@@ -19,7 +19,8 @@ use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
 use bacnet_client::tags::{TagsRead, decode_tags_read};
 use bacnet_encoding::primitives::decode_application_value;
-use bacnet_ops::format::{Floats, RawRow, RowError, StateTexts, ValueFormat, raw_text};
+use bacnet_ops::Value;
+use bacnet_ops::format::{Floats, PropertyError, RawRow, StateTexts, ValueFormat, raw_text};
 use bacnet_ops::parse;
 use bacnet_services::rpm::ReadAccessResult;
 use bacnet_transport::port::TransportPort;
@@ -70,7 +71,7 @@ impl Texts {
                 if element.property_array_index.is_none()
                     && wanted.contains(&element.property_identifier)
                 {
-                    let value = element.property_value.clone().ok_or(RowError::NoValue);
+                    let value = element.property_value.clone().ok_or(PropertyError::NoValue);
                     rows.entry(object)
                         .or_default()
                         .push((element.property_identifier, value));
@@ -180,16 +181,11 @@ pub async fn read_property_cmd<T: TransportPort + 'static>(
         )
         .await;
     let values = formatter_with(object_type, texts.of(ack.object_identifier));
-    let decoded = format_read_value(
+    let read = read_value(
         &values,
         ack.property_identifier,
         ack.property_array_index,
-        &ack.property_value,
-    );
-    let data = values.data_at(
-        ack.property_identifier,
-        ack.property_array_index,
-        &ack.property_value,
+        ack.property_value,
     );
 
     output::print_read_result(
@@ -200,8 +196,7 @@ pub async fn read_property_cmd<T: TransportPort + 'static>(
         ),
         &format!("{}", ack.property_identifier),
         ack.property_array_index,
-        &decoded,
-        &data,
+        &read,
         format,
     );
     Ok(())
@@ -318,47 +313,47 @@ async fn print_rpm_results<T: TransportPort + 'static>(
             texts.of(result.object_identifier),
         );
         for elem in &result.list_of_results {
-            let (value, data) = if let Some(ref value_bytes) = elem.property_value {
-                let text = format_read_value(
+            let value = if let Some(ref value_bytes) = elem.property_value {
+                Ok(read_value(
                     &values,
                     elem.property_identifier,
                     elem.property_array_index,
-                    value_bytes,
-                );
-                let data = values.data_at(
-                    elem.property_identifier,
-                    elem.property_array_index,
-                    value_bytes,
-                );
-                (text, Some(data))
+                    value_bytes.clone(),
+                ))
             } else if let Some((class, code)) = elem.error {
-                (format!("ERROR: {class}:{code}"), None)
+                Err(format!("ERROR: {class}:{code}"))
             } else {
-                ("???".to_string(), None)
+                Err("???".to_string())
             };
             entries.push(output::RpmEntry {
                 object: obj_str.clone(),
                 property: format!("{}", elem.property_identifier),
                 index: elem.property_array_index,
                 value,
-                data,
             });
         }
     }
     output::print_rpm_table(&entries, format);
 }
 
-/// A read value as text: Tags as named values (the form `read` documents),
-/// any other property through the shared formatter.
-fn format_read_value(
+/// A read value as the one-shot commands print it: the shared formatter's
+/// [`Value`], with Tags written as named values (the form `read`
+/// documents).
+fn read_value(
     format: &ValueFormat<'_>,
     property: PropertyIdentifier,
     index: Option<u32>,
-    data: &[u8],
-) -> String {
-    if property != PropertyIdentifier::TAGS {
-        return format.value_at(property, index, data);
+    raw: Vec<u8>,
+) -> Value {
+    let mut value = Value::new(format, property, index, raw, None);
+    if property == PropertyIdentifier::TAGS {
+        value.text = tags_text(index, &value.raw);
     }
+    value
+}
+
+/// A read of Tags as named values.
+fn tags_text(index: Option<u32>, data: &[u8]) -> String {
     match decode_tags_read(index, data) {
         Ok(TagsRead::Whole(tags)) => format!(
             "[{}]",

@@ -15,13 +15,22 @@
 //! - [`limits`]: the global request-rate cap, the one-request-per-device
 //!   gate, rates per network and per-caller accounts;
 //! - [`client`](mod@client): [`Client`], the high-level client: its connect
-//!   builders ([`Client::bip`] and the others), discovery over those limits
-//!   ([`Discover`], a local broadcast unless it names another [`Scope`]),
-//!   and the reading strategy ([`client::Reader`]);
+//!   builders ([`Client::bip`] and the others), and discovery over those
+//!   limits ([`Discover`], a local broadcast unless it names another
+//!   [`Scope`]);
 //! - [`device`]: [`DeviceAddress`], where a device answers, and the
 //!   [`Device`] handle, pinned to an address or following an instance, whose
 //!   methods are the read operations (properties, the object list, a device
 //!   summary, trend log pages and alarms);
+//! - [`reading`](mod@reading): what a read names ([`PropertyRef`], from
+//!   text such as `"ai:1 pv"`) and returns: a [`Value`] (typed data, display
+//!   text and the octets sent), a [`Reading`] a property, the
+//!   [`Readings`] of a bulk read, which reports a refused property in its
+//!   row and keeps what was read when the device stops answering, and an
+//!   object's [`ObjectRead`];
+//! - [`error`](mod@error): [`OpsError`], why a call failed as a whole;
+//! - [`raw`]: the reading layer under them, for front ends that run their
+//!   own request jobs, failing with the low-level client's errors;
 //! - [`export`]: a device's objects in another model's terms, so far an
 //!   experimental Standard 223 point list in Turtle (#2436);
 //! - [`watch`]: the watch hub, one managed COV subscription or poller per
@@ -31,16 +40,24 @@
 //! classes, frame decoding and the BBMD survey) are the `bacnet-tool`
 //! crate (#2560).
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 pub mod client;
 pub mod device;
+pub mod error;
 pub mod export;
 pub mod format;
 pub mod label;
 pub mod limits;
 pub mod octets;
 pub mod parse;
+pub mod raw;
+pub mod reading;
 pub mod target;
 pub mod watch;
 
 pub use client::{Client, Discover, Scope};
 pub use device::{Device, DeviceAddress};
+pub use error::OpsError;
+pub use format::{PropertyError, Value};
+pub use reading::{IntoProperty, ObjectRead, PropertyRef, Reading, Readings};

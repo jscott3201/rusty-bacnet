@@ -6,11 +6,15 @@ are the explicit choices. The client is a foreign device of a raw BBMD
 peer, so each broadcast reaches the peer as Distribute-Broadcast-To-Network
 (Annex J.5) carrying the NPDU as sent.
 """
+import ast
 import asyncio
+import inspect
 import unittest
+from pathlib import Path
 
+import rusty_bacnet
 from bvll_peer import RawPeer, bvll
-from rusty_bacnet import BACnetClient, ForeignDevice
+from rusty_bacnet import BACnetClient, BACnetRouter, BipRouterPort, ForeignDevice
 from test_bip_modes import accepted_registration
 
 # A Who-Is with no range: Unconfirmed-Request PDU, service choice 8.
@@ -86,6 +90,47 @@ class DiscoveryScopeTests(unittest.IsolatedAsyncioTestCase):
                         call(scope=scope)
         await asyncio.sleep(0.1)
         self.assertEqual([d for d, _ in self.peer.received if d[1] == DISTRIBUTE_BROADCAST], [])
+
+
+class RouterApplicationScopeTests(unittest.TestCase):
+    def test_a_local_who_is_on_a_router_application_names_the_scopes_to_use(self):
+        router = BACnetRouter([BipRouterPort(1, interface="127.0.0.1", port=0)],
+                              application="client")
+        client = BACnetClient(transport="router", router=router)
+        for call in (client.who_is, client.discover):
+            for scope in ({}, {"scope": "local"}):
+                with self.subTest(call=call.__name__, scope=scope):
+                    with self.assertRaisesRegex(ValueError, "scope=<network number>.*scope='global'"):
+                        call(**scope)
+
+
+class DiscoverySignatureTests(unittest.TestCase):
+    """help() and inspect show the discovery methods as the stub declares
+    them, scope='local' included."""
+
+    def stub_method(self, name):
+        stub = Path(rusty_bacnet.__file__).with_suffix(".pyi")
+        tree = ast.parse(stub.read_text(encoding="utf-8"))
+        client = next(node for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == "BACnetClient")
+        return next(node for node in client.body
+                    if isinstance(node, ast.FunctionDef) and node.name == name)
+
+    def test_runtime_and_stub_signatures_match(self):
+        for name in ("who_is", "discover", "who_is_directed"):
+            with self.subTest(method=name):
+                runtime = inspect.signature(getattr(BACnetClient, name))
+                runtime_params = [(p.name, p.default) for p in runtime.parameters.values()
+                                  if p.name != "self"]
+                method = self.stub_method(name)
+                args = method.args.args[1:]
+                defaults = [None] * (len(args) - len(method.args.defaults)) + [
+                    ast.literal_eval(d) for d in method.args.defaults]
+                stub_params = [(arg.arg, inspect.Parameter.empty if i < len(args) - len(method.args.defaults)
+                                else default)
+                               for i, (arg, default) in enumerate(zip(args, defaults))]
+                self.assertEqual(runtime_params, stub_params)
+        self.assertEqual(inspect.signature(BACnetClient.who_is).parameters["scope"].default, "local")
 
 
 if __name__ == "__main__":

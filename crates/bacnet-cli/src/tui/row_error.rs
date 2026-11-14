@@ -1,11 +1,11 @@
 //! How the TUI writes a property it couldn't read: in kebab case, like the
 //! property names beside it (decision D4 of #1887).
 //!
-//! This is the TUI's rendering only. [`RowError`]'s own `Display`, which the
+//! This is the TUI's rendering only. [`PropertyError`]'s own `Display`, which the
 //! one-shot commands print, stays `CLASS:CODE`, and MCP returns the
 //! structured error.
 
-use bacnet_ops::format::RowError;
+use bacnet_ops::format::PropertyError;
 use bacnet_ops::label::kebab;
 use bacnet_types::enums::ErrorClass;
 use bacnet_types::error::RemoteError;
@@ -15,19 +15,23 @@ use bacnet_types::error::RemoteError;
 /// own, which the code already makes plain; `class / code` otherwise
 /// (`resources / no-space-to-write-property`). A reject or abort gives its
 /// named reason (`rejected: unrecognized-service`).
-pub(crate) fn row_error_text(error: &RowError) -> String {
+pub(crate) fn row_error_text(error: &PropertyError) -> String {
     match error {
-        RowError::Remote(RemoteError::Error { class, code }) => {
+        PropertyError::Remote(RemoteError::Error { class, code }) => {
             if [ErrorClass::PROPERTY, ErrorClass::OBJECT].contains(class) {
                 kebab(code)
             } else {
                 format!("{} / {}", kebab(class), kebab(code))
             }
         }
-        RowError::Remote(RemoteError::Reject { reason }) => format!("rejected: {}", kebab(reason)),
-        RowError::Remote(RemoteError::Abort { reason }) => format!("aborted: {}", kebab(reason)),
-        RowError::NoValue => "no value".into(),
-        RowError::Other(text) => text.clone(),
+        PropertyError::Remote(RemoteError::Reject { reason }) => {
+            format!("rejected: {}", kebab(reason))
+        }
+        PropertyError::Remote(RemoteError::Abort { reason }) => {
+            format!("aborted: {}", kebab(reason))
+        }
+        PropertyError::NoValue => "no value".into(),
+        PropertyError::Other(text) => text.clone(),
         other => other.to_string(),
     }
 }
@@ -38,8 +42,8 @@ mod tests {
 
     use super::*;
 
-    fn error(class: ErrorClass, code: ErrorCode) -> RowError {
-        RowError::Remote(RemoteError::Error { class, code })
+    fn error(class: ErrorClass, code: ErrorCode) -> PropertyError {
+        PropertyError::Remote(RemoteError::Error { class, code })
     }
 
     #[test]
@@ -56,20 +60,20 @@ mod tests {
             row_error_text(&error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)),
             "device / operational-problem"
         );
-        let reject = RowError::Remote(RemoteError::Reject {
+        let reject = PropertyError::Remote(RemoteError::Reject {
             reason: RejectReason::UNRECOGNIZED_SERVICE,
         });
         assert_eq!(row_error_text(&reject), "rejected: unrecognized-service");
-        let abort = RowError::Remote(RemoteError::Abort {
+        let abort = PropertyError::Remote(RemoteError::Abort {
             reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
         });
         assert_eq!(
             row_error_text(&abort),
             "aborted: segmentation-not-supported"
         );
-        assert_eq!(row_error_text(&RowError::NoValue), "no value");
+        assert_eq!(row_error_text(&PropertyError::NoValue), "no value");
         assert_eq!(
-            row_error_text(&RowError::Other("timeout".into())),
+            row_error_text(&PropertyError::Other("timeout".into())),
             "timeout"
         );
     }

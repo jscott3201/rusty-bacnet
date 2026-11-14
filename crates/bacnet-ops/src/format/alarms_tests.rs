@@ -5,6 +5,7 @@ use bacnet_types::primitives::{Date, Time};
 use serde_json::json;
 
 use super::*;
+use crate::error::OpsError;
 
 /// The table cells name values as the shared formatter does (bits only
 /// with commas for its bars), so the alarm table and `read` agree.
@@ -240,7 +241,7 @@ impl Pages {
     fn answer(
         &self,
         after: Option<ObjectIdentifier>,
-    ) -> std::future::Ready<Result<GetEventInformationAck, Error>> {
+    ) -> std::future::Ready<Result<GetEventInformationAck, OpsError>> {
         let mut asked = self.asked.borrow_mut();
         let (objects, more) = self.pages[asked.len()].clone();
         asked.push(after.map(|object| object.instance_number()));
@@ -329,8 +330,12 @@ async fn a_device_that_never_advances_is_an_error() {
             .await
             .unwrap_err();
         assert!(
-            error.to_string().contains("no new object"),
-            "{pages:?}: {error}"
+            matches!(error, OpsError::Paging(PagingFault::Stalled { .. })),
+            "{pages:?}: {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "GetEventInformation said more remain but named no new object"
         );
     }
 }
@@ -352,10 +357,17 @@ async fn a_device_that_repeats_an_object_is_an_error() {
         let error = read_event_information(100, |after| device.answer(after))
             .await
             .unwrap_err();
+        // A paging rule broken, once an encoding error's text (#2560).
         assert!(
-            error.to_string().contains(&format!(
-                "GetEventInformation named analog-input {repeated} again"
-            )),
+            matches!(
+                &error,
+                OpsError::Paging(PagingFault::Repeated { object, .. }) if *object == ai(repeated)
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("GetEventInformation named analog-input:{repeated} again"),
             "{pages:?}: {error}"
         );
     }

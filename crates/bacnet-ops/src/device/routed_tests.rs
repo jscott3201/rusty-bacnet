@@ -10,11 +10,10 @@ use std::time::Duration;
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::test_transport::{SendLog, TestTransport};
-use bacnet_types::error::Error;
 
 use super::test_bus::{Bus, N, client_on, mac, name_of, server, settle, stop};
 use super::*;
-use crate::client::Discover;
+use crate::client::{Discover, ResolveScope};
 
 /// The client at station 1 of network 1, a router at station 254 of
 /// networks 1, 2 and 3, and on network 2 station 5 and on network 3
@@ -81,7 +80,7 @@ async fn a_routed_station_is_reached_by_its_address() {
     assert_eq!(lab.discover().await.len(), 2);
     assert!(matches!(
         client.device(N).await,
-        Err(Error::AmbiguousDevice { instance: N, .. })
+        Err(OpsError::Ambiguous { instance: N, .. })
     ));
     let station = client.device("2:0x0A000005BAC0").await.unwrap();
     assert_eq!(station.address(), DeviceAddress::new(2, &mac(5)).unwrap());
@@ -247,5 +246,59 @@ async fn handles_named_before_the_number_is_learned_are_local_after() {
     drop(held);
     assert_eq!(name_of(&pinned).await.unwrap(), "near");
     assert_eq!(name_of(&following).await.unwrap(), "near");
+    lab.stop().await;
+}
+
+/// A directed Who-Is to an address written in routed form on the client's
+/// own network, once it knows the number, goes to that station as a local
+/// unicast: no destination network, and nothing through the router.
+#[tokio::test(start_paused = true)]
+async fn a_directed_who_is_on_the_own_network_is_a_local_unicast() {
+    let lab = Routed::new(|near| near.numbered_port(1)).await;
+    let low = lab.client.low_level();
+    low.what_is_network_number(None).await.unwrap();
+    for _ in 0..50 {
+        if low.network_number().is_some() {
+            break;
+        }
+        settle().await;
+    }
+    assert_eq!(low.network_number(), Some(1), "the router said");
+    lab.sent.clear();
+    let station = DeviceAddress::new(1, &mac(9)).unwrap();
+    lab.client
+        .discover(Discover::directed(station).wait(Duration::ZERO))
+        .await
+        .unwrap();
+    let frames = super::discover_tests::who_is_frames(&lab.sent);
+    let [frame] = frames.as_slice() else {
+        panic!("one Who-Is, not {frames:?}");
+    };
+    assert!(!frame.broadcast);
+    assert_eq!(frame.mac.as_slice(), mac(9));
+    assert_eq!(frame.decode_npdu().destination, None);
+    lab.stop().await;
+}
+
+/// A following handle on a device behind the router, made from its bare
+/// instance on a client resolving on every network, asks for it again on
+/// that device's network after a timeout, never on every network.
+#[tokio::test(start_paused = true)]
+async fn a_routed_device_is_asked_for_again_on_its_network() {
+    let mut lab = Routed::new(|near| near.port(1)).await;
+    lab.servers
+        .push(server(lab.three.port(7), 2002, "on three").await);
+    let wide = lab.client.with_resolve_scope(ResolveScope::Global);
+    let device = wide.device(2002).await.unwrap();
+    assert_eq!(device.address().network(), 3);
+    assert_eq!(name_of(&device).await.unwrap(), "on three");
+    lab.sent.clear();
+    lab.three.silence(7);
+    let error = name_of(&device).await.unwrap_err();
+    assert!(error.timed_out(), "{error}");
+    assert_eq!(
+        super::discover_tests::the_who_is(&lab.sent),
+        (super::discover_tests::remote(3), true)
+    );
     lab.stop().await;
 }

@@ -22,7 +22,6 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use bacnet_ops::client::timed_out;
 use bacnet_ops::export::s223::{
     Counts, DEFAULT_BASE_IRI, Detail, DeviceInfo, Entry, Inventory, InventoryOptions,
     TurtleOptions, WritePriority, write_turtle,
@@ -291,7 +290,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
             Err(error) => {
                 // Later objects would fail the same way: stop here, say
                 // why, and let the cursor try this one again.
-                if timed_out(&error) {
+                if error.timed_out() {
                     call.timed_out();
                 }
                 page.inventory.stopped = Some(format!("{}: {error}", object_label(object)));

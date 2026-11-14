@@ -297,7 +297,8 @@ impl ObjectDatabase {
     /// logging by COV keeps no Enable or window gate and no baseline restart,
     /// a wrapped Event Log takes no received notifications, and a wrapped
     /// Pulse Converter counts nothing and its Reliability no longer follows
-    /// its Input_Reference.
+    /// its Input_Reference. A wrapped Binary Output gives no
+    /// [`physical_output`](Self::physical_output).
     ///
     /// ```compile_fail
     /// use bacnet_objects::{database::ObjectDatabase, traits::BACnetObject};
@@ -555,6 +556,18 @@ impl ObjectDatabase {
         object
             .downcast_mut::<BinaryLightingOutputObject>()
             .map(|object| object.lighting_blink_count())
+    }
+
+    /// The state to drive the physical output of the Binary Output at `oid`
+    /// to, ON as `true`: [`BinaryOutputObject::physical_output`], its
+    /// Present_Value through Polarity in service and the state it was
+    /// driven to while Out_Of_Service is TRUE (#2580). `None` for an
+    /// unknown object, another type, or a Binary Output an adapter wraps.
+    ///
+    /// [`BinaryOutputObject::physical_output`]: crate::binary::BinaryOutputObject::physical_output
+    pub fn physical_output(&self, oid: &ObjectIdentifier) -> Option<bool> {
+        self.stored_as::<crate::binary::BinaryOutputObject>(oid)
+            .map(crate::binary::BinaryOutputObject::physical_output)
     }
 
     /// Read one coherent sample from the database's shared clock.

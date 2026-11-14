@@ -325,7 +325,8 @@ async fn a_bip6_address_needs_the_bip6_transport() {
     let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let peer = "[::1]:47808".parse().unwrap();
     let error = bip6_vmac(&bip, peer).await.unwrap_err();
-    assert!(error.contains("--ipv6"), "{error}");
+    assert!(matches!(error, VmacLookup::NotBip6 { .. }), "{error:?}");
+    assert!(error.to_string().contains("--ipv6"), "{error}");
     assert!(as_bip6(&bip).is_none());
 }
 
@@ -462,7 +463,13 @@ async fn the_grammar_sees_through_the_mixed_transport() {
     assert!(as_bip6(&bip).is_none());
     assert!(!is_mstp(&bip));
     let peer = "[::1]:47808".parse().unwrap();
-    assert!(bip6_vmac(&bip, peer).await.unwrap_err().contains("--ipv6"));
+    assert!(
+        bip6_vmac(&bip, peer)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("--ipv6")
+    );
 
     let (serial, _peer) = bacnet_transport::mstp::LoopbackSerial::pair();
     let mstp = bacnet_transport::mstp::MstpTransport::new(serial, Default::default());

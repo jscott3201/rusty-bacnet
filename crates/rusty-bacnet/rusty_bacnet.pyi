@@ -997,6 +997,31 @@ class AbortReason(enum.IntEnum):
         ...
 
 
+class Polarity(enum.IntEnum):
+    """BACnet polarity of a Binary Input or Output (Clause 12, BACnetPolarity).
+
+    An ``enum.IntEnum`` (#2580): members are ints, compare equal to their
+    numbers and hash like them, so an int works wherever a member does, as in
+    ``add_binary_input(polarity=...)``, ``add_binary_output(polarity=...)``
+    and ``set_polarity_local``. A value without a name is a pseudo-member:
+    ``Polarity(7)`` and ``Polarity.from_raw(7)`` both give one, equal to 7,
+    with ``name`` None and repr ``Polarity(7)``, which those calls refuse
+    with VALUE_OUT_OF_RANGE. A number outside 0 to 4294967295 raises
+    ValueError.
+    """
+
+    NORMAL: Polarity
+    REVERSE: Polarity
+
+    @classmethod
+    def from_raw(cls, value: int) -> Polarity:
+        """The member for ``value``; a pseudo-member when it has no name."""
+        ...
+    def to_raw(self) -> int:
+        """The raw integer value."""
+        ...
+
+
 class EngineeringUnits(enum.IntEnum):
     """BACnet engineering units (Clause 21, BACnetEngineeringUnits).
 
@@ -4093,7 +4118,7 @@ class BACnetClient:
         through its router. Another name or number raises ``ValueError``,
         and another type ``TypeError``, before anything is sent. A client on
         ``transport="router"`` has no network of its own, so its Who-Is
-        names one, or every one.
+        names one, or every one: a local one raises ``ValueError`` saying so.
 
         Give ``low_limit`` and ``high_limit`` together or not at all, each from
         0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
@@ -5639,11 +5664,25 @@ class BACnetServer:
         ...
 
     # --- Binary objects ---
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """Profile and parameter keywords as on ``add_analog_input``."""
+    def add_binary_input(self, instance: int, name: str, *, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+        """Profile and parameter keywords as on ``add_analog_input``.
+
+        ``polarity`` is a ``Polarity`` or its number: NORMAL (0, the default)
+        or REVERSE (1), which inverts the state ``set_physical_input_local``
+        reports on its way to Present_Value. Any other int, negative
+        included, raises BacnetProtocolError VALUE_OUT_OF_RANGE. Clients can
+        read Polarity but not write it; ``set_polarity_local`` changes it
+        later."""
         ...
-    def add_binary_output(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """Profile and parameter keywords as on ``add_analog_input``."""
+    def add_binary_output(self, instance: int, name: str, *, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+        """Profile and parameter keywords as on ``add_analog_input``.
+
+        ``polarity`` is a ``Polarity`` or its number: NORMAL (0, the default)
+        or REVERSE (1), which inverts the state ``physical_output_local``
+        gives for the commanded Present_Value. Any other int, negative
+        included, raises BacnetProtocolError VALUE_OUT_OF_RANGE. Clients can
+        read Polarity but not write it; ``set_polarity_local`` changes it
+        later."""
         ...
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
@@ -7100,7 +7139,8 @@ class BACnetServer:
         Analog, Binary or Multi-state Value takes the same datatype as its Input
         counterpart; a commandable one raises OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
         (use ``write_property_local`` with a priority). Binary values are
-        BACnet logical values after Polarity, not raw hardware/interface levels.
+        BACnet logical values after Polarity, not raw hardware/interface levels
+        (a raw Binary Input state goes through ``set_physical_input_local``).
         An object with Out_Of_Service set rejects this update to preserve
         network simulation ownership. A Life Safety Point or Zone takes an
         Enumerated BACnetLifeSafetyState (standard, or 256..=65535) whether or
@@ -7131,6 +7171,62 @@ class BACnetServer:
         BACnetReliability (11, 26 to 63, or past 65535) raises
         VALUE_OUT_OF_RANGE. An unknown object raises UNKNOWN_OBJECT and one that
         takes no Reliability OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Raises
+        RuntimeError before ``start()``.
+        """
+        ...
+
+    def set_physical_input_local(
+        self,
+        object_id: ObjectIdentifier,
+        on: bool,
+    ) -> Awaitable[None]:
+        """Report the state the application read from a Binary Input's
+        physical input, ``True`` for ON.
+
+        In service Present_Value becomes that state through Polarity: ACTIVE
+        for ON under NORMAL (0), INACTIVE for ON under REVERSE (1). A logical
+        value goes through ``set_present_value_local`` instead. This route is
+        taken while Out_Of_Service is set too: Present_Value then keeps a
+        client's simulated value, and the return to service derives it from
+        the latest input. Event and COV processing see the logical
+        Present_Value. An unknown object raises UNKNOWN_OBJECT and any object
+        other than a Binary Input OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+        Raises RuntimeError before ``start()``.
+        """
+        ...
+
+    def set_polarity_local(
+        self,
+        object_id: ObjectIdentifier,
+        polarity: Polarity | int,
+    ) -> Awaitable[None]:
+        """Set the Polarity of a Binary Input or Binary Output: a ``Polarity``
+        or its number, NORMAL (0) or REVERSE (1). Clients can't write it.
+
+        In service a Binary Input derives Present_Value again from the
+        physical input it last took, and a Binary Output drives its physical
+        output from its unchanged Present_Value with the new Polarity; out of
+        service neither changes until the return to service. Any other int,
+        negative included, raises VALUE_OUT_OF_RANGE before anything is
+        awaited, an unknown object UNKNOWN_OBJECT and any other object
+        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Raises RuntimeError before
+        ``start()``.
+        """
+        ...
+
+    def physical_output_local(
+        self,
+        object_id: ObjectIdentifier,
+    ) -> Awaitable[bool]:
+        """The state to drive a Binary Output's physical output to, ``True``
+        for ON.
+
+        In service it is the commanded Present_Value through Polarity: ON for
+        ACTIVE under NORMAL, OFF for ACTIVE under REVERSE. While
+        Out_Of_Service is set it stays at the state it had when
+        Out_Of_Service was set, though commands keep moving Present_Value. An
+        unknown object raises UNKNOWN_OBJECT and any object other than a
+        Binary Output OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Raises
         RuntimeError before ``start()``.
         """
         ...
@@ -8105,9 +8201,9 @@ class BipEndpoint:
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
-        """Profile keywords as on ``add_analog_input``, ``alarm_value`` and
-        the delays as on ``BACnetServer.add_binary_input``."""
+    def add_binary_input(self, instance: int, name: str, *, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Profile keywords as on ``add_analog_input``, ``polarity``,
+        ``alarm_value`` and the delays as on ``BACnetServer.add_binary_input``."""
         ...
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
@@ -8298,9 +8394,9 @@ class ScEndpoint:
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
-        """Profile keywords as on ``add_analog_input``, ``alarm_value`` and
-        the delays as on ``BACnetServer.add_binary_input``."""
+    def add_binary_input(self, instance: int, name: str, *, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Profile keywords as on ``add_analog_input``, ``polarity``,
+        ``alarm_value`` and the delays as on ``BACnetServer.add_binary_input``."""
         ...
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
@@ -8511,9 +8607,9 @@ class MstpEndpoint:
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
-        """Profile keywords as on ``add_analog_input``, ``alarm_value`` and
-        the delays as on ``BACnetServer.add_binary_input``."""
+    def add_binary_input(self, instance: int, name: str, *, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Profile keywords as on ``add_analog_input``, ``polarity``,
+        ``alarm_value`` and the delays as on ``BACnetServer.add_binary_input``."""
         ...
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.

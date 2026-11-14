@@ -12,8 +12,9 @@ use bacnet_types::error::Error;
 use tokio::sync::broadcast::error::RecvError;
 
 use super::{Device, DeviceAddress, DeviceRef, Discovered, Duplicate, Pin};
-use crate::client::{Client, Discover, Scope};
-use crate::target::{Target, bip6_vmac, check_local_mac, parse_target_on};
+use crate::client::{Client, Discover, ResolveScope, Scope};
+use crate::error::OpsError;
+use crate::target::{Target, VmacLookup, bip6_vmac, check_local_mac, parse_target_on};
 
 /// How long the one Who-Is for an instance no address claims listens on
 /// past the first answer, for a second device claiming it too (within the
@@ -31,28 +32,36 @@ impl<T: TransportPort + 'static> Client<T> {
     ///
     /// # Errors
     ///
-    /// A target the grammar refuses on this transport, or a local address
-    /// its link can't reach ([`Error::OutOfRange`]), an instance two or more
-    /// addresses claim ([`Error::AmbiguousDevice`]), and an instance no
-    /// address answered for, or a remote address with no router known
-    /// ([`Error::UnknownDevice`]). A B/IPv6 socket address fails as
-    /// [`bip6_vmac`] does when its node doesn't say its VMAC.
-    pub async fn device<'a>(&self, target: impl Into<DeviceRef<'a>>) -> Result<Device<T>, Error> {
+    /// A target the grammar refuses on this transport, a local address its
+    /// link can't reach, or a B/IPv6 socket address on another link
+    /// ([`OpsError::Parse`]); an instance two or more addresses claim
+    /// ([`OpsError::Ambiguous`]); and an instance no address answered for,
+    /// a remote address with no router known, or a B/IPv6 socket address
+    /// whose node doesn't say its VMAC ([`OpsError::UnknownDevice`]).
+    pub async fn device<'a>(
+        &self,
+        target: impl Into<DeviceRef<'a>>,
+    ) -> Result<Device<T>, OpsError> {
         self.sweep();
         match target.into() {
             DeviceRef::Text(text) => {
                 let transport = self.low_level().transport();
-                match parse_target_on(transport, text).map_err(Error::OutOfRange)? {
-                    Target::Mac(mac) => self.at(local(&mac)?).await,
+                let parse = |reason| OpsError::parse("target", text, reason);
+                match parse_target_on(transport, text).map_err(parse)? {
+                    Target::Mac(mac) => self.at(local(&mac).map_err(parse)?).await,
                     Target::RoutedMac { dnet, mac } => {
-                        self.at(DeviceAddress::new(dnet, &mac).map_err(Error::OutOfRange)?)
+                        self.at(DeviceAddress::new(dnet, &mac).map_err(parse)?)
                             .await
                     }
                     Target::Bip6(peer) => {
-                        let vmac = bip6_vmac(transport, peer)
-                            .await
-                            .map_err(Error::OutOfRange)?;
-                        self.at(local(&vmac)?).await
+                        let vmac = bip6_vmac(transport, peer).await.map_err(|why| match why {
+                            VmacLookup::NoAnswer { .. } => OpsError::UnknownDevice {
+                                target: text.to_string(),
+                                asked: None,
+                            },
+                            why => parse(why.to_string()),
+                        })?;
+                        self.at(local(&vmac).map_err(parse)?).await
                     }
                     Target::Instance(instance) => self.following(instance, None).await,
                     Target::Routed { dnet, instance } => self.following(instance, Some(dnet)).await,
@@ -62,8 +71,9 @@ impl<T: TransportPort + 'static> Client<T> {
             DeviceRef::Address(address) => self.at(address).await,
             DeviceRef::Found(found) => Ok(self.pinned(found.address.clone(), found.instance)),
             DeviceRef::Entry(entry) => {
-                let address = DeviceAddress::of(entry).ok_or_else(|| Error::UnknownDevice {
-                    device: entry.object_identifier.instance_number().to_string(),
+                let address = DeviceAddress::of(entry).ok_or_else(|| OpsError::UnknownDevice {
+                    target: entry.object_identifier.instance_number().to_string(),
+                    asked: None,
                 })?;
                 Ok(self.pinned(address, entry.object_identifier.instance_number()))
             }
@@ -83,12 +93,12 @@ impl<T: TransportPort + 'static> Client<T> {
     /// holds for it. An address on this client's own network is the local
     /// station at its MAC, which the link must be able to reach. A remote
     /// address without a row asks its network first.
-    async fn at(&self, address: DeviceAddress) -> Result<Device<T>, Error> {
+    async fn at(&self, address: DeviceAddress) -> Result<Device<T>, OpsError> {
         let address = self.localized(address);
         if address.is_local() {
             let shown = address.styled(self.address_style());
             check_local_mac(self.low_level().transport(), address.mac(), &shown)
-                .map_err(Error::OutOfRange)?;
+                .map_err(|reason| OpsError::parse("address", &shown, reason))?;
         }
         let mut row = address.row(self.low_level()).await;
         if row.is_none() && !address.is_local() {
@@ -122,7 +132,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// (on `network` when one is named, network 0 for this client's own),
     /// or the one that answers a Who-Is, so long as no other answered it
     /// too.
-    async fn following(&self, instance: u32, network: Option<u16>) -> Result<Device<T>, Error> {
+    async fn following(&self, instance: u32, network: Option<u16>) -> Result<Device<T>, OpsError> {
         let network = self.scope(network);
         let claims = self.claims(instance, network).await;
         let address = match claims.as_slice() {
@@ -130,19 +140,19 @@ impl<T: TransportPort + 'static> Client<T> {
                 let row = self.find_instance(instance, network).await?;
                 let address = DeviceAddress::of(&row)
                     .map(|address| self.localized(address))
-                    .ok_or_else(|| unknown(instance, network))?;
+                    .ok_or_else(|| OpsError::from(unknown(instance, network)))?;
                 // A second device answers the one Who-Is a little after
                 // the first, not with it: `find_instance` listened on for
                 // SETTLE past the first answer, so one in that time is in
                 // the table now.
                 let claims = self.claims(instance, network).await;
                 if claims.len() > 1 {
-                    return Err(ambiguous(instance, &claims));
+                    return Err(ambiguous(instance, &claims).into());
                 }
                 address
             }
             [address] => address.clone(),
-            _ => return Err(ambiguous(instance, &claims)),
+            _ => return Err(ambiguous(instance, &claims).into()),
         };
         let at = self.follow((network, instance), address);
         Ok(Device {
@@ -186,17 +196,19 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// The device claiming `instance` that answers one Who-Is for it, to
-    /// `network` when named (this one for 0) and globally otherwise,
-    /// listening [`SETTLE`] past its answer for a second.
+    /// `network` when named (this one for 0) and to this clone's
+    /// [`resolve_scope`](Self::resolve_scope) otherwise, listening
+    /// [`SETTLE`] past its answer for a second. A miss says where it asked.
     async fn find_instance(
         &self,
         instance: u32,
         network: Option<u16>,
-    ) -> Result<DiscoveredDevice, Error> {
+    ) -> Result<DiscoveredDevice, OpsError> {
         let range = DeviceInstanceRange::single(instance)?;
         let own = self.low_level().network_number();
+        let asked = network.map_or(self.resolve_scope(), ResolveScope::on);
         let found = self
-            .wait_for(network, Some(range), SETTLE, |row| {
+            .wait_for(asked, Some(range), SETTLE, |row| {
                 row.object_identifier.instance_number() == instance
                     && network.is_none_or(|n| {
                         DeviceAddress::of(row)
@@ -204,7 +216,16 @@ impl<T: TransportPort + 'static> Client<T> {
                     })
             })
             .await?;
-        found.ok_or_else(|| unknown(instance, network))
+        found.ok_or_else(|| {
+            let sent = self.resolve_wait().is_some();
+            match OpsError::from(unknown(instance, network)) {
+                OpsError::UnknownDevice { target, .. } => OpsError::UnknownDevice {
+                    target,
+                    asked: sent.then_some(asked),
+                },
+                other => other,
+            }
+        })
     }
 
     /// The row of the station at the remote `address`, once it answers a
@@ -213,18 +234,20 @@ impl<T: TransportPort + 'static> Client<T> {
         &self,
         address: &DeviceAddress,
         range: Option<DeviceInstanceRange>,
-    ) -> Result<DiscoveredDevice, Error> {
+    ) -> Result<DiscoveredDevice, OpsError> {
+        let asked = ResolveScope::on(address.network());
         let found = self
-            .wait_for(Some(address.network()), range, Duration::ZERO, |row| {
+            .wait_for(asked, range, Duration::ZERO, |row| {
                 DeviceAddress::of(row).as_ref() == Some(address)
             })
             .await?;
-        found.ok_or_else(|| Error::UnknownDevice {
-            device: address.to_string(),
+        found.ok_or_else(|| OpsError::UnknownDevice {
+            target: address.to_string(),
+            asked: self.resolve_wait().map(|_| asked),
         })
     }
 
-    /// Send one Who-Is (to `network`, or globally) for `range`, and wait
+    /// Send one Who-Is to `asked` for `range`, and wait
     /// up to [`resolve_wait`](Self::resolve_wait) for a row `wanted` takes,
     /// then up to `settle` more, within that wait, for one at another
     /// address, which ends the wait at once. The first such row; `None`
@@ -232,17 +255,17 @@ impl<T: TransportPort + 'static> Client<T> {
     /// every answer reads the table after.
     async fn wait_for(
         &self,
-        network: Option<u16>,
+        asked: ResolveScope,
         range: Option<DeviceInstanceRange>,
         settle: Duration,
         wanted: impl Fn(&DiscoveredDevice) -> bool,
-    ) -> Result<Option<DiscoveredDevice>, Error> {
+    ) -> Result<Option<DiscoveredDevice>, OpsError> {
         let Some(wait) = self.resolve_wait() else {
             return Ok(None);
         };
         // Subscribed before asking, so the answer can't slip in between.
         let mut events = self.device_events();
-        self.who_is(&Scope::on(network), range).await?;
+        self.who_is(&Scope::from(asked), range).await?;
         let mut deadline = tokio::time::Instant::now() + wait;
         let mut first: Option<DiscoveredDevice> = None;
         loop {
@@ -288,7 +311,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// ```no_run
     /// use std::net::Ipv4Addr;
     /// use bacnet_ops::{Client, Discover};
-    /// # async fn example() -> Result<(), bacnet_types::error::Error> {
+    /// # async fn example() -> Result<(), bacnet_ops::OpsError> {
     /// let client = Client::bip().interface(Ipv4Addr::new(192, 168, 1, 50)).connect().await?;
     /// for found in client.discover(Discover::local().range(1000..=2000)).await? {
     ///     println!("{} device {}", found.address, found.instance);
@@ -298,10 +321,11 @@ impl<T: TransportPort + 'static> Client<T> {
     ///
     /// # Errors
     ///
-    /// Before anything is sent, an instance range that is empty or past
-    /// instance 4194303, and the errors of [`Scope::who_is`]; then the
-    /// transport's error.
-    pub async fn discover(&self, request: Discover) -> Result<Vec<Discovered>, Error> {
+    /// Before anything is sent, [`OpsError::Parse`] for an instance range
+    /// that is empty or past instance 4194303, or a scope that can't be
+    /// sent (see [`Scope`]); then [`OpsError::Client`] for a send the link
+    /// refused, when nothing is collected.
+    pub async fn discover(&self, request: Discover) -> Result<Vec<Discovered>, OpsError> {
         let range = request.instances()?;
         let mut events = self.device_events();
         self.who_is(request.scope(), range).await?;
@@ -376,8 +400,8 @@ impl<T: TransportPort + 'static> Client<T> {
 }
 
 /// The local station at `mac`.
-fn local(mac: &[u8]) -> Result<DeviceAddress, Error> {
-    DeviceAddress::local(mac).map_err(Error::OutOfRange)
+fn local(mac: &[u8]) -> Result<DeviceAddress, String> {
+    DeviceAddress::local(mac)
 }
 
 /// The ambiguity error for `instance`, naming every claimant.

@@ -58,7 +58,7 @@ pub async fn discover<T: TransportPort + 'static>(
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    scope.who_is(client, range).await?;
+    bacnet_ops::raw::who_is(client, scope, range).await?;
     output::print_waiting(wait_secs);
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
     output::print_devices(&collect_devices(client, range).await, format);
@@ -192,6 +192,11 @@ mod tests {
             &["--target", "10.0.0.9", "--dnet", "5"],
         ] {
             assert!(parsed(flags).is_err(), "{flags:?} parsed");
+        }
+        // Network 0 and 65535 are refused when parsed, naming what to use.
+        for (network, says) in [("0", "leave --dnet out"), ("65535", "--global")] {
+            let refused = parsed(&["--dnet", network]).unwrap_err().to_string();
+            assert!(refused.contains(says), "{network}: {refused}");
         }
         client.stop().await.unwrap();
     }

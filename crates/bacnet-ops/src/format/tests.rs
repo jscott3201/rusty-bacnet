@@ -356,7 +356,7 @@ fn the_name_is_the_object_name_with_its_control_characters_as_spaces() {
     // An error for the name alone, or no name at all: no name.
     let refused = vec![(
         P::OBJECT_NAME,
-        Err(RowError::Remote(RemoteError::Error {
+        Err(PropertyError::Remote(RemoteError::Error {
             class: ErrorClass::PROPERTY,
             code: ErrorCode::UNKNOWN_PROPERTY,
         })),
@@ -379,12 +379,12 @@ fn row_errors_keep_the_device_answer_typed() {
     use bacnet_types::error::ErrorDetail;
 
     let unknown = Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY));
-    let plain = RowError::from(Error::Remote(RemoteError::Error {
+    let plain = PropertyError::from(Error::Remote(RemoteError::Error {
         class: ErrorClass::PROPERTY,
         code: ErrorCode::UNKNOWN_PROPERTY,
     }));
     assert_eq!(plain.class_code(), unknown);
-    let structured = RowError::from(Error::Structured {
+    let structured = PropertyError::from(Error::Structured {
         class: ErrorClass::PROPERTY,
         code: ErrorCode::UNKNOWN_PROPERTY,
         detail: Box::new(ErrorDetail::FirstFailedWriteAttempt(
@@ -396,20 +396,26 @@ fn row_errors_keep_the_device_answer_typed() {
     });
     assert_eq!(structured, plain);
     assert_eq!(structured.to_string(), "PROPERTY:UNKNOWN_PROPERTY");
-    let reject = RowError::from(Error::Remote(RemoteError::Reject {
+    let reject = PropertyError::from(Error::Remote(RemoteError::Reject {
         reason: RejectReason::UNRECOGNIZED_SERVICE,
     }));
     assert_eq!(reject.class_code(), None);
     assert!(matches!(
         reject,
-        RowError::Remote(RemoteError::Reject { .. })
+        PropertyError::Remote(RemoteError::Reject { .. })
     ));
-    let abort = RowError::from(Error::Remote(RemoteError::Abort {
+    let abort = PropertyError::from(Error::Remote(RemoteError::Abort {
         reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
     }));
-    assert!(matches!(abort, RowError::Remote(RemoteError::Abort { .. })));
-    let other = RowError::from(Error::Encoding("bad tag".into()));
-    assert_eq!(other, RowError::Other("encoding error: bad tag".into()));
+    assert!(matches!(
+        abort,
+        PropertyError::Remote(RemoteError::Abort { .. })
+    ));
+    let other = PropertyError::from(Error::Encoding("bad tag".into()));
+    assert_eq!(
+        other,
+        PropertyError::Other("encoding error: bad tag".into())
+    );
     let _: &dyn std::error::Error = &other;
 }
 

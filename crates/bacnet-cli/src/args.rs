@@ -380,7 +380,7 @@ pub(crate) enum Command {
         bbmd: Option<String>,
         /// Broadcast on one remote network (1 to 65534) instead, through
         /// its router.
-        #[arg(long, conflicts_with = "global")]
+        #[arg(long, conflicts_with = "global", value_parser = crate::core::range::parse_dnet)]
         dnet: Option<u16>,
         /// Broadcast on every network instead: a global broadcast, which
         /// every router passes on. On a large routed site every device

@@ -10,11 +10,10 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
 use crate::device::Device;
-use crate::format::decode_all;
 use crate::target::format_mac;
 
 /// A device with one analog input on 127.0.0.1, at a port of its own.
@@ -53,13 +52,10 @@ async fn a_bip_client_connects_and_reads_over_loopback() {
     assert_eq!(device.resolve_instance().await.unwrap(), 2560);
     let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let name = device
-        .read_property(ai, PropertyIdentifier::OBJECT_NAME, None)
+        .read((ai, PropertyIdentifier::OBJECT_NAME))
         .await
         .unwrap();
-    assert_eq!(
-        decode_all(&name).as_deref(),
-        Some(&[PropertyValue::CharacterString("Zone Temp".into())][..])
-    );
+    assert_eq!(name.as_str(), Some("Zone Temp"));
     drop((device, client));
     server.stop().await.unwrap();
 }

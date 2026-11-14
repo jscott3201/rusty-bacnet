@@ -27,12 +27,12 @@ use bytes::Bytes;
 
 use super::*;
 use crate::device::DeviceAddress;
-use crate::format::{Floats, RowError, StateTexts, ValueFormat, decode_all};
+use crate::format::{Floats, PropertyError, StateTexts, Value, ValueFormat, decode_all};
 
 /// The lab device's instance.
-const LAB: u32 = 1001;
+pub(super) const LAB: u32 = 1001;
 
-fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
+pub(super) fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
 }
 
@@ -99,7 +99,7 @@ async fn lab() -> (Client<LoopbackTransport>, BACnetServer<LoopbackTransport>) {
 }
 
 /// [`lab`], with the client's link wrapped by `wrap`.
-async fn lab_on<C: TransportPort + 'static>(
+pub(super) async fn lab_on<C: TransportPort + 'static>(
     wrap: fn(LoopbackTransport) -> C,
 ) -> (Client<C>, BACnetServer<LoopbackTransport>) {
     let identity = DeviceIdentity::new(LAB, 42).unwrap();
@@ -138,16 +138,16 @@ async fn lab_on<C: TransportPort + 'static>(
 }
 
 /// The lab device's handle, following its instance.
-async fn lab_device<C: TransportPort + 'static>(client: &Client<C>) -> crate::Device<C> {
+pub(super) async fn lab_device<C: TransportPort + 'static>(client: &Client<C>) -> crate::Device<C> {
     client.device(LAB).await.unwrap()
 }
 
 /// Where the lab device answers.
-fn lab_at() -> DeviceAddress {
+pub(super) fn lab_at() -> DeviceAddress {
     DeviceAddress::local(&[2]).unwrap()
 }
 
-async fn stop<C: TransportPort + 'static>(
+pub(super) async fn stop<C: TransportPort + 'static>(
     client: Client<C>,
     mut server: BACnetServer<LoopbackTransport>,
 ) {
@@ -161,46 +161,51 @@ async fn stop<C: TransportPort + 'static>(
     server.stop().await.unwrap();
 }
 
-/// A property read gives each property's raw value by RPM, and the shared
-/// formatter shows it.
+/// An object's read gives each property's value by RPM, named with the
+/// Units the same read holds, and its octets as sent.
 #[tokio::test(start_paused = true)]
 async fn reads_properties_by_rpm_and_formats_them() {
     let (client, server) = lab().await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let read = lab_device(&client)
         .await
-        .read(
+        .read_object(
             ai,
             Wanted::List(&[PropertyIdentifier::PRESENT_VALUE, PropertyIdentifier::UNITS]),
         )
         .await
         .unwrap();
-    assert_eq!(read.object, ai);
     assert_eq!(read.via, ReadVia::Rpm);
-    let value = read.rows[0].1.as_ref().unwrap();
+    let reading = &read.readings[0];
     assert_eq!(
-        decode_all(value).unwrap(),
-        [PropertyValue::Real(21.5)],
-        "{read:?}"
+        (reading.object, reading.property, reading.index),
+        (ai, PropertyIdentifier::PRESENT_VALUE, None)
     );
+    let value = reading.value.as_ref().unwrap();
+    assert_eq!(value.text, "21.5 °C");
+    assert_eq!(value.as_f64(), Some(21.5));
+    assert_eq!(decode_all(&value.raw).unwrap(), [PropertyValue::Real(21.5)]);
+    // The same octets in another front end's style.
     let texts = StateTexts::default();
     let format = ValueFormat::new(ObjectType::ANALOG_INPUT, &texts, Floats::Display);
-    let units = crate::format::units(&read.rows);
     assert_eq!(
-        format.with_units(PropertyIdentifier::PRESENT_VALUE, value, units),
-        "21.5 °C"
+        format.value(PropertyIdentifier::PRESENT_VALUE, &value.raw),
+        "21.5"
     );
-    // One element of an array, by ReadProperty.
-    let length = lab_device(&client)
-        .await
-        .read_property(
+    // One element of an array, by ReadProperty, and the same from text.
+    let device = lab_device(&client).await;
+    let length = device
+        .read((
             oid(ObjectType::ANALOG_OUTPUT, 1),
             PropertyIdentifier::PRIORITY_ARRAY,
-            Some(0),
-        )
+            0,
+        ))
         .await
         .unwrap();
-    assert_eq!(decode_all(&length).unwrap(), [PropertyValue::Unsigned(16)]);
+    assert_eq!(length.as_u64(), Some(16));
+    assert_eq!(device.read("ao:1 pa[0]").await.unwrap(), length);
+    assert_eq!(device.read("ai:1").await.unwrap().as_f64(), Some(21.5));
+    drop(device);
     assert!(!client.refused_rpm(&lab_at()));
     stop(client, server).await;
 }
@@ -222,10 +227,16 @@ async fn lists_objects_and_describes_the_device() {
     }
     let summary = lab_device(&client).await.describe_device().await.unwrap();
     assert_eq!(summary.device, LAB);
-    assert_eq!(summary.rows.len(), DEVICE_PROPERTIES.len());
-    let properties: Vec<_> = summary.rows.iter().map(|(p, _)| *p).collect();
+    assert_eq!(summary.readings.len(), DEVICE_PROPERTIES.len());
+    let properties: Vec<_> = summary.readings.iter().map(|r| r.property).collect();
     assert_eq!(properties, DEVICE_PROPERTIES);
     assert!(summary.name().is_some(), "{summary:?}");
+    assert_eq!(
+        summary
+            .value(PropertyIdentifier::VENDOR_IDENTIFIER)
+            .and_then(Value::as_u64),
+        Some(42)
+    );
     stop(client, server).await;
 }
 
@@ -288,7 +299,7 @@ async fn a_refusal_of_rpm_is_remembered_per_device() {
     assert!(!client.refused_rpm(&lab_at()));
     let first = lab_device(&client)
         .await
-        .read(ai, Wanted::List(&wanted))
+        .read_object(ai, Wanted::List(&wanted))
         .await
         .unwrap();
     assert_eq!(first.via, ReadVia::Rp);
@@ -298,7 +309,7 @@ async fn a_refusal_of_rpm_is_remembered_per_device() {
     assert_eq!(rejected, 1);
     let second = lab_device(&client)
         .await
-        .read(ai, Wanted::List(&wanted))
+        .read_object(ai, Wanted::List(&wanted))
         .await
         .unwrap();
     assert_eq!(second.via, ReadVia::Rp);
@@ -307,12 +318,12 @@ async fn a_refusal_of_rpm_is_remembered_per_device() {
         rejected,
         "no RPM was tried again"
     );
-    assert_eq!(second.rows, first.rows);
+    assert_eq!(second.readings, first.readings);
     assert_eq!(
-        decode_all(second.rows[0].1.as_ref().unwrap()).unwrap(),
-        [PropertyValue::Real(21.5)]
+        second.readings[0].value.as_ref().unwrap().as_f64(),
+        Some(21.5)
     );
-    let missing = second.rows[1].1.as_ref().unwrap_err();
+    let missing = second.readings[1].value.as_ref().unwrap_err();
     assert_eq!(
         missing.class_code(),
         Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
@@ -330,27 +341,27 @@ async fn a_missing_property_is_a_typed_error_row() {
     let wanted = [PropertyIdentifier::STATE_TEXT];
     let read = lab_device(&client)
         .await
-        .read(ai, Wanted::List(&wanted))
+        .read_object(ai, Wanted::List(&wanted))
         .await
         .unwrap();
     assert_eq!(read.via, ReadVia::Rpm);
-    let error = read.rows[0].1.as_ref().unwrap_err();
+    let error = read.readings[0].value.as_ref().unwrap_err();
     assert_eq!(
         *error,
-        RowError::Remote(RemoteError::Error {
+        PropertyError::Remote(RemoteError::Error {
             class: ErrorClass::PROPERTY,
             code: ErrorCode::UNKNOWN_PROPERTY,
         })
     );
     assert_eq!(error.to_string(), "PROPERTY:UNKNOWN_PROPERTY");
-    assert_eq!(RowError::NoValue.to_string(), "no value");
+    assert_eq!(PropertyError::NoValue.to_string(), "no value");
     stop(client, server).await;
 }
 
 /// The invoke ID of `npdu` when it is a local, unsegmented
 /// ReadPropertyMultiple request: NPDU version and a control octet with no
 /// addresses, then a Confirmed-Request APDU.
-fn rpm_invoke_id(npdu: &[u8]) -> Option<u8> {
+pub(super) fn rpm_invoke_id(npdu: &[u8]) -> Option<u8> {
     match npdu {
         [0x01, control, apdu, _, invoke_id, service, ..]
             if control & 0x28 == 0 && apdu & 0xF8 == 0x00 && *service == 14 =>
@@ -365,7 +376,7 @@ fn rpm_invoke_id(npdu: &[u8]) -> Option<u8> {
 /// itself with a Reject (unrecognized service), as a device without RPM
 /// does. Everything else passes through. The link's state is an
 /// [`AtomicUsize`] counting those Rejects.
-fn refuses_rpm(inner: LoopbackTransport) -> TestTransport {
+pub(super) fn refuses_rpm(inner: LoopbackTransport) -> TestTransport {
     let builder = TestTransport::builder()
         .inner(inner)
         .unicast(SendMode::Forward)
@@ -401,7 +412,7 @@ fn refuses_rpm(inner: LoopbackTransport) -> TestTransport {
 
 /// ReadPropertyMultiple requests the [`refuses_rpm`] link has answered with
 /// a Reject so far.
-fn rejections(transport: &TestTransport) -> usize {
+pub(super) fn rejections(transport: &TestTransport) -> usize {
     transport.state::<AtomicUsize>().load(Ordering::Relaxed)
 }
 
@@ -421,9 +432,12 @@ async fn every_call_waits_for_the_device_gate() {
         .unwrap();
     let pv = [PropertyIdentifier::PRESENT_VALUE];
     assert!(
-        tokio::time::timeout(wait, lab_device(&client).await.read(ai, Wanted::List(&pv)))
-            .await
-            .is_err()
+        tokio::time::timeout(
+            wait,
+            lab_device(&client).await.read_object(ai, Wanted::List(&pv))
+        )
+        .await
+        .is_err()
     );
     assert!(
         tokio::time::timeout(wait, lab_device(&client).await.list_objects())
@@ -566,8 +580,24 @@ async fn a_who_is_fills_the_table() {
             .iter()
             .any(|d| d.object_identifier.instance_number() == LAB)
     );
+    // Once an encoding error (#2560): text that names no station.
     let refused = client.station_mac("1234").await.unwrap_err();
+    assert!(
+        matches!(&refused, crate::OpsError::Parse { what: "address", input, .. } if input == "1234"),
+        "{refused:?}"
+    );
     assert!(refused.to_string().contains("station address"), "{refused}");
+    let refused = client.station_mac("2:1234").await.unwrap_err();
+    assert!(
+        matches!(
+            &refused,
+            crate::OpsError::Parse {
+                what: "address",
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
     stop(client, server).await;
 }
 

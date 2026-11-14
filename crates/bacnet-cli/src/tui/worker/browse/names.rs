@@ -26,8 +26,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
-use bacnet_ops::client::{Halt, Reader, RpmFailure, rpm_failure, unreachable};
 use bacnet_ops::format::{MAX_NAME_CHARS, name_text};
+use bacnet_ops::raw::{Halt, Reader, RpmFailure, rpm_failure, unreachable};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::PropertyIdentifier;

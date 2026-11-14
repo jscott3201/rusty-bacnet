@@ -442,7 +442,7 @@ async fn a_device_that_stops_answering() {
         .inventory(&InventoryOptions::default())
         .await
         .unwrap_err();
-    assert!(crate::client::unreachable(&error), "{error}");
+    assert!(error.unreachable(), "{error}");
     assert_eq!(client.limits().recent(), 2, "the name, and one Who-Is");
     stop(client, server).await;
 }
@@ -609,14 +609,14 @@ async fn the_pieces_read_as_the_inventory_does() {
             .inventory_device(detail)
             .await
             .unwrap_err();
-        assert!(crate::client::unreachable(&error), "{error}");
+        assert!(error.unreachable(), "{error}");
         let ai = oid(ObjectType::ANALOG_INPUT, 1);
         let error = lab_device(&client)
             .await
             .inventory_object(ai, detail)
             .await
             .unwrap_err();
-        assert!(crate::client::unreachable(&error), "{error}");
+        assert!(error.unreachable(), "{error}");
     }
     stop(client, server).await;
 }
@@ -634,7 +634,7 @@ fn refused(property: PropertyIdentifier) -> crate::format::RawRow {
         class: bacnet_types::enums::ErrorClass::PROPERTY,
         code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
     };
-    (property, Err(crate::format::RowError::Remote(error)))
+    (property, Err(crate::format::PropertyError::Remote(error)))
 }
 
 /// A property every object of the type has fails the entry, naming the

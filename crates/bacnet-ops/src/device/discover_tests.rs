@@ -9,13 +9,13 @@ use bacnet_encoding::apdu::Apdu;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::test_transport::{SendLog, SentFrame};
 use bacnet_types::enums::UnconfirmedServiceChoice;
-use bacnet_types::error::Error;
 
 use super::test_bus::{Bus, N, at, client, mac, server, stop};
+use crate::OpsError;
 use crate::client::{DISCOVER_WAIT, Discover, Scope};
 
 /// The Who-Is frames in `log`, broadcast or not.
-fn who_is_frames(log: &SendLog) -> Vec<SentFrame> {
+pub(super) fn who_is_frames(log: &SendLog) -> Vec<SentFrame> {
     log.frames()
         .into_iter()
         .filter(|frame| {
@@ -27,13 +27,21 @@ fn who_is_frames(log: &SendLog) -> Vec<SentFrame> {
 
 /// The one Who-Is in `log` (cleared after): where its NPDU sends it, and
 /// whether the link broadcast it.
-fn the_who_is(log: &SendLog) -> (Option<NpduAddress>, bool) {
+pub(super) fn the_who_is(log: &SendLog) -> (Option<NpduAddress>, bool) {
     let frames = who_is_frames(log);
     log.clear();
     let [frame] = frames.as_slice() else {
         panic!("one Who-Is, not {frames:?}");
     };
     (frame.decode_npdu().destination, frame.broadcast)
+}
+
+/// A remote broadcast's destination: `network`, no MAC.
+pub(super) fn remote(network: u16) -> Option<NpduAddress> {
+    Some(NpduAddress {
+        network,
+        mac_address: Default::default(),
+    })
 }
 
 /// A discovery that names no scope sends one local broadcast, which no
@@ -74,14 +82,10 @@ async fn an_explicit_scope_reaches_the_wire_as_named() {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
     let quick = |request: Discover| request.wait(Duration::ZERO);
-    let remote = |network| NpduAddress {
-        network,
-        mac_address: Default::default(),
-    };
     client.discover(quick(Discover::network(5))).await.unwrap();
-    assert_eq!(the_who_is(&sent), (Some(remote(5)), true));
+    assert_eq!(the_who_is(&sent), (remote(5), true));
     client.discover(quick(Discover::global())).await.unwrap();
-    assert_eq!(the_who_is(&sent), (Some(remote(0xFFFF)), true));
+    assert_eq!(the_who_is(&sent), (remote(0xFFFF), true));
     client
         .discover(quick(Discover::directed(at(2))))
         .await
@@ -93,54 +97,57 @@ async fn an_explicit_scope_reaches_the_wire_as_named() {
     assert_eq!(frames[0].decode_npdu().destination, None);
 }
 
-/// A scope or range that can't be sent is refused before anything goes:
-/// network 0 (this one is `Local`) and 65535 (every one is `Global`), a
-/// directed address behind a router, and an empty range.
+/// A scope or range that can't be sent is refused before anything goes,
+/// as text to fix, with the scope to use instead: network 0 (this one is
+/// local), 65535 (every one is global) and a directed address behind a
+/// router (its network's scope); an empty range or one past the highest
+/// instance.
 #[tokio::test(start_paused = true)]
 async fn a_refused_scope_or_range_sends_nothing() {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
     let routed = super::DeviceAddress::new(2, &[5]).unwrap();
     let (low, high) = (5, 3);
-    for request in [
-        Discover::network(0),
-        Discover::network(0xFFFF),
-        Discover::directed(routed),
-        Discover::local().range(low..=high),
-        Discover::local().range(0..=4_194_304),
+    for (request, what, says) in [
+        (Discover::network(0), "network", "Discover::local()"),
+        (Discover::network(0xFFFF), "network", "Discover::global()"),
+        (
+            Discover::directed(routed),
+            "address",
+            "Discover::network(2)",
+        ),
+        (Discover::local().range(low..=high), "range", "5"),
+        (Discover::local().range(0..=4_194_304), "range", "4194303"),
     ] {
-        let refused = client.discover(request.clone()).await;
-        assert!(
-            matches!(refused, Err(Error::OutOfRange(_) | Error::Range(_))),
-            "{request:?}: {refused:?}"
-        );
+        let refused = client.discover(request.clone()).await.unwrap_err();
+        let OpsError::Parse { what: given, .. } = &refused else {
+            panic!("{request:?}: {refused:?}");
+        };
+        assert_eq!(*given, what, "{request:?}");
+        assert!(refused.to_string().contains(says), "{request:?}: {refused}");
     }
     assert!(who_is_frames(&sent).is_empty(), "nothing was sent");
 }
 
-/// A front end on the low-level client sends through the same scope: the
-/// default is a local broadcast there too.
+/// A front end on the low-level client sends through the same scope
+/// (`raw::who_is`, no rate cap): the default is a local broadcast there
+/// too.
 #[tokio::test(start_paused = true)]
 async fn the_low_level_send_takes_the_same_default() {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
-    Scope::default()
-        .who_is(client.low_level(), None)
+    crate::raw::who_is(client.low_level(), &Scope::default(), None)
         .await
         .unwrap();
     assert_eq!(the_who_is(&sent), (None, true));
-    Scope::Global
-        .who_is(client.low_level(), None)
+    crate::raw::who_is(client.low_level(), &Scope::Global, None)
         .await
         .unwrap();
-    assert_eq!(
-        the_who_is(&sent),
-        (
-            Some(NpduAddress {
-                network: 0xFFFF,
-                mac_address: Default::default()
-            }),
-            true
-        )
+    assert_eq!(the_who_is(&sent), (remote(0xFFFF), true));
+    let refused = crate::raw::who_is(client.low_level(), &Scope::Network(0), None).await;
+    assert!(
+        matches!(refused, Err(OpsError::Parse { .. })),
+        "{refused:?}"
     );
+    assert!(who_is_frames(&sent).is_empty());
 }

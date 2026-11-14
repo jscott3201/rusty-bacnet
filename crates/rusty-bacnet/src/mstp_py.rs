@@ -271,6 +271,38 @@ mod tests {
         );
     }
 
+    /// Every Python owner of an MS/TP port starts from the host tools' rate
+    /// (#2560): the `mstp_baud` keyword's default, written as a literal in
+    /// each `#[pyo3(signature)]` so `help()` shows it, is
+    /// `bacnet_transport::mstp::HOST_BAUD_RATE`.
+    #[test]
+    fn the_mstp_baud_defaults_are_the_host_rate() {
+        use pyo3::types::PyAnyMethods;
+        Python::initialize();
+        Python::attach(|py| {
+            let inspect = py.import("inspect").unwrap();
+            let classes = [
+                py.get_type::<crate::client::BACnetClient>(),
+                py.get_type::<crate::server::BACnetServer>(),
+                py.get_type::<crate::endpoint::PyMstpEndpoint>(),
+            ];
+            for class in classes {
+                let default = inspect
+                    .call_method1("signature", (&class,))
+                    .unwrap()
+                    .getattr("parameters")
+                    .unwrap()
+                    .get_item("mstp_baud")
+                    .unwrap()
+                    .getattr("default")
+                    .unwrap()
+                    .extract::<u32>()
+                    .unwrap();
+                assert_eq!(default, bacnet_transport::mstp::HOST_BAUD_RATE, "{class}");
+            }
+        });
+    }
+
     #[test]
     fn accepts_all_supported_baud_rates() {
         for baud in SUPPORTED_MSTP_BAUD_RATES {

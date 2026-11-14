@@ -25,8 +25,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::client::{DEVICE_PROPERTIES, Halt, Reader, Wanted};
+use bacnet_ops::client::{DEVICE_PROPERTIES, Wanted};
 use bacnet_ops::limits::RequestLimits;
+use bacnet_ops::raw::{Halt, Reader};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::primitives::ObjectIdentifier;
 use futures_util::stream::{FuturesUnordered, StreamExt};

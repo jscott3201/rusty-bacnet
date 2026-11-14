@@ -23,6 +23,11 @@ targets, values and devices the same way and obey the same request limits.
   `mstp(..)` connect without naming a transport type. A discovery
   (`Discover`) sends a local broadcast, which no router passes on, unless
   it names one network or every network.
+- `reading` and `error`: what a read returns, a `Value` (typed data,
+  display text and the octets sent) a property, gathered into `Readings`
+  by a bulk read, which keeps a refused property's error in its row and
+  what was read when the device stops answering; and `OpsError`, why a
+  call failed.
 - `export`: a device's objects in another model's terms. So far
   `export::s223`, an experimental point list in the terms of proposed
   ASHRAE Standard 223, as Turtle: an inventory read through the client

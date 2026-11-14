@@ -11,38 +11,40 @@
 //! State texts are never spliced into the display text, and the display
 //! text is enveloped whole only when the value holds device text.
 
-use bacnet_ops::format::{Datum, Floats, PLAIN_ELEMENTS, StateTexts, ValueFormat, decode_all};
+use bacnet_ops::format::{Datum, Floats, PLAIN_ELEMENTS, StateTexts, ValueFormat};
 use bacnet_ops::label::kebab;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::PropertyValue;
 use serde_json::{Value, json};
 
 use crate::untrusted::envelope;
 
-/// A property's value as `{display, typed}`, read at `index` (an array
-/// element) or whole: `source` names it for an envelope, `cap` caps any
-/// device text, and `units` (the object's, when read) follow a number in
-/// the display text.
-pub(crate) fn property_value(
+/// `raw`, a read of `property` at `index` (an array element) or whole, as
+/// the tools show it: the shared formatter's display style (six
+/// significant digits, a long list cut short), no state texts, and `units`
+/// (the object's, when read) after a whole property's number. A
+/// [`Device`](bacnet_ops::Device) read's [`Reading`](bacnet_ops::Reading)
+/// comes here by its octets, since its own text keeps every digit and
+/// names states by the object's texts.
+pub(crate) fn tool_value(
     object_type: ObjectType,
     property: PropertyIdentifier,
     index: Option<u32>,
-    data: &[u8],
+    raw: Vec<u8>,
     units: Option<EngineeringUnits>,
-    source: &str,
-    cap: usize,
-) -> Value {
+) -> bacnet_ops::Value {
     let texts = StateTexts::default();
     let format = ValueFormat::new(object_type, &texts, Floats::Display);
-    let text = match index {
-        None => format.with_units(property, data, units),
-        Some(_) => format.value_at(property, index, data),
-    };
-    let mut typed = datum_json(&format.data_at(property, index, data));
-    let display = if envelope_leaves(&mut typed, source, cap) {
-        envelope(&text, source, cap)
+    bacnet_ops::Value::new(&format, property, index, raw, units)
+}
+
+/// `value` as `{display, typed}`: `source` names it for an envelope, and
+/// `cap` caps any device text.
+pub(crate) fn value_json(value: &bacnet_ops::Value, source: &str, cap: usize) -> Value {
+    let mut typed = datum_json(&value.data);
+    let display = if envelope_leaves(&mut typed, source, cap) || value.may_hold_device_text() {
+        envelope(&value.text, source, cap)
     } else {
-        json!(text)
+        json!(value.text)
     };
     json!({ "display": display, "typed": typed })
 }
@@ -147,35 +149,32 @@ fn envelope_every(map: &mut serde_json::Map<String, Value>, source: &str, cap: u
     any
 }
 
-/// The names of a bit string's set bits, for a property whose bits have
-/// names (services, object types, status flags).
-pub(crate) fn bit_names(property: PropertyIdentifier, value: &PropertyValue) -> Vec<String> {
-    let texts = StateTexts::default();
-    let format = ValueFormat::new(ObjectType::DEVICE, &texts, Floats::Display);
-    match format.element_data(property, value) {
-        Datum::Bits {
-            names: Some(names), ..
-        } => names,
-        _ => Vec::new(),
-    }
-}
-
-/// The text of an encoded character string, as the device sent it (to be
-/// enveloped); `None` unless the octets are one character string.
-pub(crate) fn text_of(data: &[u8]) -> Option<String> {
-    match decode_all(data)?.as_slice() {
-        [PropertyValue::CharacterString(text)] => Some(text.clone()),
-        _ => None,
-    }
-}
-
-/// The text of `property` among rows as read, as [`text_of`].
-pub(crate) fn row_text(
-    rows: &[bacnet_ops::format::RawRow],
+/// The text of `property` of `object` among readings, exactly as the
+/// device sent it (to be enveloped); `None` unless it is one character
+/// string.
+pub(crate) fn reading_text(
+    readings: &[bacnet_ops::Reading],
     property: PropertyIdentifier,
 ) -> Option<String> {
-    let (_, value) = rows.iter().find(|(p, _)| *p == property)?;
-    text_of(value.as_deref().ok()?)
+    readings
+        .iter()
+        .find(|r| r.property == property && r.index.is_none())?
+        .value
+        .as_ref()
+        .ok()?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// The Units among readings, when one was read.
+pub(crate) fn reading_units(readings: &[bacnet_ops::Reading]) -> Option<EngineeringUnits> {
+    let units = readings
+        .iter()
+        .find(|r| r.property == PropertyIdentifier::UNITS && r.index.is_none())?;
+    match units.value.as_ref().ok()?.data {
+        Datum::Enumerated { value, .. } => Some(EngineeringUnits::from_raw(value)),
+        _ => None,
+    }
 }
 
 /// An object in the tools' argument form, `analog-input:1`.
@@ -187,12 +186,26 @@ pub(crate) fn object_text(object_type: ObjectType, instance: u32) -> String {
 mod tests {
     use super::*;
     use bacnet_encoding::primitives::encode_property_value;
+    use bacnet_types::primitives::PropertyValue;
     use bytes::BytesMut;
 
     fn encoded(value: &PropertyValue) -> Vec<u8> {
         let mut buf = BytesMut::new();
         encode_property_value(&mut buf, value).unwrap();
         buf.to_vec()
+    }
+
+    fn property_value(
+        object_type: ObjectType,
+        property: PropertyIdentifier,
+        index: Option<u32>,
+        data: &[u8],
+        units: Option<EngineeringUnits>,
+        source: &str,
+        cap: usize,
+    ) -> Value {
+        let value = tool_value(object_type, property, index, data.to_vec(), units);
+        value_json(&value, source, cap)
     }
 
     /// The form the tools print an object in is one their arguments take,
@@ -252,9 +265,16 @@ mod tests {
             unused_bits: 4,
             data: vec![0b1001_0000],
         };
-        assert_eq!(
-            bit_names(PropertyIdentifier::STATUS_FLAGS, &flags),
-            ["in-alarm", "out-of-service"]
+        let value = tool_value(
+            ObjectType::DEVICE,
+            PropertyIdentifier::STATUS_FLAGS,
+            None,
+            encoded(&flags),
+            None,
+        );
+        assert!(
+            matches!(&value.data, Datum::Bits { names: Some(names), .. } if names == &["in-alarm", "out-of-service"]),
+            "{value:?}"
         );
     }
 

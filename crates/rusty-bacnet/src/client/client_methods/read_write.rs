@@ -93,7 +93,10 @@ impl BACnetClient {
     /// `low_limit` above `high_limit`, or a limit past 4194303 raises
     /// `ValueError` before anything is sent, as does a scope that is none
     /// of those.
-    #[pyo3(signature = (low_limit=None, high_limit=None, scope=None))]
+    #[pyo3(
+        signature = (low_limit=None, high_limit=None, scope=None),
+        text_signature = "($self, low_limit=None, high_limit=None, scope='local')"
+    )]
     fn who_is<'py>(
         &self,
         py: Python<'py>,
@@ -102,12 +105,11 @@ impl BACnetClient {
         scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let range = device_range(low_limit, high_limit)?;
-        let scope = discovery_scope(scope.as_ref())?;
+        let scope = discovery_scope(scope.as_ref(), &self.transport_type)?;
         let inner = self.inner.clone();
         let future = async move {
             let c = started(&inner).await?;
-            scope.who_is(&c, range).await.map_err(to_py_err)?;
-            Ok(())
+            send_who_is(&c, &scope, range).await
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
@@ -117,7 +119,10 @@ impl BACnetClient {
     /// Combines `who_is()` + `asyncio.sleep()` + `discovered_devices()` in one call,
     /// with the same limits and `scope` rules as `who_is()`: this network
     /// alone by default.
-    #[pyo3(signature = (timeout_ms=3000, low_limit=None, high_limit=None, scope=None))]
+    #[pyo3(
+        signature = (timeout_ms=3000, low_limit=None, high_limit=None, scope=None),
+        text_signature = "($self, timeout_ms=3000, low_limit=None, high_limit=None, scope='local')"
+    )]
     fn discover<'py>(
         &self,
         py: Python<'py>,
@@ -127,11 +132,11 @@ impl BACnetClient {
         scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let range = device_range(low_limit, high_limit)?;
-        let scope = discovery_scope(scope.as_ref())?;
+        let scope = discovery_scope(scope.as_ref(), &self.transport_type)?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
-            scope.who_is(&c, range).await.map_err(to_py_err)?;
+            send_who_is(&c, &scope, range).await?;
             tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
             let devices = c.discovered_devices().await;
             Ok(devices

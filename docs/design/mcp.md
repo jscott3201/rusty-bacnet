@@ -155,7 +155,7 @@ application layer reader became `bacnet_ops::decode` (`bacnet_tool::decode` sinc
 
 Every item the CLI or MCP needs is `pub` and documented; helpers private to
 a module stay private. The TUI's browser, watch list and write previews use
-`client::Reader` directly with their own stop flags. The new `Client`
+`raw::Reader` directly with their own stop flags. The new `Client`
 facade is not yet used by the CLI: the one-shot `alarms` prints the raw
 acknowledgment, which the facade decodes, so switching it would change the
 output. MCP is the facade's first caller. (Since phase 2 the TUI's watch
@@ -181,14 +181,14 @@ and read at the address that claims it, a routed one through its router.
 | `alarm_summary(device)`, `enrollment_summary(device, request)` | one GetAlarmSummary or GetEnrollmentSummary answer (phase 1) |
 | `discover_routers(network, wait)` | one Who-Is-Router-To-Network, under the local network's rate, and the routers that answered (phase 1) |
 
-A property the device can't give is a typed `RowError`, not text: the
+A property the device can't give is a typed `PropertyError`, not text: the
 device's error (class and code, a structured Error PDU reduced to both),
 reject or abort as data, or no value. MCP returns the structured form
 (§5.2). The TUI writes it in kebab case like the property names beside it
 (`unknown-property`, or `device / operational-problem` when the class adds
 something; `rejected: unrecognized-service`). Before phase 0 the TUI showed
 an RPM error as `PROPERTY:UNKNOWN_PROPERTY` and a ReadProperty-fallback one
-as `BACnet error: property / unknown-property`. `RowError`'s own `Display`
+as `BACnet error: property / unknown-property`. `PropertyError`'s own `Display`
 stays `CLASS:CODE`, the form the one-shot commands print.
 
 Each request waits for its device's gate and a slot under the global cap.

@@ -18,21 +18,28 @@ use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{AbortReason, ErrorClass, ObjectType, PropertyIdentifier, RejectReason};
-use bacnet_types::error::{Error, RemoteError};
+use bacnet_types::error::{Error, RangeError, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::device::{DeviceAddress, Path};
-use crate::format::{RawRow, RowError, decode_all};
+use crate::format::{PropertyError, RawRow, decode_all};
 use crate::limits::{RequestLimits, Turn};
 use crate::target::AddressStyle;
 
 /// How a property list was read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadVia {
-    /// One ReadPropertyMultiple.
+    /// ReadPropertyMultiple.
     Rpm,
-    /// ReadProperty per property, after the device refused RPM.
+    /// ReadProperty per property: the device refused RPM, or an answer
+    /// would have been too large for it.
     Rp,
+    /// A bulk read ([`Device::read_many`](crate::Device::read_many)) only:
+    /// some of its objects by ReadPropertyMultiple, others by ReadProperty,
+    /// because the device failed one batch's RPM as a whole, or a single
+    /// object's answer was too large for one RPM, or it refused RPM part
+    /// way through the read.
+    Mixed,
 }
 
 /// Elements a device's Object_List may claim before the browser stops
@@ -108,17 +115,21 @@ pub fn rpm_failure(error: &Error) -> RpmFailure {
     }
 }
 
-/// True when `error` says the device, or the way to it, isn't answering: a
-/// timeout or a transport failure. Reading on would only time out again.
-/// Only a timeout makes a following handle look for its device elsewhere
-/// ([`Device`](crate::Device)).
+/// True when `error`, a low-level client's error such as a [`Halt`]
+/// holds, says the device, or the way to it, isn't answering: a timeout or
+/// a transport failure. Reading on would only time out again. Only a
+/// timeout makes a following handle look for its device elsewhere
+/// ([`Device`](crate::Device)). The high-level calls' errors say it with
+/// [`OpsError::unreachable`](crate::OpsError::unreachable).
 pub fn unreachable(error: &Error) -> bool {
     timed_out(error) || matches!(error, Error::Transport(_))
 }
 
-/// True when `error` says the request timed out: the client's own timeout,
-/// or the transaction state machine giving up on its retries. A transport
-/// failure is unreachable but not a timeout.
+/// True when `error`, a low-level client's error, says the request timed
+/// out: the client's own timeout, or the transaction state machine giving
+/// up on its retries. A transport failure is unreachable but not a
+/// timeout. The high-level calls' errors say it with
+/// [`OpsError::timed_out`](crate::OpsError::timed_out).
 pub fn timed_out(error: &Error) -> bool {
     match error {
         Error::Remote(RemoteError::Abort { reason }) => *reason == AbortReason::TSM_TIMEOUT,
@@ -355,7 +366,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
                 Ok(value) => Ok(value),
                 // A device that stopped answering fails the read once.
                 Err(Halt::Device(error)) if unreachable(&error) => return Err(Halt::Device(error)),
-                Err(Halt::Device(error)) => Err(RowError::from(error)),
+                Err(Halt::Device(error)) => Err(PropertyError::from(error)),
                 Err(Halt::Cancelled) => return Err(Halt::Cancelled),
             };
             rows.push((property, value));
@@ -433,9 +444,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
             Err(Halt::Cancelled) => return Err(Halt::Cancelled),
         };
         if total > MAX_OBJECTS {
-            return Err(Halt::Device(Error::Encoding(format!(
-                "Object_List claims {total} objects; the browser reads at most {MAX_OBJECTS}"
-            ))));
+            return Err(Halt::Device(too_many(total)));
         }
         let mut objects = Vec::with_capacity(total as usize);
         let mut stopped = None;
@@ -471,13 +480,24 @@ pub fn rpm_rows(ack: ReadPropertyMultipleACK) -> Vec<RawRow> {
             let value = match (element.property_value, element.error) {
                 (Some(value), _) => Ok(value),
                 (None, Some((class, code))) => {
-                    Err(RowError::Remote(RemoteError::Error { class, code }))
+                    Err(PropertyError::Remote(RemoteError::Error { class, code }))
                 }
-                (None, None) => Err(RowError::NoValue),
+                (None, None) => Err(PropertyError::NoValue),
             };
             (element.property_identifier, value)
         })
         .collect()
+}
+
+/// The error for an Object_List that claims `total` elements, more than
+/// [`MAX_OBJECTS`]: a count past a limit, which the client's errors hold
+/// best as a refused value with its numbers ([`Error::Range`]) until the
+/// raw layer has typed errors of its own (#1833).
+fn too_many(total: u32) -> Error {
+    Error::Range(
+        RangeError::new("Object_List claims {} objects; at most {} are read")
+            .with_values(u64::from(total), u64::from(MAX_OBJECTS)),
+    )
 }
 
 /// The object identifiers in an application-tagged value.

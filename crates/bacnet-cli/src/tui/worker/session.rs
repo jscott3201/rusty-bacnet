@@ -488,7 +488,8 @@ async fn serve_with<T: TransportPort + 'static>(
                                 sink.deliver(WorkerEvent::OpFinished { op: old, outcome: OpOutcome::Cancelled }).await;
                             }
                             if let WhoIsScope::Directed { to: DirectedTo::Bip6(peer), .. } = &spec.scope {
-                                let vmac = Box::pin(bacnet_ops::target::bip6_vmac(client.transport(), *peer));
+                                let lookup = bacnet_ops::target::bip6_vmac(client.transport(), *peer);
+                                let vmac = Box::pin(async move { lookup.await.map_err(|e| e.to_string()) });
                                 resolving = Some(Resolving { op, spec, vmac });
                             } else {
                                 listening = who_is(&client, &sink, op, &spec).await;
@@ -757,8 +758,7 @@ pub(crate) async fn send_who_is<T: TransportPort + 'static>(
         } => return Err(format!("the VMAC at {peer} has not been found")),
         WhoIsScope::Network(dnet) => Scope::Network(*dnet),
     };
-    scope
-        .who_is(client, spec.range)
+    bacnet_ops::raw::who_is(client, &scope, spec.range)
         .await
         .map_err(|error| error.to_string())
 }

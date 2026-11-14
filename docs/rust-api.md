@@ -6061,6 +6061,38 @@ OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. It is not audited, as the other
 `BACnetServer.set_reliability_local` (#2469), and an endpoint session has its
 own (see [Endpoint local writes](#endpoint-local-writes)).
 
+#### Binary Input and Output Polarity
+
+Binary Input and Binary Output hold a Polarity and a physical side (#2580).
+`set_polarity(Polarity)` takes NORMAL or REVERSE (VALUE_OUT_OF_RANGE for
+anything else); Polarity stays read-only on the network. On a running server
+the routes are:
+
+| Route | Object | What it does |
+| --- | --- | --- |
+| `set_physical_input_local(&oid, on)` | Binary Input | Takes the state the hardware reads, `true` for ON. In service Present_Value becomes it through Polarity (Table 12-7); out of service the state is kept and Present_Value stays the client's. |
+| `set_present_value_local(&oid, value)` | Binary Input | Takes a logical value, as before, and records the physical state it implies under the current Polarity. Refused out of service. |
+| `physical_output_local(&oid)` | Binary Output | The state to drive the hardware to, `true` for ON: the commanded Present_Value through Polarity (Table 12-9), held where it was while Out_Of_Service is TRUE. |
+| `set_polarity_local(&oid, polarity)` | both | Changes Polarity. |
+
+Without a server, the objects' own `set_physical_input`, `set_present_value`,
+`set_polarity` and `physical_output`, or `ObjectDatabase::physical_output`,
+do the same with no COV or event processing; `LocalInputValue::PhysicalInput`
+and `LocalInputValue::Polarity` reach a served object through its
+`LocalInput`, which is how firmware's `Reporter::apply_local` sets them.
+
+A Polarity change in service re-derives a Binary Input's Present_Value from
+the physical state it holds (Clause 12.6.11), so a steady input flips, and a
+subscriber hears of it; an input that has had no state from the application
+keeps its Present_Value. A Binary Output keeps its Present_Value and its
+physical output follows at once. Out of service neither moves (Clauses
+12.6.10, 12.7.10 and 12.7.11), and the return to service derives the
+Present_Value or physical output from the latest state and Polarity.
+CHANGE_OF_STATE, COMMAND_FAILURE and COV all work on the logical
+Present_Value, and Feedback_Value is logical too: the application reports
+the controlled device's state as an INACTIVE or ACTIVE Present_Value would
+name it. Neither object serves Change_Of_State_Count or Elapsed_Active_Time.
+
 #### Schedule & Notification (6)
 
 | Type | Constructor |
@@ -11794,8 +11826,10 @@ over B/IP without naming a transport type (`.interface(ip)`, `.port(..)`,
 `.broadcast_address(..)`, `.foreign_device(..)`, `.apdu_timeout(..)`,
 `.apdu_retries(..)`, `.limits(..)`, then `.connect().await?`), as do
 `Client::bip6()`, `Client::sc(hub_url, tls)` with `sc-tls` and
-`Client::mstp(port, mac)` with `serial`: each forwards to the low-level
-builder and gives a `Client` over `AnyTransport`, the type's default.
+`Client::mstp(port, mac)` with `serial` (`.baud(..)`, `.max_master(..)`,
+`.max_info_frames(..)`): each forwards to the low-level builder and gives a
+`Client` over `AnyTransport`, the type's default, and `connect()` fails with
+`OpsError`.
 `Client::over(low)` wraps a `BACnetClient<T>` already built, and
 `Client::new(client, limits)` an `Arc<BACnetClient<T>>` and an
 `Arc<RequestLimits>` (`RequestLimits::new(per_second)`, 0 for no cap); a
@@ -11805,19 +11839,24 @@ within its wait (3 s unless `.wait(..)` says otherwise). With no scope named
 (`Discover::default()`) the Who-Is is a local broadcast, which no router
 passes on; `Discover::network(n)`, `Discover::global()` and
 `Discover::directed(address)` are the explicit choices (#2560), and
-`Scope::who_is(&low_level, range)` sends the same Who-Is on a low-level
-client.
+`bacnet_ops::raw::who_is(&low_level, &scope, range)` sends the same Who-Is
+on a low-level client, with no rate cap.
 `client.device(target).await?` gives a `Device` handle: from an address
 (`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there (an
 address on the client's own network, once `BACnetClient::network_number`
 knows it, is the local station), from an instance (`1234`, or `2:1234` on
-one network) it follows the one address claiming it (none: one Who-Is,
-waiting `with_resolve_wait`'s time, a clone's own setting; two or more,
-then or after the wait: `Error::AmbiguousDevice`), and from a discovery
+one network) it follows the one address claiming it (none: one Who-Is for
+it, waiting `with_resolve_wait`'s time, to the network the target names
+or, for a bare instance, to the client's `ResolveScope`, this network alone
+unless `with_resolve_scope` or the builders' `.resolve_scope(..)` widen it,
+a miss failing as `OpsError::UnknownDevice` that says where it asked; two or
+more, then or after the wait: `OpsError::Ambiguous`), and from a discovery
 result it is pinned and knows the instance. The handle's async reads are
-`read`, `read_property`, `list_objects`, `describe_device`, `read_trend`
-(trend, event and audit log pages), `alarms`, `alarm_summary`,
-`enrollment_summary` and the 223 inventory's. A device's gate, turns and
+`read` (one property, as a `Value`), `read_many` (a bulk read, as
+`Readings`), `read_object` (an object's properties, all or a list),
+`list_objects`, `describe_device`, `read_trend` (trend, event and audit log
+pages), `alarms`, `alarm_summary`, `enrollment_summary` and the 223
+inventory's ([values and errors](#values-readings-and-opserror)). A device's gate, turns and
 memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
 two devices sharing an instance stay apart and one device named two ways
 waits at one gate. A following handle moves to the one other address on its
@@ -11826,7 +11865,8 @@ network claiming the instance, and tells `Client::events`
 itself at its address; after a request times out, or finds no route to a
 routed address, when its row is gone; and after a timeout while its address
 still claims the instance, when only the other address answered the one
-Who-Is an earlier timeout sent for it (at most one every `QUIET` for the
+Who-Is an earlier timeout sent for it, on the network where it was last
+reached and never on every network (at most one every `QUIET` for the
 handles following it). A clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
@@ -11848,8 +11888,8 @@ with no aliases left behind:
 | Was | Now |
 |---|---|
 | `bacnet_ops::engine::Engine<T>`, held in an `Arc` | `bacnet_ops::Client<T>`, cheap to clone; `Hub::new` and `McpServer::new` take it by value |
-| the module `bacnet_ops::engine` (`Reader`, `Wanted`, `ReadVia`, `unreachable`, ...) | `bacnet_ops::client` |
-| `WhoIsScope` (`Local`, `Network`, `Directed(&str)`, `Global`) and `engine.who_is(scope, range)` | `Scope` (`Directed` takes a `DeviceAddress`; `client.station_mac(text)` checks an address first), sent by `client.discover(Discover::from(scope).range(low..=high))`; `Discover::default()` is local |
+| the module `bacnet_ops::engine` (`Reader`, `Wanted`, `ReadVia`, `unreachable`, ...) | `bacnet_ops::client`; `Reader`, `Halt` and the error classifiers in `bacnet_ops::raw` |
+| `WhoIsScope` (`Local`, `Network`, `Directed(&str)`, `Global`) and `engine.who_is(scope, range)` | `Scope` (`Directed` takes a `DeviceAddress`; `client.station_mac(text)` checks an address first), sent by `client.discover(Discover::from(scope).range(low..=high))`; `Discover::default()` is local. `bacnet_ops::raw::who_is(low_level, &scope, range)` sends one on a low-level client, with no rate cap |
 | `engine.client()` | `client.low_level()` |
 | `engine.read(device, object, wanted)` and `read_property`, `list_objects`, `describe_device`, `read_trend`, `alarms`, `alarm_summary`, `enrollment_summary`, `log_columns`, `log_state_texts`, `inventory`, `inventory_device`, `inventory_object` with the instance first | the same method on `client.device(device).await?`, without it |
 | `engine.device(instance)`, the discovery table's row | `client.low_level().get_device(instance)` |
@@ -11857,8 +11897,93 @@ with no aliases left behind:
 | `RequestLimits::turn(u32)`, `turn_on(u32, Option<u16>)`, `gate(u32)`, `wait_device_free(u32)` | `turn`, `gate` and `wait_device_free` with a `&DeviceAddress`, whose network paces the request |
 | `engine::Reader { device: u32, .. }` | `Reader { device: DeviceAddress, instance: Option<u32>, .. }`; `Reader::instance` reads a missing instance by the wildcard, `Reader::rpm_in` sends an RPM in a turn the caller holds |
 | `engine::network_of` | gone: the address carries the network |
-| `watch::poll::poll(client, limits, u32, ..)` | `poll(client, limits, &DeviceAddress, ..)` |
+| `watch::poll::poll(client, limits, u32, ..)` | private: `Device::read_many` reads in the same batches |
 | an address target turned into an instance with `add_device` first (the CLI export) | `DeviceAddress::claiming(client, instance)` for the other way round, or a handle from the address |
+
+### Values, readings and OpsError
+
+A `Client` or `Device` read returns its values in both forms (#2560). A
+`Value` holds the formatter's typed data (`data`, a `format::Datum`, the
+CLI's JSON shape), its text (`text`, with every digit and every list
+element) and the octets the device sent (`raw`), with `as_f64`, `as_bool`
+(a BOOLEAN, or a binary object's state), `as_u64`, `as_i64`, `as_str`,
+`is_null` and `decode()` (the octets as a `PropertyValue`). The text names
+units and states only from what the same call read: a whole property's
+number takes the object's Units (`21.5 °C`) when the call read Units too,
+and a state its object's Active_Text and Inactive_Text, or State_Text
+(`2 (Heat)`), when the call read those. `Device::read` of one property
+names neither. `Value::new(&format, property, index, raw, units)` builds a
+value with any formatter, as the MCP server and the one-shot CLI do for
+their own display rules, and `may_hold_device_text()` says when the text
+quotes device text.
+
+`Device::read(p)` reads one property by ReadProperty. It takes a
+`PropertyRef`, text such as `"ai:1 pv"` or `"ao:1 priority-array[8]"` (an
+object alone is its Present_Value), or an `(object, property)` or `(object,
+property, index)` tuple (`IntoProperty`).
+
+`read_many(ps) -> Result<Readings, OpsError>` reads many properties of any
+objects in the watch hub's batches: up to 16 objects and 32 properties a
+ReadPropertyMultiple, a batch whose answer would be too large asked again an
+object at a time, a batch the device fails as a whole read by ReadProperty,
+and ReadProperty throughout once the device has refused RPM. `Readings {
+readings, via, stopped }` holds one `Reading { object, property, index,
+value: Result<Value, PropertyError> }` a property, in the order asked for. A
+property the device refuses, one of an object it doesn't have, an element
+past an array's end and an object its answer leaves out are errors in their
+own rows. `stopped` is set only when the device stopped answering part way
+(`unreachable()`); `readings` then keeps what was read before it, an
+object's properties read before it included. `via` is `ReadVia::Mixed` when
+some objects went by RPM and others by ReadProperty (a batch failed whole, a
+single object too large for one answer, or RPM refused part way through).
+The `Err` is anything decided before a request is sent: text that doesn't
+name one property (ALL, REQUIRED and OPTIONAL are refused, pointing to
+`read_object`), a device that can't be placed, an instance two addresses
+claim, or a routed address with no route.
+
+`read_object(object, wanted) -> Result<ObjectRead, OpsError>` reads one
+object's properties (all of them, or a list) in one RPM, or by ReadProperty
+(for ALL, those its Property_List names) once the device has refused RPM,
+or when it failed this RPM as a whole, as `read_many` does. `ObjectRead {
+object, readings, via }` has a property the device refused as an error in
+its own row. A device that stops answering fails the read, keeping
+nothing.
+
+Every call fails with `OpsError` (`#[non_exhaustive]`): `Parse { what,
+input, reason }` for text that names nothing this client can address,
+`UnknownDevice { target }` (also a B/IPv6 node that doesn't say its VMAC),
+`Ambiguous { instance, candidates }` (the addresses as `DeviceAddress`),
+`Unreachable { device, source }` for a timeout or a link failure (a
+transaction state machine's TSM_TIMEOUT abort included), `Refused { device,
+error, detail }` for the device's Error, Reject or Abort (`detail` holds a
+structured Error PDU's extra fields), `Paging(PagingFault)` for a device
+that breaks a paged read's rules (a GetEventInformation answer naming an
+object again, or saying more remain with no new object), and
+`Client(Error)` for any other low-level error, unchanged.
+`error.unreachable()`, `error.timed_out()` and `error.remote()` answer the
+usual questions. Its text is the low-level error's, and its `source()` that
+error's own source, so a printed chain names each cause once.
+
+The raw layer, `bacnet_ops::raw`, is for front ends that run their own
+request jobs: `Reader`, `Halt`, `RpmFailure`, `rpm_failure`, `rpm_rows`,
+`raw::turn` (a turn at a device's gate with no stop flag), and
+`unreachable` and `timed_out` for its `bacnet_types::error::Error`s.
+
+| Was | Now |
+|---|---|
+| `device.read(object, wanted)` and `PropertyRead { object, rows, via }` | `device.read_object(object, wanted)`, a `Result<ObjectRead, OpsError>` |
+| `device.read_property(object, property, index)`, the octets | `device.read((object, property))` or `device.read(PropertyRef::new(object, property).at(index))`, a `Value` (`value.raw` for the octets) |
+| `DeviceSummary { rows, .. }`, `Eq` | `DeviceSummary { readings, .. }`, `PartialEq` only, and `summary.value(property)` |
+| `format::RowError` | `format::PropertyError`, also `bacnet_ops::PropertyError` |
+| `Result<_, bacnet_types::error::Error>` from `Client::device`, `who_is`, `discover`, `discover_routers`, `station_mac` and every `Device` read | `Result<_, OpsError>`; `unreachable(&e)` and `timed_out(&e)` on those errors become `e.unreachable()` and `e.timed_out()` |
+| `client::{Reader, Halt, RpmFailure, rpm_failure, rpm_rows, unreachable, timed_out}` | `raw::{..}`, the same names |
+| `ReadVia::{Rpm, Rp}` | also `ReadVia::Mixed` |
+| `watch::poll::{MAX_BATCH, MAX_BATCH_PROPERTIES, MISSING}` | the batch sizes are private (16 objects, 32 properties); `watch::MISSING` |
+| `format::alarms::read_event_information(_until)` returning the client's `Error` | generic over the fetch's error `E: From<PagingFault>`, `OpsError` for a `Device` |
+| `target::bip6_vmac` failing with a `String` | `target::VmacLookup` (`NotBip6`, `NoAnswer`) |
+| `Error::Encoding` for a directed Who-Is or `station_mac` text that names no station, and `Error::OutOfRange` for a refused target | `OpsError::Parse` |
+| `Error::Encoding` for an Object_List claiming more than `MAX_OBJECTS` elements | `Error::Range` with both numbers, inside `OpsError::Client` from a `Device` read |
+| `Error::Encoding` for a GetEventInformation answer naming an object twice | `OpsError::Paging(PagingFault::Repeated { .. })` |
 
 ### Moved to bacnet-tool
 

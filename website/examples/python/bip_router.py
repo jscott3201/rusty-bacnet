@@ -55,13 +55,13 @@ async def main() -> int:
                     raise RuntimeError(f"expected this router, heard {routers}")
                 print(f"Router to network {FAR} found, "
                       f"reaching networks {routers[0].networks}")
-                # A global Who-Is crosses the router (a local one, the
-                # default, stays on this network); the I-Am names the
+                # A Who-Is to network 5 crosses the router (a local one,
+                # the default, stays on this network); the I-Am names the
                 # device's network.
                 devices = await client.discover(timeout_ms=2000,
                                                 low_limit=DEVICE_INSTANCE,
                                                 high_limit=DEVICE_INSTANCE,
-                                                scope="global")
+                                                scope=FAR)
                 [device] = [found for found in devices
                             if found.object_identifier.instance == DEVICE_INSTANCE]
                 print(f"Device {DEVICE_INSTANCE} found on network "

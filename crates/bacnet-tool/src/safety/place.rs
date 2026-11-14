@@ -22,8 +22,8 @@ use bacnet_types::error::Error;
 
 use super::ledger::Entry;
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::client::{Halt, Reader};
 use bacnet_ops::limits::{RequestLimits, Turn};
+use bacnet_ops::raw::{self, Halt, Reader};
 use bacnet_ops::target::AddressStyle;
 
 /// How long a revert waits for a device it had to look for.
@@ -263,19 +263,7 @@ pub(super) async fn turn_asking<T: TransportPort + 'static>(
             .check(client, rate, (address, instance), style)
             .await?;
     }
-    let never = AtomicBool::new(false);
-    let reader = Reader {
-        client,
-        device: address.clone(),
-        instance: Some(instance),
-        rate,
-        cancel: &never,
-        rpm: true,
-    };
-    let held = reader.turn().await.map_err(|halt| match halt {
-        Halt::Device(error) => error,
-        Halt::Cancelled => Error::Encoding("the turn was cancelled".into()),
-    })?;
+    let held = raw::turn(client, rate, address).await?;
     // Again once the turn is held: the row may have changed while it waited.
     claimed(client, address, instance, style).await?;
     Ok(held)

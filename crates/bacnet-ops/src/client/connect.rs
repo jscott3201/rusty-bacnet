@@ -18,9 +18,9 @@ use bacnet_client::client::{BACnetClient, Bip6ClientBuilder, BipClientBuilder};
 use bacnet_transport::bip::{BipMode, ForeignDeviceConfig};
 use bacnet_transport::bip6::Bip6ForeignDeviceConfig;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::error::Error;
 
-use super::Client;
+use super::{Client, ResolveScope};
+use crate::error::OpsError;
 use crate::limits::RequestLimits;
 
 /// `duration` in whole milliseconds, as the low-level builders take it.
@@ -28,9 +28,32 @@ fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// What every connect builder keeps besides the low-level builder: the
+/// request limits and where a handle by instance asks for its device.
+struct Kept {
+    limits: RequestLimits,
+    resolve_scope: ResolveScope,
+}
+
+impl Default for Kept {
+    fn default() -> Self {
+        Self {
+            limits: RequestLimits::new(0),
+            resolve_scope: ResolveScope::Local,
+        }
+    }
+}
+
+impl Kept {
+    /// A client that wraps `low`, with these settings.
+    fn wrap<T: TransportPort + 'static>(self, low: BACnetClient<T>) -> Client<T> {
+        Client::new(Arc::new(low), Arc::new(self.limits)).with_resolve_scope(self.resolve_scope)
+    }
+}
+
 /// The settings every connect builder takes: the APDU timeout and retries,
-/// forwarded to the low-level builder in `builder`, and the request limits
-/// the client keeps (`limits`).
+/// forwarded to the low-level builder in `builder`, and what the client
+/// keeps (`kept`).
 macro_rules! common_settings {
     ($builder:ty) => {
         impl $builder {
@@ -55,16 +78,20 @@ macro_rules! common_settings {
             /// and still one request at a time to each device.
             #[must_use]
             pub fn limits(mut self, limits: RequestLimits) -> Self {
-                self.limits = limits;
+                self.kept.limits = limits;
+                self
+            }
+
+            /// Where a handle made from a bare instance that no address
+            /// claims asks for its device: this network alone by default
+            /// (see [`Client::with_resolve_scope`]).
+            #[must_use]
+            pub fn resolve_scope(mut self, scope: ResolveScope) -> Self {
+                self.kept.resolve_scope = scope;
                 self
             }
         }
     };
-}
-
-/// A client that wraps `low`, keeping `limits`.
-fn wrap<T: TransportPort + 'static>(low: BACnetClient<T>, limits: RequestLimits) -> Client<T> {
-    Client::new(Arc::new(low), Arc::new(limits))
 }
 
 impl Client {
@@ -74,7 +101,7 @@ impl Client {
     /// ```no_run
     /// use std::net::Ipv4Addr;
     /// use bacnet_ops::Client;
-    /// # async fn example() -> Result<(), bacnet_types::error::Error> {
+    /// # async fn example() -> Result<(), bacnet_ops::OpsError> {
     /// let client = Client::bip()
     ///     .interface(Ipv4Addr::new(192, 168, 1, 50))
     ///     .broadcast_address(Ipv4Addr::new(192, 168, 1, 255))
@@ -85,7 +112,7 @@ impl Client {
     pub fn bip() -> BipConnect {
         BipConnect {
             builder: BACnetClient::bip_builder(),
-            limits: RequestLimits::new(0),
+            kept: Kept::default(),
         }
     }
 
@@ -94,7 +121,7 @@ impl Client {
     pub fn bip6() -> Bip6Connect {
         Bip6Connect {
             builder: BACnetClient::bip6_builder(),
-            limits: RequestLimits::new(0),
+            kept: Kept::default(),
         }
     }
 }
@@ -105,14 +132,14 @@ impl<T: TransportPort + 'static> Client<T> {
     /// application that sets what the connect builders don't offer, or
     /// runs its own transport type. [`Client::new`] takes the limits too.
     pub fn over(client: BACnetClient<T>) -> Self {
-        wrap(client, RequestLimits::new(0))
+        Kept::default().wrap(client)
     }
 }
 
 /// The B/IP settings for [`Client::bip`].
 pub struct BipConnect {
     builder: BipClientBuilder,
-    limits: RequestLimits,
+    kept: Kept,
 }
 
 common_settings!(BipConnect);
@@ -143,8 +170,9 @@ impl BipConnect {
 
     /// Have the BBMD `config` names take this client on as a foreign
     /// device: it then hands the client the broadcasts of its BACnet
-    /// network, and passes the client's broadcasts on there (Annex J). The client starts without waiting for
-    /// the BBMD to accept; [`BACnetClient::foreign_registration`] on its
+    /// network, and passes the client's broadcasts on there (Annex J).
+    /// The client starts without waiting for the BBMD to accept;
+    /// [`BACnetClient::foreign_registration`] on its
     /// [`low_level`](Client::low_level) client says how it went.
     #[must_use]
     pub fn foreign_device(mut self, config: ForeignDeviceConfig) -> Self {
@@ -156,18 +184,18 @@ impl BipConnect {
     ///
     /// # Errors
     ///
-    /// As the low-level builder's `build_any`: settings it refuses, and a
-    /// socket that can't be bound.
-    pub async fn connect(self) -> Result<Client, Error> {
+    /// As the low-level builder's `build_any`, as [`OpsError::Client`]:
+    /// settings it refuses, and a socket that can't be bound.
+    pub async fn connect(self) -> Result<Client, OpsError> {
         let low = Box::pin(self.builder.build_any()).await?;
-        Ok(wrap(low, self.limits))
+        Ok(self.kept.wrap(low))
     }
 }
 
 /// The B/IPv6 settings for [`Client::bip6`].
 pub struct Bip6Connect {
     builder: Bip6ClientBuilder,
-    limits: RequestLimits,
+    kept: Kept,
 }
 
 common_settings!(Bip6Connect);
@@ -199,10 +227,10 @@ impl Bip6Connect {
     ///
     /// # Errors
     ///
-    /// As the low-level builder's `build_any`.
-    pub async fn connect(self) -> Result<Client, Error> {
+    /// As the low-level builder's `build_any`, as [`OpsError::Client`].
+    pub async fn connect(self) -> Result<Client, OpsError> {
         let low = Box::pin(self.builder.build_any()).await?;
-        Ok(wrap(low, self.limits))
+        Ok(self.kept.wrap(low))
     }
 }
 
@@ -219,18 +247,20 @@ mod sc {
         /// (`wss://hub.example.com/bacnet`), with `tls` as its TLS
         /// identity and trust. It needs its VMAC and device UUID too
         /// ([`ScConnect::vmac`], [`ScConnect::device_uuid`]).
+        #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
         pub fn sc(hub_url: &str, tls: ScNodeTlsConfig) -> ScConnect {
             ScConnect {
                 builder: BACnetClient::sc_builder().hub_url(hub_url).tls_config(tls),
-                limits: RequestLimits::new(0),
+                kept: Kept::default(),
             }
         }
     }
 
     /// The BACnet/SC settings for [`Client::sc`].
+    #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
     pub struct ScConnect {
-        pub(super) builder: ScClientBuilder,
-        pub(super) limits: RequestLimits,
+        builder: ScClientBuilder,
+        kept: Kept,
     }
 
     common_settings!(ScConnect);
@@ -270,12 +300,13 @@ mod sc {
         ///
         /// # Errors
         ///
-        /// As the low-level builder's `build_any`: a missing or reserved
-        /// VMAC or UUID and other refused settings before any dial, then a
-        /// hub that can't be reached or refuses the connection.
-        pub async fn connect(self) -> Result<Client, Error> {
+        /// As the low-level builder's `build_any`, as
+        /// [`OpsError::Client`]: a missing or reserved VMAC or UUID and
+        /// other refused settings before any dial, then a hub that can't
+        /// be reached or refuses the connection.
+        pub async fn connect(self) -> Result<Client, OpsError> {
             let low = Box::pin(self.builder.build_any()).await?;
-            Ok(wrap(low, self.limits))
+            Ok(self.kept.wrap(low))
         }
     }
 }
@@ -287,26 +318,25 @@ pub use self::sc::ScConnect;
 mod mstp {
     use bacnet_client::client::ClientBuilder;
     use bacnet_transport::any::AnyTransport;
-    use bacnet_transport::mstp::{MstpConfig, MstpTransport};
+    use bacnet_transport::mstp::{HOST_BAUD_RATE, MstpConfig, MstpTransport};
     use bacnet_transport::mstp_serial::{SerialConfig, TokioSerialPort};
 
     use super::*;
 
-    /// The baud rate an MS/TP client joins at unless told otherwise.
-    const DEFAULT_BAUD: u32 = 38_400;
-
     impl Client {
         /// An MS/TP client on the serial port `port` (`/dev/ttyUSB0`,
         /// `COM3`), joining the trunk as master station `mac` (0 to 127,
-        /// one no other device uses) at 38,400 baud until told otherwise.
+        /// one no other device uses) at [`HOST_BAUD_RATE`] (38,400 baud),
+        /// with Max_Master 127 and Max_Info_Frames 1, until told otherwise.
+        #[cfg_attr(docsrs, doc(cfg(feature = "serial")))]
         pub fn mstp(port: &str, mac: u8) -> MstpConnect {
             MstpConnect {
                 builder: BACnetClient::<AnyTransport>::generic_builder(),
-                limits: RequestLimits::new(0),
+                kept: Kept::default(),
                 port: port.to_string(),
                 config: MstpConfig {
                     this_station: mac,
-                    baud_rate: DEFAULT_BAUD,
+                    baud_rate: HOST_BAUD_RATE,
                     ..MstpConfig::default()
                 },
             }
@@ -314,9 +344,10 @@ mod mstp {
     }
 
     /// The MS/TP settings for [`Client::mstp`].
+    #[cfg_attr(docsrs, doc(cfg(feature = "serial")))]
     pub struct MstpConnect {
-        pub(super) builder: ClientBuilder<AnyTransport>,
-        pub(super) limits: RequestLimits,
+        builder: ClientBuilder<AnyTransport>,
+        kept: Kept,
         port: String,
         config: MstpConfig,
     }
@@ -325,10 +356,28 @@ mod mstp {
 
     impl MstpConnect {
         /// The trunk's baud rate: 9600, 19200, 38400, 57600, 76800 or
-        /// 115200.
+        /// 115200 ([`HOST_BAUD_RATE`] by default).
         #[must_use]
         pub fn baud(mut self, baud: u32) -> Self {
             self.config.baud_rate = baud;
+            self
+        }
+
+        /// Max_Master: the highest MAC this station polls for a successor
+        /// (0 to 127, at least its own MAC; 127 by default). A trunk whose
+        /// masters all sit low passes the token faster with it set to the
+        /// highest of them.
+        #[must_use]
+        pub fn max_master(mut self, max_master: u8) -> Self {
+            self.config.max_master = max_master;
+            self
+        }
+
+        /// Max_Info_Frames: how many frames this station sends each time
+        /// it holds the token (1 to 255; 1 by default).
+        #[must_use]
+        pub fn max_info_frames(mut self, frames: u8) -> Self {
+            self.config.max_info_frames = frames;
             self
         }
 
@@ -336,18 +385,30 @@ mod mstp {
         ///
         /// # Errors
         ///
-        /// Settings the MS/TP transport refuses (a MAC above Max_Master,
-        /// a baud rate too low), before the port is opened; a port that
-        /// can't be opened; then as the low-level builder's `build`.
-        pub async fn connect(self) -> Result<Client, Error> {
-            self.config.validate()?;
+        /// [`OpsError::Parse`] for settings the MS/TP transport refuses (a
+        /// MAC above Max_Master, a baud rate too low), before the port is
+        /// opened; [`OpsError::Client`] for a port that can't be opened,
+        /// naming it, then as the low-level builder's `build`.
+        pub async fn connect(self) -> Result<Client, OpsError> {
+            let settings = format!(
+                "mac {}, max_master {}, max_info_frames {}, {} baud",
+                self.config.this_station,
+                self.config.max_master,
+                self.config.max_info_frames,
+                self.config.baud_rate
+            );
+            self.config
+                .validate()
+                .map_err(|error| OpsError::parse("MS/TP settings", &settings, error.to_string()))?;
             let serial = TokioSerialPort::open(&SerialConfig {
                 port_name: self.port.clone(),
                 baud_rate: self.config.baud_rate,
             })
             .map_err(|error| match error {
-                Error::Encoding(message) => Error::Encoding(format!("{}: {message}", self.port)),
-                other => other,
+                bacnet_types::error::Error::Encoding(message) => OpsError::Client(
+                    bacnet_types::error::Error::Encoding(format!("{}: {message}", self.port)),
+                ),
+                other => OpsError::Client(other),
             })?;
             let max_apdu = self.config.max_apdu_length();
             let transport = MstpTransport::new(serial, self.config);
@@ -358,7 +419,7 @@ mod mstp {
                     .build(),
             )
             .await?;
-            Ok(wrap(low, self.limits))
+            Ok(self.kept.wrap(low))
         }
     }
 }

@@ -29,7 +29,6 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::timed_out;
 use crate::device::Path;
 use crate::limits::RequestLimits;
 
@@ -44,8 +43,8 @@ pub enum Naming {
     /// Every request sent was answered, or refused, or none was sent.
     #[default]
     Answered,
-    /// A request timed out ([`timed_out`]), and the
-    /// naming stopped there.
+    /// A request timed out ([`OpsError::timed_out`](crate::OpsError::timed_out)),
+    /// and the naming stopped there.
     TimedOut,
 }
 
@@ -55,8 +54,8 @@ impl Naming {
         self == Self::TimedOut
     }
 
-    pub(crate) fn of(error: &Error) -> Self {
-        if timed_out(error) {
+    pub(crate) fn of(error: &crate::OpsError) -> Self {
+        if error.timed_out() {
             Self::TimedOut
         } else {
             Self::Answered

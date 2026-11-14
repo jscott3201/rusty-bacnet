@@ -188,9 +188,10 @@ async with router:
     await hosted.start()
     async with BACnetClient(transport="router", router=router) as client:
         # The router's application has no network of its own, so its
-        # Who-Is names every network, or one.
-        for device in await client.discover(timeout_ms=3000, scope="global"):
-            print(device.object_identifier.instance, device.source_network)
+        # Who-Is names one: here each of the router's two networks.
+        for network in (1, 5):
+            for device in await client.discover(timeout_ms=3000, scope=network):
+                print(device.object_identifier.instance, device.source_network)
         value = await client.read_property_from_device(
             1005, ObjectIdentifier(ObjectType.ANALOG_INPUT, 0),
             PropertyIdentifier.PRESENT_VALUE)
@@ -223,7 +224,7 @@ after it. The router's network-control messages stay internal.
 
 ## Enums
 
-All enums have class-level named constants, plus `from_raw(int)` and `to_raw()` for raw access, and a `name` property: the constant's name (`EventState.HIGH_LIMIT.name == "HIGH_LIMIT"`), or `None` for a number without one (#2080). They support `==`, `hash()`, and `repr()`, and `copy.copy`, `copy.deepcopy` and `pickle`, which rebuild a value with `from_raw(value.to_raw())` (#1456). Five of them, `EngineeringUnits`, `ErrorClass`, `ErrorCode`, `RejectReason` and `AbortReason`, are `enum.IntEnum` classes whose members are ints ([below](#intenum-classes)).
+All enums have class-level named constants, plus `from_raw(int)` and `to_raw()` for raw access, and a `name` property: the constant's name (`EventState.HIGH_LIMIT.name == "HIGH_LIMIT"`), or `None` for a number without one (#2080). They support `==`, `hash()`, and `repr()`, and `copy.copy`, `copy.deepcopy` and `pickle`, which rebuild a value with `from_raw(value.to_raw())` (#1456). Six of them, `EngineeringUnits`, `ErrorClass`, `ErrorCode`, `RejectReason`, `AbortReason` and `Polarity`, are `enum.IntEnum` classes whose members are ints ([below](#intenum-classes)).
 
 ### ObjectType
 
@@ -245,12 +246,13 @@ pid = PropertyIdentifier.PRESENT_VALUE
 
 ### IntEnum classes
 
-`EngineeringUnits`, `ErrorClass`, `ErrorCode`, `RejectReason` and
-`AbortReason` are `enum.IntEnum` classes (#1816). A member is an `int`: it
-compares equal to its number and hashes like it, so code that passes or
-compares plain ints keeps working. The `units=` arguments of the object
-constructors take a member or an int, and a raised error's `error_class`,
-`error_code` and `reason` are members.
+`EngineeringUnits`, `ErrorClass`, `ErrorCode`, `RejectReason`,
+`AbortReason` and `Polarity` are `enum.IntEnum` classes (#1816, #2580). A
+member is an `int`: it compares equal to its number and hashes like it, so
+code that passes or compares plain ints keeps working. The `units=` and
+`polarity=` arguments of the object constructors and `set_polarity_local`
+take a member or an int, and a raised error's `error_class`, `error_code`
+and `reason` are members.
 
 A value without a name, such as a proprietary error code or unit, is a
 pseudo-member: `ErrorCode(300)` and `ErrorCode.from_raw(300)` give an
@@ -262,7 +264,9 @@ instances of their classes whatever the value. Pseudo-members aren't cached: two
 equal values (`==` holds) but not the same object (`is` doesn't). Whether
 `300 in ErrorCode` is true depends on the Python version, so test a value with
 `ErrorCode(300)` or by comparing numbers instead. A number outside the field's range (0 to 255 for the reasons, 0 to
-65535 for the error class and code) raises `ValueError`. `str()` of a member
+65535 for the error class and code) raises `ValueError`. A `polarity=`
+argument other than NORMAL or REVERSE, negative included, raises
+`BacnetProtocolError` VALUE_OUT_OF_RANGE instead, as the object would. `str()` of a member
 is its number, as for any `IntEnum`; `repr()` names it (`ErrorClass.PROPERTY`).
 
 ```python
@@ -1811,7 +1815,7 @@ answers a global Who-Is, so give it a range, or name the network. Another
 name or number raises `ValueError`, and another type `TypeError`, before
 anything is sent. A client on a router's application
 (`transport="router"`) has no network of its own, so its Who-Is names one,
-or every one.
+or every one: a local one raises `ValueError` saying so.
 
 ```python
 await client.who_is()                    # all devices on this network
@@ -5515,6 +5519,43 @@ sensor = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
 await server.set_reliability_local(sensor, Reliability.NO_SENSOR)
 # ... and once the sensor is back:
 await server.set_reliability_local(sensor, Reliability.NO_FAULT_DETECTED)
+```
+
+#### Binary Polarity and the physical side
+
+`add_binary_input` and `add_binary_output` take a keyword-only `polarity`,
+a `Polarity` or its number: `Polarity.NORMAL` (0, the default) or
+`Polarity.REVERSE` (1) (#2580). Any other int raises `BacnetProtocolError`
+VALUE_OUT_OF_RANGE. The endpoints' `add_binary_input` takes it too. Clients
+read Polarity but can't write it; `set_polarity_local(object_id, polarity)`
+changes it on a running server. The physical side has its own routes, so a
+raw hardware state is never mistaken for a logical one:
+
+- `set_physical_input_local(object_id, on)` reports what a Binary Input's
+  hardware reads, `True` for ON. In service Present_Value becomes that state
+  through Polarity (ON is ACTIVE under NORMAL and INACTIVE under REVERSE), and
+  event and COV processing see the logical value. While Out_Of_Service is set
+  the state is kept but Present_Value stays the client's; the return to
+  service derives Present_Value from the latest state.
+  `set_present_value_local` still takes a logical value.
+- `physical_output_local(object_id)` gives the state to drive a Binary
+  Output's hardware to, `True` for ON: the commanded Present_Value through
+  Polarity in service, held where it was while Out_Of_Service is set.
+
+A run-time Polarity change re-derives an in-service Binary Input's
+Present_Value from the state it last took, and moves a Binary Output's
+physical output at once; out of service neither moves until the return to
+service. Feedback_Value stays logical: write the controlled device's state
+as an INACTIVE or ACTIVE Present_Value would name it.
+
+```python
+door = ObjectIdentifier(ObjectType.BINARY_INPUT, 1)
+fan = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)
+server.add_binary_input(1, "Door Contact", polarity=Polarity.REVERSE)  # active-low contact
+server.add_binary_output(1, "Fan Relay", polarity=Polarity.REVERSE)     # normally closed relay
+await server.start()
+await server.set_physical_input_local(door, False)        # reads ACTIVE
+energize_relay = await server.physical_output_local(fan)  # True while the fan is commanded INACTIVE
 ```
 
 #### `purge_audit_log(object_id)`
