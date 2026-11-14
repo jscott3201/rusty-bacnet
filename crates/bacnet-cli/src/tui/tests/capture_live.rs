@@ -48,6 +48,23 @@ async fn a_read_property_over_bip_shows_the_tapped_request_and_response() {
     let mut client = crate::transport::build_bip_client(&plan(None).args)
         .await
         .unwrap();
+    // The client asks for its network's number as it starts (#2572): one
+    // What-Is-Network-Number, sent before `build` returns, so before any
+    // capture can subscribe. This link broadcasts to 127.0.0.1, so the
+    // question comes straight back to the client's own socket, which drops
+    // it as its own echo. Wait for that copy, so the capture below holds
+    // the ReadProperty exchange alone and no echo can land in it.
+    bounded(async {
+        while client.transport().receive_counters().own_echo == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    assert_eq!(
+        client.transport().receive_counters().own_echo,
+        1,
+        "the start-up question, and nothing else, came back"
+    );
     let (sink, mut events) = EventSink::channel(EVENT_CHANNEL_CAPACITY);
     let (start, commands) = mpsc::channel(4);
     let mut app = capturing();
@@ -75,6 +92,7 @@ async fn a_read_property_over_bip_shows_the_tapped_request_and_response() {
     bounded(async { tokio::join!(pump, exchange) }).await;
 
     let ring = &app.capture.ring;
+    assert_eq!(ring.len(), 4, "the exchange, with no start-up frame");
     let frames: Vec<_> = (1..=4).map(|n| ring.get(n).unwrap().clone()).collect();
     let directions: Vec<Direction> = frames.iter().map(|f| f.direction).collect();
     assert_eq!(
