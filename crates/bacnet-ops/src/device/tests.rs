@@ -12,7 +12,7 @@ use bacnet_types::error::Error;
 
 use super::test_bus::{Bus, N, at, client, client_on, name_of, requests, server, settle, stop};
 use super::*;
-use crate::client::{WhoIsScope, unreachable};
+use crate::client::WhoIsScope;
 
 /// From an address a handle is pinned, from an instance claimed once it
 /// follows, from a discovery result it is pinned and knows the instance;
@@ -133,7 +133,7 @@ async fn a_shared_instance_is_reached_by_address() {
         }]
     );
     let error = client.device(N).await.unwrap_err();
-    assert!(matches!(error, Error::AmbiguousDevice { instance: N, .. }));
+    assert!(matches!(error, OpsError::Ambiguous { instance: N, .. }));
     let text = error.to_string();
     assert!(
         text.contains("10.0.0.2:47808") && text.contains("10.0.0.3:47808"),
@@ -169,7 +169,7 @@ async fn a_pinned_handle_reports_a_move_and_stays() {
     assert_eq!(device.moved_to().await, Some(at(3)));
     bus.silence(2);
     let error = name_of(&device).await.unwrap_err();
-    assert!(unreachable(&error), "{error}");
+    assert!(error.unreachable(), "{error}");
     assert_eq!(device.address(), at(2), "never followed");
     stop(servers).await;
 }
@@ -238,7 +238,7 @@ async fn an_unclaimed_instance_is_asked_for_once() {
     assert_eq!(device.address(), at(2));
     assert_eq!(sent.broadcasts().len(), 1, "one Who-Is");
     let error = client.device(4242).await.unwrap_err();
-    assert!(matches!(&error, Error::UnknownDevice { device } if device == "4242"));
+    assert!(matches!(&error, OpsError::UnknownDevice { target } if target == "4242"));
     let silent = client.with_resolve_wait(None);
     assert_eq!(silent.clone().resolve_wait(), None, "kept by its clones");
     let before = sent.len();
@@ -264,7 +264,7 @@ async fn two_answers_to_the_one_who_is_are_ambiguous() {
     ];
     let error = client.device(N).await.unwrap_err();
     assert!(
-        matches!(&error, Error::AmbiguousDevice { instance: N, candidates } if candidates.len() == 2),
+        matches!(&error, OpsError::Ambiguous { instance: N, candidates } if candidates.len() == 2),
         "{error}"
     );
     stop(servers).await;
@@ -285,7 +285,7 @@ async fn a_second_answer_a_little_later_is_ambiguous() {
     });
     let error = client.device(N).await.unwrap_err();
     assert!(
-        matches!(&error, Error::AmbiguousDevice { instance: N, candidates } if candidates.len() == 2),
+        matches!(&error, OpsError::Ambiguous { instance: N, candidates } if candidates.len() == 2),
         "{error}"
     );
     answer.await.unwrap();
@@ -301,7 +301,7 @@ async fn an_address_the_link_cant_reach_is_refused() {
     let station = DeviceAddress::local(&[5]).unwrap();
     let error = client.device(station.clone()).await.unwrap_err();
     assert!(
-        matches!(&error, Error::OutOfRange(why) if why.contains("mstp:5")),
+        matches!(&error, OpsError::Parse { what: "address", reason, .. } if reason.contains("mstp:5")),
         "{error}"
     );
     let port = TestTransport::builder()

@@ -42,7 +42,6 @@
 
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType, PropertyIdentifier as P};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::{
@@ -51,6 +50,7 @@ use super::{
 };
 use crate::client::{Halt, Reader, Wanted, device_error, unreachable};
 use crate::device::{Device, sent};
+use crate::error::OpsError;
 use crate::format::{RawRow, StateTexts, decode_all};
 use crate::label::{kebab, object_label};
 
@@ -59,7 +59,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// 223 export reads them ([`read_inventory`]). Fails only when the
     /// device's name or Object_List can't be read. A value without a
     /// Priority_Array reads as [`Access::ReadOnly`], writable or not.
-    pub async fn inventory(&self, options: &InventoryOptions) -> Result<Inventory, Error> {
+    pub async fn inventory(&self, options: &InventoryOptions) -> Result<Inventory, OpsError> {
         let instance = self.resolve_instance().await?;
         sent!(self, |at| {
             let mut reader = self.client().reader(at, Some(instance));
@@ -75,7 +75,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// ReadProperty each). The text is exactly as the device sent it, and a
     /// property it gave none of is `None`. Fails only when the device
     /// doesn't answer.
-    pub async fn inventory_device(&self, detail: Detail) -> Result<DeviceInfo, Error> {
+    pub async fn inventory_device(&self, detail: Detail) -> Result<DeviceInfo, OpsError> {
         let instance = self.resolve_instance().await?;
         sent!(self, |at| {
             let mut reader = self.client().reader(at, Some(instance));
@@ -88,7 +88,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// One object as the inventory reads it at `detail`, with
     /// the same properties: one ReadPropertyMultiple, or a ReadProperty
     /// each once the device has refused RPM (remembered, as
-    /// [`Device::read`] does). A read the device refuses, or a property
+    /// [`Device::read_object`] does). A read the device refuses, or a property
     /// every object of the type has that it can't give, comes back as
     /// [`Entry::Failed`], which the export skips; an optional property it
     /// can't give is `None`. An object of a type the export doesn't read
@@ -99,7 +99,7 @@ impl<T: TransportPort + 'static> Device<T> {
         &self,
         object: ObjectIdentifier,
         detail: Detail,
-    ) -> Result<Entry, Error> {
+    ) -> Result<Entry, OpsError> {
         sent!(self, |at| {
             let mut reader = self.client().reader(at, self.instance());
             let read = read_object(&mut reader, object, detail).await;

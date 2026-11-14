@@ -31,6 +31,7 @@ mod primitive;
 mod recipients;
 mod tagged;
 mod units;
+mod value;
 mod wire;
 
 pub use clean::{MAX_NAME_CHARS, clean_name, clean_text};
@@ -38,6 +39,7 @@ pub use constructed::timestamp_text;
 pub use data::{Datum, Fields, PLAIN_ELEMENTS};
 pub use logged::{LogColumns, LoggedProperty, MAX_STATE_TEXT_OBJECTS};
 pub use tagged::unknown_choice;
+pub use value::Value;
 pub use wire::format_property_value;
 
 use bacnet_encoding::constructed::{ConstructedElement, ElementShape, property_element};
@@ -51,14 +53,19 @@ use bacnet_types::primitives::{Date, PropertyValue, Time};
 use units::unit_symbol;
 
 /// A property as read: its raw application-tagged value, or why the device
-/// gave none.
-pub type RawRow = (PropertyIdentifier, Result<Vec<u8>, RowError>);
+/// gave none. The rows the raw readers ([`Reader`](crate::client::Reader))
+/// and the watch hub keep, undecoded; a [`Device`](crate::Device) read
+/// returns each as a [`Reading`](crate::Reading).
+pub type RawRow = (PropertyIdentifier, Result<Vec<u8>, PropertyError>);
 
-/// Why one property of a read has no value. Structured, so a front end can
-/// report the device's error class and code as data, not only as text.
+/// Why one property of a read has no value, while the rest of the read
+/// stands: the device refused that property, or the object (an unknown
+/// object is an error row for each of its properties). Structured, so a
+/// front end can report the device's error class and code as data, not
+/// only as text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum RowError {
+pub enum PropertyError {
     /// The device answered this property with an error, a reject or an
     /// abort.
     Remote(RemoteError),
@@ -69,7 +76,7 @@ pub enum RowError {
     Other(String),
 }
 
-impl RowError {
+impl PropertyError {
     /// The device's error class and code, when it answered with an error.
     pub fn class_code(&self) -> Option<(ErrorClass, ErrorCode)> {
         match self {
@@ -79,8 +86,8 @@ impl RowError {
     }
 }
 
-impl From<Error> for RowError {
-    /// The device's error, reject or abort as [`RowError::Remote`], with a
+impl From<Error> for PropertyError {
+    /// The device's error, reject or abort as [`PropertyError::Remote`], with a
     /// structured Error PDU reduced to its class and code; anything else
     /// as text.
     fn from(error: Error) -> Self {
@@ -91,9 +98,9 @@ impl From<Error> for RowError {
     }
 }
 
-impl std::error::Error for RowError {}
+impl std::error::Error for PropertyError {}
 
-impl std::fmt::Display for RowError {
+impl std::fmt::Display for PropertyError {
     /// An error as `CLASS:CODE` (`PROPERTY:UNKNOWN_PROPERTY`), the form
     /// the TUI shows; a reject or abort, or any other failure, as its own
     /// text.
@@ -280,6 +287,15 @@ impl<'a> ValueFormat<'a> {
             max_shown: usize::MAX,
             ..self
         }
+    }
+
+    /// Whether a value of `property` at `index` would name its state with
+    /// one of this formatter's texts: they aren't all empty, and
+    /// [`StateTexts::name`] holds for the object type.
+    fn names_states(&self, property: PropertyIdentifier, index: Option<u32>) -> bool {
+        let texts = self.texts;
+        (texts.active.is_some() || texts.inactive.is_some() || !texts.states.is_empty())
+            && StateTexts::name(self.object_type, property, index)
     }
 
     /// The same settings for another object, as a value that names one

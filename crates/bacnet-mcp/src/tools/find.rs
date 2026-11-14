@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::PoisonError;
 
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::client::{Wanted, timed_out, unreachable};
+use bacnet_ops::client::Wanted;
 use bacnet_ops::parse::{parse_object_specifier, parse_object_type};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -20,7 +20,7 @@ use super::{Spec, next, schema, start};
 use crate::context::{CachedNames, Call, Cleaned, Ctx, Device, LIST_CAP, Names};
 use crate::errors::ToolError;
 use crate::untrusted::{clean, envelope_cleaned};
-use crate::value::{object_text, row_text};
+use crate::value::{object_text, reading_text};
 
 pub(super) const NAME: &str = "bacnet_find_object";
 
@@ -492,10 +492,14 @@ async fn search<T: TransportPort + 'static>(
                 page.resume = Some((instance, at));
                 return;
             }
-            match device.handle.read(*object, Wanted::List(&properties)).await {
-                Ok(read) => {
+            let read = device
+                .handle
+                .read_object(*object, Wanted::List(&properties))
+                .await;
+            match read.stopped {
+                None => {
                     let kept = |property| {
-                        row_text(&read.rows, property).map(|text| {
+                        reading_text(&read.readings, property).map(|text| {
                             let (text, truncated) = clean(&text, MATCH_CAP);
                             Cleaned { text, truncated }
                         })
@@ -515,8 +519,8 @@ async fn search<T: TransportPort + 'static>(
                 // next device, with no cursor back to it, so a silent device
                 // doesn't make every later page wait out its timeout again.
                 // Search it alone (range) to try it again.
-                Err(error) if unreachable(&error) => {
-                    if timed_out(&error) {
+                Some(error) if error.unreachable() => {
+                    if error.timed_out() {
                         call.timed_out();
                     }
                     page.incomplete.push(json!({
@@ -528,7 +532,7 @@ async fn search<T: TransportPort + 'static>(
                     return;
                 }
                 // The object has no name to give: no text match.
-                Err(_) => names = Some(Names::default()),
+                Some(_) => names = Some(Names::default()),
             }
         }
         let names = names.unwrap_or_default();

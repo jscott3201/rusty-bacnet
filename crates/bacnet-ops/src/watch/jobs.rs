@@ -22,12 +22,12 @@ use bacnet_types::error::Error;
 
 use super::first::first_read;
 use super::options::{Fallback, Reads};
-use super::poll::{self, PollRow, Polled};
 use super::shared::Shared;
 use super::{Inner, Point, Watched};
-use crate::client::{Halt, unreachable};
+use crate::client::batch::{self, BatchRow, Batched};
+use crate::client::{device_error, unreachable};
 use crate::device::DeviceAddress;
-use crate::format::{RawRow, RowError};
+use crate::format::{PropertyError, RawRow};
 
 /// How long one cancel may take before it is given up.
 const CANCEL_WAIT: Duration = Duration::from_secs(30);
@@ -63,13 +63,13 @@ pub(super) fn wanted(reads: &Reads, point: &Point) -> Vec<(PropertyIdentifier, O
 }
 
 /// `point` as a row of a poll.
-pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> PollRow<u32> {
+pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u32> {
     let wanted = wanted(reads, point);
     let one_by_one = match reads.fallback {
         Fallback::All => wanted.len(),
         Fallback::Watched => 1,
     };
-    PollRow {
+    BatchRow {
         key: process,
         object: point.object,
         wanted,
@@ -165,11 +165,15 @@ async fn read<T: TransportPort + 'static>(
     if let Watched::Property { property, index } = point.watched
         && (alone || index.is_some())
     {
-        return match reader.rp(point.object, property, index).await {
+        // The client's readers are never stopped by their flag.
+        return match reader
+            .rp(point.object, property, index)
+            .await
+            .map_err(device_error)
+        {
             Ok(data) => Ok(vec![(property, Ok(data))]),
-            Err(Halt::Device(error)) if unreachable(&error) => Err(error),
-            Err(Halt::Device(error)) => Ok(vec![(property, Err(RowError::from(error)))]),
-            Err(Halt::Cancelled) => Err(Error::Encoding("the read was stopped".into())),
+            Err(error) if unreachable(&error) => Err(error),
+            Err(error) => Ok(vec![(property, Err(PropertyError::from(error)))]),
         };
     }
     wanted.extend(reads.first.iter().map(|p| (*p, None)));
@@ -183,10 +187,7 @@ async fn read<T: TransportPort + 'static>(
     )
     .await;
     client.settle(&reader);
-    read.map_err(|halt| match halt {
-        Halt::Device(error) => error,
-        Halt::Cancelled => Error::Encoding("the read was stopped".into()),
-    })
+    read.map_err(device_error)
 }
 
 /// Ask for the managed subscription: SubscribeCOV for an object,
@@ -236,33 +237,46 @@ async fn subscribe<T: TransportPort + 'static>(
     }
 }
 
+/// One poll of a device's rows.
+#[derive(Debug)]
+pub(super) struct Polled {
+    /// The rows read, and why the rest weren't.
+    pub(super) read: Batched<u32>,
+    /// The rows not read, when the poll stopped early; empty otherwise.
+    pub(super) unread: Vec<u32>,
+}
+
+impl Polled {
+    /// The device stopped answering: the poll gave up on the rows left.
+    pub(super) fn unreachable(&self) -> bool {
+        self.read.stopped.as_ref().is_some_and(unreachable)
+    }
+}
+
 /// Poll `rows` of `device` together, by RPM unless it refused it, at the
 /// address its row in the discovery table has now.
 pub(super) async fn poll<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     device: u32,
-    rows: Vec<PollRow<u32>>,
-) -> Polled<u32> {
+    rows: Vec<BatchRow<u32>>,
+) -> Polled {
     let client = &inner.client;
-    let address = match find(&inner, device).await {
-        Ok(address) => address,
-        Err(error) => {
-            return Polled {
-                rows: rows
-                    .iter()
-                    .map(|row| (row.key, Err(error.to_string())))
-                    .collect(),
-                refused_rpm: false,
-                unreachable: false,
-            };
+    let read = match find(&inner, device).await {
+        Ok(address) => {
+            let rpm = !client.refused_rpm(&address);
+            let read = batch::read(client.low_level(), client.limits(), &address, &rows, rpm).await;
+            if read.refused_rpm {
+                client.refuse_rpm(&address);
+            }
+            read
         }
+        Err(error) => Batched::stopped(error),
     };
-    let rpm = !client.refused_rpm(&address);
-    let polled = poll::poll(client.low_level(), client.limits(), &address, &rows, rpm).await;
-    if polled.refused_rpm {
-        client.refuse_rpm(&address);
-    }
-    polled
+    let unread = match read.stopped {
+        Some(_) => rows[read.rows.len()..].iter().map(|row| row.key).collect(),
+        None => Vec::new(),
+    };
+    Polled { read, unread }
 }
 
 /// Cancel `point`'s subscription, held or possibly made: stop renewing it,

@@ -7,7 +7,7 @@ use bacnet_types::error::Error;
 use super::follow::{REMEMBERED, keep_room};
 use super::test_bus::{Bus, N, at, client, name_of, requests, server, settle, stop, who_is};
 use super::*;
-use crate::client::{RESOLVE_WAIT, timed_out, unreachable};
+use crate::client::RESOLVE_WAIT;
 
 /// A following handle whose device has gone quiet and stops answering
 /// moves to the one other address claiming its instance once only that
@@ -31,7 +31,7 @@ async fn a_following_handle_moves_to_the_one_other_claim() {
     bus.silence(2);
     let mut events = client.events();
     let error = name_of(&device).await.unwrap_err();
-    assert!(timed_out(&error), "{error}");
+    assert!(error.timed_out(), "{error}");
     assert_eq!(device.address(), at(2), "the timeout asked, and stayed");
     assert_eq!(who_is(&sent), 1);
     tokio::time::sleep(RESOLVE_WAIT).await;
@@ -73,7 +73,7 @@ async fn a_duplicate_does_not_capture_a_following_handle() {
     let mut events = client.events();
     bus.silence(2);
     let error = name_of(&device).await.unwrap_err();
-    assert!(timed_out(&error), "{error}");
+    assert!(error.timed_out(), "{error}");
     bus.unsilence(2);
     assert_eq!(name_of(&device).await.unwrap(), "A");
     assert_eq!(device.address(), at(2));
@@ -102,7 +102,7 @@ async fn a_following_handle_stays_when_two_others_claim_it() {
     let mut events = client.events();
     let error = name_of(&device).await.unwrap_err();
     assert!(
-        matches!(error, Error::AmbiguousDevice { instance: N, .. }),
+        matches!(error, OpsError::Ambiguous { instance: N, .. }),
         "{error}"
     );
     assert_eq!(device.address(), at(2));
@@ -126,7 +126,7 @@ async fn no_other_claim_sends_once() {
     let rp = ConfirmedServiceChoice::READ_PROPERTY;
     let before = requests(&sent, rp, 2);
     let error = name_of(&device).await.unwrap_err();
-    assert!(unreachable(&error), "{error}");
+    assert!(error.unreachable(), "{error}");
     assert_eq!(requests(&sent, rp, 2) - before, 1, "one request");
     assert_eq!(device.address(), at(2));
     assert_eq!(who_is(&sent), 1);
@@ -193,7 +193,7 @@ async fn a_reused_address_with_no_other_claim_fails_unsent() {
     let before = sent.len();
     let error = name_of(&device).await.unwrap_err();
     assert!(
-        matches!(&error, Error::UnknownDevice { device } if device == "1001"),
+        matches!(&error, OpsError::UnknownDevice { target } if target == "1001"),
         "{error}"
     );
     assert_eq!(sent.len(), before, "nothing sent");
@@ -219,7 +219,16 @@ async fn a_local_link_failure_moves_nothing() {
     settle().await;
     bus.break_link(2);
     let error = name_of(&device).await.unwrap_err();
-    assert!(matches!(error, Error::Transport(_)), "{error}");
+    assert!(
+        matches!(
+            error,
+            OpsError::Unreachable {
+                source: Error::Transport(_),
+                ..
+            }
+        ),
+        "{error}"
+    );
     assert_eq!(device.address(), at(2));
     let rp = ConfirmedServiceChoice::READ_PROPERTY;
     assert_eq!(requests(&sent, rp, 3), 0, "nothing went to the other");

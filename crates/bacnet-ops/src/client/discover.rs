@@ -6,10 +6,10 @@ use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::UnconfirmedServiceChoice;
-use bacnet_types::error::Error;
 use bytes::BytesMut;
 
 use super::Client;
+use crate::error::OpsError;
 use crate::target::{self, AddressStyle};
 
 /// Why a directed Who-Is refuses a device instance or a routed target.
@@ -45,17 +45,19 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Send one Who-Is to `scope`, for the devices in `range` (all for
     /// `None`), under the rate cap. The answers land in the discovery table
     /// ([`devices`](Self::devices)) as they arrive.
+    ///
+    /// # Errors
+    ///
+    /// [`OpsError::Parse`] for a directed scope whose text names no station
+    /// (nothing is sent), and [`OpsError::Client`] for a send the link
+    /// refused.
     pub async fn who_is(
         &self,
         scope: WhoIsScope<'_>,
         range: Option<DeviceInstanceRange>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), OpsError> {
         let mac = match scope {
-            WhoIsScope::Directed(address) => Some(
-                target::address_mac(self.low_level().transport(), address, NOT_A_STATION)
-                    .await
-                    .map_err(Error::Encoding)?,
-            ),
+            WhoIsScope::Directed(address) => Some(self.station_mac(address).await?),
             _ => None,
         };
         // The network the Who-Is goes out on takes its slot, so a slow one
@@ -89,7 +91,7 @@ impl<T: TransportPort + 'static> Client<T> {
         if sent.is_err() {
             crate::limits::refund();
         }
-        sent
+        sent.map_err(OpsError::from)
     }
 
     /// Broadcast one Who-Is-Router-To-Network on this network, for
@@ -103,7 +105,7 @@ impl<T: TransportPort + 'static> Client<T> {
         network: Option<u16>,
         wait: std::time::Duration,
         deadline: Option<tokio::time::Instant>,
-    ) -> Result<Vec<DiscoveredRouter>, Error> {
+    ) -> Result<Vec<DiscoveredRouter>, OpsError> {
         self.limits().slot(Some(0)).await;
         let wait = match deadline {
             Some(deadline) => {
@@ -117,16 +119,21 @@ impl<T: TransportPort + 'static> Client<T> {
         if found.is_err() {
             crate::limits::refund();
         }
-        found
+        found.map_err(OpsError::from)
     }
 
     /// The link MAC of a station address in the target grammar, checked
-    /// without sending anything: a device instance or routed target is no
+    /// without sending anything but the Virtual-Address-Resolution a
+    /// B/IPv6 address needs: a device instance or routed target is no
     /// station address.
-    pub async fn station_mac(&self, address: &str) -> Result<Vec<u8>, Error> {
+    ///
+    /// # Errors
+    ///
+    /// [`OpsError::Parse`] for text that names no station on this link.
+    pub async fn station_mac(&self, address: &str) -> Result<Vec<u8>, OpsError> {
         target::address_mac(self.low_level().transport(), address, NOT_A_STATION)
             .await
-            .map_err(Error::Encoding)
+            .map_err(|reason| OpsError::parse("address", address, reason))
     }
 
     /// Every device in the client's discovery table.

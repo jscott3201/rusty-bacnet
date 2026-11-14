@@ -4,23 +4,23 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use bacnet_ops::DeviceAddress;
-use bacnet_ops::client::{Wanted, unreachable};
-use bacnet_ops::format::{self, RawRow, RowError};
+use bacnet_ops::client::Wanted;
+use bacnet_ops::format::{self, RawRow};
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::charged;
 use bacnet_ops::watch::{Point, Snapshot, Source, State, Watched};
+use bacnet_ops::{DeviceAddress, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
 use super::uri::{self, Uri};
 use crate::context::{Call, Ctx, DeviceArg};
-use crate::errors::{ToolError, row_error_json};
+use crate::errors::ToolError;
 use crate::listen::ALARMS_EVERY;
 use crate::tools::read::{Format, result_row};
 use crate::tools::{alarms, describe, discover};
-use crate::value::object_text;
+use crate::value::{object_text, tool_value};
 
 /// How long a device summary is served from the cache.
 const DEVICE_TTL: Duration = Duration::from_secs(300);
@@ -70,25 +70,31 @@ pub(super) async fn point<T: TransportPort + 'static>(
     let failed = |error| ToolError::device(point.device, &error);
     let rows: Vec<RawRow> = match point.watched {
         Watched::Object => {
-            device
+            let read = device
                 .handle
-                .read(
+                .read_object(
                     point.object,
                     Wanted::List(&bacnet_ops::watch::POINT_PROPERTIES),
                 )
-                .await
-                .map_err(failed)?
-                .rows
+                .await;
+            if let Some(error) = read.stopped {
+                return Err(failed(error));
+            }
+            read.readings
+                .into_iter()
+                .map(|reading| (reading.property, reading.value.map(|value| value.raw)))
+                .collect()
         }
         Watched::Property { property, index } => {
-            match device
-                .handle
-                .read_property(point.object, property, index)
-                .await
-            {
-                Ok(data) => vec![(property, Ok(data))],
-                Err(error) if unreachable(&error) => return Err(failed(error)),
-                Err(error) => vec![(property, Err(RowError::from(error)))],
+            let wanted = PropertyRef {
+                object: point.object,
+                property,
+                index,
+            };
+            match device.handle.read(wanted).await {
+                Ok(value) => vec![(property, Ok(value.raw))],
+                Err(error) if error.unreachable() => return Err(failed(error)),
+                Err(error) => vec![(property, Err(PropertyError::from(error)))],
             }
         }
     };
@@ -118,12 +124,17 @@ pub(crate) fn point_body<T: TransportPort + 'static>(
     let values: Vec<Value> = rows
         .iter()
         .map(|(property, value)| {
+            let reading = Reading {
+                object: point.object,
+                property: *property,
+                index,
+                value: value.clone().map(|raw| {
+                    tool_value(point.object.object_type(), *property, index, raw, units)
+                }),
+            };
             result_row(
                 point.device,
-                point.object,
-                *property,
-                index,
-                value.clone().map_err(|e| row_error_json(&e)),
+                reading,
                 units,
                 Format::Both,
                 ctx.policy.caps.text,

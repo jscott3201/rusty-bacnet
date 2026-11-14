@@ -28,7 +28,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::{RpmFailure, rpm_failure, rpm_rows, unreachable};
-use bacnet_ops::format::{LogColumns, RawRow, RowError, StateTexts};
+use bacnet_ops::format::{LogColumns, PropertyError, RawRow, StateTexts};
 use bacnet_ops::target::{Target, bip6_vmac, parse_target_on};
 
 mod services;
@@ -351,7 +351,7 @@ impl Destination {
                 match self.read_property(client, object, *property, None).await {
                     Ok(ack) => rows.push((*property, Ok(ack.property_value))),
                     Err(error) if unreachable(&error) => return Err(error),
-                    Err(error) => rows.push((*property, Err(RowError::from(error)))),
+                    Err(error) => rows.push((*property, Err(PropertyError::from(error)))),
                 }
             }
             Ok(rows)

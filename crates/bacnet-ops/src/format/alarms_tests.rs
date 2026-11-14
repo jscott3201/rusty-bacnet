@@ -352,9 +352,14 @@ async fn a_device_that_repeats_an_object_is_an_error() {
         let error = read_event_information(100, |after| device.answer(after))
             .await
             .unwrap_err();
+        // A decoder's refusal, once an encoding error's text (#2560).
+        assert!(
+            matches!(&error, Error::Decoding(refused) if refused.values == [0, repeated]),
+            "{error:?}"
+        );
         assert!(
             error.to_string().contains(&format!(
-                "GetEventInformation named analog-input {repeated} again"
+                "GetEventInformation: object type 0 instance {repeated} named again"
             )),
             "{pages:?}: {error}"
         );

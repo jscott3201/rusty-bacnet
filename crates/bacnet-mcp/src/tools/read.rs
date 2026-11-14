@@ -1,10 +1,10 @@
 //! `bacnet_read`: properties of one device's objects, by
 //! ReadPropertyMultiple with the client's ReadProperty fallback.
 
-use bacnet_ops::client::{DEVICE_PROPERTIES, ReadVia, Wanted, timed_out, unreachable};
-use bacnet_ops::format::{self, RawRow};
+use bacnet_ops::client::{DEVICE_PROPERTIES, ReadVia, Wanted};
 use bacnet_ops::label::kebab;
 use bacnet_ops::parse::{parse_object_specifier, parse_property};
+use bacnet_ops::{OpsError, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use super::{MAX_STRUCTURED, Spec, next, schema, start};
 use crate::context::{Call, Ctx, DeviceArg};
 use crate::errors::{ToolError, row_error_json};
-use crate::value::{object_text, property_value};
+use crate::value::{object_text, reading_units, tool_value, value_json};
 
 pub(super) const NAME: &str = "bacnet_read";
 
@@ -135,9 +135,6 @@ pub(crate) enum Format {
     Both,
 }
 
-/// A property as read: its array index, and its value or the error body.
-type Row = (PropertyIdentifier, Option<u32>, Result<Vec<u8>, Value>);
-
 /// One object's read, parsed.
 struct Plan {
     object: ObjectIdentifier,
@@ -232,46 +229,48 @@ pub(super) async fn run<T: TransportPort + 'static>(
             resume = Some(at);
             break;
         }
-        let mut rows: Vec<Row> = Vec::new();
-        let mut failed = None;
+        let mut rows: Vec<Reading> = Vec::new();
+        let mut failed: Option<OpsError> = None;
         if plan.all || !plan.list.is_empty() {
             let wanted = if plan.all {
                 Wanted::All
             } else {
                 Wanted::List(&plan.list)
             };
-            match device.handle.read(plan.object, wanted).await {
-                Ok(read) => {
-                    vias.push(read.via);
-                    for (property, value) in read.rows {
-                        rows.push((property, None, value.map_err(|e| row_error_json(&e))));
-                    }
+            let read = device.handle.read_object(plan.object, wanted).await;
+            match read.stopped {
+                None => {
+                    vias.extend(read.via);
+                    rows.extend(read.readings);
                 }
-                Err(error) => failed = Some(error),
+                Some(error) => failed = Some(error),
             }
         }
         for &(property, index) in &plan.elements {
             if failed.is_some() {
                 break;
             }
-            match device
-                .handle
-                .read_property(plan.object, property, Some(index))
-                .await
-            {
-                Ok(data) => rows.push((property, Some(index), Ok(data))),
-                Err(error) if unreachable(&error) => failed = Some(error),
-                Err(error) => {
-                    let body = ToolError::device(device.instance, &error).json();
-                    rows.push((property, Some(index), Err(body)));
+            let element = PropertyRef::new(plan.object, property).at(index);
+            let value = match device.handle.read(element).await {
+                Ok(value) => Ok(value),
+                Err(error) if error.unreachable() => {
+                    failed = Some(error);
+                    break;
                 }
-            }
+                Err(error) => Err(PropertyError::from(error)),
+            };
+            rows.push(Reading {
+                object: plan.object,
+                property,
+                index: Some(index),
+                value,
+            });
         }
         if let Some(error) = failed {
             if results.is_empty() {
                 return Err(ToolError::device(device.instance, &error));
             }
-            if timed_out(&error) {
+            if error.timed_out() {
                 call.timed_out();
             }
             // Later objects would fail the same way: stop here, and say why.
@@ -279,22 +278,11 @@ pub(super) async fn run<T: TransportPort + 'static>(
             resume = Some(at);
             break;
         }
-        let units = format::units(
-            &rows
-                .iter()
-                .filter_map(|(p, i, v)| match (i, v) {
-                    (None, Ok(data)) => Some((*p, Ok(data.clone()))),
-                    _ => None,
-                })
-                .collect::<Vec<RawRow>>(),
-        );
-        for (property, index, value) in rows {
+        let units = reading_units(&rows);
+        for reading in rows {
             let row = result_row(
                 device.instance,
-                plan.object,
-                property,
-                index,
-                value,
+                reading,
                 units,
                 args.format,
                 ctx.policy.caps.text,
@@ -303,7 +291,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
             results.push(row);
         }
     }
-    let via = match (vias.contains(&ReadVia::Rpm), vias.contains(&ReadVia::Rp)) {
+    let rpm = vias.contains(&ReadVia::Rpm);
+    let rp = vias.contains(&ReadVia::Rp);
+    let via = match (rpm, rp) {
+        _ if vias.contains(&ReadVia::Mixed) => "mixed",
         (true, true) => "mixed",
         (true, false) => "rpm",
         (false, true) => "rp",
@@ -323,33 +314,29 @@ pub(super) async fn run<T: TransportPort + 'static>(
     Ok(body)
 }
 
-/// One property's row.
-#[allow(clippy::too_many_arguments)]
+/// One property's row: its value as the tools show it (named with the
+/// object's `units` when they were read), or its error.
 pub(crate) fn result_row(
     device: u32,
-    object: ObjectIdentifier,
-    property: PropertyIdentifier,
-    index: Option<u32>,
-    value: Result<Vec<u8>, Value>,
+    reading: Reading,
     units: Option<bacnet_types::enums::EngineeringUnits>,
     format: Format,
     cap: usize,
 ) -> Value {
+    let Reading {
+        object,
+        property,
+        index,
+        value,
+    } = reading;
     let object_name = object_text(object.object_type(), object.instance_number());
     let property_name = kebab(property);
     let mut row = json!({ "object": object_name, "property": property_name, "index": index });
     match value {
-        Ok(data) => {
+        Ok(value) => {
             let source = format!("device {device} {object_name} {property_name}");
-            let mut value = property_value(
-                object.object_type(),
-                property,
-                index,
-                &data,
-                units,
-                &source,
-                cap,
-            );
+            let shown = tool_value(object.object_type(), property, index, value.raw, units);
+            let mut value = value_json(&shown, &source, cap);
             match format {
                 Format::Display => drop(value.as_object_mut().map(|v| v.remove("typed"))),
                 Format::Typed => drop(value.as_object_mut().map(|v| v.remove("display"))),
@@ -357,7 +344,7 @@ pub(crate) fn result_row(
             }
             row["value"] = value;
         }
-        Err(error) => row["error"] = error,
+        Err(error) => row["error"] = row_error_json(&error),
     }
     row
 }

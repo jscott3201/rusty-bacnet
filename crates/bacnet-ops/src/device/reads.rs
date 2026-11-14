@@ -18,60 +18,167 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::{Device, DeviceAddress, Path};
+use crate::client::batch::{self, BatchRow, Batched, Missing};
 use crate::client::{
-    DEVICE_PROPERTIES, DeviceSummary, ListRead, Naming, PagedLog, PropertyRead, Wanted,
-    device_error, timed_out, unreachable,
+    DEVICE_PROPERTIES, DeviceSummary, ListRead, Naming, PagedLog, ReadVia, Wanted, device_error,
 };
-use crate::format::{LogColumns, StateTexts};
+use crate::error::OpsError;
+use crate::format::{Floats, LogColumns, PropertyError, RawRow, StateTexts, Value, ValueFormat};
 use crate::limits::Turn;
+use crate::reading::{IntoProperty, PropertyRef, RawReading, Readings, readings};
 
 impl<T: TransportPort + 'static> Device<T> {
-    /// The properties `wanted` of `object`: one ReadPropertyMultiple, or
-    /// ReadProperty each once the device has refused RPM. A property the
-    /// device can't give is an error row, not a failed read.
-    pub async fn read(
-        &self,
-        object: ObjectIdentifier,
-        wanted: Wanted<'_>,
-    ) -> Result<PropertyRead, Error> {
-        sent!(self, |at| self.read_at(at, object, wanted).await)
-    }
-
-    async fn read_at(
-        &self,
-        at: &DeviceAddress,
-        object: ObjectIdentifier,
-        wanted: Wanted<'_>,
-    ) -> Result<PropertyRead, Error> {
-        let mut reader = self.client.reader(at, self.instance());
-        let read = reader.properties(object, wanted).await;
-        self.client.settle(&reader);
-        let (rows, via) = read.map_err(device_error)?;
-        Ok(PropertyRead { object, rows, via })
-    }
-
-    /// One property of `object`, or one element of it (`index` 0 is an
-    /// array's length), as its raw application-tagged value.
-    pub async fn read_property(
-        &self,
-        object: ObjectIdentifier,
-        property: PropertyIdentifier,
-        index: Option<u32>,
-    ) -> Result<Vec<u8>, Error> {
-        sent!(self, |at| {
+    /// One property of one object, or one element of an array property
+    /// (index 0 is an array's size): one ReadProperty. `property` is a
+    /// [`PropertyRef`], text such as `"ai:1 pv"` or a tuple
+    /// ([`IntoProperty`]). The value names no units or state texts, which
+    /// the one property doesn't hold; [`read_many`](Self::read_many) with
+    /// the object's Units or state texts too names them.
+    ///
+    /// # Errors
+    ///
+    /// [`OpsError::Parse`] for text that doesn't name a property (nothing
+    /// is sent), and the device's refusal of the property as
+    /// [`OpsError::Refused`].
+    pub async fn read(&self, property: impl IntoProperty) -> Result<Value, OpsError> {
+        let wanted = property.into_property()?;
+        let PropertyRef {
+            object,
+            property,
+            index,
+        } = wanted;
+        let raw = sent!(self, |at| {
             let reader = self.client.reader(at, self.instance());
             reader
                 .rp(object, property, index)
                 .await
                 .map_err(device_error)
-        })
+        })?;
+        let texts = StateTexts::default();
+        let format = ValueFormat::new(object.object_type(), &texts, Floats::Exact).whole_lists();
+        Ok(Value::new(&format, property, index, raw, None))
+    }
+
+    /// Several properties, of any of the device's objects, in batches:
+    /// ReadPropertyMultiple of up to 16 objects and 32 properties a request,
+    /// properties of one object named one after another going in one
+    /// access specification; ReadProperty each once the device has refused
+    /// RPM. A batch whose answer would be too large is asked again an
+    /// object at a time, and any other batch the device fails as a whole is
+    /// read by ReadProperty, so one bad object can't put errors on its
+    /// neighbours. The readings come in the order asked for, a value named
+    /// with its object's Units and state texts when the same call reads
+    /// them.
+    ///
+    /// It never fails as a whole. A property the device refuses, or one of
+    /// an object it doesn't have, is an error in its own row. A device that
+    /// stops answering ends the read with what was read before it, and
+    /// [`Readings::stopped`] says why; so does a device that can't be
+    /// placed, or a property whose text doesn't parse (then nothing is
+    /// sent). A following handle whose read stopped before anything was
+    /// read looks for its device as any other read does, and reads again
+    /// where it moved to. Every property of an object (ALL) is
+    /// [`read_object`](Self::read_object)'s.
+    pub async fn read_many<P: IntoProperty>(
+        &self,
+        properties: impl IntoIterator<Item = P>,
+    ) -> Readings {
+        let mut wanted = Vec::new();
+        for property in properties {
+            match property.into_property() {
+                Ok(property) => wanted.push(property),
+                Err(error) => return Readings::nothing_read(error),
+            }
+        }
+        if wanted.is_empty() {
+            return Readings::default();
+        }
+        let rows = batch_rows(&wanted);
+        let mut address = match self.target().await {
+            Ok(address) => address,
+            Err(error) => return Readings::nothing_read(OpsError::from(error)),
+        };
+        let mut read = self.batch_at(&address, &rows).await;
+        if read.rows.is_empty()
+            && let Some(error) = read.stopped.take()
+        {
+            let stopped = Err::<(), _>(error);
+            match self.retry(&address, &stopped).await {
+                Ok(Some(to)) => {
+                    read = self.batch_at(&to, &rows).await;
+                    address = to;
+                }
+                Ok(None) => read.stopped = stopped.err(),
+                Err(error) => return Readings::nothing_read(OpsError::from(error)),
+            }
+        }
+        let via = read.via();
+        let stopped = read.stopped.map(|error| OpsError::at(&address, error));
+        Readings {
+            readings: readings(raw_readings(&rows, read.rows)),
+            via,
+            stopped,
+        }
+    }
+
+    /// `rows` read by batches at `at`, remembering a refusal of RPM.
+    async fn batch_at(&self, at: &DeviceAddress, rows: &[BatchRow<usize>]) -> Batched<usize> {
+        let client = &self.client;
+        let rpm = !client.refused_rpm(at);
+        let read = batch::read(client.low_level(), client.limits(), at, rows, rpm).await;
+        if read.refused_rpm {
+            client.refuse_rpm(at);
+        }
+        read
+    }
+
+    /// The properties `wanted` of `object`: one ReadPropertyMultiple, or
+    /// ReadProperty each once the device has refused RPM. For
+    /// [`Wanted::All`], by ReadProperty the object's Property_List names
+    /// them. Each value is named with the object's Units and state texts
+    /// when the read holds them.
+    ///
+    /// It never fails as a whole: a property the device can't give is an
+    /// error row, and a device that fails the read, or stops answering
+    /// part way through it, leaves no readings and says why in
+    /// [`Readings::stopped`].
+    pub async fn read_object(&self, object: ObjectIdentifier, wanted: Wanted<'_>) -> Readings {
+        match self.rows(object, wanted).await {
+            Ok((rows, via)) => Readings {
+                readings: readings(rows.into_iter().map(|row| (object, None, row)).collect()),
+                via: Some(via),
+                stopped: None,
+            },
+            Err(error) => Readings::nothing_read(error),
+        }
+    }
+
+    /// [`read_object`](Self::read_object)'s rows, undecoded.
+    pub(crate) async fn rows(
+        &self,
+        object: ObjectIdentifier,
+        wanted: Wanted<'_>,
+    ) -> Result<(Vec<RawRow>, ReadVia), OpsError> {
+        sent!(self, |at| self.rows_at(at, object, wanted).await)
+    }
+
+    async fn rows_at(
+        &self,
+        at: &DeviceAddress,
+        object: ObjectIdentifier,
+        wanted: Wanted<'_>,
+    ) -> Result<(Vec<RawRow>, ReadVia), Error> {
+        let mut reader = self.client.reader(at, self.instance());
+        let read = reader.properties(object, wanted).await;
+        self.client.settle(&reader);
+        read.map_err(device_error)
     }
 
     /// The device's Object_List: whole, or element by element when the
     /// device can't send it in one answer (at most
     /// [`MAX_OBJECTS`](crate::client::MAX_OBJECTS)). Read by the wildcard
     /// instance while the device's own isn't known.
-    pub async fn list_objects(&self) -> Result<ListRead, Error> {
+    pub async fn list_objects(&self) -> Result<ListRead, OpsError> {
         sent!(self, |at| {
             let reader = self.client.reader(at, self.instance());
             reader.object_list(|_, _| {}).await.map_err(device_error)
@@ -80,12 +187,16 @@ impl<T: TransportPort + 'static> Device<T> {
 
     /// The device's [`DEVICE_PROPERTIES`]. A handle that doesn't know the
     /// instance reads it first ([`resolve_instance`](Self::resolve_instance)).
-    pub async fn describe_device(&self) -> Result<DeviceSummary, Error> {
+    pub async fn describe_device(&self) -> Result<DeviceSummary, OpsError> {
         let device = self.resolve_instance().await?;
         let object = ObjectIdentifier::new(ObjectType::DEVICE, device)?;
-        let PropertyRead { rows, via, .. } =
-            self.read(object, Wanted::List(&DEVICE_PROPERTIES)).await?;
-        Ok(DeviceSummary { device, rows, via })
+        let (rows, via) = self.rows(object, Wanted::List(&DEVICE_PROPERTIES)).await?;
+        let readings = readings(rows.into_iter().map(|row| (object, None, row)).collect());
+        Ok(DeviceSummary {
+            device,
+            readings,
+            via,
+        })
     }
 
     /// One page of at most `page_size` records of `log` (a Trend Log,
@@ -100,7 +211,7 @@ impl<T: TransportPort + 'static> Device<T> {
         log: ObjectIdentifier,
         cursor: LogCursor,
         page_size: u16,
-    ) -> Result<LogPage, Error> {
+    ) -> Result<LogPage, OpsError> {
         sent!(self, |at| {
             let limits = self.client.limits();
             let path = Path::to(self.client.low_level(), at).await?;
@@ -130,7 +241,7 @@ impl<T: TransportPort + 'static> Device<T> {
     pub async fn alarms(
         &self,
         after: Option<ObjectIdentifier>,
-    ) -> Result<GetEventInformationAck, Error> {
+    ) -> Result<GetEventInformationAck, OpsError> {
         let client = self.client.low_level();
         sent!(self, |at| {
             let (path, _turn) = self.turn_at(at).await?;
@@ -140,7 +251,7 @@ impl<T: TransportPort + 'static> Device<T> {
 
     /// The device's GetAlarmSummary answer: the objects whose alarms it
     /// reports this way.
-    pub async fn alarm_summary(&self) -> Result<GetAlarmSummaryAck, Error> {
+    pub async fn alarm_summary(&self) -> Result<GetAlarmSummaryAck, OpsError> {
         let client = self.client.low_level();
         sent!(self, |at| {
             let (path, _turn) = self.turn_at(at).await?;
@@ -152,7 +263,7 @@ impl<T: TransportPort + 'static> Device<T> {
     pub async fn enrollment_summary(
         &self,
         request: &GetEnrollmentSummaryRequest,
-    ) -> Result<GetEnrollmentSummaryAck, Error> {
+    ) -> Result<GetEnrollmentSummaryAck, OpsError> {
         let client = self.client.low_level();
         sent!(self, |at| {
             let (path, _turn) = self.turn_at(at).await?;
@@ -171,10 +282,10 @@ impl<T: TransportPort + 'static> Device<T> {
             return (LogColumns::default(), Naming::Answered);
         }
         match self
-            .read_property(log, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY, None)
+            .read((log, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY))
             .await
         {
-            Ok(data) => (LogColumns::decode(&data), Naming::Answered),
+            Ok(value) => (LogColumns::decode(&value.raw), Naming::Answered),
             Err(error) => (LogColumns::default(), Naming::of(&error)),
         }
     }
@@ -204,10 +315,10 @@ impl<T: TransportPort + 'static> Device<T> {
                     return ControlFlow::Break(());
                 }
                 let wanted = Wanted::List(StateTexts::properties(object.object_type()));
-                match self.read(object, wanted).await {
-                    Ok(read) => ControlFlow::Continue(StateTexts::from_rows(&read.rows)),
-                    Err(error) if unreachable(&error) => {
-                        lost.store(timed_out(&error), Ordering::Relaxed);
+                match self.rows(object, wanted).await {
+                    Ok((rows, _)) => ControlFlow::Continue(StateTexts::from_rows(&rows)),
+                    Err(error) if error.unreachable() => {
+                        lost.store(error.timed_out(), Ordering::Relaxed);
                         ControlFlow::Break(())
                     }
                     Err(_) => ControlFlow::Continue(StateTexts::default()),
@@ -220,4 +331,51 @@ impl<T: TransportPort + 'static> Device<T> {
             Naming::Answered
         }
     }
+}
+
+/// The batch rows of `wanted`: one an object, each holding the properties
+/// named for it one after another, keyed by the position of its first.
+fn batch_rows(wanted: &[PropertyRef]) -> Vec<BatchRow<usize>> {
+    let mut rows: Vec<BatchRow<usize>> = Vec::new();
+    for (at, property) in wanted.iter().enumerate() {
+        match rows.last_mut() {
+            Some(row) if row.object == property.object => {
+                row.wanted.push((property.property, property.index));
+                row.one_by_one += 1;
+            }
+            _ => rows.push(BatchRow {
+                key: at,
+                object: property.object,
+                wanted: vec![(property.property, property.index)],
+                one_by_one: 1,
+            }),
+        }
+    }
+    rows
+}
+
+/// The rows a batch read as raw readings, each property with the element
+/// it asked for. An answer's properties are matched to the ones asked for
+/// in order, by property; one the answer left out reads as
+/// [`PropertyError::NoValue`], and so does each property of a row it left
+/// out.
+fn raw_readings(
+    asked: &[BatchRow<usize>],
+    read: Vec<(usize, Result<Vec<RawRow>, Missing>)>,
+) -> Vec<RawReading> {
+    let mut out = Vec::new();
+    for (row, (_, answer)) in asked.iter().zip(read) {
+        let mut answer: Vec<Option<RawRow>> = answer
+            .map(|rows| rows.into_iter().map(Some).collect())
+            .unwrap_or_default();
+        for &(property, index) in &row.wanted {
+            let found = answer
+                .iter_mut()
+                .find(|slot| slot.as_ref().is_some_and(|(p, _)| *p == property))
+                .and_then(Option::take);
+            let value = found.map_or(Err(PropertyError::NoValue), |(_, value)| value);
+            out.push((row.object, index, (property, value)));
+        }
+    }
+    out
 }

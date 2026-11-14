@@ -11,9 +11,8 @@ use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_ops::limits::{Account, TokenBucket};
 use bacnet_ops::target::{self, Target};
 use bacnet_ops::watch::{Hub, Point};
-use bacnet_ops::{Client, DeviceAddress};
+use bacnet_ops::{Client, DeviceAddress, OpsError};
 use bacnet_transport::port::TransportPort;
-use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -320,7 +319,7 @@ pub(crate) struct Device<T: TransportPort + 'static> {
 pub(crate) async fn pinned<T: TransportPort + 'static>(
     client: &Client<T>,
     entry: &DiscoveredDevice,
-) -> Result<bacnet_ops::Device<T>, Error> {
+) -> Result<bacnet_ops::Device<T>, OpsError> {
     let instance = entry.object_identifier.instance_number();
     client.low_level().get_device(instance).await?;
     client.device(entry).await
@@ -329,13 +328,10 @@ pub(crate) async fn pinned<T: TransportPort + 'static>(
 const DISCOVER_HINT: &str = "call bacnet_discover first (with a range or network that includes it)";
 
 /// The ambiguity error for `instance`, claimed by every row of `claims`.
-fn ambiguous(instance: u32, claims: &[DiscoveredDevice]) -> Error {
-    Error::AmbiguousDevice {
+fn ambiguous(instance: u32, claims: &[DiscoveredDevice]) -> OpsError {
+    OpsError::Ambiguous {
         instance,
-        candidates: claims
-            .iter()
-            .filter_map(DiscoveredDevice::address)
-            .collect(),
+        candidates: claims.iter().filter_map(DeviceAddress::of).collect(),
     }
 }
 
@@ -370,10 +366,10 @@ impl<T: TransportPort + 'static> Ctx<T> {
             hint: DISCOVER_HINT.into(),
         };
         // Named as written: `7`, `2:7` or an address.
-        let failed = |error: Error| match error {
-            Error::UnknownDevice { .. } => unknown(),
-            Error::AmbiguousDevice { candidates, .. } => ToolError::ambiguous(&text, &candidates),
-            Error::OutOfRange(why) => ToolError::invalid("device", why),
+        let failed = |error: OpsError| match error {
+            OpsError::UnknownDevice { .. } => unknown(),
+            OpsError::Ambiguous { candidates, .. } => ToolError::ambiguous(&text, &candidates),
+            OpsError::Parse { reason, .. } => ToolError::invalid("device", reason),
             error => ToolError::Failed(format!("{text}: {error}")),
         };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
@@ -381,7 +377,7 @@ impl<T: TransportPort + 'static> Ctx<T> {
             Target::Instance(instance) => match client.low_level().get_device(instance).await {
                 Ok(Some(entry)) => entry,
                 Ok(None) => return Err(unknown()),
-                Err(error) => return Err(failed(error)),
+                Err(error) => return Err(failed(error.into())),
             },
             Target::Routed { dnet, instance } => {
                 let claims = self.claims(instance, Some(dnet)).await;

@@ -1,5 +1,15 @@
 use super::*;
 
+/// A read's text as `read` prints it.
+fn format_read_value(
+    format: &ValueFormat<'_>,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    data: &[u8],
+) -> String {
+    read_value(format, property, index, data.to_vec()).text
+}
+
 #[test]
 fn tags_formatter_preserves_names_values_and_shapes() {
     let semantic = [0x0a, 0, b'a'];

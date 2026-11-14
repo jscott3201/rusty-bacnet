@@ -2,13 +2,12 @@
 
 use std::sync::{Arc, PoisonError};
 
-use bacnet_ops::DeviceAddress;
-use bacnet_ops::client::{MAX_OBJECTS, Wanted, unreachable};
+use bacnet_ops::client::{MAX_OBJECTS, Wanted};
 use bacnet_ops::format::decode_all;
 use bacnet_ops::parse::parse_object_type;
+use bacnet_ops::{DeviceAddress, OpsError};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -18,7 +17,7 @@ use super::{Spec, next, schema, start};
 use crate::context::{CachedList, Call, Ctx, Device, DeviceArg, LIST_CAP};
 use crate::errors::ToolError;
 use crate::untrusted::envelope;
-use crate::value::{object_text, row_text};
+use crate::value::{object_text, reading_text};
 
 pub(super) const NAME: &str = "bacnet_list_objects";
 
@@ -208,7 +207,7 @@ pub(super) async fn listing<T: TransportPort + 'static>(
         Arc::clone(locks.entry(device.address.clone()).or_default())
     };
     let _turn = lock.lock().await;
-    let failed = |e: &Error| ToolError::device(device.instance, e);
+    let failed = |e: &OpsError| ToolError::device(device.instance, e);
     let kept = {
         let lists = ctx.lists.lock().unwrap_or_else(PoisonError::into_inner);
         lists
@@ -224,12 +223,13 @@ pub(super) async fn listing<T: TransportPort + 'static>(
     let list_object = ObjectIdentifier::new(ObjectType::DEVICE, device.instance)
         .map_err(|e| ToolError::invalid("device", e.to_string()))?;
     let list = PropertyIdentifier::OBJECT_LIST;
-    let read_count = async |whole: Option<&Error>| -> Result<u32, ToolError> {
+    let read_count = async |whole: Option<&OpsError>| -> Result<u32, ToolError> {
         let data = device
             .handle
-            .read_property(list_object, list, Some(0))
+            .read((list_object, list, 0))
             .await
-            .map_err(|e| failed(whole.unwrap_or(&e)))?;
+            .map_err(|e| failed(whole.unwrap_or(&e)))?
+            .raw;
         let total = count(&data).ok_or_else(|| {
             whole.map_or_else(
                 || ToolError::Failed("Object_List count isn't a number".into()),
@@ -258,18 +258,18 @@ pub(super) async fn listing<T: TransportPort + 'static>(
                 (fresh_partial(now), false)
             }
         }
-        None => match device.handle.read_property(list_object, list, None).await {
-            Ok(data) => {
+        None => match device.handle.read((list_object, list)).await {
+            Ok(value) => {
                 let whole = CachedList {
                     at: Instant::now(),
-                    objects: Arc::new(identifiers(&data)),
+                    objects: Arc::new(identifiers(&value.raw)),
                     indexed: None,
                     gaps: Vec::new(),
                 };
                 store(ctx, &device.address, whole.clone());
                 return Ok(Listing::from_cache(&whole, false, None));
             }
-            Err(e) if unreachable(&e) => return Err(failed(&e)),
+            Err(e) if e.unreachable() => return Err(failed(&e)),
             Err(whole) => (fresh_partial(read_count(Some(&whole)).await?), false),
         },
     };
@@ -281,13 +281,9 @@ pub(super) async fn listing<T: TransportPort + 'static>(
         if read_here > 0 && call.out_of_time() {
             break;
         }
-        match device
-            .handle
-            .read_property(list_object, list, Some(next))
-            .await
-        {
-            Ok(data) => objects.extend(identifiers(&data)),
-            Err(e) if unreachable(&e) => {
+        match device.handle.read((list_object, list, next)).await {
+            Ok(value) => objects.extend(identifiers(&value.raw)),
+            Err(e) if e.unreachable() => {
                 if read_here == 0 && objects.is_empty() {
                     return Err(failed(&e));
                 }
@@ -388,12 +384,11 @@ pub(super) async fn run<T: TransportPort + 'static>(
         let text = object_text(object.object_type(), object.instance_number());
         let mut row = json!({ "object": text });
         if args.names {
-            let name = device
+            let read = device
                 .handle
-                .read(*object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
-                .await
-                .ok()
-                .and_then(|read| row_text(&read.rows, PropertyIdentifier::OBJECT_NAME));
+                .read_object(*object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
+                .await;
+            let name = reading_text(&read.readings, PropertyIdentifier::OBJECT_NAME);
             let source = format!("device {} {text} object-name", device.instance);
             row["name"] = name.map_or(Value::Null, |name| envelope(&name, source, cap));
         }

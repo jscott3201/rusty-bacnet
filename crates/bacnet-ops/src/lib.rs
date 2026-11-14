@@ -21,6 +21,12 @@
 //!   [`Device`] handle, pinned to an address or following an instance, whose
 //!   methods are the read operations (properties, the object list, a device
 //!   summary, trend log pages and alarms);
+//! - [`reading`](mod@reading): what a read names ([`PropertyRef`], from
+//!   text such as `"ai:1 pv"`) and returns: a [`Value`] (typed data, display
+//!   text and the octets sent), a [`Reading`] a property, and the
+//!   [`Readings`] of a bulk read, which reports a refused property in its
+//!   row and never fails as a whole;
+//! - [`error`](mod@error): [`OpsError`], why a call failed as a whole;
 //! - [`export`]: a device's objects in another model's terms, so far an
 //!   experimental Standard 223 point list in Turtle (#2436);
 //! - [`watch`]: the watch hub, one managed COV subscription or poller per
@@ -32,14 +38,19 @@
 
 pub mod client;
 pub mod device;
+pub mod error;
 pub mod export;
 pub mod format;
 pub mod label;
 pub mod limits;
 pub mod octets;
 pub mod parse;
+pub mod reading;
 pub mod target;
 pub mod watch;
 
 pub use client::Client;
 pub use device::{Device, DeviceAddress};
+pub use error::OpsError;
+pub use format::{PropertyError, Value};
+pub use reading::{IntoProperty, PropertyRef, Reading, Readings};

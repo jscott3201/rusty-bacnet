@@ -17,6 +17,7 @@
 //! cheap to clone: clones share one client, one set of limits and one
 //! memory.
 
+pub(crate) mod batch;
 mod discover;
 mod log;
 mod read;
@@ -30,7 +31,6 @@ use bacnet_client::client::{BACnetClient, DeviceEvent};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast;
 
 pub use self::discover::WhoIsScope;
@@ -41,8 +41,9 @@ pub use self::read::{
     timed_out, unreachable,
 };
 use crate::device::{ClientEvent, DeviceAddress, Follows};
-use crate::format::{RawRow, object_name};
+use crate::format::Value;
 use crate::limits::RequestLimits;
+use crate::reading::Reading;
 
 #[cfg(doc)]
 use crate::device::Device;
@@ -73,25 +74,14 @@ pub const RESOLVE_WAIT: Duration = Duration::from_secs(3);
 /// cancelled by dropping its future.
 pub(crate) static NEVER_STOPPED: AtomicBool = AtomicBool::new(false);
 
-/// One object's properties as read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PropertyRead {
-    /// The object read.
-    pub object: ObjectIdentifier,
-    /// Each property's raw application-tagged value, or why the device
-    /// gave none.
-    pub rows: Vec<RawRow>,
-    /// Whether the read went by ReadPropertyMultiple or ReadProperty.
-    pub via: ReadVia,
-}
-
 /// A device's [`DEVICE_PROPERTIES`] as read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeviceSummary {
     /// The device instance.
     pub device: u32,
-    /// Each property's raw value, or why the device gave none.
-    pub rows: Vec<RawRow>,
+    /// Each property's value, or why the device gave none, in the order
+    /// of [`DEVICE_PROPERTIES`].
+    pub readings: Vec<Reading>,
     /// Whether the read went by ReadPropertyMultiple or ReadProperty.
     pub via: ReadVia,
 }
@@ -101,7 +91,17 @@ impl DeviceSummary {
     /// ([`clean_name`](crate::format::clean_name)); `None` when the device
     /// gave none. Device-supplied text: a front end shows it as data.
     pub fn name(&self) -> Option<String> {
-        object_name(&self.rows)
+        self.value(PropertyIdentifier::OBJECT_NAME)
+            .and_then(Value::as_str)
+            .map(crate::format::clean_name)
+    }
+
+    /// The value of `property`, when the device gave one.
+    pub fn value(&self, property: PropertyIdentifier) -> Option<&Value> {
+        self.readings
+            .iter()
+            .find(|reading| reading.property == property)
+            .and_then(|reading| reading.value.as_ref().ok())
     }
 }
 
@@ -215,7 +215,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// handles, after a request times out, ask once where the device went
     /// and give the answers that long (see [`QUIET`](crate::device::QUIET)).
     /// `None` sends no Who-Is: such a handle fails at once with
-    /// [`Error::UnknownDevice`], as does a routed address the discovery
+    /// [`OpsError::UnknownDevice`](crate::OpsError::UnknownDevice), as does a routed address the discovery
     /// table holds no router for, and a following one goes by the
     /// discovery table's I-Am times alone. The setting is the clone's
     /// alone, and its clones' and handles': the other clones keep theirs.
@@ -282,3 +282,6 @@ pub(crate) fn device_error(halt: Halt) -> Error {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod read_many_tests;

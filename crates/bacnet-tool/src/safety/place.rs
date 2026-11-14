@@ -274,7 +274,7 @@ pub(super) async fn turn_asking<T: TransportPort + 'static>(
     };
     let held = reader.turn().await.map_err(|halt| match halt {
         Halt::Device(error) => error,
-        Halt::Cancelled => Error::Encoding("the turn was cancelled".into()),
+        Halt::Cancelled => unreachable!("nothing sets the turn's stop flag"),
     })?;
     // Again once the turn is held: the row may have changed while it waited.
     claimed(client, address, instance, style).await?;

@@ -235,7 +235,7 @@ impl Writer {
             Ok(rows) => match sample.via {
                 Via::Poll => Some(
                     from_rows(property, rows)
-                        .unwrap_or_else(|| Reading::failed(hub::poll::MISSING.into())),
+                        .unwrap_or_else(|| Reading::failed(hub::MISSING.into())),
                 ),
                 Via::First | Via::Notification => from_rows(property, rows),
             },

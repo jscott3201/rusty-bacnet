@@ -7,7 +7,8 @@ use bacnet_client::discovery::DiscoveredDevice;
 use owo_colors::OwoColorize;
 use serde::Serialize;
 
-use bacnet_ops::format::{Datum, StateTexts};
+use bacnet_ops::Value;
+use bacnet_ops::format::StateTexts;
 use bacnet_ops::target::{AddressStyle, routed_station};
 
 /// No state texts: a binary object's state shows as `active` or
@@ -151,10 +152,10 @@ pub fn print_read_result(
     object: &str,
     property: &str,
     array_index: Option<u32>,
-    value: &str,
-    decoded: &Datum,
+    read: &Value,
     format: OutputFormat,
 ) {
+    let (value, decoded) = (&read.text, &read.data);
     let prop_display = match array_index {
         Some(idx) => format!("{property}[{idx}]"),
         None => property.to_string(),
@@ -194,10 +195,8 @@ pub struct RpmEntry {
     pub property: String,
     /// The array index read, if any.
     pub index: Option<u32>,
-    /// The value as text, or `ERROR: CLASS:CODE`.
-    pub value: String,
-    /// The value as typed data; `None` for an error.
-    pub data: Option<Datum>,
+    /// The value, or why there is none as text: `ERROR: CLASS:CODE`.
+    pub value: Result<Value, String>,
 }
 
 /// Print RPM results: a table, or in JSON one object per property with
@@ -212,11 +211,9 @@ pub fn print_rpm_table(entries: &[RpmEntry], format: OutputFormat) {
             let mut table = comfy_table::Table::new();
             table.set_header(vec!["Object", "Property", "Value"]);
             for entry in entries {
-                let value = screen(&entry.value);
-                let colored_val = if entry.data.is_none() {
-                    format!("{}", value.red())
-                } else {
-                    format!("{}", value.green())
+                let colored_val = match &entry.value {
+                    Ok(value) => format!("{}", screen(&value.text).green()),
+                    Err(error) => format!("{}", screen(error).red()),
                 };
                 table.add_row(vec![entry.object.as_str(), &property(entry), &colored_val]);
             }
@@ -226,13 +223,17 @@ pub fn print_rpm_table(entries: &[RpmEntry], format: OutputFormat) {
             let json_results: Vec<serde_json::Value> = entries
                 .iter()
                 .map(|entry| {
+                    let text = match &entry.value {
+                        Ok(value) => &value.text,
+                        Err(error) => error,
+                    };
                     let mut json = serde_json::json!({
                         "object": entry.object,
                         "property": property(entry),
-                        "value": entry.value,
+                        "value": text,
                     });
-                    if let Some(data) = &entry.data {
-                        json["decoded"] = serde_json::to_value(data).unwrap_or_default();
+                    if let Ok(value) = &entry.value {
+                        json["decoded"] = serde_json::to_value(&value.data).unwrap_or_default();
                     }
                     json
                 })

@@ -18,11 +18,9 @@ use bacnet_services::alarm_summary::AlarmSummaryEntry;
 use bacnet_services::enrollment_summary::EnrollmentSummaryEntry;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 use serde::Serialize;
-
-use crate::label::object_label;
 
 use super::{Datum, Floats, StateTexts, ValueFormat, constructed};
 
@@ -348,17 +346,21 @@ pub fn cell(datum: &Datum) -> String {
 /// a time: `fetch` asks for the objects after its argument (`None` for
 /// the first answer), and the reading goes on while the device says more
 /// remain, up to `max` summaries. It returns the summaries and whether
-/// the device holds more than them.
+/// the device holds more than them. `fetch`'s error passes through: the
+/// low-level client's, or a [`Device::alarms`](crate::Device::alarms)
+/// [`OpsError`](crate::OpsError).
 ///
 /// A device that names an object twice, or says more remain but sends
-/// nothing, would show duplicates or page forever, so either is an error.
-pub async fn read_event_information<F, Fut>(
+/// nothing, would show duplicates or page forever, so either is an error:
+/// a decoding error ([`Error::Decoding`]) in `E`.
+pub async fn read_event_information<F, Fut, E>(
     max: usize,
     fetch: F,
-) -> Result<(Vec<EventSummary>, bool), Error>
+) -> Result<(Vec<EventSummary>, bool), E>
 where
     F: FnMut(Option<ObjectIdentifier>) -> Fut,
-    Fut: Future<Output = Result<GetEventInformationAck, Error>>,
+    Fut: Future<Output = Result<GetEventInformationAck, E>>,
+    E: From<Error>,
 {
     read_event_information_until(max, || false, fetch).await
 }
@@ -367,15 +369,16 @@ where
 /// asked before every answer after the first, and a stop returns the
 /// summaries read so far with "more" set, so the caller can go on after the
 /// last of them later (a call out of time, say).
-pub async fn read_event_information_until<S, F, Fut>(
+pub async fn read_event_information_until<S, F, Fut, E>(
     max: usize,
     mut stop: S,
     mut fetch: F,
-) -> Result<(Vec<EventSummary>, bool), Error>
+) -> Result<(Vec<EventSummary>, bool), E>
 where
     S: FnMut() -> bool,
     F: FnMut(Option<ObjectIdentifier>) -> Fut,
-    Fut: Future<Output = Result<GetEventInformationAck, Error>>,
+    Fut: Future<Output = Result<GetEventInformationAck, E>>,
+    E: From<Error>,
 {
     let mut summaries: Vec<EventSummary> = Vec::new();
     let mut seen = HashSet::new();
@@ -387,10 +390,7 @@ where
         let ack = fetch(after).await?;
         for summary in ack.list_of_event_summaries {
             if !seen.insert(summary.object_identifier.encode()) {
-                return Err(Error::Encoding(format!(
-                    "GetEventInformation named {} again",
-                    object_label(summary.object_identifier)
-                )));
+                return Err(named_twice(summary.object_identifier).into());
             }
             summaries.push(summary);
         }
@@ -410,10 +410,28 @@ where
                 return Err(Error::decoding(
                     0,
                     "GetEventInformation said more events remain but sent no new object",
-                ));
+                )
+                .into());
             }
         }
     }
+}
+
+/// The error for a GetEventInformation answer that names `object` again:
+/// its type and instance numbers, as a decoder's refusal holds them.
+fn named_twice(object: ObjectIdentifier) -> Error {
+    Error::Decoding(
+        DecodeError::new(
+            DecodingKind::InvalidEncoding,
+            0,
+            "object type {} instance {} named again",
+        )
+        .within("GetEventInformation")
+        .with_values(
+            u64::from(object.object_type().to_raw()),
+            u64::from(object.instance_number()),
+        ),
+    )
 }
 
 #[cfg(test)]

@@ -1,15 +1,17 @@
-//! Batched polls of one device's watched points (from the TUI's watch
-//! list, #2115).
+//! Batched reads of one device's properties: the watch hub's polls (from
+//! the TUI's watch list, #2115) and [`Device::read_many`] (#2560).
 //!
-//! The rows due on a device are read together: by ReadPropertyMultiple, up
-//! to [`MAX_BATCH`] rows a request, each row its own access specification,
-//! or by ReadProperty once the device has refused RPM (Clause 15.5). A
-//! batch whose answer would be too large is asked again a row at a time;
-//! any other batch the device fails as a whole is read by ReadProperty for
-//! this poll only, so one bad object can't put errors on its neighbours. A device
-//! that stops answering ends the poll, and the rows left get its error at
-//! once. Every request takes its own turn at the device's gate under the
+//! The rows are read together: by ReadPropertyMultiple, up to
+//! [`MAX_BATCH`] rows a request, each row its own access specification, or
+//! by ReadProperty once the device has refused RPM (Clause 15.5). A batch
+//! whose answer would be too large is asked again a row at a time; any
+//! other batch the device fails as a whole is read by ReadProperty for
+//! this read only, so one bad object can't put errors on its neighbours. A
+//! device that stops answering ends the read, keeping the rows read before
+//! it. Every request takes its own turn at the device's gate under the
 //! shared [`RequestLimits`].
+//!
+//! [`Device::read_many`]: crate::Device::read_many
 
 use std::collections::VecDeque;
 
@@ -20,96 +22,119 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::client::{RpmFailure, rpm_failure, unreachable};
+use super::{ReadVia, RpmFailure, rpm_failure, unreachable};
 use crate::device::{DeviceAddress, Path};
-use crate::format::{RawRow, RowError};
+use crate::format::{PropertyError, RawRow};
 use crate::limits::RequestLimits;
 
-/// Rows read by one ReadPropertyMultiple when polling.
-pub const MAX_BATCH: usize = 16;
+/// Rows read by one ReadPropertyMultiple.
+pub(crate) const MAX_BATCH: usize = 16;
 
-/// Properties one ReadPropertyMultiple of a poll asks for at most, all its
-/// rows together: a batch ends at [`MAX_BATCH`] rows or here, whichever
-/// comes first, so rows that read many properties make smaller batches.
-pub const MAX_BATCH_PROPERTIES: usize = 32;
+/// Properties one ReadPropertyMultiple asks for at most, all its rows
+/// together: a batch ends at [`MAX_BATCH`] rows or here, whichever comes
+/// first, so rows that read many properties make smaller batches.
+pub(crate) const MAX_BATCH_PROPERTIES: usize = 32;
 
-/// Why a row of an answer has no reading.
-pub const MISSING: &str = "missing from the device's answer";
-
-/// One row of a poll: what it reads of which object.
+/// One row of a batch: what it reads of which object.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PollRow<K> {
+pub(crate) struct BatchRow<K> {
     /// The caller's name for the row.
-    pub key: K,
+    pub(crate) key: K,
     /// The object read.
-    pub object: ObjectIdentifier,
+    pub(crate) object: ObjectIdentifier,
     /// The properties a ReadPropertyMultiple asks for, each with its array
     /// element if one; the first is the watched one.
-    pub wanted: Vec<(PropertyIdentifier, Option<u32>)>,
+    pub(crate) wanted: Vec<(PropertyIdentifier, Option<u32>)>,
     /// How many of `wanted`, from the first, are read one by one by
     /// ReadProperty when RPM isn't used; at least one.
-    pub one_by_one: usize,
+    pub(crate) one_by_one: usize,
 }
 
-/// One poll of a device's rows.
+/// A row the device's ReadPropertyMultiple answer left out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Missing;
+
+/// What a batch read.
 #[derive(Debug)]
-pub struct Polled<K> {
-    /// Every row asked for: its properties as read, or why it has none.
-    pub rows: Vec<(K, Result<Vec<RawRow>, String>)>,
-    /// The device refused RPM during this poll.
-    pub refused_rpm: bool,
-    /// The device stopped answering: the poll gave up on the rows left.
-    pub unreachable: bool,
+pub(crate) struct Batched<K> {
+    /// The rows read, in the order asked for, each its properties as read
+    /// or [`Missing`]. The rows after them weren't read: see `stopped`.
+    pub(crate) rows: Vec<(K, Result<Vec<RawRow>, Missing>)>,
+    /// The device refused RPM during this read.
+    pub(crate) refused_rpm: bool,
+    /// Why the rows after `rows` weren't read: the device stopped
+    /// answering, or a routed address has no path, and then nothing was
+    /// sent.
+    pub(crate) stopped: Option<Error>,
+    /// Some rows were read by ReadPropertyMultiple.
+    by_rpm: bool,
+    /// Some rows were read by ReadProperty.
+    by_rp: bool,
+}
+
+impl<K> Batched<K> {
+    /// Nothing read, for `error`.
+    pub(crate) fn stopped(error: Error) -> Self {
+        Self {
+            rows: Vec::new(),
+            refused_rpm: false,
+            stopped: Some(error),
+            by_rpm: false,
+            by_rp: false,
+        }
+    }
+
+    /// How the rows were read; `None` when none was.
+    pub(crate) fn via(&self) -> Option<ReadVia> {
+        match (self.by_rpm, self.by_rp) {
+            (true, true) => Some(ReadVia::Mixed),
+            (true, false) => Some(ReadVia::Rpm),
+            (false, true) => Some(ReadVia::Rp),
+            (false, false) => None,
+        }
+    }
 }
 
 /// Read every row in `rows` of the device at `device`, by RPM while `rpm`
-/// holds. A routed address the discovery table holds no router for fails
-/// every row at once, with nothing sent.
-pub async fn poll<K: Copy, T: TransportPort + 'static>(
+/// holds. A routed address the discovery table holds no router for reads
+/// nothing, with nothing sent.
+pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
     device: &DeviceAddress,
-    rows: &[PollRow<K>],
+    rows: &[BatchRow<K>],
     mut rpm: bool,
-) -> Polled<K> {
+) -> Batched<K> {
     let started_rpm = rpm;
     let path = match Path::to(client, device).await {
         Ok(path) => path,
-        Err(error) => {
-            return Polled {
-                rows: rows
-                    .iter()
-                    .map(|row| (row.key, Err(error.to_string())))
-                    .collect(),
-                refused_rpm: false,
-                unreachable: false,
-            };
-        }
+        Err(error) => return Batched::stopped(error),
     };
     let path = &path;
-    let mut read = Vec::with_capacity(rows.len());
-    let mut silent: Option<Error> = None;
-    let mut batches: VecDeque<&[PollRow<K>]> = batches(rows).collect();
-    while let Some(batch) = batches.pop_front() {
-        if let Some(error) = &silent {
-            read.extend(batch.iter().map(|row| (row.key, Err(error.to_string()))));
-            continue;
-        }
+    let mut read = Batched {
+        rows: Vec::with_capacity(rows.len()),
+        refused_rpm: false,
+        stopped: None,
+        by_rpm: false,
+        by_rp: false,
+    };
+    let mut batches: VecDeque<&[BatchRow<K>]> = batches(rows).collect();
+    'batches: while let Some(batch) = batches.pop_front() {
         if rpm {
             match rpm_batch(client, limits, (device, path), batch).await {
                 Ok(rows) => {
-                    read.extend(rows);
+                    read.by_rpm = true;
+                    read.rows.extend(rows);
                     continue;
                 }
                 Err(error) if unreachable(&error) => {
-                    read.extend(batch.iter().map(|row| (row.key, Err(error.to_string()))));
-                    silent = Some(error);
-                    continue;
+                    read.stopped = Some(error);
+                    break;
                 }
                 Err(error) => match rpm_failure(&error) {
                     RpmFailure::Refused => {
                         tracing::info!(
-                            "device {device} refused ReadPropertyMultiple ({error}); polling one property at a time"
+                            "device {device} refused ReadPropertyMultiple ({error}); reading one property at a time"
                         );
                         rpm = false;
                     }
@@ -129,30 +154,26 @@ pub async fn poll<K: Copy, T: TransportPort + 'static>(
             }
         }
         for row in batch {
-            if let Some(error) = &silent {
-                read.push((row.key, Err(error.to_string())));
-                continue;
-            }
             match one_by_one(client, limits, (device, path), row).await {
-                Ok(rows) => read.push((row.key, Ok(rows))),
+                Ok(rows) => {
+                    read.by_rp = true;
+                    read.rows.push((row.key, Ok(rows)));
+                }
                 Err(error) => {
-                    read.push((row.key, Err(error.to_string())));
-                    silent = Some(error);
+                    read.stopped = Some(error);
+                    break 'batches;
                 }
             }
         }
     }
-    Polled {
-        rows: read,
-        refused_rpm: started_rpm && !rpm,
-        unreachable: silent.is_some(),
-    }
+    read.refused_rpm = started_rpm && !rpm;
+    read
 }
 
 /// `rows` in batches of at most [`MAX_BATCH`] rows and
 /// [`MAX_BATCH_PROPERTIES`] properties; a row asking for more is a batch of
 /// its own.
-fn batches<K>(rows: &[PollRow<K>]) -> impl Iterator<Item = &[PollRow<K>]> {
+fn batches<K>(rows: &[BatchRow<K>]) -> impl Iterator<Item = &[BatchRow<K>]> {
     let mut start = 0;
     std::iter::from_fn(move || {
         if start == rows.len() {
@@ -174,13 +195,13 @@ fn batches<K>(rows: &[PollRow<K>]) -> impl Iterator<Item = &[PollRow<K>]> {
     })
 }
 
-/// `row`'s first [`PollRow::one_by_one`] properties by ReadProperty each;
+/// `row`'s first [`BatchRow::one_by_one`] properties by ReadProperty each;
 /// the error of a device that stopped answering.
 async fn one_by_one<K, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
     (device, path): (&DeviceAddress, &Path),
-    row: &PollRow<K>,
+    row: &BatchRow<K>,
 ) -> Result<Vec<RawRow>, Error> {
     let mut rows = Vec::with_capacity(row.one_by_one);
     for &(property, index) in row.wanted.iter().take(row.one_by_one.max(1)) {
@@ -192,7 +213,7 @@ async fn one_by_one<K, T: TransportPort + 'static>(
         let value = match read {
             Ok(ack) => Ok(ack.property_value),
             Err(error) if unreachable(&error) => return Err(error),
-            Err(error) => Err(RowError::from(error)),
+            Err(error) => Err(PropertyError::from(error)),
         };
         rows.push((property, value));
     }
@@ -204,8 +225,8 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
     (device, path): (&DeviceAddress, &Path),
-    batch: &[PollRow<K>],
-) -> Result<Vec<(K, Result<Vec<RawRow>, String>)>, Error> {
+    batch: &[BatchRow<K>],
+) -> Result<Vec<(K, Result<Vec<RawRow>, Missing>)>, Error> {
     let specs = batch
         .iter()
         .map(|row| ReadAccessSpecification {
@@ -233,7 +254,7 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
         .iter()
         .map(|row| {
             let Some(result) = results.next() else {
-                return (row.key, Err(MISSING.to_string()));
+                return (row.key, Err(Missing));
             };
             let rows: Vec<RawRow> = result
                 .list_of_results
@@ -242,9 +263,9 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
                     let value = match (element.property_value, element.error) {
                         (Some(value), _) => Ok(value),
                         (None, Some((class, code))) => {
-                            Err(RowError::Remote(RemoteError::Error { class, code }))
+                            Err(PropertyError::Remote(RemoteError::Error { class, code }))
                         }
-                        (None, None) => Err(RowError::NoValue),
+                        (None, None) => Err(PropertyError::NoValue),
                     };
                     (element.property_identifier, value)
                 })
@@ -260,8 +281,8 @@ mod tests {
 
     use super::*;
 
-    fn row(key: usize, properties: usize) -> PollRow<usize> {
-        PollRow {
+    fn row(key: usize, properties: usize) -> BatchRow<usize> {
+        BatchRow {
             key,
             object: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             wanted: vec![(PropertyIdentifier::PRESENT_VALUE, None); properties],
@@ -269,7 +290,7 @@ mod tests {
         }
     }
 
-    fn sizes(rows: &[PollRow<usize>]) -> Vec<usize> {
+    fn sizes(rows: &[BatchRow<usize>]) -> Vec<usize> {
         batches(rows).map(<[_]>::len).collect()
     }
 

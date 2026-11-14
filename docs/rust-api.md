@@ -11798,11 +11798,13 @@ address on the client's own network, once `BACnetClient::network_number`
 knows it, is the local station), from an instance (`1234`, or `2:1234` on
 one network) it follows the one address claiming it (none: one Who-Is,
 waiting `with_resolve_wait`'s time, a clone's own setting; two or more,
-then or after the wait: `Error::AmbiguousDevice`), and from a discovery
+then or after the wait: `OpsError::Ambiguous`), and from a discovery
 result it is pinned and knows the instance. The handle's async reads are
-`read`, `read_property`, `list_objects`, `describe_device`, `read_trend`
-(trend, event and audit log pages), `alarms`, `alarm_summary`,
-`enrollment_summary` and the 223 inventory's. A device's gate, turns and
+`read` (one property, as a `Value`), `read_many` (a bulk read, as
+`Readings`), `read_object` (an object's properties, all or a list),
+`list_objects`, `describe_device`, `read_trend` (trend, event and audit log
+pages), `alarms`, `alarm_summary`, `enrollment_summary` and the 223
+inventory's ([values and errors](#values-readings-and-opserror)). A device's gate, turns and
 memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
 two devices sharing an instance stay apart and one device named two ways
 waits at one gate. A following handle moves to the one other address on its
@@ -11841,8 +11843,59 @@ with no aliases left behind:
 | `RequestLimits::turn(u32)`, `turn_on(u32, Option<u16>)`, `gate(u32)`, `wait_device_free(u32)` | `turn`, `gate` and `wait_device_free` with a `&DeviceAddress`, whose network paces the request |
 | `engine::Reader { device: u32, .. }` | `Reader { device: DeviceAddress, instance: Option<u32>, .. }`; `Reader::instance` reads a missing instance by the wildcard, `Reader::rpm_in` sends an RPM in a turn the caller holds |
 | `engine::network_of` | gone: the address carries the network |
-| `watch::poll::poll(client, limits, u32, ..)` | `poll(client, limits, &DeviceAddress, ..)` |
+| `watch::poll::poll(client, limits, u32, ..)` | private: `Device::read_many` reads in the same batches |
 | an address target turned into an instance with `add_device` first (the CLI export) | `DeviceAddress::claiming(client, instance)` for the other way round, or a handle from the address |
+
+### Values, readings and OpsError
+
+A `Client` or `Device` read returns its values in both forms (#2560). A
+`Value` holds the formatter's typed data (`data`, a `format::Datum`, the
+CLI's JSON shape), its text (`text`: every digit and every list element,
+`21.5 °C` when the same read had the object's Units, `2 (Heat)` when it had
+its State_Text) and the octets the device sent (`raw`), with `as_f64`,
+`as_bool` (a BOOLEAN, or a binary object's state), `as_u64`, `as_i64`,
+`as_str`, `is_null` and `decode()` (the octets as a `PropertyValue`).
+`Value::new(&format, property, index, raw, units)` builds one with any
+formatter, as the MCP server and the one-shot CLI do for their own display
+rules, and `may_hold_device_text()` says when the text quotes device text.
+
+`Device::read(p)` takes a `PropertyRef`, text such as `"ai:1 pv"` or
+`"ao:1 priority-array[8]"` (an object alone is its Present_Value), or an
+`(object, property)` or `(object, property, index)` tuple (`IntoProperty`).
+`read_many(ps)` and `read_object(object, wanted)` never fail as a whole:
+they return `Readings { readings, via, stopped }`, one `Reading { object,
+property, index, value: Result<Value, PropertyError> }` a property in the
+order asked for. A property the device refuses, or one of an object it
+doesn't have, is an error in its own row; a device that stops answering
+ends the read with what was read before it, and `stopped` says why.
+`read_many` reads up to 16 objects and 32 properties a ReadPropertyMultiple,
+asks a batch whose answer would be too large again an object at a time,
+reads a batch the device fails as a whole by ReadProperty (`via` is then
+`ReadVia::Mixed`), and goes by ReadProperty once the device has refused RPM:
+the batches the watch hub polls in.
+
+Every other call fails with `OpsError` (`#[non_exhaustive]`): `Parse { what,
+input, reason }` for text that names nothing this client can address,
+`UnknownDevice { target }`, `Ambiguous { instance, candidates }` (the
+addresses as `DeviceAddress`), `Unreachable { device, source }` for a
+timeout or a link failure (a transaction state machine's TSM_TIMEOUT abort
+included), `Refused { device, error }` for the device's Error, Reject or
+Abort, and `Client(Error)` for any other low-level error, unchanged.
+`error.unreachable()`, `error.timed_out()` and `error.remote()` answer the
+usual questions; its text is the low-level error's. The raw layer
+(`Reader`, `Halt`) keeps `bacnet_types::error::Error`, with the free
+functions `client::unreachable` and `client::timed_out` for it.
+
+| Was | Now |
+|---|---|
+| `device.read(object, wanted)` and `PropertyRead { object, rows, via }` | `device.read_object(object, wanted)`, `Readings` |
+| `device.read_property(object, property, index)`, the octets | `device.read((object, property))` or `device.read(PropertyRef::new(object, property).at(index))`, a `Value` (`value.raw` for the octets) |
+| `DeviceSummary { rows, .. }` | `DeviceSummary { readings, .. }`, and `summary.value(property)` |
+| `format::RowError` | `format::PropertyError`, also `bacnet_ops::PropertyError` |
+| `Result<_, bacnet_types::error::Error>` from `Client::device`, `who_is`, `discover`, `discover_routers`, `station_mac` and every `Device` read | `Result<_, OpsError>`; `client::unreachable(&e)` and `client::timed_out(&e)` on those errors become `e.unreachable()` and `e.timed_out()` |
+| `Error::Encoding` for a directed Who-Is or `station_mac` text that names no station, and `Error::OutOfRange` for a refused target | `OpsError::Parse` |
+| `Error::Encoding` for an Object_List claiming more than `MAX_OBJECTS` elements, or a GetEventInformation answer naming an object twice | `Error::Decoding` (kinds `Overflow` and `InvalidEncoding`), inside `OpsError::Client` from a `Device` read |
+| `watch::poll::MISSING` | `watch::MISSING` |
 
 ### Moved to bacnet-tool
 
