@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::server::EventNotificationCounters;
-use crate::server::notification_transactions::canonical_direct_peer;
 
 const TARGET: [u8; 6] = [192, 168, 1, 50, 0xBA, 0xC0];
 
@@ -125,27 +124,23 @@ async fn unanswered_confirmed_notification_counts_once_after_its_last_retry() {
 async fn confirmed_notification_without_a_free_invoke_id_waits_for_one() {
     let harness = confirmed_local_harness(60_000).await;
     // Lease every device-wide invoke ID to another peer.
-    let mut held: Vec<_> = (0..256)
-        .map(|_| {
-            harness
-                .notification_transactions
-                .reserve(
-                    canonical_direct_peer(&[1]),
-                    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-                )
-                .expect("a free invoke ID")
-        })
-        .collect();
+    let mut held = harness.notification_transactions.lease_every_invoke_id();
     let distribute = harness.distribute();
     tokio::pin!(distribute);
     let waited = tokio::time::timeout(Duration::from_secs(10), &mut distribute).await;
     assert!(waited.is_err(), "it waits for an invoke ID");
     assert!(harness.unicast_frames().is_empty());
-    assert_eq!(counters(&harness), EventNotificationCounters::default());
+    let counted_once = EventNotificationCounters {
+        confirmed_waited_for_invoke_id: 1,
+        ..Default::default()
+    };
+    assert_eq!(counters(&harness), counted_once);
     drop(held.pop());
-    distribute.await;
+    tokio::time::timeout(Duration::from_secs(10), distribute)
+        .await
+        .expect("it goes once an invoke ID comes back");
     sent_invoke_id(&harness);
-    assert_eq!(counters(&harness), EventNotificationCounters::default());
+    assert_eq!(counters(&harness), counted_once);
 }
 
 #[tokio::test]

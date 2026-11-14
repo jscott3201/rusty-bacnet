@@ -90,13 +90,12 @@ pub struct EventNotificationCounters {
     /// broadcast, and sending one unconfirmed would drop the acknowledgment
     /// the destination asks for. No invoke ID is reserved for them.
     pub confirmed_broadcast_recipient: u64,
-    /// Confirmed notifications not sent because the server's transaction
-    /// state could lease no invoke ID at all, which only a panic in it (or
-    /// running out of lease generations) brings about. One that finds every
-    /// invoke ID in use waits in its destination's lane for one instead, and
-    /// isn't counted (#2537). Reservations refused while the server stops
-    /// are not counted either.
-    pub confirmed_no_invoke_id: u64,
+    /// Confirmed notifications that found every invoke ID in use and waited
+    /// for one to come back, counted once each as its wait starts (#2537).
+    /// None is dropped for want of an ID: it waits in its destination's
+    /// lane, or a Device recipient's in its device's queue, and holds up
+    /// only that destination.
+    pub confirmed_waited_for_invoke_id: u64,
     /// Confirmed notifications the recipient answered with an Error, Reject
     /// or Abort.
     pub confirmed_rejected: u64,
@@ -135,9 +134,10 @@ pub struct EventNotificationCounters {
     /// logs. Notifications no Event Log collects are not counted.
     pub received_not_logged: u64,
     /// Notifications dropped because their destination's lane already held
-    /// 64 waiting to go (#2537): a destination that stalls drops its own
-    /// newest notifications, and the next From State it is sent shows the
-    /// gap.
+    /// 64 waiting to go (#2537), or, for a Device recipient waiting for its
+    /// I-Am or an invoke ID, its device's queue did: a destination that
+    /// stalls drops its own newest notifications, and the next From State
+    /// it is sent shows the gap.
     pub lane_full: u64,
     /// Notifications dropped because 1,024 were already waiting across
     /// every destination's lane.
@@ -162,7 +162,7 @@ pub(crate) enum EventSuppression {
     DeviceRecipientUnbound,
     RecipientUnroutable,
     ConfirmedBroadcastRecipient,
-    ConfirmedNoInvokeId,
+    ConfirmedWaitedForInvokeId,
     ConfirmedRejected,
     ConfirmedUnanswered,
     UnconfirmedSendFailed,
@@ -221,7 +221,7 @@ impl EventSuppressions {
             device_recipient_unbound,
             recipient_unroutable,
             confirmed_broadcast_recipient,
-            confirmed_no_invoke_id,
+            confirmed_waited_for_invoke_id,
             confirmed_rejected,
             confirmed_unanswered,
             unconfirmed_send_failed,
@@ -238,7 +238,7 @@ impl EventSuppressions {
             device_recipient_unbound,
             recipient_unroutable,
             confirmed_broadcast_recipient,
-            confirmed_no_invoke_id,
+            confirmed_waited_for_invoke_id,
             confirmed_rejected,
             confirmed_unanswered,
             unconfirmed_send_failed,
@@ -283,7 +283,7 @@ mod tests {
         EventSuppression::DeviceRecipientUnbound,
         EventSuppression::RecipientUnroutable,
         EventSuppression::ConfirmedBroadcastRecipient,
-        EventSuppression::ConfirmedNoInvokeId,
+        EventSuppression::ConfirmedWaitedForInvokeId,
         EventSuppression::ConfirmedRejected,
         EventSuppression::ConfirmedUnanswered,
         EventSuppression::UnconfirmedSendFailed,
@@ -311,7 +311,7 @@ mod tests {
                 device_recipient_unbound: 5,
                 recipient_unroutable: 6,
                 confirmed_broadcast_recipient: 7,
-                confirmed_no_invoke_id: 8,
+                confirmed_waited_for_invoke_id: 8,
                 confirmed_rejected: 9,
                 confirmed_unanswered: 10,
                 unconfirmed_send_failed: 11,

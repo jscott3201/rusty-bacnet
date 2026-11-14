@@ -13,18 +13,16 @@ use bacnet_types::bitstring::EventTransitionBits;
 /// A destination whose confirmed notifications wait for an invoke ID.
 const HELD: [u8; 6] = [10, 0, 0, 11, 0xBA, 0xC0];
 
-/// Every device-wide invoke ID, leased to another peer.
+/// Every invoke ID, leased to another peer.
 fn lease_every_id(transactions: &NotificationTransactions) -> Vec<NotificationReservation> {
-    (0..256)
-        .map(|_| {
-            transactions
-                .reserve(
-                    canonical_direct_peer(&[1]),
-                    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-                )
-                .expect("a free invoke ID")
-        })
-        .collect()
+    transactions.lease_every_invoke_id()
+}
+
+/// Confirmed notifications that waited for an invoke ID, so far.
+fn waited(rig: &Rig) -> u64 {
+    rig.server
+        .event_notification_counters()
+        .confirmed_waited_for_invoke_id
 }
 
 /// An Address recipient at `mac`, confirmed or not, for `transitions`.
@@ -122,8 +120,7 @@ async fn a_confirmed_notification_with_no_invoke_id_waits_at_its_lanes_head() {
         1,
         "the unconfirmed one waits behind the held head"
     );
-    let counters = rig.server.event_notification_counters();
-    assert_eq!(counters.confirmed_no_invoke_id, 0, "not dropped");
+    assert_eq!(waited(&rig), 1, "it waits, counted once");
     drop(leases.pop());
     assert_eq!(
         wait_sent_to(&rig, &HELD, 2).await,
@@ -148,6 +145,7 @@ async fn a_release_racing_the_start_of_the_wait_still_ends_it() {
                     .reserve_waiting(
                         canonical_direct_peer(&OTHER),
                         ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+                        || {},
                     )
                     .await
                     .is_ok()
@@ -197,7 +195,7 @@ async fn a_lane_held_for_an_invoke_id_still_fills_and_drops_the_newest() {
         counters.lane_full, 1,
         "the head held, 64 behind it, one more"
     );
-    assert_eq!(counters.confirmed_no_invoke_id, 0);
+    assert_eq!(counters.confirmed_waited_for_invoke_id, 1, "the head");
     assert_eq!(
         lanes(&rig.server.notification_transactions).waiting(),
         MAX_LANE_ENTRIES
@@ -218,6 +216,9 @@ async fn stop_ends_a_lane_held_for_an_invoke_id() {
     let leases = lease_every_id(&rig.server.notification_transactions);
     rig.reliability(Reliability::NO_SENSOR).await;
     rig.reliability(Reliability::NO_FAULT_DETECTED).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(lanes(&rig.server.notification_transactions).open(), 1);
+    assert_eq!(waited(&rig), 1, "held for an ID");
     let started = tokio::time::Instant::now();
     rig.server.stop().await.unwrap();
     // The writers' COV waits run to 3 s; sealing ends them first.
@@ -239,6 +240,9 @@ async fn a_drop_ends_a_lane_held_for_an_invoke_id() {
     let transactions = Arc::clone(&rig.server.notification_transactions);
     let leases = lease_every_id(&transactions);
     rig.reliability(Reliability::NO_SENSOR).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(lanes(&transactions).open(), 1);
+    assert_eq!(waited(&rig), 1, "held for an ID");
     let Rig { server, sent, .. } = rig;
     drop(server);
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -301,10 +305,14 @@ async fn dcc_withdraws_a_notification_that_waited_for_an_invoke_id() {
     drop(leases.pop());
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(sent_to(&rig, &HELD), [], "withdrawn");
+    assert_eq!(lanes(&transactions).open(), 0, "the lane woke and closed");
     assert_eq!(transactions.active_count(), 255, "its ID given back");
     assert_eq!(
         rig.server.event_notification_counters(),
-        EventNotificationCounters::default()
+        EventNotificationCounters {
+            confirmed_waited_for_invoke_id: 1,
+            ..EventNotificationCounters::default()
+        }
     );
 }
 
@@ -335,7 +343,6 @@ async fn a_worker_that_panics_gives_its_invoke_id_back() {
     let held = wait_sent_to(&rig, &HELD, 1).await;
     assert_eq!((other, held), (vec![(true, FAULT)], vec![(true, FAULT)]));
     assert_eq!(*rig.probe.panic_on.lock().unwrap(), None, "a send panicked");
-    let counters = rig.server.event_notification_counters();
-    assert_eq!(counters.confirmed_no_invoke_id, 0);
+    assert_eq!(waited(&rig), 1, "the other destination waited");
     spy.assert_logged_unlocked(1);
 }

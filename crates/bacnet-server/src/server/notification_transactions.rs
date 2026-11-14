@@ -381,17 +381,19 @@ impl NotificationTransactions {
 
     /// [`Self::reserve`], waiting while every invoke ID is leased: a
     /// confirmed event notification holds its lane until one comes back
-    /// (#2537). The 256 IDs are one pool for the whole device, shared by
-    /// every destination (and, in an endpoint, its client), so each release
-    /// wakes every waiter, in the order they began to wait; the first to run
-    /// takes the ID, and the rest wait again. Any other refusal returns at
-    /// once. It holds no lock while it waits, so it can be cancelled.
+    /// (#2537). The server's 256 IDs are one pool, shared by its event, COV,
+    /// audit and command-run requests, so each release wakes every waiter.
+    /// Whichever runs first takes the ID and the rest wait again: there is
+    /// no order among waiters. `waits` is called once, as the wait starts.
+    /// Any other refusal returns at once. It holds no lock while it waits,
+    /// so it can be cancelled.
     pub(super) async fn reserve_waiting(
         &self,
         peer: CanonicalPeer,
         service_choice: ConfirmedServiceChoice,
+        waits: impl FnOnce(),
     ) -> Result<NotificationReservation, NotificationReserveError> {
-        let mut said = false;
+        let mut waits = Some(waits);
         loop {
             // Made before the attempt, so a lease released after it fails
             // still ends this wait: the coordinator's wake reaches every
@@ -399,14 +401,29 @@ impl NotificationTransactions {
             let released = self.core.coordinator.released();
             match self.reserve(peer.clone(), service_choice) {
                 Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => {
-                    if !std::mem::replace(&mut said, true) {
-                        tracing::debug!("Every invoke ID is leased; waiting for one to come back");
+                    if let Some(waits) = waits.take() {
+                        waits();
                     }
                     released.await;
                 }
                 result => return result,
             }
         }
+    }
+
+    /// Lease every invoke ID to another peer, for tests that need none
+    /// free.
+    #[cfg(test)]
+    pub(super) fn lease_every_invoke_id(&self) -> Vec<NotificationReservation> {
+        (0..256)
+            .map(|_| {
+                self.reserve(
+                    canonical_direct_peer(&[1]),
+                    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+                )
+                .expect("a free invoke ID")
+            })
+            .collect()
     }
 
     /// Lease an invoke ID for a read this server sends, answered by an

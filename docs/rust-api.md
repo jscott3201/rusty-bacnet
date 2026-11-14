@@ -11599,7 +11599,7 @@ counters.recipient_list_too_long;       // a custom class served more than 32 de
 counters.device_recipient_unbound;      // a Device recipient with no current binding
 counters.recipient_unroutable;          // a recipient no binding or retry can route
 counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast or group address
-counters.confirmed_no_invoke_id;        // no invoke ID could be leased at all (one in use waits)
+counters.confirmed_waited_for_invoke_id; // waited in its lane for a free invoke ID
 counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;          // no acknowledgment after the last retry
 counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused
@@ -11618,9 +11618,11 @@ notifications alike, whose Notification Class lookup failed closed: one per
 `RecipientLookupOutcome` that suppresses delivery, alongside the warning each
 one logs. `NoConfiguredDestinations` and `NoMatchingDestinations` are
 configured behaviour and are not counted, nor are notifications held back by
-DCC or Event_Enable, a confirmed one DCC ends at a retry included. The three
-confirmed fields count notifications to one
-recipient; a reservation refused because the server is stopping is not
+DCC or Event_Enable, a confirmed one DCC ends at a retry included. The
+confirmed fields count notifications to one recipient: `confirmed_rejected`
+and `confirmed_unanswered` ones that were not delivered, and
+`confirmed_waited_for_invoke_id` ones that waited for an invoke ID, which are
+not dropped; a reservation refused because the server is stopping is not
 counted.
 
 `unconfirmed_send_failed` (#1196) counts unconfirmed notifications whose send
@@ -11645,9 +11647,13 @@ lane, filled under the database guard that committed it and drained by one
 task per destination, so one destination's notifications go out in commit
 order whichever task committed them, and a destination that stalls holds up
 only its own lane (#2537). A confirmed one holds its lane until its first
-attempt is handed off. `lane_full`, `lanes_entries_full` and `lanes_full`
-count notifications dropped, the newest, at a lane's 64 entries, 1,024 across
-the lanes and 256 destinations. A change's COV notifications wait for its
+attempt is handed off, and, with every invoke ID in use, until one comes back,
+counted once in `confirmed_waited_for_invoke_id`. Notifications to a Device
+recipient whose I-Am the server waits for go to that device's queue instead,
+which holds 64 as a lane does and waits for an ID the same way. `lane_full`,
+`lanes_entries_full` and `lanes_full` count notifications dropped, the newest,
+at 64 entries for one destination, 1,024 across the lanes and 256
+destinations. A change's COV notifications wait for its
 event notifications to be handed off (#889) for at most the APDU timeout
 (`cov_retry_timeout_ms`); `cov_wait_expired` counts the changes for which
 they went out at that limit instead.

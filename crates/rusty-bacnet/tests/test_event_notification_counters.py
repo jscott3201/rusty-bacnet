@@ -18,7 +18,7 @@ FIELDS = frozenset({
     "device_recipient_unbound",
     "recipient_unroutable",
     "confirmed_broadcast_recipient",
-    "confirmed_no_invoke_id",
+    "confirmed_waited_for_invoke_id",
     "confirmed_rejected",
     "confirmed_unanswered",
     "unconfirmed_send_failed",

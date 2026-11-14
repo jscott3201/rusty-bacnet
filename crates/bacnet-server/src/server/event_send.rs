@@ -239,12 +239,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }) = confirmed_route
         {
             // With every invoke ID leased, the notification waits here for
-            // one, so its lane holds and the destination's later entries
-            // stay behind it (#2537). Should DCC restrict initiation
-            // meanwhile, the first attempt withdraws it, uncounted.
+            // one, counted once, so its lane (or its device's queue) holds
+            // and the destination's later entries stay behind it (#2537).
+            // Should DCC restrict initiation meanwhile, the first attempt
+            // withdraws it, uncounted.
             let reservation = notification_transactions.reserve_waiting(
                 canonical_peer,
                 ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+                || {
+                    suppressions.record(EventSuppression::ConfirmedWaitedForInvokeId);
+                    debug!("Every invoke ID is leased; the EventNotification waits for one");
+                },
             );
             let (operation, result_rx) = match reservation.await {
                 Ok(reservation) => reservation,
@@ -256,10 +261,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 // The transaction state can lease no ID at all, poisoned by
                 // a panic or out of generations, so nothing would end a
-                // wait: dropped and counted.
+                // wait: dropped, and said.
                 Err(error) => {
-                    suppressions.record(EventSuppression::ConfirmedNoInvokeId);
-                    warn!(%error, "No confirmed transaction for an EventNotification");
+                    warn!(%error, "No confirmed transaction for an EventNotification; dropped");
                     return None;
                 }
             };

@@ -3124,7 +3124,7 @@ Keys:
 - `device_recipient_unbound: int`
 - `recipient_unroutable: int`
 - `confirmed_broadcast_recipient: int`
-- `confirmed_no_invoke_id: int`
+- `confirmed_waited_for_invoke_id: int`
 - `confirmed_rejected: int`
 - `confirmed_unanswered: int`
 - `unconfirmed_send_failed: int`

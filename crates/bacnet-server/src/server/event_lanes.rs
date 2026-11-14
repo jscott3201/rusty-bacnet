@@ -416,6 +416,23 @@ pub(in crate::server) fn lanes_held(transactions: &NotificationTransactions) -> 
     })
 }
 
+/// Count a notification dropped because its Device recipient's queue, which
+/// waits for the device's I-Am or for an invoke ID, already held
+/// [`MAX_LANE_ENTRIES`], as the device's lane would (#2537); warned once the
+/// lock is let go.
+pub(super) fn dropped_from_device_queue(
+    transactions: &NotificationTransactions,
+    device: ObjectIdentifier,
+) {
+    let state = lane_state(transactions);
+    state.lock().dropped(LaneDrop::OwnLane);
+    warn_throttled!(
+        state.warning,
+        %device,
+        "A Device recipient's queue is full; notification dropped"
+    );
+}
+
 /// Log a lane task that panicked, as it is reaped.
 fn observe(result: Result<(), tokio::task::JoinError>) {
     if let Err(error) = result
