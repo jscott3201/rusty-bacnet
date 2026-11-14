@@ -111,7 +111,7 @@ These options go before or after the command. Each command also takes `-h` or `-
 | [`mcp serve`](#bacnet-mcp-serve) | — | Serve MCP on stdin and stdout until the agent host closes them. Stdout carries only JSON-RPC; logs go to stderr. Needs the `mcp` feature. |
 | [`mcp connect`](#bacnet-mcp-connect) | — | Bridge stdin and stdout to the MCP socket (a named pipe on Windows) of a TUI that has the profile open, so an agent shares its client. Its writes, if the profile offers them, wait for confirmation there. Needs the `mcp` feature. |
 | [`mcp authorize`](#bacnet-mcp-authorize) | — | Record, after showing what an agent may reach, that you authorize the MCP server on a profile. Needs a terminal. Needs the `mcp` feature. |
-| [`discover`](#bacnet-discover) | `whois` | Discover BACnet devices (WhoIs). |
+| [`discover`](#bacnet-discover) | `whois` | Discover BACnet devices (WhoIs): a broadcast on this network alone, which no router passes on, unless --dnet, --global or --target says where else. |
 | [`find`](#bacnet-find) | `whohas` | Find objects by name (WhoHas). |
 | [`read`](#bacnet-read) | `rp` | Read a property. |
 | [`export`](#bacnet-export) | — | Export a device's objects in another model's terms (experimental). |
@@ -238,7 +238,7 @@ Options:
 
 ### bacnet discover
 
-Discover BACnet devices (WhoIs).
+Discover BACnet devices (WhoIs): a broadcast on this network alone, which no router passes on, unless --dnet, --global or --target says where else.
 
 Aliases: `whois`.
 
@@ -255,7 +255,8 @@ Options:
 - `--wait <WAIT>`: Seconds to wait for responses. Default: `3`.
 - `--target <TARGET>`: Send directed WhoIs to a specific address instead of broadcasting.
 - `--bbmd <BBMD>`: Register as foreign device with a BBMD before discovering, once (for --ttl seconds). --foreign-bbmd also renews and sends the Who-Is through the BBMD.
-- `--dnet <DNET>`: Target a specific remote network number.
+- `--dnet <DNET>`: Broadcast on one remote network (1 to 65534) instead, through its router.
+- `--global`: Broadcast on every network instead: a global broadcast, which every router passes on. On a large routed site every device answers it.
 
 ### bacnet find
 

@@ -18,7 +18,7 @@ use std::fmt;
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::client::{timed_out as is_timed_out, unreachable as is_unreachable};
+use crate::client::{ResolveScope, timed_out as is_timed_out, unreachable as is_unreachable};
 use crate::device::DeviceAddress;
 use crate::format::PropertyError;
 use crate::label::kebab;
@@ -36,14 +36,17 @@ use crate::label::kebab;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum OpsError {
-    /// Text that doesn't name something this client can address: a target,
-    /// an address, an object or a property, or a property a call doesn't
-    /// read (every property, ALL, is
-    /// [`Device::read_object`](crate::Device::read_object)'s). Nothing was
-    /// sent.
+    /// Text or settings this client can't use: a target, an address, an
+    /// object or a property that names nothing it can address, a property a
+    /// call doesn't read (every property, ALL, is
+    /// [`Device::read_object`](crate::Device::read_object)'s), a discovery
+    /// scope or range that can't be sent, or MS/TP settings the transport
+    /// refuses. Nothing was sent.
     Parse {
         /// What the text was meant to be: `"target"`, `"address"`,
-        /// `"object"` or `"property"`.
+        /// `"object"` or `"property"`; for a discovery's scope or range,
+        /// `"network"` or `"range"`; for an MS/TP connect builder's
+        /// settings, `"MS/TP settings"`.
         what: &'static str,
         /// The text as given.
         input: String,
@@ -58,6 +61,13 @@ pub enum OpsError {
         /// The device as it was named: an instance (`1234`, `2:1234`) or an
         /// address (`2:0x05`).
         target: String,
+        /// Where the one Who-Is for it went unanswered: the network a
+        /// target or address named, or for a bare instance the client's
+        /// [`ResolveScope`]; `None` when none was sent. For
+        /// `Some(ResolveScope::Local)`, a bare instance asked on this
+        /// network alone (the default), the text says how to reach
+        /// further.
+        asked: Option<ResolveScope>,
     },
     /// Two or more addresses claim the instance named, so which device is
     /// meant is unknown. Nothing was sent. Name one of `candidates` by its
@@ -172,7 +182,10 @@ impl From<Error> for OpsError {
     /// a request's error by its device instead.
     fn from(error: Error) -> Self {
         match error {
-            Error::UnknownDevice { device } => Self::UnknownDevice { target: device },
+            Error::UnknownDevice { device } => Self::UnknownDevice {
+                target: device,
+                asked: None,
+            },
             Error::AmbiguousDevice {
                 instance,
                 candidates,
@@ -211,12 +224,35 @@ impl fmt::Display for OpsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Parse { reason, .. } => f.write_str(reason),
-            Self::UnknownDevice { target } => {
+            Self::UnknownDevice {
+                target,
+                asked: None,
+            } => {
                 write!(
                     f,
                     "device {target} is not known to the client; discover it first"
                 )
             }
+            Self::UnknownDevice {
+                target,
+                asked: Some(ResolveScope::Local),
+            } => write!(
+                f,
+                "device {target} did not answer a Who-Is on this network, the only one \
+                 asked: name its network in the target (5:{target} for network 5), or widen \
+                 the client's resolve scope (with_resolve_scope)"
+            ),
+            Self::UnknownDevice {
+                target,
+                asked: Some(ResolveScope::Network(network)),
+            } => write!(
+                f,
+                "device {target} did not answer a Who-Is on network {network}"
+            ),
+            Self::UnknownDevice {
+                target,
+                asked: Some(ResolveScope::Global),
+            } => write!(f, "device {target} did not answer a Who-Is on any network"),
             Self::Ambiguous {
                 instance,
                 candidates,

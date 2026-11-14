@@ -18,8 +18,11 @@
 //! - **From an instance** (`1234`, or `2:1234` on one network): one
 //!   address claiming it in the discovery table gives a handle that
 //!   follows the instance; none sends one Who-Is for it and waits
-//!   ([`Client::with_resolve_wait`]); two or more, before or after that
-//!   wait, fail with [`OpsError::Ambiguous`], listing them.
+//!   ([`Client::with_resolve_wait`]), to the network the target names, or
+//!   for a bare instance to the client's resolve scope, this network alone
+//!   by default ([`Client::with_resolve_scope`]), and a miss fails as
+//!   [`OpsError::UnknownDevice`] saying where it asked; two or more, before
+//!   or after that wait, fail with [`OpsError::Ambiguous`], listing them.
 //! - **From a discovery result** ([`Discovered`]): pinned, knowing the
 //!   instance.
 //!
@@ -36,8 +39,9 @@
 //!   address, no row there claims the instance any more;
 //! - after a request timed out while its address still claims the
 //!   instance, only the other address answered the one Who-Is for the
-//!   instance an earlier timeout sent ([`QUIET`] says how often it asks,
-//!   and how a clone that sends no Who-Is decides instead).
+//!   instance an earlier timeout sent, on the network where the device was
+//!   last reached, never on every network ([`QUIET`] says how often it
+//!   asks, and how a clone that sends no Who-Is decides instead).
 //!
 //! Two or more other claims fail a timed-out request as ambiguous, and
 //! otherwise its error stays as it was. Handles following one instance on
@@ -83,6 +87,7 @@ mod route;
 use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
+use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 
 pub use self::address::DeviceAddress;
@@ -228,7 +233,8 @@ enum Pin {
 
 /// One device, as a [`Client`] reaches it: by address, pinned, or by
 /// instance, following it. Cheap to clone; a handle carries its client.
-pub struct Device<T: TransportPort + 'static> {
+/// The transport type defaults to the connect builders' [`AnyTransport`].
+pub struct Device<T: TransportPort + 'static = AnyTransport> {
     client: Client<T>,
     pin: Pin,
     /// The instance when known: a following handle's own, or a pinned
@@ -334,7 +340,13 @@ impl<T: TransportPort + 'static> Device<T> {
 mod ask_tests;
 
 #[cfg(test)]
+mod discover_tests;
+
+#[cfg(test)]
 mod follow_tests;
+
+#[cfg(test)]
+mod resolve_scope_tests;
 
 #[cfg(test)]
 mod routed_tests;

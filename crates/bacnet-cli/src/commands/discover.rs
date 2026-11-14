@@ -1,7 +1,8 @@
 //! Discovery commands: WhoIs and WhoHas.
 
 use bacnet_client::client::{BACnetClient, ReceivedIHave};
-use bacnet_ops::target::AddressStyle;
+use bacnet_ops::target::{self, AddressStyle};
+use bacnet_ops::{DeviceAddress, Scope};
 use bacnet_services::who_has::WhoHasObject;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -26,44 +27,38 @@ async fn collect_devices<T: TransportPort + 'static>(
         .collect()
 }
 
-/// Send a WhoIs broadcast and display discovered devices after waiting.
+/// Where `discover`'s Who-Is goes (#2560): one station for `--target`,
+/// one remote network for `--dnet`, every network for `--global`, and with
+/// none of them this network alone.
+pub async fn scope<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    target: Option<&str>,
+    dnet: Option<u16>,
+    global: bool,
+) -> Result<Scope, Box<dyn std::error::Error>> {
+    Ok(match (target, dnet) {
+        (Some(target), _) => {
+            let mac =
+                target::address_mac(client.transport(), target, target::TARGET_NOT_AN_ADDRESS)
+                    .await?;
+            Scope::Directed(DeviceAddress::local(&mac)?)
+        }
+        (None, Some(network)) => Scope::Network(network),
+        (None, None) if global => Scope::Global,
+        (None, None) => Scope::Local,
+    })
+}
+
+/// Send a Who-Is to `scope` and display the discovered devices after
+/// waiting.
 pub async fn discover<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
+    scope: &Scope,
     range: Option<DeviceInstanceRange>,
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    client.who_is(range).await?;
-    output::print_waiting(wait_secs);
-    tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-    output::print_devices(&collect_devices(client, range).await, format);
-    Ok(())
-}
-
-/// Send a directed (unicast) WhoIs to a specific device and display responses.
-pub async fn discover_directed<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    target_mac: &[u8],
-    range: Option<DeviceInstanceRange>,
-    wait_secs: u64,
-    format: OutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
-    client.who_is_directed(target_mac, range).await?;
-    output::print_waiting(wait_secs);
-    tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-    output::print_devices(&collect_devices(client, range).await, format);
-    Ok(())
-}
-
-/// Send a WhoIs broadcast targeting a specific remote network.
-pub async fn discover_network<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    dnet: u16,
-    range: Option<DeviceInstanceRange>,
-    wait_secs: u64,
-    format: OutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
-    client.who_is_network(dnet, range).await?;
+    bacnet_ops::raw::who_is(client, scope, range).await?;
     output::print_waiting(wait_secs);
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
     output::print_devices(&collect_devices(client, range).await, format);
@@ -133,5 +128,76 @@ fn print_found(found: &[FoundObject], format: OutputFormat) {
             "{}",
             serde_json::to_string_pretty(found).expect("serialize found objects")
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bacnet_client::client::ClientConfig;
+    use bacnet_transport::test_transport::{BIP_LOCAL_MAC, TestTransport};
+
+    use super::*;
+    use crate::args::{Cli, Command};
+
+    /// `bacnet discover` with `flags`, as `main` parses it.
+    fn parsed(flags: &[&'static str]) -> Result<Option<Command>, clap::Error> {
+        let argv: Vec<&'static str> = [&["bacnet", "discover"][..], flags].concat();
+        crate::parse_on_large_stack(move || <Cli as clap::Parser>::try_parse_from(argv))
+            .map(|cli| cli.command)
+    }
+
+    /// `discover` with no scope flag sends a local broadcast, which no
+    /// router passes on: no destination network in its NPDU (#2560).
+    /// `--dnet` and `--global` are the explicit broadcasts to one network
+    /// and to every network, `--target` a unicast; one at a time.
+    #[tokio::test]
+    async fn discover_without_a_scope_flag_is_a_local_broadcast() {
+        let port = TestTransport::builder().local_mac(&BIP_LOCAL_MAC).build();
+        let sent = port.sent();
+        let mut client = BACnetClient::start(ClientConfig::default(), port)
+            .await
+            .unwrap();
+        let cases: [(&[&'static str], Option<u16>, bool); 4] = [
+            (&[], None, true),
+            (&["--dnet", "5"], Some(5), true),
+            (&["--global"], Some(0xFFFF), true),
+            (&["--target", "10.0.0.9"], None, false),
+        ];
+        for (flags, destination, broadcast) in cases {
+            let Some(Command::Discover {
+                target,
+                dnet,
+                global,
+                ..
+            }) = parsed(flags).unwrap()
+            else {
+                panic!("{flags:?} is no discover");
+            };
+            let scope = scope(&client, target.as_deref(), dnet, global)
+                .await
+                .unwrap();
+            discover(&client, &scope, None, 0, OutputFormat::Json)
+                .await
+                .unwrap();
+            let frames = sent.take();
+            let [frame] = frames.as_slice() else {
+                panic!("{flags:?}: one Who-Is, not {frames:?}");
+            };
+            let to = frame.decode_npdu().destination.map(|to| to.network);
+            assert_eq!((to, frame.broadcast), (destination, broadcast), "{flags:?}");
+        }
+        for flags in [
+            &["--global", "--dnet", "5"][..],
+            &["--target", "10.0.0.9", "--global"],
+            &["--target", "10.0.0.9", "--dnet", "5"],
+        ] {
+            assert!(parsed(flags).is_err(), "{flags:?} parsed");
+        }
+        // Network 0 and 65535 are refused when parsed, naming what to use.
+        for (network, says) in [("0", "leave --dnet out"), ("65535", "--global")] {
+            let refused = parsed(&["--dnet", network]).unwrap_err().to_string();
+            assert!(refused.contains(says), "{network}: {refused}");
+        }
+        client.stop().await.unwrap();
     }
 }

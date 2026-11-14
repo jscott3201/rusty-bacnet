@@ -13,7 +13,7 @@ categories = ["network-programming"]
 
 [package.metadata.docs.rs]
 no-default-features = true
-features = ["sc-tls"]
+features = ["sc-tls", "serial"]
 default-target = "x86_64-unknown-linux-gnu"
 targets = []
 rustdoc-args = ["--cfg", "docsrs"]
@@ -41,8 +41,11 @@ proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [features]
-# The BACnet/SC transport, passed through to the layers below.
+# The BACnet/SC transport, passed through to the layers below, and the
+# `Client::sc` connect builder.
 sc-tls = ["bacnet-transport/sc-tls", "bacnet-client/sc-tls"]
+# MS/TP over a serial port: the `Client::mstp` connect builder.
+serial = ["bacnet-transport/serial"]
 # The 223 export's structural check (`export::s223::testing`), for the MCP
 # tool's tests. Not a stable API.
 test-support = []

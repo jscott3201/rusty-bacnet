@@ -18,7 +18,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 use super::resolve::{ambiguous, unknown};
 use super::{ClientEvent, Device, DeviceAddress, Pin, QUIET};
-use crate::client::{Client, WhoIsScope, lock, timed_out};
+use crate::client::{Client, ResolveScope, Scope, lock, timed_out};
 
 /// Where the handles following one instance on one network reach it, and
 /// when they last asked where it went. They share it, so one that moves
@@ -133,7 +133,7 @@ impl<T: TransportPort + 'static> Device<T> {
             Elsewhere::Moved(to) => Ok(self.client.move_to(key, followed, &here, to)),
             // It claims the instance again by now.
             Elsewhere::Shared { .. } => Ok(here),
-            Elsewhere::Nowhere => Err(unknown(*instance, key.0)),
+            Elsewhere::Nowhere => Err(unknown(*instance, *network)),
             Elsewhere::Contested(claims) => Err(ambiguous(*instance, &claims)),
         }
     }
@@ -274,12 +274,13 @@ impl<T: TransportPort + 'static> Client<T> {
         answered && seen < asked && other.is_some_and(|other| other >= asked)
     }
 
-    /// Send one Who-Is for `key`'s instance on its network (on every
-    /// network for `None`), unless the handles sharing `followed` sent one
-    /// less than [`QUIET`] ago: who answers it decides their next timeout.
-    /// A Who-Is that can't be sent is one asked all the same.
+    /// Send one Who-Is for `key`'s instance on the network where the
+    /// handles sharing `followed` last reached it, never on every network,
+    /// unless they sent one less than [`QUIET`] ago: who answers it decides
+    /// their next timeout. A Who-Is that can't be sent is one asked all the
+    /// same.
     async fn ask(&self, key: FollowKey, followed: &Followed) {
-        let (network, instance) = key;
+        let (_, instance) = key;
         let Ok(range) = DeviceInstanceRange::single(instance) else {
             return;
         };
@@ -296,7 +297,11 @@ impl<T: TransportPort + 'static> Client<T> {
             }
             place.asked = Some(asked);
         }
-        if let Err(error) = self.who_is(WhoIsScope::on(network), Some(range)).await {
+        // Where it was last heard: a moved device is claimed again there,
+        // or, if it went to another network, by its I-Am there.
+        let seen = self.localized(lock(followed).at.clone()).network();
+        let scope = Scope::from(ResolveScope::on(seen));
+        if let Err(error) = self.who_is(&scope, Some(range)).await {
             tracing::debug!("asking where device {instance} went: {error}");
         }
     }

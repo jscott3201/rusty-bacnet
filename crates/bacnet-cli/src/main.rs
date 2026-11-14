@@ -136,7 +136,7 @@ async fn execute_command<T: TransportPort + 'static>(
             target,
             bbmd,
             dnet,
-            ..
+            global,
         } => {
             if bbmd.is_some() {
                 return Err(
@@ -144,20 +144,9 @@ async fn execute_command<T: TransportPort + 'static>(
                 );
             }
             let range = parse_discover_range(range.as_deref())?;
-            if let Some(target_str) = target {
-                let mac = target::address_mac(
-                    client.transport(),
-                    target_str,
-                    target::TARGET_NOT_AN_ADDRESS,
-                )
-                .await?;
-                commands::discover::discover_directed(client, &mac, range, *wait, format).await?;
-            } else if let Some(network) = dnet {
-                commands::discover::discover_network(client, *network, range, *wait, format)
-                    .await?;
-            } else {
-                commands::discover::discover(client, range, *wait, format).await?;
-            }
+            let scope =
+                commands::discover::scope(client, target.as_deref(), *dnet, *global).await?;
+            commands::discover::discover(client, &scope, range, *wait, format).await?;
         }
         Command::Find {
             name,
@@ -412,6 +401,7 @@ async fn execute_bip_command(
             target,
             bbmd: Some(bbmd_addr),
             dnet,
+            global,
         } => {
             let bbmd_mac = target::address_mac(
                 client.transport(),
@@ -424,20 +414,9 @@ async fn execute_bip_command(
             // Brief pause to allow registration to propagate.
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             let range = parse_discover_range(range.as_deref())?;
-            if let Some(target_str) = target {
-                let mac = target::address_mac(
-                    client.transport(),
-                    target_str,
-                    target::TARGET_NOT_AN_ADDRESS,
-                )
-                .await?;
-                commands::discover::discover_directed(client, &mac, range, *wait, format).await?;
-            } else if let Some(network) = dnet {
-                commands::discover::discover_network(client, *network, range, *wait, format)
-                    .await?;
-            } else {
-                commands::discover::discover(client, range, *wait, format).await?;
-            }
+            let scope =
+                commands::discover::scope(client, target.as_deref(), *dnet, *global).await?;
+            commands::discover::discover(client, &scope, range, *wait, format).await?;
         }
         Command::Bdt { target } => {
             let mac = resolve_target_mac(client, target).await?;

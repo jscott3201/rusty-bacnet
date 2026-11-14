@@ -1,43 +1,287 @@
-//! Discovery through the client: Who-Is under the rate cap, and the
+//! Discovery through the client: where a Who-Is goes ([`Scope`]), where a
+//! handle made from a bare instance asks for its device ([`ResolveScope`]),
+//! one discovery ([`Discover`]), Who-Is under the rate cap, and the
 //! client's discovery table.
 
-use bacnet_client::client::{DeviceEvent, DiscoveredRouter};
+use std::ops::RangeInclusive;
+use std::time::Duration;
+
+use bacnet_client::client::{BACnetClient, DeviceEvent, DiscoveredRouter};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::UnconfirmedServiceChoice;
+use bacnet_types::error::Error;
 use bytes::BytesMut;
 
 use super::Client;
+use crate::device::DeviceAddress;
 use crate::error::OpsError;
-use crate::target::{self, AddressStyle};
+use crate::target::{self, AddressStyle, Target, VmacLookup};
 
-/// Why a directed Who-Is refuses a device instance or a routed target.
+/// Why a station address in the target grammar is refused where one
+/// station on this network is wanted.
 const NOT_A_STATION: &str =
     "a directed Who-Is needs a station address, not a device instance or routed target";
 
-/// Where a Who-Is goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WhoIsScope<'a> {
-    /// Broadcast to this network alone.
+/// How long a [`Discover`] listens for answers unless it says otherwise.
+pub const DISCOVER_WAIT: Duration = Duration::from_secs(3);
+
+/// Where a Who-Is goes. The default is this network alone: a broadcast that
+/// reaches every device on a large routed site is a choice, made by naming
+/// one network or every network.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Scope {
+    /// A broadcast on this network alone, which no router passes on.
+    #[default]
     Local,
-    /// A broadcast on one remote network, through its router.
+    /// A broadcast on one remote network, 1 to 65534, through its router.
+    /// This client's own network, once it has learned the number, is a
+    /// local broadcast.
     Network(u16),
-    /// One station, by its address in the target grammar
-    /// ([`target::address_mac`]).
-    Directed(&'a str),
-    /// A global broadcast, which every router passes on.
+    /// A global broadcast, which every router passes on: every network.
+    Global,
+    /// One station on this network, by unicast. An address on this client's
+    /// own network, once it knows the number, is the local station.
+    Directed(DeviceAddress),
+}
+
+/// Where a handle made from a bare device instance (`1234`) asks for its
+/// device when no address in the discovery table claims it: one Who-Is for
+/// that instance ([`Client::with_resolve_scope`]). This network alone by
+/// default; a target that names its network (`5:1234`) asks that network
+/// whatever this says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ResolveScope {
+    /// This network alone: a local broadcast.
+    #[default]
+    Local,
+    /// One remote network, 1 to 65534, through its router; 0 and 65535
+    /// are taken as [`Local`](Self::Local) and [`Global`](Self::Global)
+    /// ([`normalized`](Self::normalized)).
+    Network(u16),
+    /// Every network: a global broadcast.
     Global,
 }
 
-impl WhoIsScope<'static> {
-    /// To `network` (this one for 0), or globally for `None`.
-    pub(crate) fn on(network: Option<u16>) -> Self {
-        match network {
-            Some(0) => Self::Local,
-            Some(network) => Self::Network(network),
-            None => Self::Global,
+impl From<ResolveScope> for Scope {
+    fn from(scope: ResolveScope) -> Self {
+        match scope {
+            ResolveScope::Local => Self::Local,
+            ResolveScope::Network(network) => Self::Network(network),
+            ResolveScope::Global => Self::Global,
         }
+    }
+}
+
+impl ResolveScope {
+    /// To `network`: this one for 0, every one for 65535, one remote
+    /// network otherwise.
+    pub(crate) fn on(network: u16) -> Self {
+        Self::Network(network).normalized()
+    }
+
+    /// The scope as a Who-Is goes: `Network(0)` is this network
+    /// ([`Local`](Self::Local)) and `Network(65535)` every network
+    /// ([`Global`](Self::Global)); any other is itself.
+    /// [`Client::with_resolve_scope`] stores a setting this way.
+    #[must_use]
+    pub fn normalized(self) -> Self {
+        match self {
+            Self::Network(0) => Self::Local,
+            Self::Network(u16::MAX) => Self::Global,
+            scope => scope,
+        }
+    }
+}
+
+impl Scope {
+    /// The network this Who-Is goes out on, for its rate slot: a global one
+    /// reaches every network and takes the global slot alone.
+    fn network(&self) -> Option<u16> {
+        match self {
+            Self::Local | Self::Directed(_) => Some(0),
+            Self::Network(network) => Some(*network),
+            Self::Global => None,
+        }
+    }
+
+    /// The scope checked before anything is sent against `client`: the
+    /// station's MAC for a directed one.
+    ///
+    /// # Errors
+    ///
+    /// [`OpsError::Parse`] for a network outside 1 to 65534, and for a
+    /// directed address on another network, saying which scope to use
+    /// instead.
+    pub(crate) fn station<T: TransportPort + 'static>(
+        &self,
+        client: &BACnetClient<T>,
+    ) -> Result<Option<Vec<u8>>, OpsError> {
+        let refused = |network: u16, reason: &str| {
+            OpsError::parse("network", &network.to_string(), reason.to_string())
+        };
+        match self {
+            Self::Network(0) => Err(refused(
+                0,
+                "network 0 is this network: leave the network out, or use a local scope \
+                 (Discover::local())",
+            )),
+            Self::Network(u16::MAX) => Err(refused(
+                u16::MAX,
+                "network 65535 is every network: use a global scope (Discover::global())",
+            )),
+            Self::Directed(address) => {
+                let local = address.clone().localized(client.network_number());
+                if local.is_local() {
+                    return Ok(Some(local.mac().to_vec()));
+                }
+                let network = local.network();
+                Err(OpsError::parse(
+                    "address",
+                    &address.to_string(),
+                    format!(
+                        "{address} is on network {network}, and a directed Who-Is goes to one \
+                         station on this network: Discover::network({network}) asks that \
+                         network's devices"
+                    ),
+                ))
+            }
+            Self::Local | Self::Network(_) | Self::Global => Ok(None),
+        }
+    }
+
+    /// Send the Who-Is, once checked ([`station`](Self::station)).
+    pub(crate) async fn send<T: TransportPort + 'static>(
+        &self,
+        client: &BACnetClient<T>,
+        station: Option<&[u8]>,
+        range: Option<DeviceInstanceRange>,
+    ) -> Result<(), Error> {
+        match (self, station) {
+            (Self::Local, _) => {
+                let mut buf = BytesMut::new();
+                WhoIsRequest { range }.encode(&mut buf);
+                client
+                    .broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
+                    .await
+            }
+            (Self::Network(network), _) => client.who_is_network(*network, range).await,
+            (Self::Directed(_), Some(mac)) => client.who_is_directed(mac, range).await,
+            (Self::Directed(_), None) => unreachable!("a directed Who-Is has its station"),
+            (Self::Global, _) => client.who_is(range).await,
+        }
+    }
+}
+
+/// One discovery for [`Client::discover`]: where its Who-Is goes, the
+/// device instances it asks, and how long it listens for the answers.
+/// [`Discover::default`] asks every device on this network alone and
+/// listens for [`DISCOVER_WAIT`].
+///
+/// ```
+/// use std::time::Duration;
+/// use bacnet_ops::Discover;
+///
+/// let nearby = Discover::local().range(1000..=2000);
+/// let behind_a_router = Discover::network(5).wait(Duration::from_secs(5));
+/// let everywhere = Discover::global();
+/// # let _ = (nearby, behind_a_router, everywhere);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Discover {
+    pub(crate) scope: Scope,
+    range: Option<RangeInclusive<u32>>,
+    pub(crate) wait: Duration,
+}
+
+impl Default for Discover {
+    fn default() -> Self {
+        Self::from(Scope::Local)
+    }
+}
+
+impl From<Scope> for Discover {
+    /// A discovery of every device in `scope`, listening for
+    /// [`DISCOVER_WAIT`].
+    fn from(scope: Scope) -> Self {
+        Self {
+            scope,
+            range: None,
+            wait: DISCOVER_WAIT,
+        }
+    }
+}
+
+impl Discover {
+    /// The devices on this network alone: a local broadcast.
+    pub fn local() -> Self {
+        Self::from(Scope::Local)
+    }
+
+    /// The devices on the remote `network` (1 to 65534), through its router.
+    pub fn network(network: u16) -> Self {
+        Self::from(Scope::Network(network))
+    }
+
+    /// The devices on every network: a global broadcast, which every router
+    /// passes on.
+    pub fn global() -> Self {
+        Self::from(Scope::Global)
+    }
+
+    /// The station at `address` on this network, by unicast. From text in
+    /// the target grammar, [`Client::station_mac`] finds the MAC:
+    ///
+    /// ```no_run
+    /// use bacnet_ops::{Client, DeviceAddress, Discover};
+    /// # async fn example(client: Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let station = DeviceAddress::local(&client.station_mac("192.168.1.20").await?)?;
+    /// let found = client.discover(Discover::directed(station)).await?;
+    /// # let _ = found; Ok(()) }
+    /// ```
+    pub fn directed(address: DeviceAddress) -> Self {
+        Self::from(Scope::Directed(address))
+    }
+
+    /// Ask only the devices whose instance is in `instances` (every device
+    /// by default). Checked when the discovery runs: an empty range, or
+    /// one past instance 4194303, fails it before anything is sent.
+    #[must_use]
+    pub fn range(mut self, instances: RangeInclusive<u32>) -> Self {
+        self.range = Some(instances);
+        self
+    }
+
+    /// Listen for answers for `wait` ([`DISCOVER_WAIT`] by default).
+    #[must_use]
+    pub fn wait(mut self, wait: Duration) -> Self {
+        self.wait = wait;
+        self
+    }
+
+    /// Where the Who-Is goes.
+    pub fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
+    /// The instance range asked, checked.
+    pub(crate) fn instances(&self) -> Result<Option<DeviceInstanceRange>, OpsError> {
+        self.range
+            .as_ref()
+            .map(|range| {
+                let (low, high) = (*range.start(), *range.end());
+                DeviceInstanceRange::new(low, high).map_err(|error| {
+                    let reason = match error {
+                        Error::Range(refused) => refused.message().to_string(),
+                        other => other.to_string(),
+                    };
+                    OpsError::parse("range", &format!("{low}-{high}"), reason)
+                })
+            })
+            .transpose()
     }
 }
 
@@ -45,47 +289,18 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Send one Who-Is to `scope`, for the devices in `range` (all for
     /// `None`), under the rate cap. The answers land in the discovery table
     /// ([`devices`](Self::devices)) as they arrive.
-    ///
-    /// # Errors
-    ///
-    /// [`OpsError::Parse`] for a directed scope whose text names no station
-    /// (nothing is sent), and [`OpsError::Client`] for a send the link
-    /// refused.
-    pub async fn who_is(
+    pub(crate) async fn who_is(
         &self,
-        scope: WhoIsScope<'_>,
+        scope: &Scope,
         range: Option<DeviceInstanceRange>,
     ) -> Result<(), OpsError> {
-        let mac = match scope {
-            WhoIsScope::Directed(address) => Some(self.station_mac(address).await?),
-            _ => None,
-        };
+        let station = scope.station(self.low_level())?;
         // The network the Who-Is goes out on takes its slot, so a slow one
-        // is paced; a global one reaches every network and takes the
-        // global slot alone.
-        let network = match scope {
-            WhoIsScope::Local | WhoIsScope::Directed(_) => Some(0),
-            WhoIsScope::Network(network) => Some(network),
-            WhoIsScope::Global => None,
-        };
-        self.limits().slot(network).await;
-        let sent = match (scope, mac) {
-            (WhoIsScope::Local, _) => {
-                let mut buf = BytesMut::new();
-                WhoIsRequest { range }.encode(&mut buf);
-                self.low_level()
-                    .broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
-                    .await
-            }
-            (WhoIsScope::Network(network), _) => {
-                self.low_level().who_is_network(network, range).await
-            }
-            (WhoIsScope::Directed(_), Some(mac)) => {
-                self.low_level().who_is_directed(&mac, range).await
-            }
-            (WhoIsScope::Directed(_), None) => unreachable!("a directed Who-Is has its address"),
-            (WhoIsScope::Global, _) => self.low_level().who_is(range).await,
-        };
+        // is paced; a global one takes the global slot alone.
+        self.limits().slot(scope.network()).await;
+        let sent = scope
+            .send(self.low_level(), station.as_deref(), range)
+            .await;
         // An unconfirmed send that fails never left: the caller isn't
         // charged for it.
         if sent.is_err() {
@@ -129,11 +344,30 @@ impl<T: TransportPort + 'static> Client<T> {
     ///
     /// # Errors
     ///
-    /// [`OpsError::Parse`] for text that names no station on this link.
+    /// [`OpsError::Parse`] for text that names no station on this link (a
+    /// B/IPv6 address on another link among them), and
+    /// [`OpsError::UnknownDevice`] for a B/IPv6 address whose node didn't
+    /// say its VMAC.
     pub async fn station_mac(&self, address: &str) -> Result<Vec<u8>, OpsError> {
-        target::address_mac(self.low_level().transport(), address, NOT_A_STATION)
-            .await
-            .map_err(|reason| OpsError::parse("address", address, reason))
+        let transport = self.low_level().transport();
+        let parse = |reason: String| OpsError::parse("address", address, reason);
+        match target::parse_target_on(transport, address).map_err(parse)? {
+            Target::Mac(mac) => Ok(mac),
+            Target::Bip6(peer) => {
+                target::bip6_vmac(transport, peer)
+                    .await
+                    .map_err(|why| match why {
+                        VmacLookup::NoAnswer { .. } => OpsError::UnknownDevice {
+                            target: address.to_string(),
+                            asked: None,
+                        },
+                        why => parse(why.to_string()),
+                    })
+            }
+            Target::Instance(_) | Target::Routed { .. } | Target::RoutedMac { .. } => {
+                Err(parse(NOT_A_STATION.to_string()))
+            }
+        }
     }
 
     /// Every device in the client's discovery table.

@@ -11875,16 +11875,36 @@ terminal UI and its MCP server share: no terminal or MCP dependency, just a
 (`format`, `label`; `format::alarms` renders alarm and event summaries),
 request limits (`limits`: the global rate cap, the one request per device
 gate and per-caller accounts), the watch hub (`watch`), the high-level
-client (`client`) and device identity (`device`). `Client::new(client,
-limits)` wraps an `Arc<BACnetClient<T>>` and an `Arc<RequestLimits>`
-(`RequestLimits::new(per_second)`, 0 for no cap), and is cheap to clone.
+client (`client`) and device identity (`device`). `Client::bip()` connects
+over B/IP without naming a transport type (`.interface(ip)`, `.port(..)`,
+`.broadcast_address(..)`, `.foreign_device(..)`, `.apdu_timeout(..)`,
+`.apdu_retries(..)`, `.limits(..)`, then `.connect().await?`), as do
+`Client::bip6()`, `Client::sc(hub_url, tls)` with `sc-tls` and
+`Client::mstp(port, mac)` with `serial` (`.baud(..)`, `.max_master(..)`,
+`.max_info_frames(..)`): each forwards to the low-level builder and gives a
+`Client` over `AnyTransport`, the type's default, and `connect()` fails with
+`OpsError`.
+`Client::over(low)` wraps a `BACnetClient<T>` already built, and
+`Client::new(client, limits)` an `Arc<BACnetClient<T>>` and an
+`Arc<RequestLimits>` (`RequestLimits::new(per_second)`, 0 for no cap); a
+client is cheap to clone. `client.discover(Discover::local().range(1000..=2000))`
+sends one Who-Is and returns one `Discovered` per address that answered
+within its wait (3 s unless `.wait(..)` says otherwise). With no scope named
+(`Discover::default()`) the Who-Is is a local broadcast, which no router
+passes on; `Discover::network(n)`, `Discover::global()` and
+`Discover::directed(address)` are the explicit choices (#2560), and
+`bacnet_ops::raw::who_is(&low_level, &scope, range)` sends the same Who-Is
+on a low-level client, with no rate cap.
 `client.device(target).await?` gives a `Device` handle: from an address
 (`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there (an
 address on the client's own network, once `BACnetClient::network_number`
 knows it, is the local station), from an instance (`1234`, or `2:1234` on
-one network) it follows the one address claiming it (none: one Who-Is,
-waiting `with_resolve_wait`'s time, a clone's own setting; two or more,
-then or after the wait: `OpsError::Ambiguous`), and from a discovery
+one network) it follows the one address claiming it (none: one Who-Is for
+it, waiting `with_resolve_wait`'s time, to the network the target names
+or, for a bare instance, to the client's `ResolveScope`, this network alone
+unless `with_resolve_scope` or the builders' `.resolve_scope(..)` widen it,
+a miss failing as `OpsError::UnknownDevice` that says where it asked; two or
+more, then or after the wait: `OpsError::Ambiguous`), and from a discovery
 result it is pinned and knows the instance. The handle's async reads are
 `read` (one property, as a `Value`), `read_many` (a bulk read, as
 `Readings`), `read_object` (an object's properties, all or a list),
@@ -11899,7 +11919,8 @@ network claiming the instance, and tells `Client::events`
 itself at its address; after a request times out, or finds no route to a
 routed address, when its row is gone; and after a timeout while its address
 still claims the instance, when only the other address answered the one
-Who-Is an earlier timeout sent for it (at most one every `QUIET` for the
+Who-Is an earlier timeout sent for it, on the network where it was last
+reached and never on every network (at most one every `QUIET` for the
 handles following it). A clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
@@ -11921,7 +11942,8 @@ with no aliases left behind:
 | Was | Now |
 |---|---|
 | `bacnet_ops::engine::Engine<T>`, held in an `Arc` | `bacnet_ops::Client<T>`, cheap to clone; `Hub::new` and `McpServer::new` take it by value |
-| the module `bacnet_ops::engine` (`Reader`, `Wanted`, `WhoIsScope`, `ReadVia`, `unreachable`, ...) | `bacnet_ops::client`; `Reader`, `Halt` and the error classifiers in `bacnet_ops::raw` |
+| the module `bacnet_ops::engine` (`Reader`, `Wanted`, `ReadVia`, `unreachable`, ...) | `bacnet_ops::client`; `Reader`, `Halt` and the error classifiers in `bacnet_ops::raw` |
+| `WhoIsScope` (`Local`, `Network`, `Directed(&str)`, `Global`) and `engine.who_is(scope, range)` | `Scope` (`Directed` takes a `DeviceAddress`; `client.station_mac(text)` checks an address first), sent by `client.discover(Discover::from(scope).range(low..=high))`; `Discover::default()` is local. `bacnet_ops::raw::who_is(low_level, &scope, range)` sends one on a low-level client, with no rate cap |
 | `engine.client()` | `client.low_level()` |
 | `engine.read(device, object, wanted)` and `read_property`, `list_objects`, `describe_device`, `read_trend`, `alarms`, `alarm_summary`, `enrollment_summary`, `log_columns`, `log_state_texts`, `inventory`, `inventory_device`, `inventory_object` with the instance first | the same method on `client.device(device).await?`, without it |
 | `engine.device(instance)`, the discovery table's row | `client.low_level().get_device(instance)` |

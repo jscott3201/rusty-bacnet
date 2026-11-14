@@ -198,7 +198,7 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
         # loopback read; requests and responses must traverse the router.
         for ingress,target_index in ((0,1),(0,2),(1,0),(2,1)):
             target=(1,5,7)[target_index];client=clients[ingress]
-            discovered=await client.discover(timeout_ms=1500,low_limit=185800+target,high_limit=185800+target)
+            discovered=await client.discover(timeout_ms=1500,low_limit=185800+target,high_limit=185800+target,scope="global")
             found=[d for d in discovered if d.object_identifier.instance==185800+target]
             self.assertEqual(len(found),1)
             self.assertEqual(found[0].source_network,target)
