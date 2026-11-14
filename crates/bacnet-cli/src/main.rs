@@ -202,12 +202,13 @@ async fn execute_command<T: TransportPort + 'static>(
             value,
             priority,
         } => {
-            let to = resolve_destination(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
             let (prop, index) = parse::parse_property(property)?;
             let (val, inline_priority) =
                 parse::parse_value_for_with_priority(object_type, prop, index, value)?;
-            let pri = priority.or(inline_priority);
+            // `72.5@8 --priority 10` names two: refused, never one picked.
+            let pri = bacnet_ops::write::one_priority(inline_priority, *priority)?;
+            let to = resolve_destination(client, target).await?;
             commands::write::write_property_cmd(
                 client,
                 &to,
@@ -217,7 +218,7 @@ async fn execute_command<T: TransportPort + 'static>(
                     property: prop,
                     index,
                     value: val,
-                    priority: pri,
+                    priority: pri.map(bacnet_ops::Priority::get),
                 },
                 format,
             )

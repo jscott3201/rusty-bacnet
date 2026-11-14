@@ -10,8 +10,8 @@
 //!   `bip6:0x0004D2`, `mstp:5`, ...);
 //! - [`parse`]: the object, property and value grammar (`ai:1`,
 //!   `present-value[3]`, `72.5@8`);
-//! - [`format`](mod@format) and [`label`]: values as display text, and how objects,
-//!   properties and priorities are named;
+//! - [`format`](mod@format) and [`label`]: values as display text, and how objects
+//!   and properties are named;
 //! - [`limits`]: the global request-rate cap, the one-request-per-device
 //!   gate, rates per network and per-caller accounts;
 //! - [`client`](mod@client): [`Client`], the high-level client: Who-Is and
@@ -26,6 +26,11 @@
 //!   [`Readings`] of a bulk read, which reports a refused property in its
 //!   row and keeps what was read when the device stops answering, and an
 //!   object's [`ObjectRead`];
+//! - [`write`](mod@write): the write calls' parts: [`Priority`], the
+//!   [`WritePolicy`] that refuses priorities 1, 2, 5 and 6 unless allowed,
+//!   what [`Device::write`] and [`Device::relinquish`] send and return
+//!   ([`Written`], [`PriorityView`]), and what
+//!   [`Device::preview_write`] reads ([`WritePreview`]);
 //! - [`error`](mod@error): [`OpsError`], why a call failed as a whole;
 //! - [`raw`]: the reading layer under them, for front ends that run their
 //!   own request jobs, failing with the low-level client's errors;
@@ -51,9 +56,13 @@ pub mod raw;
 pub mod reading;
 pub mod target;
 pub mod watch;
+pub mod write;
 
 pub use client::Client;
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};
-pub use reading::{IntoProperty, ObjectRead, PropertyRef, Reading, Readings};
+pub use reading::{IntoObject, IntoProperty, ObjectRead, PropertyRef, Reading, Readings};
+pub use write::{
+    IntoWriteValue, Priority, PriorityView, WriteDenied, WritePolicy, WritePreview, Written,
+};

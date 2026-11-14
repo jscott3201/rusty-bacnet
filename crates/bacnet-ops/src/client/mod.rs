@@ -43,6 +43,7 @@ use crate::device::{ClientEvent, DeviceAddress, Follows};
 use crate::format::Value;
 use crate::limits::RequestLimits;
 use crate::reading::Reading;
+use crate::write::WritePolicy;
 
 #[cfg(doc)]
 use crate::device::Device;
@@ -113,12 +114,16 @@ impl DeviceSummary {
 /// at a time, and every request takes a slot under the global rate cap, so
 /// many callers can share a client without overrunning a device. Cheap to
 /// clone: clones share everything but how long a handle by instance waits
-/// for its device's I-Am ([`with_resolve_wait`](Self::with_resolve_wait)).
+/// for its device's I-Am ([`with_resolve_wait`](Self::with_resolve_wait))
+/// and the priorities its writes may use
+/// ([`with_write_policy`](Self::with_write_policy)).
 pub struct Client<T: TransportPort + 'static> {
     pub(crate) shared: Arc<Shared<T>>,
     /// How long a handle by instance that no address claims waits for an
     /// I-Am; `None` sends no Who-Is at all. This clone's and its handles'.
     resolve_wait: Option<Duration>,
+    /// The priorities this clone's handles may write and relinquish at.
+    write_policy: WritePolicy,
 }
 
 /// What a [`Client`]'s clones share. Each std mutex is held only to look up
@@ -153,6 +158,7 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
         Self {
             shared: Arc::clone(&self.shared),
             resolve_wait: self.resolve_wait,
+            write_policy: self.write_policy,
         }
     }
 }
@@ -179,6 +185,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 events: broadcast::channel(64).0,
             }),
             resolve_wait: Some(RESOLVE_WAIT),
+            write_policy: WritePolicy::default(),
         }
     }
 
@@ -220,8 +227,8 @@ impl<T: TransportPort + 'static> Client<T> {
     /// alone, and its clones' and handles': the other clones keep theirs.
     pub fn with_resolve_wait(&self, wait: Option<Duration>) -> Self {
         Self {
-            shared: Arc::clone(&self.shared),
             resolve_wait: wait,
+            ..self.clone()
         }
     }
 
@@ -229,6 +236,32 @@ impl<T: TransportPort + 'static> Client<T> {
     /// [`with_resolve_wait`](Self::with_resolve_wait).
     pub fn resolve_wait(&self) -> Option<Duration> {
         self.resolve_wait
+    }
+
+    /// A clone of this client whose handles write and relinquish under
+    /// `policy` ([`WritePolicy::default`] for [`new`](Self::new)'s, which
+    /// refuses priorities 1, 2, 5 and 6). The setting is the clone's alone,
+    /// and its clones' and handles': the other clones keep theirs.
+    ///
+    /// ```
+    /// # use bacnet_ops::{Client, Priority, WritePolicy};
+    /// # use bacnet_transport::port::TransportPort;
+    /// # fn life_safety<T: TransportPort + 'static>(client: &Client<T>) -> Client<T> {
+    /// let policy = WritePolicy::default().allow_priorities([Priority::MANUAL_LIFE_SAFETY]);
+    /// client.with_write_policy(policy)
+    /// # }
+    /// ```
+    pub fn with_write_policy(&self, policy: WritePolicy) -> Self {
+        Self {
+            write_policy: policy,
+            ..self.clone()
+        }
+    }
+
+    /// The priorities this clone's handles may write at; see
+    /// [`with_write_policy`](Self::with_write_policy).
+    pub fn write_policy(&self) -> WritePolicy {
+        self.write_policy
     }
 
     /// A receiver of this client's own events: a handle that follows an
@@ -287,3 +320,6 @@ mod read_many_tests;
 
 #[cfg(test)]
 mod read_many_more_tests;
+
+#[cfg(test)]
+mod write_tests;

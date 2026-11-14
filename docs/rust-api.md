@@ -11836,7 +11836,9 @@ result it is pinned and knows the instance. The handle's async reads are
 `Readings`), `read_object` (an object's properties, all or a list),
 `list_objects`, `describe_device`, `read_trend` (trend, event and audit log
 pages), `alarms`, `alarm_summary`, `enrollment_summary` and the 223
-inventory's ([values and errors](#values-readings-and-opserror)). A device's gate, turns and
+inventory's ([values and errors](#values-readings-and-opserror)), and its
+writes are `write`, `relinquish`, `priority_array` and `preview_write`
+([writes and priorities](#writes-and-priorities)). A device's gate, turns and
 memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
 two devices sharing an instance stay apart and one device named two ways
 waits at one gate. A following handle moves to the one other address on its
@@ -11937,7 +11939,9 @@ error, detail }` for the device's Error, Reject or Abort (`detail` holds a
 structured Error PDU's extra fields), `Paging(PagingFault)` for a device
 that breaks a paged read's rules (a GetEventInformation answer naming an
 object again, or saying more remain with no new object), and
-`Client(Error)` for any other low-level error, unchanged.
+`Client(Error)` for any other low-level error, unchanged, and for writes
+`Denied(WriteDenied)` and `ReadBack { written, source }` ([writes and
+priorities](#writes-and-priorities)).
 `error.unreachable()`, `error.timed_out()` and `error.remote()` answer the
 usual questions. Its text is the low-level error's, and its `source()` that
 error's own source, so a printed chain names each cause once.
@@ -11962,6 +11966,68 @@ request jobs: `Reader`, `Halt`, `RpmFailure`, `rpm_failure`, `rpm_rows`,
 | `Error::Encoding` for a directed Who-Is or `station_mac` text that names no station, and `Error::OutOfRange` for a refused target | `OpsError::Parse` |
 | `Error::Encoding` for an Object_List claiming more than `MAX_OBJECTS` elements | `Error::Range` with both numbers, inside `OpsError::Client` from a `Device` read |
 | `Error::Encoding` for a GetEventInformation answer naming an object twice | `OpsError::Paging(PagingFault::Repeated { .. })` |
+
+### Writes and priorities
+
+A `Device` writes through the same gate as its reads (#2560). `Priority` is
+a checked 1 to 16 (`Priority::new(8)?`, `"8".parse()`, constants such as
+`Priority::MANUAL_OPERATOR` and `Priority::LOWEST`; `purpose()` names Table
+19-1's use of it, and `Priority::COUNT` is a Priority_Array's length).
+
+- `write(p, v, Option<Priority>) -> Result<Written, OpsError>` sends one
+  WriteProperty. `p` is an `IntoProperty`; `v` is text in the value grammar,
+  read for the property's datatype (`"72.5"`, `"active"`), or a typed
+  `PropertyValue` (`IntoWriteValue`). Text may carry `@N`: the text's
+  priority and the argument must agree, or the call is refused with nothing
+  sent. Which priority goes follows `Commandability::of(type, property)`,
+  decided with nothing read: a Present_Value the standard makes commandable
+  (the outputs, Access Door, Lighting Output, Channel) goes at the priority
+  given or 16; one that may be (the value objects, any property of a vendor
+  type, a vendor property) goes with the priority given or none, which the
+  device takes at 16 if it is commandable; any other property goes with
+  none, and naming a priority for it is refused. NULL to a Present_Value
+  with a Priority_Array, and any write to Priority_Array itself, are refused
+  too. `Written { device, property, value, priority, commandable }` says
+  what was sent. A write that timed out is never sent again.
+- `relinquish(object, Priority) -> Result<PriorityView, OpsError>` writes
+  NULL at that slot, then reads Priority_Array, Relinquish_Default and
+  Present_Value back in one RPM: two requests. A relinquish acknowledged
+  whose read back failed is `OpsError::ReadBack`, whose `written` says it
+  took effect; `unreachable()` is false for it, so nothing retries it.
+- `priority_array(object) -> Result<PriorityView, OpsError>` reads the same
+  three. `PriorityView { object, slots, in_control, relinquish_default,
+  present_value }` holds sixteen `Option<Value>` slots (`slot(priority)`)
+  and the slot in control, `None` when Relinquish_Default applies. An
+  object type with no Priority_Array (an input, or a Channel, which passes
+  commands to its members) is refused before anything is sent.
+- `preview_write(p, v, Option<Priority>) -> Result<WritePreview, OpsError>`
+  reads what the write would do and sends nothing: one RPM of the priorities
+  for a Present_Value that may be commandable (the read settles it), or one
+  ReadProperty of anything else. `WritePreview` names the slot
+  (`priority`), who holds it (`Occupancy::{NotCommandable, Empty, Held,
+  Unknown}`), what the write replaces (`before`), the `Effect` on
+  Present_Value (`Changes { from, to }`, or `Unchanged { held_by }` when a
+  stronger slot keeps control), the `PriorityView`, and `denied` when the
+  policy would refuse it.
+
+The client's `WritePolicy` refuses priorities 1, 2, 5 and 6 by default
+(`WritePolicy::GUARDED`): a write or relinquish there fails with
+`OpsError::Denied(WriteDenied { property, priority, relinquish })` and
+sends nothing. `client.with_write_policy(WritePolicy::default()
+.allow_priorities([Priority::MANUAL_LIFE_SAFETY]))` gives a clone, and its
+handles, the priorities it names; the other clones keep theirs. Nothing
+else is guarded: no read before a write, no Out_Of_Service rule. The
+low-level `BACnetClient` has no policy, and `bacnet-tool`'s writes go
+through it, so the TUI's and MCP's tiers and confirmations decide there.
+`bacnet_ops::write::{commands, effect}` are the analysis `preview_write`
+makes, which the tool's planner shares.
+
+| Was | Now |
+|---|---|
+| `label::priority_label(n)` | `Priority::new(n)?.purpose()` |
+| `label::PRIORITIES` | `Priority::COUNT` |
+| `parse::parse_value_with_priority` and `parse_value_for_with_priority` returning `Option<u8>` | `Option<Priority>` |
+| `bacnet_tool::safety::Effect` with `held_by: Option<u8>` | `bacnet_ops::write::Effect` (re-exported there) with `held_by: Option<Priority>` |
 
 ### Moved to bacnet-tool
 
