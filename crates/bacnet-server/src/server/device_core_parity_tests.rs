@@ -166,17 +166,16 @@ impl Parity {
         segmentation: Segmentation,
         fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
     ) -> Self {
-        let interval = ServerConfig::default().event_enrollment_interval_secs;
-        Self::start_enrolling(budget, segmentation, fixture, interval).await
+        Self::start_enrolling(budget, segmentation, fixture, ServerConfig::default()).await
     }
 
-    /// [`start_from`](Self::start_from), the server's Event Enrollment pass
-    /// every `interval` seconds.
+    /// [`start_from`](Self::start_from), the server's background tasks set
+    /// as `tasks` sets them: its Event Enrollment pass and fault detection.
     async fn start_enrolling(
         budget: ReadPropertyMultipleBudget,
         segmentation: Segmentation,
         fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
-        interval: u64,
+        tasks: ServerConfig,
     ) -> Self {
         let identity = identity();
         let (transport, tx) = TestTransport::inbound(16);
@@ -185,8 +184,7 @@ impl Parity {
         let config = ServerConfig {
             device: served.clone(),
             read_property_multiple_budget: budget,
-            event_enrollment_interval_secs: interval,
-            ..ServerConfig::default()
+            ..tasks
         };
         let server = BACnetServer::start(config, fixture(&served), transport)
             .await

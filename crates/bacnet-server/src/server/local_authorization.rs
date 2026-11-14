@@ -97,16 +97,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // belongs to the server's task set. The COV read guard excludes admission
         // through capture, and the database guard is released before fanout awaits.
         drop(table);
-        let fanout = CovFanout::new(&self.local_writer().cov_context(), &self.event_suppressions);
-        let routers = Arc::clone(&self.learned_routers);
-        let bindings = Arc::clone(&self.device_bindings);
+        let fanout = CovFanout::new(
+            &self.local_writer().cov_context(),
+            &self.event_suppressions,
+            &self.learned_routers,
+            &self.device_bindings,
+        );
         self.finish_in_task(&runtime, async move {
             // The point's transition commits under the attempt's guard (#2530).
             // The built-in Access Point reports no intrinsic events; an
             // application's own point that does is evaluated here.
             let mut db = db;
             let mut settle = super::event_send::Settle::default();
-            let delivery = fanout.event_delivery(&routers, &bindings);
+            let delivery = fanout.event_delivery();
             // Its notification joins its recipients' lanes under the guard
             // (#2537). No test drives this replacement: the built-in Access
             // Point reports no intrinsic events, and a test point that did

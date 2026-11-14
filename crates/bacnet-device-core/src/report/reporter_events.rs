@@ -389,8 +389,11 @@ impl Reporter {
         self.report_committed(db, &changed, &snapshots, now);
     }
 
-    /// Run every object's reliability evaluation and report what changed
-    /// to COV; the sweep turns a changed Reliability into its transition.
+    /// Run every object's reliability evaluation and report what changed:
+    /// each changed object's intrinsic reporting is evaluated as after a
+    /// change, so the transition a new Reliability causes commits with it and
+    /// its event notifications queue ahead of its COV ones, as the server's
+    /// fault-detection task does (#2535).
     fn fault_pass(&mut self, db: &mut ObjectDatabase, now: Instant) {
         // The hooks change objects in place: Life Safety values first.
         let life_safety = db
@@ -400,7 +403,9 @@ impl Reporter {
         let snapshots = LifeSafetyCovSnapshots::capture_oids(db, life_safety);
         let pass = fault_pass(db);
         let changed: Vec<_> = pass.changes.iter().map(|change| change.object_id).collect();
-        self.report_committed(db, &changed, &snapshots, now);
+        if !changed.is_empty() {
+            self.after_change(db, &changed, &snapshots, Tail::Host, now);
+        }
     }
 
     /// Report `objects`, which a background pass changed, to COV, through

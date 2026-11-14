@@ -16,6 +16,8 @@ pub(super) struct CovFanout<T: TransportPort + 'static> {
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     comm_state: Arc<CommState>,
     event_suppressions: Arc<super::event_suppression::EventSuppressions>,
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    device_bindings: Arc<RwLock<DeviceBindingTable>>,
     config: Arc<ServerConfig>,
 }
 
@@ -29,17 +31,22 @@ impl<T: TransportPort + 'static> Clone for CovFanout<T> {
             notification_transactions: Arc::clone(&self.notification_transactions),
             comm_state: Arc::clone(&self.comm_state),
             event_suppressions: Arc::clone(&self.event_suppressions),
+            learned_routers: Arc::clone(&self.learned_routers),
+            device_bindings: Arc::clone(&self.device_bindings),
             config: Arc::clone(&self.config),
         }
     }
 }
 
 impl<T: TransportPort + 'static> CovFanout<T> {
-    /// Own the handles of `ctx`, plus the event counters the background
-    /// tasks' EventNotification sends move.
+    /// Own the handles of `ctx`, plus those the background tasks'
+    /// EventNotification sends read: the event counters, the learned routers
+    /// and the Device bindings.
     pub(super) fn new(
         ctx: &CovNotifyContext<'_, T>,
         event_suppressions: &Arc<super::event_suppression::EventSuppressions>,
+        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
     ) -> Self {
         Self {
             db: Arc::clone(ctx.db),
@@ -49,6 +56,8 @@ impl<T: TransportPort + 'static> CovFanout<T> {
             notification_transactions: Arc::clone(ctx.notification_transactions),
             comm_state: Arc::clone(ctx.comm_state),
             event_suppressions: Arc::clone(event_suppressions),
+            learned_routers: Arc::clone(learned_routers),
+            device_bindings: Arc::clone(device_bindings),
             config: Arc::clone(ctx.config),
         }
     }
@@ -68,18 +77,14 @@ impl<T: TransportPort + 'static> CovFanout<T> {
 
     /// Borrow the handles an EventNotification send reads. The retry timeout
     /// and APDU capacity come from the server config.
-    pub(super) fn event_delivery<'a>(
-        &'a self,
-        learned_routers: &'a Arc<Mutex<LearnedRouterCache>>,
-        device_bindings: &'a Arc<RwLock<DeviceBindingTable>>,
-    ) -> EventDelivery<'a, T> {
+    pub(super) fn event_delivery(&self) -> EventDelivery<'_, T> {
         EventDelivery {
             db: &self.db,
             network: &self.network,
             comm_state: &self.comm_state,
-            learned_routers,
+            learned_routers: &self.learned_routers,
             notification_transactions: &self.notification_transactions,
-            device_bindings,
+            device_bindings: &self.device_bindings,
             suppressions: &self.event_suppressions,
             retry_timeout_ms: self.config.cov_retry_timeout_ms,
             local_apdu_capacity: u32::from(self.config.device.max_apdu_length()),

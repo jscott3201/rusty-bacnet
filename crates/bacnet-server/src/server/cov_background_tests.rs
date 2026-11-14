@@ -175,6 +175,44 @@ async fn fault_detection_reaches_property_and_timestamped_subscribers_without_an
     h.server.stop().await.unwrap();
 }
 
+/// With event detection on, the fault-detection pass commits the FAULT its
+/// Reliability causes with it (#2535): a timestamped Status_Flags reference
+/// records the two as one row, FAULT with IN_ALARM, not FAULT alone and the
+/// transition a sweep later.
+#[tokio::test(start_paused = true)]
+async fn fault_detection_and_its_transition_are_one_timestamped_row() {
+    let config = ServerConfig {
+        enable_fault_detection: true,
+        ..ServerConfig::default()
+    };
+    let mut h = Harness::start_with(config, |db| {
+        db.remove(&av1()).unwrap();
+        let mut object =
+            AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+        object.configure_fault_out_of_range(0.0, 100.0).unwrap();
+        db.add(Box::new(object)).unwrap();
+    })
+    .await;
+    // The 1 s sweep runs late, at 1.5 s, and keeps that phase, half a second
+    // off the fault-detection passes: a transition left to a sweep would
+    // show as a row of its own.
+    tokio::time::advance(Duration::from_millis(1_500)).await;
+    h.subscribe_specs(false, vec![(av1(), vec![(SF, true)])])
+        .await;
+    h.notification().await;
+    h.write_local(150.0).await;
+    h.set_clock(40);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let timed = h.notification().await;
+    let flags: Vec<_> = rows(&timed)
+        .into_iter()
+        .filter(|(property, _, _)| *property == SF)
+        .map(|(_, value, time)| (flags(&value), time))
+        .collect();
+    assert_eq!(flags, [(IN_ALARM | FAULT, Some(time(40)))]);
+    h.server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_schedule_write_reaches_ordinary_and_timestamped_subscribers() {
     let mut h = Harness::start_with(ServerConfig::default(), av1_schedule).await;

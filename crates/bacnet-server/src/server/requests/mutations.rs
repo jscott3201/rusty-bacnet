@@ -4,7 +4,7 @@ use crate::mutation::{
     MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
     MutationTarget, MutationTrust,
 };
-use crate::server::event_notifications::commit_written_transition;
+use crate::server::event_notifications::{commit_written_transition, committing};
 use crate::server::event_send::Settle;
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 use bacnet_device_core::write::{self, WpmOutcome};
@@ -16,6 +16,34 @@ use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 
 mod object_lifecycle;
+
+/// The pass of each Schedule among `written`, objects a request's write
+/// committed to under `db`, its guard ([`crate::schedule::reevaluate_written`]):
+/// the targets the pass writes commit their transitions under that guard,
+/// counted in the request's `settle` (#2535). Boxed, and only for a
+/// Schedule: a write to one is rare, and the pass's future would size every
+/// write's.
+async fn reevaluate_schedules<T: TransportPort + 'static>(
+    services: &RequestServices<T>,
+    db: &mut ObjectDatabase,
+    written: &[ObjectIdentifier],
+    settle: &mut Settle,
+) -> crate::committed_cov::CommittedCov {
+    let schedule = |oid: &ObjectIdentifier| oid.object_type() == ObjectType::SCHEDULE;
+    if !written.iter().any(schedule) {
+        return Default::default();
+    }
+    let mut transition = committing(|| services.event_delivery(), settle);
+    let (database, table) = (&services.db, &services.cov_table);
+    Box::pin(crate::schedule::reevaluate_written(
+        database,
+        db,
+        written,
+        table,
+        &mut transition,
+    ))
+    .await
+}
 
 pub(super) enum InitialCovNotification {
     Single(Box<CovSubscriptionSnapshot>),
@@ -290,18 +318,8 @@ impl Request<'_> {
                     capture.run(&db);
                 }
             }
-            let schedule_cov = match written {
-                Some(oid) => {
-                    crate::schedule::reevaluate_written(
-                        database,
-                        &mut db,
-                        std::slice::from_ref(&oid),
-                        cov_table,
-                    )
-                    .await
-                }
-                None => Default::default(),
-            };
+            let written_slice = written.as_slice();
+            let schedule_cov = reevaluate_schedules(services, &mut db, written_slice, settle).await;
             (result.map(|_| written), changes, plans, schedule_cov)
         };
         staging_plans.extend(plans);
@@ -380,8 +398,7 @@ impl Request<'_> {
             let plans = BACnetServer::<T>::take_staging_plans(&mut db, committed_oids);
             command_runs.extend(TakenRuns::take(database, &mut db, committed_oids));
             let schedule_cov =
-                crate::schedule::reevaluate_written(database, &mut db, committed_oids, cov_table)
-                    .await;
+                reevaluate_schedules(services, &mut db, committed_oids, settle).await;
             // Each written object's transition commits under this guard too,
             // in the order the objects were written. Its attempts were
             // captured as they committed: an object whose transition commits
@@ -569,7 +586,6 @@ impl Request<'_> {
             durable_writes::DurableTarget::list_element(&self.req.service_request, remove),
         )
         .await;
-        let database = db;
         let (result, written, schedule_cov) = {
             let mut db = db.write().await;
             let (result, written) = match handlers::handle_list_element_observed(
@@ -596,12 +612,9 @@ impl Request<'_> {
                 let capture = cov_table.read().await.timed_capture(oid);
                 capture.run(&db);
             }
-            let schedule_cov = match written {
-                Some(oid) => {
-                    crate::schedule::reevaluate_written(database, &mut db, &[oid], cov_table).await
-                }
-                None => Default::default(),
-            };
+            let settle = &mut effects.settle;
+            let schedule_cov =
+                reevaluate_schedules(services, &mut db, written.as_slice(), settle).await;
             (result, written, schedule_cov)
         };
         // The edited object first, then a Schedule's targets, which the merge

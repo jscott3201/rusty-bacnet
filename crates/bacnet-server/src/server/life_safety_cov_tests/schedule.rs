@@ -6,7 +6,7 @@ use bacnet_types::constructed::BACnetObjectPropertyReference;
 
 async fn tick(db: &Arc<RwLock<ObjectDatabase>>) -> crate::committed_cov::CommittedCov {
     let table = RwLock::new(CovSubscriptionTable::new());
-    crate::schedule::tick_schedules_committed(db, &table).await
+    crate::schedule::tick_schedules_committed(db, &table, &mut |_, _| false).await
 }
 
 #[tokio::test]

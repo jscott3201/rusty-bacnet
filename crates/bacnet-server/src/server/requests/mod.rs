@@ -300,12 +300,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::CREATE_OBJECT => {
                 mutation
-                    .create_object::<T>(db, cov_table, &mut effects, ack_buf, &mut audit)
+                    .create_object::<T>(services, &mut effects, ack_buf, &mut audit)
                     .await
             }
             s if s == ConfirmedServiceChoice::DELETE_OBJECT => {
                 mutation
-                    .delete_object::<T>(db, cov_table, &mut effects, &mut audit)
+                    .delete_object::<T>(services, &mut effects, &mut audit)
                     .await
             }
             s if s == ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL => {
@@ -597,7 +597,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let MutationEffects {
             mut settle,
             mut coarse_cov_oids,
-            life_safety_cov_changes,
+            mut life_safety_cov_changes,
             staging_plans,
             mut command_runs,
             timed_revisits,
@@ -627,7 +627,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // The handle goes into the boxed future and back, so it isn't held
         // across that await in this future's state.
         if !staging_plans.is_empty() {
-            let cov = &mut coarse_cov_oids;
+            let cov = (&mut coarse_cov_oids, &mut life_safety_cov_changes);
             let plans = Self::execute_request_staging_plans(services, staging_plans, settle, cov);
             let (runs, returned) = Box::pin(plans).await;
             settle = returned;

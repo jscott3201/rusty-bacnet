@@ -198,10 +198,10 @@ pub struct ReportConfig {
     #[cfg(feature = "event-reporting")]
     pub sweep: Option<Duration>,
     /// The fault pass's period, `None` (the default) for none: each pass
-    /// runs every object's reliability evaluation and reports what changed
-    /// to COV, as `bacnet-server`'s `enable_fault_detection` does every
-    /// 10 s; the sweep then turns a changed Reliability into its FAULT
-    /// transition.
+    /// runs every object's reliability evaluation, commits the FAULT
+    /// transition (or the return from it) each changed Reliability causes
+    /// and reports both, event notifications first, as `bacnet-server`'s
+    /// `enable_fault_detection` does every 10 s (#2535).
     #[cfg(feature = "event-reporting")]
     pub fault_detection: Option<Duration>,
     /// The Event Enrollment pass's period, `None` (the default) for none.
@@ -238,8 +238,8 @@ impl ReportConfig {
     /// and Event_Algorithm_Inhibit references. It looks at the due instants
     /// after every write and change it is given, so a period longer than
     /// the shortest delay delays no transition the host reported; a FAULT
-    /// from a Reliability nobody reported, the fault pass's included, waits
-    /// for the next periodic sweep. Whatever `period` and the delays, it
+    /// from a Reliability nobody reported (the fault pass reports its own)
+    /// waits for the next periodic sweep. Whatever `period` and the delays, it
     /// sweeps no sooner than
     /// [`SWEEP_FLOOR`] after its last sweep.
     #[cfg(feature = "event-reporting")]
@@ -250,8 +250,8 @@ impl ReportConfig {
 
     /// This configuration with a fault pass every `period`; see
     /// [`fault_detection`](Self::fault_detection). [`Reporter::new`] refuses
-    /// it without [`with_sweep`](Self::with_sweep), which turns its faults
-    /// into transitions.
+    /// it without [`with_sweep`](Self::with_sweep), which turns the event
+    /// path on.
     #[cfg(feature = "event-reporting")]
     pub fn with_fault_detection(mut self, period: Duration) -> Self {
         self.fault_detection = Some(period);

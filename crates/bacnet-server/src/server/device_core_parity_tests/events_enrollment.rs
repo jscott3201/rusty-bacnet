@@ -158,7 +158,7 @@ fn real(value: f32) -> PropertyValue {
 /// the same notifications at every pass.
 #[tokio::test(start_paused = true)]
 async fn each_algorithm_both_ways_and_a_fault_match() {
-    let mut both = EventParity::start_with(algorithms, true, Some(1)).await;
+    let mut both = EventParity::start_with(algorithms, true, Some(1), false).await;
     let pv = P::PRESENT_VALUE;
     let steps: [(&str, ObjectIdentifier, P, PropertyValue); 12] = [
         ("OUT_OF_RANGE over", av(2), pv, real(90.0)),
@@ -220,7 +220,8 @@ async fn each_algorithm_both_ways_and_a_fault_match() {
 #[tokio::test(start_paused = true)]
 async fn the_delay_counts_passes_at_two_intervals() {
     for (interval, before, fires) in [(1, 5_900, 6_100), (10, 19_900, 20_100)] {
-        let mut both = EventParity::start_with(delayed_enrollment, true, Some(interval)).await;
+        let mut both =
+            EventParity::start_with(delayed_enrollment, true, Some(interval), false).await;
         let what = format!("over the limit, a pass every {interval} s");
         let with_reply = both
             .write_to(&what, 500, (av(2), P::PRESENT_VALUE), real(90.0))
@@ -245,7 +246,7 @@ fn two_on_one(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
 /// database's: compared in order here, not as sets.
 #[tokio::test(start_paused = true)]
 async fn two_transitions_at_one_pass_go_out_in_the_same_order() {
-    let mut both = EventParity::start_with(two_on_one, true, Some(1)).await;
+    let mut both = EventParity::start_with(two_on_one, true, Some(1), false).await;
     assert_eq!(both.run_to("before", 1_500).await, 0);
     let over = (av(2), P::PRESENT_VALUE);
     assert_eq!(both.write_to("over", 1_500, over, real(90.0)).await, 0);

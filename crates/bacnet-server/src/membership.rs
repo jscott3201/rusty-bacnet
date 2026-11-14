@@ -26,21 +26,24 @@ use std::sync::Arc;
 use bacnet_objects::database::ObjectDatabase;
 use tokio::sync::{Notify, RwLock};
 
-use crate::committed_cov::{BackgroundCommit, CommittedCov};
+use crate::committed_cov::{BackgroundCommit, CommitTransition, CommittedCov};
 use crate::cov::CovSubscriptionTable;
 
 /// Take the work queued on `db_w`, the guard on `db`, and return the COV
-/// fanout it owes, to send once that guard is dropped.
+/// fanout it owes, to send once that guard is dropped. Each object it
+/// changed commits its transition under that guard through `transition`
+/// (#2535).
 pub(crate) async fn settle(
     db: &Arc<RwLock<ObjectDatabase>>,
     db_w: &mut ObjectDatabase,
     cov_table: &RwLock<CovSubscriptionTable>,
+    transition: CommitTransition<'_>,
 ) -> CommittedCov {
     let mut commit = BackgroundCommit::new();
     if !drain(db_w, &mut commit) {
         return CommittedCov::default();
     }
-    commit.finish(db, db_w, cov_table).await
+    commit.finish(db, db_w, cov_table, transition).await
 }
 
 /// [`settle`] for a write of the Staging object `source`'s plan (#2289):
@@ -52,6 +55,7 @@ pub(crate) async fn settle_for_staging(
     db_w: &mut ObjectDatabase,
     cov_table: &RwLock<CovSubscriptionTable>,
     source: bacnet_types::primitives::ObjectIdentifier,
+    transition: CommitTransition<'_>,
 ) -> CommittedCov {
     let mut commit = BackgroundCommit::new();
     let queued = drain(db_w, &mut commit);
@@ -59,7 +63,7 @@ pub(crate) async fn settle_for_staging(
     if !(queued || owed) {
         return CommittedCov::default();
     }
-    commit.finish(db, db_w, cov_table).await
+    commit.finish(db, db_w, cov_table, transition).await
 }
 
 /// Take the work queued on `db_w` and do it into `commit`: the removed
@@ -83,9 +87,10 @@ pub(crate) fn drain(db_w: &mut ObjectDatabase, commit: &mut BackgroundCommit) ->
 pub(crate) async fn settle_committed(
     db: &Arc<RwLock<ObjectDatabase>>,
     cov_table: &RwLock<CovSubscriptionTable>,
+    transition: CommitTransition<'_>,
 ) -> CommittedCov {
     let mut db_w = db.write().await;
-    settle(db, &mut db_w, cov_table).await
+    settle(db, &mut db_w, cov_table, transition).await
 }
 
 /// Install a waker on `db` that wakes the returned notify whenever a change

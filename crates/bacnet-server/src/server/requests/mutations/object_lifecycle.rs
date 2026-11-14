@@ -10,12 +10,12 @@ impl Request<'_> {
     /// its COV fanout joins the request's.
     pub(in crate::server::requests) async fn create_object<T: TransportPort + 'static>(
         &self,
-        db: &Arc<RwLock<ObjectDatabase>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        services: &RequestServices<T>,
         effects: &mut MutationEffects,
         mut ack_buf: BytesMut,
         audit: &mut crate::server::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
+        let (db, cov_table) = (&services.db, &services.cov_table);
         if let Err(error) = self
             .authorize(|| {
                 CreateObjectRequest::decode(&self.req.service_request)
@@ -65,7 +65,11 @@ impl Request<'_> {
                 );
                 audit.lifecycle_completed(&mut db, &result);
             }
-            let membership = crate::membership::settle(database, &mut db, cov_table).await;
+            // The objects both change commit their transitions under this
+            // guard, counted in the request's settle (#2535).
+            let mut transition = committing(|| services.event_delivery(), &mut effects.settle);
+            let membership =
+                crate::membership::settle(database, &mut db, cov_table, &mut transition).await;
             // A created Schedule runs at once with its initial values, as
             // after a write of it, not at the next minute's pass (#2208).
             let created = target.filter(|_| result.is_ok());
@@ -74,6 +78,7 @@ impl Request<'_> {
                 &mut db,
                 created.as_slice(),
                 cov_table,
+                &mut transition,
             )
             .await;
             (result, [membership, schedule])
@@ -98,11 +103,11 @@ impl Request<'_> {
     /// its COV fanout joins the request's.
     pub(in crate::server::requests) async fn delete_object<T: TransportPort + 'static>(
         &self,
-        db: &Arc<RwLock<ObjectDatabase>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        services: &RequestServices<T>,
         effects: &mut MutationEffects,
         audit: &mut crate::server::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
+        let (db, cov_table) = (&services.db, &services.cov_table);
         if let Err(error) = self
             .authorize(|| {
                 DeleteObjectRequest::decode(&self.req.service_request)
@@ -146,7 +151,11 @@ impl Request<'_> {
                 status.set_configured(false);
             }
             audit.lifecycle_completed(&mut db, &result);
-            let membership = crate::membership::settle(database, &mut db, cov_table).await;
+            // A relinquished target's transition commits under this guard,
+            // counted in the request's settle (#2535).
+            let mut transition = committing(|| services.event_delivery(), &mut effects.settle);
+            let membership =
+                crate::membership::settle(database, &mut db, cov_table, &mut transition).await;
             (result, removed, membership)
         };
         settled.merge_into(

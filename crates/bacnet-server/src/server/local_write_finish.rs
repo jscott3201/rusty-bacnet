@@ -19,7 +19,7 @@
 use super::local_writes::LocalWriter;
 use super::*;
 use crate::command_lists::TakenRuns;
-use crate::server::event_notifications::commit_written_transition;
+use crate::server::event_notifications::{commit_written_transition, committing};
 use crate::server::event_send::{Settle, settled as settled_lanes};
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 use bacnet_objects::staging::StagingWritePlan;
@@ -135,13 +135,24 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
             }
         };
         capture.run(&db);
-        let schedule_cov = crate::schedule::reevaluate_written(
-            self.db,
-            &mut db,
-            std::slice::from_ref(&oid),
-            self.cov_table,
-        )
-        .await;
+        // A written Schedule's targets commit their transitions in its pass,
+        // under this guard, counted with the write's (#2535). Boxed, as a
+        // write to a Schedule is rare.
+        let schedule_cov = if oid.object_type() == ObjectType::SCHEDULE {
+            let mut transition = committing(|| self.event_delivery(), &mut settle);
+            let written = std::slice::from_ref(&oid);
+            let (database, table) = (self.db, self.cov_table);
+            let pass = crate::schedule::reevaluate_written(
+                database,
+                &mut db,
+                written,
+                table,
+                &mut transition,
+            );
+            Box::pin(pass).await
+        } else {
+            crate::committed_cov::CommittedCov::default()
+        };
         drop(db);
 
         // Its COV fanout waits for those notifications, capped (#889).
