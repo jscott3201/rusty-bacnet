@@ -1,3 +1,5 @@
+use bacnet_transport::port::TransportPort;
+
 use super::super::*;
 
 #[pymethods]
@@ -14,7 +16,7 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, async move {
             let client = started(&inner).await?;
             // A B/IPv6 client reports its own shape (#2365).
-            if let Some(bip6) = client.transport().bip6() {
+            if let Some(bip6) = client.transport().bip6_transport() {
                 let status = bip6.foreign_status().unwrap_or_default();
                 return crate::registration_dicts::bip6_registration_dict(status);
             }

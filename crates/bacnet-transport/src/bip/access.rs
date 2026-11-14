@@ -1,8 +1,10 @@
 //! Reaching the B/IP transport behind a transport that may carry BACnet/IP.
 
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 
 use super::BipTransport;
+use crate::port::TransportPort;
 
 /// A transport that may carry BACnet/IP, and so can lend its [`BipTransport`].
 ///
@@ -12,8 +14,9 @@ use super::BipTransport;
 /// helpers take any transport with it, so the same calls work on a client over
 /// [`BipTransport`] and on one over [`AnyTransport`](crate::any::AnyTransport).
 ///
-/// A wrapper transport, such as a decorator around a `BipTransport`, can
-/// implement it by delegating to the transport it wraps.
+/// Every [`TransportPort`] has it, through [`TransportPort::bip_transport`]: a
+/// wrapper transport, such as a decorator around a `BipTransport`, takes part
+/// by forwarding that method to the transport it wraps.
 ///
 /// ```
 /// use std::net::Ipv4Addr;
@@ -48,9 +51,18 @@ pub trait AsBip {
     fn as_bip(&self) -> Result<&BipTransport, Error>;
 }
 
-impl AsBip for BipTransport {
-    /// Always this transport.
+impl<T: TransportPort + ?Sized> AsBip for T {
+    /// The transport [`TransportPort::bip_transport`] gives. A transport
+    /// with no data link of its own, such as a router's application port,
+    /// refuses with [`Error::Encoding`], since [`DataLink`] has no value for
+    /// it.
     fn as_bip(&self) -> Result<&BipTransport, Error> {
-        Ok(self)
+        self.bip_transport().ok_or_else(|| match self.data_link() {
+            Some(actual) => Error::UnsupportedTransport {
+                required: DataLink::Bip,
+                actual,
+            },
+            None => Error::Encoding("this transport has no B/IP link of its own".into()),
+        })
     }
 }

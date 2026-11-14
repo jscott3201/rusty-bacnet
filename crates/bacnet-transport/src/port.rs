@@ -12,6 +12,7 @@ pub use crate::direct_response::{DirectResponse, DirectResponseScope, ResponseSc
 pub use crate::principal::ScPrincipal;
 use bacnet_npdu::NpduLimits;
 use bacnet_types::MacAddr;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use bytes::Bytes;
 use std::sync::Arc;
@@ -486,6 +487,33 @@ pub struct Bip6Port {
 /// Implementations handle the data-link framing (e.g., BVLL for BACnet/IP)
 /// and expose a simple send/receive interface for NPDU bytes.
 pub trait TransportPort: Send + Sync {
+    /// The data link this transport carries, or `None` when it carries no
+    /// one link a caller could name: a router's application port, or a
+    /// test double. Callers that adapt to the link (a target grammar, an
+    /// address format) ask here rather than guess from the concrete type,
+    /// which a wrapper such as [`AnyTransport`](crate::any::AnyTransport)
+    /// hides. Every built-in transport reports its link, and a wrapper must
+    /// forward the underlying answer.
+    fn data_link(&self) -> Option<DataLink> {
+        None
+    }
+
+    /// The B/IP transport this one is or wraps, for what only that type
+    /// offers: BBMD table reads, the foreign-registration state and the
+    /// management counters. `None`, the default, when the link isn't
+    /// BACnet/IP. A wrapper must forward the underlying answer.
+    fn bip_transport(&self) -> Option<&crate::bip::BipTransport> {
+        None
+    }
+
+    /// The B/IPv6 transport this one is or wraps, for what only that type
+    /// offers, such as resolving a peer's VMAC. The B/IPv6 counterpart of
+    /// [`bip_transport`](Self::bip_transport), under the same contract.
+    #[cfg(feature = "ipv6")]
+    fn bip6_transport(&self) -> Option<&crate::bip6::Bip6Transport> {
+        None
+    }
+
     /// Configured broadcast endpoint when this link uses IPv4 BACnet/IP.
     /// `None` means the link does not expose that capability. Wrappers must
     /// forward the underlying value. After `start`, the port is the actual
