@@ -130,6 +130,14 @@ impl IoCore {
     /// Read one of the properties the core or `detector` serves; `None` for
     /// any other. The object has checked `array_index` against its metadata
     /// first.
+    ///
+    /// Only this entry and [`Self::write`] are made per detector type; the
+    /// rest is one copy for every object, as far as the inliner leaves it
+    /// one. An image with a single I/O type gets [`Self::read_own`] and
+    /// [`Self::write_own`] inlined into that type's own routes, which costs a
+    /// few dozen octets there; check the shared copy once all nine objects
+    /// are on the core, and mark the two `#[inline(never)]` if the images
+    /// need it.
     pub(crate) fn read<D: IoDetector>(
         &self,
         detector: &D,
@@ -365,10 +373,10 @@ macro_rules! impl_profile {
         impl $object {
             /// Provision independent optional Tags, Profile_Location and
             /// Profile_Name rows before registration. Tags is writable over
-            /// the network whatever Out_Of_Service or a command says; the
-            /// text rows are network read-only. Invalid configuration
-            /// leaves the previous profile and its attached storage
-            /// unchanged.
+            /// the network whatever Out_Of_Service or a command says, and on
+            /// an Analog Value in every Present_Value access mode; the text
+            /// rows are network read-only. Invalid configuration leaves the
+            /// previous profile and its attached storage unchanged.
             pub fn set_profile(
                 &mut self,
                 profile: $crate::object_profile::ObjectProfile,

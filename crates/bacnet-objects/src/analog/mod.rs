@@ -260,8 +260,11 @@ macro_rules! impl_analog_properties {
             /// COV notification (#2445). A new object uses 0, so any change
             /// notifies. As for a write of it, a negative or non-finite increment
             /// is VALUE_OUT_OF_RANGE and the old one stays.
-            pub fn set_cov_increment(&mut self, increment: f32) -> Result<(), Error> {
-                self.analog.cov_increment = common::checked_cov_increment(increment)?;
+            pub fn set_cov_increment(
+                &mut self,
+                increment: f32,
+            ) -> Result<(), bacnet_types::error::Error> {
+                self.analog.cov_increment = $crate::common::checked_cov_increment(increment)?;
                 Ok(())
             }
 
@@ -277,14 +280,14 @@ macro_rules! impl_analog_properties {
         }
 
         impl $crate::creation::Creatable for $object {
-            const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] =
+            const CREATION_ONLY_PROPERTIES: &'static [bacnet_types::enums::PropertyIdentifier] =
                 $crate::analog::CREATION_ONLY;
 
             fn initialize_property(
                 &mut self,
-                property: PropertyIdentifier,
-                value: PropertyValue,
-            ) -> Result<(), Error> {
+                property: bacnet_types::enums::PropertyIdentifier,
+                value: bacnet_types::primitives::PropertyValue,
+            ) -> Result<(), bacnet_types::error::Error> {
                 $crate::analog::initialize_units(&mut self.analog.units, property, value)
             }
         }
@@ -314,21 +317,26 @@ macro_rules! impl_fault_out_of_range {
                 &mut self,
                 low: f32,
                 high: f32,
-            ) -> Result<(), Error> {
+            ) -> Result<(), bacnet_types::error::Error> {
                 self.fault_out_of_range.configure(low, high)
             }
         }
 
         impl $crate::traits::ReliabilityEval for $object {
-            fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+            fn set_reliability(
+                &mut self,
+                reliability: bacnet_types::enums::Reliability,
+            ) -> Result<(), bacnet_types::error::Error> {
                 self.core.set_reliability(reliability)?;
                 self.fault_out_of_range.clear_ownership();
                 Ok(())
             }
 
-            fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
+            fn evaluate_reliability(
+                &mut self,
+            ) -> Result<$crate::traits::ReliabilityEvaluation, bacnet_types::error::Error> {
                 if !self.core.owns_reliability() {
-                    return Ok(ReliabilityEvaluation::Unchanged);
+                    return Ok($crate::traits::ReliabilityEvaluation::Unchanged);
                 }
                 self.fault_out_of_range
                     .evaluate(self.present_value, &mut self.core.reliability)

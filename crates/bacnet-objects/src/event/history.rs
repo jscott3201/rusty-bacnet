@@ -120,9 +120,10 @@ impl<'a> EventTransitionState<'a> {
 /// kernel's own detection check on the commit, enforce Clause 13.2.2.1's
 /// Event_Detection_Enable state-machine gate.
 ///
-/// Each field is named by its path from `self`: `event_detector`, or
-/// `core.event_detector` for an object holding an
-/// [`IoCore`](crate::io_core::IoCore).
+/// Each field is named by its path from `self`. An object holding an
+/// [`IoCore`](crate::io_core::IoCore) keeps its detector in `event_detector`
+/// and names the rest in the core: `core.event_history`,
+/// `core.reliability` and `core.event_detection_enable`.
 macro_rules! impl_builtin_intrinsic_reporting {
     (
         $object:ty,
