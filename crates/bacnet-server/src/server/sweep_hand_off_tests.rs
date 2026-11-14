@@ -16,7 +16,11 @@ use std::collections::VecDeque;
 /// path: above its High_Limit of 80 on even steps, below it on odd ones, and
 /// a new value at every step, so each COV report differs from the last.
 async fn flap(server: &BACnetServer<TestTransport>, oid: &ObjectIdentifier, step: u16) {
-    let value = if step % 2 == 0 { 85 + step } else { 50 + step };
+    let value = if step.is_multiple_of(2) {
+        85 + step
+    } else {
+        50 + step
+    };
     let value = PropertyValue::Real(f32::from(value));
     let mut db = server.database().write().await;
     db.get_mut(oid)
@@ -103,12 +107,15 @@ async fn an_object_is_handed_on_once_at_most_so_reports_go_within_two_caps() {
     }
 }
 
+/// The changes a [`ScriptedPoint`]'s next commits make, in turn.
+type Steps = Arc<std::sync::Mutex<VecDeque<fn(&mut LifeSafetyPointObject)>>>;
+
 /// A Life Safety Point whose sweeps propose a transition while a step is
 /// queued, and whose commit applies the step: its passes change the COV
 /// properties the test picks.
 struct ScriptedPoint {
     point: LifeSafetyPointObject,
-    steps: Arc<std::sync::Mutex<VecDeque<fn(&mut LifeSafetyPointObject)>>>,
+    steps: Steps,
 }
 
 impl BACnetObject for ScriptedPoint {
