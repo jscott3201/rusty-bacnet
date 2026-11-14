@@ -186,8 +186,14 @@ async fn a_write_with_no_one_address_is_not_sent() {
     let mut client = BACnetClient::start(ClientConfig::default(), transport)
         .await
         .unwrap();
-    client.add_device(7, &[10, 0, 0, 2, 0xBA, 0xC0]).await.unwrap();
-    client.add_device(7, &[10, 0, 0, 3, 0xBA, 0xC0]).await.unwrap();
+    client
+        .add_device(7, &[10, 0, 0, 2, 0xBA, 0xC0])
+        .await
+        .unwrap();
+    client
+        .add_device(7, &[10, 0, 0, 3, 0xBA, 0xC0])
+        .await
+        .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut desk = Desk::open(Some(dir.path()), context(), Origin::default());
     let write = preview(planned(12, Gate::Allowed(Tier::T1)));

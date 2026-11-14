@@ -272,3 +272,44 @@ async fn an_address_the_link_cant_reach_is_refused() {
     assert!(mstp.device(at(2)).await.is_err(), "six octets on MS/TP");
     assert!(sent.is_empty());
 }
+
+/// A routed address the discovery table has no row for has no path: a
+/// read fails before it takes the device's turn, a rate slot or a charge,
+/// by ReadProperty, by ReadPropertyMultiple and in a caller's own turn.
+#[tokio::test(start_paused = true)]
+async fn a_read_with_no_path_takes_no_turn() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    use bacnet_types::primitives::ObjectIdentifier;
+
+    use crate::client::{Halt, Reader, Wanted};
+    use crate::limits::{Account, charged};
+
+    let bus = Bus::new();
+    let (client, sent) = client(&bus).await;
+    let cancel = AtomicBool::new(false);
+    let mut reader = Reader {
+        client: client.low_level(),
+        device: DeviceAddress::new(5, &[5]).unwrap(),
+        instance: None,
+        rate: client.limits(),
+        cancel: &cancel,
+        rpm: true,
+    };
+    let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let no_path = |halt: Halt| matches!(halt, Halt::Device(Error::UnknownDevice { .. }));
+    let account = Arc::new(Account::agent(None));
+    charged(Arc::clone(&account), async {
+        let rp = reader.rp(ai, PropertyIdentifier::PRESENT_VALUE, None).await;
+        assert!(no_path(rp.unwrap_err()));
+        let rpm = reader.properties(ai, Wanted::All).await;
+        assert!(no_path(rpm.unwrap_err()));
+        assert!(reader.turn().await.is_err_and(no_path));
+    })
+    .await;
+    assert_eq!(client.limits().recent(), 0, "no rate slot taken");
+    assert_eq!(account.requests(), 0, "nothing charged");
+    assert!(sent.is_empty());
+}
