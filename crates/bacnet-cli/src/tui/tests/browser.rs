@@ -332,6 +332,7 @@ async fn a_device_gets_one_request_at_a_time() {
         commands.push(Command::Browse {
             req,
             device: LAB,
+            at: "10.0.0.100:47808".parse().unwrap(),
             read: BrowseRead::Object(object),
         });
     }

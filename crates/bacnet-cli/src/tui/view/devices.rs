@@ -229,7 +229,7 @@ fn cell(field: Field, row: &DeviceRow, app: &App, selected: bool) -> String {
 
 /// The device's name as its cell shows it.
 fn name<'a>(row: &DeviceRow, app: &'a App) -> &'a str {
-    Names::of(app).text(row.instance, device_object(row.instance))
+    Names::of(app).text(row.instance, &row.address, device_object(row.instance))
 }
 
 /// The width of [`cell`]'s text, without building it where the cell is a

@@ -174,24 +174,25 @@ impl App {
                     op.replies += usize::from(op.spec.wants(row.instance));
                 }
                 self.names.answered(row.instance, &row.address);
-                self.devices.upsert(row);
+                let instance = row.instance;
+                let before = self.devices.upsert(row);
+                // The duplicate record follows the rows: the instance this
+                // address claims now, and the one it claimed before.
+                for instance in std::iter::once(instance).chain(before) {
+                    self.duplicates
+                        .set(instance, &self.devices.claims(instance));
+                }
                 self.resolve_capture_devices();
             }
-            WorkerEvent::Lost(row) => self.devices.remove(&row),
-            WorkerEvent::Collision {
-                instance,
-                claimants,
-            } => {
-                self.duplicates.set(instance, &claimants);
-                // The one claimant left shows, if the purge took the row
-                // the table showed for the instance.
-                if let [left] = claimants.as_slice() {
-                    self.devices.upsert(left.clone());
+            WorkerEvent::Lost(row) => {
+                if self.devices.remove(&row) {
+                    let claims = self.devices.claims(row.instance);
+                    self.duplicates.set(row.instance, &claims);
                 }
             }
             WorkerEvent::Snapshot(rows) => {
-                self.duplicates.rebuild(&rows);
                 self.devices.replace_all(rows);
+                self.duplicates.rebuild(self.devices.rows());
                 self.resolve_capture_devices();
             }
             WorkerEvent::WhoIsSent { op } => {

@@ -306,10 +306,8 @@ fn stale_sessions_cannot_restore_rows_collisions_or_connection_state() {
         },
         WorkerEvent::Snapshot(vec![row(7, "old", 1, 0)]),
         WorkerEvent::Discovered(row(8, "old", 1, 0)),
-        WorkerEvent::Collision {
-            instance: 9,
-            claimants: vec![row(9, "old-a", 1, 0), row(9, "old-b", 1, 0)],
-        },
+        WorkerEvent::Discovered(row(9, "old-a", 1, 0)),
+        WorkerEvent::Discovered(row(9, "old-b", 1, 0)),
     ] {
         worker(
             &mut app,
@@ -353,13 +351,8 @@ fn stale_sessions_cannot_restore_rows_collisions_or_connection_state() {
 
 fn five_devices_for_session(app: &mut App) {
     worker(app, WorkerEvent::Discovered(row(1, "old-a", 1, 0)));
-    worker(
-        app,
-        WorkerEvent::Collision {
-            instance: 1,
-            claimants: vec![row(1, "old-a", 1, 0), row(1, "old-b", 1, 0)],
-        },
-    );
+    worker(app, WorkerEvent::Discovered(row(1, "old-b", 1, 0)));
+    assert!(!app.duplicates.banner().is_empty());
 }
 
 #[test]

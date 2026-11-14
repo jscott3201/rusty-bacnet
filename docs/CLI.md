@@ -1023,8 +1023,13 @@ write to one array element (`state-text[2]`) keeps that element's old value and
 reverts just that element; if the element couldn't be read before the write,
 revert leaves the entry and says the old value is unknown. Writing index 0 (the
 array's length) is a resize, which is never reverted. Element and whole writes
-to one array revert to the array as it was before the first of them. A
-device not yet discovered (after a restart, say) is looked for first. Reverting
+to one array revert to the array as it was before the first of them. Each
+entry keeps the address its write went to, and a revert goes back there, so
+two devices sharing an instance keep their entries apart (#2560): after a
+restart a device on this network is written to at once, with no Who-Is, and
+one behind a router whose route was lost is asked for on its own network
+first. An entry from an earlier release, which kept only the instance, is
+looked for by that instance first, as before. Reverting
 needs a connection but not an armed session. Quitting with entries in the
 ledger, or with a write session request still out, opens the exit guard: `r`
 reverts all and quits, `k` keeps them, records that in the audit log and quits

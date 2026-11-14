@@ -296,7 +296,15 @@ impl<T: TransportPort + 'static> McpServer<T> {
     /// alarms are cached, sorted.
     #[cfg(test)]
     pub(crate) fn alarm_state(&self) -> (usize, Vec<u32>) {
-        let mut devices: Vec<u32> = self.ctx.alarms.lock().unwrap().keys().copied().collect();
+        let mut devices: Vec<u32> = self
+            .ctx
+            .alarms
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|(_, body)| body["device"].as_u64())
+            .filter_map(|device| u32::try_from(device).ok())
+            .collect();
         devices.sort_unstable();
         (self.ctx.subs.uris(), devices)
     }

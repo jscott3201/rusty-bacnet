@@ -1,0 +1,101 @@
+# callgrind format
+version: 1
+creator: callgrind-3.22.0
+pid: 9
+cmd:  /target/release/counts rpm ct 1000
+part: 1
+
+positions: line
+events: Ir
+summary: 975
+
+ob=(1) /target/release/counts
+fl=(1) src/lib.rs
+fn=(1) <bacnet_counts::CountingAlloc as core::alloc::global::GlobalAlloc>::alloc
+37 20
+cob=(2) /usr/lib/aarch64-linux-gnu/libc.so.6
+cfl=(2) ./malloc/./malloc/malloc.c
+cfn=(2) malloc
+calls=2 3300
+40 500
+fl=(3) src/main.rs
+fn=(3) main
+5 285
+cob=(2)
+cfl=(9) ???
+cfn=(15) __aarch64_swp8_acq
+calls=1 1
+6 4
+cfl=(8) /rustc/compiler-builtins/src/aarch64.rs
+cfn=(13) __aarch64_ldadd8_relax
+calls=1 10
+7 0
+fl=(8)
+fn=(13) __aarch64_ldadd8_relax
+10 8
+ob=(2)
+fl=(2)
+fn=(2)
+3300 100
+cfn=(4) _int_malloc
+calls=1 3800
+3301 200
+cfl=(10) ./string/../sysdeps/aarch64/memcpy.S
+cfn=(16) __GI_memcpy
+calls=1 1
+3302 30
+cob=(1)
+cfl=(8)
+cfn=(13)
+calls=1 10
+3303 8
+fn=(4)
+3800 150
+fi=(4) ./malloc/../sysdeps/generic/malloc-size.h
+40 10
+fe=(2)
+3801 40
+cfl=(10)
+cfn=(16)
+calls=1 1
+3802 25
+fn=(5) unlink_chunk.isra.0
+1600 30
+fn=(6) free
+3400 25
+fn=(7) free'2
+3400 25
+fn=(8) _int_free
+4400 45
+fn=(9) _int_realloc
+4800 60
+cfn=(4)
+calls=2 3800
+4801 10
+cfl=(5) ./string/../sysdeps/aarch64/multiarch/memcpy_generic.S
+cfn=(10) __memcpy_generic
+calls=1 50
+4802 80
+fn=(14) malloc_consolidate
+4900 12
+cfl=(9)
+cfn=(15)
+calls=2 1
+4901 6
+fl=(5)
+fn=(10)
+50 80
+fl=(10)
+fn=(16)
+1 55
+fl=(9)
+fn=(15)
+1 10
+fl=(6) ./malloc/./malloc/scratch_buffer_set_array_size.c
+fn=(11) __libc_scratch_buffer_set_array_size
+30 15
+fl=(7) ./malloc/./malloc/arena.c
+fn=(12) _dl_tunable_set_tcache_count
+300 5
+
+totals: 975

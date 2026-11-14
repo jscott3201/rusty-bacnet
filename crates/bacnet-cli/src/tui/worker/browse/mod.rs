@@ -114,13 +114,13 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                     }
                     prune(&mut queues);
                 }
-                Some(Command::Browse { req, device, read }) => {
+                Some(Command::Browse { req, device, at, read }) => {
                     // A fresh read of the device may ask again for names
                     // it couldn't give before.
                     if read == BrowseRead::Device {
                         with_queue(&queues, device, NameQueue::forget);
                     }
-                    if let Some(started) = scheduler.submit(device, Job { req, read }) {
+                    if let Some(started) = scheduler.submit(device, Job { req, at, read }) {
                         jobs.push(start(started, &no_rpm, &queues));
                     }
                 }
@@ -165,9 +165,13 @@ async fn job<T: TransportPort + 'static>(
             },
         )
     };
-    // The device's row names its instance; its requests and gate go to
-    // the address the discovery table holds for it (#2560).
-    let at = match DeviceAddress::claiming(client, device).await {
+    // A read goes to the address of the row it was asked for (#2560);
+    // name reads, asked for by instance, to the one address claiming it.
+    let named = match &task {
+        Task::Read(job) => Ok(job.at.clone()),
+        Task::Names => DeviceAddress::claiming(client, device).await,
+    };
+    let at = match named {
         Ok(at) => at,
         Err(error) => {
             match task {
@@ -194,7 +198,7 @@ async fn job<T: TransportPort + 'static>(
         rpm,
     };
     let (req, read) = match task {
-        Task::Read(Job { req, read }) => (req, read),
+        Task::Read(Job { req, read, .. }) => (req, read),
         Task::Names => {
             names::read_names(&mut reader, &queue, report).await;
             return Done {

@@ -22,8 +22,9 @@ pub(crate) mod write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bacnet_client::client::{DeviceCollisionEvent, DeviceEvent, DeviceEventKind};
+use bacnet_client::client::{DeviceEvent, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::target::AddressStyle;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
@@ -174,15 +175,15 @@ impl EventSink {
     }
 }
 
-/// Folds the client's device and collision broadcasts into UI events.
+/// Folds the client's device broadcasts into UI events: one row per
+/// address, which is all the UI needs to show every claimant of an
+/// instance (#2560).
 pub(crate) struct DeviceFeed {
     style: AddressStyle,
     /// Something was lost, so the UI's table may be out of date.
     pub(crate) needs_resync: bool,
     /// `device_events()` is still open.
     pub(crate) devices_open: bool,
-    /// `device_collision_events()` is still open.
-    pub(crate) collisions_open: bool,
 }
 
 impl DeviceFeed {
@@ -192,19 +193,21 @@ impl DeviceFeed {
             style,
             needs_resync: false,
             devices_open: true,
-            collisions_open: true,
         }
     }
 
-    /// Convert a client row for the UI.
-    pub(crate) fn row(&self, device: &DiscoveredDevice) -> DeviceRow {
+    /// Convert a client row for the UI; `None` for one whose address the
+    /// target grammar can't write, which the UI has no key for.
+    pub(crate) fn row(&self, device: &DiscoveredDevice) -> Option<DeviceRow> {
+        let at = DeviceAddress::of(device)?;
         let routed = device
             .source_network
             .zip(device.source_address.as_ref())
             .map(|(network, station)| (network, station.as_slice()));
         let (address, via) = self.style.locate(device.mac_address.as_slice(), routed);
-        DeviceRow {
+        Some(DeviceRow {
             instance: device.object_identifier.instance_number(),
+            at,
             address,
             via,
             network: device.source_network,
@@ -212,14 +215,17 @@ impl DeviceFeed {
             max_apdu: device.max_apdu_length,
             segmentation: device.segmentation_supported,
             last_seen: device.last_seen,
-        }
+        })
     }
 
     /// Handle one receive from `device_events()`.
     pub(crate) fn on_device(&mut self, sink: &EventSink, received: Result<DeviceEvent, RecvError>) {
         match received {
             Ok(event) => {
-                let row = self.row(&event.device);
+                let Some(row) = self.row(&event.device) else {
+                    tracing::debug!("device {:?} has no address to show", event.device);
+                    return;
+                };
                 let event = match event.kind {
                     DeviceEventKind::Discovered => WorkerEvent::Discovered(row),
                     DeviceEventKind::Updated => WorkerEvent::Updated(row),
@@ -238,33 +244,6 @@ impl DeviceFeed {
                 self.needs_resync = true;
             }
             Err(RecvError::Closed) => self.devices_open = false,
-        }
-    }
-
-    /// Handle one receive from `device_collision_events()`, returning the
-    /// event to deliver. Collisions are rare and important, so the caller
-    /// delivers them with [`EventSink::deliver`] rather than risk a drop.
-    pub(crate) fn on_collision(
-        &mut self,
-        sink: &EventSink,
-        received: Result<DeviceCollisionEvent, RecvError>,
-    ) -> Option<WorkerEvent> {
-        match received {
-            Ok(event) => Some(WorkerEvent::Collision {
-                instance: event.instance,
-                claimants: event.claimants.iter().map(|d| self.row(d)).collect(),
-            }),
-            // A missed notice may have been a contest's end; the snapshot
-            // lists every claimant, so the banner is rebuilt from it.
-            Err(RecvError::Lagged(missed)) => {
-                sink.add_dropped(missed);
-                self.needs_resync = true;
-                None
-            }
-            Err(RecvError::Closed) => {
-                self.collisions_open = false;
-                None
-            }
         }
     }
 }

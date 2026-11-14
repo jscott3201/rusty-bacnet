@@ -30,7 +30,8 @@ its noise floor and no allocation calls are added.
 4. runs each workload and runtime in the order A B A' A' B A (A A' A' A for
    a noise run), --blocks times, each position at the short and the long
    loop length under callgrind; every run first checks its binary's SHA-256
-   and runs without a network;
+   and runs without a network, and records its total, the harness's
+   counting allocator's share and the system allocator's (#2555);
 5. writes callgrind_annotate's per-function view of every run, then
    analyzes: OUT/summary.json, OUT/summary.md (the verdict table),
    OUT/profiles/*.md (per-function and per-line slopes) and OUT/items.md;
@@ -39,6 +40,12 @@ its noise floor and no allocation calls are added.
 A comparison exits 1 when it isn't accepted, 2 on a usage error. Quick mode
 (--noise-floors FILE) skips the A' build and takes the floors from an
 earlier noise run on the same machine; use it only for local iteration.
+The manifest records which figure those floors are of, and both `run` and
+`analyze` refuse floors of another (a noise run before #2555, or before its
+fix round). `analyze` of a run recorded before then takes the system
+allocator's share from the run's raw callgrind files. `attribute` marks the
+system allocator's functions and lists them alone, with the block copies
+and atomic helpers it calls: the share the gate leaves out.
 """
 
 import argparse
@@ -324,16 +331,19 @@ def run_matrix(manifest, out, save):
                     if (result["workload"], result["runtime"], result["n"]) != (workload, runtime, n):
                         raise RuntimeError(f"{name}: RESULT line doesn't match the run")
                     cg_text = (raw / f"{name}.cg").read_text()
-                    _lines, functions, edges = ca.parse_callgrind(cg_text)
+                    files, object_edges = {}, {}
+                    _lines, functions, edges = ca.parse_callgrind(cg_text, files, object_edges)
                     record.update(
                         instructions=ca.parse_summary(cg_text),
                         harness_ir=ca.harness_ir(functions, edges),
+                        **ca.allocator_record(functions, files, edges, object_edges),
                         allocs=result["allocs"],
                         bytes=result["bytes"],
                     )
                     save()
                     ca.check_harness_ir(record)
-                    log("RUN", name, record["instructions"], record["allocs"], record["bytes"])
+                    ca.check_allocator_ir(record)
+                    log("RUN", name, record["instructions"], record["allocator_ir"], record["allocs"], record["bytes"])
 
 
 CALLER_DEPTH = 8
@@ -457,29 +467,80 @@ def attribute(out, workload, runtime, top=25, threshold=0.5):
     if not runs:
         raise ValueError(f"no runs of {workload}/{runtime} in {out}")
     other = "B" if "B" in manifest["variants"] else "P"
-    selves, calls = {}, {}
+    selves, calls, part_calls, part_ir = {}, {}, {}, {}
     for run in runs:
         if run["label"] not in ("A", other):
             continue
         text = read_cg(out / "raw", run["name"])
         if text is None:
             raise ValueError(f"{run['name']}: no callgrind file")
-        _lines, functions, edges = ca.parse_callgrind(text)
+        files, object_edges = {}, {}
+        _lines, functions, edges = ca.parse_callgrind(text, files, object_edges)
         selves[run["name"]], calls[run["name"]] = functions, ca.calls_in(edges)
+        record = ca.allocator_record(functions, files, edges, object_edges)
+        part_calls[run["name"]] = {COPY_PART: record["allocator_copy_calls"]}
+        part_ir[run["name"]] = {COPY_PART: record["allocator_copy_ir"], HELPER_PART: record["allocator_helpers_ir"]}
+    parts = [ca.symbol_slopes(data, runs, workload, runtime, label)
+             for label in ("A", other) for data in (part_calls, part_ir)]
     lines = []
+    slopes = {}
     for title, data in (("Calls in per request", calls), ("Self instructions per request", selves)):
         a = ca.symbol_slopes(data, runs, workload, runtime, "A")
         b = ca.symbol_slopes(data, runs, workload, runtime, other)
+        slopes[title] = (a, b)
         changes = ca.function_changes(a, b, threshold)
         lines += [f"## {title}, {workload}/{runtime}: {ca.LABELS[other]} - A "
                   f"(total over the {len(changes)} functions that moved by {threshold:g} or more: "
                   f"{sum(r[0] for r in changes):+.1f}; the largest {min(top, len(changes))} listed)", ""]
         lines.append(ca.table(["A", ca.LABELS[other], "Change", "Function"], [
-            [f"{x:,.2f}", f"{y:,.2f}", f"{d:+,.2f}", f"`{name[:150]}`"] for d, x, y, name in changes[:top]]))
+            [f"{x:,.2f}", f"{y:,.2f}", f"{d:+,.2f}", function_cell(name)] for d, x, y, name in changes[:top]]))
         lines.append("")
+    lines += allocator_attribution(*slopes["Calls in per request"], *slopes["Self instructions per request"],
+                                   workload, runtime, other, *parts)
     text = "\n".join(lines)
     print(text)
     return text
+
+
+def function_cell(name):
+    """A function in the attribution tables; the system allocator's are
+    marked, since the gated figure leaves them out (#2555)."""
+    return f"`{name[:150]}`" + (" (allocator)" if ca.ALLOCATOR_RE.match(name) else "")
+
+
+# The allocator's share that isn't a function's self cost (count_analysis.py).
+COPY_PART = "block copies: memcpy/memmove called by _int_malloc and _int_realloc"
+HELPER_PART = "atomic helpers: libc's __aarch64_* called by the allocator's functions"
+
+
+def allocator_attribution(calls_a, calls_b, self_a, self_b, workload, runtime, other,
+                          part_calls_a=None, part_ir_a=None, part_calls_b=None, part_ir_b=None):
+    """The system allocator's share alone: every function of it that ran,
+    with its calls in and self instructions per request, then the block
+    copies and atomic helpers it calls (inclusive instructions per request),
+    and the total the gated figure leaves out (#2555)."""
+    names = sorted({f for f in set(self_a) | set(self_b) if ca.ALLOCATOR_RE.match(f)},
+                   key=lambda f: (-abs(self_b.get(f, 0.0) - self_a.get(f, 0.0)), f))
+    part_calls_a, part_ir_a = part_calls_a or {}, part_ir_a or {}
+    part_calls_b, part_ir_b = part_calls_b or {}, part_ir_b or {}
+    parts = [p for p in (COPY_PART, HELPER_PART) if p in part_ir_a or p in part_ir_b]
+    total_a = sum(self_a.get(f, 0.0) for f in names) + sum(part_ir_a.get(p, 0.0) for p in parts)
+    total_b = sum(self_b.get(f, 0.0) for f in names) + sum(part_ir_b.get(p, 0.0) for p in parts)
+    label = ca.LABELS[other]
+    lines = [f"## System allocator, {workload}/{runtime}: {label} - A (reported, not gated; instructions "
+             f"{total_a:,.1f} / {total_b:,.1f}, change {total_b - total_a:+.1f})", ""]
+    rows = [[f"{calls_a.get(f, 0.0):,.2f}", f"{calls_b.get(f, 0.0):,.2f}", f"{self_a.get(f, 0.0):,.2f}",
+             f"{self_b.get(f, 0.0):,.2f}", f"{self_b.get(f, 0.0) - self_a.get(f, 0.0):+,.2f}", f"`{f}`"]
+            for f in names]
+    for part in parts:
+        a, b = part_ir_a.get(part, 0.0), part_ir_b.get(part, 0.0)
+        calls = [f"{d[part]:,.2f}" if part in d else "-" for d in (part_calls_a, part_calls_b)]
+        rows.append([*calls, f"{a:,.2f}", f"{b:,.2f}", f"{b - a:+,.2f}", part])
+    lines.append(ca.table(["Calls in A", f"Calls in {label}", "Instructions A", f"Instructions {label}", "Change",
+                           "Function (self) or call (inclusive)"], rows))
+    lines += ["", "Counted as the system allocator: " + (", ".join(f"`{f}`" for f in names) or "none")
+              + "".join(f"; {p}" for p in parts), ""]
+    return lines
 
 
 def read_cg(raw, name):
@@ -510,13 +571,19 @@ def summary_markdown(summary):
     lines += [
         "",
         "Instructions are callgrind instruction reads per request (per iteration for the codec",
-        "workloads), without the harness's counting allocator: the median over six ordinals of the",
-        "slope between the short and the long run. Calls are allocator calls per request (gated);",
-        "bytes are requested bytes per request (reported only).",
+        "workloads): the median over six ordinals of the slope between the short and the long run.",
+        "The gated figure (the gated medians, their change and the floor) leaves out the harness's",
+        "counting allocator and the system allocator's work (#2555): glibc's malloc, free and their",
+        "internals, the copy a moving realloc makes, and the atomic helpers they call in libc.",
+        "Allocator is that share, reported only; Total is the two together, the figure gated before",
+        "#2555, with its own A vs A' floor, reported only. Calls are allocator calls per request",
+        "(gated); bytes are requested bytes per request (reported only).",
         "",
         ca.verdict_table(summary),
         "",
     ]
+    notes = summary.get("allocator_notes") or []
+    lines += notes + ([""] if notes else [])
     if "baseline_builds_identical" in summary:
         lines.append(f"Baseline builds (A and A') byte-identical: {summary['baseline_builds_identical']}")
     if summary["mode"] != "noise":
@@ -525,13 +592,31 @@ def summary_markdown(summary):
     return "\n".join(lines) + "\n"
 
 
-def analyze(out, floors_paths=None, aim=("rp",)):
+def fill_allocator(manifest, raw):
+    """A run recorded before #2555, or before its fix round added the block
+    copies and atomic helpers, lacks some of the system-allocator fields:
+    take them all from the run's callgrind file, kept in raw/ (gzipped or
+    not), in memory only. A run without one keeps what it has, and the
+    analysis refuses it."""
+    for run in manifest["runs"]:
+        if run.get("instructions") is None or all(run.get(k) is not None for k in ca.ALLOCATOR_FIELDS):
+            continue
+        text = read_cg(raw, run["name"])
+        if text is not None:
+            run.update(ca.allocator_record_of(text))
+
+
+def analyze(out, aim=("rp",)):
+    """Analyzes a completed matrix in OUT and writes its tables there. A
+    quick comparison's floors are those its manifest recorded, and only
+    when they are of the figure gated now."""
     manifest = ca.load_json(out / "manifest.json")
     if not manifest.get("completed"):
         raise RuntimeError("the matrix didn't complete; no verdict")
+    fill_allocator(manifest, out / "raw")
     floors = dict(manifest.get("recorded_floors") or {})
-    for path in floors_paths or []:
-        floors.update(ca.load_json(path)["noise_floors"])
+    if floors:
+        ca.check_floors_figure(manifest.get("recorded_floors_figure"), f"{out / 'manifest.json'} (quick mode)")
     summary = ca.analyze(manifest, floors, aim)
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (out / "summary.md").write_text(summary_markdown(summary))
@@ -597,6 +682,8 @@ def plan(args):
                 if recorded.get("environment", {}) != environment:
                     raise ValueError(f"{path} was recorded with allocator settings {recorded.get('environment', {})}, "
                                      f"not this run's {environment}; its floors don't apply")
+                # Floors from before #2555 hold the system allocator's spread.
+                ca.check_floors_figure(recorded.get("figure"), str(path))
                 floors.update(recorded["noise_floors"])
             missing = [f"{w}/{r}" for w in workloads for r in (runtimes if w in ca.ROUND_TRIP else ["none"])
                        if f"{w}/{r}" not in floors]
@@ -620,6 +707,8 @@ def run(args):
         "order": order,
         "lengths": ca.LENGTHS,
         "recorded_floors": floors,
+        # The figure quick mode's floors are of; `analyze` checks it again.
+        "recorded_floors_figure": ca.GATED_FIGURE if floors else None,
         "environment": run_environment(args),
         "variants": {},
         "runs": [],
@@ -670,7 +759,7 @@ def run(args):
             caller_split(manifest, out)
             save()
         annotate(manifest, out)
-        summary = analyze(out, None, aim)
+        summary = analyze(out, aim)
         if args.gzip_raw:
             for path in (out / "raw").glob("*.cg"):
                 with open(path, "rb") as src, gzip.open(f"{path}.gz", "wb") as dst:
@@ -738,7 +827,7 @@ def main(argv=None):
             return 0
         else:
             aim = tuple(a.strip() for a in args.aim.split(",") if a.strip())
-            summary = analyze(Path(args.out).resolve(), None, aim)
+            summary = analyze(Path(args.out).resolve(), aim)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

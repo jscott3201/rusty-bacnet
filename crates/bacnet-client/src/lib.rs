@@ -2,6 +2,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 
+pub mod acks;
 pub mod client;
 pub mod discovery;
 mod endpoint_requester;
@@ -16,6 +17,5 @@ pub use endpoint_requester::{
     EndpointOperationAck, EndpointOperationOutcome, EndpointOperationRequest, EndpointReadAck,
     EndpointReadRequest, EndpointRequester, PacedEndpointOperation, PreparedEndpointOperation,
 };
-mod read_property;
 
 mod endpoint_rpm;

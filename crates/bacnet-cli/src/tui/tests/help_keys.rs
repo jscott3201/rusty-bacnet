@@ -559,8 +559,8 @@ fn a_session_reset_while_browsing_leaves_browse() {
 }
 
 /// Showing the kept device again takes the address its row has now. A
-/// device heard at a new address shows there once the purge takes the old
-/// one and the contest over its instance ends.
+/// device heard at a new address is a row of its own (#2560), and once the
+/// purge takes the old one the kept device shows there.
 #[test]
 fn the_kept_device_takes_its_new_address() {
     let mut app = browsing();
@@ -568,15 +568,13 @@ fn the_kept_device_takes_its_new_address() {
     let old = app.devices.get(1001).unwrap().clone();
     let moved = row(1001, "10.0.1.99:47808", 260, 3);
     worker(&mut app, WorkerEvent::Discovered(moved.clone()));
-    assert_eq!(app.devices.get(1001).unwrap().address, old.address);
-    worker(&mut app, WorkerEvent::Lost(old));
-    worker(
-        &mut app,
-        WorkerEvent::Collision {
-            instance: 1001,
-            claimants: vec![moved],
-        },
+    assert_eq!(
+        app.devices.claims(1001).len(),
+        2,
+        "two rows while both claim it"
     );
+    worker(&mut app, WorkerEvent::Lost(old));
+    assert_eq!(app.devices.get(1001).unwrap().address, moved.address);
     app.settle();
     assert_eq!(app.devices.selected_row().unwrap().instance, 1001);
     assert!(press(&mut app, KeyCode::Enter).is_empty(), "no new read");

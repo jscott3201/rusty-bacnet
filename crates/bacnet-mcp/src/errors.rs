@@ -7,8 +7,10 @@
 //! `timeout`, `failed`) are always distinct, because an agent's retry logic
 //! depends on the difference.
 
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::format::RowError;
 use bacnet_ops::label::kebab;
+use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, RemoteError};
 use serde_json::{Value, json};
@@ -61,8 +63,29 @@ impl ToolError {
         }
     }
 
+    /// The device `target` names, as written (`7`, `2:7`), is claimed by
+    /// every address of `candidates` (#2560): refused as ambiguous, naming
+    /// them. Nothing was sent.
+    pub(crate) fn ambiguous(target: &str, candidates: &[BACnetAddress]) -> Self {
+        let claims: Vec<String> = candidates
+            .iter()
+            .filter_map(|c| DeviceAddress::new(c.network_number, &c.mac_address).ok())
+            .map(|address| address.to_string())
+            .collect();
+        Self::refused(
+            "ambiguous-device",
+            format!(
+                "device {target} is claimed by {}; name one by its address",
+                claims.join(" and ")
+            ),
+        )
+    }
+
     /// A request to `device` that failed with `error`.
     pub(crate) fn device(device: u32, error: &Error) -> Self {
+        if let Error::AmbiguousDevice { candidates, .. } = error {
+            return Self::ambiguous(&device.to_string(), candidates);
+        }
         match (error, error.remote()) {
             (_, Some(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT => {
                 Self::Timeout {

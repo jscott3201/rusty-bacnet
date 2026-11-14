@@ -210,6 +210,13 @@ impl Caller for Session<'_> {
         // The exit guard counts a write in flight.
         Box::pin(tell(self.sink, SafetyEvent::Ledger(entries.to_vec())))
     }
+
+    /// The TUI may: an operator's revert after a restart asks a routed
+    /// device's network, or the whole internetwork for an entry kept
+    /// without an address, before giving up on it.
+    fn may_look(&self) -> bool {
+        true
+    }
 }
 
 /// The locked desk, and the session's arming.

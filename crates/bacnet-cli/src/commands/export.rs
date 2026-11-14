@@ -8,7 +8,6 @@ use std::sync::atomic::AtomicBool;
 
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::{Halt, Reader};
 use bacnet_ops::export::s223::{
     InventoryOptions, TurtleOptions, WritePriority, read_inventory, write_turtle,
@@ -51,15 +50,10 @@ pub async fn export_cmd<T: TransportPort + 'static>(
     {
         return Err(format!("output file already exists: {}", path.display()).into());
     }
-    // By instance, at the address the discovery table holds for it; by
-    // address, at it, the instance read once from the device (#2560).
-    let (address, instance) = match crate::resolve_destination(client, target).await? {
-        Destination::Device(instance) => (
-            DeviceAddress::claiming(client, instance).await?,
-            Some(instance),
-        ),
-        Destination::Mac(mac) => (DeviceAddress::local(&mac)?, None),
-    };
+    // At the target's address; by instance, the one the discovery table
+    // holds for it; by an address the table doesn't know, the instance read
+    // once from the device (#2560).
+    let Destination { address, instance } = crate::resolve_destination(client, target).await?;
     // A one-shot command has the device to itself: no rate cap beyond the
     // client's --min-interval-ms, one request at a time.
     let limits = RequestLimits::new(0);

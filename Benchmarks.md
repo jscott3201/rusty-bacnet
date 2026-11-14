@@ -1217,18 +1217,56 @@ interleaved matrix compare.
   workloads). The difference in instructions divided by the difference in
   length is the cost of one request, without setup, checks or shutdown. The
   harness's own counting allocator (about 42 instructions per allocation) is
-  subtracted; the tables show the figure with it too. Allocations per
-  request are the counted loop's allocator calls and requested bytes divided
-  by its length.
+  subtracted. Allocations per request are the counted loop's allocator
+  calls and requested bytes divided by its length.
+- **The system allocator is reported, not gated.** The gated figure also
+  leaves out the work of glibc's allocator: the instructions it runs in its
+  own functions (`malloc`, `free` and internals such as `_int_malloc` and
+  `unlink_chunk`), the copy it makes when `realloc` moves a block to a new
+  place, and, on arm64, the small atomic helper functions it calls inside
+  the C library for its locks. Every other copy stays in the gated figure,
+  including the program's own copies that callgrind books to `malloc`
+  because the program reaches `malloc` with a tail call. Which free chunk
+  serves a request depends on where earlier allocations landed in the
+  heap. That can differ between two builds whose request path is the same,
+  and on ReadPropertyMultiple between runs of one binary too: 16 bytes of
+  padding in one server struct moved that row by about 200 instructions
+  per request, all inside glibc, with the same allocation calls and bytes
+  ([#2555](https://github.com/jscott3201/rusty-bacnet/issues/2555)). In
+  the two matrices that checked this change, two clean builds of one
+  commit spread over 673 and 536 instructions per request on
+  ReadPropertyMultiple (current-thread runtime) with the allocator
+  counted, and over 9 and 66 without it. The table shows the allocator's
+  share and the total (the two together, the figure gated before #2555)
+  beside the gated figure, each with its change, and the total with its
+  own noise floor; those columns are marked as reported only. Allocation
+  calls stay gated, so allocating more still fails; a change that only
+  makes each allocation dearer, such as a size that moves to a larger bin,
+  shows in the allocator's column and isn't gated. A note under the table
+  names each row whose allocator share rose by more than the total's own
+  noise floor.
+- **Finding the allocator.** Its functions are named from glibc's
+  debugging symbols, which the image installs with Valgrind, and listed in
+  `scripts/perf/count_analysis.py`. These stop the comparison rather than
+  gate a figure that still holds the allocator, or one that lost the
+  program's own copies: a run that allocated without those functions
+  (another C library, or a static or stripped one); a function in glibc's
+  allocator sources that the list doesn't name (a newer glibc); a loop
+  whose allocations cost the allocator fewer than 10 instructions per
+  allocation call (glibc's own cost 182 to 208 on the round trips), which
+  means another allocator serves them while glibc runs only at start-up;
+  and a run in which callgrind books more copies to the allocator than
+  `realloc` moved blocks. After a deliberate glibc update, the lists in
+  that file are refreshed from the new image's symbols.
 - **Builds and order.** Each commit is exported into its own tree, built in a
   fresh Docker volume at the same paths with `--locked`. A comparison builds
   the baseline twice (A and A') and the candidate once (B), and runs them in
   the order A B A' A' B A, three times, so each build gets six values per
   workload and runtime. Every run first checks its binary's SHA-256.
-- **Noise floor.** The range of the twelve A and A' values per workload and
-  runtime, from the same matrix as the verdict. Two clean builds of one
-  commit give byte-identical binaries. A noise run (`--noise`) measures only
-  this.
+- **Noise floor.** The range of the twelve A and A' values of the gated
+  figure per workload and runtime, from the same matrix as the verdict. Two
+  clean builds of one commit give byte-identical binaries. A noise run
+  (`--noise`) measures only this.
 - **Gates.** A comparison is accepted only when it covers `rp`, `wp` and
   `rpm` on both runtimes and every row passes. The aimed workload (`rp`
   unless `--aim` names others) must fall by at least 100 instructions per
@@ -1236,7 +1274,9 @@ interleaved matrix compare.
   lower; an aimed codec workload has the same rule without the
   100-instruction minimum. Every other row may not rise by more than its
   noise floor, and no row's allocation calls may rise by more than 0.01 per
-  request. Requested bytes are reported, not gated. Wire bytes must stay
+  request. Each instruction rule judges the gated figure, so a saving made
+  only inside the system allocator doesn't count as one. Requested bytes
+  and the allocator's instructions are reported, not gated. Wire bytes must stay
   identical; the existing test suites check that. The script exits non-zero
   when a comparison isn't accepted.
 - **No-regression check.** A change that isn't an optimization, such as a
@@ -1245,11 +1285,13 @@ interleaved matrix compare.
   no row adds allocation calls; each row reports its change in floors.
 - **When a comparison fails.** Compare per-function call counts first:
   `perf_counts.py attribute <run directory> --workload rp --runtime ct`
-  lists the calls per request that changed, then the instructions. The
-  workflow writes the same for each round trip to `attribution.md` when it
-  fails. Unchanged calls with changed instructions point at code
-  generation, such as a function the compiler stopped inlining, rather
-  than at more work per request.
+  lists the calls per request that changed, then the instructions, marking
+  the system allocator's functions, and then the share the gate leaves
+  out: the allocator's functions, its block copies and the atomic helpers
+  it calls. The workflow writes the same
+  for each round trip to `attribution.md` when it fails. Unchanged calls
+  with changed instructions point at code generation, such as a function
+  the compiler stopped inlining, rather than at more work per request.
 - **Where.** On Apple silicon, in local Docker; on GitHub, the manual
   `Perf counts` workflow (`.github/workflows/perf-counts.yml`, run from the
   Actions tab with a baseline ref, a candidate ref and the workloads) on an
@@ -1273,13 +1315,20 @@ channels' permit returns, in `callers.md`. A channel receive inlined into
 its caller, like the network layer's APDU receiver, leaves no channel frame,
 so that receiver counts as the channel. For quick local iteration only, `--noise-floors /tmp/noise/summary.json`
 skips the A' build and takes the floors from an earlier noise run on the
-same machine; each row of the table names its floor's source. Each run
+same machine; each row of the table names its floor's source. Floors are
+used only for the figure they were measured on: the manifest records it,
+and both the run and a later `perf_counts.py analyze` refuse floors from a
+noise run before #2555, which hold the allocator's spread.
+`perf_counts.py analyze` of a run recorded before #2555 takes the
+allocator's share from its raw callgrind files. Each run
 writes `summary.md` (the verdict table), per-function and per-line
 instruction slopes under `profiles/`, and the #1978 items' share in
 `items.md`. The first baseline and noise floors on dev are in
-[benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md); the
-current ones, built like the release with the fixed allocator settings, in
+[benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md), and
+the first built like the release with the fixed allocator settings in
 [benchmarks/results/perf-s0b](benchmarks/results/perf-s0b/README.md).
+Both hold floors of the total, before #2555, so quick mode refuses them;
+measure new floors with a noise run.
 
 ### 10.5 The #1979 shifts, explained by counts
 

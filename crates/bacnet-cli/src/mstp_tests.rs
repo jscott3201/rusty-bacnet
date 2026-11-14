@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::destination::{self, Destination};
+use crate::destination;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::mstp::{LoopbackSerial, MstpTransport};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -649,25 +649,11 @@ async fn the_cli_client_discovers_and_reads_a_server_on_the_trunk() {
         let to = destination::resolve(&client, target, Duration::from_secs(1))
             .await
             .unwrap();
-        let ack = match &to {
-            Destination::Mac(mac) => {
-                assert_eq!(mac.as_slice(), [SERVER_MAC], "{target}");
-                client
-                    .read_property(mac, ai2, PropertyIdentifier::PRESENT_VALUE, None)
-                    .await
-            }
-            Destination::Device(instance) => {
-                client
-                    .read_property_from_device(
-                        *instance,
-                        ai2,
-                        PropertyIdentifier::PRESENT_VALUE,
-                        None,
-                    )
-                    .await
-            }
-        }
-        .unwrap();
+        assert_eq!(to.address.mac(), [SERVER_MAC], "{target}");
+        let ack = to
+            .read_property(&client, ai2, PropertyIdentifier::PRESENT_VALUE, None)
+            .await
+            .unwrap();
         let (value, _) =
             bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
         assert_eq!(value, PropertyValue::Real(51.0), "{target}");

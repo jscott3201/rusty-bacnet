@@ -356,6 +356,7 @@ mod tests {
 
     fn preview() -> Preview {
         Preview {
+            address: bacnet_ops::DeviceAddress::local(&[10, 0, 0, 100, 0xBA, 0xC0]).unwrap(),
             device: 100,
             items: Vec::new(),
             batch: false,

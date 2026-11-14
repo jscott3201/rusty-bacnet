@@ -22,7 +22,13 @@ impl Caller for Fixed {
     fn refusal(&self) -> Option<String> {
         self.refusal.clone()
     }
+    fn may_look(&self) -> bool {
+        true
+    }
 }
+
+/// Device 7's MAC.
+const SEVEN: [u8; 6] = [10, 0, 0, 7, 0xBA, 0xC0];
 
 const ARMED: Fixed = Fixed {
     level: Level::Armed { dangerous: false },
@@ -40,6 +46,7 @@ fn context() -> Context {
 fn planned(priority: u8, gate: Gate) -> Planned {
     Planned {
         spec: WriteSpec {
+            address: DeviceAddress::local(&SEVEN).unwrap(),
             device: 7,
             object: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
             property: PropertyIdentifier::PRESENT_VALUE,
@@ -64,6 +71,7 @@ fn planned(priority: u8, gate: Gate) -> Planned {
 
 fn preview(item: Planned) -> Preview {
     Preview {
+        address: item.spec.address.clone(),
         device: 7,
         gate: item.gate.clone(),
         items: vec![item],
@@ -125,7 +133,12 @@ async fn an_interrupted_write_settles_as_unknown() {
     let dir = tempfile::tempdir().unwrap();
     {
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger.begin(&planned(12, Gate::Allowed(Tier::T1)), run_id(), "t");
+        ledger.begin(
+            &planned(12, Gate::Allowed(Tier::T1)),
+            run_id(),
+            "t",
+            Place::default(),
+        );
         ledger.save().unwrap();
     }
     let mut desk = Desk::open(Some(dir.path()), context(), Origin::default());
@@ -152,7 +165,12 @@ fn an_unknown_front_end_still_loads() {
     let dir = tempfile::tempdir().unwrap();
     {
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger.begin(&planned(12, Gate::Allowed(Tier::T1)), "r", "t");
+        ledger.begin(
+            &planned(12, Gate::Allowed(Tier::T1)),
+            "r",
+            "t",
+            Place::default(),
+        );
         ledger.save().unwrap();
     }
     let path = dir.path().join(crate::safety::ledger::FILE);
@@ -167,45 +185,4 @@ fn an_unknown_front_end_still_loads() {
     ledger.save().unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("\"front_end\": \"daemon\""), "{text}");
-}
-
-/// A write to an instance two addresses claim has no one gate to wait at:
-/// it is reported not sent, settled as not applied, and nothing goes out
-/// (#2560).
-#[tokio::test]
-async fn a_write_with_no_one_address_is_not_sent() {
-    use bacnet_client::client::ClientConfig;
-    use bacnet_transport::test_transport::TestTransport;
-
-    let (_inbox, inbound) = tokio::sync::mpsc::channel(8);
-    let transport = TestTransport::builder()
-        .local_mac(&[10, 0, 0, 1, 0xBA, 0xC0])
-        .inbound(inbound)
-        .build();
-    let sent = transport.sent();
-    let mut client = BACnetClient::start(ClientConfig::default(), transport)
-        .await
-        .unwrap();
-    client
-        .add_device(7, &[10, 0, 0, 2, 0xBA, 0xC0])
-        .await
-        .unwrap();
-    client
-        .add_device(7, &[10, 0, 0, 3, 0xBA, 0xC0])
-        .await
-        .unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let mut desk = Desk::open(Some(dir.path()), context(), Origin::default());
-    let write = preview(planned(12, Gate::Allowed(Tier::T1)));
-    let done = desk
-        .commit(&client, &RequestLimits::new(0), &ARMED, &write)
-        .await;
-    assert!(
-        matches!(&done[0].outcome, Outcome::NotSent(why) if why.contains("10.0.0.3:47808")),
-        "{:?}",
-        done[0].outcome
-    );
-    assert!(desk.entries().is_empty(), "settled as not applied");
-    assert!(sent.unicasts().is_empty(), "nothing went out");
-    client.stop().await.unwrap();
 }

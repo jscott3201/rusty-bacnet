@@ -129,14 +129,36 @@ impl DeviceAddress {
         self.network == 0
     }
 
-    /// The address as the discovery table and the gates key it on a client
-    /// whose own network is numbered `own`, once known: one on that network
-    /// is the local station at its MAC. A MAC the local network has no form
-    /// for stays as it is.
-    pub(crate) fn localized(self, own: Option<u16>) -> Self {
+    /// The address with a station on the network numbered `own` written as
+    /// the local station at its MAC: the form the request gates, the device
+    /// handles and the write ledger compare. `own` is the client's own
+    /// network's number, once it knows it
+    /// ([`BACnetClient::network_number`]). A MAC the local network has no
+    /// form for stays as it is. The discovery table may still hold a routed
+    /// row for such a station for a while (#2572): [`row`](Self::row) finds
+    /// either.
+    pub fn localized(self, own: Option<u16>) -> Self {
         match own {
             Some(own) if own == self.network => Self::local(&self.mac).unwrap_or(self),
             _ => self,
+        }
+    }
+
+    /// The row of `client`'s discovery table for the station at this
+    /// address, looked up in its [`localized`](Self::localized) form. For a
+    /// local station, while the client knows its own network's number, also
+    /// a routed row on that network the table hasn't folded into the local
+    /// one yet (#2572). Sends nothing.
+    pub async fn row<T: TransportPort + 'static>(
+        &self,
+        client: &BACnetClient<T>,
+    ) -> Option<DiscoveredDevice> {
+        let own = client.network_number();
+        let at = self.clone().localized(own);
+        let row = client.get_device_at(at.network(), at.mac()).await;
+        match (row, own) {
+            (None, Some(own)) if at.is_local() => client.get_device_at(own, at.mac()).await,
+            (row, _) => row,
         }
     }
 

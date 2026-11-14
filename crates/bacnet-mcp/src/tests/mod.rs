@@ -1,6 +1,7 @@
 //! The server driven over a pipe, as an agent host drives it on stdio,
 //! against an in-process lab device on a loopback link.
 
+mod address_writes;
 #[cfg(any(unix, windows))]
 mod attach;
 #[cfg(any(unix, windows))]
