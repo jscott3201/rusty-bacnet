@@ -34,7 +34,7 @@ pub(crate) struct Cli {
     pub(crate) explicit_args: Vec<String>,
 
     /// The subcommand's canonical name, captured before extraction, for the
-    /// write guard's classification (`bacnet_ops::class`).
+    /// write guard's classification (`bacnet_tool::class`).
     #[arg(skip)]
     pub(crate) command_name: Option<String>,
 

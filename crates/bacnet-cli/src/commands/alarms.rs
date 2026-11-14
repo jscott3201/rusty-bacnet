@@ -3,8 +3,8 @@
 //! (GetEnrollmentSummary), decoded and named by the shared renderer
 //! (`bacnet_ops::format::alarms`).
 
+use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::destination::Destination;
 use bacnet_ops::format::alarms::{
     AlarmSummaryData, EnrollmentSummaryData, EventInformationData, EventSummaryData,
     read_event_information,

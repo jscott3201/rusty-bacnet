@@ -20,8 +20,8 @@ use crate::tui::capture::pcap::{
 use crate::tui::capture::{CaptureEvent, CaptureFrame, Direction, ExportJob, Framing};
 use crate::tui::worker::session::SessionOptions;
 use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, coordinator};
-use bacnet_ops::decode::frame::summarize_frame;
-use bacnet_ops::decode::testing;
+use bacnet_tool::decode::frame::summarize_frame;
+use bacnet_tool::decode::testing;
 
 fn u32_at(file: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(file[at..at + 4].try_into().unwrap())

@@ -25,6 +25,7 @@ bacnet-transport = { workspace = true, features = ["ipv6"] }
 bacnet-network.workspace = true
 bacnet-client = { workspace = true, features = ["ipv6"] }
 bacnet-ops.workspace = true
+bacnet-tool.workspace = true
 # `bacnet mcp serve` (the `mcp` feature, #2066).
 bacnet-mcp = { workspace = true, optional = true, features = ["stdio"] }
 bytes = { workspace = true, features = ["std"] }
@@ -71,8 +72,8 @@ unicode-segmentation = { version = "1.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-# The decode tests' frame builders (`bacnet_ops::decode::testing`).
-bacnet-ops = { workspace = true, features = ["test-support"] }
+# The decode tests' frame builders (`bacnet_tool::decode::testing`).
+bacnet-tool = { workspace = true, features = ["test-support"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 # The source a local write takes (`write::local::LocalCommandSource`).

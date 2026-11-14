@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::bbmd::{address_of, mac};
 use bacnet_ops::engine::Engine;
+use bacnet_tool::bbmd::{address_of, mac};
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
 use bacnet_transport::bip::{
     BipMode, BipTransport, ForeignDeviceConfig, ForeignRegistrationOutcome,

@@ -32,7 +32,7 @@ use super::{Batch, CaptureCommand, CaptureEvent, CaptureFrame, Direction, FrameS
 use crate::tui::message::WorkerEvent;
 use crate::tui::monitor::lines::CliSerial;
 use crate::tui::worker::{EventSink, Offer};
-use bacnet_ops::decode::frame::summarize_frame;
+use bacnet_tool::decode::frame::summarize_frame;
 
 /// What a session's capture is called before its tap is known.
 pub(crate) const TAP: &str = "the session's frame tap";

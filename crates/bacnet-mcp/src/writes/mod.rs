@@ -1,7 +1,7 @@
 //! Writes over MCP (#2068; design §7): the server's write session, who may
 //! approve a write ([`Approver`], and its waiting form [`WaitingApprover`]),
 //! the sealed confirmation state ([`seal`]), and the MCP front end as a
-//! caller of the shared write desk (`bacnet_ops::safety::desk`), which owns
+//! caller of the shared write desk (`bacnet_tool::safety::desk`), which owns
 //! the ledger and the audit log.
 //!
 //! The tools themselves are `tools/write.rs` and `tools/revert.rs`; an
@@ -18,8 +18,8 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bacnet_ops::octets::hex;
-use bacnet_ops::safety::desk::{Caller, Waiting};
-use bacnet_ops::safety::{DEFAULT_MINUTES, Level, Preview, Tier};
+use bacnet_tool::safety::desk::{Caller, Waiting};
+use bacnet_tool::safety::{DEFAULT_MINUTES, Level, Preview, Tier};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
@@ -475,7 +475,7 @@ impl Caller for McpCaller<'_> {
 
     fn ledger_changed<'a>(
         &'a self,
-        entries: &'a [bacnet_ops::safety::ledger::Entry],
+        entries: &'a [bacnet_tool::safety::ledger::Entry],
     ) -> Waiting<'a> {
         // The `sending` rows are in the file now: tell the ledger's
         // subscribers, and again once they settle, however they settle.
@@ -487,8 +487,8 @@ impl Caller for McpCaller<'_> {
             let ids = entries
                 .iter()
                 .filter(|e| {
-                    e.state == bacnet_ops::safety::ledger::State::Sending
-                        && e.run == bacnet_ops::safety::run_id()
+                    e.state == bacnet_tool::safety::ledger::State::Sending
+                        && e.run == bacnet_tool::safety::run_id()
                 })
                 .map(|e| e.id);
             *sending.lock().unwrap_or_else(PoisonError::into_inner) = ids.collect();

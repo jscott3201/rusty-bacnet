@@ -9,8 +9,8 @@
 use std::time::Duration;
 use std::{io::IsTerminal, net::Ipv4Addr};
 
+use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::destination::{self, Destination};
 use bacnet_ops::{parse, target};
 use bacnet_transport::{bip::BipTransport, port::TransportPort};
 use clap::{CommandFactory, FromArgMatches};
@@ -22,6 +22,7 @@ mod core;
 // part of it.
 #[cfg_attr(not(all(feature = "pcap", feature = "tui")), allow(dead_code))]
 mod decode;
+mod destination;
 mod entry;
 mod foreign;
 #[cfg(feature = "mcp")]
@@ -613,8 +614,8 @@ fn guard_one_shot(cli: &Cli, confirm: &mut dyn guard::Confirm) -> Result<(), gua
     };
     // A name that wasn't captured classifies as nothing, so it is refused.
     let name = cli.command_name.as_deref().unwrap_or_default();
-    let class = bacnet_ops::class::of(name).map(|class| match command {
-        Command::Subscribe { lifetime, .. } => bacnet_ops::class::of_subscribe(*lifetime),
+    let class = bacnet_tool::class::of(name).map(|class| match command {
+        Command::Subscribe { lifetime, .. } => bacnet_tool::class::of_subscribe(*lifetime),
         _ => class,
     });
     guard::check(name, class, target, cli.policy(), confirm)

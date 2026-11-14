@@ -311,7 +311,7 @@ The project README asks for authorization before use on a network. The
 one-shot CLI guards writes with `--allow-write`, and DCC and reinitialize
 also with `--yes` or a typed confirmation (#972). The one-shots and the TUI
 take a command's class (read, write or device management) from one
-table, `bacnet_ops::class` (`crates/bacnet-ops/src/class.rs`); `Level::permits` maps the TUI's levels onto it.
+table, `bacnet_tool::class` (`crates/bacnet-tool/src/class.rs`); `Level::permits` maps the TUI's levels onto it.
 
 **Session levels** (always shown in the status bar):
 
@@ -351,7 +351,7 @@ table, `bacnet_ops::class` (`crates/bacnet-ops/src/class.rs`); `Level::permits` 
 | T3 | Priorities 1, 2 and 5, DCC, reinitialize, Write-BDT, Delete-FDT-Entry, create and delete object, file write | Shows the blast radius; the user types the device instance (or BBMD address) to confirm. A DCC disable lasts 15 minutes unless a duration or `forever` is typed (#1799); plain disable is T3 here too, behind `dangerous = true` |
 | Blocked | Priority 6, which the standard sets aside for minimum on and off times (Clause 19.2.3) | Expert flag only (`dangerous = true`); then T3. The deprecated plain-disable DCC option, which current-revision servers refuse (Clause 16.1), needs the same flag, which every DCC needs, and is confirmed at T3 with a deprecation warning |
 
-As built in #964 (`tui/safety/plan.rs`, since #2068 `bacnet_ops::safety::plan`): priorities 3, 4 and 7, which Table 19-1
+As built in #964 (`tui/safety/plan.rs`, since #2068 `bacnet_ops::safety::plan`, since #2560 `bacnet_tool::safety::plan`): priorities 3, 4 and 7, which Table 19-1
 leaves to the site but which outrank the operator's 8, are T2 like 8. A
 WritePropertyMultiple batch is at least T2 and takes its strongest member's
 tier; one blocked member blocks it. The "expert flag" is the profile's
@@ -535,7 +535,7 @@ crates/bacnet-cli/src/
 `safety/` holds the TUI's side of the write session model (the device
 management requests, the password `Secret`, the app and worker messages); the
 shared core (levels, tiers and planning, ledger, audit writer, workspace lock,
-and the engine half of a write) is `bacnet_ops::safety` since #2068, which the
+and the engine half of a write) is `bacnet_tool::safety` (since #2068, in `bacnet-ops` until #2560), which the
 MCP server uses too. `worker/write/` and `worker/passive.rs` are its worker side, and
 `app/safety.rs` and `view/safety.rs` its dialogs (#964). Each screen has its
 own app and view modules. The profile store in `profile/` keeps B/IP, SC and

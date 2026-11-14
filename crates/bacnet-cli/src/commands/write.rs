@@ -1,8 +1,8 @@
 //! Write commands: WriteProperty (WP) and WritePropertyMultiple (WPM).
 
+use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::encode_property_value;
-use bacnet_ops::destination::Destination;
 use bacnet_ops::parse;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;

@@ -30,7 +30,7 @@ Turtle, and, when a profile allows it, write and revert values.
   gives hosts without subscriptions the same through a tool.
 - Writes are off by default. A policy that offers them lists
   `bacnet_write` and `bacnet_revert`, which go through the TUI's preview
-  tiers, ledger and audit log (`bacnet-ops::safety`): the client's
+  tiers, ledger and audit log (`bacnet-tool::safety`): the client's
   confirmation may approve T1 writes only, a plan grant the writes it
   names, and the confirmation state is sealed for its caller, single use
   and short-lived.

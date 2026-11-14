@@ -35,9 +35,9 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast::error::RecvError;
 
-use super::target::{Target, bip6_vmac, parse_target_on};
-use crate::engine::{RpmFailure, rpm_failure, rpm_rows, unreachable};
-use crate::format::{LogColumns, RawRow, RowError, StateTexts};
+use bacnet_ops::engine::{RpmFailure, rpm_failure, rpm_rows, unreachable};
+use bacnet_ops::format::{LogColumns, RawRow, RowError, StateTexts};
+use bacnet_ops::target::{Target, bip6_vmac, parse_target_on};
 
 /// Where a service request goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,9 +438,9 @@ impl Destination {
     }
 
     /// Name the states `columns` sample with their objects' state texts,
-    /// as [`Engine::log_state_texts`](crate::engine::Engine::log_state_texts)
+    /// as [`Engine::log_state_texts`](bacnet_ops::engine::Engine::log_state_texts)
     /// does: one request an object, each object once, at most
-    /// [`MAX_STATE_TEXT_OBJECTS`](crate::format::MAX_STATE_TEXT_OBJECTS).
+    /// [`MAX_STATE_TEXT_OBJECTS`](bacnet_ops::format::MAX_STATE_TEXT_OBJECTS).
     /// A reference that names a device is read only when it names this
     /// destination's device: one addressed by instance, or a MAC the
     /// client's discovery table holds a device at. A refused
@@ -667,3 +667,7 @@ impl Destination {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "destination_tests.rs"]
+mod tests;

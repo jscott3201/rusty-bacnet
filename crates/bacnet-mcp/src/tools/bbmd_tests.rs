@@ -4,7 +4,7 @@
 
 use std::net::Ipv4Addr;
 
-use bacnet_ops::bbmd::{BdtRow, NotFollowed, Surveyed, Unfollowed};
+use bacnet_tool::bbmd::{BdtRow, NotFollowed, Surveyed, Unfollowed};
 
 use super::*;
 

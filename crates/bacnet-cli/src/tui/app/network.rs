@@ -29,7 +29,7 @@ use crate::tui::network::routers::RouterMap;
 use crate::tui::network::{
     BdtRow, FdtRow, Foreign, NetworkCommand, NetworkEvent, OwnEntry, own_entry,
 };
-use bacnet_ops::bbmd::{Matrix, Unfollowed};
+use bacnet_tool::bbmd::{Matrix, Unfollowed};
 
 /// The table below the foreign-device panel.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

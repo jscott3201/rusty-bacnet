@@ -18,10 +18,10 @@
 use std::sync::Arc;
 
 use bacnet_ops::parse::{parse_object_specifier, parse_property, parse_value_for};
-use bacnet_ops::safety::audit::{Audit, Context};
-use bacnet_ops::safety::desk::{self, Caller};
-use bacnet_ops::safety::ledger::Ledger;
-use bacnet_ops::safety::{FrontEnd, Gate, Preview, Tier, WriteSpec, item_json};
+use bacnet_tool::safety::audit::{Audit, Context};
+use bacnet_tool::safety::desk::{self, Caller};
+use bacnet_tool::safety::ledger::Ledger;
+use bacnet_tool::safety::{FrontEnd, Gate, Preview, Tier, WriteSpec, item_json};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -52,7 +52,7 @@ pub(super) fn attached() -> String {
          dialog, at any tier; the call waits for that answer (declined after {} s), and requests \
          queue one at a time. Each applied write is kept in the ledger with its pre-image for \
          bacnet_revert.",
-        bacnet_ops::safety::PREVIEW_LIFETIME.as_secs()
+        bacnet_tool::safety::PREVIEW_LIFETIME.as_secs()
     )
 }
 
@@ -553,7 +553,7 @@ fn ask(preview: &Preview, tier: Tier, arm: Option<u32>, state: String) -> InputR
         let (now, _) = crate::untrusted::clean(before, 80);
         let (to, _) = crate::untrusted::clean(&item.value.text, 80);
         message.push_str(&format!("- {}: {now} -> {to}\n", item.label()));
-        if let bacnet_ops::safety::Effect::Changes { from, to } = &item.effect {
+        if let bacnet_tool::safety::Effect::Changes { from, to } = &item.effect {
             let (from, _) = crate::untrusted::clean(from, 80);
             let (to, _) = crate::untrusted::clean(to, 80);
             message.push_str(&format!("  present value: {from} -> {to}\n"));

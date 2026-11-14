@@ -28,8 +28,8 @@ use super::lock::{WorkspaceLock, lock};
 use super::plan::{self, PRE_READ, PreRead};
 use super::send::{find, item_json, send};
 use super::{Gate, Level, Outcome, Planned, Preview, WriteSpec, run_id};
-use crate::engine::{Halt, Reader, Wanted, unreachable};
-use crate::limits::RequestLimits;
+use bacnet_ops::engine::{Halt, Reader, Wanted, unreachable};
+use bacnet_ops::limits::RequestLimits;
 
 /// Why a passive session refuses anything that transmits.
 pub const PASSIVE: &str = "passive session: nothing is transmitted";

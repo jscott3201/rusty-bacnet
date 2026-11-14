@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use bacnet_ops::safety::ledger::{Ledger, State};
+use bacnet_tool::safety::ledger::{Ledger, State};
 use bacnet_types::primitives::PropertyValue;
 use serde_json::{Value, json};
 use tokio::time::Instant;
@@ -109,7 +109,7 @@ async fn an_older_client_confirms_and_the_write_is_sent_and_ledgered() {
     assert_eq!(session["level"], json!("read-only"), "{session}");
     assert_eq!(slot(&lab, 12).await, PropertyValue::Null);
     // Nor the workspace's: the TUI could take it meanwhile.
-    drop(bacnet_ops::safety::lock::lock(dir.path(), "tui").unwrap());
+    drop(bacnet_tool::safety::lock::lock(dir.path(), "tui").unwrap());
 
     let answer = json!({ "action": "accept", "content": { "confirm": true } });
     lab.agent.reply_to(&ask, answer).await;

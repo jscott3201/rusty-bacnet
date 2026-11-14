@@ -20,6 +20,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 bacnet-ops.workspace = true
+bacnet-tool.workspace = true
 bacnet-client = { workspace = true, features = ["ipv6"] }
 bacnet-transport = { workspace = true, features = ["ipv6"] }
 bacnet-types = { workspace = true, features = ["std"] }

@@ -12,7 +12,7 @@ use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use serde_json::{Value, json};
 
 use super::{Outcome, Planned, Preview};
-use crate::octets::hex;
+use bacnet_ops::octets::hex;
 
 /// How long a revert waits for a device it had to look for.
 const FIND_FOR: Duration = Duration::from_secs(3);
@@ -137,8 +137,8 @@ pub fn item_json(item: &Planned) -> Value {
     json!({
         "target": {
             "device": spec.device,
-            "object": crate::label::object_label(spec.object),
-            "property": crate::label::kebab(spec.property),
+            "object": bacnet_ops::label::object_label(spec.object),
+            "property": bacnet_ops::label::kebab(spec.property),
             "index": spec.index,
         },
         "params": { "value": item.value.text, "encoded": hex(&item.value.bytes) },

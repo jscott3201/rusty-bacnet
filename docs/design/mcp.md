@@ -6,7 +6,7 @@ the `bacnet-ops` crate and this document. Phase 1 (#2066) is complete: the
 tools. Phase 2 (#2067) is complete: the watch hub, the resources,
 `subscriptions/listen` and the `bacnet_watch` fallback, with the deviations
 noted in §6. Phase 3 (#2068) is complete: the shared safety core in
-`bacnet-ops::safety`, `bacnet_write` and `bacnet_revert`, with the
+`bacnet-ops::safety` (`bacnet-tool::safety` since #2560), `bacnet_write` and `bacnet_revert`, with the
 deviations noted in §7.4. Phase 4 (#2185) has begun: the TUI's Unix socket
 and `bacnet mcp connect`, read-only (§8.1, §9); the `TuiApprover`, the
 agent pane and the Windows named pipe follow.
@@ -150,7 +150,7 @@ From `bacnet-cli` into `bacnet-ops`, without behaviour changes (#2065):
 
 Phase 1 moved the capture screen's decoder the same way, for
 `bacnet_decode`: `decode/frame.rs`, `decode/tree.rs` and the network and
-application layer reader became `bacnet_ops::decode`, and
+application layer reader became `bacnet_ops::decode` (`bacnet_tool::decode` since #2560), and
 `output::format_property_value` became `bacnet_ops::format::format_property_value`.
 
 Every item the CLI or MCP needs is `pub` and documented; helpers private to
@@ -206,7 +206,7 @@ the rate cap (`who_is`) and reads the discovery table (`devices`,
 `device`).
 
 Phase 3 put the write half beside the engine rather than in it: the
-`bacnet_ops::safety::desk::Desk` holds a workspace's ledger, audit log and
+`bacnet_tool::safety::desk::Desk` (in `bacnet-ops` until #2560) holds a workspace's ledger, audit log and
 lock, and its `prepare`, `execute`, `commit` and `revert` take the
 engine's client and limits. Phase 2 added the watch hub (§6) beside the
 engine, and `device_events`.
@@ -848,7 +848,7 @@ image, and a `.mcpb` bundle for Claude Desktop.
 | 0 | #2065 | `bacnet-ops` read side; this document | CLI and TUI suites pass unchanged (insta snapshots, the in-process lab, the class-table pin test, which moved with the table); `bacnet-ops` passes `check-default-features.sh` and the file-size cap; no snapshot churn |
 | 1 | #2066 | `bacnet-mcp` with `stdio`; `bacnet mcp serve` behind `mcp`; the nine read tools; untrusted envelope; error mapping; signed cursors; per-call caps; per-principal and per-network limits; the `[mcp]` profile table; `survey_site` and `investigate_point`; `mcp` classified `Read` | a stdio integration test drives a site survey against the in-process lab; `tools/list` has no write tool in any configuration; `--passive` builds no client and sends nothing; 500 reads stay within the caps and a slow network is held to 2 a second; an injection fixture comes back sanitised, enveloped and capped; stdout carries only JSON-RPC; trend paging survives three pages and `summary` matches a brute-force computation; a docs page and changelog |
 | 2 (done) | #2067 | the watch hub; resources and templates; `subscriptions/listen` with caps; the alarm, session and ledger resources; `bacnet_watch` | two listeners on one point make one BACnet subscription and the last one leaving cancels it; a device refusing COV falls back to polling with `source: poll`; no lifetime-0 subscription; a notification storm is coalesced and drops counted; shutdown completes each listen stream and cancels every subscription |
-| 3 (done) | #2068 | `tui/safety/*` and the engine half of the write worker move to `bacnet-ops::safety` (the TUI keeps an adapter); `bacnet_write`, `bacnet_revert`; the `Approver` trait with `ClientElicitation`, `PlanGrant` and `Deny`; integrity-protected state; `mcp_writes = "never" \| "elicit"` (default `never`); the new audit fields | with `never` the write tools are absent; with `elicit` a T1 write is previewed, confirmed, sent and ledgered while T2, T3 and priority 6 are refused; tampered, expired, replayed or cross-principal state is refused and nothing sent; a stale pre-image gives `refused: stale`, audited; a timeout leaves an `unknown` entry; revert restores the pre-image; the TUI lists MCP entries marked `front_end: mcp`; plan-grant writes run without prompts and are audited; the TUI's write tests still pass |
+| 3 (done) | #2068 | `tui/safety/*` and the engine half of the write worker move to `bacnet-ops::safety`, since #2560 `bacnet-tool::safety` (the TUI keeps an adapter); `bacnet_write`, `bacnet_revert`; the `Approver` trait with `ClientElicitation`, `PlanGrant` and `Deny`; integrity-protected state; `mcp_writes = "never" \| "elicit"` (default `never`); the new audit fields | with `never` the write tools are absent; with `elicit` a T1 write is previewed, confirmed, sent and ledgered while T2, T3 and priority 6 are refused; tampered, expired, replayed or cross-principal state is refused and nothing sent; a stale pre-image gives `refused: stale`, audited; a timeout leaves an `unknown` entry; revert restores the pre-image; the TUI lists MCP entries marked `front_end: mcp`; plan-grant writes run without prompts and are audited; the TUI's write tests still pass |
 | 4 (done) | #2185, #2201 | TUI-attached mode: the socket (Unix) and named pipe (Windows) listener, `bacnet mcp connect`, `TuiApprover` and the agent pane | an agent's T2 or T3 write executes only after the TUI confirmation; another uid is refused and audited; agent reads share the rate meter, attributed to the agents as the pane counts them; frame tests cover the banner, the queue and the agent pane; disarming refuses the queue at once |
 | 4b | after 0.15, optional | background daemon | survives TUI exit and reattaches with the same ledger; a crash mid-write leaves `sending`, which becomes `unknown` on restart; a protocol mismatch is handled as specified |
 | 5 | after 0.15 | Streamable HTTP and OAuth, multi-user | conformance against an SDK client; wrong audience 401, missing scope 403; cross-user redemption refused; starts only with TLS and OAuth or an explicit loopback bind; interop with a real provider as a manual check |

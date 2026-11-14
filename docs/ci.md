@@ -1746,7 +1746,7 @@ repository scripts and the workflows. Its `paths-ignore` leaves out:
 - test code: every `tests/` directory (the crates' integration tests, the
   test module directories under `src/`, the Python suite and the website's
   tests), in-crate test files (`tests.rs`, `*_tests.rs`, `test_*.rs`,
-  `*_test_*.rs`), `bacnet-ops`' decode fixtures, and the scripts' own tests;
+  `*_test_*.rs`), `bacnet-tool`'s decode fixtures, and the scripts' own tests;
 - code that never ships: `benchmarks/`, every `examples/` directory, the fuzz
   crates, `bacnet-integration-tests` and `bacnet-mstp-sim`, and the website's
   test server and TUI screenshot lab.
@@ -2031,7 +2031,12 @@ To release:
    names it, and the crate map marks a crate whose Cargo.toml sets
    `[package.metadata.website] first-release` to a later release as
    unreleased, linking its source instead of docs.rs. Set that key on a
-   crate that is new since the last release. Each script rewrites the
+   crate that is new since the last release. Pages that link to source
+   files at the release tag (`v${release}/crates/...`) follow the tag too,
+   and no test checks that those paths exist: when files have moved between
+   crates since the last release, retarget the links in the same PR (for
+   0.16.0: `tui/network.mdx` and `tui/writes.mdx` link `bbmd` and `safety`
+   files that moved from `bacnet-ops` to `bacnet-tool`, #2560). Each script rewrites the
    generated part of its pages and leaves the authored text around it;
    `--check` changes nothing and fails when a page is stale:
 

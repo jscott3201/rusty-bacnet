@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-use bacnet_ops::safety::ledger::Ledger;
+use bacnet_tool::safety::ledger::Ledger;
 use bacnet_types::primitives::PropertyValue;
 use serde_json::{Value, json};
 
@@ -167,7 +167,7 @@ async fn a_held_workspace_leaves_the_count_alone() {
     let dir = tempfile::tempdir().unwrap();
     let grant = authorized(dir.path(), plan(10)).unwrap();
     let mut lab = lab(dir.path(), grant.clone()).await;
-    let held = bacnet_ops::safety::lock::lock(dir.path(), "tui").unwrap();
+    let held = bacnet_tool::safety::lock::lock(dir.path(), "tui").unwrap();
     let before = lab.sends().len();
     assert_eq!(refusal(&mut lab, 1).await, json!("workspace-locked"));
     assert_eq!(lab.sends().len(), before, "nothing sent, not even a read");
