@@ -174,7 +174,7 @@ async fn a_second_claimant_is_discovered_and_reported_with_the_first() {
         network_number: 0,
         mac_address: MacAddr::from_slice(mac),
     };
-    let expected = vec![at(&incoming_mac), at(&retained_mac)];
+    let expected = [at(&incoming_mac), at(&retained_mac)];
     for error in [
         client.get_device(1001).await.unwrap_err(),
         client.resolve_device(1001).await.unwrap_err(),
