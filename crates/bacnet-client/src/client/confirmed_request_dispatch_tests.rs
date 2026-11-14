@@ -4,48 +4,28 @@ use super::*;
 use bacnet_encoding::apdu::{ConfirmedRequest, decode_apdu};
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::enums::AbortReason;
 use tokio::sync::Mutex;
 
-struct ImmediateReplyTransport {
+/// A link whose every send, either kind, lands in `fallback_sends`.
+fn immediate_reply_transport(
     local_mac: MacAddr,
-    inbound_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
+    inbound_rx: mpsc::Receiver<ReceivedNpdu>,
     fallback_sends: Arc<Mutex<Vec<Bytes>>>,
-}
-
-impl TransportPort for ImmediateReplyTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.inbound_rx.take().expect("transport started once"))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        self.fallback_sends
-            .lock()
-            .await
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.fallback_sends
-            .lock()
-            .await
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .local_mac(&local_mac)
+        .inbound(inbound_rx)
+        .on_send(move |frame| {
+            let fallback_sends = Arc::clone(&fallback_sends);
+            async move {
+                fallback_sends.lock().await.push(frame.npdu);
+                Ok(())
+            }
+        })
+        .build()
 }
 
 fn confirmed_request(
@@ -435,11 +415,7 @@ async fn unsupported_confirmed_request_uses_immediate_reply_channel() {
     };
     let (inbound_tx, inbound_rx) = mpsc::channel(1);
     let fallback_sends = Arc::new(Mutex::new(Vec::new()));
-    let transport = ImmediateReplyTransport {
-        local_mac,
-        inbound_rx: Some(inbound_rx),
-        fallback_sends: Arc::clone(&fallback_sends),
-    };
+    let transport = immediate_reply_transport(local_mac, inbound_rx, Arc::clone(&fallback_sends));
     let mut client = BACnetClient::generic_builder()
         .transport(transport)
         .build()

@@ -11,6 +11,7 @@
 //! reference.
 
 use super::*;
+use crate::session::bus_port::bus_port;
 use bacnet_device_core::cov::{CovPolicy, FlightTiming};
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_services::cov_multiple::{
@@ -152,12 +153,12 @@ impl Pair {
             .role(SessionRole::ServerOnly)
             .database(db)
             .cov(ReportConfig::new(policy.clone()))
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
         endpoint.start().await.unwrap();
         let server = BACnetServer::generic_builder()
             .device(DeviceIdentity::new(DEVICE, 0x105).unwrap())
-            .transport(BusPort::new())
+            .transport(bus_port())
             .database(fixture())
             .cov_policy(policy)
             .build()

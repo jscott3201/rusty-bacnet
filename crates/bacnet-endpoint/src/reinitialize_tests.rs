@@ -1,15 +1,15 @@
 use super::*;
+use crate::session::bus_port::bus_port;
 use bacnet_server::server::ReinitializeContext;
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ReinitializedState};
 use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 
 const PASSWORD: &str = "reinit-pw";
 
-use crate::session::bus_port::BusPort;
-
 type Builder = crate::bip::BipEndpointBuilder;
-type Client = bacnet_client::client::BACnetClient<BusPort>;
+type Client = bacnet_client::client::BACnetClient<TestTransport>;
 type Received = Arc<std::sync::Mutex<Vec<ReinitializeContext>>>;
 
 /// A handler that records the context of each request it carries out.
@@ -36,16 +36,14 @@ fn states(received: &Received) -> Vec<ReinitializedState> {
 /// tests run on paused time (#2298).
 async fn running(
     configure: impl FnOnce(Builder) -> Builder,
-) -> (EndpointSession<BusPort>, Client, [u8; 6]) {
+) -> (EndpointSession<TestTransport>, Client, [u8; 6]) {
     let identity = crate::DeviceIdentity::new(123, 42).unwrap();
     let db = crate::identity::build_database_with_extra(&identity, vec![]).unwrap();
     let builder = Builder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(SessionRole::ServerOnly)
         .database(db)
         .device(identity);
-    let mut endpoint = configure(builder)
-        .build_session_over(BusPort::new())
-        .unwrap();
+    let mut endpoint = configure(builder).build_session_over(bus_port()).unwrap();
     endpoint.start().await.unwrap();
     let port = endpoint.bip_local_address().unwrap().port();
     let client = bus_client().await;

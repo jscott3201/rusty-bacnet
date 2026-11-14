@@ -4,11 +4,12 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use bacnet_encoding::apdu::{self, Apdu, SimpleAck, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
-use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 
@@ -24,102 +25,95 @@ const C: &[u8] = &[0x0C];
 /// Records when each unicast leaves and answers a confirmed request with a
 /// SimpleAck from the MAC it went to, `reply_after` later; the first
 /// `unanswered` requests get no answer.
-struct RecordingTransport {
-    local_mac: MacAddr,
+fn recording_transport(
     inbound_tx: mpsc::Sender<ReceivedNpdu>,
-    inbound_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
+    inbound_rx: mpsc::Receiver<ReceivedNpdu>,
     sends: Sends,
     reply_after: Duration,
-    unanswered: StdMutex<usize>,
+    unanswered: usize,
+) -> TestTransport {
+    let unanswered = StdMutex::new(unanswered);
+    TestTransport::builder()
+        .local_mac(&[0x01])
+        .inbound(inbound_rx)
+        .broadcast(SendMode::Ignore)
+        .on_send(move |frame| {
+            sends
+                .lock()
+                .unwrap()
+                .push((Instant::now(), MacAddr::from_slice(&frame.mac)));
+            let result = reply_to(&frame, &unanswered).map(|reply| {
+                if let Some(received) = reply {
+                    let inbound = inbound_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(reply_after).await;
+                        let _ = inbound.send(received).await;
+                    });
+                }
+            });
+            async move { result }
+        })
+        .build()
 }
 
-impl TransportPort for RecordingTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.inbound_rx.take().expect("started once"))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sends
-            .lock()
-            .unwrap()
-            .push((Instant::now(), MacAddr::from_slice(mac)));
-        let npdu = decode_npdu(Bytes::copy_from_slice(npdu))?;
-        let Apdu::ConfirmedRequest(request) = apdu::decode_apdu(npdu.payload)? else {
-            return Ok(());
-        };
-        {
-            let mut unanswered = self.unanswered.lock().unwrap();
-            if *unanswered > 0 {
-                *unanswered -= 1;
-                return Ok(());
-            }
+/// The SimpleAck a device at the frame's MAC answers a confirmed request
+/// with, unless the request is one of the unanswered ones.
+fn reply_to(
+    frame: &bacnet_transport::test_transport::SentFrame,
+    unanswered: &StdMutex<usize>,
+) -> Result<Option<ReceivedNpdu>, Error> {
+    let npdu = decode_npdu(frame.npdu.clone())?;
+    let Apdu::ConfirmedRequest(request) = apdu::decode_apdu(npdu.payload)? else {
+        return Ok(None);
+    };
+    {
+        let mut unanswered = unanswered.lock().unwrap();
+        if *unanswered > 0 {
+            *unanswered -= 1;
+            return Ok(None);
         }
-        let mut apdu_buf = BytesMut::new();
-        encode_apdu(
-            &mut apdu_buf,
-            &Apdu::SimpleAck(SimpleAck {
-                invoke_id: request.invoke_id,
-                service_choice: request.service_choice,
-            }),
-        )?;
-        let mut npdu_buf = BytesMut::new();
-        encode_npdu(
-            &mut npdu_buf,
-            &Npdu {
-                payload: apdu_buf.freeze(),
-                ..Npdu::default()
-            },
-        )?;
-        let received = ReceivedNpdu {
-            direct_response: None,
-            npdu: npdu_buf.freeze(),
-            source_mac: MacAddr::from_slice(mac),
-            link_layer_group: false,
-            data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
-            reply_tx: None,
-        };
-        let inbound = self.inbound_tx.clone();
-        let delay = self.reply_after;
-        tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-            let _ = inbound.send(received).await;
-        });
-        Ok(())
     }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+    let mut apdu_buf = BytesMut::new();
+    encode_apdu(
+        &mut apdu_buf,
+        &Apdu::SimpleAck(SimpleAck {
+            invoke_id: request.invoke_id,
+            service_choice: request.service_choice,
+        }),
+    )?;
+    let mut npdu_buf = BytesMut::new();
+    encode_npdu(
+        &mut npdu_buf,
+        &Npdu {
+            payload: apdu_buf.freeze(),
+            ..Npdu::default()
+        },
+    )?;
+    Ok(Some(ReceivedNpdu {
+        direct_response: None,
+        npdu: npdu_buf.freeze(),
+        source_mac: frame.mac.clone(),
+        link_layer_group: false,
+        data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
+        reply_tx: None,
+    }))
 }
 
 async fn paced_client(
     interval_ms: u64,
     reply_after: Duration,
     unanswered: usize,
-) -> (BACnetClient<RecordingTransport>, Sends) {
+) -> (BACnetClient<TestTransport>, Sends) {
     let (inbound_tx, inbound_rx) = mpsc::channel(16);
     let sends = Sends::default();
-    let transport = RecordingTransport {
-        local_mac: MacAddr::from_slice(&[0x01]),
+    let transport = recording_transport(
         inbound_tx,
-        inbound_rx: Some(inbound_rx),
-        sends: Arc::clone(&sends),
+        inbound_rx,
+        Arc::clone(&sends),
         reply_after,
-        unanswered: StdMutex::new(unanswered),
-    };
+        unanswered,
+    );
     let client = BACnetClient::generic_builder()
         .transport(transport)
         .apdu_timeout_ms(10_000)
@@ -131,11 +125,11 @@ async fn paced_client(
     (client, sends)
 }
 
-async fn client(interval_ms: u64) -> (BACnetClient<RecordingTransport>, Sends) {
+async fn client(interval_ms: u64) -> (BACnetClient<TestTransport>, Sends) {
     paced_client(interval_ms, Duration::ZERO, 0).await
 }
 
-async fn request(client: &BACnetClient<RecordingTransport>, mac: &[u8]) {
+async fn request(client: &BACnetClient<TestTransport>, mac: &[u8]) {
     client
         .confirmed_request(mac, ConfirmedServiceChoice::WRITE_PROPERTY, &[0x0C])
         .await
@@ -430,14 +424,8 @@ async fn the_pacer_forgets_idle_destinations_and_stays_bounded() {
 #[tokio::test]
 async fn an_interval_over_an_hour_is_refused() {
     let (inbound_tx, inbound_rx) = mpsc::channel(1);
-    let transport = RecordingTransport {
-        local_mac: MacAddr::from_slice(&[0x01]),
-        inbound_tx,
-        inbound_rx: Some(inbound_rx),
-        sends: Sends::default(),
-        reply_after: Duration::ZERO,
-        unanswered: StdMutex::new(0),
-    };
+    let transport =
+        recording_transport(inbound_tx, inbound_rx, Sends::default(), Duration::ZERO, 0);
     let refused = BACnetClient::generic_builder()
         .transport(transport)
         .min_request_interval_ms(super::MAX_MIN_REQUEST_INTERVAL_MS + 1)

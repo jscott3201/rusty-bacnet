@@ -2,6 +2,7 @@
 use super::*;
 use crate::roles::Commandability;
 use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_transport::test_transport::TestTransport;
 
 fn write_database(confirmed: bool) -> ObjectDatabase {
     let mut db = database(confirmed);
@@ -40,7 +41,7 @@ fn write_ack(invoke_id: u8, _: &WritePropertyRequest) -> Apdu {
     })
 }
 fn start_write(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     mac: &[u8],
     property: PropertyIdentifier,
     index: Option<u32>,
@@ -56,7 +57,7 @@ fn start_write(
     )
 }
 fn write_value(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     mac: &[u8],
     property: PropertyIdentifier,
     index: Option<u32>,

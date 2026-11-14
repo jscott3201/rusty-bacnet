@@ -3,7 +3,8 @@ use std::sync::Arc;
 use bacnet_encoding::apdu::{self, Apdu, SegmentAck, SimpleAck, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
-use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
@@ -21,74 +22,40 @@ pub(super) struct SentFrame {
     destination: MacAddr,
 }
 
-pub(super) struct CaptureTransport {
-    local_mac: MacAddr,
-    inbound_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
-    outbound_tx: mpsc::UnboundedSender<SentFrame>,
-    max_apdu: u16,
-}
-
-impl TransportPort for CaptureTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inbound_rx
-            .take()
-            .ok_or_else(|| Error::Encoding("capture transport already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.outbound_tx
-            .send(SentFrame {
-                npdu: Bytes::copy_from_slice(npdu),
-                destination: MacAddr::from_slice(mac),
-            })
-            .map_err(|_| Error::Encoding("capture observer closed".into()))
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send_unicast(npdu, &[]).await
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.max_apdu
-    }
-}
-
+/// A link with `max_apdu` as its egress limit, fed by the returned sender,
+/// whose every send (either kind) comes out of the returned receiver.
 pub(super) fn harness(
     local_mac: &[u8],
     max_apdu: u16,
 ) -> (
-    CaptureTransport,
+    TestTransport,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<SentFrame>,
 ) {
     let (inbound_tx, inbound_rx) = mpsc::channel(64);
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
     (
-        CaptureTransport {
-            local_mac: MacAddr::from_slice(local_mac),
-            inbound_rx: Some(inbound_rx),
-            outbound_tx,
-            max_apdu,
-        },
+        TestTransport::builder()
+            .local_mac(local_mac)
+            .inbound(inbound_rx)
+            .egress_limit(max_apdu)
+            .on_send(move |frame| {
+                let sent = outbound_tx
+                    .send(SentFrame {
+                        npdu: frame.npdu,
+                        destination: frame.mac,
+                    })
+                    .map_err(|_| Error::Encoding("capture observer closed".into()));
+                async move { sent }
+            })
+            .build(),
         inbound_tx,
         outbound_rx,
     )
 }
 
 pub(super) fn routed_request(
-    client: Arc<BACnetClient<CaptureTransport>>,
+    client: Arc<BACnetClient<TestTransport>>,
     router: Vec<u8>,
     dnet: u16,
     dadr: Vec<u8>,

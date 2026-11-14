@@ -1,70 +1,40 @@
-use super::bus_port::BusPort;
 use super::*;
+use crate::session::bus_port::bus_port;
 use bacnet_encoding::apdu::{ConfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::{SendMode, TestTransport, TestTransportHandle};
 use bacnet_types::enums::{ConfirmedServiceChoice, ServiceSupported};
 use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-struct CountedTransport {
-    inner: LoopbackTransport,
-    starts: Arc<AtomicUsize>,
-}
-impl TransportPort for CountedTransport {
-    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
-        Some("255.255.255.255:47808".parse().unwrap())
-    }
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.starts.fetch_add(1, Ordering::SeqCst);
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, data: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(data, mac).await
-    }
-    async fn send_broadcast(&self, data: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(data).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
+/// `inner` behind a transport that counts each start and reports the limited
+/// broadcast as its B/IP broadcast endpoint.
+fn counted_transport(inner: LoopbackTransport) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .on_bip_broadcast_endpoint(|| Some("255.255.255.255:47808".parse().unwrap()))
+        .build()
 }
 
 fn session(
     role: SessionRole,
 ) -> (
-    EndpointSession<CountedTransport>,
+    EndpointSession<TestTransport>,
     LoopbackTransport,
-    Arc<AtomicUsize>,
+    TestTransportHandle,
 ) {
     let (inner, peer) = LoopbackTransport::pair(vec![1], vec![2]);
-    let starts = Arc::new(AtomicUsize::new(0));
+    let transport = counted_transport(inner);
+    let starts = transport.handle();
     (
-        EndpointSession::new(
-            CountedTransport {
-                inner,
-                starts: starts.clone(),
-            },
-            role,
-            SessionConfig::default(),
-        )
-        .unwrap(),
+        EndpointSession::new(transport, role, SessionConfig::default()).unwrap(),
         peer,
         starts,
     )
@@ -72,9 +42,9 @@ fn session(
 
 /// A client on the in-memory link, so a test that talks to an endpoint
 /// through it runs on paused time (#2298).
-pub(super) async fn bus_client() -> bacnet_client::client::BACnetClient<BusPort> {
+pub(super) async fn bus_client() -> bacnet_client::client::BACnetClient<TestTransport> {
     bacnet_client::client::BACnetClient::generic_builder()
-        .transport(BusPort::new())
+        .transport(bus_port())
         .build()
         .await
         .unwrap()
@@ -135,7 +105,7 @@ async fn device_write_profile_matches_execution_with_and_without_identity() {
                 session = session.device(crate::DeviceIdentity::new(123, 42).unwrap());
             }
             session.start().await.unwrap();
-            assert_eq!(starts.load(Ordering::SeqCst), 1);
+            assert_eq!(starts.starts(), 1);
             assert_eq!(
                 services(read(&session, PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED).await),
                 vec![12, 15]
@@ -197,7 +167,7 @@ async fn device_write_preflight_errors_are_atomic_and_retryable() {
             None
         };
         assert!(session.start().await.is_err(), "{case}");
-        assert_eq!(starts.load(Ordering::SeqCst), 0, "{case}");
+        assert_eq!(starts.starts(), 0, "{case}");
         assert_eq!(
             session.lifecycle.load(Ordering::Acquire),
             Lifecycle::Ready as u8
@@ -218,7 +188,7 @@ async fn device_write_preflight_errors_are_atomic_and_retryable() {
                 .with_database(database(&[123]))
                 .device(crate::DeviceIdentity::new(123, 42).unwrap());
             session.start().await.unwrap();
-            assert_eq!(starts.load(Ordering::SeqCst), 1);
+            assert_eq!(starts.starts(), 1);
             session.stop().await.unwrap();
         }
     }
@@ -393,7 +363,7 @@ async fn device_write_rejects_device_shaped_custom_object_without_authority() {
         .with_database(db)
         .with_device_writes(Arc::new(|_| true));
     assert!(session.start().await.is_err());
-    assert_eq!(starts.load(Ordering::SeqCst), 0);
+    assert_eq!(starts.starts(), 0);
     assert_eq!(
         session.lifecycle.load(Ordering::Acquire),
         Lifecycle::Ready as u8
@@ -411,7 +381,7 @@ async fn device_write_authorized_round_trip_and_service_readback() {
                 context.source_network.is_none()
                     && context.trust == bacnet_server::mutation::MutationTrust::Unverified
             }))
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
     session.start().await.unwrap();
     let port = session.bip_local_address().unwrap().port();
@@ -480,7 +450,7 @@ async fn device_writes_reach_the_lowest_of_several_devices() {
             .database(database(&[456, 123]))
             .device(crate::DeviceIdentity::new(123, 42).unwrap())
             .device_writes(Arc::new(|_| true))
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
     session.start().await.unwrap();
     let port = session.bip_local_address().unwrap().port();

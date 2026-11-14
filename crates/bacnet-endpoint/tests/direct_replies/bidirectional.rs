@@ -10,54 +10,31 @@ use bacnet_transport::{
     sc::{LoopbackWebSocket, ScTransport, WebSocketPort},
     sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message},
     sc_tls::{DirectAcceptConfig, DirectListener, ScNodeTlsConfig},
+    test_transport::{SendMode, TestTransport},
 };
-use bacnet_types::{
-    enums::{ConfirmedServiceChoice, PropertyIdentifier},
-    error::Error,
-};
+use bacnet_types::enums::{ConfirmedServiceChoice, PropertyIdentifier};
 use bytes::{Bytes, BytesMut};
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
 use tokio::sync::mpsc;
 const LOCAL: [u8; 6] = [0xaa; 6];
 const REMOTE: [u8; 6] = [0x22; 6];
 
 // Startup alone is adapted: every tested ingress still traverses the real
 // ScTransport intake, NetworkLayer, and unmodified public consumer dispatcher.
-struct StartedSc {
+// The test transport starts with the receiver the real transport already
+// returned, stops and aborts the real one, and passes every ordinary send on
+// to it, keeping them in its send log.
+struct ScParts {
     transport: ScTransport<LoopbackWebSocket>,
     rx: Option<mpsc::Receiver<ReceivedNpdu>>,
-    ordinary_sends: Arc<AtomicUsize>,
 }
-impl TransportPort for StartedSc {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.rx.take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.transport.stop().await
-    }
-    fn abort(&mut self) {
-        self.transport.abort();
-    }
-    async fn send_unicast(&self, bytes: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.ordinary_sends.fetch_add(1, Ordering::AcqRel);
-        self.transport.send_unicast(bytes, mac).await
-    }
-    async fn send_broadcast(&self, bytes: &[u8]) -> Result<(), Error> {
-        self.ordinary_sends.fetch_add(1, Ordering::AcqRel);
-        self.transport.send_broadcast(bytes).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.transport.local_receive_apdu_capacity()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.transport.local_mac()
-    }
-    fn egress_apdu_limit(&self) -> u16 {
-        self.transport.egress_apdu_limit()
+impl ScParts {
+    fn into_port(self) -> TestTransport {
+        TestTransport::builder()
+            .inner(self.transport)
+            .inbound(self.rx.expect("the receiver was not taken"))
+            .unicast(SendMode::Forward)
+            .broadcast(SendMode::Forward)
+            .build()
     }
 }
 struct Peer {
@@ -128,7 +105,13 @@ fn ack(invoke: u8) -> Apdu {
     })
 }
 impl Peer {
-    async fn start(ca: &TestCa) -> (Self, StartedSc) {
+    async fn start(ca: &TestCa) -> (Self, TestTransport) {
+        let (peer, parts) = Self::start_parts(ca).await;
+        (peer, parts.into_port())
+    }
+    /// [`Self::start`], before the transport is wrapped, for a test that
+    /// changes its configuration or takes its receiver first.
+    async fn start_parts(ca: &TestCa) -> (Self, ScParts) {
         let tls = ca.tls("localhost");
         let config =
             DirectAcceptConfig::new("127.0.0.1:0".parse().unwrap(), REMOTE, [2; 16], tls.clone());
@@ -137,7 +120,7 @@ impl Peer {
             "wss://localhost:{}/.bacnet/sc",
             listener.local_addr().port()
         );
-        let (port, local, hub) = start_port(ca, uri).await;
+        let (port, local, hub) = connect_port(ca, uri).await;
         let route = bounded(received.recv())
             .await
             .unwrap()
@@ -190,7 +173,14 @@ impl Peer {
         self.local.stop().await;
     }
 }
-async fn start_port(ca: &TestCa, uri: String) -> (StartedSc, DirectListener, LoopbackWebSocket) {
+async fn start_port(
+    ca: &TestCa,
+    uri: String,
+) -> (TestTransport, DirectListener, LoopbackWebSocket) {
+    let (parts, local, hub) = connect_port(ca, uri).await;
+    (parts.into_port(), local, hub)
+}
+async fn connect_port(ca: &TestCa, uri: String) -> (ScParts, DirectListener, LoopbackWebSocket) {
     let (ws, hub) = LoopbackWebSocket::pair();
     let config = DirectAcceptConfig::new(
         "127.0.0.1:0".parse().unwrap(),
@@ -226,10 +216,9 @@ async fn start_port(ca: &TestCa, uri: String) -> (StartedSc, DirectListener, Loo
     });
     sent.unwrap();
     (
-        StartedSc {
+        ScParts {
             transport,
             rx: Some(rx),
-            ordinary_sends: Arc::new(AtomicUsize::new(0)),
         },
         local,
         hub,
@@ -365,10 +354,11 @@ mod segments;
 async fn standard_client_hub_request_accepts_matching_direct_response() {
     use bacnet_transport::sc_tls::TlsWebSocket;
     let ca = TestCa::new();
-    let (mut peer, mut port) = Peer::start(&ca).await;
+    let (mut peer, mut parts) = Peer::start_parts(&ca).await;
     // Retire the priming outbound socket. The independently registered local
     // listener continues accepting, while discovery is now disabled.
-    port.transport = port.transport.with_direct_discovery(false);
+    parts.transport = parts.transport.with_direct_discovery(false);
+    let port = parts.into_port();
     let mut client = BACnetClient::start(ClientConfig::default(), port)
         .await
         .unwrap();

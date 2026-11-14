@@ -1,6 +1,10 @@
 //! Raw BVLL/NPDU fixtures exercise the two actual NORMAL B/IP owners.
 use super::*;
-use bacnet_transport::{bip::BipTransport, port::ReceivedNpdu};
+use bacnet_transport::{
+    bip::BipTransport,
+    port::ReceivedNpdu,
+    test_transport::{SendMode, TestTransport},
+};
 use std::{
     net::{Ipv4Addr, SocketAddrV4},
     time::Duration,
@@ -13,79 +17,67 @@ mod sc_network_number_tests;
 fn selected() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::NETWORK_PORT, 2).unwrap()
 }
-struct ObservedBip {
+/// A real B/IP link whose broadcasts are observed in `sent` before they are forwarded to it
+/// (a held send waits first), whose stop `gates` can hold, and whose
+/// received frames come from `input_override` when given.
+fn observed_bip(
     bip: BipTransport,
     sent: mpsc::Sender<Vec<u8>>,
     gates: Option<Arc<Gates>>,
     input_override: Option<mpsc::Receiver<ReceivedNpdu>>,
-}
-impl TransportPort for ObservedBip {
-    fn supports_local_nonrouter_number_controls(&self) -> bool {
-        self.bip.supports_local_nonrouter_number_controls()
+) -> TestTransport {
+    let (stop_gates, after_gates, send_gates) = (gates.clone(), gates.clone(), gates);
+    let mut builder = TestTransport::builder()
+        .inner(bip)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .before_stop(move || {
+            let gates = stop_gates.clone();
+            async move {
+                if let Some(gates) = &gates
+                    && gates.hold_stop.load(Ordering::SeqCst)
+                {
+                    gates.stop_entered.notify_one();
+                    gates.stop_release.acquire().await.unwrap().forget();
+                }
+                Ok(())
+            }
+        })
+        .after_stop(move || {
+            if let Some(gates) = &after_gates {
+                gates.stop_finished.notify_one();
+            }
+            async { Ok(()) }
+        })
+        .on_send(move |frame| {
+            let (gates, sent) = (send_gates.clone(), sent.clone());
+            async move {
+                if !frame.broadcast {
+                    return Ok(());
+                }
+                if let Some(gates) = &gates
+                    && gates.hold_send.load(Ordering::SeqCst)
+                {
+                    gates.send_entered.notify_one();
+                    gates.send_release.acquire().await.unwrap().forget();
+                }
+                sent.try_send(frame.npdu.to_vec())
+                    .expect("bounded test observation");
+                Ok(())
+            }
+        });
+    if let Some(input) = input_override {
+        builder = builder.replace_inbound(input);
     }
-    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
-        self.bip.bip_port()
-    }
-    fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
-        self.bip.bip_broadcast_endpoint()
-    }
-    fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
-        self.bip.retain_network_port_lease_internal(lease)
-    }
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let real = self.bip.start().await?;
-        Ok(self.input_override.take().unwrap_or(real))
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(gates) = &self.gates
-            && gates.hold_stop.load(Ordering::SeqCst)
-        {
-            gates.stop_entered.notify_one();
-            gates.stop_release.acquire().await.unwrap().forget();
-        }
-        self.bip.stop().await?;
-        if let Some(gates) = &self.gates {
-            gates.stop_finished.notify_one();
-        }
-        Ok(())
-    }
-    fn abort(&mut self) {
-        self.bip.abort();
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.bip.local_receive_apdu_capacity()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.bip.local_mac()
-    }
-    fn egress_apdu_limit(&self) -> u16 {
-        self.bip.egress_apdu_limit()
-    }
-    async fn send_unicast(&self, mac: &[u8], npdu: &[u8]) -> Result<(), Error> {
-        self.bip.send_unicast(mac, npdu).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        if let Some(gates) = &self.gates
-            && gates.hold_send.load(Ordering::SeqCst)
-        {
-            gates.send_entered.notify_one();
-            gates.send_release.acquire().await.unwrap().forget();
-        }
-        self.bip.send_broadcast(npdu).await?;
-        self.sent
-            .try_send(npdu.to_vec())
-            .expect("bounded test observation");
-        Ok(())
-    }
+    builder.build()
 }
 #[allow(
     clippy::large_enum_variant,
     reason = "one fixture per test; the two owners differ in size"
 )]
 enum Owner {
-    Server(bacnet_server::server::BACnetServer<ObservedBip>),
-    Endpoint(EndpointSession<ObservedBip>),
+    Server(bacnet_server::server::BACnetServer<TestTransport>),
+    Endpoint(EndpointSession<TestTransport>),
 }
 struct Fixture {
     owner: Owner,
@@ -126,12 +118,12 @@ impl Fixture {
             .with_bip_port(2, number.into(), Ipv4Addr::LOCALHOST, port)
             .unwrap();
         let db = identity.build_database().unwrap();
-        let transport = ObservedBip {
-            bip: BipTransport::new(Ipv4Addr::LOCALHOST, port, broadcast),
-            sent: sent_tx,
+        let transport = observed_bip(
+            BipTransport::new(Ipv4Addr::LOCALHOST, port, broadcast),
+            sent_tx,
             gates,
             input_override,
-        };
+        );
         let owner = if full {
             let mut config = crate::identity::server_config(&identity);
             config.registered_network_port = registered.then_some(selected());

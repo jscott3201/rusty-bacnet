@@ -1,44 +1,36 @@
 use super::*;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use tokio::sync::{Semaphore, mpsc};
+use bacnet_transport::test_transport::{SendMode, TestTransport};
+use tokio::sync::Semaphore;
 
-struct FailingTransport {
+/// A loopback link whose unicasts reach the peer first; each then waits for
+/// a permit from `gate` and fails once `fail_from` earlier attempts were
+/// made. `count` counts the unicast attempts.
+fn failing_transport(
     inner: LoopbackTransport,
     count: Arc<AtomicUsize>,
     fail_from: usize,
     gate: Arc<Semaphore>,
-}
-impl TransportPort for FailingTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let attempt = self.count.fetch_add(1, Ordering::SeqCst);
-        self.inner.send_unicast(npdu, mac).await?;
-        self.gate.acquire().await.unwrap().forget();
-        if attempt >= self.fail_from {
-            Err(Error::Encoding("injected send failure".into()))
-        } else {
-            Ok(())
-        }
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::ForwardFirst)
+        .broadcast(SendMode::Forward)
+        .on_send(move |frame| {
+            let attempt = (!frame.broadcast).then(|| count.fetch_add(1, Ordering::SeqCst));
+            let gate = Arc::clone(&gate);
+            async move {
+                let Some(attempt) = attempt else {
+                    return Ok(());
+                };
+                gate.acquire().await.unwrap().forget();
+                if attempt >= fail_from {
+                    Err(Error::Encoding("injected send failure".into()))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .build()
 }
 
 #[tokio::test]
@@ -48,12 +40,7 @@ async fn endpoint_requester_terminal_precedes_send_failure_and_tracks_prior_atte
         let count = Arc::new(AtomicUsize::new(0));
         let gate = Arc::new(Semaphore::new(0));
         let mut endpoint = EndpointIngress::new(
-            FailingTransport {
-                inner: transport,
-                count: Arc::clone(&count),
-                fail_from,
-                gate: Arc::clone(&gate),
-            },
+            failing_transport(transport, Arc::clone(&count), fail_from, Arc::clone(&gate)),
             4,
         );
         let ingress = endpoint.start().await.unwrap();
@@ -116,12 +103,7 @@ async fn endpoint_requester_queue_rejection_is_silent_and_releases_prepared_leas
     let count = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new(Semaphore::new(0));
     let mut endpoint = EndpointIngress::new(
-        FailingTransport {
-            inner: transport,
-            count: Arc::clone(&count),
-            fail_from: usize::MAX,
-            gate,
-        },
+        failing_transport(transport, Arc::clone(&count), usize::MAX, gate),
         1,
     );
     let ingress = endpoint.start().await.unwrap();

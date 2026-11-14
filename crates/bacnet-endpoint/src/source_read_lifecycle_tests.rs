@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::bus_port::bus_port;
 
 #[tokio::test(start_paused = true)]
 async fn source_read_filters_priority_independence_and_unsupported_destinations() {
@@ -361,7 +362,7 @@ async fn source_read_and_target_reporting_remain_independent() {
         .unwrap();
     let mut target_server = BACnetServer::generic_builder()
         .device(bacnet_objects::DeviceIdentity::new(456, 42).unwrap())
-        .transport(BusPort::new())
+        .transport(bus_port())
         .database(db)
         .audit_reporters(AuditReportersConfig {
             reporters: vec![selected()],

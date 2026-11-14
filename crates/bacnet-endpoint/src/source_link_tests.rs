@@ -8,6 +8,7 @@ use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
 use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
 use bacnet_transport::port::GroupDestinations;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::ReinitializedState;
 
@@ -121,37 +122,13 @@ async fn bindings_of_the_wrong_link_fail_start() {
 
 /// A link that learns its MAC at start, as B/IPv6 does: it reports station
 /// 7 as a placeholder before start, and the started node is station 1.
-struct LateMac {
-    inner: bacnet_transport::loopback::LoopbackTransport,
-    started: bool,
-}
-
-impl TransportPort for LateMac {
-    async fn start(
-        &mut self,
-    ) -> Result<tokio::sync::mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        self.started = true;
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-    fn local_mac(&self) -> &[u8] {
-        if self.started {
-            self.inner.local_mac()
-        } else {
-            &[7]
-        }
-    }
+fn late_mac(inner: bacnet_transport::loopback::LoopbackTransport) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .local_mac_until_started(&[7])
+        .build()
 }
 
 /// The selected Reporter's Reliability.
@@ -178,10 +155,7 @@ async fn a_binding_to_the_mac_learned_at_start_reads_configuration_error() {
         (1, Reliability::CONFIGURATION_ERROR),
     ] {
         let (inner, _peer) = bacnet_transport::loopback::LoopbackTransport::pair(vec![1], vec![2]);
-        let transport = LateMac {
-            inner,
-            started: false,
-        };
+        let transport = late_mac(inner);
         let mut session =
             EndpointSession::new(transport, SessionRole::ClientOnly, SessionConfig::default())
                 .unwrap()

@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_transport::test_transport::TestTransport;
 
 fn failure_flags() -> AuditOperationFlags {
     let mut flags = AuditOperationFlags::empty();
@@ -48,8 +49,8 @@ fn expected_summary(count: u64, timestamp: BACnetTimeStamp) -> BACnetAuditNotifi
     }
 }
 pub(super) async fn complete_read(
-    session: &EndpointSession<BusPort>,
-    peer: &NetworkLayer<BusPort>,
+    session: &EndpointSession<TestTransport>,
+    peer: &NetworkLayer<TestTransport>,
     requests: &mut bacnet_network::layer::ApduReceiver,
 ) {
     let read = start_read(

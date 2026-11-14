@@ -1,4 +1,4 @@
-use super::super::queued::Gated;
+use super::super::queued::gated;
 use super::*;
 use bacnet_transport::loopback::LoopbackTransport;
 use tokio::sync::{Notify, Semaphore};
@@ -45,11 +45,7 @@ async fn congestion(mode: u8) {
         .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
         .unwrap();
     let mut session = EndpointSession::new(
-        Gated {
-            inner: transport,
-            entered: entered.clone(),
-            gate: gate.clone(),
-        },
+        gated(transport, entered.clone(), gate.clone()),
         SessionRole::ClientOnly,
         SessionConfig::default(),
     )

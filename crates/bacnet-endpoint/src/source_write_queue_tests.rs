@@ -1,4 +1,4 @@
-use super::super::queued::Gated;
+use super::super::queued::gated;
 use super::*;
 use bacnet_transport::loopback::LoopbackTransport;
 use tokio::sync::{Notify, Semaphore};
@@ -10,11 +10,7 @@ async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
     let entered = Arc::new(Notify::new());
     let gate = Arc::new(Semaphore::new(0));
     let mut session = EndpointSession::new(
-        Gated {
-            inner: transport,
-            entered: Arc::clone(&entered),
-            gate: Arc::clone(&gate),
-        },
+        gated(transport, Arc::clone(&entered), Arc::clone(&gate)),
         SessionRole::ClientOnly,
         SessionConfig::default(),
     )
@@ -113,11 +109,7 @@ async fn endpoint_write_unreported_cancel_retracts_queued_and_in_progress_sends(
         let entered = Arc::new(Notify::new());
         let gate = Arc::new(Semaphore::new(0));
         let mut session = EndpointSession::new(
-            Gated {
-                inner: transport,
-                entered: entered.clone(),
-                gate: gate.clone(),
-            },
+            gated(transport, entered.clone(), gate.clone()),
             SessionRole::ClientOnly,
             SessionConfig::default(),
         )

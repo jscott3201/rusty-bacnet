@@ -12,13 +12,14 @@
 //! from a task (a dropped call's path).
 
 use super::*;
-use crate::session::bus_port::BusPort;
+use crate::session::bus_port::bus_port;
 use bacnet_encoding::constructed::encode_destination_list;
 use bacnet_objects::durable::{DurableWrites, SaveWait, StageStep};
 use bacnet_objects::notification_forwarder::{
     ForwarderSnapshot, NotificationForwarderObject, NotificationForwarderPersistence,
 };
 use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
@@ -151,7 +152,7 @@ fn list(destinations: &[BACnetDestination]) -> PropertyValue {
 }
 
 async fn write(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     index: Option<u32>,
     destinations: &[BACnetDestination],
 ) -> Result<(), Error> {
@@ -202,7 +203,7 @@ async fn a_local_write_refused_before_the_object_releases_what_it_staged() {
         crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ServerOnly)
             .database(db)
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
     session.start().await.unwrap();
 
