@@ -21,9 +21,9 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 
 use super::constructed::{object_reference, on_device, reference};
-use super::primitive::hex;
 use super::{StateTexts, ValueFormat};
 use crate::label::{kebab, object_label};
+use crate::octets::hex;
 
 /// The renderer signature of the element table (see `constructed`).
 type Rendered = Result<(String, usize), Error>;
@@ -293,7 +293,7 @@ pub(super) fn factor_text(factor: &BACnetAuthenticationFactor) -> String {
         "{} class {} value 0x{}",
         kebab(factor.format_type),
         factor.format_class,
-        hex(&factor.value, "")
+        hex(&factor.value)
     )
 }
 

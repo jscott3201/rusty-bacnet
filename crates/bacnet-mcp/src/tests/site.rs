@@ -538,7 +538,7 @@ pub(crate) fn ack_with_text(text: &str) -> String {
     let length = u16::try_from(npdu.len() + 4).unwrap().to_be_bytes();
     let mut frame = vec![0x81, 0x0A, length[0], length[1]];
     frame.extend_from_slice(&npdu);
-    frame.iter().map(|b| format!("{b:02x}")).collect()
+    bacnet_ops::octets::hex(&frame)
 }
 
 /// Every label in a decode tree, depth first.

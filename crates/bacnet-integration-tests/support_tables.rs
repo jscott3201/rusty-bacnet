@@ -57,7 +57,7 @@ const DATA_LINKS: &[(&str, DataLinkSupport, Option<&str>)] = &[
 const NON_LINK_FEATURES: &[&str] = &["default", "serial-gpio", "test-support"];
 
 /// Method-name endings that still send the service the name starts with, as
-/// in `who_has_by_id` or `acknowledge_alarm_request`.
+/// in `who_has_by_id` or `acknowledge_alarm`.
 const PYTHON_METHOD_SUFFIXES: &[&str] = &[
     "",
     "_typed",

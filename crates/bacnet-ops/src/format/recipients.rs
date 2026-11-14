@@ -21,8 +21,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::ValueFormat;
 use super::constructed::reference;
-use super::primitive::{hex, time_text, weekday};
+use super::primitive::{time_text, weekday};
 use crate::label::kebab;
+use crate::octets::hex;
 
 /// `network 5 address 0x0a000001bac0`; an empty MAC, a broadcast on
 /// that network, as `network 5 broadcast`.
@@ -35,7 +36,7 @@ fn network_mac(network: u16, mac: &[u8]) -> String {
     if mac.is_empty() {
         format!("network {network} broadcast")
     } else {
-        format!("network {network} address 0x{}", hex(mac, ""))
+        format!("network {network} address 0x{}", hex(mac))
     }
 }
 

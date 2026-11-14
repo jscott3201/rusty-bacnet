@@ -77,8 +77,10 @@ pub(crate) fn pipe_name(salt: &Salt, nonce: &Nonce, dir: &Path) -> PathBuf {
         .chain_update(nonce.0)
         .chain_update(canonical.as_os_str().as_encoded_bytes())
         .finalize();
-    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
-    PathBuf::from(format!(r"\\.\pipe\rusty-bacnet-mcp-{hex}"))
+    PathBuf::from(format!(
+        r"\\.\pipe\rusty-bacnet-mcp-{}",
+        bacnet_ops::octets::hex(&digest[..16])
+    ))
 }
 
 /// The workspace `dir`'s salt, checked as [`read_private`] does.
@@ -132,7 +134,7 @@ pub(crate) fn read_private<const N: usize>(path: &Path) -> Result<[u8; N], SaltE
 pub(crate) fn write_temporary(dir: &Path, file: &str, bytes: &[u8]) -> io::Result<PathBuf> {
     let mut tag = [0u8; 8];
     getrandom::fill(&mut tag).map_err(io::Error::other)?;
-    let tag: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+    let tag = bacnet_ops::octets::hex(&tag);
     let temporary = dir.join(format!("{file}.{tag}.tmp"));
     // A file already at the name isn't this call's: left alone.
     let mut made = platform::create_private(&temporary)?;

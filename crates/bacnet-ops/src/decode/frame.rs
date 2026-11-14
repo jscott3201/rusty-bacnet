@@ -8,7 +8,8 @@
 
 use std::ops::Range;
 
-use crate::target::{hex, routed_station};
+use crate::octets::hex_sep;
+use crate::target::routed_station;
 use bacnet_transport::bip6::{Bvll6, decode_bvll6, format_vmac_text};
 use bacnet_transport::bvll::{self, BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_transport::mstp::codec::{FrameType, decode_frame, decode_frame_in_place};
@@ -221,8 +222,8 @@ fn bip6(frame: &[u8], link: &mut Link) -> Result<(), String> {
 fn sc(frame: &[u8], link: &mut Link) -> Result<(), String> {
     let message = decode_sc_message(frame).map_err(|e| e.to_string())?;
     link.name = kebab(format!("{:?}", message.function));
-    link.source = message.originating_vmac.map(|v| hex(&v));
-    link.destination = message.destination_vmac.map(|v| hex(&v));
+    link.source = message.originating_vmac.map(|v| hex_sep(&v, ":"));
+    link.destination = message.destination_vmac.map(|v| hex_sep(&v, ":"));
     link.broadcast = message
         .destination_vmac
         .is_some_and(|vmac| is_broadcast_vmac(&vmac));

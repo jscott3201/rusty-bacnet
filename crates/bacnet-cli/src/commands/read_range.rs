@@ -41,9 +41,10 @@ use bacnet_types::enums::{NotifyType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use serde::Serialize;
 
-use super::read::{format_items, formatter, hex};
+use super::read::{format_items, formatter};
 pub use super::read_range_options::RangeOptions;
 use crate::output::{OutputFormat, screen};
+use bacnet_ops::octets::hex_sep;
 
 /// Read a range of items from a list or log-buffer property: one read over
 /// the range `range` names, or with `--all` every page of a log.
@@ -324,7 +325,7 @@ fn log_rows(ack: &ReadRangeAck, columns: &LogColumns) -> Option<LogRows> {
                 .item_data
                 .get(error.offset..)
                 .filter(|rest| !rest.is_empty())
-                .map(hex),
+                .map(|rest| hex_sep(rest, " ")),
         },
     })
 }
@@ -546,7 +547,7 @@ fn recipient(recipient: &BACnetRecipient) -> String {
         BACnetRecipient::Address(address) => format!(
             "network {} mac [{}]",
             address.network_number,
-            hex(&address.mac_address)
+            hex_sep(&address.mac_address, " ")
         ),
     }
 }

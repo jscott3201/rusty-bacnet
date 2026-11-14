@@ -1,7 +1,7 @@
 use super::super::*;
 use bacnet_services::alarm_event::GetEventInformationAck;
 
-fn build_acknowledge_alarm_request(
+fn build_acknowledge_alarm(
     acknowledging_process_identifier: u32,
     event_object_identifier: bacnet_types::primitives::ObjectIdentifier,
     event_state_acknowledged: bacnet_types::enums::EventState,
@@ -219,7 +219,7 @@ impl BACnetClient {
     /// `timestamp` must exactly echo the original event-notification timestamp;
     /// `time_of_acknowledgment` is the caller-selected acknowledgment time.
     #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, timestamp, acknowledgment_source, time_of_acknowledgment))]
-    fn acknowledge_alarm_request<'py>(
+    fn acknowledge_alarm<'py>(
         &self,
         py: Python<'py>,
         address: String,
@@ -233,7 +233,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let mac = peers.parse(&address)?;
-        let request = build_acknowledge_alarm_request(
+        let request = build_acknowledge_alarm(
             acknowledging_process_identifier,
             event_object_identifier.to_rust(),
             event_state_acknowledged.to_rust(),
@@ -244,52 +244,9 @@ impl BACnetClient {
 
         let future = async move {
             let c = started(&inner).await?;
-            c.acknowledge_alarm_request(&mac, &request)
+            c.acknowledge_alarm(&mac, &request)
                 .await
                 .map_err(to_py_err)?;
-            Ok(())
-        };
-        crate::py_async::future_into_py(py, crate::unit_result(future))
-    }
-
-    /// Deprecated compatibility helper for acknowledging an alarm.
-    ///
-    /// This method fabricates SequenceNumber(0) for both timestamps. Use
-    /// `acknowledge_alarm_request` with exact caller-supplied timestamps.
-    #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, acknowledgment_source))]
-    #[allow(deprecated)]
-    fn acknowledge_alarm<'py>(
-        &self,
-        py: Python<'py>,
-        address: String,
-        acknowledging_process_identifier: u32,
-        event_object_identifier: PyObjectIdentifier,
-        event_state_acknowledged: PyEventState,
-        acknowledgment_source: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        PyErr::warn(
-            py,
-            &py.get_type::<PyDeprecationWarning>(),
-            c"BACnetClient.acknowledge_alarm() is deprecated; use acknowledge_alarm_request() with exact event and acknowledgment timestamps",
-            2,
-        )?;
-        let inner = self.inner.clone();
-        let peers = PeerAddresses::for_transport(&self.transport_type);
-        let oid = event_object_identifier.to_rust();
-        let event_state_acknowledged = event_state_acknowledged.to_rust();
-
-        let future = async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            c.acknowledge_alarm(
-                &mac,
-                acknowledging_process_identifier,
-                oid,
-                event_state_acknowledged,
-                &acknowledgment_source,
-            )
-            .await
-            .map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -358,7 +315,7 @@ mod acknowledgment_request_tests {
             },
         };
 
-        let request = build_acknowledge_alarm_request(
+        let request = build_acknowledge_alarm(
             0x1020_3040,
             oid,
             EventState::HIGH_LIMIT,

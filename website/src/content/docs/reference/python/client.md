@@ -860,10 +860,10 @@ Send ReinitializeDevice to a remote device.
 Raises ValueError, before anything is sent, for a password over 20
 characters or an empty one (pass None to send no password).
 
-### BACnetClient.acknowledge_alarm_request
+### BACnetClient.acknowledge_alarm
 
 ```python
-def acknowledge_alarm_request(
+def acknowledge_alarm(
     self,
     address: str,
     acknowledging_process_identifier: int,
@@ -879,24 +879,6 @@ Acknowledge an alarm with exact caller-supplied BACnetTimeStamp values.
 
 `timestamp` must echo the original event notification timestamp;
 `time_of_acknowledgment` is selected by the caller.
-
-### BACnetClient.acknowledge_alarm
-
-```python
-def acknowledge_alarm(
-    self,
-    address: str,
-    acknowledging_process_identifier: int,
-    event_object_identifier: ObjectIdentifier,
-    event_state_acknowledged: EventState,
-    acknowledgment_source: str,
-) -> Awaitable[None]
-```
-
-Deprecated compatibility method.
-
-This method fabricates sequence-number zero for both timestamps. Use
-`acknowledge_alarm_request` for a lossless request.
 
 ### BACnetClient.get_event_information
 

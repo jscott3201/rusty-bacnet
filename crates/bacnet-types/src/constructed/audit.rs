@@ -241,17 +241,4 @@ mod tests {
         };
         assert_eq!(record.clone(), record);
     }
-
-    #[test]
-    #[allow(deprecated)]
-    fn legacy_bool_helper_maps_old_meaning_to_named_filter() {
-        assert_eq!(
-            BACnetSuccessFilter::from_legacy_bool(true),
-            BACnetSuccessFilter::SUCCESSES_ONLY
-        );
-        assert_eq!(
-            BACnetSuccessFilter::from_legacy_bool(false),
-            BACnetSuccessFilter::ALL
-        );
-    }
 }

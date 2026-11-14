@@ -225,7 +225,7 @@ async fn send_everything(client: &BACnetClient<LoopbackTransport>) {
         )
         .await;
     let _ = client
-        .acknowledge_alarm_request(
+        .acknowledge_alarm(
             &PEER,
             &AcknowledgeAlarmRequest {
                 acknowledging_process_identifier: 1,

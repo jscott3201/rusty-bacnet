@@ -258,16 +258,16 @@ impl Destination {
     }
 
     /// Acknowledge an alarm with the caller's exact request.
-    pub async fn acknowledge_alarm_request<T: TransportPort + 'static>(
+    pub async fn acknowledge_alarm<T: TransportPort + 'static>(
         &self,
         client: &BACnetClient<T>,
         request: &bacnet_services::alarm_event::AcknowledgeAlarmRequest,
     ) -> Result<(), Error> {
         match self {
-            Self::Mac(mac) => client.acknowledge_alarm_request(mac, request).await,
+            Self::Mac(mac) => client.acknowledge_alarm(mac, request).await,
             Self::Device(instance) => {
                 client
-                    .acknowledge_alarm_request_from_device(*instance, request)
+                    .acknowledge_alarm_from_device(*instance, request)
                     .await
             }
         }
