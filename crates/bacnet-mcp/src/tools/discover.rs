@@ -4,6 +4,7 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
+use bacnet_ops::OpsError;
 use bacnet_ops::client::{Wanted, WhoIsScope};
 use bacnet_ops::label::kebab;
 use bacnet_services::who_is::DeviceInstanceRange;
@@ -18,7 +19,7 @@ use super::{Spec, next, schema, start};
 use crate::context::{Call, Ctx};
 use crate::errors::ToolError;
 use crate::untrusted::envelope;
-use crate::value::row_text;
+use crate::value::reading_text;
 
 pub(super) const NAME: &str = "bacnet_discover";
 
@@ -245,12 +246,13 @@ pub(super) async fn run<T: TransportPort + 'static>(
             // Pinned to the row the policy let through above.
             let read = match crate::context::pinned(client, found).await {
                 Ok(device) => device
-                    .read(object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
+                    .read_object(object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
                     .await
                     .ok(),
                 Err(_) => None,
             };
-            let name = read.and_then(|read| row_text(&read.rows, PropertyIdentifier::OBJECT_NAME));
+            let name =
+                read.and_then(|read| reading_text(&read.readings, PropertyIdentifier::OBJECT_NAME));
             let source = format!("device {instance} device:{instance} object-name");
             row["name"] = name.map_or(Value::Null, |name| envelope(&name, source, cap));
         }
@@ -331,12 +333,10 @@ async fn who_is<T: TransportPort + 'static>(
     // whether the discovery table knows a device there.
     let known_station = match scope {
         WhoIsScope::Directed(address) => {
-            let mac = client.station_mac(address).await.map_err(|e| match e {
-                bacnet_types::error::Error::Encoding(message) => {
-                    ToolError::invalid("address", message)
-                }
-                other => ToolError::invalid("address", other.to_string()),
-            })?;
+            let mac = client
+                .station_mac(address)
+                .await
+                .map_err(|e| ToolError::invalid("address", e.to_string()))?;
             client
                 .devices()
                 .await
@@ -353,7 +353,7 @@ async fn who_is<T: TransportPort + 'static>(
         .transpose()
         .map_err(|e| ToolError::invalid("range", e.to_string()))?;
     client.who_is(scope, range).await.map_err(|e| match e {
-        bacnet_types::error::Error::Encoding(message) => ToolError::invalid("address", message),
+        OpsError::Parse { reason, .. } => ToolError::invalid("address", reason),
         other => ToolError::Failed(other.to_string()),
     })
 }

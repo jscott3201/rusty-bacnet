@@ -268,23 +268,56 @@ pub fn check_local_mac<T: TransportPort + 'static>(
     }
 }
 
+/// Why [`bip6_vmac`] found no VMAC.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum VmacLookup {
+    /// The client's link isn't B/IPv6: nothing was asked.
+    NotBip6 {
+        /// The address given.
+        peer: SocketAddrV6,
+    },
+    /// The node at `peer` didn't say its VMAC.
+    NoAnswer {
+        /// The address asked.
+        peer: SocketAddrV6,
+        /// The transport's error.
+        error: Error,
+    },
+}
+
+impl std::fmt::Display for VmacLookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotBip6 { peer } => write!(f, "{peer} is a B/IPv6 address: use it with --ipv6"),
+            Self::NoAnswer { peer, error } => {
+                write!(f, "could not find the VMAC at {peer}: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for VmacLookup {}
+
 /// Find the VMAC of the B/IPv6 node at `peer`, the MAC a command sends to.
 ///
 /// A B/IPv6 node is addressed by its VMAC, not its IPv6 address (Clause
 /// U.1.3), so the CLI asks the node once, with a Virtual-Address-Resolution
 /// (Clause U.5), unless the transport already knows which VMAC is there.
-/// Fails on any transport but B/IPv6, and when nothing answers within three
-/// seconds.
+///
+/// # Errors
+///
+/// [`VmacLookup::NotBip6`] on any transport but B/IPv6, and
+/// [`VmacLookup::NoAnswer`] when nothing answers within three seconds.
 pub async fn bip6_vmac<T: TransportPort + 'static>(
     transport: &T,
     peer: SocketAddrV6,
-) -> Result<Vec<u8>, String> {
-    let bip6 = as_bip6(transport)
-        .ok_or_else(|| format!("{peer} is a B/IPv6 address: use it with --ipv6"))?;
+) -> Result<Vec<u8>, VmacLookup> {
+    let bip6 = as_bip6(transport).ok_or(VmacLookup::NotBip6 { peer })?;
     let vmac = bip6
         .resolve_virtual_address(peer)
         .await
-        .map_err(|e| format!("could not find the VMAC at {peer}: {e}"))?;
+        .map_err(|error| VmacLookup::NoAnswer { peer, error })?;
     Ok(vmac.octets().to_vec())
 }
 
@@ -302,7 +335,9 @@ pub async fn address_mac<T: TransportPort + 'static>(
 ) -> Result<Vec<u8>, String> {
     match parse_target_on(transport, text)? {
         Target::Mac(mac) => Ok(mac),
-        Target::Bip6(peer) => bip6_vmac(transport, peer).await,
+        Target::Bip6(peer) => bip6_vmac(transport, peer)
+            .await
+            .map_err(|error| error.to_string()),
         Target::Instance(_) | Target::Routed { .. } | Target::RoutedMac { .. } => {
             Err(refusal.to_string())
         }

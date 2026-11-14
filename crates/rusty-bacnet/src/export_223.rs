@@ -6,12 +6,12 @@ use std::sync::atomic::AtomicBool;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::client::{Halt, Reader};
 use bacnet_ops::export::s223::{
     Access, DEFAULT_BASE_IRI, Entry, Inventory, InventoryOptions, Point, PointKind, TurtleOptions,
     WritePriority, read_inventory, to_turtle,
 };
 use bacnet_ops::limits::RequestLimits;
+use bacnet_ops::raw::{Halt, Reader};
 use bacnet_types::enums::EngineeringUnits;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;

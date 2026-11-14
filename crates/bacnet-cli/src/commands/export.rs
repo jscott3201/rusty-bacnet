@@ -8,12 +8,12 @@ use std::sync::atomic::AtomicBool;
 
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::client::{Halt, Reader};
 use bacnet_ops::export::s223::{
     InventoryOptions, TurtleOptions, WritePriority, read_inventory, write_turtle,
 };
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::parse::parse_object_type;
+use bacnet_ops::raw::{Halt, Reader};
 use bacnet_transport::port::TransportPort;
 
 use crate::args::ExportFormat;

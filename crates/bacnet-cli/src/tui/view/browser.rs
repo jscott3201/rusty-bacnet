@@ -325,6 +325,8 @@ fn title(view: &ObjectView) -> String {
     let via = match view.via {
         ReadVia::Rpm => "",
         ReadVia::Rp => " (via RP)",
+        // One object's read is never part one way, part the other.
+        ReadVia::Mixed => " (via RPM and RP)",
     };
     format!(" {}{via} ", object_label(view.object))
 }

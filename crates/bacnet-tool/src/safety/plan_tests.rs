@@ -1,6 +1,6 @@
 //! Tests of the write preview: occupancy, effects, tiers and refusals.
 
-use bacnet_ops::format::RowError;
+use bacnet_ops::format::PropertyError;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -311,7 +311,7 @@ fn a_priority_array_that_does_not_decode_refuses_the_write() {
     );
     // An error reading it means not commandable.
     let mut rows = ao1();
-    rows[1].1 = Err(RowError::Remote(RemoteError::Error {
+    rows[1].1 = Err(PropertyError::Remote(RemoteError::Error {
         class: ErrorClass::PROPERTY,
         code: ErrorCode::UNKNOWN_PROPERTY,
     }));

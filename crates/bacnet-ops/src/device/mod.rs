@@ -19,7 +19,7 @@
 //!   address claiming it in the discovery table gives a handle that
 //!   follows the instance; none sends one Who-Is for it and waits
 //!   ([`Client::with_resolve_wait`]); two or more, before or after that
-//!   wait, fail with [`Error::AmbiguousDevice`], listing them.
+//!   wait, fail with [`OpsError::Ambiguous`], listing them.
 //! - **From a discovery result** ([`Discovered`]): pinned, knowing the
 //!   instance.
 //!
@@ -30,7 +30,7 @@
 //! ([`ClientEvent::Moved`]) and sends there, when:
 //!
 //! - before a request, another device has announced itself at its address
-//!   (with no other claim the request fails as [`Error::UnknownDevice`],
+//!   (with no other claim the request fails as [`OpsError::UnknownDevice`],
 //!   with two or more as ambiguous, and nothing is sent);
 //! - after a request timed out, or found no route left to a routed
 //!   address, no row there claims the instance any more;
@@ -46,20 +46,29 @@
 /// Evaluate `$body` with `$at` where the device is reached now
 /// ([`Device::target`]), and for a following handle whose request timed
 /// out or found no route once more where it moved to ([`Device::retry`]).
-/// For a function returning `Result<_, Error>`.
+/// `$body` gives a `Result<_, Error>`, the macro a `Result<_, OpsError>`
+/// whose error names the address the request went to, for a function
+/// returning `Result<_, OpsError>`.
 macro_rules! sent {
     ($device:expr, |$at:ident| $body:expr) => {{
-        let address = $device.target().await?;
+        let address = $device
+            .target()
+            .await
+            .map_err($crate::error::OpsError::from)?;
         let result = {
             let $at = &address;
             $body
         };
-        match $device.retry(&address, &result).await? {
+        match $device
+            .retry(&address, &result)
+            .await
+            .map_err($crate::error::OpsError::from)?
+        {
             Some(to) => {
                 let $at = &to;
-                $body
+                ($body).map_err(|error| $crate::error::OpsError::at(&to, error))
             }
-            None => result,
+            None => result.map_err(|error| $crate::error::OpsError::at(&address, error)),
         }
     }};
 }
@@ -75,13 +84,13 @@ use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::error::Error;
 
 pub use self::address::DeviceAddress;
 use self::follow::Followed;
 pub(crate) use self::follow::Follows;
 pub(crate) use self::route::Path;
 use crate::client::{Client, lock};
+use crate::error::OpsError;
 
 /// How long an address must have been quiet before another announcing its
 /// instance counts as the device moving there, where only the discovery
@@ -286,7 +295,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// so it is read once: until the discovery table loses a row at that
     /// address, or a device there announces another instance, which may
     /// mean another device has it now.
-    pub async fn resolve_instance(&self) -> Result<u32, Error> {
+    pub async fn resolve_instance(&self) -> Result<u32, OpsError> {
         if let Some(instance) = self.instance() {
             return Ok(instance);
         }
@@ -295,7 +304,7 @@ impl<T: TransportPort + 'static> Device<T> {
         let instance = reader
             .instance()
             .await
-            .map_err(crate::client::device_error)?;
+            .map_err(|halt| OpsError::at(&address, crate::client::device_error(halt)))?;
         self.client.remember(address, instance);
         Ok(instance)
     }

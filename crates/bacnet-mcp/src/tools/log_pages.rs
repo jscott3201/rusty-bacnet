@@ -6,7 +6,6 @@
 
 use bacnet_client::log_reader::{LogCursor, LogPage};
 use bacnet_ops::Device;
-use bacnet_ops::client::timed_out;
 use bacnet_ops::parse::parse_weekday_digit;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;
@@ -391,7 +390,7 @@ impl Pager {
             Ok(page) => page,
             Err(error) if self.pages == 0 => return Err(ToolError::device(self.device, &error)),
             Err(error) => {
-                if timed_out(&error) {
+                if error.timed_out() {
                     call.timed_out();
                 }
                 self.stopped = Some(ToolError::device(self.device, &error).json());

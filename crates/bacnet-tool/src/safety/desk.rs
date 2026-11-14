@@ -39,8 +39,9 @@ use super::plan::{self, PRE_READ, PreRead};
 use super::send::{item_json, send, write_property};
 use super::{Gate, Level, Outcome, Planned, Preview, Stored, WriteSpec, run_id};
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::client::{Halt, Reader, Wanted, unreachable};
+use bacnet_ops::client::Wanted;
 use bacnet_ops::limits::RequestLimits;
+use bacnet_ops::raw::{Halt, Reader, unreachable};
 
 /// Why a passive session refuses anything that transmits.
 pub const PASSIVE: &str = "passive session: nothing is transmitted";
