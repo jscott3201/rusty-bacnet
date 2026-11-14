@@ -2,6 +2,7 @@
 //! `read_work_limit` (#1215): a Group's Present_Value counts its own row plus
 //! each member row, and a read past the limit is aborted with
 //! OUT_OF_RESOURCES, as the full server aborts it.
+use crate::session::bus_port::bus_port;
 use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 
@@ -10,7 +11,6 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::AbortReason;
 
-use super::bus_port::BusPort;
 use super::device_write_tests::bus_client;
 use super::*;
 use crate::bip::BipEndpointBuilder;
@@ -66,7 +66,7 @@ async fn read_groups(limit: Option<usize>) -> Vec<Result<(), Error>> {
     if let Some(limit) = limit {
         builder = builder.read_work_limit(limit);
     }
-    let mut endpoint = builder.build_session_over(BusPort::new()).unwrap();
+    let mut endpoint = builder.build_session_over(bus_port()).unwrap();
     endpoint.start().await.unwrap();
     let port = endpoint.bip_local_address().unwrap().port();
     let mut client = bus_client().await;

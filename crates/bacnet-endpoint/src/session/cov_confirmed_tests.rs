@@ -5,6 +5,7 @@
 //! outstanding gives every invoke ID back and sends nothing more.
 
 use super::*;
+use crate::session::bus_port::bus_port;
 use crate::session::eventually::eventually;
 use bacnet_device_core::cov::CovPolicy;
 use bacnet_device_core::report::OutboxLimits;
@@ -224,7 +225,7 @@ async fn the_bounds_hold() {
         BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(role)
             .database(fixture())
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap()
             .with_cov(config.clone())
     };

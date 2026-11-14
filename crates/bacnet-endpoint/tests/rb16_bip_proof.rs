@@ -21,10 +21,6 @@
 //!   never INSTEAD of these real-UDP proofs.
 
 use std::net::Ipv4Addr;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
 use std::time::Duration;
 
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest as ConfirmedPdu, decode_apdu, encode_apdu};
@@ -36,7 +32,8 @@ use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bip::BipTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::TransportPort;
+use bacnet_transport::test_transport::{SendMode, TestTransport, TestTransportHandle};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation,
@@ -44,7 +41,6 @@ use bacnet_types::enums::{
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
-use tokio::sync::mpsc;
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -167,46 +163,16 @@ async fn peer_respond_once(
 
 // --- Bind-count double (transport-independent determinism) ---
 
-struct CountingTransport<T: TransportPort> {
-    inner: T,
-    starts: Arc<AtomicUsize>,
-}
-
-impl<T: TransportPort> CountingTransport<T> {
-    fn new(inner: T, starts: Arc<AtomicUsize>) -> Self {
-        Self { inner, starts }
-    }
-}
-
-impl<T: TransportPort> TransportPort for CountingTransport<T> {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, bacnet_types::error::Error> {
-        self.starts.fetch_add(1, Ordering::SeqCst);
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), bacnet_types::error::Error> {
-        self.inner.stop().await
-    }
-    async fn send_unicast(
-        &self,
-        npdu: &[u8],
-        mac: &[u8],
-    ) -> Result<(), bacnet_types::error::Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), bacnet_types::error::Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
+/// `inner` behind a test transport that counts each start (the bind), and
+/// passes every send on.
+fn counting(inner: impl TransportPort + 'static) -> (TestTransport, TestTransportHandle) {
+    let transport = TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .build();
+    let starts = transport.handle();
+    (transport, starts)
 }
 
 #[tokio::test]
@@ -216,38 +182,20 @@ async fn bip_bind_count_is_one_per_start() {
     use bacnet_endpoint::session::EndpointSession;
     use bacnet_transport::loopback::LoopbackTransport;
 
-    let starts = Arc::new(AtomicUsize::new(0));
     let (inner, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let counting = CountingTransport::new(inner, Arc::clone(&starts));
-    let mut s = EndpointSession::new(counting, SessionRole::Both, session_config()).unwrap();
+    let (transport, starts) = counting(inner);
+    let mut s = EndpointSession::new(transport, SessionRole::Both, session_config()).unwrap();
     s.start().await.unwrap();
-    assert_eq!(
-        starts.load(Ordering::SeqCst),
-        1,
-        "one bind per start, no hidden socket"
-    );
+    assert_eq!(starts.starts(), 1, "one bind per start, no hidden socket");
     assert!(s.start().await.is_err());
-    assert_eq!(
-        starts.load(Ordering::SeqCst),
-        1,
-        "failed start must not bind again"
-    );
+    assert_eq!(starts.starts(), 1, "failed start must not bind again");
     s.stop().await.unwrap();
 
-    let starts2 = Arc::new(AtomicUsize::new(0));
     let (inner2, _peer2) = LoopbackTransport::pair(vec![0x03], vec![0x04]);
-    let mut s2 = EndpointSession::new(
-        CountingTransport::new(inner2, Arc::clone(&starts2)),
-        SessionRole::Both,
-        session_config(),
-    )
-    .unwrap();
+    let (transport2, starts2) = counting(inner2);
+    let mut s2 = EndpointSession::new(transport2, SessionRole::Both, session_config()).unwrap();
     s2.start().await.unwrap();
-    assert_eq!(
-        starts2.load(Ordering::SeqCst),
-        1,
-        "rebind after stop binds once"
-    );
+    assert_eq!(starts2.starts(), 1, "rebind after stop binds once");
     s2.stop().await.unwrap();
 }
 

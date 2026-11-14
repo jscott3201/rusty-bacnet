@@ -20,10 +20,12 @@ use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
 use bytes::{Bytes, BytesMut};
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::time::{Duration, timeout};
 
 #[path = "local_network_source_tests.rs"]
@@ -66,67 +68,41 @@ struct Sent {
     npdu: Bytes,
 }
 
-/// A B/IP-shaped link that records every send and takes injected input.
-struct Capture {
-    local: MacAddr,
-    inbound: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// A B/IP-shaped link that records every send and takes injected input. It
+/// reports a NORMAL B/IP port at `SELF` and takes the Number controls; its
+/// first stop fails when `fail_stop`.
+fn capture(
+    inbound: mpsc::Receiver<ReceivedNpdu>,
     outbound: mpsc::Sender<Sent>,
-    lease: Option<Arc<()>>,
     fail_stop: bool,
-}
-
-impl Capture {
-    fn record(&self, link: &[u8], npdu: &[u8]) -> Result<(), Error> {
-        self.outbound
-            .try_send(Sent {
-                link: MacAddr::from_slice(link),
-                npdu: Bytes::copy_from_slice(npdu),
-            })
-            .expect("bounded send observation");
-        Ok(())
-    }
-}
-
-impl TransportPort for Capture {
-    fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
-        Some(host(255))
-    }
-    fn supports_local_nonrouter_number_controls(&self) -> bool {
-        true
-    }
-    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
-        Some(bacnet_transport::port::BipPort::new(
-            host(SELF),
-            bacnet_types::bip_port::BipPortMode::Normal,
-        ))
-    }
-    fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
-        self.lease = Some(lease);
-        Ok(())
-    }
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.inbound.take().expect("started once"))
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.lease = None;
-        if std::mem::take(&mut self.fail_stop) {
-            Err(Error::Encoding("injected capture stop failure".into()))
-        } else {
-            Ok(())
-        }
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.record(mac, npdu)
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.record(&[], npdu)
-    }
-    fn local_mac(&self) -> &[u8] {
-        &self.local
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
+) -> TestTransport {
+    let fail_stop = Arc::new(AtomicBool::new(fail_stop));
+    TestTransport::builder()
+        .local_mac(&mac(SELF))
+        .inbound(inbound)
+        .number_controls()
+        .normal_bip(host(SELF))
+        .on_bip_broadcast_endpoint(|| Some(host(255)))
+        .on_send(move |frame| {
+            outbound
+                .try_send(Sent {
+                    link: frame.mac,
+                    npdu: frame.npdu,
+                })
+                .expect("bounded send observation");
+            async { Ok(()) }
+        })
+        .on_stop(move || {
+            let failing = fail_stop.swap(false, Ordering::SeqCst);
+            async move {
+                if failing {
+                    Err(Error::Encoding("injected capture stop failure".into()))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .build()
 }
 
 /// Where a frame went: its link MAC and the NPDU's DNET/DADR, if any.
@@ -165,7 +141,7 @@ fn peer_on(network: u16) -> Option<NpduAddress> {
 }
 
 struct Endpoint {
-    session: EndpointSession<Capture>,
+    session: EndpointSession<TestTransport>,
     inbound: mpsc::Sender<ReceivedNpdu>,
     sent: mpsc::Receiver<Sent>,
 }
@@ -179,13 +155,7 @@ impl Endpoint {
     fn with_stop_failure(role: SessionRole, fail_stop: bool) -> Self {
         let (inbound, input) = mpsc::channel(32);
         let (outbound, sent) = mpsc::channel(32);
-        let transport = Capture {
-            local: mac(SELF),
-            inbound: Some(input),
-            outbound,
-            lease: None,
-            fail_stop,
-        };
+        let transport = capture(input, outbound, fail_stop);
         let config = SessionConfig {
             apdu_timeout_ms: 5_000,
             ..SessionConfig::default()

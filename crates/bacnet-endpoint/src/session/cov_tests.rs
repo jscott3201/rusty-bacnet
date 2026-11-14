@@ -13,7 +13,7 @@
 
 use super::*;
 use crate::bip::BipEndpointBuilder;
-use crate::session::bus_port::BusPort;
+use crate::session::bus_port::bus_port;
 use crate::session::{EndpointSession, SessionRole};
 use bacnet_encoding::apdu::{ConfirmedRequest, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
@@ -21,6 +21,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, ServiceSupported};
 use bytes::Bytes;
@@ -64,11 +65,11 @@ fn fixture() -> ObjectDatabase {
 
 /// A running endpoint over [`fixture`] on the in-memory link, with COV
 /// under `cov` when it is given.
-async fn endpoint(role: SessionRole, cov: Option<ReportConfig>) -> EndpointSession<BusPort> {
+async fn endpoint(role: SessionRole, cov: Option<ReportConfig>) -> EndpointSession<TestTransport> {
     let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(role)
         .database(fixture())
-        .build_session_over(BusPort::new())
+        .build_session_over(bus_port())
         .unwrap();
     if let Some(config) = cov {
         session = session.with_cov(config);
@@ -78,7 +79,7 @@ async fn endpoint(role: SessionRole, cov: Option<ReportConfig>) -> EndpointSessi
 }
 
 /// The endpoint's MAC on the link.
-fn mac_of(session: &EndpointSession<BusPort>) -> MacAddr {
+fn mac_of(session: &EndpointSession<TestTransport>) -> MacAddr {
     let port = session.bip_local_address().unwrap().port();
     MacAddr::from_slice(&bacnet_transport::bvll::encode_bip_mac(
         [127, 0, 0, 1],
@@ -87,10 +88,10 @@ fn mac_of(session: &EndpointSession<BusPort>) -> MacAddr {
 }
 
 /// A `bacnet-server` over [`fixture`] on the in-memory link.
-async fn server() -> BACnetServer<BusPort> {
+async fn server() -> BACnetServer<TestTransport> {
     BACnetServer::generic_builder()
         .device(DeviceIdentity::new(DEVICE, 0x105).unwrap())
-        .transport(BusPort::new())
+        .transport(bus_port())
         .database(fixture())
         .build()
         .await
@@ -155,13 +156,13 @@ fn confirmed_apdu(invoke_id: u8, service: ConfirmedServiceChoice, body: &[u8]) -
 
 /// A bare node on the link: it sends APDUs and reads what comes back.
 struct Node {
-    port: BusPort,
+    port: TestTransport,
     rx: mpsc::Receiver<ReceivedNpdu>,
 }
 
 impl Node {
     async fn new() -> Self {
-        let mut port = BusPort::new();
+        let mut port = bus_port();
         let rx = port.start().await.unwrap();
         Self { port, rx }
     }
@@ -227,8 +228,8 @@ impl Node {
 /// The subscriber and the two hosts it talks to.
 struct Pair {
     node: Node,
-    server: BACnetServer<BusPort>,
-    endpoint: EndpointSession<BusPort>,
+    server: BACnetServer<TestTransport>,
+    endpoint: EndpointSession<TestTransport>,
     invoke_id: u8,
 }
 
@@ -560,7 +561,7 @@ async fn an_event_path_in_the_cov_config_is_refused_at_start() {
         let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ServerOnly)
             .database(fixture())
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap()
             .with_cov(config);
         let error = session.start().await.expect_err("COV only");
@@ -576,7 +577,7 @@ async fn a_device_write_with_cov_on_answers_alone() {
     let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(SessionRole::ServerOnly)
         .database(fixture())
-        .build_session_over(BusPort::new())
+        .build_session_over(bus_port())
         .unwrap()
         .with_device_writes(Arc::new(|_| true))
         .with_cov(ReportConfig::default());

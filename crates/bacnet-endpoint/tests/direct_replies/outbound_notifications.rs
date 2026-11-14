@@ -19,10 +19,11 @@ async fn standard_native_notification_owner_accepts_hub_direct_path_switches() {
     for mode in 0..3 {
         let hub_request = mode == 1;
         let ca = TestCa::new();
-        let (mut peer, mut port) = Peer::start(&ca).await;
+        let (mut peer, mut parts) = Peer::start_parts(&ca).await;
         if hub_request {
-            port.transport = port.transport.with_direct_discovery(false);
+            parts.transport = parts.transport.with_direct_discovery(false);
         }
+        let port = parts.into_port();
         let mut network = NetworkLayer::new(port);
         let mut incoming = network.start().await.unwrap();
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());

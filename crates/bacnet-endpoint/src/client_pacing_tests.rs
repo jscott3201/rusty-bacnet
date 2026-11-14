@@ -8,6 +8,7 @@ use bacnet_encoding::apdu::{ComplexAck, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use std::sync::Mutex as StdMutex;
@@ -21,128 +22,98 @@ const B: &[u8] = &[0x0B];
 /// A link whose devices answer each ReadProperty `reply_after` it was sent,
 /// from the MAC it went to, recording when each request left. The first
 /// `unanswered` requests get no answer.
-struct Devices {
-    inbound_tx: mpsc::Sender<ReceivedNpdu>,
-    inbound_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
-    sends: Sends,
-    unanswered: StdMutex<usize>,
-    reply_after: Duration,
-}
-
-impl Devices {
-    /// The answer to `request` from `mac`, unless the device stays silent.
-    fn answer(&self, request: &[u8], mac: &[u8]) -> Result<Option<ReceivedNpdu>, Error> {
-        let npdu = decode_npdu(Bytes::copy_from_slice(request))?;
-        let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload)? else {
-            return Ok(None);
-        };
-        {
-            let mut unanswered = self.unanswered.lock().unwrap();
-            if *unanswered > 0 {
-                *unanswered -= 1;
-                return Ok(None);
-            }
-        }
-        let read = ReadPropertyRequest::decode(&request.service_request)?;
-        let mut service_ack = BytesMut::new();
-        ReadPropertyACK {
-            object_identifier: read.object_identifier,
-            property_identifier: read.property_identifier,
-            property_array_index: read.property_array_index,
-            property_value: vec![0x21, 42],
-        }
-        .encode(&mut service_ack)
-        .unwrap();
-        let mut apdu = BytesMut::new();
-        encode_apdu(
-            &mut apdu,
-            &Apdu::ComplexAck(ComplexAck {
-                segmented: false,
-                more_follows: false,
-                invoke_id: request.invoke_id,
-                sequence_number: None,
-                proposed_window_size: None,
-                service_choice: request.service_choice,
-                service_ack: service_ack.freeze(),
-            }),
-        )?;
-        let mut reply = BytesMut::new();
-        encode_npdu(
-            &mut reply,
-            &Npdu {
-                payload: apdu.freeze(),
-                ..Npdu::default()
-            },
-        )?;
-        Ok(Some(ReceivedNpdu {
-            direct_response: None,
-            npdu: reply.freeze(),
-            source_mac: MacAddr::from_slice(mac),
-            link_layer_group: false,
-            data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
-            reply_tx: None,
-        }))
-    }
-}
-
-impl TransportPort for Devices {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.inbound_rx.take().expect("started once"))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sends
-            .lock()
-            .unwrap()
-            .push((Instant::now(), MacAddr::from_slice(mac)));
-        if let Some(reply) = self.answer(npdu, mac)? {
-            let inbound = self.inbound_tx.clone();
-            let delay = self.reply_after;
-            tokio::spawn(async move {
-                tokio::time::sleep(delay).await;
-                let _ = inbound.send(reply).await;
-            });
-        }
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[0x01]
-    }
-}
-
-fn devices(sends: &Sends, unanswered: usize, reply_after: Duration) -> Devices {
+fn devices(sends: &Sends, unanswered: usize, reply_after: Duration) -> TestTransport {
     let (inbound_tx, inbound_rx) = mpsc::channel(16);
-    Devices {
-        inbound_tx,
-        inbound_rx: Some(inbound_rx),
-        sends: Arc::clone(sends),
-        unanswered: StdMutex::new(unanswered),
-        reply_after,
-    }
+    let (sends, unanswered) = (Arc::clone(sends), StdMutex::new(unanswered));
+    TestTransport::builder()
+        .inbound(inbound_rx)
+        .broadcast(SendMode::Ignore)
+        .on_send(move |frame| {
+            sends
+                .lock()
+                .unwrap()
+                .push((Instant::now(), MacAddr::from_slice(&frame.mac)));
+            let result = answer(&unanswered, &frame.npdu, &frame.mac).map(|reply| {
+                if let Some(reply) = reply {
+                    let inbound = inbound_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(reply_after).await;
+                        let _ = inbound.send(reply).await;
+                    });
+                }
+            });
+            async move { result }
+        })
+        .build()
 }
 
-/// A started client-only session over [`Devices`] with a 100 ms APDU
+/// The answer to `request` from `mac`, unless the device stays silent.
+fn answer(
+    unanswered: &StdMutex<usize>,
+    request: &[u8],
+    mac: &[u8],
+) -> Result<Option<ReceivedNpdu>, Error> {
+    let npdu = decode_npdu(Bytes::copy_from_slice(request))?;
+    let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload)? else {
+        return Ok(None);
+    };
+    {
+        let mut unanswered = unanswered.lock().unwrap();
+        if *unanswered > 0 {
+            *unanswered -= 1;
+            return Ok(None);
+        }
+    }
+    let read = ReadPropertyRequest::decode(&request.service_request)?;
+    let mut service_ack = BytesMut::new();
+    ReadPropertyACK {
+        object_identifier: read.object_identifier,
+        property_identifier: read.property_identifier,
+        property_array_index: read.property_array_index,
+        property_value: vec![0x21, 42],
+    }
+    .encode(&mut service_ack)
+    .unwrap();
+    let mut apdu = BytesMut::new();
+    encode_apdu(
+        &mut apdu,
+        &Apdu::ComplexAck(ComplexAck {
+            segmented: false,
+            more_follows: false,
+            invoke_id: request.invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: request.service_choice,
+            service_ack: service_ack.freeze(),
+        }),
+    )?;
+    let mut reply = BytesMut::new();
+    encode_npdu(
+        &mut reply,
+        &Npdu {
+            payload: apdu.freeze(),
+            ..Npdu::default()
+        },
+    )?;
+    Ok(Some(ReceivedNpdu {
+        direct_response: None,
+        npdu: reply.freeze(),
+        source_mac: MacAddr::from_slice(mac),
+        link_layer_group: false,
+        data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
+        reply_tx: None,
+    }))
+}
+
+/// A started client-only session over [`devices`] with a 100 ms APDU
 /// timeout, `retries` retries and the given interval.
 async fn paced(
     interval_ms: u64,
     retries: u8,
     unanswered: usize,
     reply_after: Duration,
-) -> (EndpointSession<Devices>, Sends) {
+) -> (EndpointSession<TestTransport>, Sends) {
     let sends = Sends::default();
     let devices = devices(&sends, unanswered, reply_after);
     let config = SessionConfig {
@@ -164,7 +135,7 @@ async fn try_read(client: &ClientRoleHandle, mac: &[u8]) -> Result<(), Error> {
         .map(drop)
 }
 
-async fn read(session: &EndpointSession<Devices>, mac: &[u8]) {
+async fn read(session: &EndpointSession<TestTransport>, mac: &[u8]) {
     try_read(session.client().unwrap(), mac).await.unwrap();
 }
 

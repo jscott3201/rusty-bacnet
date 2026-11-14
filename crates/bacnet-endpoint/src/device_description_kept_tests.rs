@@ -4,8 +4,9 @@
 //! configured one, and refuses a write it can't save.
 
 use super::*;
-use crate::session::bus_port::BusPort;
+use crate::session::bus_port::bus_port;
 use bacnet_objects::object_profile::{TagsPersistence, TagsSnapshot};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use std::net::Ipv4Addr;
 use std::sync::atomic::AtomicBool;
@@ -73,7 +74,7 @@ impl TagsPersistence for Storage {
 
 /// A session serving Device 123, built on `storage` and configured with a
 /// Description as an application does at each start.
-async fn session_on(storage: &Arc<Storage>) -> (EndpointSession<BusPort>, [u8; 6]) {
+async fn session_on(storage: &Arc<Storage>) -> (EndpointSession<TestTransport>, [u8; 6]) {
     let config = DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::new(123, 42)
             .unwrap()
@@ -89,7 +90,7 @@ async fn session_on(storage: &Arc<Storage>) -> (EndpointSession<BusPort>, [u8; 6
             .role(SessionRole::ServerOnly)
             .database(db)
             .device_writes(Arc::new(|_| true))
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
     session.start().await.unwrap();
     let database = Arc::downgrade(session.database.as_ref().unwrap());
@@ -211,7 +212,7 @@ async fn a_description_written_locally_is_saved_first() {
 }
 
 /// Whether Device 123 holds a write staged for a request.
-async fn staged(session: &EndpointSession<BusPort>) -> bool {
+async fn staged(session: &EndpointSession<TestTransport>) -> bool {
     let mut db = session.database.as_ref().unwrap().write().await;
     let device = db.get_mut(&oid(123)).unwrap();
     device.durable_writes().unwrap().has_staged_write()

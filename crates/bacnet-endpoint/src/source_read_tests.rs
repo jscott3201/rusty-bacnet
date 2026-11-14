@@ -1,6 +1,6 @@
-use super::bus_port::BusPort;
 use super::eventually::eventually;
 use super::*;
+use crate::session::bus_port::bus_port;
 use bacnet_encoding::apdu::{
     AbortPdu, ComplexAck, ErrorPdu, RejectPdu, SimpleAck, decode_apdu, encode_apdu,
 };
@@ -10,6 +10,7 @@ use bacnet_objects::audit::AuditReporterObject;
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bvll::{decode_bip_mac, encode_bip_mac};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{BACnetAuditNotification, BACnetObjectSelector, BACnetRecipient};
@@ -23,7 +24,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::time::{Duration, timeout};
 
 /// How long a test waits for a frame or a condition. Every test here runs
-/// on paused time, over [`BusPort`] or a loopback transport, so this is
+/// on paused time, over [`bus_port`] or a loopback transport, so this is
 /// Tokio time, not the host's: a stalled host can't use it up, and a wait
 /// that never succeeds fails after 2 s of it (#2293). A wait in a loop must
 /// go through [`eventually`], since a loop that only yields stops paused
@@ -60,20 +61,23 @@ fn database(confirmed: bool) -> ObjectDatabase {
     db.add(Box::new(reporter)).unwrap();
     db
 }
-async fn network() -> (NetworkLayer<BusPort>, bacnet_network::layer::ApduReceiver) {
-    let mut network = NetworkLayer::new(BusPort::new());
+async fn network() -> (
+    NetworkLayer<TestTransport>,
+    bacnet_network::layer::ApduReceiver,
+) {
+    let mut network = NetworkLayer::new(bus_port());
     let receiver = network.start().await.unwrap();
     (network, receiver)
 }
-fn address(network: &NetworkLayer<BusPort>) -> SocketAddrV4 {
+fn address(network: &NetworkLayer<TestTransport>) -> SocketAddrV4 {
     let (ip, port) = decode_bip_mac(network.local_mac()).unwrap();
     SocketAddrV4::new(ip.into(), port)
 }
 fn session(
     mut db: ObjectDatabase,
     role: SessionRole,
-    sink: &NetworkLayer<BusPort>,
-) -> EndpointSession<BusPort> {
+    sink: &NetworkLayer<TestTransport>,
+) -> EndpointSession<TestTransport> {
     db.get_mut(&oid(ObjectType::DEVICE, 123))
         .unwrap()
         .device_authority_internal()
@@ -99,14 +103,14 @@ fn session(
         session
     }
 }
-/// A session on its own [`BusPort`], with no database or source Audit.
-fn bare_session(role: SessionRole, config: SessionConfig) -> EndpointSession<BusPort> {
-    EndpointSession::new(BusPort::new(), role, config).unwrap()
+/// A session on its own [`bus_port`], with no database or source Audit.
+fn bare_session(role: SessionRole, config: SessionConfig) -> EndpointSession<TestTransport> {
+    EndpointSession::new(bus_port(), role, config).unwrap()
 }
 async fn receive(receiver: &mut bacnet_network::layer::ApduReceiver) -> ReceivedApdu {
     timeout(WAIT, receiver.recv()).await.unwrap().unwrap()
 }
-async fn send(network: &NetworkLayer<BusPort>, mac: &[u8], pdu: Apdu) {
+async fn send(network: &NetworkLayer<TestTransport>, mac: &[u8], pdu: Apdu) {
     let mut bytes = BytesMut::new();
     encode_apdu(&mut bytes, &pdu).unwrap();
     network
@@ -182,7 +186,7 @@ async fn reliability<T: TransportPort + 'static>(session: &EndpointSession<T>) -
     value
 }
 fn start_read(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     target_mac: &[u8],
     property: PropertyIdentifier,
     index: Option<u32>,
@@ -568,7 +572,7 @@ async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
             ..Default::default()
         },
         remote_db,
-        BusPort::new(),
+        bus_port(),
     )
     .await
     .unwrap();

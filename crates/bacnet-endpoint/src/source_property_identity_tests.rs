@@ -1,9 +1,10 @@
 //! A source records only the concrete identity established by a valid ACK.
 use super::*;
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::error::RemoteError;
 
 fn start_object(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     mac: &[u8],
     object: ObjectIdentifier,
 ) -> tokio::task::JoinHandle<Result<ReadPropertyACK, Error>> {
@@ -16,13 +17,13 @@ fn start_object(
     })
 }
 fn start_alias(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     mac: &[u8],
     kind: ObjectType,
 ) -> tokio::task::JoinHandle<Result<ReadPropertyACK, Error>> {
     start_object(session, mac, oid(kind, ObjectIdentifier::WILDCARD_INSTANCE))
 }
-async fn released(session: &EndpointSession<BusPort>) {
+async fn released(session: &EndpointSession<TestTransport>) {
     eventually(
         WAIT,
         "every lease and source operation is released",

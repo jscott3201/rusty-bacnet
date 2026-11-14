@@ -11,6 +11,7 @@
 
 use super::confirmed::{ack, confirmed_notification};
 use super::*;
+use crate::session::bus_port::bus_port;
 use crate::session::eventually::eventually;
 use bacnet_device_core::cov::{CovPolicy, FlightTiming};
 use bacnet_device_core::report::OutboxLimits;
@@ -336,7 +337,7 @@ async fn a_client_write_notifies_nobody() {
         .database(fixture())
         .device_writes(Arc::new(|_| true))
         .cov(ReportConfig::default())
-        .build_session_over(BusPort::new())
+        .build_session_over(bus_port())
         .unwrap();
     session.start().await.unwrap();
     let to = mac_of(&session);
@@ -389,7 +390,7 @@ async fn the_builder_option_is_the_session_opt_in() {
     let mut node = Node::new().await;
     let mut session = builder()
         .role(SessionRole::ServerOnly)
-        .build_session_over(BusPort::new())
+        .build_session_over(bus_port())
         .unwrap();
     let services = session.executed_services();
     assert!(services.contains(&ServiceSupported::SUBSCRIBE_COV));
@@ -403,7 +404,7 @@ async fn the_builder_option_is_the_session_opt_in() {
 
     let mut client = builder()
         .role(SessionRole::ClientOnly)
-        .build_session_over(BusPort::new())
+        .build_session_over(bus_port())
         .unwrap();
     let error = client.start().await.expect_err("a server role");
     assert!(

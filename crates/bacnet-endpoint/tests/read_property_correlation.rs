@@ -8,7 +8,7 @@ use bacnet_types::{
     enums::{ObjectType, PropertyIdentifier},
     primitives::ObjectIdentifier,
 };
-use bus_port::BusPort;
+use bus_port::bus_port;
 
 #[path = "support/bus_port.rs"]
 mod bus_port;
@@ -25,12 +25,12 @@ async fn endpoint_device_wildcard_accepts_bundled_server_concrete_ack() {
             ..Default::default()
         },
         database,
-        BusPort::new(),
+        bus_port(),
     )
     .await
     .unwrap();
     let mut endpoint = EndpointSession::new(
-        BusPort::new(),
+        bus_port(),
         SessionRole::ClientOnly,
         SessionConfig::default(),
     )

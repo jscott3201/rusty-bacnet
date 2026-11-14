@@ -1,42 +1,34 @@
 use super::*;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use tokio::sync::{Notify, Semaphore};
 
-pub(super) struct Gated {
-    pub(super) inner: LoopbackTransport,
-    pub(super) entered: Arc<Notify>,
-    pub(super) gate: Arc<Semaphore>,
-}
-impl TransportPort for Gated {
-    fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
-        Some("255.255.255.255:30001".parse().unwrap())
-    }
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.entered.notify_one();
-        self.gate.acquire().await.unwrap().forget();
-        self.inner.send_unicast(npdu, mac).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
+/// `inner` with a unicast that tells `entered` and then waits for a permit
+/// from `gate` before it goes on, and a B/IP broadcast endpoint at the
+/// limited broadcast, port 30001.
+pub(super) fn gated(
+    inner: LoopbackTransport,
+    entered: Arc<Notify>,
+    gate: Arc<Semaphore>,
+) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .on_bip_broadcast_endpoint(|| Some("255.255.255.255:30001".parse().unwrap()))
+        .on_send(move |frame| {
+            let gate = Arc::clone(&gate);
+            if !frame.broadcast {
+                entered.notify_one();
+            }
+            async move {
+                if !frame.broadcast {
+                    gate.acquire().await.unwrap().forget();
+                }
+                Ok(())
+            }
+        })
+        .build()
 }
 
 #[tokio::test(start_paused = true)]
@@ -47,11 +39,7 @@ async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
     let entered = Arc::new(Notify::new());
     let gate = Arc::new(Semaphore::new(0));
     let mut session = EndpointSession::new(
-        Gated {
-            inner: transport,
-            entered: Arc::clone(&entered),
-            gate: Arc::clone(&gate),
-        },
+        gated(transport, Arc::clone(&entered), Arc::clone(&gate)),
         SessionRole::ClientOnly,
         SessionConfig::default(),
     )
@@ -147,11 +135,7 @@ async fn source_recipient_full_egress_fails_one_sibling_after_commit_without_ret
         .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
         .unwrap();
     let mut session = EndpointSession::new(
-        Gated {
-            inner: transport,
-            entered: entered.clone(),
-            gate: gate.clone(),
-        },
+        gated(transport, entered.clone(), gate.clone()),
         SessionRole::ClientOnly,
         SessionConfig {
             queue_capacity: 1,
@@ -252,11 +236,7 @@ async fn queued_i_am_holds_no_database_guard() {
     let gate = Arc::new(Semaphore::new(0));
     let identity = crate::DeviceIdentity::new(123, 42).unwrap();
     let mut session = EndpointSession::new(
-        Gated {
-            inner: transport,
-            entered: Arc::clone(&entered),
-            gate: Arc::clone(&gate),
-        },
+        gated(transport, Arc::clone(&entered), Arc::clone(&gate)),
         SessionRole::ClientOnly,
         SessionConfig::default(),
     )

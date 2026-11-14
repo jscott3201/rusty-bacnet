@@ -1,6 +1,6 @@
 //! Device Tags metadata does not expand the endpoint's narrow write admission.
 use super::*;
-use crate::session::bus_port::BusPort;
+use crate::session::bus_port::bus_port;
 use bacnet_objects::object_profile::{ObjectProfile, TagsPersistence, TagsSnapshot};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
@@ -115,7 +115,7 @@ async fn device_profiles_read_but_tags_never_enter_endpoint_mutation_authority()
                     .role(SessionRole::ServerOnly)
                     .database(db)
                     .device(identity)
-                    .build_session_over(BusPort::new())
+                    .build_session_over(bus_port())
                     .unwrap();
             if writes {
                 let calls = calls.clone();
