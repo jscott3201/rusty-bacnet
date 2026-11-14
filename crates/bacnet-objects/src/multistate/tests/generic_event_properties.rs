@@ -405,8 +405,8 @@ fn multistate_event_history_is_listed_readable_and_read_only() {
 macro_rules! assert_multistate_history_reset {
     ($object:expr_2021, $label:literal) => {{
         let mut object = $object;
-        object.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(91);
-        object.event_history.message_texts[1] = "seeded".into();
+        object.core.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(91);
+        object.core.event_history.message_texts[1] = "seeded".into();
         object
             .write_property(
                 PropertyIdentifier::EVENT_DETECTION_ENABLE,

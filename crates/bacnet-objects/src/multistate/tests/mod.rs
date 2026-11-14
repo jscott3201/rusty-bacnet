@@ -1,6 +1,7 @@
 mod alarm_values_setter;
 mod creation_only;
 mod generic_event_properties;
+mod metadata;
 mod objects;
 mod reliability;
 mod relinquish_default;

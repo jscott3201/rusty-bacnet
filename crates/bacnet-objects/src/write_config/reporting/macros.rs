@@ -19,8 +19,8 @@
 ///   ([`AlgorithmDetector`](super::parameters::AlgorithmDetector)), and a
 ///   staged write of one is checked on a detector of that type.
 /// - `impl_reporting_persistence!(T, states: field)`: the same, for a
-///   multi-state object whose State_Text is in `field` and its count in
-///   `number_of_states`. It keeps a written State_Text, and with it the
+///   multi-state object whose State_Text and its count are in `field`, its
+///   `MultiStateProperties`. It keeps a written State_Text, and with it the
 ///   count, as one more row (#2414); the count bounds the Alarm_Values
 ///   entries it takes, at a stage the count the request's own State_Text
 ///   writes leave. Its `held_states` names the states a new count may not
@@ -32,7 +32,7 @@
 ///   implements `KeepsReporting` itself, has no Tags storage, and guards
 ///   its own setters with [`setter_gives_way`](super::setter_gives_way).
 macro_rules! impl_reporting_persistence {
-    ($object:ty $(, in $core:ident)? $(, states: $texts:ident)?) => {
+    ($object:ty $(, in $core:ident)? $(, states: $states:ident)?) => {
         $crate::write_config::reporting::impl_reporting_persistence!(@builder $object $(, in $core)?);
 
         impl $object {
@@ -103,7 +103,7 @@ macro_rules! impl_reporting_persistence {
                             $crate::write_config::reporting::parameters::AlgorithmDetector::parameters(
                                 &self.event_detector,
                             );
-                        $(algorithm.state_text = Some(self.$texts.clone());)?
+                        $(algorithm.state_text = Some(self.$states.state_text.clone());)?
                         algorithm
                     },
                 }
@@ -125,8 +125,8 @@ macro_rules! impl_reporting_persistence {
                 );
                 $(if let Some(texts) = &saved.algorithm.state_text {
                     $crate::multistate::restore_state_text(
-                        &mut self.number_of_states,
-                        &mut self.$texts,
+                        &mut self.$states.number_of_states,
+                        &mut self.$states.state_text,
                         texts,
                     );
                 })?
@@ -140,7 +140,7 @@ macro_rules! impl_reporting_persistence {
                 $(if write.property == bacnet_types::enums::PropertyIdentifier::STATE_TEXT {
                     // Alarm_Values as the request leaves it, from `rows`.
                     let held: alloc::vec::Vec<u32> = self.held_states(&[]).collect();
-                    return $crate::multistate::state_text_after(&self.$texts, held, rows, write);
+                    return $crate::multistate::state_text_after(&self.$states.state_text, held, rows, write);
                 })?
                 // The detector's type picks the family's write path.
                 $crate::write_config::reporting::parameters::after(&self.event_detector, rows, write)

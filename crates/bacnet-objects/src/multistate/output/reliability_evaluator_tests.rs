@@ -14,7 +14,7 @@ fn configuration_error_dominates_bypassed_invalid_present_value() {
         .evaluate_reliability()
         .unwrap();
     assert_eq!(
-        mso.reliability,
+        mso.core.reliability,
         Reliability::CONFIGURATION_ERROR,
         "invalid configuration must dominate invalid Present_Value"
     );
@@ -23,7 +23,7 @@ fn configuration_error_dominates_bypassed_invalid_present_value() {
         .unwrap()
         .evaluate_reliability()
         .unwrap();
-    assert_eq!(mso.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
+    assert_eq!(mso.core.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
     mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -33,7 +33,7 @@ fn configuration_error_dominates_bypassed_invalid_present_value() {
     )
     .unwrap();
     assert_eq!(
-        mso.reliability,
+        mso.core.reliability,
         Reliability::NO_FAULT_DETECTED,
         "the central priority recalculation must recover synchronously"
     );
