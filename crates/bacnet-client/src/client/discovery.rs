@@ -43,6 +43,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// in it; `None` asks every device. A [`DeviceInstanceRange`] holds both
     /// limits, low no greater than high, so the request can't carry one
     /// alone (Clause 16.10, #1483).
+    ///
+    /// The client's first Who-Is, of any scope, goes right after one
+    /// What-Is-Network-Number while the client doesn't know its network's
+    /// number (#2572): the answer lets a device a router relays back from
+    /// this network be one device. A question that fails to send doesn't
+    /// hold the Who-Is back.
     pub async fn who_is(&self, range: Option<DeviceInstanceRange>) -> Result<(), Error> {
         let mut buf = BytesMut::new();
         WhoIsRequest { range }.encode(&mut buf);
@@ -189,7 +195,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// local row at `remote_mac`, as requests to it go out locally (#1358).
     /// One registered before the number was learned became that local row
     /// when it was (#2572). Like the other manual registrations, this sends
-    /// no device or collision notices.
+    /// no device or collision notices. A routed device registered while the
+    /// number is unknown has the client ask for it first, once (#2572).
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {
             return Err(Error::Encoding(
@@ -210,28 +217,41 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // MAC (#1358). The number is read under the lock its learning folds
         // the table under (#2572): a routed row registered before then has
         // become the local row, and none is registered after.
-        let mut table = self.device_table.lock();
-        let this_network = self.network.local_network_number().get();
-        let local = this_network == Some(config.remote_network);
-        let remote_mac = MacAddr::from_slice(&config.remote_mac);
-        let (mac_address, source_network, source_address) = if local {
-            (remote_mac, None, None)
-        } else {
-            let router = MacAddr::from_slice(&config.router_mac);
-            (router, Some(config.remote_network), Some(remote_mac))
+        let this_network = {
+            let mut table = self.device_table.lock();
+            let this_network = self.network.local_network_number().get();
+            let local = this_network == Some(config.remote_network);
+            let remote_mac = MacAddr::from_slice(&config.remote_mac);
+            let (mac_address, source_network, source_address) = if local {
+                (remote_mac, None, None)
+            } else {
+                let router = MacAddr::from_slice(&config.router_mac);
+                (router, Some(config.remote_network), Some(remote_mac))
+            };
+            let device = DiscoveredDevice {
+                object_identifier: oid,
+                mac_address,
+                max_apdu_length: config.max_apdu_length,
+                segmentation_supported: config.segmentation_supported,
+                max_segments_accepted: config.max_segments_accepted,
+                vendor_id: 0,
+                last_seen: crate::discovery::now(),
+                last_announced: None,
+                source_network,
+                source_address,
+            };
+            if local {
+                table.upsert_by_number(device);
+            } else {
+                table.upsert(device);
+            }
+            this_network
         };
-        table.upsert(DiscoveredDevice {
-            object_identifier: oid,
-            mac_address,
-            max_apdu_length: config.max_apdu_length,
-            segmentation_supported: config.segmentation_supported,
-            max_segments_accepted: config.max_segments_accepted,
-            vendor_id: 0,
-            last_seen: crate::discovery::now(),
-            last_announced: None,
-            source_network,
-            source_address,
-        });
+        // A routed row stored while the number is unknown may be a local
+        // device's twin: ask, once (#2572).
+        if this_network.is_none() {
+            self.asking.first_need(&self.network).await;
+        }
         Ok(())
     }
 }

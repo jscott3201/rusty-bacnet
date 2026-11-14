@@ -117,9 +117,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// The number of the network this client is on, once a
     /// Network-Number-Is has taught it ([`Self::what_is_network_number`]
-    /// asks); `None` until then, and always on a link that takes no
-    /// network number controls. A routed address naming this network is a
-    /// station on this one.
+    /// asks, and the client asks by itself before its first Who-Is or when
+    /// it first stores a routed device, #2572); `None` until then, and
+    /// always on a link that takes no network number controls. A routed
+    /// address naming this network is a station on this one.
     pub fn network_number(&self) -> Option<u16> {
         self.network.local_network_number().get()
     }

@@ -631,6 +631,8 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     #[cfg(test)]
     response_warning: Arc<WarnThrottle>,
     local_mac: MacAddr,
+    /// When the client asks its network's number (#2572).
+    asking: Arc<network_number::Asking>,
     routed_path_limits: Arc<RoutedPathLimits>,
     /// See [`Self::group_source_request_drops`].
     group_source_request_drops: Arc<std::sync::atomic::AtomicU64>,

@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** The client sends one What-Is-Network-Number as a local broadcast
-  as it starts, and again when a BACnet/SC hub connection comes back while
-  the number is unknown; learning the number folds a device a router relayed
-  back into its local row at once, so it is no longer ambiguous (#2572).
+- **Wire:** The client asks for its network's number once, on first need:
+  one What-Is-Network-Number before its first Who-Is, or when it first
+  stores a routed device while the number is unknown. Learning the number
+  folds a device a router relayed back into its local row (#2572).

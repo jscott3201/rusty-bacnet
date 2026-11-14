@@ -44,7 +44,7 @@ Supported owners consume What-Is-Network-Number and Network-Number-Is automatica
 
 Routed controls, malformed payloads and unicast NNI are ignored. Rejection of zero, reserved 65535 and flags beyond 0/1 is the implementation's validation policy. A Forwarded-NPDU can be a logical broadcast even when its UDP hop is unicast; it still has to pass that mode's transport admission rules. Learning a number does not authenticate its origin.
 
-Standalone clients use the same learning rules without a Device object, registration or configured-number setter. Unlike the other owners, a standalone client asks: one What-Is-Network-Number as it starts, and one more each time a BACnet/SC hub connection comes back while the number is still unknown (#2572). Learning the number folds a device a router relayed back onto this network into its local discovery-table row. Reconstructing an unregistered runtime resets it to UNKNOWN; learned state is not persistent configuration.
+Standalone clients use the same learning rules without a Device object, registration or configured-number setter. Unlike the other owners, a standalone client asks, once, on first need: before its first Who-Is, or when it first stores a routed device row while the number is unknown (#2572). A client that only names devices by address never asks. After that question, one more goes each time the link comes back (a BACnet/SC hub reconnect, a B/IP or B/IPv6 foreign device registering again) while the number is still unknown. Learning the number folds a device a router relayed back onto this network into its local discovery-table row. Reconstructing an unregistered runtime resets it to UNKNOWN; learned state is not persistent configuration.
 
 ## Know which owner and link were exercised
 

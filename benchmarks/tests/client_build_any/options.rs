@@ -73,14 +73,6 @@ async fn send<T: TransportPort>(
     bounded(peer.send_unicast(&npdu, client)).await.unwrap();
 }
 
-/// The What-Is-Network-Number an SC client broadcasts as it starts
-/// (#2572), which the hub relays to the peer ahead of anything else.
-async fn asked(rx: &mut mpsc::Receiver<ReceivedNpdu>) {
-    let packet = bounded(rx.recv()).await.unwrap();
-    assert!(packet.link_layer_group, "a broadcast");
-    assert_eq!(packet.npdu.as_ref(), [1, 0x80, 0x12]);
-}
-
 async fn reply(rx: &mut mpsc::Receiver<ReceivedNpdu>) -> Apdu {
     let packet = bounded(rx.recv()).await.unwrap();
     decode_apdu(decode_npdu(packet.npdu).unwrap().payload).unwrap()
@@ -270,12 +262,14 @@ async fn sc_builders_keep_custom_cov_policy_and_independent_channel_capacities()
                 *transport.connection_state_changes().borrow(),
                 ScConnectionState::Connected
             );
-            asked(&mut rx).await;
             Box::pin(options(client, &peer, &mut rx)).await;
         } else {
-            let client = Box::pin(builder.build()).await.unwrap();
-            asked(&mut rx).await;
-            Box::pin(options(client, &peer, &mut rx)).await;
+            Box::pin(options(
+                Box::pin(builder.build()).await.unwrap(),
+                &peer,
+                &mut rx,
+            ))
+            .await;
         }
         peer.stop().await.unwrap();
     }

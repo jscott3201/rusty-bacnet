@@ -159,15 +159,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             network.transport().egress_apdu_limit(),
         )?;
         let local_mac = MacAddr::from_slice(network.local_mac());
-        // On a link that takes the local Number controls, ask this network's
-        // number before anything else goes out, and again when the link
-        // comes back while it is still unknown (#2572): until then a device
-        // a router relays back from this network is a routed station of its
-        // own. Sent before any task starts, so a start dropped here leaves
-        // none running.
+        // On a link that takes the local Number controls, the client asks
+        // this network's number on first need, and again when the link comes
+        // back while it is still unknown (#2572); nothing goes out at start.
         let numbers = network
             .transport()
             .supports_local_nonrouter_number_controls();
+        let asking = Arc::new(network_number::Asking::new(numbers));
         let link_returns = numbers
             .then(|| network.transport().link_returns())
             .flatten()
@@ -175,9 +173,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 returns.mark_unchanged();
                 returns
             });
-        if numbers {
-            network_number::ask(&network).await;
-        }
 
         let network = Arc::new(network);
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
@@ -203,6 +198,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 table: Arc::clone(&device_table),
                 device_tx: device_tx.clone(),
                 collision_tx: device_collision_tx.clone(),
+                asking: Arc::clone(&asking),
                 link_returns,
             };
             let (tx, task) = network_number::spawn(&network, owner);
@@ -245,6 +241,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             device_collision_tx.clone(),
         );
         let device_purge = device_purge_task.abort_handle();
+        let asking_dispatch = Arc::clone(&asking);
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
             let mut controls = Controls::new(
@@ -351,6 +348,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         device_tx: &device_tx_dispatch,
                                         device_collision_tx: &device_collision_tx_dispatch,
                                         i_have_tx: &i_have_tx_dispatch,
+                                        asking: &asking_dispatch,
                                         seg_ack_senders: &seg_ack_senders_dispatch,
                                         decode_warning: &decode_warning,
                                         response_warning: &response_warning,
@@ -414,6 +412,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             #[cfg(test)]
             response_warning: response_warning_hook,
             local_mac,
+            asking,
             routed_path_limits,
             group_source_request_drops,
             pacer,

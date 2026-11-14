@@ -478,17 +478,6 @@ async fn bip6_builder_hands_the_transport_its_resolver_and_release() {
         .unwrap()
         .unwrap();
     assert_eq!(&packet[..len], registration);
-    // Then the What-Is-Network-Number the client asks as it starts (#2572),
-    // for the BBMD to distribute: Distribute-Broadcast-To-Network from the
-    // instance's VMAC.
-    let (len, _) = timeout(wait, old.recv_from(&mut packet))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        &packet[..len],
-        [0x82, 0x0C, 0, 10, 0x12, 0x34, 0x56, 1, 0x80, 0x12]
-    );
     let Some(BipPortMode::Foreign { registration: lent }) =
         client.transport().bip6_port().map(|port| port.mode)
     else {

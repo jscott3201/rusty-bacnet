@@ -114,3 +114,31 @@ async fn a_registration_or_a_lapse_ends_a_run_of_refusals() {
     let registration = device.ctx.node.snapshot().foreign_registration;
     assert_eq!((registration.refused, registration.lapses), (3, 1));
 }
+
+/// The link's returns (#2572). A start's first registration is none: the
+/// broadcasts made before it were held for it. A registration after a lease
+/// lapsed, or after the BBMD refused an attempt, is one: broadcasts may have
+/// gone nowhere meanwhile. A renewal while the lease is live is none.
+#[tokio::test(start_paused = true)]
+async fn a_registration_after_a_loss_is_a_return_of_the_link() {
+    let device = Device::new(Duration::from_secs(10)).await;
+    let returns = device.ctx.node.link_returns();
+    device.at(13).await;
+    device.bbmd_says(0).await;
+    device.at(10_013).await;
+    device.bbmd_says(0).await;
+    assert_eq!(*returns.borrow(), 0, "a start's registration and a renewal");
+    // Every attempt lost from 20 s: the lease, renewed from 10 s, lapses
+    // at 70 s, and the attempt at 75 s is answered.
+    device.at(75_013).await;
+    device.bbmd_says(0).await;
+    assert_eq!(*returns.borrow(), 1, "registered again after the lapse");
+
+    let device = Device::new(Duration::from_secs(10)).await;
+    let returns = device.ctx.node.link_returns();
+    device.at(13).await;
+    device.bbmd_says(0x30).await;
+    device.at(10_013).await;
+    device.bbmd_says(0).await;
+    assert_eq!(*returns.borrow(), 1, "registered after a refusal");
+}

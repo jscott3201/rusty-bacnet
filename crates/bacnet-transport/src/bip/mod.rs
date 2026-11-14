@@ -41,6 +41,7 @@ use bacnet_types::error::Error;
 mod bbmd_receive;
 mod bbmd_start;
 mod client_snapshot;
+mod counter_reads;
 mod datagram;
 mod exchange;
 pub use bacnet_bip_core::node::ExchangeRefusal;
@@ -342,38 +343,6 @@ impl BipTransport {
         self.broadcast_address
     }
 
-    /// Return the operational BBMD management counters.
-    pub fn management_counters(&self) -> ManagementCounters {
-        match self.management_limiter.lock() {
-            Ok(limiter) => limiter.counters(),
-            Err(poison) => poison.into_inner().counters(),
-        }
-    }
-
-    /// Return operational Foreign Device Table counters if BBMD mode is enabled.
-    pub fn fdt_counters(&self) -> Option<FdtCounters> {
-        self.bbmd
-            .as_ref()
-            .map(|bbmd| bbmd::lock(bbmd).fdt_counters())
-    }
-
-    /// Return the operational broadcast forwarding fanout counters.
-    pub fn fanout_counters(&self) -> FanoutCounters {
-        self.fanout_counters.snapshot()
-    }
-
-    /// Return the datagrams the receive path dropped since this transport
-    /// was created, by reason (see [`ReceiveCounters`]).
-    pub fn receive_counters(&self) -> ReceiveCounters {
-        self.receive_drops.snapshot()
-    }
-
-    /// Return the NPDUs this transport refused to send since it was
-    /// created, by reason (see [`SendCounters`]).
-    pub fn send_counters(&self) -> SendCounters {
-        self.send_refusals.snapshot()
-    }
-
     /// Set the broadcast forwarding fanout policy and rate limits.
     pub fn set_fanout_policy(&mut self, policy: FanoutPolicy) {
         let policy = policy.sanitized();
@@ -486,6 +455,12 @@ impl TransportPort for BipTransport {
         self.network_port_lease = Some(lease);
         Ok(())
     }
+    /// A foreign device's registration after a loss (#2572); `None` before
+    /// start.
+    fn link_returns(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.node.as_ref().map(|node| node.link_returns())
+    }
+
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         true
     }

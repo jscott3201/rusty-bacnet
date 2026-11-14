@@ -36,7 +36,7 @@ impl Drop for Signal<'_> {
 }
 /// A link that takes the local Number controls, records every send (either
 /// kind) in `outbound`, and holds the stop and, with `hold_number`, each
-/// Network-Number-Is broadcast, on `gates`.
+/// broadcast, on `gates`.
 pub fn capture(
     inbound: mpsc::Receiver<ReceivedNpdu>,
     outbound: mpsc::Sender<Sent>,
@@ -61,7 +61,7 @@ pub fn capture(
         .on_send(move |frame| {
             let (outbound, gates) = (outbound.clone(), gates.clone());
             async move {
-                if frame.broadcast && hold_number && frame.npdu.get(2) == Some(&0x13) {
+                if frame.broadcast && hold_number {
                     let _drop = Signal(&gates.dropped);
                     gates.entered.add_permits(1);
                     gates.release.acquire().await.unwrap().forget();
@@ -88,7 +88,7 @@ pub async fn harness(
     Arc<Gates>,
 ) {
     let (inbound, rx) = mpsc::channel(64);
-    let (outbound, mut sent) = mpsc::channel(64);
+    let (outbound, tx) = mpsc::channel(64);
     let gates = Arc::new(Gates {
         entered: Semaphore::new(0),
         release: Semaphore::new(0),
@@ -107,20 +107,7 @@ pub async fn harness(
     )
     .await
     .unwrap();
-    asked(&mut sent);
-    (client, inbound, sent, gates)
-}
-
-/// Take the What-Is-Network-Number a client sends as it starts (#2572),
-/// checked to be the first frame it sent and a local broadcast.
-pub fn asked(outbound: &mut mpsc::Receiver<Sent>) {
-    let sent = outbound.try_recv().expect("the client asked at start");
-    assert!(sent.destination.is_empty(), "a broadcast");
-    assert_eq!(
-        sent.npdu.as_ref(),
-        QUERY,
-        "the local What-Is-Network-Number"
-    );
+    (client, inbound, tx, gates)
 }
 pub async fn inject(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], group: bool) {
     deliver(inbound, npdu, &[2], group).await;
@@ -142,6 +129,18 @@ async fn deliver(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], source: &[u8
         })
         .await
         .unwrap();
+}
+
+/// Take the What-Is-Network-Number the client asks on its first need
+/// (#2572), checked to be the next frame it sent and a local broadcast.
+pub async fn asked(outbound: &mut mpsc::Receiver<Sent>) {
+    let sent = bounded(outbound.recv()).await.unwrap();
+    assert!(sent.destination.is_empty(), "a broadcast");
+    assert_eq!(
+        sent.npdu.as_ref(),
+        QUERY,
+        "the local What-Is-Network-Number"
+    );
 }
 
 pub fn number(value: u16, flag: u8) -> Vec<u8> {

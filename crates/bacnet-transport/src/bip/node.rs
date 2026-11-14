@@ -35,7 +35,7 @@ use bacnet_bip_core::node::{
 use bacnet_time::HostClock;
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{Notify, oneshot, watch};
 use tracing::{debug, info, warn};
 
 use super::BipSocket;
@@ -158,6 +158,13 @@ pub(super) struct NodeState {
     refusal_warned: bool,
     /// Set by stop: no request starts, and nothing more is counted.
     pub(super) stopped: bool,
+    /// A foreign device's registration was lost, refused or unanswered
+    /// since its lease was last proven: broadcasts may have gone nowhere,
+    /// so the next registration is the link coming back (#2572). Not set
+    /// for the first attempt of a start, whose broadcasts are held.
+    lost: bool,
+    /// The link's returns: `TransportPort::link_returns`.
+    returns: watch::Sender<u64>,
 }
 
 impl NodeState {
@@ -213,6 +220,7 @@ impl NodeState {
             log_release(bbmd, outcome);
             return;
         }
+        self.follow_link(&event);
         // Every other event follows an attempt, so it has a BBMD to name.
         let Mode::Foreign(Foreign {
             bbmd: Some(bbmd), ..
@@ -245,6 +253,29 @@ impl NodeState {
                 debug!("Foreign registration attempt did not return a matched result");
             }
             other => debug!(?other, "Foreign registration event"),
+        }
+    }
+}
+
+impl NodeState {
+    /// Follow a foreign device's link through its registration (#2572): a
+    /// registration lost, refused or unanswered may have dropped the
+    /// broadcasts sent meanwhile, and the next registration brings the link
+    /// back. The first attempt's own success is no return: the broadcasts
+    /// made before it were held and go now.
+    fn follow_link(&mut self, event: &RegistrationEvent) {
+        match event {
+            RegistrationEvent::Registered { .. } => {
+                if std::mem::take(&mut self.lost) {
+                    self.returns
+                        .send_modify(|count| *count = count.wrapping_add(1));
+                }
+            }
+            RegistrationEvent::Renewed { .. } => self.lost = false,
+            RegistrationEvent::Lapsed
+            | RegistrationEvent::Refused { .. }
+            | RegistrationEvent::Unanswered => self.lost = true,
+            _ => {}
         }
     }
 }
@@ -332,6 +363,8 @@ impl NodeHandle {
                 releasing: false,
                 refusal_warned: false,
                 stopped: false,
+                lost: false,
+                returns: watch::Sender::new(0),
             }),
             wake: Notify::new(),
             attempt_hook: OnceLock::new(),
@@ -453,6 +486,12 @@ impl NodeHandle {
 
     fn lock(&self) -> MutexGuard<'_, NodeState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The link's returns: one more each time a foreign device registers
+    /// again after its registration was lost, refused or unanswered.
+    pub(super) fn link_returns(&self) -> watch::Receiver<u64> {
+        self.lock().returns.subscribe()
     }
 
     /// Call into the node now, under the lock, then drain what it asks for

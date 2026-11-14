@@ -785,17 +785,23 @@ pub trait TransportPort: Send + Sync {
     ///
     /// The receiver's value is a count that rises by one each time the link
     /// is back; a change is all a stack needs to read from it. Anything the
-    /// stack broadcast while the link was down went nowhere, so it may redo
-    /// what it does once at start: `bacnet_client`'s `BACnetClient` asks
-    /// for the local network's number again then, if no answer has taught
-    /// it yet (#2572).
+    /// stack broadcast while the link was down may have gone nowhere, so it
+    /// may send it again: `bacnet_client`'s `BACnetClient`, once it has
+    /// asked for the local network's number, asks again then if no answer
+    /// has taught it yet (#2572).
     ///
-    /// BACnet/SC returns one, counting each hub connection its recovery
-    /// makes after the connection it had was lost, to the same hub or the
-    /// failover hub. A move back to the primary hub while the failover hub
-    /// still serves is no return. The other built-in transports keep the
-    /// default: a B/IP foreign device registering again after its lease
-    /// lapsed and an MS/TP node rejoining the token ring are not reported.
+    /// BACnet/SC counts each hub connection its recovery makes after the
+    /// connection it had was lost, to the same hub or the failover hub; a
+    /// move back to the primary hub while the failover hub still serves is
+    /// no return. A started B/IP transport counts, as a foreign device,
+    /// each registration the BBMD takes after an attempt was refused or
+    /// unanswered or the lease lapsed; a start's first attempt succeeding
+    /// is no return, since the broadcasts made before it were held for it. A B/IPv6 foreign device
+    /// counts each registration the BBMD takes after a broadcast went to it
+    /// while its latest answer wasn't a success (B/IPv6 holds none, so a
+    /// start's first registration can count). MS/TP, Ethernet and B/IPv6
+    /// outside foreign mode keep the default: an MS/TP node rejoining the
+    /// token ring is not reported.
     ///
     /// Wrappers must delegate.
     fn link_returns(&self) -> Option<watch::Receiver<u64>> {

@@ -10,8 +10,9 @@
 //! every network while the number is unknown.
 //!
 //! The peer is `[3]`, behind router `[9]` when routed. The number is learned
-//! through the client's own Network-Number-Is intake, after the
-//! What-Is-Network-Number the client sends as it starts.
+//! through the client's own Network-Number-Is intake. The client asks for it
+//! when it first stores a routed row or sends a Who-Is while it is unknown
+//! (#2572), and each test takes that question where it goes.
 use super::*;
 use crate::client::BACnetClient;
 use crate::discovery::RoutedDeviceConfig;
@@ -218,6 +219,10 @@ async fn a_device_added_as_routed_on_this_network_is_written_locally() {
             })
             .await
             .unwrap();
+        // A routed row stored while the number is unknown asks for it.
+        if !learned {
+            asked(&mut outbound).await;
+        }
         let (result, route) = bounded(async {
             tokio::join!(
                 client.write_property_to_device(
@@ -247,6 +252,9 @@ async fn a_who_is_on_this_network_by_number_goes_as_a_local_broadcast() {
     ] {
         let (mut client, _inbound, mut outbound) = client(learned).await;
         client.who_is_network(network, None).await.unwrap();
+        if !learned {
+            asked(&mut outbound).await;
+        }
         let sent = bounded(outbound.recv()).await.unwrap();
         assert!(sent.destination.is_empty(), "a broadcast");
         let destination = decode_npdu(sent.npdu).unwrap().destination;
@@ -286,6 +294,7 @@ async fn client_with_routed_row(
         })
         .await
         .unwrap();
+    asked(&mut outbound).await;
     learn(&inbound, &mut outbound).await;
     (client, inbound, outbound)
 }
@@ -555,7 +564,8 @@ async fn learning_the_number_folds_the_routed_row_an_echo_made() {
     let echo = || relayed_from(THIS_NETWORK, &PEER);
     send_to_client(&inbound, &i_am(9), &PEER, None).await;
     send_to_client(&inbound, &i_am(9), &ROUTER, echo()).await;
-    tokio::time::sleep(Duration::from_millis(5)).await;
+    // The routed row the echo made asks for the number.
+    asked(&mut outbound).await;
     assert!(matches!(
         client.get_device(9).await,
         Err(Error::AmbiguousDevice { instance: 9, .. })
@@ -593,7 +603,7 @@ async fn a_routed_registration_on_this_network_folds_to_the_local_row() {
     let (mut client, inbound, mut outbound) = client(false).await;
     let relayed = relayed_from(THIS_NETWORK, &PEER);
     send_to_client(&inbound, &i_am(9), &ROUTER, relayed).await;
-    tokio::time::sleep(Duration::from_millis(5)).await;
+    asked(&mut outbound).await;
     learn(&inbound, &mut outbound).await;
     client
         .add_routed_device(RoutedDeviceConfig {

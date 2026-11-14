@@ -1,4 +1,5 @@
 use super::*;
+use crate::discovery::Folded;
 use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_types::network_number::NetworkNumber;
 
@@ -20,14 +21,16 @@ pub(super) type TableNotices<'a> = (
 /// Take an I-Am into the discovery table and tell the subscribers what it
 /// changed. The notices go out under the table's lock, as the purge's do (a
 /// broadcast send never waits), so the two can't interleave out of order.
-/// Kept out of line: the dispatch loop's hot path is the replies.
+/// Whether it stored a routed row while this client's network number is
+/// unknown, which wants the number asked for (#2572). Kept out of line: the
+/// dispatch loop's hot path is the replies.
 #[inline(never)]
 pub(super) fn heard_i_am(
     table: &SyncMutex<DeviceTable>,
     from: IAmSource<'_>,
     i_am: &bacnet_services::who_is::IAmRequest,
     (device_tx, collision_tx): TableNotices<'_>,
-) {
+) -> bool {
     let mut table = table.lock();
     // A router relaying back an I-Am from this client's own network names a
     // local device: one row, as it is one peer (#1358, #1465). The number is
@@ -59,7 +62,19 @@ pub(super) fn heard_i_am(
         source_network,
         source_address,
     };
-    let heard = table.heard(device.clone());
+    // A relay naming this network lands on a local row by the number alone.
+    let relayed_here = source_network.is_none()
+        && from
+            .network
+            .as_ref()
+            .is_some_and(|routed| !routed.mac_address.is_empty());
+    let heard = if relayed_here {
+        table.heard_by_number(device.clone())
+    } else {
+        table.heard(device.clone())
+    };
+    let routed_while_unknown =
+        this_network.is_none() && source_network.is_some() && heard.change != Change::Dropped;
     // The device that left the address, then the one now there.
     if let Some(old) = heard.replaced {
         let _ = device_tx.send(DeviceEvent {
@@ -79,17 +94,20 @@ pub(super) fn heard_i_am(
     for instance in heard.contested {
         let _ = collision_tx.send(DeviceCollisionEvent::of(&table, instance));
     }
+    routed_while_unknown
 }
 
 /// Learn this client's network number `number`, and fold the discovery
-/// table to it in the same locked call (#2572): every routed row on that
-/// network names a local station, so it is taken out where the station has
-/// a local row, or becomes that row. Each routed row taken out is reported
-/// `Lost`, the local row it became `Discovered`, then one collision notice
-/// per instance whose claimants changed, as the I-Am path and the purge
-/// report theirs. The number is published under the lock, so an I-Am taken
-/// in after this sees it, and one taken in before has made the routed row
-/// this folds.
+/// table to it in the same locked call (#2572). When it replaces a number
+/// known before, the rows local only by that number are dropped first,
+/// each reported `Lost`. Then every routed row on the new network names a
+/// local station: it is taken out where the station has a local row
+/// (`Lost`), or becomes that row (`Lost`, then `Discovered`, or `Updated`
+/// over an `add_device` placeholder for the same instance). Then one
+/// collision notice per instance whose claimants changed, as the I-Am path
+/// and the purge report theirs. The number is published under the lock, so
+/// an I-Am taken in after this sees it, and one taken in before has made
+/// the routed row this folds.
 pub(super) fn learned_number(
     table: &SyncMutex<DeviceTable>,
     this_network: &LocalNetworkNumber,
@@ -97,21 +115,50 @@ pub(super) fn learned_number(
     (device_tx, collision_tx): TableNotices<'_>,
 ) {
     let mut table = table.lock();
+    let previous = this_network.get();
     this_network.publish(number);
-    let localized = table.localize(number.snapshot().0);
-    for (routed, local) in localized.rows {
+    let lost = |device| {
         let _ = device_tx.send(DeviceEvent {
             kind: DeviceEventKind::Lost,
-            device: routed,
+            device,
         });
-        if let Some(device) = local {
-            let _ = device_tx.send(DeviceEvent {
-                kind: DeviceEventKind::Discovered,
-                device,
-            });
+    };
+    let mut contested = Vec::new();
+    if previous.is_some() {
+        let dropped = table.unlocalize();
+        dropped.lost.into_iter().for_each(lost);
+        contested = dropped.contested;
+    }
+    let (folded, more) = table.localize(number.snapshot().0);
+    for Folded {
+        routed,
+        local,
+        placeholder,
+    } in folded
+    {
+        lost(routed);
+        let Some(local) = local else {
+            continue;
+        };
+        let kind = match placeholder {
+            Some(p) if p.object_identifier == local.object_identifier => DeviceEventKind::Updated,
+            Some(p) => {
+                lost(p);
+                DeviceEventKind::Discovered
+            }
+            None => DeviceEventKind::Discovered,
+        };
+        let _ = device_tx.send(DeviceEvent {
+            kind,
+            device: local,
+        });
+    }
+    for instance in more {
+        if !contested.contains(&instance) {
+            contested.push(instance);
         }
     }
-    for instance in localized.contested {
+    for instance in contested {
         let _ = collision_tx.send(DeviceCollisionEvent::of(&table, instance));
     }
 }

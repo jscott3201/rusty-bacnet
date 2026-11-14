@@ -252,3 +252,48 @@ async fn a_failed_send_counts_nothing_and_keeps_the_one_before() {
     answered(&transport, Some(Bip6RegistrationAnswer::Held)).await;
     transport.stop().await.unwrap();
 }
+
+/// The link's returns (#2572). B/IPv6 holds no broadcasts for the first
+/// registration, so a success after a broadcast went to the BBMD before any
+/// success, or after a refusal, is a return of the link: the broadcast may
+/// have gone nowhere. A success with nothing broadcast unproven since is
+/// none.
+#[tokio::test]
+async fn a_success_after_an_unproven_broadcast_is_a_return_of_the_link() {
+    let held = Some(Bip6RegistrationAnswer::Held);
+    let refused = Some(Bip6RegistrationAnswer::Refused);
+    let a = bbmd().await;
+    let (mut transport, lent) = started(&a, 300).await;
+    let returns = transport.link_returns().expect("a foreign device's");
+    transport.send_broadcast(&[1, 0x80, 0x12]).await.unwrap();
+    result(&a, &transport, Bvlc6ResultCode::SUCCESSFUL_COMPLETION).await;
+    answered(&transport, held).await;
+    assert_eq!(*returns.borrow(), 1, "the first success, after a broadcast");
+
+    // A broadcast while the BBMD holds the entry is proven; a refusal with
+    // nothing broadcast since leaves the next success no return.
+    transport.send_broadcast(&[1, 0x80, 0x12]).await.unwrap();
+    for (ttl, code, answer) in [
+        (120, Bvlc6ResultCode::REGISTER_FOREIGN_DEVICE_NAK, refused),
+        (90, Bvlc6ResultCode::SUCCESSFUL_COMPLETION, held),
+    ] {
+        lent.activate(&changes(None, Some(ttl))).unwrap();
+        assert_eq!(registration(&a).await, ttl);
+        result(&a, &transport, code).await;
+        answered(&transport, answer).await;
+    }
+    assert_eq!(*returns.borrow(), 1, "nothing went unproven");
+
+    // Refused, then a broadcast: the next success brings the link back.
+    lent.activate(&changes(None, Some(130))).unwrap();
+    assert_eq!(registration(&a).await, 130);
+    result(&a, &transport, Bvlc6ResultCode::REGISTER_FOREIGN_DEVICE_NAK).await;
+    answered(&transport, refused).await;
+    transport.send_broadcast(&[1, 0x80, 0x12]).await.unwrap();
+    lent.activate(&changes(None, Some(140))).unwrap();
+    assert_eq!(registration(&a).await, 140);
+    result(&a, &transport, Bvlc6ResultCode::SUCCESSFUL_COMPLETION).await;
+    answered(&transport, held).await;
+    assert_eq!(*returns.borrow(), 2);
+    transport.stop().await.unwrap();
+}
