@@ -26,7 +26,7 @@ const NUMBER: PropertyIdentifier = PropertyIdentifier::CHANNEL_NUMBER;
 const GROUPS: PropertyIdentifier = PropertyIdentifier::CONTROL_GROUPS;
 const INHIBIT: PropertyIdentifier = PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT;
 
-fn member(instance: u32) -> BACnetDeviceObjectPropertyReference {
+pub(super) fn member(instance: u32) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference {
         object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, instance).unwrap(),
         property_identifier: 85,
@@ -47,7 +47,7 @@ fn unsigned_list(values: &[u64]) -> PropertyValue {
 
 /// Channel 1 kept in `storage`, configured as an application would: one
 /// member with a 10 ms delay, number 4, groups [2] and inhibit off.
-fn channel(storage: &Arc<MemoryConfig>) -> ChannelObject {
+pub(super) fn channel(storage: &Arc<MemoryConfig>) -> ChannelObject {
     let persistence = Arc::clone(storage) as Arc<dyn WriteConfigPersistence>;
     let mut channel = ChannelObject::with_persistence(1, "CH", 4, persistence).unwrap();
     channel.set_members(vec![member(1)]).unwrap();
@@ -256,7 +256,11 @@ fn clearing_the_written_config_lets_the_configured_one_apply() {
 }
 
 #[cfg(feature = "durable-writes")]
-fn pending(property: PropertyIdentifier, index: Option<u32>, value: PropertyValue) -> PendingWrite {
+pub(super) fn pending(
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    value: PropertyValue,
+) -> PendingWrite {
     PendingWrite {
         property,
         array_index: index,
@@ -266,7 +270,10 @@ fn pending(property: PropertyIdentifier, index: Option<u32>, value: PropertyValu
 
 /// Stage `writes` on `channel` and wait for the save; the wait releases it.
 #[cfg(feature = "durable-writes")]
-fn staged(channel: &mut ChannelObject, writes: &[PendingWrite]) -> crate::durable::SaveWait {
+pub(super) fn staged(
+    channel: &mut ChannelObject,
+    writes: &[PendingWrite],
+) -> crate::durable::SaveWait {
     let StageStep::Staged(wait) = channel.stage_writes(writes) else {
         panic!("the writes didn't stage");
     };
@@ -275,7 +282,7 @@ fn staged(channel: &mut ChannelObject, writes: &[PendingWrite]) -> crate::durabl
 }
 
 #[cfg(feature = "durable-writes")]
-fn make(channel: &mut ChannelObject, write: &PendingWrite) -> Result<(), Error> {
+pub(super) fn make(channel: &mut ChannelObject, write: &PendingWrite) -> Result<(), Error> {
     let PendingWrite {
         property,
         array_index,

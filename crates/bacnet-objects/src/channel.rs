@@ -186,6 +186,11 @@ impl ChannelObject {
     /// for the parts they configure.
     /// [`clear_written_config`](Self::clear_written_config) lets them all
     /// apply again.
+    ///
+    /// Every setter here given the value the Channel already serves changes
+    /// nothing a request being saved depends on, so it leaves that request
+    /// alone; one given another value makes it give way (#2552). This one
+    /// forgets the datatypes learned for the members either way.
     pub fn set_members(
         &mut self,
         members: Vec<BACnetDeviceObjectPropertyReference>,
@@ -194,8 +199,15 @@ impl ChannelObject {
         if self.saved().members {
             return Ok(());
         }
-        self.config.execution_delay.resize(members.len(), 0);
+        // What was learned for the members is forgotten whether or not the
+        // list differs. It isn't saved and a staged step doesn't carry it
+        // (it is taken from what is served as the write is made), so
+        // forgetting it needs no counted change.
         self.config.learned = vec![None; members.len()];
+        if self.config.members == members {
+            return Ok(());
+        }
+        self.config.execution_delay.resize(members.len(), 0);
         self.config.members = members;
         self.config_changed();
         Ok(())
@@ -213,8 +225,10 @@ impl ChannelObject {
         if delays.len() != self.config.members.len() {
             return Err(common::value_out_of_range_error());
         }
-        self.config.execution_delay = delays;
-        self.config_changed();
+        if self.config.execution_delay != delays {
+            self.config.execution_delay = delays;
+            self.config_changed();
+        }
         Ok(())
     }
 
@@ -229,8 +243,10 @@ impl ChannelObject {
         if self.saved().groups {
             return Ok(());
         }
-        self.config.control_groups = groups;
-        self.config_changed();
+        if self.config.control_groups != groups {
+            self.config.control_groups = groups;
+            self.config_changed();
+        }
         Ok(())
     }
 
@@ -242,8 +258,10 @@ impl ChannelObject {
         if self.saved().inhibit {
             return;
         }
-        self.config.allow_group_delay_inhibit = allow;
-        self.config_changed();
+        if self.config.allow_group_delay_inhibit != allow {
+            self.config.allow_group_delay_inhibit = allow;
+            self.config_changed();
+        }
     }
 
     /// Take a Present_Value write (Clauses 12.53.5 to 12.53.7).
@@ -558,3 +576,6 @@ mod learned_tests;
 
 #[cfg(test)]
 mod saving_tests;
+
+#[cfg(all(test, feature = "durable-writes"))]
+mod unchanged_setter_tests;
