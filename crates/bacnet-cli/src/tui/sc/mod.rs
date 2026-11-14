@@ -384,11 +384,6 @@ pub(crate) fn hub_name(hub: ScActiveHub) -> &'static str {
     }
 }
 
-/// A VMAC as `02:00:00:00:00:01`.
-pub(crate) fn vmac_text(vmac: &[u8]) -> String {
-    bacnet_ops::octets::hex_sep(vmac, ":")
-}
-
 /// A UUID in its 8-4-4-4-12 form.
 pub(crate) fn uuid_text(uuid: &[u8; 16]) -> String {
     let hex = bacnet_ops::octets::hex(uuid);
@@ -405,6 +400,7 @@ pub(crate) fn uuid_text(uuid: &[u8; 16]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::profile::sc::Vmac;
     use bacnet_transport::sc::{ScCertificateRejection, ScTlsAlert};
 
     #[test]
@@ -434,7 +430,7 @@ mod tests {
 
     #[test]
     fn identities_print_as_operators_write_them() {
-        assert_eq!(vmac_text(&[2, 0, 0, 0, 0, 0x1a]), "02:00:00:00:00:1a");
+        assert_eq!(Vmac([2, 0, 0, 0, 0, 0x1a]).to_string(), "02:00:00:00:00:1a");
         let uuid = [
             0x6f, 0x1c, 0x2a, 0x9e, 0x44, 0x07, 0x4b, 0x3d, 0x9a, 0x51, 0x0e, 0x7c, 0x88, 0x21,
             0xd4, 0x0b,

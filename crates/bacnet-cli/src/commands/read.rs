@@ -150,11 +150,6 @@ pub(super) fn format_items(
     (values, None)
 }
 
-/// Octets as space-separated lowercase hex.
-pub(super) fn hex(data: &[u8]) -> String {
-    bacnet_ops::octets::hex_sep(data, " ")
-}
-
 /// Read a single property and print its value.
 pub async fn read_property_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,

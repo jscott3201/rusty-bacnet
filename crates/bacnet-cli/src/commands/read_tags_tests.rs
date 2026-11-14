@@ -74,7 +74,10 @@ fn tags_formatter_reports_whole_failure_and_preserves_other_formatters() {
     ] {
         assert_eq!(
             format_read_value(&formatter(AI), PropertyIdentifier::TAGS, index, &bytes),
-            format!("[invalid Tags] [raw {}]", hex(&bytes))
+            format!(
+                "[invalid Tags] [raw {}]",
+                bacnet_ops::octets::hex_sep(&bytes, " ")
+            )
         );
     }
     // Any other property goes through the shared formatter.
