@@ -28,15 +28,16 @@ pub(crate) const MONITOR_ONLY: &str =
 impl App {
     /// The device `:dcc` and `:reinit` go to: the browser's on the Browse
     /// screen, the selected row's on the Devices screen, none elsewhere.
-    fn manage_target(&mut self) -> Option<u32> {
+    fn manage_target(&mut self) -> Option<(u32, bacnet_ops::DeviceAddress)> {
         if let Some(browser) = self.shown_browser() {
-            return Some(browser.device);
+            return Some((browser.device, browser.at.clone()));
         }
         if self.screen != Screen::Main {
             return None;
         }
         self.settle_devices();
-        self.devices.selected_row().map(|row| row.instance)
+        let row = self.devices.selected_row()?;
+        Some((row.instance, row.at.clone()))
     }
 
     /// Why `:dcc` and `:reinit` may not run now, if they may not; the
@@ -67,12 +68,13 @@ impl App {
             self.flash(why, FLASH_FOR);
             return;
         }
-        let Some(device) = self.manage_target() else {
+        let Some((device, at)) = self.manage_target() else {
             self.flash(NO_DEVICE, FLASH_FOR);
             return;
         };
         let request = Box::new(Request {
             device,
+            at,
             action,
             password: None,
         });

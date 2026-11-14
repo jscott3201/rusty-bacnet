@@ -246,17 +246,20 @@ impl<'a> Names<'a> {
         }
     }
 
-    /// `object`'s name on `device` (at the address the device table
-    /// shows) as a cell shows it: the name (already free of control
-    /// characters), `…` while it is being asked for, `-` when the device
-    /// refused it, `?` when it didn't answer (until its next I-Am), and
-    /// nothing when nothing can be asked.
+    /// `object`'s name on `device` at `address` (a row's or the browser's,
+    /// so two devices sharing an instance each show their own) as a cell
+    /// shows it: the name (already free of control characters), `…` while
+    /// it is being asked for, `-` when the device refused it, `?` when it
+    /// didn't answer (until its next I-Am), and nothing when nothing can be
+    /// asked.
     pub(super) fn text(
         &self,
         device: u32,
+        address: &str,
         object: Option<bacnet_types::primitives::ObjectIdentifier>,
     ) -> &'a str {
-        match object.and_then(|object| self.app.name_of(device, object)) {
+        let name = object.and_then(|object| self.app.names.get(device, address, object));
+        match name {
             Some(Name::Known(name)) => name,
             Some(Name::Unavailable) => "-",
             Some(Name::Unreachable) => UNREAD,

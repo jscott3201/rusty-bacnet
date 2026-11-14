@@ -22,6 +22,7 @@ pub mod desk;
 pub mod file;
 pub mod ledger;
 pub mod lock;
+mod place;
 pub mod plan;
 mod send;
 
@@ -34,9 +35,11 @@ use bacnet_types::primitives::ObjectIdentifier;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::class::Class;
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::octets::hex;
 
-pub use send::{find, item_json, turn};
+pub use place::{Unsent, reach, revert_address, turn};
+pub use send::item_json;
 
 /// Default write session length, in minutes.
 pub const DEFAULT_MINUTES: u32 = 15;
@@ -232,7 +235,11 @@ fn from_hex<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Er
 /// One write the user asked for, before anything is read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteSpec {
-    /// Device instance, from the discovery table.
+    /// Where the device answers: the write is read, planned, gated and sent
+    /// at this address, and its ledger entry keeps it (#2560).
+    pub address: DeviceAddress,
+    /// Its device instance, for the labels, the typed confirmation and the
+    /// policies that name devices by instance.
     pub device: u32,
     /// The object.
     pub object: ObjectIdentifier,
@@ -343,7 +350,10 @@ pub fn label(
 /// A previewed change: one WriteProperty, or a WritePropertyMultiple batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preview {
-    /// The device every write goes to.
+    /// The address every write goes to, the one its pre-images were read
+    /// at.
+    pub address: DeviceAddress,
+    /// That device's instance.
     pub device: u32,
     /// The writes, in order.
     pub items: Vec<Planned>,

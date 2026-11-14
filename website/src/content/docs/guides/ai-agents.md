@@ -101,7 +101,7 @@ With `mcp_writes = "elicit"` in the `[mcp]` table the server also offers `bacnet
   hours = 4                     # required, 1 to 8
   reason = "night setback test" # optional
   ```
-- **Targets are numbers.** The device instance and `type:instance` objects come from the agent, never from a name a device reported.
+- **Targets are numbers or addresses.** The device (its instance, `dnet:instance` on one network, or the address of a discovered device such as `10.0.0.2:47808` or `2:0x05`) and `type:instance` objects come from the agent, never from a name a device reported. An instance two addresses claim is refused until the agent names one by its address.
 - **Not offered:** DeviceCommunicationControl, ReinitializeDevice, or anything that creates or deletes objects.
 
 `bacnet_revert` puts back what this agent changed: a slot is relinquished (or given back the value another commander had), another property gets its old value. While the TUI has the profile open it holds the ledger, so a write is refused (`workspace-locked`) until it closes; reads go on. Attach the agent to the open TUI instead (`bacnet mcp connect`), and it can write there: each write waits in the TUI's preview dialog, under an agent banner, until you confirm it (any tier, with the TUI's write session armed) or decline it. Disarming the TUI refuses every request still waiting (`not-armed`), and `bacnet://session` tells the agent whether the TUI is armed (`tui.armed`).

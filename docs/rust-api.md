@@ -10122,6 +10122,28 @@ ambiguous until the next relay folds that row into the local one, reported
 row the same way. If the number is never learned, the routed row stays until
 the purge takes it.
 
+A station is reached by its address too, which is how one of two devices
+sharing an instance is reached (#2560):
+
+```rust
+use bacnet_types::constructed::BACnetAddress;
+
+let station = BACnetAddress { network_number: 2, mac_address: MacAddr::from_slice(&[0x05]) };
+let ack = client.confirmed_request_to(&station, ConfirmedServiceChoice::READ_PROPERTY, &request).await?;
+let read = bacnet_client::acks::read_property(&read_request, &ack)?; // checked as read_property checks
+client.unconfirmed_request_to(&station, UnconfirmedServiceChoice::TIME_SYNCHRONIZATION, &data).await?;
+```
+
+Network 0 is a station on this network, at its MAC; another network's
+station goes through the router its discovery-table row names, and an
+address on the client's own network, once it has learned the number, is
+the local station. Both take the existing request path, so the row at the
+address bounds the request (Max APDU, segmentation) and an answer keeps it
+alive; with no row a local station gets the configured limits, and a remote
+one has no route and fails with `Error::UnknownDevice` before anything is
+sent. `bacnet_client::acks` holds the ReadProperty and AtomicReadFile answer
+checks the typed calls use.
+
 Who-Has answers and router discovery (#960):
 
 ```rust

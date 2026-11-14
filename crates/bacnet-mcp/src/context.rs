@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use bacnet_client::client::{DeviceEventKind, DiscoveredRouter};
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_ops::Client;
 use bacnet_ops::limits::{Account, TokenBucket};
 use bacnet_ops::target::{self, Target};
 use bacnet_ops::watch::{Hub, Point};
+use bacnet_ops::{Client, DeviceAddress};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -40,17 +40,19 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     pub(crate) bucket: Arc<TokenBucket>,
     /// When the principal's last broad Who-Is went.
     pub(crate) broad: Arc<Mutex<Option<Instant>>>,
-    /// Object lists read, by device, for paging without reading again.
-    pub(crate) lists: Mutex<HashMap<u32, CachedList>>,
+    /// Object lists read, by the device's address, for paging without
+    /// reading again.
+    pub(crate) lists: Mutex<HashMap<DeviceAddress, CachedList>>,
     /// One lock a device, held while its list is read, so two calls on one
     /// device take turns and the second goes on from where the first
     /// stopped.
-    pub(crate) list_locks: Mutex<HashMap<u32, Arc<tokio::sync::Mutex<()>>>>,
-    /// Calls and requests per device, logged as a summary at shutdown.
-    pub(crate) reads: Mutex<BTreeMap<u32, (u64, u64)>>,
-    /// Object names and descriptions read by `bacnet_find_object`, by
-    /// device, so its later pages don't read them again.
-    pub(crate) names: Mutex<HashMap<u32, CachedNames>>,
+    pub(crate) list_locks: Mutex<HashMap<DeviceAddress, Arc<tokio::sync::Mutex<()>>>>,
+    /// Calls and requests per device, by its address and with its
+    /// instance, logged as a summary at shutdown.
+    pub(crate) reads: Mutex<BTreeMap<DeviceAddress, (u32, u64, u64)>>,
+    /// Object names and descriptions read by `bacnet_find_object`, by the
+    /// device's address, so its later pages don't read them again.
+    pub(crate) names: Mutex<HashMap<DeviceAddress, CachedNames>>,
     /// What Who-Is-Router-To-Network queries found, and when the last one
     /// went; at most one goes a minute for the principal.
     pub(crate) routers: Arc<Mutex<Routers>>,
@@ -73,12 +75,15 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     pub(crate) closing: CancellationToken,
     /// Listen streams running.
     pub(crate) listening: watch::Sender<usize>,
-    /// The discovery table's devices and their networks, kept for the
-    /// subscription acknowledgment, which the SDK asks for synchronously.
-    pub(crate) known: Mutex<HashMap<u32, u16>>,
-    /// Device summaries served to `bacnet://device/{instance}`.
+    /// The discovery table's devices, one per address with the instance it
+    /// claims, kept for the subscription acknowledgment, which the SDK asks
+    /// for synchronously. Two devices sharing an instance are two entries
+    /// (#2560).
+    pub(crate) known: Mutex<HashMap<DeviceAddress, u32>>,
+    /// Device summaries served to `bacnet://device/{instance}`, by the
+    /// address the instance named when read.
     pub(crate) described: Cache,
-    /// Alarm pages served to the alarm resources.
+    /// Alarm pages served to the alarm resources, by address as above.
     pub(crate) alarms: Cache,
     /// The write session, the plan grant's budget and the confirmation
     /// sealer (#2068).
@@ -224,8 +229,9 @@ pub(crate) struct Call {
     pub(crate) deadline: Instant,
     pub(crate) account: Arc<Account>,
     timeouts: AtomicU32,
-    /// The device the call reached, for the read log.
-    device: Mutex<Option<u32>>,
+    /// The device the call reached, by address and instance, for the read
+    /// log.
+    device: Mutex<Option<(DeviceAddress, u32)>>,
 }
 
 impl Call {
@@ -250,12 +256,16 @@ impl Call {
         self.timeouts.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn reached(&self, device: u32) {
-        *self.device.lock().unwrap_or_else(PoisonError::into_inner) = Some(device);
+    pub(crate) fn reached(&self, address: &DeviceAddress, instance: u32) {
+        *self.device.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((address.clone(), instance));
     }
 
-    pub(crate) fn device(&self) -> Option<u32> {
-        *self.device.lock().unwrap_or_else(PoisonError::into_inner)
+    pub(crate) fn device(&self) -> Option<(DeviceAddress, u32)> {
+        self.device
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The `cost` block every result carries.
@@ -270,8 +280,9 @@ impl Call {
     }
 }
 
-/// A device argument: an instance, `dnet:instance` or `dnet:0xMAC`, as a
-/// string, or an instance as a number.
+/// A device argument: an instance, `dnet:instance`, or an address (`ip:port`,
+/// `dnet:0xMAC` and the target grammar's other station forms), as a string,
+/// or an instance as a number.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum DeviceArg {
@@ -291,6 +302,8 @@ impl DeviceArg {
 /// A device the policy lets the call reach, from the discovery table.
 pub(crate) struct Device<T: TransportPort + 'static> {
     pub(crate) instance: u32,
+    /// Where it answers: what the caches key on (#2560).
+    pub(crate) address: DeviceAddress,
     /// Its network, 0 for the local one.
     pub(crate) network: u16,
     pub(crate) entry: DiscoveredDevice,
@@ -315,6 +328,17 @@ pub(crate) async fn pinned<T: TransportPort + 'static>(
 
 const DISCOVER_HINT: &str = "call bacnet_discover first (with a range or network that includes it)";
 
+/// The ambiguity error for `instance`, claimed by every row of `claims`.
+fn ambiguous(instance: u32, claims: &[DiscoveredDevice]) -> Error {
+    Error::AmbiguousDevice {
+        instance,
+        candidates: claims
+            .iter()
+            .filter_map(DiscoveredDevice::address)
+            .collect(),
+    }
+}
+
 impl<T: TransportPort + 'static> Ctx<T> {
     /// The client, or a refusal in passive mode.
     pub(crate) fn client(&self) -> Result<&Client<T>, ToolError> {
@@ -328,11 +352,12 @@ impl<T: TransportPort + 'static> Ctx<T> {
 
     /// The device `arg` names, if the discovery table holds it and the
     /// policy allows it, with the handle the call reads through. Targets
-    /// are numeric: a device is never found by name, and a local address is
-    /// no device. Nothing is sent to find one (the server's client looks
-    /// for no device), and an instance two addresses claim is refused,
-    /// naming both, also as `dnet:instance`. The handle is pinned to the
-    /// row the policy checks, so no request in the call goes elsewhere.
+    /// are numeric: a device is never found by name. An instance names the
+    /// one address claiming it, `dnet:instance` the one claiming it on that
+    /// network, and an address (#2560) the device at it. Nothing is sent to
+    /// find one (the server's client looks for no device), and an instance
+    /// two addresses claim is refused, naming both. The handle is pinned to
+    /// the row the policy checks, so no request in the call goes elsewhere.
     pub(crate) async fn device(
         &self,
         call: &Call,
@@ -344,116 +369,181 @@ impl<T: TransportPort + 'static> Ctx<T> {
             device: text.clone(),
             hint: DISCOVER_HINT.into(),
         };
-        // An instance names itself; a station is named by the text given.
-        let failed = |instance: Option<u32>, error: Error| match (instance, error) {
-            (_, Error::UnknownDevice { .. }) => unknown(),
-            (_, Error::OutOfRange(why)) => ToolError::invalid("device", why),
-            (Some(instance), error) => ToolError::device(instance, &error),
-            (None, error) => ToolError::Failed(format!("{text}: {error}")),
+        // Named as written: `7`, `2:7` or an address.
+        let failed = |error: Error| match error {
+            Error::UnknownDevice { .. } => unknown(),
+            Error::AmbiguousDevice { candidates, .. } => ToolError::ambiguous(&text, &candidates),
+            Error::OutOfRange(why) => ToolError::invalid("device", why),
+            error => ToolError::Failed(format!("{text}: {error}")),
         };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
-        let (handle, entry) = match parsed {
-            Target::Instance(instance) | Target::Routed { instance, .. } => {
-                let entry = match client.low_level().get_device(instance).await {
-                    Ok(Some(entry)) => entry,
-                    Ok(None) => return Err(unknown()),
-                    Err(error) => return Err(failed(Some(instance), error)),
-                };
-                // The client's own network, once it knows the number, is
-                // the local one, as its handles key it.
-                let own = client.low_level().network_number();
-                let local = |network: u16| if Some(network) == own { 0 } else { network };
-                if let Target::Routed { dnet, .. } = parsed
-                    && local(entry.source_network.unwrap_or(0)) != local(dnet)
-                {
-                    return Err(unknown());
+        let entry = match parsed {
+            Target::Instance(instance) => match client.low_level().get_device(instance).await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => return Err(unknown()),
+                Err(error) => return Err(failed(error)),
+            },
+            Target::Routed { dnet, instance } => {
+                let claims = self.claims(instance, Some(dnet)).await;
+                match claims.as_slice() {
+                    [] => return Err(unknown()),
+                    [entry] => entry.clone(),
+                    several => return Err(failed(ambiguous(instance, several))),
                 }
-                let handle = client
-                    .device(&entry)
-                    .await
-                    .map_err(|error| failed(Some(instance), error))?;
-                (handle, entry)
             }
-            Target::RoutedMac { .. } => {
-                let handle = client
-                    .device(text.as_str())
-                    .await
-                    .map_err(|error| failed(None, error))?;
+            Target::Mac(_) | Target::RoutedMac { .. } => {
+                // A handle from an address sends nothing on this client,
+                // which never looks for a device; the table says what is
+                // there.
+                let handle = client.device(text.as_str()).await.map_err(failed)?;
                 let at = handle.address();
-                let entry = client
+                client
                     .low_level()
                     .get_device_at(at.network(), at.mac())
                     .await
-                    .ok_or_else(unknown)?;
-                (handle, entry)
+                    .ok_or_else(unknown)?
             }
-            Target::Mac(_) | Target::Bip6(_) => {
+            Target::Bip6(_) => {
                 return Err(ToolError::invalid(
                     "device",
-                    "a device instance, dnet:instance or dnet:0xMAC, not an address",
+                    "a B/IPv6 node is named by its VMAC (bip6:0x...) or its instance",
                 ));
             }
         };
+        let handle = client.device(&entry).await.map_err(failed)?;
+        let address = handle.address();
         let device = Device {
             instance: entry.object_identifier.instance_number(),
-            network: handle.address().network(),
+            network: address.network(),
+            address,
             entry,
             handle,
         };
-        self.allow(device.instance, device.network)?;
+        self.allow(&device.address, device.instance)?;
         self.remember(&device.entry);
-        call.reached(device.instance);
+        call.reached(&device.address, device.instance);
         Ok(device)
     }
 
-    /// Note a device of the discovery table for the subscription check.
-    pub(crate) fn remember(&self, found: &DiscoveredDevice) {
-        let instance = found.object_identifier.instance_number();
-        let network = found.source_network.unwrap_or(0);
-        self.known
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(instance, network);
+    /// The rows of the discovery table claiming `instance`, on `network`
+    /// when given (the client's own network, once it knows the number, is
+    /// the local one, as its handles key it), ordered by address.
+    pub(crate) async fn claims(
+        &self,
+        instance: u32,
+        network: Option<u16>,
+    ) -> Vec<DiscoveredDevice> {
+        let Some(client) = &self.client else {
+            return Vec::new();
+        };
+        let own = client.low_level().network_number();
+        let local = |network: u16| if Some(network) == own { 0 } else { network };
+        let mut claims: Vec<DiscoveredDevice> = client
+            .low_level()
+            .discovered_devices()
+            .await
+            .into_iter()
+            .filter(|row| row.object_identifier.instance_number() == instance)
+            .filter(|row| {
+                network.is_none_or(|n| local(row.source_network.unwrap_or(0)) == local(n))
+            })
+            .collect();
+        // One station per address in its local form: a routed row on this
+        // network the table hasn't folded into the local one yet (#2572) is
+        // no second claim. The sort is stable, so the local row is kept.
+        let at = |row: &DiscoveredDevice| DeviceAddress::of(row).map(|a| a.localized(own));
+        claims.sort_by_key(at);
+        claims.dedup_by_key(|row| at(row));
+        claims
     }
 
-    /// Whether `instance` is a known device the policy lets the server
+    /// Note a device of the discovery table for the subscription check: its
+    /// address claims its instance now.
+    pub(crate) fn remember(&self, found: &DiscoveredDevice) {
+        if let Some(address) = DeviceAddress::of(found) {
+            let instance = found.object_identifier.instance_number();
+            self.known
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(address, instance);
+        }
+    }
+
+    /// Whether `instance` names one known device the policy lets the server
     /// reach, without waiting for the discovery table.
     pub(crate) fn reach_known(&self, instance: u32) -> bool {
         self.reach_check(instance).is_ok()
     }
 
-    /// [`reach_known`](Self::reach_known), saying why not: the device
-    /// isn't in the discovery table, or the policy leaves it out.
+    /// [`reach_known`](Self::reach_known), saying why not: no address in
+    /// the discovery table claims the instance, two or more do (a resource
+    /// names a device by its instance alone), or the policy leaves out the
+    /// one that does.
     pub(crate) fn reach_check(&self, instance: u32) -> Result<(), ToolError> {
-        let network = self
+        let claims: Vec<DeviceAddress> = {
+            let known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut claims: Vec<DeviceAddress> = known
+                .iter()
+                .filter(|(_, claimed)| **claimed == instance)
+                .map(|(address, _)| address.clone())
+                .collect();
+            claims.sort();
+            claims
+        };
+        match claims.as_slice() {
+            [] => Err(ToolError::UnknownDevice {
+                device: instance.to_string(),
+                hint: DISCOVER_HINT.into(),
+            }),
+            [address] => self.allow(address, instance),
+            several => {
+                let list: Vec<String> = several.iter().map(ToString::to_string).collect();
+                Err(ToolError::refused(
+                    "ambiguous-device",
+                    format!(
+                        "device {instance} is claimed by {}; a resource names one device",
+                        list.join(" and ")
+                    ),
+                ))
+            }
+        }
+    }
+
+    /// The one known address claiming `instance`; `None` when none or two
+    /// or more do.
+    pub(crate) fn known_at(&self, instance: u32) -> Option<DeviceAddress> {
+        let known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut claims = known
+            .iter()
+            .filter(|(_, claimed)| **claimed == instance)
+            .map(|(address, _)| address);
+        match (claims.next(), claims.next()) {
+            (Some(address), None) => Some(address.clone()),
+            _ => None,
+        }
+    }
+
+    /// The known instances in reach, in order: each claimed by one address
+    /// the policy allows.
+    pub(crate) fn known_in_reach(&self) -> Vec<u32> {
+        let mut instances: Vec<u32> = self
             .known
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&instance)
-            .copied();
-        let network = network.ok_or_else(|| ToolError::UnknownDevice {
-            device: instance.to_string(),
-            hint: DISCOVER_HINT.into(),
-        })?;
-        self.allow(instance, network)
-    }
-
-    /// The known devices in reach, in order.
-    pub(crate) fn known_in_reach(&self) -> Vec<u32> {
-        let known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut devices: Vec<u32> = known
-            .iter()
-            .filter(|(instance, network)| self.allow(**instance, **network).is_ok())
-            .map(|(instance, _)| *instance)
+            .values()
+            .copied()
             .collect();
-        devices.sort_unstable();
-        devices
+        instances.sort_unstable();
+        instances.dedup();
+        instances.retain(|instance| self.reach_check(*instance).is_ok());
+        instances
     }
 
     /// Keep [`known`](Self::known) in step with the discovery table until
     /// the server closes: a snapshot, then its events (a snapshot again
-    /// after a burst the receiver missed). It also lets `bacnet_watch`
-    /// points go once nobody has asked for them in [`TOOL_IDLE`].
+    /// after a burst the receiver missed), one entry per address. It also
+    /// lets `bacnet_watch` points go once nobody has asked for them in
+    /// [`TOOL_IDLE`].
     pub(crate) async fn follow_devices(&self) {
         let Some(client) = &self.client else {
             return;
@@ -464,13 +554,12 @@ impl<T: TransportPort + 'static> Ctx<T> {
         loop {
             if resync {
                 let devices = client.devices().await;
-                let mut known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
-                known.clear();
+                self.known
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clear();
                 for found in &devices {
-                    known.insert(
-                        found.object_identifier.instance_number(),
-                        found.source_network.unwrap_or(0),
-                    );
+                    self.remember(found);
                 }
                 resync = false;
             }
@@ -488,17 +577,11 @@ impl<T: TransportPort + 'static> Ctx<T> {
             };
             match event {
                 Ok(event) if event.kind == DeviceEventKind::Lost => {
-                    // Another address may still claim the instance.
-                    let instance = event.device.object_identifier.instance_number();
-                    match client.low_level().get_device(instance).await {
-                        Ok(Some(left)) => self.remember(&left),
-                        Ok(None) => {
-                            self.known
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .remove(&instance);
-                        }
-                        Err(_) => {}
+                    if let Some(address) = DeviceAddress::of(&event.device) {
+                        self.known
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .remove(&address);
                     }
                 }
                 Ok(event) => self.remember(&event.device),
@@ -533,9 +616,10 @@ impl<T: TransportPort + 'static> Ctx<T> {
         ))
     }
 
-    /// Refuse a device or network the policy leaves out.
-    pub(crate) fn allow(&self, instance: u32, network: u16) -> Result<(), ToolError> {
-        self.allow_network(network)?;
+    /// Refuse a device the policy leaves out: its address's network, or
+    /// its instance.
+    pub(crate) fn allow(&self, address: &DeviceAddress, instance: u32) -> Result<(), ToolError> {
+        self.allow_network(address.network())?;
         if !self.policy.allows_device(instance) {
             return Err(ToolError::refused(
                 "device-not-allowed",
@@ -554,31 +638,36 @@ impl<T: TransportPort + 'static> Ctx<T> {
     /// Record a finished call in the read log, as a summary line.
     pub(crate) fn log_read(&self, tool: &str, call: &Call, outcome: &str) {
         let requests = call.account.requests();
-        let device = call.device();
+        let reached = call.device();
+        let device = reached.as_ref().map(|(_, instance)| *instance);
+        let address = reached.as_ref().map(|(address, _)| address.to_string());
         tracing::info!(
             target: "bacnet_mcp::reads",
             tool,
             device,
+            address,
             requests,
             outcome,
             "read call"
         );
-        if let Some(device) = device {
+        if let Some((address, instance)) = reached {
             let mut reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
-            let entry = reads.entry(device).or_default();
-            entry.0 += 1;
-            entry.1 += u64::from(requests);
+            let entry = reads.entry(address).or_insert((instance, 0, 0));
+            entry.0 = instance;
+            entry.1 += 1;
+            entry.2 += u64::from(requests);
         }
     }
 
     /// Log the read counts per device, at shutdown.
     pub(crate) fn log_summary(&self) {
         let reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
-        for (device, (calls, requests)) in reads.iter() {
+        for (address, (device, calls, requests)) in reads.iter() {
             tracing::info!(
                 target: "bacnet_mcp::reads",
                 principal = %self.principal,
                 device,
+                address = %address,
                 calls,
                 requests,
                 "read summary"

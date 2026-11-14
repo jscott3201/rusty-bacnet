@@ -87,6 +87,7 @@ fn unknown() -> Entry {
         run: "earlier-run".into(),
         at: "2026-10-18T12:00:00.000Z".into(),
         device: LAB,
+        address: Some(bacnet_ops::DeviceAddress::local(&super::writes::LAB_MAC).unwrap()),
         object_type: ObjectType::MULTI_STATE_VALUE.to_raw(),
         instance: 1,
         property: PropertyIdentifier::STATE_TEXT.to_raw(),

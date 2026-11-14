@@ -29,7 +29,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .confirmed_request(destination_mac, ConfirmedServiceChoice::READ_PROPERTY, &buf)
             .await?;
 
-        crate::read_property::decode_ack(&request, &response_data)
+        crate::acks::read_property(&request, &response_data)
     }
 
     /// Read a property from a discovered device, auto-routing if needed.
@@ -93,7 +93,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             )
             .await?;
 
-        crate::read_property::decode_ack(&request, &response_data)
+        crate::acks::read_property(&request, &response_data)
     }
 
     /// Read multiple properties from one or more objects on a remote device.

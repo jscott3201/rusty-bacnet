@@ -90,7 +90,7 @@ impl<T: TransportPort + 'static> Client<T> {
             check_local_mac(self.low_level().transport(), address.mac(), &shown)
                 .map_err(Error::OutOfRange)?;
         }
-        let mut row = self.row_at(&address).await;
+        let mut row = address.row(self.low_level()).await;
         if row.is_none() && !address.is_local() {
             row = Some(self.find(&address, None).await?);
         }
@@ -116,19 +116,6 @@ impl<T: TransportPort + 'static> Client<T> {
     pub(super) fn scope(&self, network: Option<u16>) -> Option<u16> {
         let own = self.low_level().network_number();
         network.map(|network| if Some(network) == own { 0 } else { network })
-    }
-
-    /// The discovery table's row for the station at `address`: for a
-    /// local one, while this client knows its own network's number, also
-    /// a routed row on that network the table hasn't folded into a local
-    /// one yet.
-    pub(super) async fn row_at(&self, address: &DeviceAddress) -> Option<DiscoveredDevice> {
-        let low = self.low_level();
-        let row = low.get_device_at(address.network(), address.mac()).await;
-        match (row, low.network_number()) {
-            (None, Some(own)) if address.is_local() => low.get_device_at(own, address.mac()).await,
-            (row, _) => row,
-        }
     }
 
     /// A handle following `instance`, from the one address claiming it

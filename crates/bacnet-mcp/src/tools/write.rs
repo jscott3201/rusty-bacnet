@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::parse::{parse_object_specifier, parse_property, parse_value_for};
+use bacnet_ops::target::AddressStyle;
 use bacnet_tool::safety::audit::{Audit, Context};
 use bacnet_tool::safety::desk::{self, Caller};
 use bacnet_tool::safety::ledger::Ledger;
@@ -220,7 +222,9 @@ fn value_text(value: &Value) -> Result<Option<String>, ToolError> {
 }
 
 /// The writes, checked: numeric targets, values in the grammar.
-fn specs(device: u32, args: &Args) -> Result<Vec<WriteSpec>, ToolError> {
+/// The writes `args` asks for, to `device` at `address`, the address the
+/// call's handle is pinned to (#2560).
+fn specs(address: &DeviceAddress, device: u32, args: &Args) -> Result<Vec<WriteSpec>, ToolError> {
     if args.writes.is_empty() || args.writes.len() > MAX_WRITES {
         return Err(ToolError::invalid(
             "writes",
@@ -259,6 +263,7 @@ fn specs(device: u32, args: &Args) -> Result<Vec<WriteSpec>, ToolError> {
                     .map_err(|e| ToolError::invalid("value", e))?;
             }
             Ok(WriteSpec {
+                address: address.clone(),
                 device,
                 object,
                 property,
@@ -342,7 +347,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let device = ctx.device(call, &args.device).await?;
     let fields = fields(&ctx.principal, peer, raw);
     let refusing = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields.clone());
-    let specs = match specs(device.instance, &args) {
+    let specs = match specs(&device.handle.address(), device.instance, &args) {
         Ok(specs) => specs,
         Err(error @ ToolError::Refused { .. }) => {
             // A policy refusal (Priority_Array), recorded like the others.
@@ -520,7 +525,11 @@ async fn preview<T: TransportPort + 'static>(
                 preview_digest(&preview),
                 arm,
             );
-            Ok(Step::Ask(ask(&preview, tier, arm, state), good_until))
+            let style = client.address_style();
+            Ok(Step::Ask(
+                ask(&preview, tier, (arm, style), state),
+                good_until,
+            ))
         }
         Approval::Refused { reason, message } => {
             let error = ToolError::refused(reason, message);
@@ -542,11 +551,20 @@ pub(super) fn mcp_tier(preview: &Preview, tier: Tier) -> Tier {
     if fallback { Tier::T3 } else { tier }
 }
 
-/// The `input_required` result: the confirmation form and the state.
-fn ask(preview: &Preview, tier: Tier, arm: Option<u32>, state: String) -> InputRequiredResult {
+/// The `input_required` result: the confirmation form and the state. The
+/// address is written as the link writes it (`style`: an SC VMAC as hex).
+fn ask(
+    preview: &Preview,
+    tier: Tier,
+    (arm, style): (Option<u32>, AddressStyle),
+    state: String,
+) -> InputRequiredResult {
+    // The address too: the confirmation is bound to it (#2560).
     let mut message = format!(
-        "Confirm this {tier:?} BACnet write ({}):\n",
-        preview.service()
+        "Confirm this {tier:?} BACnet write ({}) to device {} at {}:\n",
+        preview.service(),
+        preview.device,
+        preview.address.styled(style)
     );
     for item in &preview.items {
         let before = item.before.as_ref().map_or("NULL", |b| b.text.as_str());

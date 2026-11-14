@@ -33,6 +33,7 @@ fn earlier(state: State) -> Entry {
         run: "earlier-run".into(),
         at: "2026-10-18T12:00:00.000Z".into(),
         device: LAB,
+        address: Some(bacnet_ops::DeviceAddress::local(&super::writes::LAB_MAC).unwrap()),
         object_type: ObjectType::ANALOG_OUTPUT.to_raw(),
         instance: 1,
         property: PropertyIdentifier::PRESENT_VALUE.to_raw(),

@@ -3,6 +3,7 @@
 //! the ledger and the exit guard.
 
 use bacnet_ops::label::object_label;
+use bacnet_ops::target::AddressStyle;
 use bacnet_types::enums::EnableDisable;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -22,13 +23,15 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, them
     let (title, lines) = match modal {
         Modal::Arm(form) => (" Arm a write session ".to_string(), arm(app, form, theme)),
         Modal::Write {
+            at,
             device,
             object,
             relinquish,
             form,
         } => {
             let what = if *relinquish { "Relinquish" } else { "Write" };
-            let title = format!(" {what}: device {device} {} ", object_label(*object));
+            let at = at.styled(app.style);
+            let title = format!(" {what}: device {device} ({at}) {} ", object_label(*object));
             (title, write_form(*relinquish, form, theme))
         }
         Modal::Waiting { what, .. } => (
@@ -52,7 +55,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, them
             // The key guard runs from the first frame that shows it.
             app.drawing_confirm(*req);
             let tier = tier_name(&change.gate());
-            let lines = confirm(change, typed, error.as_deref(), theme);
+            let lines = confirm(change, app.style, typed, error.as_deref(), theme);
             // An attached agent's request (#2185): who asks, and the queue.
             match app.safety.agents.banner(*req) {
                 Some((who, queue)) => {
@@ -244,8 +247,9 @@ fn password(request: &Request, typed: &Secret, theme: &Theme) -> Vec<Line<'stati
     ]
 }
 
-/// What a device management request will do, for its confirmation.
-fn request_lines(request: &Request, theme: &Theme) -> Vec<Line<'static>> {
+/// What a device management request will do, for its confirmation, and
+/// the address it goes to, written as the link writes it.
+fn request_lines(request: &Request, style: AddressStyle, theme: &Theme) -> Vec<Line<'static>> {
     let warning = match request.action {
         Action::Dcc { .. } => {
             "The device may stop answering or initiating BACnet traffic until enabled again."
@@ -259,6 +263,7 @@ fn request_lines(request: &Request, theme: &Theme) -> Vec<Line<'static>> {
     };
     let mut lines = vec![
         Line::styled(request.label(), theme.accent()),
+        Line::raw(format!("  address: {}", request.at.styled(style))),
         Line::raw(format!("  password: {password}")),
         Line::styled(format!("  ! {warning}"), theme.warn()),
     ];
@@ -283,17 +288,28 @@ fn request_lines(request: &Request, theme: &Theme) -> Vec<Line<'static>> {
     lines
 }
 
-fn confirm(change: &Change, typed: &str, error: Option<&str>, theme: &Theme) -> Vec<Line<'static>> {
+/// The confirmation: what goes where (the device and its address, the one
+/// the change is bound to, #2560), and the tier's keys.
+fn confirm(
+    change: &Change,
+    style: AddressStyle,
+    typed: &str,
+    error: Option<&str>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let (gate, why_t3) = match change {
         Change::Write(preview) => {
-            if preview.batch {
-                lines.push(Line::raw(format!(
-                    "One WritePropertyMultiple of {} write(s) to device {}:",
+            let at = preview.address.styled(style);
+            lines.push(Line::raw(if preview.batch {
+                format!(
+                    "One WritePropertyMultiple of {} write(s) to device {} at {at}:",
                     preview.items.len(),
                     preview.device
-                )));
-            }
+                )
+            } else {
+                format!("One WriteProperty to device {} at {at}:", preview.device)
+            }));
             for item in &preview.items {
                 lines.extend(item_lines(item, theme));
             }
@@ -310,7 +326,7 @@ fn confirm(change: &Change, typed: &str, error: Option<&str>, theme: &Theme) -> 
             (preview.gate.clone(), why)
         }
         Change::Device(request) => {
-            lines.extend(request_lines(request, theme));
+            lines.extend(request_lines(request, style, theme));
             (
                 request.gate(),
                 "T3: device management reaches the whole device.",

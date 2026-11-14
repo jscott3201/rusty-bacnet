@@ -41,10 +41,7 @@ async fn next_event(events: &mut mpsc::Receiver<WorkerEvent>) -> WorkerEvent {
             .expect("an event in time")
             .expect("the worker is running");
         match event {
-            WorkerEvent::Discovered(_)
-            | WorkerEvent::Updated(_)
-            | WorkerEvent::Snapshot(_)
-            | WorkerEvent::Collision { .. } => {}
+            WorkerEvent::Discovered(_) | WorkerEvent::Updated(_) | WorkerEvent::Snapshot(_) => {}
             other => return other,
         }
     }

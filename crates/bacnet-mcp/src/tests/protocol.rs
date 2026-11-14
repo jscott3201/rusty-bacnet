@@ -204,11 +204,24 @@ async fn errors_are_structured_and_say_what_was_sent() {
     assert_eq!(bad["error"], json!("invalid-argument"));
     assert_eq!(bad["field"], json!("object"));
     assert_eq!(bad["cost"]["requests"], json!(0));
+    // An address is a target too (#2560): one the table doesn't hold is
+    // unknown, named as written, and nothing is sent to find it.
     let address = lab
         .agent
-        .call("bacnet_read", json!({ "device": "10.0.0.1", "reads": [] }))
+        .call(
+            "bacnet_read",
+            json!({ "device": "10.0.0.1", "reads": [{ "object": "ai:1" }] }),
+        )
         .await;
-    assert_eq!(error(&address)["field"], json!("device"));
+    let address = error(&address);
+    assert_eq!(address["error"], json!("unknown-device"));
+    assert_eq!(address["target"], json!("10.0.0.1"), "{address}");
+    assert_eq!(address["cost"]["requests"], json!(0));
+    let vmac = lab
+        .agent
+        .call("bacnet_read", json!({ "device": "[fe80::1]", "reads": [] }))
+        .await;
+    assert_eq!(error(&vmac)["field"], json!("device"));
     let timeout = lab
         .agent
         .call(

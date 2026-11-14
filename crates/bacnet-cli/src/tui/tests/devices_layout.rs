@@ -56,7 +56,7 @@ fn site() -> App {
         discovered(3005, 8, Some((3, &[5]))),
     ];
     for device in &devices {
-        worker(&mut app, WorkerEvent::Discovered(feed.row(device)));
+        worker(&mut app, WorkerEvent::Discovered(feed.row(device).unwrap()));
     }
     tick(&mut app, at(5));
     app
@@ -182,13 +182,9 @@ fn a_routed_duplicate_names_each_station_with_its_router() {
         routed_row(2001, (2, &[5]), "10.0.1.1:47808", 24, 1),
         routed_row(2001, (3, &[5]), "10.0.1.2:47808", 24, 2),
     ];
-    worker(
-        &mut app,
-        WorkerEvent::Collision {
-            instance: 2001,
-            claimants,
-        },
-    );
+    for claimant in claimants {
+        worker(&mut app, WorkerEvent::Discovered(claimant));
+    }
     let banner = app.duplicates.banner().join(" ");
     for station in ["2:0x05 via 10.0.1.1:47808", "3:0x05 via 10.0.1.2:47808"] {
         assert!(banner.contains(station), "{banner}");

@@ -1,46 +1,6 @@
 use super::*;
-
-fn validate_atomic_read_file_ack(
-    request: &bacnet_services::file::FileAccessMethod,
-    ack: &bacnet_services::file::AtomicReadFileAck,
-) -> Result<(), Error> {
-    use bacnet_services::file::{FileAccessMethod, FileReadAckMethod};
-
-    match (request, &ack.access) {
-        (
-            FileAccessMethod::Stream {
-                requested_octet_count,
-                ..
-            },
-            FileReadAckMethod::Stream { file_data, .. },
-        ) if file_data.len() <= *requested_octet_count as usize => Ok(()),
-        (FileAccessMethod::Stream { .. }, FileReadAckMethod::Stream { .. }) => Err(
-            Error::decoding(0, "AtomicReadFile ACK exceeds the requested octet window"),
-        ),
-        (
-            FileAccessMethod::Record {
-                requested_record_count,
-                ..
-            },
-            FileReadAckMethod::Record {
-                returned_record_count,
-                file_record_data,
-                ..
-            },
-        ) if returned_record_count <= requested_record_count
-            && *returned_record_count as usize == file_record_data.len() =>
-        {
-            Ok(())
-        }
-        (FileAccessMethod::Record { .. }, FileReadAckMethod::Record { .. }) => Err(
-            Error::decoding(0, "AtomicReadFile ACK exceeds the requested record window"),
-        ),
-        _ => Err(Error::decoding(
-            0,
-            "AtomicReadFile ACK access method does not match the request",
-        )),
-    }
-}
+#[cfg(test)]
+use crate::acks::validate_atomic_read_file_ack;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Send a caller-supplied AcknowledgeAlarm request without fabricating fields.
@@ -130,9 +90,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let response = self
             .atomic_read_file(destination_mac, file_identifier, access)
             .await?;
-        let ack = bacnet_services::file::AtomicReadFileAck::decode(&response)?;
-        validate_atomic_read_file_ack(&requested_access, &ack)?;
-        Ok(ack)
+        crate::acks::atomic_read_file(&requested_access, &response)
     }
 
     /// Read raw file acknowledgement bytes from a discovered device.
@@ -182,9 +140,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let response = self
             .atomic_read_file_from_device(device_instance, file_identifier, access)
             .await?;
-        let ack = bacnet_services::file::AtomicReadFileAck::decode(&response)?;
-        validate_atomic_read_file_ack(&requested_access, &ack)?;
-        Ok(ack)
+        crate::acks::atomic_read_file(&requested_access, &response)
     }
 
     /// Write file data to a remote device (stream or record access).

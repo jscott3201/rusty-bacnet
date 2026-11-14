@@ -37,7 +37,14 @@ plus a text rendering. An `object` argument is `type:instance` (`ai:1`,
 `analog-output:3`) or, as the coming BACnet RDF encoding writes one,
 `type,instance` (`analog-output,3`); a log tool's `from` and `to` also take
 that encoding's date-time string, `2026-11-10 2 16:35:00.00`. Every form is
-in the CLI reference's [Input Forms](CLI.md#input-forms).
+in the CLI reference's [Input Forms](CLI.md#input-forms). A `device`
+argument is an instance (`1201`), `dnet:instance` for the one claiming it
+on that network, or the address of a device in the discovery table
+(`10.0.0.2:47808`, `mstp:5`, `bip6:0x0004D2`, six hex octets, or
+`2001:0x33` behind a router; #2560); nothing is sent to resolve one, and
+every request of the call goes to the address the policy checked. An
+instance two addresses claim is refused (`ambiguous-device`), naming both:
+name one by its address.
 
 | Tool | Notes |
 |---|---|
@@ -210,9 +217,10 @@ advertises `resources.subscribe` for every version.
   included. A URI that can't be honoured is a JSON-RPC -32602 with the
   tool error body, as a refused read is: `invalid-argument` (malformed, or
   a device summary, which has no updates), `unknown-device`, or `refused`
-  with `device-not-allowed`, `network-not-allowed`, `principal-cap`,
-  `process-cap`, `passive` or `shutting-down` (the session is ending);
-  nothing is sent. Subscribing twice to one
+  with `device-not-allowed`, `network-not-allowed`, `ambiguous-device` (a
+  URI names a device by its instance, and two addresses claim it),
+  `principal-cap`, `process-cap`, `passive` or `shutting-down` (the session
+  is ending); nothing is sent. Subscribing twice to one
   URI is one subscription, and a session holds at most 64 URIs (twice the
   point cap), its listen streams' per-device alarm URIs included (#2150). `resources/unsubscribe` drops the subscription and its watch
   at once; the last watch on a point cancels its BACnet subscription. When
@@ -396,7 +404,8 @@ Writes go through `bacnet_tool::safety`: the TUI's planner, tiers, ledger
   only (priority 9 to 16, or a property that isn't commandable): T2 and T3
   are refused (`needs-verified-approver`). A T1 write returns
   `input_required` (multi round-trip requests, 2026-07-28) with a form
-  elicitation `confirm` (the canonical targets, the value now and after,
+  elicitation `confirm` (the device and its address, the canonical
+  targets, the value now and after,
   the Present_Value change and the planner's notes; device text cleaned and
   labelled) and a sealed `requestState`. An older-revision session that
   declared form elicitation (or the capability without a mode, as
@@ -422,8 +431,10 @@ Writes go through `bacnet_tool::safety`: the TUI's planner, tiers, ledger
 - **The retry** carries the form's answer and the state. The state is
   XChaCha20-Poly1305 under a key drawn per process, with the principal and
   the tool as associated data, and holds a digest of the arguments, a
-  digest of the preview, a nonce and a 120 s expiry (the process's own
-  clock). A forged or changed state, or another caller's
+  digest of the preview (the device's address included, #2560: a device
+  named by its instance that has moved by the retry previews another
+  address, and is refused as `stale`), a nonce and a 120 s expiry (the
+  process's own clock). A forged or changed state, or another caller's
   (`confirmation-invalid`), an expired one (`confirmation-expired`), one
   used before (`confirmation-replayed`; a state opens once even when the
   retry is then refused) and different arguments (`confirmation-mismatch`)
@@ -449,9 +460,22 @@ Writes go through `bacnet_tool::safety`: the TUI's planner, tiers, ledger
   once.
 - **`bacnet_revert`**: `entries` (ledger ids) or `all`, this principal's
   MCP entries only (`not-yours` for another's), on devices the policy
-  reaches; no prompt and no armed session, as in the TUI. Latest write
-  first, through the desk; the result names each entry's outcome and how
-  many are `left`.
+  reaches, checked by the address each entry's write went to
+  (`network-not-allowed`, `device-not-allowed`); no prompt and no armed
+  session, as in the TUI. Latest write first, through the desk; the result
+  names each entry's outcome and how many are `left`. It sends no Who-Is:
+  an entry whose device the discovery table can't place (a routed station
+  with no row, or an entry from before addresses were kept whose instance
+  no row claims) is reported not reverted, saying why.
+- **The device at the address.** A write or revert goes to its address
+  only while the discovery table's row there claims the device it was
+  confirmed for; another instance there now refuses it with nothing sent
+  (#2560). A write or revert to a local address with no row (aged out, or
+  after a restart) asks the device which it is first: one ReadProperty of
+  its Device object's Object_Identifier per address, and no Who-Is. A
+  revert is checked against the policy where the desk finds the entry's
+  device, in its local form, and an attached revert only goes to the
+  address the person confirmed.
 - **Plan grants** (`[mcp.plan]`: `devices`, `properties` (`present-value`
   by default), `priority_min` and `priority_max` (8 and 16 by default),
   `max_writes` (1 to 10,000), `hours` (1 to 8), `reason`) run from

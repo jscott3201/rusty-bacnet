@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use bacnet_tool::safety::ledger::{Entry, Ledger};
-use bacnet_tool::safety::{FrontEnd, Outcome};
+use bacnet_tool::safety::{FrontEnd, Outcome, Unsent, revert_address};
 use bacnet_transport::port::TransportPort;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -117,7 +117,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             ));
         }
     };
-    ctx.client()?;
+    let client = ctx.client()?.low_level();
     let workspace =
         ctx.policy.writes.workspace.clone().ok_or_else(|| {
             ToolError::refused("write-not-granted", "no workspace for the ledger")
@@ -146,18 +146,29 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             }
         }
     }
-    if let Some(entry) = entries.iter().find(|e| {
-        ours(e, &ctx.principal)
-            && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
-            && !ctx.policy.allows_device(e.device)
-    }) {
-        return Err(ToolError::refused(
-            "device-not-allowed",
-            format!(
-                "device {} is not in this server's [mcp] devices",
-                entry.device
-            ),
-        ));
+    // The policy checks a device by its address's network, in its local
+    // form, and its instance (#2560). An entry written before addresses
+    // were kept is checked where the desk finds its device, as it reverts
+    // it (`McpCaller::reverting`): found once, so what is checked is what
+    // is sent to.
+    let own = client.network_number();
+    let chosen = |e: &&Entry| {
+        ours(e, &ctx.principal) && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
+    };
+    for entry in entries.iter().filter(chosen) {
+        match &entry.address {
+            Some(address) => ctx.allow(&address.clone().localized(own), entry.device)?,
+            None if !ctx.policy.allows_device(entry.device) => {
+                return Err(ToolError::refused(
+                    "device-not-allowed",
+                    format!(
+                        "device {} is not in this server's [mcp] devices",
+                        entry.device
+                    ),
+                ));
+            }
+            None => {}
+        }
     }
     let mut fields = Map::new();
     fields.insert("tool".into(), json!(NAME));
@@ -170,7 +181,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     if ctx.attached.is_some() {
         // The TUI holds the workspace: the person there confirms the
         // revert, and its desk does it (#2185).
-        return attached(ctx, &entries, wanted, (workspace, account, sending, fields));
+        return attached(ctx, &entries, wanted, (workspace, account, sending, fields)).await;
     }
     let work = {
         let ctx = Arc::clone(ctx);
@@ -178,7 +189,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         let fields = fields.clone();
         async move {
             let client = ctx.client()?;
-            let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
+            let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields)
+                .reverting(&ctx.policy, None);
             let mut desk = open(&ctx, &workspace, &caller).await?;
             let principal = ctx.principal.clone();
             let before = desk.entries();
@@ -188,6 +200,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                         && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
                 })
                 .await;
+            // An entry the desk couldn't reach without a Who-Is is among
+            // `done`, not reverted, with why: MCP's caller never looks.
             ctx.writes.signals.ledger_settled(&before, &desk, false);
             let left = desk
                 .entries()
@@ -206,7 +220,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
 /// pre-images back, for the TUI to confirm at the tier of the writes they
 /// undo. Refused across devices, since the dialog confirms one device; with
 /// nothing to put back, nothing is asked and nothing sent.
-fn attached<T: TransportPort + 'static>(
+async fn attached<T: TransportPort + 'static>(
     ctx: &Arc<Ctx<T>>,
     entries: &[Entry],
     wanted: Option<BTreeSet<u64>>,
@@ -230,7 +244,27 @@ fn attached<T: TransportPort + 'static>(
         .cloned()
         .collect();
     let ids: BTreeSet<u64> = chosen.iter().map(|e| e.id).collect();
-    let preview = bacnet_tool::safety::plan::undo_preview(&chosen);
+    // Where the entries' writes went, found as the desk finds it (nothing
+    // is sent); one written before #2560 kept no address, so its device is
+    // the one the discovery table holds for its instance. The job checks
+    // the desk finds the same address again (`McpCaller::reverting`).
+    let client = ctx.client()?.low_level();
+    let first = chosen
+        .iter()
+        .find(|e| e.address.is_some())
+        .or(chosen.first());
+    let address = match first {
+        Some(entry) => Some(
+            revert_address(client, entry, false)
+                .await
+                .map_err(|unsent| unplaced(entry, unsent))?,
+        ),
+        None => None,
+    };
+    let own = client.network_number();
+    let preview = address
+        .as_ref()
+        .and_then(|address| bacnet_tool::safety::plan::undo_preview(&chosen, address, own));
     match preview {
         Some(mut preview) if !preview.items.is_empty() => {
             // The planner's tier, never blocked here: `undo_preview` plans
@@ -268,6 +302,28 @@ fn attached<T: TransportPort + 'static>(
                 ctx, workspace, account, sending, fields, work,
             )))
         }
+    }
+}
+
+/// Why an attached revert of `entry` can't be put to the person: the
+/// device can't be placed without a Who-Is, or an entry from before
+/// addresses names an instance two addresses claim. Nothing was sent.
+fn unplaced(entry: &Entry, unsent: Unsent) -> ToolError {
+    match unsent {
+        Unsent::Contested { .. } => ToolError::refused("ambiguous-device", unsent.to_string()),
+        Unsent::NotLooking { device } => ToolError::UnknownDevice {
+            // Its address, or for an entry from before addresses its instance.
+            device: match entry.address {
+                Some(_) => device,
+                None => entry.device.to_string(),
+            },
+            hint: format!(
+                "this server sends no Who-Is to find the device of ledger entry {}: call \
+                 bacnet_discover first",
+                entry.id
+            ),
+        },
+        other => ToolError::Failed(other.to_string()),
     }
 }
 

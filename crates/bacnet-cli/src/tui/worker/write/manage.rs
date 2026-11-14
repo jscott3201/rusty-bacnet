@@ -1,18 +1,19 @@
 //! Device management in the write worker (#1799): DeviceCommunicationControl
 //! and ReinitializeDevice, checked here again whatever the app decided,
-//! sent once, and recorded with their outcome. The audit record names the
-//! service, the device, the state and duration, and whether a password went
-//! with it, never the password itself; the request, password and all, is
-//! dropped once it has been sent.
+//! sent once to the device's address, and recorded with their outcome. The
+//! audit record names the service, the device, the state and duration, and
+//! whether a password went with it, never the password itself; the request,
+//! password and all, is dropped once it has been sent.
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_tool::class::Class;
 use bacnet_tool::safety::desk::{Caller, ENDED};
-use bacnet_tool::safety::{find, turn};
+use bacnet_tool::safety::{reach, turn};
 use bacnet_transport::port::TransportPort;
 
 use super::{PASSIVE, Runner, tell};
+use crate::destination::Destination;
 use crate::tui::safety::manage::{Action, NEEDS_DANGEROUS, Request};
 use crate::tui::safety::{Outcome, SafetyEvent};
 use crate::tui::worker::EventSink;
@@ -70,23 +71,25 @@ async fn send<T: TransportPort + 'static>(
     request: &Request,
 ) -> Outcome {
     let device = request.device;
-    find(client, device).await;
-    let held = match turn(client, rate, device).await {
+    reach(client, &request.at, device).await;
+    // Refused, with nothing sent, once another device is at the address.
+    let held = match turn(client, rate, &request.at, device).await {
         Ok(held) => held,
         Err(error) => return Outcome::NotSent(error.to_string()),
     };
     let password = request.password.as_ref().map(|p| p.expose().to_owned());
+    // To the address the turn was taken at, never back through the
+    // instance (#2560).
+    let to = Destination {
+        address: request.at.clone(),
+        instance: Some(device),
+    };
     let result = match request.action {
         Action::Dcc { state, time } => {
-            client
-                .device_communication_control_from_device(device, state, time.minutes(), password)
+            to.device_communication_control(client, state, time.minutes(), password)
                 .await
         }
-        Action::Reinit { state } => {
-            client
-                .reinitialize_device_from_device(device, state, password)
-                .await
-        }
+        Action::Reinit { state } => to.reinitialize_device(client, state, password).await,
     };
     drop(held);
     Outcome::of(&result)

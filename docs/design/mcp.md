@@ -248,10 +248,14 @@ Rules:
    session never changes the list.
 3. **Every tool returns `structuredContent` with an `outputSchema`**, plus a
    short text rendering of the same result.
-4. **Targets are numeric.** A device is an instance, or `dnet:instance` or
-   `dnet:0xMAC` for a routed one, in the shared target grammar. An object is
-   `type:instance` (`ai:1`, `analog-output:3`). Write tools never resolve a
-   target by name, because names are attacker-controlled strings.
+4. **Targets are numeric.** A device is an instance, `dnet:instance` for
+   the one claiming it on that network, or the address of a device in the
+   discovery table (`ip:port`, `mstp:N`, `bip6:0xVMAC`, `dnet:0xMAC` behind
+   a router), in the shared target grammar (#2560). Devices are known, allowed
+   and cached by address, so two networks holding one instance are two
+   devices, and an instance two addresses claim is refused, naming both. An
+   object is `type:instance` (`ai:1`, `analog-output:3`). Write tools never
+   resolve a target by name, because names are attacker-controlled strings.
 5. **Values cross in two forms:** the display string from `format`, and
    its typed form, `format::Datum`, the CLI's JSON shape (`72.5`, `{ "value":
    62, "name": "degrees-fahrenheit" }`, ...). Writes take only a typed form

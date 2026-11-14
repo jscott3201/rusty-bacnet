@@ -157,6 +157,7 @@ pub(super) fn writes_sent(site: &Site) -> usize {
 
 pub(super) fn spec(value: Option<&str>, priority: u8) -> WriteSpec {
     WriteSpec {
+        address: bacnet_ops::DeviceAddress::local(&LAB_MAC).unwrap(),
         device: LAB,
         object: ao1(),
         property: PropertyIdentifier::PRESENT_VALUE,
@@ -584,6 +585,7 @@ async fn a_passive_session_puts_nothing_on_the_wire() {
         Command::Browse {
             req: 1,
             device: LAB,
+            at: bacnet_ops::DeviceAddress::local(&LAB_MAC).unwrap(),
             read: crate::tui::point::BrowseRead::Device,
         },
         Command::Watch(crate::tui::watched::WatchCommand::Add {

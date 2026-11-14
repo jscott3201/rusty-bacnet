@@ -30,6 +30,7 @@ fn entry(run: &str) -> Entry {
         run: run.into(),
         at: "2026-10-18T12:00:00.000Z".into(),
         device: 100,
+        address: Some("10.0.0.100:47808".parse().unwrap()),
         object_type: 1,
         instance: 1,
         property: 85,
@@ -146,6 +147,7 @@ fn ctrl_c_on_a_preview_declines_it() {
     let mut app = connected_app();
     ready(&mut app, true, Vec::new());
     let preview = Box::new(Preview {
+        address: bacnet_ops::DeviceAddress::local(&[10, 0, 0, 100, 0xBA, 0xC0]).unwrap(),
         device: 100,
         items: Vec::new(),
         batch: false,
@@ -180,6 +182,7 @@ fn confirming() -> App {
     app.overlay = Overlay::Safety(Box::new(Modal::Confirm {
         req: 1,
         change: Change::Write(Box::new(Preview {
+            address: bacnet_ops::DeviceAddress::local(&[10, 0, 0, 100, 0xBA, 0xC0]).unwrap(),
             device: 100,
             items: Vec::new(),
             batch: false,
@@ -286,6 +289,7 @@ fn an_agents_entries_are_listed_and_marked_as_mcp() {
     let dir = tempfile::tempdir().unwrap();
     let planned = Planned {
         spec: WriteSpec {
+            address: bacnet_ops::DeviceAddress::local(&[10, 0, 0, 100, 0xBA, 0xC0]).unwrap(),
             device: 100,
             object: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
             property: PropertyIdentifier::PRESENT_VALUE,
@@ -306,7 +310,12 @@ fn an_agents_entries_are_listed_and_marked_as_mcp() {
     let mut ledger = Ledger::open(dir.path())
         .unwrap()
         .written_by(Origin::mcp("agent-user"));
-    let id = ledger.begin(&planned, "mcp-run", "2026-10-29T12:00:00.000Z");
+    let id = ledger.begin(
+        &planned,
+        "mcp-run",
+        "2026-10-29T12:00:00.000Z",
+        bacnet_tool::safety::ledger::Place::default(),
+    );
     ledger.finish(id, Some(true), &[]);
     ledger.save().unwrap();
     let file = std::fs::read_to_string(dir.path().join("ledger.json")).unwrap();

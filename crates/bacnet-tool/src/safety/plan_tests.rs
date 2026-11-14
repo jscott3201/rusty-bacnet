@@ -38,6 +38,7 @@ fn ao1() -> Vec<RawRow> {
 
 fn spec(value: Option<&str>, priority: u8) -> WriteSpec {
     WriteSpec {
+        address: DeviceAddress::local(&[10, 0, 0, 100, 0xBA, 0xC0]).unwrap(),
         device: 100,
         object: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
         property: PropertyIdentifier::PRESENT_VALUE,

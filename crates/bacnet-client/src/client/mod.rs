@@ -941,6 +941,7 @@ mod segmentation;
 mod segmentation_abort;
 mod segmentation_context;
 mod segmented_request;
+mod station;
 mod summaries;
 mod transaction_cleanup;
 mod transaction_peer;

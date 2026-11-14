@@ -17,13 +17,14 @@ use crate::tui::app::Overlay;
 use crate::tui::app::safety::CONFIRM_GUARD;
 use crate::tui::safety::audit::Secret;
 use crate::tui::safety::manage::{Action, DccTime, Request};
-use crate::tui::safety::{Change, SafetyCommand, SafetyEvent};
+use crate::tui::safety::{Change, Outcome, SafetyCommand, SafetyEvent};
 
 fn manage(req: u64) -> Command {
     Command::Safety(SafetyCommand::Manage {
         req,
         request: Box::new(Request {
             device: LAB,
+            at: bacnet_ops::DeviceAddress::local(&super::writes::LAB_MAC).unwrap(),
             action: Action::Dcc {
                 state: EnableDisable::DISABLE_INITIATION,
                 time: DccTime::Default,
@@ -87,6 +88,50 @@ async fn not_armed_or_expired_the_worker_refuses_and_records_it() {
         assert_eq!(record["outcome"]["result"], "refused");
         assert_eq!(record["params"]["password"], "[redacted]");
     }
+    site.stop().await;
+}
+
+/// A request confirmed for one device goes to its address only while the
+/// discovery table's row there still claims that device (#2560): the lab
+/// device's address with another instance named is refused, nothing sent,
+/// and the outcome names the address and both instances.
+#[tokio::test(start_paused = true)]
+async fn a_request_to_an_address_another_device_holds_sends_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut site = site(dir.path(), DANGEROUS).await;
+    let arm = SafetyCommand::Arm {
+        reason: String::new(),
+        minutes: 5,
+    };
+    site.send(vec![Command::Safety(arm)]).await;
+    site.pump_until(|app| app.safety.armed.is_some()).await;
+    let Command::Safety(SafetyCommand::Manage { mut request, .. }) = manage(4) else {
+        unreachable!("a management request");
+    };
+    request.device = LAB + 1;
+    site.send(vec![Command::Safety(SafetyCommand::Manage {
+        req: 4,
+        request,
+    })])
+    .await;
+    let mut outcome = None;
+    site.pump_events_until(|event| match event {
+        WorkerEvent::Safety(SafetyEvent::Done { req: 4, outcomes }) => {
+            outcome = outcomes.first().map(|(_, outcome)| outcome.clone());
+            true
+        }
+        _ => false,
+    })
+    .await;
+    let why = format!(
+        "10.0.0.100:47808 is device {LAB} now, not device {}",
+        LAB + 1
+    );
+    assert!(
+        matches!(&outcome, Some(Outcome::NotSent(text)) if text.starts_with(&why)),
+        "{outcome:?}"
+    );
+    nothing_sent(&site);
     site.stop().await;
 }
 

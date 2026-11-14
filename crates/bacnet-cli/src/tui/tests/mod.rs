@@ -200,10 +200,24 @@ pub(super) fn connected_app() -> App {
     app
 }
 
+/// The address `text` names, or for a label that names none (`"old"`) a
+/// local one made from it, so rows with different labels are different
+/// devices.
+pub(super) fn address_of(text: &str) -> bacnet_ops::DeviceAddress {
+    text.parse().unwrap_or_else(|_| {
+        let mut mac = [0xEE, 0, 0, 0, 0, 0];
+        for (i, octet) in text.bytes().enumerate() {
+            mac[1 + i % 5] ^= octet.rotate_left(i as u32);
+        }
+        bacnet_ops::DeviceAddress::local(&mac).unwrap()
+    })
+}
+
 /// A synthetic device row seen `seen` seconds after `t0()`.
 pub(super) fn row(instance: u32, address: &str, vendor_id: u16, seen: u64) -> DeviceRow {
     DeviceRow {
         instance,
+        at: address_of(address),
         address: address.into(),
         via: None,
         network: None,
