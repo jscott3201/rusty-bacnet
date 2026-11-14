@@ -112,7 +112,7 @@ async fn canonical_acknowledge_alarm_preserves_every_caller_supplied_field() {
 
     for request in &requests {
         client
-            .acknowledge_alarm_request(&remote_mac, request)
+            .acknowledge_alarm(&remote_mac, request)
             .await
             .unwrap();
     }

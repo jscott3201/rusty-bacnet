@@ -166,7 +166,7 @@ pub async fn reinit_cmd<T: TransportPort + 'static>(
     Ok(())
 }
 
-fn build_acknowledge_alarm_request(
+fn build_acknowledge_alarm(
     process_id: u32,
     object_type: ObjectType,
     instance: u32,
@@ -218,7 +218,7 @@ pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
     } = args;
     // Use PID as process identifier
     let process_id = std::process::id();
-    let request = build_acknowledge_alarm_request(
+    let request = build_acknowledge_alarm(
         process_id,
         object_type,
         instance,
@@ -228,7 +228,7 @@ pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
         time_of_acknowledgment,
     )?;
 
-    to.acknowledge_alarm_request(client, &request).await?;
+    to.acknowledge_alarm(client, &request).await?;
 
     output::print_success("Alarm acknowledged", format);
     Ok(())
@@ -345,7 +345,7 @@ mod acknowledgment_tests {
                 hundredths: 99,
             },
         };
-        let request = build_acknowledge_alarm_request(
+        let request = build_acknowledge_alarm(
             0x1234_5678,
             ObjectType::ANALOG_INPUT,
             77,

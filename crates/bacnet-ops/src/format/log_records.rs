@@ -18,9 +18,9 @@ use serde::Serialize;
 
 use super::alarms::timestamp;
 use super::notification::EventValues;
-use super::primitive::hex;
 use super::{Datum, Floats, StateTexts, ValueFormat};
 use crate::label::kebab;
+use crate::octets::{hex, hex_sep};
 
 /// An Event Log record's event notification, decoded.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -149,7 +149,7 @@ fn recipient(format: &ValueFormat<'_>, recipient: &BACnetRecipient) -> Datum {
             text: format!(
                 "network {} mac {}",
                 address.network_number,
-                hex(&address.mac_address, ":")
+                hex_sep(&address.mac_address, ":")
             ),
             fields: None,
         },
@@ -218,9 +218,7 @@ impl AuditNotificationData {
         named(object_type, |format| {
             let value = |data: Option<&Vec<u8>>| match (data, property) {
                 (Some(data), Some(property)) => format.data(property.property_identifier, data),
-                (Some(data), None) => Datum::Octets {
-                    octets: hex(data, ""),
-                },
+                (Some(data), None) => Datum::Octets { octets: hex(data) },
                 (None, _) => Datum::Null,
             };
             let maybe_object = |target: Option<ObjectIdentifier>| {

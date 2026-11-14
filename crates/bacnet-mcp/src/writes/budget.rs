@@ -27,7 +27,7 @@ use std::path::Path;
 use std::sync::PoisonError;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bacnet_ops::safety::hex;
+use bacnet_ops::octets::hex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};

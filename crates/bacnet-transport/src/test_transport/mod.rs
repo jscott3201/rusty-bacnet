@@ -435,7 +435,6 @@ impl TransportPort for TestTransport {
         if let Some(inner) = &mut self.inner {
             inner.abort();
         }
-
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {

@@ -20,11 +20,11 @@ use bacnet_transport::sc::{ScActiveHub, ScConnectionState};
 use bacnet_types::enums::ErrorCode;
 
 use super::App;
+use crate::tui::profile::sc::Vmac;
 use crate::tui::sc::credentials::{Credentials, Level};
 use crate::tui::sc::doctor::{self, Diagnosis};
 use crate::tui::sc::{
     CertSummary, Fault, LinkEvent, LinkSnapshot, ScFailure, ScIdentity, ScReport, hub_name,
-    vmac_text,
 };
 
 /// Timeline entries kept.
@@ -163,7 +163,7 @@ pub(crate) fn describe(event: &LinkEvent) -> (Severity, String) {
             format!(
                 "connected to the {} hub (hub VMAC {})",
                 hub_name(*hub),
-                vmac_text(hub_vmac)
+                Vmac(*hub_vmac)
             ),
         ),
         LinkEvent::Disconnected { hub, fault, code } => (
