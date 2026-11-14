@@ -307,3 +307,32 @@ async fn a_bulk_read_follows_a_device_that_moved() {
     assert_eq!(device.address(), at(3));
     stop(vec![old, new]).await;
 }
+
+/// A write whose request timed out may have been applied, so it is never
+/// sent again, even by a following handle whose device another address
+/// now claims: one WriteProperty, to the address it went to, and the
+/// timeout as the error.
+#[tokio::test(start_paused = true)]
+async fn a_timed_out_write_is_never_sent_again() {
+    let bus = Bus::new();
+    let (client, sent) = client(&bus).await;
+    let old = server(bus.port(2), N, "A").await;
+    bus.i_am(2, N);
+    settle().await;
+    let device = client.device(N).await.unwrap();
+    assert_eq!(name_of(&device).await.unwrap(), "A");
+    tokio::time::sleep(QUIET * 2).await;
+    let new = server(bus.port(3), N, "B").await;
+    bus.i_am(3, N);
+    settle().await;
+    bus.silence(2);
+    // A read's timeout asks where the device went; only station 3 answers.
+    assert!(name_of(&device).await.unwrap_err().timed_out());
+    tokio::time::sleep(RESOLVE_WAIT).await;
+    let wp = ConfirmedServiceChoice::WRITE_PROPERTY;
+    let error = device.write("ai:1 oos", "true", None).await.unwrap_err();
+    assert!(error.timed_out(), "{error}");
+    assert_eq!(requests(&sent, wp, 2), 1, "one write, where it went");
+    assert_eq!(requests(&sent, wp, 3), 0, "never sent again elsewhere");
+    stop(vec![old, new]).await;
+}

@@ -2,8 +2,8 @@
 //! app and views show: the device card, the object list, and one object's
 //! properties, health and priority array.
 
+use bacnet_ops::Priority;
 use bacnet_ops::client::ReadVia;
-use bacnet_ops::label::PRIORITIES;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -107,7 +107,7 @@ impl Health {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PriorityView {
     /// Slot `i` holds priority `i + 1`; `None` is relinquished (NULL).
-    pub(crate) slots: [Option<String>; PRIORITIES],
+    pub(crate) slots: [Option<String>; Priority::COUNT],
     /// Relinquish_Default, when read.
     pub(crate) relinquish_default: Option<String>,
     /// Present_Value, when read.

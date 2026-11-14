@@ -268,7 +268,7 @@ pub struct WritePriority(u8);
 impl WritePriority {
     /// `priority`, refused outside 1 to 16.
     pub fn new(priority: u8) -> Result<Self, String> {
-        let range = 1..=crate::label::PRIORITIES;
+        let range = 1..=crate::Priority::COUNT;
         if range.contains(&usize::from(priority)) {
             Ok(Self(priority))
         } else {

@@ -56,7 +56,8 @@ fn one(spec: WriteSpec) -> Planned {
 #[test]
 fn a_weaker_priority_leaves_present_value_alone() {
     let planned = one(spec(Some("42"), 12));
-    assert_eq!(planned.effect, Effect::Unchanged { held_by: Some(10) });
+    let ten = bacnet_ops::Priority::new(10).ok();
+    assert_eq!(planned.effect, Effect::Unchanged { held_by: ten });
     assert_eq!(planned.occupancy, Occupancy::Empty);
     assert_eq!(planned.gate, Gate::Allowed(Tier::T1));
     // The integer was sent as the REAL the object holds.

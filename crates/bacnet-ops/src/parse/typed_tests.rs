@@ -369,20 +369,18 @@ fn timestamps_round_trip() {
 #[test]
 fn explicit_forms_and_priorities_still_work() {
     let parse = |text| parse_value_for_with_priority(O::BINARY_VALUE, P::PRESENT_VALUE, None, text);
+    let eight = Some(crate::Priority::MANUAL_OPERATOR);
     assert_eq!(
         parse("enumerated:3"),
         Ok((PropertyValue::Enumerated(3), None))
     );
-    assert_eq!(parse("null@8"), Ok((PropertyValue::Null, Some(8))));
-    assert_eq!(
-        parse("active@8"),
-        Ok((PropertyValue::Enumerated(1), Some(8)))
-    );
+    assert_eq!(parse("null@8"), Ok((PropertyValue::Null, eight)));
+    assert_eq!(parse("active@8"), Ok((PropertyValue::Enumerated(1), eight)));
     assert!(parse("active@17").unwrap_err().contains("priority"));
     // An untyped property reads the untyped grammar.
     assert_eq!(
         parse_value_for_with_priority(O::ANALOG_VALUE, P::PRESENT_VALUE, None, "72.5@8"),
-        Ok((PropertyValue::Real(72.5), Some(8)))
+        Ok((PropertyValue::Real(72.5), eight))
     );
 }
 

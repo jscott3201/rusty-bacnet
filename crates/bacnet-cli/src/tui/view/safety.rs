@@ -211,7 +211,9 @@ fn item_lines(item: &Planned, theme: &Theme) -> Vec<Line<'static>> {
         Effect::Unchanged { held_by: None } => {
             lines.push(Line::raw("  Present_Value will not change"))
         }
-        Effect::NotPresentValue => {}
+        // The tool's planner treats unread slots as no Priority_Array, so
+        // it never makes Unknown.
+        Effect::NotPresentValue | Effect::Unknown => {}
     }
     if let Some(oos) = item.out_of_service {
         lines.push(Line::styled(
