@@ -249,8 +249,9 @@ pub enum Error {
         /// The Device instance the request named.
         instance: u32,
         /// Every address that claims it, ordered by network number and then
-        /// MAC: network 0 is the local network.
-        candidates: Vec<BACnetAddress>,
+        /// MAC: network 0 is the local network. A boxed slice, not a `Vec`,
+        /// so the variant lends `Error` no niche to keep its tag in.
+        candidates: Box<[BACnetAddress]>,
     },
 
     /// A paged log read asked for the records from one sequence number and

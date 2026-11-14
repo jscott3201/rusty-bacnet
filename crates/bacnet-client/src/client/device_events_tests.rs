@@ -180,7 +180,7 @@ async fn a_second_claimant_is_discovered_and_reported_with_the_first() {
         client.resolve_device(1001).await.unwrap_err(),
     ] {
         assert!(
-            matches!(&error, Error::AmbiguousDevice { instance: 1001, candidates } if *candidates == expected),
+            matches!(&error, Error::AmbiguousDevice { instance: 1001, candidates } if candidates[..] == expected[..]),
             "{error:?}"
         );
     }

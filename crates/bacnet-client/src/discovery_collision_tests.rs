@@ -62,7 +62,7 @@ fn candidates(table: &DeviceTable, instance: u32) -> Vec<BACnetAddress> {
             candidates,
         }) => {
             assert_eq!(named, instance);
-            candidates
+            candidates.into_vec()
         }
         other => panic!("expected an ambiguous instance, got {other:?}"),
     }

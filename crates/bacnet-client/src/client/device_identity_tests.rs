@@ -222,7 +222,7 @@ async fn two_claimants_are_listed_reachable_by_address_and_refused_by_instance()
         .unwrap_err();
     assert!(
         matches!(&refused, Error::AmbiguousDevice { instance: INSTANCE, candidates }
-            if *candidates == [local(), routed()]),
+            if candidates[..] == [local(), routed()]),
         "{refused:?}"
     );
     let routed_to = Some((NETWORK, MacAddr::from_slice(&STATION)));

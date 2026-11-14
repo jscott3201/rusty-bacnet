@@ -22,7 +22,7 @@ fn ambiguous_device_candidates_read_back() {
     ];
     let text = Error::AmbiguousDevice {
         instance: 9,
-        candidates: candidates.clone(),
+        candidates: candidates.clone().into(),
     }
     .to_string();
     let list = text

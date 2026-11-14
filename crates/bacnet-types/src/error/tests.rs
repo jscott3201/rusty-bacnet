@@ -123,7 +123,8 @@ fn ambiguous_device_names_every_candidate() {
             at(0, &[10, 0, 0, 1, 0xBA, 0xC0]),
             at(0, &[1, 2]),
             at(2, &[0x05]),
-        ],
+        ]
+        .into(),
     };
     assert_eq!(
         error.to_string(),
