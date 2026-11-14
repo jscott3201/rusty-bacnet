@@ -8,13 +8,13 @@ use bacnet_ops::client::Wanted;
 use bacnet_ops::format::{self, RawRow};
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::charged;
-use bacnet_ops::watch::{Point, Snapshot, Source, State, Watched};
+use bacnet_ops::watch::{Snapshot, Source, State, Watched};
 use bacnet_ops::{DeviceAddress, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
-use super::uri::{self, Uri};
+use super::uri::{self, PointUri, Uri};
 use crate::context::{Call, Ctx, DeviceArg};
 use crate::errors::ToolError;
 use crate::listen::ALARMS_EVERY;
@@ -56,15 +56,16 @@ fn keep(cache: &Cache, cap: usize, device: &DeviceAddress, body: &Value) {
     cache.insert(device.clone(), (Instant::now(), body.clone()));
 }
 
-/// A point: from the watch hub when it is watched (nothing is sent),
-/// else read once.
+/// A point: from the watch hub when it is watched at the address its
+/// instance names now (nothing is sent), else read once.
 pub(super) async fn point<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     call: &Call,
-    point: Point,
+    point: PointUri,
 ) -> Result<Value, ToolError> {
     let device = ctx.device(call, &DeviceArg::Number(point.device)).await?;
-    if let Some(snapshot) = ctx.hub.as_ref().and_then(|hub| hub.peek(&point)) {
+    let watched = point.at(device.address.clone());
+    if let Some(snapshot) = ctx.hub.as_ref().and_then(|hub| hub.peek(&watched)) {
         return Ok(point_body(ctx, &point, &snapshot.rows, Some(&snapshot)));
     }
     let failed = |error| ToolError::device(point.device, &error);
@@ -104,7 +105,7 @@ pub(super) async fn point<T: TransportPort + 'static>(
 /// read just now).
 pub(crate) fn point_body<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    point: &Point,
+    point: &PointUri,
     rows: &[RawRow],
     watch: Option<&Snapshot>,
 ) -> Value {
@@ -179,8 +180,10 @@ pub(crate) fn state_name(state: State) -> &'static str {
     match state {
         State::Starting => "starting",
         State::Live => "live",
-        // The hub gives a point up only under `MissingDevice::Fail`, which
-        // the server doesn't use; it would be a failed watch.
+        // The hub gives a point up when its device answers at another
+        // address now (the note says where), or under
+        // `MissingDevice::Fail`, which the server doesn't use: a failed
+        // watch either way.
         State::Failed | State::Gone => "failed",
         State::Unreachable => "unreachable",
         State::Stopped => "stopped",

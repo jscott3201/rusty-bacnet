@@ -22,6 +22,7 @@ use crate::client::{timed_out as is_timed_out, unreachable as is_unreachable};
 use crate::device::DeviceAddress;
 use crate::format::PropertyError;
 use crate::label::kebab;
+use crate::watch::WatchError;
 
 /// Why a high-level call failed as a whole.
 ///
@@ -93,6 +94,10 @@ pub enum OpsError {
     /// what was read or never end. What was read stays unreported: the
     /// call fails.
     Paging(PagingFault),
+    /// A watch couldn't take its points: the client's hub watches as many
+    /// as it may ([`MAX_WATCHED`](crate::watch::MAX_WATCHED)). Nothing was
+    /// watched.
+    Watch(WatchError),
     /// Any other failure the low-level client reported, as it reported it:
     /// an answer that doesn't decode, a request too long for the path, and
     /// the like.
@@ -246,6 +251,7 @@ impl fmt::Display for OpsError {
                 ..
             } => write!(f, "{error}, {detail}"),
             Self::Paging(fault) => write!(f, "{fault}"),
+            Self::Watch(error) => write!(f, "{error}"),
             Self::Client(error) => write!(f, "{error}"),
         }
     }

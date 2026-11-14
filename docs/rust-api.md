@@ -11820,7 +11820,8 @@ terminal UI and its MCP server share: no terminal or MCP dependency, just a
 (`target`), object, property and value parsing (`parse`), display text
 (`format`, `label`; `format::alarms` renders alarm and event summaries),
 request limits (`limits`: the global rate cap, the one request per device
-gate and per-caller accounts), the watch hub (`watch`), the high-level
+gate and per-caller accounts), watching points (`watch`: `Client::watch`
+and the hub under it, [watching points](#watching-points)), the high-level
 client (`client`) and device identity (`device`). `Client::new(client,
 limits)` wraps an `Arc<BACnetClient<T>>` and an `Arc<RequestLimits>`
 (`RequestLimits::new(per_second)`, 0 for no cap), and is cheap to clone.
@@ -11962,6 +11963,84 @@ request jobs: `Reader`, `Halt`, `RpmFailure`, `rpm_failure`, `rpm_rows`,
 | `Error::Encoding` for a directed Who-Is or `station_mac` text that names no station, and `Error::OutOfRange` for a refused target | `OpsError::Parse` |
 | `Error::Encoding` for an Object_List claiming more than `MAX_OBJECTS` elements | `Error::Range` with both numbers, inside `OpsError::Client` from a `Device` read |
 | `Error::Encoding` for a GetEventInformation answer naming an object twice | `OpsError::Paging(PagingFault::Repeated { .. })` |
+
+### Watching points
+
+`client.watch(points)` watches many points at once (#2560) and returns a
+`Watch`, a `futures_core::Stream` of `Update`s (read it with
+`futures_util::StreamExt::next`). A point comes from a handle:
+`device.point("ai:1")`, `device.point("bv:3 pv")` or
+`device.point("ao:2 priority-array[8]")`, in the grammar `Device::read`
+takes. It names its device by the handle's `DeviceAddress`, so two devices
+sharing an instance are two points. A Present_Value is watched by
+SubscribeCOV on its object; any other property, or an element, by
+SubscribeCOVProperty.
+
+```rust
+use futures_util::StreamExt;
+
+let ahu = client.device("192.168.1.10").await?;
+let mut watch = client.watch([ahu.point("ai:1")?, ahu.point("bv:3 pv")?])?;
+while let Some(u) = watch.next().await {
+    let text = u.value.as_ref().map(|v| v.text.as_str()).unwrap_or("-");
+    println!("{} {text} via {:?} ({:?}, {:?})", u.point, u.via, u.state, u.why);
+}
+```
+
+An `Update` carries the `point`, its latest `value` (a `Value`, an object
+watch's Present_Value, named by the units and state texts the first read
+had), `error` (the device's error for the property or the whole object),
+`via` (`Via::First`, `Notification` or `Poll`), `source` (`Cov` or
+`Poll`), `state` (`Starting`, `Live`, `Failed`, `Unreachable`, `Stopped`,
+`Gone`), `why` (`Refused`, `NoAnswer`, `Lapsed`, `Missing` for a remote
+address with no router known, or `Moved { to }`; `None` while subscribed)
+and `cov`. The points share the client's own hub, made on first use: one
+subscription a point however many watches hold it, five minutes at a time
+and renewed before it ends; a point the device won't subscribe is polled
+with the device's other polled points, every 10 s at most; at most
+`watch::MAX_WATCHED` (4096) points; `OpsError::Watch` past that.
+
+The latest value of each point wins: a consumer that falls behind gets one
+update a point with its latest value and state (`Watch::folded` counts the
+changes folded away), nothing grows past one pending update a point, and
+the hub never waits for a watch. Dropping a watch lets its points go: a
+subscribed point no other watch holds is cancelled on the wire (a
+SubscribeCOV without a lifetime, through the device's gate; one the device
+doesn't answer within 30 s lapses with its lifetime), and a polled one
+stops being polled.
+
+A device that stops answering (a poll or a first read fails; a point whose
+renewal failed goes to the next poll) is looked for: as a following handle would after a timeout when one
+follows its instance (one Who-Is at most every `QUIET`), by the discovery
+table's I-Am times otherwise, as `Device::moved_to` does. A following
+handle that moves for a request of its own tells the hub too. Its points
+are then given up (`State::Gone`, `Why::Moved { to }`) and nothing more is
+sent to the old address; watch the point at `to`, which a following
+handle's `point` now gives. The hub doesn't follow on its own.
+
+`CovSupport` (`Unknown`, `NotOffered`, `Offered`, `Accepted`, `Refused`)
+says what is known of COV: `client.cov_support(&address)` for a device's
+SubscribeCOV, filled from Protocol_Services_Supported when
+`describe_device` reads it and from the hub's subscriptions, and
+`Update::cov` for one point. A device that refuses the service itself (an
+unknown service, or a services-class denial) is remembered by its address,
+as an RPM refusal is: its later points are polled without asking. A
+refusal for one object stays that point's own.
+
+Under `Client::watch` is the hub, for front ends that keep a history,
+serve several sessions or pick their own `WatchOptions` (the TUI's watch
+list and the MCP server): `Hub::new(client, options)`, `Hub::watch(point)`
+for a `Lease` with its `Snapshot`, change signal and `samples()`, and
+`peek`, `seq`, `stats` and `shutdown`.
+
+| Was | Now |
+|---|---|
+| `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; the hub keys entries, schedulers and subscription targets on the address and never looks the instance up |
+| a point whose instance two addresses claim failing its start as ambiguous | two points, one an address |
+| `Why::Missing`: the instance not in the discovery table | `Why::Missing`: a remote address the table holds no router for; a local address is never missing |
+| a point following its instance to wherever the table placed it at each start and poll | the point stays at its address; a move ends it with `Why::Moved { to }` and `State::Gone` |
+| `Snapshot { .. }` | also `via` (how the latest values came) and `cov` (`CovSupport`) |
+| `Lease::point()` a copy | a clone |
 
 ### Moved to bacnet-tool
 

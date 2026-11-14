@@ -1,9 +1,23 @@
-//! The watch hub (#2067): one managed BACnet subscription or poller per
-//! point, however many listeners share it.
+//! Watching points: one managed BACnet subscription or poller per point,
+//! however many listeners share it (#2067).
 //!
-//! [`Hub::watch`] hands out a [`Lease`] on a [`Point`]. The first lease on a
-//! point starts its entry, which goes to its device's scheduler (#2115):
-//! one task per watched device, running one job at a time. The scheduler
+//! An application calls [`Client::watch`] with points from
+//! [`Device::point`](crate::Device::point) and reads the [`Watch`], a
+//! stream of [`Update`]s: each point's latest value, how it came, and how
+//! its watch goes. A watch runs on the client's own hub.
+//!
+//! Under it is the hub itself, for front ends that keep a history, serve
+//! several sessions or pick their own settings (the `bacnet` tool's watch
+//! list and its MCP server): [`Hub::watch`] hands out a [`Lease`] on a
+//! [`Point`], with the point's [`Snapshot`], its change signal and every
+//! value it gets ([`Lease::samples`]).
+//!
+//! A point names its device by address (#2560): the hub keys its entries,
+//! its per-device schedulers and its subscriptions' targets on it, so two
+//! devices sharing an instance are two devices, and one announcing itself
+//! again at its address keeps its entries. The first lease on a point
+//! starts its entry, which goes to its device's scheduler (#2115): one
+//! task per watched address, running one job at a time. The scheduler
 //! reads the point once (what it reads is [`WatchOptions::reads`]), then
 //! asks the device for a finite COV subscription (SubscribeCOV for an
 //! object, SubscribeCOVProperty for one property) through the client's
@@ -37,6 +51,25 @@
 //! gate but no rate slot, as in the TUI; cancels skip the hub's bucket so a
 //! shutdown isn't held to it.
 //!
+//! A device that refuses the COV service itself is remembered by its
+//! address ([`CovSupport`]), as an RPM refusal is: its later points are
+//! polled without asking. A subscription a device lost (it restarted, say)
+//! is made again by its next renewal, which goes before each lifetime
+//! ends, so it is missed for at most a lifetime less the renewal margin.
+//! After an outage, the points' new subscriptions and polls take the
+//! device's gate and the client's rate like every other request, so they
+//! come back no faster than the limits allow.
+//!
+//! When the device behind a point stops answering (a poll or a first read
+//! fails; a point whose renewal failed goes to the next poll), the
+//! scheduler asks where its instance went: as a following handle would
+//! after a timeout when one follows the instance, and by the discovery
+//! table's announcements otherwise
+//! ([`Device::moved_to`](crate::Device::moved_to)). A following handle
+//! that moves for a request of its own says so too. Either way the
+//! device's points are given up with [`Why::Moved`], naming where it
+//! answers now: the hub doesn't follow it.
+//!
 //! Lifetimes are finite by construction ([`Lifetime`] can't be zero): a
 //! subscription that never lapses is a write in the `bacnet` tool's
 //! command classes (`bacnet_tool::class`), and the hub never sends one.
@@ -48,8 +81,11 @@ mod dispatch;
 pub mod first;
 mod jobs;
 mod options;
+mod point;
 mod sample;
 mod shared;
+mod stream;
+mod support;
 
 use std::num::NonZeroU32;
 use std::sync::atomic::Ordering;
@@ -58,19 +94,20 @@ use std::time::Duration;
 
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
 
 pub use self::options::{
     Backoff, Fallback, MAX_ROWS, MAX_SAMPLES, MIN_POLL, MissingDevice, POLL_FLOOR, Reads,
     WatchOptions,
 };
+pub use self::point::{Point, Snapshot, Source, State, Watched, Why};
 pub use self::sample::{Sample, Samples, Via};
 use self::shared::{Arrival, DeviceSlot, Registry, Running, Shared};
+pub use self::stream::{MAX_WATCHED, Update, Watch};
+pub use self::support::CovSupport;
+pub(crate) use self::support::{CovMemory, services};
 use crate::client::Client;
-use crate::format::RawRow;
 use crate::limits::Account;
 
 /// The properties an object watch reads: what an agent or an operator needs
@@ -159,128 +196,6 @@ pub fn renewal_margin(secs: u32, request_budget: Duration) -> Duration {
     tenth.max(request_budget * 2).min(half)
 }
 
-/// What a watch follows on an object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Watched {
-    /// The object: SubscribeCOV, its [`POINT_PROPERTIES`] read and polled.
-    Object,
-    /// One property, or one element of it: SubscribeCOVProperty.
-    Property {
-        /// The property.
-        property: PropertyIdentifier,
-        /// The array element, if one.
-        index: Option<u32>,
-    },
-}
-
-/// A watched point: an object of a device, whole or one property.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Point {
-    /// The device instance, looked up in the client's discovery table.
-    pub device: u32,
-    /// The object.
-    pub object: ObjectIdentifier,
-    /// The object or one property.
-    pub watched: Watched,
-}
-
-/// Where a point's values come from now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
-    /// COV notifications under a managed subscription.
-    Cov,
-    /// Polls, because the device refused COV or stopped renewing it.
-    Poll,
-}
-
-/// How a point's watch is going.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum State {
-    /// Its first read hasn't finished.
-    Starting,
-    /// Subscribed, or the last poll answered.
-    Live,
-    /// The device answered the last read with an error for the whole
-    /// object (see [`Snapshot::note`]).
-    Failed,
-    /// The device didn't answer the last request.
-    Unreachable,
-    /// The watch ended (the hub shut down).
-    Stopped,
-    /// Nothing watches it any more: its device isn't in the discovery
-    /// table and [`WatchOptions::missing`] says not to wait for it (see
-    /// [`Snapshot::note`]).
-    Gone,
-}
-
-/// A point's latest values and how its watch is going.
-#[derive(Debug, Clone)]
-pub struct Snapshot {
-    /// Each property's latest raw value, or why the device gave none.
-    pub rows: Vec<RawRow>,
-    /// Where the values come from; `None` before the first read.
-    pub source: Option<Source>,
-    /// How the watch is going.
-    pub state: State,
-    /// Why the point is polled or not live, as text.
-    pub note: Option<String>,
-    /// The hub's sequence number at the last change; 0 before any.
-    pub seq: u64,
-    /// When the values last changed.
-    pub updated: Option<Instant>,
-    /// COV notifications applied.
-    pub notifications: u64,
-    /// Changes folded into another's signal.
-    pub coalesced: u64,
-    /// Polls answered.
-    pub polls: u64,
-    /// Renewals the device took.
-    pub renewals: u64,
-    /// Why the point is polled, or was given up, as its start or a failed
-    /// renewal found; a poll's error, which goes to [`note`](Self::note),
-    /// leaves it. `None` while subscribed, and before the first start ends.
-    pub why: Option<Why>,
-}
-
-/// Why a point is polled or given up ([`Snapshot::why`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Why {
-    /// The device refused the subscription or didn't answer it, with the
-    /// error.
-    Refused(String),
-    /// The first read had no answer, so no subscription was asked for.
-    NoAnswer(String),
-    /// A renewal failed, with its error, or stopped.
-    Lapsed(Option<String>),
-    /// The device isn't in the discovery table.
-    Missing,
-}
-
-impl Default for Snapshot {
-    /// A point not read yet: starting, no rows, nothing counted.
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Snapshot {
-    pub(super) fn new() -> Self {
-        Self {
-            rows: Vec::new(),
-            source: None,
-            state: State::Starting,
-            note: None,
-            seq: 0,
-            updated: None,
-            notifications: 0,
-            coalesced: 0,
-            polls: 0,
-            renewals: 0,
-            why: None,
-        }
-    }
-}
-
 /// Why a watch wasn't started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchError {
@@ -338,9 +253,9 @@ pub struct Lease {
 }
 
 impl Lease {
-    /// The point.
+    /// The point, its device's address as the hub keys it.
     pub fn point(&self) -> Point {
-        self.shared.point
+        self.shared.point.clone()
     }
 
     /// Its latest values and state.
@@ -413,7 +328,7 @@ impl std::fmt::Debug for Lease {
     }
 }
 
-struct Inner<T: TransportPort + 'static> {
+pub(crate) struct Inner<T: TransportPort + 'static> {
     client: Client<T>,
     options: WatchOptions,
     registry: Arc<Registry>,
@@ -448,7 +363,13 @@ impl<T: TransportPort + 'static> Hub<T> {
         ));
         let (stop_dispatch, stopped) = watch::channel(false);
         let notifications = client.low_level().cov_notifications();
-        let dispatcher = tokio::spawn(dispatch::run(Arc::clone(&registry), notifications, stopped));
+        let events = client.events();
+        let dispatcher = tokio::spawn(dispatch::run(
+            Arc::clone(&registry),
+            notifications,
+            events,
+            stopped,
+        ));
         let bucket = options.bucket.clone();
         let account = Arc::new(match options.agent {
             true => Account::agent(bucket),
@@ -472,9 +393,12 @@ impl<T: TransportPort + 'static> Hub<T> {
     }
 
     /// A lease on `point`, starting its watch if it has none. A new
-    /// watch goes to its device's scheduler, started with it when the
-    /// device has none.
+    /// watch goes to its device's scheduler, one a device address, started
+    /// with it when the device has none. A station on the client's own
+    /// network is keyed as the local station at its MAC once the client
+    /// knows the network's number, as the device handles key it.
     pub fn watch(&self, point: Point) -> Result<Lease, WatchError> {
+        let point = self.keyed(point);
         let registry = &self.inner.registry;
         let (shared, scheduler) = {
             let mut table = registry.table();
@@ -496,9 +420,13 @@ impl<T: TransportPort + 'static> Hub<T> {
                     process = next_process(base, process);
                 }
                 table.next_process = next_process(base, process);
-                let shared = Arc::new(Shared::new(point, process, self.inner.options.samples));
+                let shared = Arc::new(Shared::new(
+                    point.clone(),
+                    process,
+                    self.inner.options.samples,
+                ));
                 table.entries.insert(
-                    point,
+                    point.clone(),
                     shared::Slot {
                         shared: Arc::clone(&shared),
                         leases: 1,
@@ -506,13 +434,12 @@ impl<T: TransportPort + 'static> Hub<T> {
                 );
                 table.by_process.insert(process, Arc::clone(&shared));
                 let mut fresh = false;
-                let device = Arc::clone(table.devices.entry(point.device).or_insert_with(|| {
-                    fresh = true;
-                    Arc::new(DeviceSlot {
-                        inbox: Mutex::new(Vec::new()),
-                        wake: tokio::sync::Notify::new(),
-                    })
-                }));
+                let device = Arc::clone(table.devices.entry(point.device.clone()).or_insert_with(
+                    || {
+                        fresh = true;
+                        Arc::new(DeviceSlot::new())
+                    },
+                ));
                 device.inbox().push(Arrival {
                     shared: Arc::clone(&shared),
                     running: Running::new(registry),
@@ -541,8 +468,16 @@ impl<T: TransportPort + 'static> Hub<T> {
 
     /// `point`'s latest values, if it is watched: nothing is sent.
     pub fn peek(&self, point: &Point) -> Option<Snapshot> {
-        let shared = Arc::clone(&self.inner.registry.table().entries.get(point)?.shared);
+        let point = self.keyed(point.clone());
+        let shared = Arc::clone(&self.inner.registry.table().entries.get(&point)?.shared);
         Some(shared.snapshot())
+    }
+
+    /// `point` as the hub keys it: its device's address localized.
+    fn keyed(&self, mut point: Point) -> Point {
+        let own = self.inner.client.low_level().network_number();
+        point.device = point.device.localized(own);
+        point
     }
 
     /// The hub's sequence number: every change takes the next one, so a
@@ -646,7 +581,11 @@ impl<T: TransportPort + 'static> Hub<T> {
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
+mod moves_tests;
+#[cfg(test)]
 mod scheduler_tests;
+#[cfg(test)]
+mod stream_tests;
 #[cfg(test)]
 mod test_lab;
 #[cfg(test)]

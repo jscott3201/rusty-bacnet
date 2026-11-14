@@ -13,6 +13,14 @@
 //! The device's polled points are read together, `poll_every` after the
 //! last poll ended, and a device that stops answering is polled after a
 //! backoff instead. A first read stands in for a poll.
+//!
+//! When a request goes unanswered (a poll, a first read, a subscription;
+//! a point whose renewal failed goes to the next poll), a job asks where
+//! the device's instance went; a move found there, or one a following
+//! handle made ([`DeviceSlot::moved`]), gives every point up with
+//! [`Why::Moved`]. Their renewals stop and nothing more is sent to the old
+//! address, cancels included: a subscription still held there lapses with
+//! its lifetime.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
@@ -26,13 +34,15 @@ use bacnet_transport::port::TransportPort;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::time::Instant;
 
-use super::jobs::{self, Polled, Started};
+use super::jobs::{self, Outcome, Polled, Started};
 use super::options::MissingDevice;
 use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
 use super::{Inner, MISSING, Source, State, Why};
 use crate::client::batch::Missing;
 use crate::client::unreachable;
+use crate::device::DeviceAddress;
+use crate::format::PropertyError;
 use crate::limits::charged;
 
 /// How often the scheduler looks at renewals and what is due.
@@ -50,7 +60,8 @@ enum Mode {
     ),
     /// Polled.
     Polled,
-    /// Its device isn't in the table: looked for again at `resubscribe`.
+    /// No route to its device is known: looked for again at
+    /// `resubscribe`.
     Waiting,
     /// Given up ([`State::Gone`]).
     Gone,
@@ -73,6 +84,8 @@ struct Row {
 
 enum Op {
     Start(u32),
+    /// Ask where the device went, once its instance is known.
+    Locate(u32),
     Cancel {
         shared: Arc<Shared>,
         /// What the cancel keeps counted until it ends.
@@ -95,13 +108,22 @@ enum Done {
     Started { process: u32, started: Box<Started> },
     Cancelled(Holder),
     Polled(Polled),
+    Located(Option<DeviceAddress>),
 }
 
 type Job = Pin<Box<dyn Future<Output = Done> + Send>>;
 
 struct Device<T: TransportPort + 'static> {
     inner: Arc<Inner<T>>,
-    id: u32,
+    /// Where the device answers: the scheduler's key.
+    address: DeviceAddress,
+    /// The instance it claims, as a start last found it.
+    instance: Option<u32>,
+    /// A locate is queued or running.
+    locating: bool,
+    /// Where the device answers now, once a move was found: every point
+    /// here is given up, those arriving or starting since included.
+    moved_to: Option<DeviceAddress>,
     rows: BTreeMap<u32, Row>,
     ops: VecDeque<Op>,
     /// The device stopped answering polls: the current backoff, and when
@@ -115,12 +137,15 @@ struct Device<T: TransportPort + 'static> {
 /// Run `device`'s points until it has none left.
 pub(super) async fn run<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
-    id: u32,
+    address: DeviceAddress,
     slot: Arc<DeviceSlot>,
 ) {
     let mut device = Device {
         inner,
-        id,
+        address,
+        instance: None,
+        locating: false,
+        moved_to: None,
         rows: BTreeMap::new(),
         ops: VecDeque::new(),
         backoff: Duration::ZERO,
@@ -133,6 +158,13 @@ pub(super) async fn run<T: TransportPort + 'static>(
     loop {
         let arrivals: Vec<Arrival> = slot.inbox().drain(..).collect();
         device.arrive(arrivals);
+        if let Some((instance, to)) = slot.take_moved() {
+            // A handle following another device's instance here speaks
+            // for this one only when it claims that instance.
+            if device.instance.is_none_or(|known| known == instance) {
+                device.moved(to);
+            }
+        }
         device.reap();
         if job.is_none() {
             job = device.launch();
@@ -151,10 +183,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
             if slot.inbox().is_empty() {
                 if table
                     .devices
-                    .get(&id)
+                    .get(&device.address)
                     .is_some_and(|known| Arc::ptr_eq(known, &slot))
                 {
-                    table.devices.remove(&id);
+                    table.devices.remove(&device.address);
                 }
                 return;
             }
@@ -179,23 +211,25 @@ impl<T: TransportPort + 'static> Device<T> {
         &self.inner.registry.seq
     }
 
-    /// Take in points handed to the device.
+    /// Take in points handed to the device; once it has moved, given up
+    /// at once.
     fn arrive(&mut self, arrivals: Vec<Arrival>) {
         for Arrival { shared, running } in arrivals {
             let process = shared.process;
-            self.rows.insert(
-                process,
-                Row {
-                    shared,
-                    running,
-                    mode: Mode::Queued,
-                    target: None,
-                    removing: false,
-                    maybe_subscribed: false,
-                    resubscribe: None,
-                },
-            );
-            self.ops.push_back(Op::Start(process));
+            let mut row = Row {
+                shared,
+                running,
+                mode: Mode::Queued,
+                target: None,
+                removing: false,
+                maybe_subscribed: false,
+                resubscribe: None,
+            };
+            match &self.moved_to {
+                Some(to) => give_up(&mut row, to, self.seq()),
+                None => self.ops.push_back(Op::Start(process)),
+            }
+            self.rows.insert(process, row);
         }
     }
 
@@ -295,6 +329,12 @@ impl<T: TransportPort + 'static> Device<T> {
                     }
                 }))
             }
+            Some(Op::Locate(instance)) => {
+                let address = self.address.clone();
+                Some(Box::pin(async move {
+                    Done::Located(jobs::locate(inner, address, instance).await)
+                }))
+            }
             Some(Op::Cancel {
                 shared,
                 holder,
@@ -302,7 +342,7 @@ impl<T: TransportPort + 'static> Device<T> {
                 managed,
             }) => {
                 let process = shared.process;
-                let point = shared.point;
+                let point = shared.point.clone();
                 Some(Box::pin(async move {
                     jobs::cancel(inner, process, point, target, managed).await;
                     Done::Cancelled(holder)
@@ -327,9 +367,9 @@ impl<T: TransportPort + 'static> Device<T> {
                 if due.is_empty() {
                     return None;
                 }
-                let id = self.id;
+                let address = self.address.clone();
                 Some(Box::pin(async move {
-                    Done::Polled(charged(account, jobs::poll(inner, id, due)).await)
+                    Done::Polled(charged(account, jobs::poll(inner, address, due)).await)
                 }))
             }
         }
@@ -349,7 +389,43 @@ impl<T: TransportPort + 'static> Device<T> {
                 }
             }
             Done::Polled(polled) => self.polled(polled),
+            Done::Located(to) => {
+                self.locating = false;
+                if let Some(to) = to {
+                    self.moved(to);
+                }
+            }
         }
+    }
+
+    /// Ask where the device went, unless that is under way or its instance
+    /// isn't known.
+    fn locate(&mut self) {
+        if let (false, Some(instance)) = (self.locating, self.instance) {
+            self.locating = true;
+            self.ops.push_back(Op::Locate(instance));
+        }
+    }
+
+    /// The device answers at `to` now: give every point up, stopping its
+    /// renewals and sending nothing more to this address. A point whose
+    /// start is running is given up when it ends.
+    fn moved(&mut self, to: DeviceAddress) {
+        if self.moved_to.is_some() {
+            return;
+        }
+        tracing::info!(
+            "device at {} answers at {to} now; its watches end",
+            self.address
+        );
+        self.ops.retain(|op| !matches!(op, Op::Start(_)));
+        let seq = &self.inner.registry.seq;
+        for row in self.rows.values_mut() {
+            if !matches!(row.mode, Mode::Gone | Mode::Starting) && !row.removing {
+                give_up(row, &to, seq);
+            }
+        }
+        self.moved_to = Some(to);
     }
 
     fn started(&mut self, process: u32, started: Started) {
@@ -368,9 +444,29 @@ impl<T: TransportPort + 'static> Device<T> {
         if let Some(target) = &started.target {
             row.target = Some(target.clone());
         }
+        if started.instance.is_some() {
+            self.instance = started.instance;
+        }
+        shared.lock().snapshot.cov = started.cov;
+        if let Some(to) = &self.moved_to {
+            // Moved while this start ran: nothing more goes to this
+            // address, so what the start made lapses with its lifetime, as
+            // the device's other points' subscriptions do.
+            if leaving {
+                let row = self.rows.remove(&process).expect("looked up above");
+                self.finish(row);
+            } else {
+                give_up(row, to, seq);
+            }
+            return;
+        }
         let Some(first) = started.first else {
-            // The device isn't in the table.
-            let note = format!("device {} is not in the device table", shared.point.device);
+            // No route to the device is known.
+            let address = &shared.point.device;
+            let note = format!(
+                "no route to {address}: the discovery table knows no router to network {}",
+                address.network()
+            );
             if leaving {
                 let row = self.rows.remove(&process).expect("looked up above");
                 self.cancel(row, None);
@@ -421,29 +517,39 @@ impl<T: TransportPort + 'static> Device<T> {
             ),
             read_at,
         };
+        let mut lost = false;
         match first {
             Ok(rows) => {
                 shared.lock().snapshot.note = None;
                 shared.read(seq, rows, false, Some(first_at));
             }
             Err(error) => {
+                let note = error.to_string();
                 let (source, state) = if unreachable(&error) {
-                    shared.lock().snapshot.why = Some(Why::NoAnswer(error.to_string()));
+                    lost = true;
+                    shared.lock().snapshot.why = Some(Why::NoAnswer(note.clone()));
                     (Some(Source::Poll), State::Unreachable)
                 } else {
+                    shared.lock().failure = Some(PropertyError::from(error));
                     (None, State::Failed)
                 };
-                shared.set_state(seq, source, state, Some(error.to_string()));
+                shared.set_state(seq, source, state, Some(note));
             }
         }
-        // `None` when the first read had no answer and nothing was asked.
+        // A failure for want of an answer retries; a refusal doesn't.
+        let transient = match &started.outcome {
+            Outcome::Asked(Err(error)) => unreachable(error),
+            Outcome::Refused => false,
+            Outcome::Asked(Ok(_)) | Outcome::NotAsked => true,
+        };
+        // `None` when nothing was asked: the first read had no answer.
         let refusal = match started.outcome {
-            Some(Ok(managed)) if leaving => {
+            Outcome::Asked(Ok(managed)) if leaving => {
                 let row = self.rows.remove(&process).expect("looked up above");
                 self.cancel(row, Some(managed));
                 return;
             }
-            Some(Ok(managed)) => {
+            Outcome::Asked(Ok(managed)) => {
                 let events = managed.events();
                 row.mode = Mode::Cov(Box::new(managed), events);
                 row.resubscribe = None;
@@ -452,10 +558,11 @@ impl<T: TransportPort + 'static> Device<T> {
                 shared.set_state(seq, Some(Source::Cov), State::Live, None);
                 return;
             }
-            Some(Err(error)) => Some(error),
-            None => None,
+            Outcome::Asked(Err(error)) => Some(error.to_string()),
+            Outcome::Refused => Some(REFUSED_BEFORE.to_string()),
+            Outcome::NotAsked => None,
         };
-        let transient = refusal.as_ref().is_none_or(unreachable);
+        lost |= refusal.is_some() && transient;
         // An unanswered subscription may have reached the device.
         row.maybe_subscribed |= refusal.is_some() && transient;
         if leaving {
@@ -481,13 +588,16 @@ impl<T: TransportPort + 'static> Device<T> {
             } else {
                 shared.lock().snapshot.state
             };
-            shared.lock().snapshot.why = Some(Why::Refused(error.to_string()));
+            shared.lock().snapshot.why = Some(Why::Refused(error.clone()));
             shared.set_state(
                 seq,
                 Some(Source::Poll),
                 state,
                 Some(format!("COV refused: {error}")),
             );
+        }
+        if lost {
+            self.locate();
         }
     }
 
@@ -499,10 +609,11 @@ impl<T: TransportPort + 'static> Device<T> {
             self.backoff = self.inner.options.poll_backoff.next(self.backoff);
             self.retry_at = Some(now + self.backoff);
             tracing::info!(
-                "device {} isn't answering polls; next try in {} s",
-                self.id,
+                "device at {} isn't answering polls; next try in {} s",
+                self.address,
                 self.backoff.as_secs()
             );
+            self.locate();
         } else {
             self.backoff = Duration::ZERO;
             self.retry_at = None;
@@ -519,8 +630,11 @@ impl<T: TransportPort + 'static> Device<T> {
             unread,
         } = polled;
         let stopped = stopped.map(|error| error.to_string());
-        let failed = |row: &Row, error: String| {
+        let failed = |row: &Row, error: String, failure: PropertyError| {
             let shared = &row.shared;
+            if !unreachable {
+                shared.lock().failure = Some(failure);
+            }
             shared.set_state(seq, Some(Source::Poll), state, Some(error.clone()));
             shared.sample(Err(error), Via::Poll);
         };
@@ -530,13 +644,13 @@ impl<T: TransportPort + 'static> Device<T> {
             };
             match rows {
                 Ok(rows) => row.shared.read(seq, rows, true, None),
-                Err(Missing) => failed(row, MISSING.to_string()),
+                Err(Missing) => failed(row, MISSING.to_string(), PropertyError::NoValue),
             }
         }
         if let Some(error) = stopped {
             for process in unread {
                 if let Some(row) = self.rows.get(&process) {
-                    failed(row, error.clone());
+                    failed(row, error.clone(), PropertyError::Other(error.clone()));
                 }
             }
         }
@@ -584,7 +698,7 @@ impl<T: TransportPort + 'static> Device<T> {
             };
             let wait = retry_cov.first;
             tracing::info!(
-                "watch of {:?}: {why}; polling, and subscribing again in {} s",
+                "watch of {}: {why}; polling, and subscribing again in {} s",
                 row.shared.point,
                 wait.as_secs()
             );
@@ -598,3 +712,19 @@ impl<T: TransportPort + 'static> Device<T> {
         }
     }
 }
+
+/// Give `row` up: its device answers at `to` now. Its managed
+/// subscription, dropped, stops renewing, and nothing is sent for it: what
+/// the old address may hold lapses with its lifetime.
+fn give_up(row: &mut Row, to: &DeviceAddress, seq: &std::sync::atomic::AtomicU64) {
+    row.mode = Mode::Gone;
+    row.maybe_subscribed = false;
+    row.resubscribe = None;
+    row.shared.lock().snapshot.why = Some(Why::Moved { to: to.clone() });
+    let note = format!("the device answers at {to} now; watch it there");
+    row.shared.set_state(seq, None, State::Gone, Some(note));
+}
+
+/// Why a point is polled whose device refused the COV service itself for
+/// an earlier point.
+const REFUSED_BEFORE: &str = "the device refused this COV service before; not asked again";

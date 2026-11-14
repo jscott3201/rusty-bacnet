@@ -3,7 +3,9 @@
 //! entry's device and names its object (and property). The loop's arms
 //! never await: applying a notification takes two std mutexes in turn (the
 //! table's, released before the entry's), and a held-back signal is a
-//! deadline the loop sleeps toward.
+//! deadline the loop sleeps toward. It also hands each device's scheduler
+//! the moves of handles following the device's instance away from its
+//! address ([`ClientEvent::Moved`]).
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -20,6 +22,7 @@ use bacnet_types::enums::PropertyIdentifier;
 use super::options::MAX_ROWS;
 use super::shared::{Registry, Shared};
 use super::{Point, Watched};
+use crate::device::ClientEvent;
 use crate::format::{RawRow, decode_all};
 
 /// Route notifications until the hub stops or the client closes its
@@ -27,9 +30,11 @@ use crate::format::{RawRow, decode_all};
 pub(super) async fn run(
     registry: Arc<Registry>,
     mut notifications: broadcast::Receiver<ReceivedCOVNotification>,
+    mut events: broadcast::Receiver<ClientEvent>,
     mut stop: watch::Receiver<bool>,
 ) {
     let mut held: Vec<(Instant, Arc<Shared>)> = Vec::new();
+    let mut following = true;
     loop {
         let due = held.iter().map(|(at, _)| *at).min();
         tokio::select! {
@@ -41,6 +46,15 @@ pub(super) async fn run(
                     registry.lagged.fetch_add(missed, Ordering::Relaxed);
                 }
                 Err(RecvError::Closed) => break,
+            },
+            event = events.recv(), if following => match event {
+                Ok(ClientEvent::Moved { instance, from, to }) => {
+                    registry.moved(instance, &from, to);
+                }
+                // A move missed is found by the device's next unanswered
+                // request instead.
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => following = false,
             },
             () = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                 let now = Instant::now();

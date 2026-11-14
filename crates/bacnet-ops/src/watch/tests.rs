@@ -10,7 +10,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::shared::Registry;
-use super::test_lab::{LAB, Lab, ai, object, oid, settle};
+use super::test_lab::{LAB, Lab, ai, lab_at, object, oid, routed_at, settle};
 use super::*;
 use crate::format::decode_all;
 
@@ -180,7 +180,7 @@ async fn a_silent_device_is_reported() {
 async fn a_property_watch_subscribes_to_the_property() {
     let lab = Lab::start(WatchOptions::default()).await;
     let point = Point {
-        device: LAB,
+        device: lab_at(),
         object: ai(3),
         watched: Watched::Property {
             property: PropertyIdentifier::PRESENT_VALUE,
@@ -340,7 +340,7 @@ fn notifications_cannot_grow_the_rows() {
     assert!(rows.len() <= MAX_ROWS);
 
     let element = Point {
-        device: LAB,
+        device: lab_at(),
         object: oid(ObjectType::ANALOG_OUTPUT, 1),
         watched: Watched::Property {
             property: PropertyIdentifier::PRIORITY_ARRAY,
@@ -384,7 +384,7 @@ fn notifications_cannot_grow_the_rows() {
             property: PropertyIdentifier::PRIORITY_ARRAY,
             index: None,
         },
-        ..element
+        ..element.clone()
     };
     assert!(!dispatch::belongs(&whole, Some(&target), &mine));
 }
@@ -395,7 +395,7 @@ fn notifications_cannot_grow_the_rows() {
 #[test]
 fn a_property_watch_takes_its_property_whatever_the_order() {
     let point = Point {
-        device: LAB,
+        device: lab_at(),
         object: ai(1),
         watched: Watched::Property {
             property: PropertyIdentifier::PRESENT_VALUE,
@@ -428,35 +428,43 @@ async fn lagged_notifications_are_counted() {
         sender.send(notification(ai(1), &[])).unwrap();
     }
     let (stop, stopped) = watch::channel(false);
-    let task = tokio::spawn(dispatch::run(Arc::clone(&registry), receiver, stopped));
+    let (_events, moves) = tokio::sync::broadcast::channel(1);
+    let task = tokio::spawn(dispatch::run(
+        Arc::clone(&registry),
+        receiver,
+        moves,
+        stopped,
+    ));
     settle().await;
     assert_eq!(registry.lagged.load(Ordering::Relaxed), 3);
     stop.send_replace(true);
     task.await.unwrap();
 }
 
-/// A point whose device isn't in the table yet is reported so, and is
-/// subscribed once the device appears.
+/// A remote point with no route known is reported so and sends nothing;
+/// once the discovery table holds a router for its network, it is read
+/// through that router.
 #[tokio::test(start_paused = true)]
-async fn a_device_that_appears_later_is_subscribed() {
+async fn a_route_that_appears_later_is_used() {
     let lab = Lab::start(WatchOptions::default()).await;
     let point = Point {
-        device: 2002,
-        object: ai(1),
-        watched: Watched::Object,
+        device: routed_at(),
+        ..object(ai(1))
     };
     let lease = lab.hub.watch(point).unwrap();
     settle().await;
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.state, State::Unreachable);
-    assert!(snapshot.note.as_deref().unwrap().contains("device table"));
-    lab.client.low_level().add_device(2002, &[2]).await.unwrap();
+    assert_eq!(snapshot.why, Some(Why::Missing));
+    assert!(snapshot.note.as_deref().unwrap().contains("no route"));
+    assert!(lab.services().is_empty(), "{:?}", lab.services());
+    lab.route().await;
     tokio::time::sleep(Duration::from_secs(30)).await;
-    let snapshot = lease.snapshot();
-    assert_eq!(snapshot.source, Some(Source::Cov), "{snapshot:?}");
-    assert_eq!(snapshot.state, State::Live);
-    assert_eq!(snapshot.note, None);
-    assert_eq!(present_value(&snapshot), Some(10.0));
-    assert_eq!(lab.table().await.len(), 1);
+    assert!(
+        lab.services().first() == Some(&super::test_lab::RPM),
+        "read through the router: {:?}",
+        lab.services()
+    );
+    drop(lease);
     lab.stop().await;
 }

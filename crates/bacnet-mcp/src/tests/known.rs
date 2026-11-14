@@ -161,8 +161,8 @@ async fn the_own_network_number_names_the_local_network() {
 /// a station on network 2001 behind it that announces the same instance.
 /// The server knows them as two devices; the instance alone names neither,
 /// `2001:instance` names the routed one and is refused by a policy that
-/// leaves its network out, and the local one is reached by its address.
-/// Nothing is sent to resolve any of them.
+/// leaves its network out, and the local one is reached, and watched, by
+/// its address. Nothing is sent to resolve any of them.
 #[tokio::test(start_paused = true)]
 async fn two_networks_holding_one_instance_are_two_devices() {
     let policy = Policy {
@@ -211,11 +211,13 @@ async fn two_networks_holding_one_instance_are_two_devices() {
         .await;
     assert_ne!(local["isError"], json!(true), "{local}");
     assert_eq!(local["structuredContent"]["device"], json!(LAB), "{local}");
-    // The watch list names devices by instance, so the local one by its
-    // address is refused while the instance is contested.
+    // The watch hub keys points by address (#2560), so the local one by
+    // its address is watched while the instance is contested.
     let points = json!({ "points": [{ "device": "10.0.0.2:47808", "object": "ai:1" }] });
     let watch = lab.agent.call("bacnet_watch", points).await;
-    assert!(watch.to_string().contains("ambiguous-device"), "{watch}");
+    let point = &watch["structuredContent"]["points"][0];
+    assert!(point.get("error").is_none(), "{watch}");
+    assert_eq!(point["watched"], json!(true), "{watch}");
     lab.stop().await;
 }
 

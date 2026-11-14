@@ -39,28 +39,27 @@ fn the_list_settings_make_a_valid_hub() {
 }
 
 /// Present_Value follows the object (SubscribeCOV); any other property is
-/// a property watch.
+/// a property watch; the hub's point is at the row's device address.
 #[test]
 fn rows_map_to_hub_points() {
+    let at = bacnet_ops::DeviceAddress::new(2, &[5]).unwrap();
     let mut point = Point {
         device: 2001,
         network: Some(2),
         object: ai(1),
         property: PropertyIdentifier::PRESENT_VALUE,
     };
-    assert_eq!(hub_point(&point).watched, Watched::Object);
+    assert_eq!(hub_point(&point, at.clone()).watched, Watched::Object);
     point.property = PropertyIdentifier::STATUS_FLAGS;
+    let hub = hub_point(&point, at.clone());
     assert_eq!(
-        hub_point(&point).watched,
+        hub.watched,
         Watched::Property {
             property: PropertyIdentifier::STATUS_FLAGS,
             index: None,
         }
     );
-    assert_eq!(
-        (hub_point(&point).device, hub_point(&point).object),
-        (2001, ai(1))
-    );
+    assert_eq!((hub.device, hub.object), (at, ai(1)));
 }
 
 fn snapshot(source: Option<hub::Source>, why: Option<Why>, note: Option<&str>) -> Snapshot {
@@ -106,6 +105,19 @@ fn a_snapshot_reads_as_the_row_source() {
                 Some("device 7 is not in the device table"),
             ),
             Some(Source::Failed("device 7 is not in the device table".into())),
+        ),
+        // A device that answers elsewhere now: the row fails, saying where.
+        (
+            snapshot(
+                poll,
+                Some(Why::Moved {
+                    to: bacnet_ops::DeviceAddress::local(&[9]).unwrap(),
+                }),
+                Some("the device answers at mstp:9 now; watch it there"),
+            ),
+            Some(Source::Failed(
+                "the device answers at mstp:9 now; watch it there".into(),
+            )),
         ),
         // Between the steps of a change: no source yet.
         (snapshot(poll, None, Some("timeout")), None),

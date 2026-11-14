@@ -25,7 +25,7 @@ pub(crate) mod read;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, DeviceEvent};
@@ -132,6 +132,12 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
+    /// The client's own hub, which its [`watch`](Client::watch)es share
+    /// while any holds a point: weak, since the hub holds the client.
+    pub(crate) hub: Mutex<Weak<crate::watch::Inner<T>>>,
+    /// What each address's device declared and did of COV
+    /// ([`CovSupport`](crate::watch::CovSupport)).
+    pub(crate) cov: Mutex<HashMap<DeviceAddress, crate::watch::CovMemory>>,
     /// Where each instance a handle follows is reached now, and when its
     /// handles last asked where it went, while one does (at most
     /// `device::follow::REMEMBERED`).
@@ -173,6 +179,8 @@ impl<T: TransportPort + 'static> Client<T> {
                 limits,
                 no_rpm: Mutex::new(HashSet::new()),
                 hubs: AtomicU32::new(0),
+                hub: Mutex::new(Weak::new()),
+                cov: Mutex::new(HashMap::new()),
                 follows: Mutex::new(HashMap::new()),
                 instances: Mutex::new(HashMap::new()),
                 changes,
@@ -236,6 +244,14 @@ impl<T: TransportPort + 'static> Client<T> {
     /// client channel.
     pub fn events(&self) -> broadcast::Receiver<ClientEvent> {
         self.shared.events.subscribe()
+    }
+
+    /// What is known of COV at the device at `device`: of SubscribeCOV,
+    /// which an object watch sends, what the device did once a watch asked,
+    /// else what its Protocol_Services_Supported lists once
+    /// [`Device::describe_device`] read it. Sends nothing.
+    pub fn cov_support(&self, device: &DeviceAddress) -> crate::watch::CovSupport {
+        self.cov_known(device, &crate::watch::Watched::Object)
     }
 
     /// True once the device at `device` has refused ReadPropertyMultiple.

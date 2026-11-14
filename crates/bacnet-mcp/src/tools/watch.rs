@@ -8,7 +8,6 @@
 
 use std::time::Duration;
 
-use bacnet_ops::DeviceAddress;
 use bacnet_ops::parse::{parse_object_specifier, parse_property};
 use bacnet_ops::watch::{Point, State, Watched};
 use bacnet_transport::port::TransportPort;
@@ -22,7 +21,7 @@ use crate::context::{Call, Ctx, DeviceArg};
 use crate::errors::ToolError;
 use crate::listen::{SHUTTING_DOWN, TOOL_IDLE};
 use crate::resources::point_body;
-use crate::resources::uri::of_point;
+use crate::resources::uri::{PointUri, of_point};
 
 pub(super) const NAME: &str = "bacnet_watch";
 
@@ -136,45 +135,6 @@ struct PointArg {
     property: Option<String>,
 }
 
-/// `device`, unless another address claims its instance too. The hub keys
-/// points by instance (#2560 leaves it so for now), so a device named by its
-/// address whose instance is contested can't be watched without reaching
-/// both: refused as ambiguous, naming every claimant. The discovery table
-/// says who claims it now, not the server's copy of it, which can lag.
-async fn contested<T: TransportPort + 'static>(
-    ctx: &Ctx<T>,
-    device: crate::context::Device<T>,
-) -> Result<crate::context::Device<T>, ToolError> {
-    let own = ctx.client()?.low_level().network_number();
-    let claims: Vec<DeviceAddress> = ctx
-        .claims(device.instance, None)
-        .await
-        .iter()
-        .filter_map(DeviceAddress::of)
-        .map(|at| at.localized(own))
-        .collect();
-    match claims.as_slice() {
-        [only] if *only == device.address => Ok(device),
-        [_, _, ..] => {
-            let claims: Vec<String> = claims.iter().map(ToString::to_string).collect();
-            Err(ToolError::refused(
-                "ambiguous-device",
-                format!(
-                    "device {} is claimed by {}, and the watch list names a device by its \
-                     instance: neither can be watched until one address alone claims it",
-                    device.instance,
-                    claims.join(" and ")
-                ),
-            ))
-        }
-        // The row went, or moved, since the call found it.
-        _ => Err(ToolError::UnknownDevice {
-            device: device.address.to_string(),
-            hint: "the discovery table changed during the call; call again".into(),
-        }),
-    }
-}
-
 /// What a point argument asks for, parsed: nothing is sent for a bad one.
 fn watched(arg: &PointArg) -> Result<(ObjectIdentifier, Watched), ToolError> {
     let (object_type, instance) =
@@ -218,32 +178,31 @@ pub(super) async fn run<T: TransportPort + 'static>(
     // plus one, so a hub with no change yet still reads as "since".
     let since = start(ctx, NAME, args.cursor.as_deref(), raw)?.checked_sub(1);
     ctx.subs.expire_tool(TOOL_IDLE);
-    let mut rows: Vec<Result<Point, (String, Value)>> = Vec::new();
+    // Each point at the address the call's device names: two devices
+    // sharing an instance, named by their addresses, are two points.
+    let mut rows: Vec<Result<(PointUri, Point), (String, Value)>> = Vec::new();
     for (arg, (object, watched)) in args.points.iter().zip(parsed) {
-        let device = match ctx.device(call, &arg.device).await {
-            Ok(device) => contested(ctx, device).await,
-            Err(error) => Err(error),
-        };
-        let row = match device {
+        let row = match ctx.device(call, &arg.device).await {
             Ok(device) => {
-                let point = Point {
+                let uri = PointUri {
                     device: device.instance,
                     object,
                     watched,
                 };
-                match ctx.subs.tool_watch(ctx, point) {
-                    Ok(()) => Ok(point),
+                let point = uri.at(device.address);
+                match ctx.subs.tool_watch(ctx, point.clone()) {
+                    Ok(()) => Ok((uri, point)),
                     Err(SHUTTING_DOWN) => {
                         let error =
                             ToolError::refused(SHUTTING_DOWN, "the server is shutting down");
-                        Err((of_point(&point), error.json()))
+                        Err((of_point(&uri), error.json()))
                     }
                     Err(cap) => {
                         let error = ToolError::refused(
                             "watch-cap",
                             format!("no room for another watched point ({cap}); max {max}"),
                         );
-                        Err((of_point(&point), error.json()))
+                        Err((of_point(&uri), error.json()))
                     }
                 }
             }
@@ -260,7 +219,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
     // them, within the budget.
     let deadline = (Instant::now() + FIRST_READ).min(call.deadline);
     while Instant::now() < deadline
-        && rows.iter().flatten().any(|point| {
+        && rows.iter().flatten().any(|(_, point)| {
             hub.peek(point).is_some_and(|snapshot| {
                 snapshot.source.is_none() && matches!(snapshot.state, State::Starting | State::Live)
             })
@@ -274,15 +233,15 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let points: Vec<Value> = rows
         .into_iter()
         .map(|row| match row {
-            Ok(point) => {
+            Ok((uri, point)) => {
                 let Some(snapshot) = hub.peek(&point) else {
-                    return json!({ "uri": of_point(&point), "error": { "error": "failed",
+                    return json!({ "uri": of_point(&uri), "error": { "error": "failed",
                         "message": "the watch ended" } });
                 };
                 let changed = since.is_none_or(|since| snapshot.seq > since);
                 let rows = if changed { &snapshot.rows[..] } else { &[] };
-                let mut body = point_body(ctx, &point, rows, Some(&snapshot));
-                body["uri"] = json!(of_point(&point));
+                let mut body = point_body(ctx, &uri, rows, Some(&snapshot));
+                body["uri"] = json!(of_point(&uri));
                 body["changed"] = json!(changed);
                 if !changed && let Some(map) = body.as_object_mut() {
                     map.remove("values");

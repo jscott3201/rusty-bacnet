@@ -596,6 +596,7 @@ async fn a_passive_session_puts_nothing_on_the_wire() {
                 object: ao1(),
                 property: PropertyIdentifier::PRESENT_VALUE,
             },
+            at: Some(bacnet_ops::DeviceAddress::local(&LAB_MAC).unwrap()),
         }),
         Command::Safety(SafetyCommand::Arm {
             reason: String::new(),
