@@ -64,3 +64,6 @@ pub use value::*;
 #[cfg(test)]
 #[path = "tests/generic_event_properties.rs"]
 mod generic_event_properties_tests;
+#[cfg(all(test, feature = "std"))]
+#[path = "tests/saved_files.rs"]
+mod saved_files_tests;
