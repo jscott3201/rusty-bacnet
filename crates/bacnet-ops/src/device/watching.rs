@@ -7,11 +7,12 @@ use std::sync::Weak;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 
+use super::follow::Elsewhere;
 use super::{Device, DeviceAddress};
 use crate::client::{Client, lock};
 use crate::error::OpsError;
 use crate::reading::{IntoProperty, one_property};
-use crate::watch::{Point, Watched};
+use crate::watch::{CovSupport, Point, Watched};
 
 impl<T: TransportPort + 'static> Device<T> {
     /// A point of this device to watch ([`Client::watch`]): `property` in
@@ -45,6 +46,16 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 }
 
+impl<T: TransportPort + 'static> Device<T> {
+    /// What is known of COV at this device, at its address now: of
+    /// SubscribeCOV, which an object watch sends, what the device did once
+    /// a watch asked, else what its Protocol_Services_Supported lists once
+    /// [`describe_device`](Self::describe_device) read it. Sends nothing.
+    pub fn cov_support(&self) -> CovSupport {
+        self.client.cov_known(&self.address(), &Watched::Object)
+    }
+}
+
 impl<T: TransportPort + 'static> Client<T> {
     /// The instance the device at `address` claims: its row's in the
     /// discovery table, or one read earlier by the wildcard instance.
@@ -57,14 +68,18 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// Where the device that was at `from`, claiming `instance`, answers
-    /// now, after a request to it went unanswered. When a handle follows
-    /// the instance at `from`, as that handle would after a timeout: it
-    /// may send one Who-Is for the instance (at most one every
-    /// [`QUIET`](crate::device::QUIET) for the handles following it), and
-    /// it moves, telling [`Client::events`]. Otherwise by the discovery
-    /// table alone, as [`Device::moved_to`] says, sending nothing. `None`
-    /// while the device may still be at `from`, or two other addresses
-    /// claim the instance.
+    /// now, after a request to it went unanswered, when that is certain.
+    /// When a handle follows the instance at `from`, as that handle would
+    /// after a timeout: it may send one Who-Is for the instance (at most
+    /// one every [`QUIET`](crate::device::QUIET) for the handles following
+    /// it), and it moves, telling [`Client::events`]. Otherwise by the
+    /// discovery table alone, sending nothing: only when no row at `from`
+    /// claims the instance any more (it is gone, or names another) and one
+    /// other address claims it. Announcement times alone, which
+    /// [`Device::moved_to`] reports, never give a watch up: a duplicate
+    /// starting up and one missed request look the same. `None` while the
+    /// device may still be at `from`, or two other addresses claim the
+    /// instance.
     pub(crate) async fn relocated(
         &self,
         instance: u32,
@@ -87,8 +102,9 @@ impl<T: TransportPort + 'static> Client<T> {
                 Err(_) => None,
             };
         }
-        self.elsewhere(instance, None, from)
-            .await
-            .by_announcements()
+        match self.elsewhere(instance, None, from).await {
+            Elsewhere::Moved(to) => Some(to),
+            Elsewhere::Nowhere | Elsewhere::Shared { .. } | Elsewhere::Contested(_) => None,
+        }
     }
 }

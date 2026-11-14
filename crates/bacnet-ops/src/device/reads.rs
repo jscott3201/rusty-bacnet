@@ -222,7 +222,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// The device's [`DEVICE_PROPERTIES`]. A handle that doesn't know the
     /// instance reads it first ([`resolve_instance`](Self::resolve_instance)).
     /// The client notes which COV services its Protocol_Services_Supported
-    /// lists ([`Client::cov_support`](crate::Client::cov_support)).
+    /// lists ([`cov_support`](Self::cov_support)).
     pub async fn describe_device(&self) -> Result<DeviceSummary, OpsError> {
         let device = self.resolve_instance().await?;
         let object = ObjectIdentifier::new(ObjectType::DEVICE, device)?;

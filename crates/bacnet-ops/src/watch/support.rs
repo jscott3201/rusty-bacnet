@@ -13,13 +13,14 @@ use crate::device::DeviceAddress;
 
 /// What is known of COV for a device or one of its points.
 ///
-/// For a device ([`Client::cov_support`]) it is about SubscribeCOV, which
-/// an object watch sends; for a watched point
+/// For a device ([`Device::cov_support`](crate::Device::cov_support)) it
+/// is about SubscribeCOV, which an object watch sends; for a watched point
 /// ([`Update::cov`](super::Update::cov)), about the subscription that
 /// point's watch sends. What the device did outranks what it declared:
 /// its Protocol_Services_Supported is noted when
 /// [`Device::describe_device`](crate::Device::describe_device) reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CovSupport {
     /// Nothing yet: the device's Protocol_Services_Supported wasn't read
     /// and no subscription was asked for.
@@ -95,6 +96,17 @@ pub(super) fn refuses_service(error: &Error) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `error`, a device's answer to a subscription, says its
+/// subscription table is full (a resources-class Error PDU): not a
+/// refusal, since a full table frees up; the point is polled meanwhile and
+/// subscribed again after a backoff.
+pub(super) fn fills_table(error: &Error) -> bool {
+    matches!(
+        error.remote(),
+        Some(RemoteError::Error { class, .. }) if class == ErrorClass::RESOURCES
+    )
 }
 
 impl<T: TransportPort + 'static> Client<T> {

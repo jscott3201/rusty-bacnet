@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bacnet_client::client::{DeviceEvent, DeviceEventKind};
 use bacnet_ops::Client;
-use bacnet_ops::watch::Changes;
+use bacnet_ops::watch::hub::Changes;
 use bacnet_transport::port::TransportPort;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::broadcast::{self, error::RecvError};

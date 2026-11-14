@@ -23,10 +23,10 @@ use std::time::Duration;
 
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::limits::RequestLimits;
-use bacnet_ops::watch::{
-    self as hub, Backoff, Hub, Lease, Lifetime, MissingDevice, Reads, Samples, Snapshot, Watched,
-    Why,
+use bacnet_ops::watch::hub::{
+    self, Backoff, Hub, Lease, Lifetime, MissingDevice, Reads, Samples, Snapshot,
 };
+use bacnet_ops::watch::{Point as WatchPoint, Watched, Why};
 use bacnet_ops::{Client, DeviceAddress};
 use bacnet_transport::port::TransportPort;
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -116,7 +116,7 @@ pub(crate) fn hub_options(options: &WatchOptions) -> hub::WatchOptions {
 /// A row's point as the hub watches it, at its device's address `at`:
 /// Present_Value by SubscribeCOV on the object, any other property by
 /// SubscribeCOVProperty.
-pub(crate) fn hub_point(point: &Point, at: DeviceAddress) -> hub::Point {
+pub(crate) fn hub_point(point: &Point, at: DeviceAddress) -> WatchPoint {
     let watched = if point.whole_object() {
         Watched::Object
     } else {
@@ -125,7 +125,7 @@ pub(crate) fn hub_point(point: &Point, at: DeviceAddress) -> hub::Point {
             index: None,
         }
     };
-    hub::Point {
+    WatchPoint {
         device: at,
         object: point.object,
         watched,
@@ -141,8 +141,9 @@ fn source_of(snapshot: &Snapshot, lifetime: u32) -> Option<Source> {
         (Some(why), Some(hub::Source::Poll)) => Some(Source::Polled(match why {
             Why::Refused(error) => format!("COV refused: {error}"),
             Why::NoAnswer(error) => format!("no answer: {error}"),
+            Why::Full(error) => format!("COV table full: {error}"),
             Why::Lapsed(Some(error)) => format!("renewal failed: {error}"),
-            Why::Lapsed(None) | Why::Missing | Why::Moved { .. } => "renewal stopped".to_string(),
+            _ => "renewal stopped".to_string(),
         })),
         _ => None,
     }

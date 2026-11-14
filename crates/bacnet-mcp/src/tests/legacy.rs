@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_ops::Client;
-use bacnet_ops::watch::{Hub, WatchOptions};
+use bacnet_ops::watch::hub::{Hub, WatchOptions};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde_json::{Value, json};

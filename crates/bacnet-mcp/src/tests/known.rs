@@ -218,6 +218,8 @@ async fn two_networks_holding_one_instance_are_two_devices() {
     let point = &watch["structuredContent"]["points"][0];
     assert!(point.get("error").is_none(), "{watch}");
     assert_eq!(point["watched"], json!(true), "{watch}");
+    assert_eq!(point["address"], json!("10.0.0.2:47808"), "{watch}");
+    assert_eq!(point["uri_ambiguous"], json!(true), "{watch}");
     lab.stop().await;
 }
 

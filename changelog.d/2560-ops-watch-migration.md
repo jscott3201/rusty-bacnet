@@ -1,9 +1,10 @@
 ---
 section: Migration notes
 ---
-- **bacnet-ops watch (Rust API, #2560):** `watch::Point` names its device
-  by `DeviceAddress`: build it with `device.point("ai:1")` instead of an
-  instance. `Why::Missing` now means no router to a remote address, a moved
-  device gives its points up with `Why::Moved { to }`, and an application
-  can call `client.watch(points)` instead of running a `Hub`.
+- **bacnet-ops watch (Rust API, #2560):** import `Hub`, `Lease`,
+  `Snapshot`, `WatchOptions` and the other hub types from `watch::hub`;
+  the snapshot's `State` and `Source` are `watch::hub::State` and `Source`.
+  Build a `watch::Point` with `device.point("ai:1")`: it names a
+  `DeviceAddress`, not an instance. Match `Why` and `WatchError` with a
+  wildcard arm. Applications call `client.watch(points)`.
   [Watching points](docs/rust-api.md#watching-points) has the table.

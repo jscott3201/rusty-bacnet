@@ -8,7 +8,8 @@ use bacnet_ops::client::Wanted;
 use bacnet_ops::format::{self, RawRow};
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::charged;
-use bacnet_ops::watch::{Snapshot, Source, State, Watched};
+use bacnet_ops::watch::Watched;
+use bacnet_ops::watch::hub::{Snapshot, Source, State};
 use bacnet_ops::{DeviceAddress, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
 use serde_json::{Map, Value, json};
@@ -75,7 +76,7 @@ pub(super) async fn point<T: TransportPort + 'static>(
                 .handle
                 .read_object(
                     point.object,
-                    Wanted::List(&bacnet_ops::watch::POINT_PROPERTIES),
+                    Wanted::List(&bacnet_ops::watch::hub::POINT_PROPERTIES),
                 )
                 .await
                 .map_err(failed)?;

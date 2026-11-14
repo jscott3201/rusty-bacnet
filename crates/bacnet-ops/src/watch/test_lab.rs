@@ -28,7 +28,8 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::Bytes;
 use tokio::time::Instant;
 
-use super::{Hub, Point, WatchOptions, Watched};
+use super::hub::{Hub, WatchOptions};
+use super::{Point, Watched};
 use crate::client::Client;
 use crate::limits::RequestLimits;
 
@@ -65,6 +66,11 @@ pub(super) struct Quirks {
     /// Every SubscribeCOV is rejected as an unknown service, as by a device
     /// without COV.
     pub(super) refuse_cov: AtomicBool,
+    /// The next SubscribeCOV requests are refused for a full subscription
+    /// table.
+    pub(super) full_cov: AtomicU8,
+    /// The device's answers to RPM take half a second.
+    pub(super) slow_rpm_ack: AtomicBool,
     /// The device's acknowledgements of SubscribeCOV take half a second.
     pub(super) slow_cov_ack: AtomicBool,
     /// The device's acknowledgements of SubscribeCOV come half a second
@@ -74,9 +80,15 @@ pub(super) struct Quirks {
 
 /// Whether `npdu` acknowledges a SubscribeCOV.
 fn is_cov_ack(npdu: &ReceivedNpdu) -> bool {
+    is_ack_of(npdu, 2, SUBSCRIBE_COV)
+}
+
+/// Whether `npdu` is an answer of PDU type `kind` (2 simple, 3 complex) to
+/// `service`.
+fn is_ack_of(npdu: &ReceivedNpdu, kind: u8, service: u8) -> bool {
     decode_npdu(npdu.npdu.clone()).is_ok_and(|decoded| {
         let apdu = &decoded.payload;
-        apdu.len() >= 3 && apdu[0] >> 4 == 2 && apdu[2] == SUBSCRIBE_COV
+        apdu.len() >= 3 && apdu[0] >> 4 == kind && apdu[2] == service
     })
 }
 
@@ -107,6 +119,9 @@ pub(super) fn link(
             let late = late.clone();
             async move {
                 if quirks.slow_cov_ack.load(Ordering::Relaxed) && is_cov_ack(&npdu) {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                if quirks.slow_rpm_ack.load(Ordering::Relaxed) && is_ack_of(&npdu, 3, RPM) {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
                 if quirks.late_cov_ack.load(Ordering::Relaxed) && is_cov_ack(&npdu) {
@@ -220,6 +235,15 @@ fn forwards(
             }
         }
         if service == SUBSCRIBE_COV && take(&quirks.swallow_cov) {
+            return false;
+        }
+        if service == SUBSCRIBE_COV && take(&quirks.full_cov) {
+            let class = ErrorClass::RESOURCES.to_raw() as u8;
+            let code = ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u8;
+            answer(
+                handle,
+                vec![0x50, invoke, SUBSCRIBE_COV, 0x91, class, 0x91, code],
+            );
             return false;
         }
         if service == SUBSCRIBE_COV && quirks.refuse_cov.load(Ordering::Relaxed) {

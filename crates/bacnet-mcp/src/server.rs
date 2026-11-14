@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use bacnet_ops::Client;
 use bacnet_ops::limits::TokenBucket;
-use bacnet_ops::watch::{Hub, WatchOptions};
+use bacnet_ops::watch::hub::{Hub, WatchOptions};
 use bacnet_transport::port::TransportPort;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,

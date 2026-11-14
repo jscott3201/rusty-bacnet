@@ -9,10 +9,14 @@ use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use super::hub::State;
+use super::hub::*;
 use super::shared::Registry;
 use super::test_lab::{LAB, Lab, ai, lab_at, object, oid, routed_at, settle};
 use super::*;
 use crate::format::decode_all;
+use std::time::Duration;
+use tokio::sync::watch;
 
 /// The Present_Value among a snapshot's rows.
 pub(super) fn present_value(snapshot: &Snapshot) -> Option<f32> {
@@ -428,11 +432,17 @@ async fn lagged_notifications_are_counted() {
         sender.send(notification(ai(1), &[])).unwrap();
     }
     let (stop, stopped) = watch::channel(false);
-    let (_events, moves) = tokio::sync::broadcast::channel(1);
+    let (_events, events) = tokio::sync::broadcast::channel(1);
+    let (_devices, devices) = tokio::sync::broadcast::channel(1);
+    let heard = dispatch::Heard {
+        events,
+        devices,
+        own: Box::new(|| None),
+    };
     let task = tokio::spawn(dispatch::run(
         Arc::clone(&registry),
         receiver,
-        moves,
+        heard,
         stopped,
     ));
     settle().await;
@@ -467,4 +477,32 @@ async fn a_route_that_appears_later_is_used() {
     );
     drop(lease);
     lab.stop().await;
+}
+
+/// A notification carrying the watched property clears the error a read
+/// left for the whole object; one carrying only another property doesn't.
+#[tokio::test(start_paused = true)]
+async fn a_notified_value_clears_the_whole_objects_error() {
+    let registry = Arc::new(Registry::new(
+        PROCESS_BASE,
+        Duration::ZERO,
+        POINT_PROPERTIES.to_vec(),
+        false,
+    ));
+    let shared = Arc::new(super::shared::Shared::new(object(ai(1)), PROCESS_BASE, 4));
+    registry
+        .table()
+        .by_process
+        .insert(PROCESS_BASE, Arc::clone(&shared));
+    {
+        let mut entry = shared.lock();
+        entry.target = Some(CovTarget::local(&[2]));
+        entry.failure = Some(crate::format::PropertyError::NoValue);
+    }
+    let flags = notification(ai(1), &[(PropertyIdentifier::STATUS_FLAGS, None)]);
+    registry.deliver(&flags);
+    assert!(shared.lock().failure.is_some(), "not the watched property");
+    let value = notification(ai(1), &[(PropertyIdentifier::PRESENT_VALUE, None)]);
+    registry.deliver(&value);
+    assert!(shared.lock().failure.is_none(), "a value of the property");
 }

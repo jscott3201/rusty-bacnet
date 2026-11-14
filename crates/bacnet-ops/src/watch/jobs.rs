@@ -23,11 +23,12 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 
-use super::first::first_read;
+use super::hub::Inner;
+use super::hub::first::first_read;
 use super::options::{Fallback, Reads};
 use super::shared::Shared;
-use super::support::{CovSupport, refuses_service};
-use super::{Inner, Point, Watched};
+use super::support::{CovSupport, fills_table, refuses_service};
+use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
 use crate::client::{device_error, unreachable};
 use crate::device::{DeviceAddress, Path};
@@ -147,7 +148,8 @@ pub(super) async fn start<T: TransportPort + 'static>(
                 client.cov_observed(address, &point.watched, true);
                 CovSupport::Accepted
             }
-            Err(error) if unreachable(error) => known,
+            // Not the device's last word: it is asked again.
+            Err(error) if unreachable(error) || fills_table(error) => known,
             Err(error) => {
                 if refuses_service(error) {
                     client.cov_observed(address, &point.watched, false);
@@ -318,13 +320,14 @@ pub(super) async fn poll<T: TransportPort + 'static>(
 /// flag, which the device takes as a cancellation, to `target`, the way
 /// the subscription went. It takes the device's turn first, so no renewal
 /// is in flight when the renewals stop. Not charged to the hub's bucket.
+/// False when the device didn't answer it.
 pub(super) async fn cancel<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     process: u32,
     point: Point,
     target: CovTarget,
     managed: Option<ManagedCOVSubscription>,
-) {
+) -> bool {
     let client = inner.client.low_level();
     let limits = inner.client.limits();
     let cancel = async {
@@ -352,12 +355,21 @@ pub(super) async fn cancel<T: TransportPort + 'static>(
         }
     };
     match tokio::time::timeout(CANCEL_WAIT, cancel).await {
-        Ok(Ok(())) => tracing::debug!("watch of {point}: COV subscription cancelled"),
-        Ok(Err(error)) => tracing::debug!(
-            "watch of {point}: the cancel failed ({error}); it ends with its lifetime"
-        ),
+        Ok(Ok(())) => {
+            tracing::debug!("watch of {point}: COV subscription cancelled");
+            true
+        }
+        Ok(Err(error)) => {
+            tracing::debug!(
+                "watch of {point}: the cancel failed ({error}); it ends with its lifetime"
+            );
+            !unreachable(&error)
+        }
         Err(_) => {
-            tracing::debug!("watch of {point}: the cancel took too long; it ends with its lifetime")
+            tracing::debug!(
+                "watch of {point}: the cancel took too long; it ends with its lifetime"
+            );
+            false
         }
     }
 }

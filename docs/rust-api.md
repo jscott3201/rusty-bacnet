@@ -11990,79 +11990,121 @@ request jobs: `Reader`, `Halt`, `RpmFailure`, `rpm_failure`, `rpm_rows`,
 
 `client.watch(points)` watches many points at once (#2560) and returns a
 `Watch`, a `futures_core::Stream` of `Update`s (read it with
-`futures_util::StreamExt::next`). A point comes from a handle:
+`futures_util::StreamExt::next`). It is the one way an application
+watches; `watch::hub` is the layer under it. A point comes from a handle:
 `device.point("ai:1")`, `device.point("bv:3 pv")` or
 `device.point("ao:2 priority-array[8]")`, in the grammar `Device::read`
 takes. It names its device by the handle's `DeviceAddress`, so two devices
-sharing an instance are two points. A Present_Value is watched by
-SubscribeCOV on its object; any other property, or an element, by
-SubscribeCOVProperty.
+sharing an instance are two points, and one station named two ways is one.
+A Present_Value is watched by SubscribeCOV on its object; any other
+property, or an element, by SubscribeCOVProperty.
 
 ```rust
+use bacnet_ops::watch::{State, Why};
 use futures_util::StreamExt;
 
 let ahu = client.device("192.168.1.10").await?;
 let mut watch = client.watch([ahu.point("ai:1")?, ahu.point("bv:3 pv")?])?;
 while let Some(u) = watch.next().await {
-    let text = u.value.as_ref().map(|v| v.text.as_str()).unwrap_or("-");
-    println!("{} {text} via {:?} ({:?}, {:?})", u.point, u.via, u.state, u.why);
+    let text = u.value.as_ref().map_or("-", |v| v.text.as_str());
+    match &u.state {
+        State::Gone { why: Why::Moved { to } } => println!("moved to {to}"),
+        state => println!("{} {text} {:?} via {:?}", u.point, state, u.via),
+    }
 }
 ```
 
-An `Update` carries the `point`, its latest `value` (a `Value`, an object
-watch's Present_Value, named by the units and state texts the first read
-had), `error` (the device's error for the property or the whole object),
-`via` (`Via::First`, `Notification` or `Poll`), `source` (`Cov` or
-`Poll`), `state` (`Starting`, `Live`, `Failed`, `Unreachable`, `Stopped`,
-`Gone`), `why` (`Refused`, `NoAnswer`, `Lapsed`, `Missing` for a remote
-address with no router known, or `Moved { to }`; `None` while subscribed)
-and `cov`. The points share the client's own hub, made on first use: one
-subscription a point however many watches hold it, five minutes at a time
-and renewed before it ends; a point the device won't subscribe is polled
-with the device's other polled points, every 10 s at most; at most
-`watch::MAX_WATCHED` (4096) points; `OpsError::Watch` past that.
+An `Update` (`#[non_exhaustive]`) carries:
+
+- `point`;
+- `state`, one `watch::State`: `Starting`, `Subscribed`, `Polled { why }`,
+  `Unreachable { why }` or `Gone { why }`, where `why` is a `watch::Why`
+  (`Refused`, `NoAnswer`, `Full`, `Lapsed`, `Missing` for a remote address
+  with no router known, or `Moved { to }`);
+- `value` (a `Value`, an object watch's Present_Value, named by the units
+  and state texts the first read had) and `error`: `value` alone is
+  current; both together, a value read earlier while the latest read
+  failed; `error` alone, no value yet or the device answers the property
+  with an error; neither, no value yet;
+- `status_flags` (a `StatusFlags`, as read or notified with the value),
+  `via` (`Via::First`, `Notification` or `Poll`) and `updated` (a
+  `SystemTime`, by the wall clock, which an application shows, logs or
+  hands on; `elapsed()` is the value's age);
+- `cov`, a `CovSupport`.
+
+The points share the client's own hub, made on first use and kept while a
+watch holds a point, in one range of subscriber process identifiers for
+the client's life, with the client's base settings whichever clone calls:
+one subscription a point however many watches hold it, five minutes at a
+time and renewed before it ends; a point the device won't subscribe is
+polled with the device's other polled points, every 10 s at most; at most
+`watch::MAX_WATCHED` (4096) points, those still cancelling included.
+`OpsError::Watch(WatchError::Full { .. })` refuses points that would pass
+it, taking none and sending nothing, and `WatchError::NoRuntime` a call
+outside a Tokio runtime.
 
 The latest value of each point wins: a consumer that falls behind gets one
 update a point with its latest value and state (`Watch::folded` counts the
 changes folded away), nothing grows past one pending update a point, and
 the hub never waits for a watch. Dropping a watch lets its points go: a
-subscribed point no other watch holds is cancelled on the wire (a
-SubscribeCOV without a lifetime, through the device's gate; one the device
-doesn't answer within 30 s lapses with its lifetime), and a polled one
-stops being polled.
+subscribed point no other watch holds is cancelled on the wire with the
+request that made it, without a lifetime, through the device's gate. A
+device in its poll backoff, or one that leaves a cancel unanswered, is
+sent no more cancels, whose subscriptions lapse with their lifetimes, so
+dropping a silent device's points costs at most one cancel's wait. A
+polled point stops being polled. A non-empty watch never ends on its own:
+drop it to stop.
 
 A device that stops answering (a poll or a first read fails; a point whose
-renewal failed goes to the next poll) is looked for: as a following handle would after a timeout when one
-follows its instance (one Who-Is at most every `QUIET`), by the discovery
-table's I-Am times otherwise, as `Device::moved_to` does. A following
-handle that moves for a request of its own tells the hub too. Its points
-are then given up (`State::Gone`, `Why::Moved { to }`) and nothing more is
-sent to the old address; watch the point at `to`, which a following
-handle's `point` now gives. The hub doesn't follow on its own.
+renewal failed goes to the next poll) is looked for. Its points are given
+up (`State::Gone { why: Why::Moved { to } }`) only when the move is
+certain: no row at the address claims the instance any more (it is gone,
+or names another) and one other address does, or a following handle moved
+by its own rule (one Who-Is at most every `QUIET`), for the hub's request
+or one of its own. Announcement times alone, which `Device::moved_to`
+reports, never give a point up: a duplicate starting up while the device
+misses a request looks the same, so the point stays `Unreachable`, polled
+after its backoff. A given-up point is sent nothing more, though the old
+address may still notify it until its subscription lapses. The move
+doesn't stick: a point started at the address later starts as any other,
+and the given-up points start again once the address announces itself for
+the instance, or answers a start while the discovery table names it
+there. The hub doesn't follow a device on its own; watch the point at
+`to`, which a following handle's `point` now gives.
 
-`CovSupport` (`Unknown`, `NotOffered`, `Offered`, `Accepted`, `Refused`)
-says what is known of COV: `client.cov_support(&address)` for a device's
-SubscribeCOV, filled from Protocol_Services_Supported when
+`CovSupport` (`Unknown`, `NotOffered`, `Offered`, `Accepted`, `Refused`;
+`#[non_exhaustive]`) says what is known of COV: `device.cov_support()` for
+the device's SubscribeCOV, filled from Protocol_Services_Supported when
 `describe_device` reads it and from the hub's subscriptions, and
 `Update::cov` for one point. A device that refuses the service itself (an
 unknown service, or a services-class denial) is remembered by its address,
 as an RPM refusal is: its later points are polled without asking. A
-refusal for one object stays that point's own.
+refusal for one object stays that point's own, and a full subscription
+table (a resources-class error) is no refusal: the point is polled
+(`Why::Full`) and asked again after a backoff.
 
-Under `Client::watch` is the hub, for front ends that keep a history,
-serve several sessions or pick their own `WatchOptions` (the TUI's watch
-list and the MCP server): `Hub::new(client, options)`, `Hub::watch(point)`
-for a `Lease` with its `Snapshot`, change signal and `samples()`, and
-`peek`, `seq`, `stats` and `shutdown`.
+`watch::hub` is the layer under `Watch`, for a front end that runs its own
+hub (the TUI's watch list and the MCP server, which keep a history, serve
+several sessions and pick their settings): `Hub::new(client, options)`
+with `WatchOptions`, `Reads`, `Backoff`, `Fallback`, `MissingDevice` and
+`Lifetime`; `Hub::watch(point)` for a `Lease` with its `Snapshot` (the
+hub's own `hub::State` and `hub::Source`), its change signal (`Changes`)
+and `samples()` (`Samples`, `Sample`); `peek`, `seq`, `stats`
+(`HubStats`) and `shutdown`; `renewal_margin`, `first` and the poll and
+row constants.
 
 | Was | Now |
 |---|---|
-| `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; the hub keys entries, schedulers and subscription targets on the address and never looks the instance up |
+| `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
+| `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
+| `watch::{State, Source}` (the snapshot's) | `watch::hub::{State, Source}`; `watch::State` is the update's one state with its reason |
 | a point whose instance two addresses claim failing its start as ambiguous | two points, one an address |
 | `Why::Missing`: the instance not in the discovery table | `Why::Missing`: a remote address the table holds no router for; a local address is never missing |
-| a point following its instance to wherever the table placed it at each start and poll | the point stays at its address; a move ends it with `Why::Moved { to }` and `State::Gone` |
+| a point following its instance to wherever the table placed it at each start and poll | the point stays at its address; a certain move gives it up with `Why::Moved { to }` |
+| a full subscription table refusing the point for good | `Why::Full`, polled and asked again |
 | `Snapshot { .. }` | also `via` (how the latest values came) and `cov` (`CovSupport`) |
 | `Lease::point()` a copy | a clone |
+| `WatchError::{Full, Shut}` | `#[non_exhaustive]`, with `NoRuntime` |
 
 ### Moved to bacnet-tool
 

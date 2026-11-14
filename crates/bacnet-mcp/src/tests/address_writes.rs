@@ -175,9 +175,9 @@ async fn a_revert_sends_no_who_is_to_find_its_device() {
     lab.stop().await;
 }
 
-/// A device named by its address is watched there while another address
-/// claims its instance too (#2560): the hub keys points on the address,
-/// so the second claim makes no ambiguity.
+/// Two devices sharing an instance, each named by its address, are
+/// watched there (#2560): the hub keys points on the address, so neither
+/// claim makes the other ambiguous, and each row carries its address.
 #[tokio::test(start_paused = true)]
 async fn a_watch_by_address_ignores_another_claim_to_the_instance() {
     let mut lab = Lab::start(Policy::default()).await;
@@ -192,12 +192,22 @@ async fn a_watch_by_address_ignores_another_claim_to_the_instance() {
         known.values().filter(|instance| **instance == LAB).count()
     };
     until(&lab, |lab| claims(lab) == 2, "both claims are known").await;
-    let points = json!({ "points": [{ "device": "10.0.0.2:47808", "object": "ai:1" }] });
+    let points = json!({ "points": [
+        { "device": "10.0.0.2:47808", "object": "ai:1" },
+        { "device": "2001:0x33", "object": "ai:1" },
+    ] });
     let watch = lab.agent.call("bacnet_watch", points).await;
-    let point = &watch["structuredContent"]["points"][0];
-    assert!(point.get("error").is_none(), "{watch}");
-    assert_eq!(point["watched"], json!(true), "{watch}");
-    assert_eq!(point["device"], json!(LAB));
+    let rows = &watch["structuredContent"]["points"];
+    for (row, address) in [(&rows[0], "10.0.0.2:47808"), (&rows[1], "2001:0x33")] {
+        assert!(row.get("error").is_none(), "{watch}");
+        assert_eq!(row["watched"], json!(true), "{watch}");
+        assert_eq!(row["device"], json!(LAB));
+        // Each row says which device it is; the instance's URI names
+        // neither, and the row says so.
+        assert_eq!(row["address"], json!(address), "{watch}");
+        assert_eq!(row["uri_ambiguous"], json!(true), "{watch}");
+    }
+    assert_eq!(rows[0]["uri"], rows[1]["uri"]);
     lab.stop().await;
 }
 

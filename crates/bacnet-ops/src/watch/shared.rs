@@ -3,11 +3,13 @@
 //! of entries and devices. Every lock here is a std mutex held for a few
 //! field updates, never across an await. The order is the table's, then a
 //! device inbox's, then an entry's, then a [`Watch`](super::Watch)'s
-//! mailbox, which takes no other.
+//! mailbox, which takes no other. A watch is woken only once the entry's
+//! lock is let go ([`release`]).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::Waker;
 use std::time::{Duration, SystemTime};
 
 use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
@@ -15,10 +17,11 @@ use bacnet_types::enums::PropertyIdentifier;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::Instant;
 
+use super::hub::{Snapshot, Source, State};
 use super::options::MAX_ROWS;
 use super::sample::{Sample, Via};
 use super::stream::Listener;
-use super::{Point, Snapshot, Source, State, dispatch};
+use super::{Point, dispatch};
 use crate::device::DeviceAddress;
 use crate::format::{PropertyError, RawRow};
 
@@ -30,7 +33,7 @@ pub(super) struct Shared {
     state: Mutex<EntryState>,
     /// Carries the hub's counter at each change it signals.
     pub(super) signal: watch::Sender<u64>,
-    /// Every value the point gets, for [`Lease::samples`](super::Lease::samples).
+    /// Every value the point gets, for [`Lease::samples`](super::hub::Lease::samples).
     pub(super) samples: broadcast::Sender<Sample>,
     /// Set once to stop the entry.
     stop: watch::Sender<bool>,
@@ -52,12 +55,33 @@ pub(super) struct EntryState {
     pending: bool,
     /// The device's error for the whole object at the last read that
     /// failed so ([`State::Failed`]), for an update's `error`; `None` once
-    /// a read answers.
+    /// a read answers, a notification carries the watched property, or a
+    /// subscription is taken.
     pub(super) failure: Option<PropertyError>,
+    /// When the values last changed, by the wall clock, for an update.
+    pub(super) wall: Option<SystemTime>,
     /// The [`Watch`](super::Watch)es told of each signalled change: at
     /// most one a watch holding the point, and those dropped until the
     /// next change prunes them.
     pub(super) listeners: Vec<Listener>,
+    /// The wakers of the watches told of a change, woken by [`release`]
+    /// once this lock is let go.
+    wakers: Vec<Waker>,
+}
+
+impl EntryState {
+    /// Whether the watch has ended, given up or stopped: only a stop, or
+    /// a revival by the scheduler ([`Shared::revive`]), leaves it.
+    fn ended(&self) -> bool {
+        matches!(self.snapshot.state, State::Gone | State::Stopped)
+    }
+}
+
+/// Let `guard` go, then wake the watches a change under it told.
+pub(super) fn release(mut guard: MutexGuard<'_, EntryState>) {
+    let wakers = std::mem::take(&mut guard.wakers);
+    drop(guard);
+    wakers.into_iter().for_each(Waker::wake);
 }
 
 impl EntryState {
@@ -80,7 +104,9 @@ impl Shared {
                 last_signal: None,
                 pending: false,
                 failure: None,
+                wall: None,
                 listeners: Vec::new(),
+                wakers: Vec::new(),
             }),
             signal: watch::Sender::new(0),
             samples: broadcast::Sender::new(samples),
@@ -139,7 +165,7 @@ impl Shared {
                 state.pending = false;
                 state.last_signal = Some(now);
                 self.signal.send_replace(state.snapshot.seq);
-                post(&mut state.listeners);
+                post(state);
                 None
             }
         }
@@ -152,12 +178,14 @@ impl Shared {
             state.pending = false;
             state.last_signal = Some(Instant::now());
             self.signal.send_replace(state.snapshot.seq);
-            post(&mut state.listeners);
+            post(&mut state);
         }
+        release(state);
     }
 
     /// Change the watch's state and note without a value change; signalled
-    /// at once, since the state matters to listeners.
+    /// at once, since the state matters to listeners. A watch that has
+    /// ended stays so: only [`State::Stopped`] follows [`State::Gone`].
     pub(super) fn set_state(
         &self,
         seq: &AtomicU64,
@@ -166,6 +194,11 @@ impl Shared {
         note: Option<String>,
     ) {
         let mut entry = self.lock();
+        let leaves =
+            entry.ended() && !(entry.snapshot.state == State::Gone && state == State::Stopped);
+        if leaves {
+            return;
+        }
         let snapshot = &mut entry.snapshot;
         let new_source = source.is_some() && snapshot.source != source;
         if !new_source && snapshot.state == state && snapshot.note == note {
@@ -177,12 +210,26 @@ impl Shared {
         snapshot.state = state;
         snapshot.note = note;
         self.changed(&mut entry, seq, Duration::ZERO);
+        release(entry);
+    }
+
+    /// Start the watch again after it was given up, its reason cleared:
+    /// its device's address answers for its instance again.
+    pub(super) fn revive(&self, seq: &AtomicU64) {
+        let mut entry = self.lock();
+        let snapshot = &mut entry.snapshot;
+        snapshot.state = State::Starting;
+        snapshot.source = None;
+        snapshot.why = None;
+        snapshot.note = None;
+        self.changed(&mut entry, seq, Duration::ZERO);
+        release(entry);
     }
 
     /// Values read (a first read, or a poll when `poll`): fold them into
     /// the rows, mark the watch live, signal at once, and sample a poll's.
     /// A first read's sample waits for its start's outcome
-    /// ([`FirstSample`]).
+    /// ([`FirstSample`]). Nothing changes for a watch that has ended.
     ///
     /// A first read passes the instant it ended as `first_at`: a property a
     /// notification set at or after then keeps the notification's value
@@ -203,6 +250,9 @@ impl Shared {
         first_at: Option<Instant>,
     ) {
         let mut guard = self.lock();
+        if guard.ended() {
+            return;
+        }
         let state = &mut *guard;
         match first_at {
             Some(at) => {
@@ -217,6 +267,7 @@ impl Shared {
             None => fold(&mut state.snapshot.rows, &rows),
         }
         state.snapshot.updated = Some(Instant::now());
+        state.wall = Some(SystemTime::now());
         state.snapshot.state = State::Live;
         state.snapshot.via = Some(if poll { Via::Poll } else { Via::First });
         state.failure = None;
@@ -225,7 +276,7 @@ impl Shared {
             state.snapshot.source = Some(Source::Poll);
         }
         self.changed(state, seq, Duration::ZERO);
-        drop(guard);
+        release(guard);
         if poll {
             self.sample(Ok(rows), Via::Poll);
         }
@@ -290,9 +341,12 @@ impl Drop for Running {
 }
 
 /// Tell each live listener of a signalled change, dropping those whose
-/// watch is gone.
-fn post(listeners: &mut Vec<Listener>) {
-    listeners.retain(Listener::post);
+/// watch is gone; their wakers wait for [`release`].
+fn post(state: &mut EntryState) {
+    let EntryState {
+        listeners, wakers, ..
+    } = state;
+    listeners.retain(|listener| listener.post(wakers));
 }
 
 /// An entry on its way to its device's scheduler.
@@ -311,6 +365,9 @@ pub(super) struct DeviceSlot {
     ///
     /// [`ClientEvent::Moved`]: crate::device::ClientEvent::Moved
     pub(super) moved: Mutex<Option<(u32, DeviceAddress)>>,
+    /// Set by the notification receiver when a device at the address
+    /// announces itself: the instance it named.
+    pub(super) announced: Mutex<Option<u32>>,
     pub(super) wake: Notify,
 }
 
@@ -319,12 +376,21 @@ impl DeviceSlot {
         Self {
             inbox: Mutex::new(Vec::new()),
             moved: Mutex::new(None),
+            announced: Mutex::new(None),
             wake: Notify::new(),
         }
     }
 
     pub(super) fn inbox(&self) -> MutexGuard<'_, Vec<Arrival>> {
         self.inbox.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The instance a device at the address last announced, once.
+    pub(super) fn take_announced(&self) -> Option<u32> {
+        self.announced
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     /// The instance a following handle moved from the device's address,
@@ -439,6 +505,19 @@ impl Registry {
         }
     }
 
+    /// A device at `at` announced itself as `instance`: tell that address's
+    /// scheduler, if it has one.
+    pub(super) fn announced(&self, at: &DeviceAddress, instance: u32) {
+        let device = self.table().devices.get(at).cloned();
+        if let Some(device) = device {
+            *device
+                .announced
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(instance);
+            device.wake.notify_one();
+        }
+    }
+
     /// Apply a COV notification to the entry it names; the instant a
     /// held-back signal is due, the first time one is held back.
     pub(super) fn deliver(
@@ -459,14 +538,21 @@ impl Registry {
             received,
         );
         let now = Instant::now();
+        let watched = shared.point.property().0;
         for (property, _) in &merged {
             state.notified.insert(*property, now);
+            if *property == watched {
+                // A value of the watched property: the last read's error
+                // no longer stands.
+                state.failure = None;
+            }
         }
         state.snapshot.notifications += 1;
         state.snapshot.updated = Some(now);
+        state.wall = Some(SystemTime::now());
         state.snapshot.via = Some(Via::Notification);
         let due = shared.changed(&mut state, &self.seq, self.coalesce);
-        drop(state);
+        release(state);
         if !merged.is_empty() {
             shared.sample(Ok(merged), Via::Notification);
         }

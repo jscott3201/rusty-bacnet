@@ -1,23 +1,18 @@
-//! What the hub watches and reports: a [`Point`] by its device's address,
-//! and a point's [`Snapshot`] with how its watch goes ([`State`],
-//! [`Source`], [`Why`]).
+//! What a watch names and reports: a [`Point`] by its device's address,
+//! and [`Why`] a point is polled, unreachable or given up.
 
 use std::fmt;
 
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
-use tokio::time::Instant;
 
-use super::sample::Via;
-use super::support::CovSupport;
 use crate::device::DeviceAddress;
-use crate::format::RawRow;
 use crate::label::kebab;
 
 /// What a watch follows on an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Watched {
-    /// The object: SubscribeCOV, what [`Reads::object`](super::Reads::object)
+    /// The object: SubscribeCOV, what [`Reads::object`](super::hub::Reads::object)
     /// names read and polled. Its value is the Present_Value.
     Object,
     /// One property, or one element of it: SubscribeCOVProperty.
@@ -83,120 +78,35 @@ impl fmt::Display for Point {
     }
 }
 
-/// Where a point's values come from now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
-    /// COV notifications under a managed subscription.
-    Cov,
-    /// Polls, because the device refused COV or stopped renewing it.
-    Poll,
-}
-
-/// How a point's watch is going.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum State {
-    /// Its first read hasn't finished.
-    Starting,
-    /// Subscribed, or the last poll answered.
-    Live,
-    /// The device answered the last read with an error for the whole
-    /// object (see [`Snapshot::note`]).
-    Failed,
-    /// The device didn't answer the last request.
-    Unreachable,
-    /// The watch ended (the hub shut down).
-    Stopped,
-    /// Nothing watches it any more: no route to its address is known and
-    /// [`WatchOptions::missing`](super::WatchOptions::missing) says not to
-    /// wait ([`Why::Missing`]), or its device answers at another address
-    /// now ([`Why::Moved`]). See [`Snapshot::note`].
-    Gone,
-}
-
-/// Why a point is polled, unreachable or given up ([`Snapshot::why`]).
+/// Why a point is polled, unreachable or given up: inside a
+/// [`State`](super::State), and the hub's
+/// [`Snapshot::why`](super::hub::Snapshot::why).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Why {
     /// The device refused the subscription or didn't answer it, with the
     /// error; or it refused the service itself for another point before,
-    /// so it wasn't asked again ([`CovSupport::Refused`]).
+    /// so it wasn't asked again
+    /// ([`CovSupport::Refused`](super::CovSupport::Refused)).
     Refused(String),
     /// The first read had no answer, so no subscription was asked for.
     NoAnswer(String),
+    /// The device's subscription table was full, with its error: polled
+    /// meanwhile, and asked again after the COV retry's backoff.
+    Full(String),
     /// A renewal failed, with its error, or stopped.
     Lapsed(Option<String>),
     /// No route to the device's address is known: a remote network the
     /// discovery table holds no router for.
     Missing,
-    /// The device's instance answers at `to` now, while its address here
-    /// went quiet: its row there is gone or names another instance, or a
-    /// handle following the instance moved there. The point is given up
-    /// ([`State::Gone`]); watch the point at `to` instead. The hub doesn't
-    /// follow it.
+    /// The device's instance answers at `to` now, certainly: no row at
+    /// its old address claims it any more (it is gone, or names another)
+    /// and only `to` does, or a handle following the instance moved there.
+    /// The point is given up ([`State::Gone`](super::State::Gone)); watch
+    /// the point at `to` instead. The hub doesn't follow it, but starts the
+    /// point again if the old address answers for the instance again.
     Moved {
         /// Where the device answers now.
         to: DeviceAddress,
     },
-}
-
-/// A point's latest values and how its watch is going.
-#[derive(Debug, Clone)]
-pub struct Snapshot {
-    /// Each property's latest raw value, or why the device gave none.
-    pub rows: Vec<RawRow>,
-    /// Where the values come from; `None` before the first read.
-    pub source: Option<Source>,
-    /// How the latest values came; `None` before any.
-    pub via: Option<Via>,
-    /// How the watch is going.
-    pub state: State,
-    /// Why the point is polled or not live, as text.
-    pub note: Option<String>,
-    /// The hub's sequence number at the last change; 0 before any.
-    pub seq: u64,
-    /// When the values last changed.
-    pub updated: Option<Instant>,
-    /// COV notifications applied.
-    pub notifications: u64,
-    /// Changes folded into another's signal.
-    pub coalesced: u64,
-    /// Polls answered.
-    pub polls: u64,
-    /// Renewals the device took.
-    pub renewals: u64,
-    /// Why the point is polled, or was given up, as its start, a failed
-    /// renewal or a move found; a poll's error, which goes to
-    /// [`note`](Self::note), leaves it. `None` while subscribed, and
-    /// before the first start ends.
-    pub why: Option<Why>,
-    /// What is known of COV for this point: the device's own answer to
-    /// its subscription once asked, before that what the device declared
-    /// or did for its other points.
-    pub cov: CovSupport,
-}
-
-impl Default for Snapshot {
-    /// A point not read yet: starting, no rows, nothing counted.
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Snapshot {
-    pub(super) fn new() -> Self {
-        Self {
-            rows: Vec::new(),
-            source: None,
-            via: None,
-            state: State::Starting,
-            note: None,
-            seq: 0,
-            updated: None,
-            notifications: 0,
-            coalesced: 0,
-            polls: 0,
-            renewals: 0,
-            why: None,
-            cov: CovSupport::Unknown,
-        }
-    }
 }

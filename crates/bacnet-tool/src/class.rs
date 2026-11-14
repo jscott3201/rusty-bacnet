@@ -152,7 +152,7 @@ mod tests {
         // The watch hub's lifetimes are finite, so its subscriptions are
         // reads.
         assert_eq!(
-            of_subscribe(bacnet_ops::watch::Lifetime::DEFAULT.secs()),
+            of_subscribe(bacnet_ops::watch::hub::Lifetime::DEFAULT.secs()),
             Read
         );
         assert_eq!(of_subscribe(300), Read);

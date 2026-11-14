@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;
-use bacnet_ops::watch::{Hub, Point, WatchOptions, Watched};
+use bacnet_ops::watch::hub::{Hub, WatchOptions};
+use bacnet_ops::watch::{Point, Watched};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde_json::json;

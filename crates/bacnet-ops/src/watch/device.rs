@@ -16,11 +16,18 @@
 //!
 //! When a request goes unanswered (a poll, a first read, a subscription;
 //! a point whose renewal failed goes to the next poll), a job asks where
-//! the device's instance went; a move found there, or one a following
-//! handle made ([`DeviceSlot::moved`]), gives every point up with
-//! [`Why::Moved`]. Their renewals stop and nothing more is sent to the old
-//! address, cancels included: a subscription still held there lapses with
-//! its lifetime.
+//! the device's instance went. A move that is certain there, or one a
+//! following handle made ([`DeviceSlot::moved`]), gives every point up
+//! with [`Why::Moved`]: their renewals stop and nothing more is sent for
+//! them, cancels included, so a subscription still held there lapses with
+//! its lifetime. The move doesn't stick: a point arriving later starts as
+//! any other, and the given-up points start again once the address
+//! answers or announces itself for the instance again.
+//!
+//! Cancels go while the device answers. One it leaves unanswered puts the
+//! device in its poll backoff, and while it is there the cancels left are
+//! not sent, so dropping every point of a silent device costs at most one
+//! cancel's wait.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
@@ -34,11 +41,13 @@ use bacnet_transport::port::TransportPort;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::time::Instant;
 
+use super::Why;
+use super::hub::{Inner, MISSING, Source, State};
 use super::jobs::{self, Outcome, Polled, Started};
 use super::options::MissingDevice;
 use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
-use super::{Inner, MISSING, Source, State, Why};
+use super::support::fills_table;
 use crate::client::batch::Missing;
 use crate::client::unreachable;
 use crate::device::DeviceAddress;
@@ -75,6 +84,9 @@ struct Row {
     target: Option<CovTarget>,
     /// Removed while starting: cancel once the start ends.
     removing: bool,
+    /// Given up because its device answers elsewhere now: started again
+    /// if its address answers for the instance again.
+    moved: bool,
     /// A subscription may exist although the point isn't subscribed: a
     /// request that went unanswered, or a renewal that failed.
     maybe_subscribed: bool,
@@ -105,8 +117,12 @@ enum Holder {
 }
 
 enum Done {
-    Started { process: u32, started: Box<Started> },
-    Cancelled(Holder),
+    Started {
+        process: u32,
+        started: Box<Started>,
+    },
+    /// A cancel ended; whether the device answered it.
+    Cancelled(Holder, bool),
     Polled(Polled),
     Located(Option<DeviceAddress>),
 }
@@ -121,9 +137,10 @@ struct Device<T: TransportPort + 'static> {
     instance: Option<u32>,
     /// A locate is queued or running.
     locating: bool,
-    /// Where the device answers now, once a move was found: every point
-    /// here is given up, those arriving or starting since included.
-    moved_to: Option<DeviceAddress>,
+    /// The instance whose points were given up as moved here, while any
+    /// is: they start again when the address answers or announces itself
+    /// for it.
+    moved: Option<u32>,
     rows: BTreeMap<u32, Row>,
     ops: VecDeque<Op>,
     /// The device stopped answering polls: the current backoff, and when
@@ -145,7 +162,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         address,
         instance: None,
         locating: false,
-        moved_to: None,
+        moved: None,
         rows: BTreeMap::new(),
         ops: VecDeque::new(),
         backoff: Duration::ZERO,
@@ -164,6 +181,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
             if device.instance.is_none_or(|known| known == instance) {
                 device.moved(to);
             }
+        }
+        if let Some(instance) = slot.take_announced() {
+            device.answered_for(Some(instance));
         }
         device.reap();
         if job.is_none() {
@@ -211,24 +231,21 @@ impl<T: TransportPort + 'static> Device<T> {
         &self.inner.registry.seq
     }
 
-    /// Take in points handed to the device; once it has moved, given up
-    /// at once.
+    /// Take in points handed to the device.
     fn arrive(&mut self, arrivals: Vec<Arrival>) {
         for Arrival { shared, running } in arrivals {
             let process = shared.process;
-            let mut row = Row {
+            let row = Row {
                 shared,
                 running,
                 mode: Mode::Queued,
                 target: None,
                 removing: false,
+                moved: false,
                 maybe_subscribed: false,
                 resubscribe: None,
             };
-            match &self.moved_to {
-                Some(to) => give_up(&mut row, to, self.seq()),
-                None => self.ops.push_back(Op::Start(process)),
-            }
+            self.ops.push_back(Op::Start(process));
             self.rows.insert(process, row);
         }
     }
@@ -311,11 +328,30 @@ impl<T: TransportPort + 'static> Device<T> {
         drop(row.running);
     }
 
+    /// Whether the device is in its backoff: it left a poll or a cancel
+    /// unanswered, and isn't due to be polled again yet.
+    fn backing_off(&self) -> bool {
+        self.retry_at.is_some_and(|at| at > Instant::now())
+    }
+
     /// Start the next job, if the device is idle and one is due: a queued
-    /// start or cancel first, then a poll of its polled points.
+    /// start or cancel first, then a poll of its polled points. A cancel
+    /// due while the device backs off ends without a request.
     fn launch(&mut self) -> Option<Job> {
         let inner = Arc::clone(&self.inner);
         let account = Arc::clone(&inner.account);
+        while matches!(self.ops.front(), Some(Op::Cancel { .. })) && self.backing_off() {
+            let Some(Op::Cancel { holder, .. }) = self.ops.pop_front() else {
+                break;
+            };
+            // Its managed subscription, dropped with the op, stops renewing;
+            // the device's subscription lapses with its lifetime.
+            tracing::debug!(
+                "device at {} is backing off: a cancel is left to lapse",
+                self.address
+            );
+            self.done(Done::Cancelled(holder, false));
+        }
         match self.ops.pop_front() {
             Some(Op::Start(process)) => {
                 let row = self.rows.get_mut(&process)?;
@@ -344,13 +380,13 @@ impl<T: TransportPort + 'static> Device<T> {
                 let process = shared.process;
                 let point = shared.point.clone();
                 Some(Box::pin(async move {
-                    jobs::cancel(inner, process, point, target, managed).await;
-                    Done::Cancelled(holder)
+                    let answered = jobs::cancel(inner, process, point, target, managed).await;
+                    Done::Cancelled(holder, answered)
                 }))
             }
             None => {
                 let now = Instant::now();
-                if self.retry_at.is_some_and(|at| at > now)
+                if self.backing_off()
                     || self.last_polled.is_some_and(|at| {
                         now.saturating_duration_since(at) < inner.options.poll_every
                     })
@@ -378,7 +414,7 @@ impl<T: TransportPort + 'static> Device<T> {
     fn done(&mut self, done: Done) {
         match done {
             Done::Started { process, started } => self.started(process, *started),
-            Done::Cancelled(holder) => {
+            Done::Cancelled(holder, answered) => {
                 self.inner
                     .registry
                     .cancelling
@@ -386,6 +422,9 @@ impl<T: TransportPort + 'static> Device<T> {
                 match holder {
                     Holder::Row(row) => self.finish(*row),
                     Holder::Alone(running) => drop(running),
+                }
+                if !answered && !self.backing_off() {
+                    self.back_off();
                 }
             }
             Done::Polled(polled) => self.polled(polled),
@@ -407,25 +446,59 @@ impl<T: TransportPort + 'static> Device<T> {
         }
     }
 
+    /// Wait before the next poll, longer each time in a row: the device
+    /// left a request unanswered.
+    fn back_off(&mut self) {
+        self.backoff = self.inner.options.poll_backoff.next(self.backoff);
+        self.retry_at = Some(Instant::now() + self.backoff);
+    }
+
     /// The device answers at `to` now: give every point up, stopping its
-    /// renewals and sending nothing more to this address. A point whose
-    /// start is running is given up when it ends.
+    /// renewals and sending nothing more for them. A point whose start is
+    /// running decides by its own answer.
     fn moved(&mut self, to: DeviceAddress) {
-        if self.moved_to.is_some() {
-            return;
-        }
         tracing::info!(
-            "device at {} answers at {to} now; its watches end",
+            "device at {} answers at {to} now; its watches stop",
             self.address
         );
         self.ops.retain(|op| !matches!(op, Op::Start(_)));
         let seq = &self.inner.registry.seq;
+        let mut gave_up = false;
         for row in self.rows.values_mut() {
             if !matches!(row.mode, Mode::Gone | Mode::Starting) && !row.removing {
                 give_up(row, &to, seq);
+                gave_up = true;
             }
         }
-        self.moved_to = Some(to);
+        if gave_up {
+            self.moved = self.moved.or(self.instance);
+        }
+    }
+
+    /// The device at the address answered, or announced itself, for
+    /// `instance`: when that is the instance whose points were given up as
+    /// moved, they start again.
+    fn answered_for(&mut self, instance: Option<u32>) {
+        let (Some(moved), Some(instance)) = (self.moved, instance) else {
+            return;
+        };
+        if moved != instance {
+            return;
+        }
+        tracing::info!(
+            "device {instance} answers at {} again; its watches start again",
+            self.address
+        );
+        self.moved = None;
+        let seq = &self.inner.registry.seq;
+        for (process, row) in &mut self.rows {
+            if row.moved && matches!(row.mode, Mode::Gone) && !row.removing {
+                row.moved = false;
+                row.mode = Mode::Queued;
+                row.shared.revive(seq);
+                self.ops.push_back(Op::Start(*process));
+            }
+        }
     }
 
     fn started(&mut self, process: u32, started: Started) {
@@ -448,18 +521,6 @@ impl<T: TransportPort + 'static> Device<T> {
             self.instance = started.instance;
         }
         shared.lock().snapshot.cov = started.cov;
-        if let Some(to) = &self.moved_to {
-            // Moved while this start ran: nothing more goes to this
-            // address, so what the start made lapses with its lifetime, as
-            // the device's other points' subscriptions do.
-            if leaving {
-                let row = self.rows.remove(&process).expect("looked up above");
-                self.finish(row);
-            } else {
-                give_up(row, to, seq);
-            }
-            return;
-        }
         let Some(first) = started.first else {
             // No route to the device is known.
             let address = &shared.point.device;
@@ -536,9 +597,12 @@ impl<T: TransportPort + 'static> Device<T> {
                 shared.set_state(seq, source, state, Some(note));
             }
         }
-        // A failure for want of an answer retries; a refusal doesn't.
+        // A subscription with no answer, or one refused for a full table,
+        // is asked for again; any other refusal isn't.
+        let unanswered = matches!(&started.outcome, Outcome::Asked(Err(e)) if unreachable(e));
+        let full = matches!(&started.outcome, Outcome::Asked(Err(e)) if fills_table(e));
         let transient = match &started.outcome {
-            Outcome::Asked(Err(error)) => unreachable(error),
+            Outcome::Asked(Err(_)) => unanswered || full,
             Outcome::Refused => false,
             Outcome::Asked(Ok(_)) | Outcome::NotAsked => true,
         };
@@ -554,17 +618,25 @@ impl<T: TransportPort + 'static> Device<T> {
                 row.mode = Mode::Cov(Box::new(managed), events);
                 row.resubscribe = None;
                 row.maybe_subscribed = false;
-                shared.lock().snapshot.why = None;
+                {
+                    let mut entry = shared.lock();
+                    entry.snapshot.why = None;
+                    // Subscribed: a first read's error no longer stands.
+                    entry.failure = None;
+                }
                 shared.set_state(seq, Some(Source::Cov), State::Live, None);
+                if read_first {
+                    self.answered_for(started.instance);
+                }
                 return;
             }
             Outcome::Asked(Err(error)) => Some(error.to_string()),
             Outcome::Refused => Some(REFUSED_BEFORE.to_string()),
             Outcome::NotAsked => None,
         };
-        lost |= refusal.is_some() && transient;
+        lost |= unanswered;
         // An unanswered subscription may have reached the device.
-        row.maybe_subscribed |= refusal.is_some() && transient;
+        row.maybe_subscribed |= unanswered;
         if leaving {
             let row = self.rows.remove(&process).expect("looked up above");
             self.cancel(row, None);
@@ -583,21 +655,25 @@ impl<T: TransportPort + 'static> Device<T> {
             (Instant::now() + wait, wait)
         });
         if let Some(error) = refusal {
-            let state = if transient {
+            let state = if unanswered {
                 State::Unreachable
             } else {
                 shared.lock().snapshot.state
             };
-            shared.lock().snapshot.why = Some(Why::Refused(error.clone()));
-            shared.set_state(
-                seq,
-                Some(Source::Poll),
-                state,
-                Some(format!("COV refused: {error}")),
-            );
+            let (why, note) = if full {
+                let note = format!("COV table full: {error}");
+                (Why::Full(error), note)
+            } else {
+                let note = format!("COV refused: {error}");
+                (Why::Refused(error), note)
+            };
+            shared.lock().snapshot.why = Some(why);
+            shared.set_state(seq, Some(Source::Poll), state, Some(note));
         }
         if lost {
             self.locate();
+        } else if read_first {
+            self.answered_for(started.instance);
         }
     }
 
@@ -606,8 +682,7 @@ impl<T: TransportPort + 'static> Device<T> {
         self.last_polled = Some(now);
         let unreachable = polled.unreachable();
         if unreachable {
-            self.backoff = self.inner.options.poll_backoff.next(self.backoff);
-            self.retry_at = Some(now + self.backoff);
+            self.back_off();
             tracing::info!(
                 "device at {} isn't answering polls; next try in {} s",
                 self.address,
@@ -638,8 +713,10 @@ impl<T: TransportPort + 'static> Device<T> {
             shared.set_state(seq, Some(Source::Poll), state, Some(error.clone()));
             shared.sample(Err(error), Via::Poll);
         };
+        // A point given up while the poll was out stays so.
+        let live = |row: &&Row| !matches!(row.mode, Mode::Gone);
         for (process, rows) in rows {
-            let Some(row) = self.rows.get(&process) else {
+            let Some(row) = self.rows.get(&process).filter(live) else {
                 continue;
             };
             match rows {
@@ -649,7 +726,7 @@ impl<T: TransportPort + 'static> Device<T> {
         }
         if let Some(error) = stopped {
             for process in unread {
-                if let Some(row) = self.rows.get(&process) {
+                if let Some(row) = self.rows.get(&process).filter(live) {
                     failed(row, error.clone(), PropertyError::Other(error.clone()));
                 }
             }
@@ -718,6 +795,7 @@ impl<T: TransportPort + 'static> Device<T> {
 /// the old address may hold lapses with its lifetime.
 fn give_up(row: &mut Row, to: &DeviceAddress, seq: &std::sync::atomic::AtomicU64) {
     row.mode = Mode::Gone;
+    row.moved = true;
     row.maybe_subscribed = false;
     row.resubscribe = None;
     row.shared.lock().snapshot.why = Some(Why::Moved { to: to.clone() });

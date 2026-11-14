@@ -9,7 +9,8 @@
 use std::time::Duration;
 
 use bacnet_ops::parse::{parse_object_specifier, parse_property};
-use bacnet_ops::watch::{Point, State, Watched};
+use bacnet_ops::watch::hub::State;
+use bacnet_ops::watch::{Point, Watched};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::primitives::ObjectIdentifier;
 use serde::Deserialize;
@@ -86,7 +87,19 @@ fn output() -> Value {
                 "type": "object",
                 "properties": {
                     "uri": { "type": "string" },
+                    "uri_ambiguous": {
+                        "type": "boolean",
+                        "description": "Set when another address claims the device's \
+                                        instance too: the uri names the device by its \
+                                        instance, so it names neither; follow this point \
+                                        with bacnet_watch by its address",
+                    },
                     "device": { "type": "integer" },
+                    "address": {
+                        "type": "string",
+                        "description": "Where the device answers: two devices sharing an \
+                                        instance have two",
+                    },
                     "object": { "type": "string" },
                     "property": { "type": "string" },
                     "changed": { "type": "boolean" },
@@ -135,6 +148,11 @@ struct PointArg {
     property: Option<String>,
 }
 
+/// A point the call watches: as its resource names it, as the hub keys it,
+/// and whether another address claims its instance, so the URI names
+/// neither.
+type Watching = (PointUri, Point, bool);
+
 /// What a point argument asks for, parsed: nothing is sent for a bad one.
 fn watched(arg: &PointArg) -> Result<(ObjectIdentifier, Watched), ToolError> {
     let (object_type, instance) =
@@ -180,7 +198,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
     ctx.subs.expire_tool(TOOL_IDLE);
     // Each point at the address the call's device names: two devices
     // sharing an instance, named by their addresses, are two points.
-    let mut rows: Vec<Result<(PointUri, Point), (String, Value)>> = Vec::new();
+    let mut rows: Vec<Result<Watching, (String, Value)>> = Vec::new();
     for (arg, (object, watched)) in args.points.iter().zip(parsed) {
         let row = match ctx.device(call, &arg.device).await {
             Ok(device) => {
@@ -189,9 +207,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
                     object,
                     watched,
                 };
+                let contested = ctx.claims(device.instance, None).await.len() > 1;
                 let point = uri.at(device.address);
                 match ctx.subs.tool_watch(ctx, point.clone()) {
-                    Ok(()) => Ok((uri, point)),
+                    Ok(()) => Ok((uri, point, contested)),
                     Err(SHUTTING_DOWN) => {
                         let error =
                             ToolError::refused(SHUTTING_DOWN, "the server is shutting down");
@@ -219,7 +238,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
     // them, within the budget.
     let deadline = (Instant::now() + FIRST_READ).min(call.deadline);
     while Instant::now() < deadline
-        && rows.iter().flatten().any(|(_, point)| {
+        && rows.iter().flatten().any(|(_, point, _)| {
             hub.peek(point).is_some_and(|snapshot| {
                 snapshot.source.is_none() && matches!(snapshot.state, State::Starting | State::Live)
             })
@@ -233,15 +252,20 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let points: Vec<Value> = rows
         .into_iter()
         .map(|row| match row {
-            Ok((uri, point)) => {
+            Ok((uri, point, contested)) => {
+                let address = point.device.to_string();
                 let Some(snapshot) = hub.peek(&point) else {
-                    return json!({ "uri": of_point(&uri), "error": { "error": "failed",
-                        "message": "the watch ended" } });
+                    return json!({ "uri": of_point(&uri), "address": address,
+                        "error": { "error": "failed", "message": "the watch ended" } });
                 };
                 let changed = since.is_none_or(|since| snapshot.seq > since);
                 let rows = if changed { &snapshot.rows[..] } else { &[] };
                 let mut body = point_body(ctx, &uri, rows, Some(&snapshot));
                 body["uri"] = json!(of_point(&uri));
+                body["address"] = json!(address);
+                if contested {
+                    body["uri_ambiguous"] = json!(true);
+                }
                 body["changed"] = json!(changed);
                 if !changed && let Some(map) = body.as_object_mut() {
                     map.remove("values");

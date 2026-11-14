@@ -34,7 +34,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use bacnet_ops::watch::{Changes, Lease, Point, WatchError};
+use bacnet_ops::watch::hub::{Changes, Lease};
+use bacnet_ops::watch::{Point, WatchError};
 use bacnet_transport::port::TransportPort;
 use rmcp::ErrorData;
 use rmcp::service::SubscriptionContext;
@@ -259,8 +260,8 @@ impl Subs {
             return Err("principal-cap");
         }
         let lease = hub.watch(point.clone()).map_err(|e| match e {
-            WatchError::Shut => SHUTTING_DOWN,
             WatchError::Full { .. } => "process-cap",
+            _ => SHUTTING_DOWN,
         })?;
         if new {
             *points.entry(point.clone()).or_default() += 1;
