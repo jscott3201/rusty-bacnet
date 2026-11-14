@@ -8,8 +8,8 @@
 
 use std::time::{Duration, Instant};
 
-use bacnet_ops::class::Class;
 use bacnet_ops::parse::{parse_property, parse_value_for};
+use bacnet_tool::class::Class;
 use bacnet_types::enums::PropertyIdentifier;
 
 use super::browser::ViewState;
@@ -31,7 +31,7 @@ pub(crate) const CONFIRM_GUARD: Duration = Duration::from_millis(300);
 
 /// How long a preview may wait for its confirmation before it is
 /// declined as stale.
-pub(crate) const PREVIEW_LIFETIME: Duration = bacnet_ops::safety::PREVIEW_LIFETIME;
+pub(crate) const PREVIEW_LIFETIME: Duration = bacnet_tool::safety::PREVIEW_LIFETIME;
 
 /// What `w` says in a read-only session.
 pub(crate) const ARM_HINT: &str = "Read-only: press W to arm a write session first.";

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use bacnet_ops::destination::{self, Destination};
+use crate::destination::{self, Destination};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::mstp::{LoopbackSerial, MstpTransport};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

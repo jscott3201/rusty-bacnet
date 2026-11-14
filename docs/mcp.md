@@ -16,11 +16,11 @@ page. Experimental in 0.15.
 |---|---|---|
 | `bacnet-mcp` | `crates/bacnet-mcp` | `McpServer<T>`: the tool surface, prompts, policy, untrusted-text envelope, signed cursors. Out of `default-members`; publishable, because the CLI depends on it. Default feature `stdio`. |
 | Engine extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn_on` and `slot`; per-caller `Account` and `TokenBucket` through `limits::charged`; `Engine::who_is`, `discover_routers`, `devices`, `device`, `address_style`; `read_trend` charged per request; `alarm_summary` and `enrollment_summary`; `inventory_device` and `inventory_object`, the 223 export's reads a page at a time (#2436) |
-| Decoder | `bacnet-ops::decode` | The capture screen's frame summary and field tree, moved from the CLI for `bacnet_decode`: any tapped link (B/IP, B/IPv6, BACnet/SC, MS/TP), or a bare NPDU or APDU; a field quoting a character string is marked as device text |
+| Decoder | `bacnet-tool::decode` | The capture screen's frame summary and field tree, moved from the CLI for `bacnet_decode`: any tapped link (B/IP, B/IPv6, BACnet/SC, MS/TP), or a bare NPDU or APDU; a field quoting a character string is marked as device text |
 | Watch hub | `bacnet-ops::watch` | `Hub`: one managed COV subscription or poller per point, shared by every listener, holding the latest values (phase 2); `Engine::device_events` |
-| `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]`, `connect [--profile NAME]` (#2185) and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles; the release binaries include it from 0.15.0, and a source build enables it with `--features mcp`). Classified `Read` in `bacnet_ops::class`. |
+| `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]`, `connect [--profile NAME]` (#2185) and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles; the release binaries include it from 0.15.0, and a source build enables it with `--features mcp`). Classified `Read` in `bacnet_tool::class`. |
 | `[mcp]` profile table | `crates/bacnet-cli/src/tui/profile/mcp.rs` | networks, devices, slow and fast networks, broad discovery, rates and caps; `mcp_writes`, `mcp_arm` and `[mcp.plan]` (#2068) |
-| Write safety core | `bacnet-ops::safety` | The TUI's plan, ledger, audit log and workspace lock, and the engine half of a write (`desk`: pre-image reads, the stale check, the ledger and audit around each send, revert), shared by the TUI and MCP (#2068) |
+| Write safety core | `bacnet-tool::safety` | The TUI's plan, ledger, audit log and workspace lock, and the engine half of a write (`desk`: pre-image reads, the stale check, the ledger and audit around each send, revert), shared by the TUI and MCP (#2068) |
 | Writes | `crates/bacnet-mcp/src/writes/`, `tools/write.rs`, `tools/revert.rs` | The write session, the approvers (`ClientElicitation`, `PlanApprover`, `Deny`), the sealed confirmation state, and the two write tools |
 | Attached mode | `crates/bacnet-mcp/src/attach/`, `crates/bacnet-cli/src/tui/attach.rs` | The TUI's local socket or, on Windows, named pipe (`attach::Listener`), the peer checks, and `bacnet mcp connect`'s bridge (`attach::bridge`) (#2185, #2201) |
 
@@ -360,7 +360,7 @@ J.2.3 and J.2.7), and returns them under `bbmd` with a verdict.
   consistency check compares only the tables read, so its work is bounded
   by the 16 reads, not by what the tables list. A survey whose every read
   the call's budget left unsent gives its minute back. The table
-  rows, the survey and the consistency matrix are `bacnet_ops::bbmd`'s,
+  rows, the table reads, the survey and the consistency matrix are `bacnet_tool::bbmd`'s,
   shared with the TUI's Network screen.
 
 ## Writes
@@ -370,7 +370,7 @@ Phase 3 (#2068). Off by default: with the `[mcp]` table's `mcp_writes =
 profile allows. `mcp_writes = "elicit"` lists `bacnet_write` and
 `bacnet_revert` (`readOnlyHint: false`, `destructiveHint: true`) and needs
 the profile's workspace, which holds the ledger and audit log the TUI uses.
-Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
+Writes go through `bacnet_tool::safety`: the TUI's planner, tiers, ledger
 (entries marked `front_end: mcp` with the principal) and audit log.
 
 - **`bacnet_write`**: `device`, `writes` (1 to 20: `object`, `property`

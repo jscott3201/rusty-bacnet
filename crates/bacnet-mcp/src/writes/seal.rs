@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
 /// How long a confirmation stays good: the TUI's preview timeout.
-pub(crate) const LIFETIME: Duration = bacnet_ops::safety::PREVIEW_LIFETIME;
+pub(crate) const LIFETIME: Duration = bacnet_tool::safety::PREVIEW_LIFETIME;
 
 /// What a confirmation binds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

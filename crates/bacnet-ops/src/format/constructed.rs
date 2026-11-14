@@ -207,7 +207,7 @@ fn timestamp(
 }
 
 /// A timestamp as text: a time, `seq 12`, or a date and time.
-pub(crate) fn timestamp_text(stamp: &BACnetTimeStamp) -> String {
+pub fn timestamp_text(stamp: &BACnetTimeStamp) -> String {
     match stamp {
         BACnetTimeStamp::Time(time) => time_text(time),
         BACnetTimeStamp::SequenceNumber(n) => format!("seq {n}"),

@@ -10,7 +10,7 @@ use bytes::BytesMut;
 
 use super::tests::{ctx_string, holds, masked_in_place, npdu, reinit_npdu, request};
 use super::*;
-use bacnet_ops::decode::testing;
+use bacnet_tool::decode::testing;
 
 const DCC: ConfirmedServiceChoice = ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL;
 const REINIT: ConfirmedServiceChoice = ConfirmedServiceChoice::REINITIALIZE_DEVICE;

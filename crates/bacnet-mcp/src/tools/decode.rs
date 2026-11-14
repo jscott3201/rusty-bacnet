@@ -1,13 +1,13 @@
 //! `bacnet_decode`: a frame, NPDU or APDU the agent passes as hex, decoded
-//! by the capture screen's decoder (`bacnet_ops::decode`). Nothing is sent,
+//! by the capture screen's decoder (`bacnet_tool::decode`). Nothing is sent,
 //! so it works in passive mode.
 //!
 //! The octets are the agent's, but whatever wrote them chose any character
 //! string inside: those come back as untrusted envelopes, like any device
 //! text.
 
-use bacnet_ops::decode::frame::{FrameSummary, Framing, summarize_frame, summarize_npdu};
-use bacnet_ops::decode::tree::{Field, decode_apdu_tree, decode_npdu_tree, decode_tree};
+use bacnet_tool::decode::frame::{FrameSummary, Framing, summarize_frame, summarize_npdu};
+use bacnet_tool::decode::tree::{Field, decode_apdu_tree, decode_npdu_tree, decode_tree};
 use bacnet_transport::port::TransportPort;
 use serde::Deserialize;
 use serde_json::{Value, json};

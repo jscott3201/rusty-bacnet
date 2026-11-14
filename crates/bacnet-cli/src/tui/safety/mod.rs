@@ -1,5 +1,5 @@
 //! The TUI's write-safety model (#964; `docs/design/tui.md` section 5):
-//! the shared core in `bacnet_ops::safety` (levels, tiers, previews, the
+//! the shared core in `bacnet_tool::safety` (levels, tiers, previews, the
 //! ledger, the audit log and the workspace lock, #2068), and what only the
 //! TUI has:
 //!
@@ -10,19 +10,19 @@
 //! - the messages between the app and its write worker.
 //!
 //! The app decides what the user may do; the worker checks the same rules
-//! again before it sends anything (through `bacnet_ops::safety::desk`),
+//! again before it sends anything (through `bacnet_tool::safety::desk`),
 //! owns the ledger and the audit log, and records every outcome even when
 //! the session ends under a write.
 
 pub(crate) mod audit;
 pub(crate) mod manage;
 
-pub(crate) use bacnet_ops::safety::{
+pub(crate) use bacnet_tool::safety::{
     DEFAULT_MINUTES, Effect, FrontEnd, Gate, Level, MAX_MINUTES, Occupancy, Outcome, Planned,
     Preview, Tier, WriteSpec, ledger,
 };
 #[cfg(test)]
-pub(crate) use bacnet_ops::safety::{Stored, plan};
+pub(crate) use bacnet_tool::safety::{Stored, plan};
 
 use self::ledger::Entry;
 use super::profile::Safety;

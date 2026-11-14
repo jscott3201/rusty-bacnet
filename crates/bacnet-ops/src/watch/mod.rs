@@ -37,8 +37,8 @@
 //! shutdown isn't held to it.
 //!
 //! Lifetimes are finite by construction ([`Lifetime`] can't be zero): a
-//! subscription that never lapses is a write in [`crate::class`], and the
-//! hub never sends one.
+//! subscription that never lapses is a write in the `bacnet` tool's
+//! command classes (`bacnet_tool::class`), and the hub never sends one.
 //!
 //! [`BACnetClient::cov_notifications`]: bacnet_client::client::BACnetClient::cov_notifications
 
@@ -69,7 +69,6 @@ pub use self::options::{
 };
 pub use self::sample::{Sample, Samples, Via};
 use self::shared::{Arrival, DeviceSlot, Registry, Running, Shared};
-use crate::class::{self, Class};
 use crate::engine::Engine;
 use crate::format::RawRow;
 use crate::limits::Account;
@@ -126,7 +125,6 @@ impl Lifetime {
     /// A lifetime of `secs`; `None` for 0.
     pub fn new(secs: u32) -> Option<Self> {
         let secs = NonZeroU32::new(secs)?;
-        debug_assert_eq!(class::of_subscribe(secs.get()), Class::Read);
         Some(Self(secs))
     }
 

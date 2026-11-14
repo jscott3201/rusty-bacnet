@@ -1,7 +1,7 @@
-//! The shared class table ([`bacnet_ops::class`]) against this binary's
+//! The shared class table ([`bacnet_tool::class`]) against this binary's
 //! clap definitions. The table's own pin test lives with it.
 
-use bacnet_ops::class::{COMMANDS, of};
+use bacnet_tool::class::{COMMANDS, of};
 use clap::CommandFactory;
 
 /// Every clap subcommand and alias, from the derived definition.

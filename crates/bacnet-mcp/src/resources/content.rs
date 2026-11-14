@@ -440,12 +440,12 @@ pub(super) fn ledger<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
             "note": "this server can't write, so its ledger is empty",
         });
     };
-    let entries: Vec<Value> = bacnet_ops::safety::ledger::Ledger::open(&workspace.dir)
+    let entries: Vec<Value> = bacnet_tool::safety::ledger::Ledger::open(&workspace.dir)
         .map(|ledger| ledger.entries().to_vec())
         .unwrap_or_default()
         .into_iter()
         .filter(|e| {
-            e.origin.front_end == bacnet_ops::safety::FrontEnd::Mcp
+            e.origin.front_end == bacnet_tool::safety::FrontEnd::Mcp
                 && e.origin.principal.as_deref() == Some(ctx.principal.as_str())
         })
         .map(|e| {

@@ -22,9 +22,9 @@
 //! object, and shows each state with its text, `2 (Low)` (#2122); a
 //! refused read keeps `2`.
 
+use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
 use bacnet_client::log_reader::{LogCursor, LogGap};
-use bacnet_ops::destination::Destination;
 use bacnet_ops::format::notification::EventValues;
 use bacnet_ops::format::{Datum, Floats, LogColumns, ValueFormat, unknown_choice};
 use bacnet_services::read_range::{

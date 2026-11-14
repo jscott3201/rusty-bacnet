@@ -20,9 +20,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use bacnet_ops::limits::{Account, charged};
-use bacnet_ops::safety::desk::{Caller, Desk, Sent};
-use bacnet_ops::safety::ledger::{Entry, Origin};
-use bacnet_ops::safety::{Gate, Outcome, Preview, Tier};
+use bacnet_tool::safety::desk::{Caller, Desk, Sent};
+use bacnet_tool::safety::ledger::{Entry, Origin};
+use bacnet_tool::safety::{Gate, Outcome, Preview, Tier};
 use bacnet_transport::port::TransportPort;
 use rmcp::ErrorData;
 use serde_json::{Map, Value, json};
@@ -75,7 +75,7 @@ enum Work {
 /// rebuilt, must match item for item (target, priority, the value put back
 /// and the value it replaces), on one device this server may reach.
 fn changed(confirmed: &Preview, current: &[Entry], policy: &crate::Policy) -> Option<String> {
-    let Some(now) = bacnet_ops::safety::plan::undo_preview(current) else {
+    let Some(now) = bacnet_tool::safety::plan::undo_preview(current) else {
         return Some("the entries confirmed have changed".into());
     };
     if !policy.allows_device(now.device) {

@@ -1746,7 +1746,7 @@ repository scripts and the workflows. Its `paths-ignore` leaves out:
 - test code: every `tests/` directory (the crates' integration tests, the
   test module directories under `src/`, the Python suite and the website's
   tests), in-crate test files (`tests.rs`, `*_tests.rs`, `test_*.rs`,
-  `*_test_*.rs`), `bacnet-ops`' decode fixtures, and the scripts' own tests;
+  `*_test_*.rs`), `bacnet-tool`'s decode fixtures, and the scripts' own tests;
 - code that never ships: `benchmarks/`, every `examples/` directory, the fuzz
   crates, `bacnet-integration-tests` and `bacnet-mstp-sim`, and the website's
   test server and TUI screenshot lab.

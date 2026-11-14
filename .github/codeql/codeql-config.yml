@@ -26,9 +26,9 @@ paths-ignore:
   - "**/*_tests.rs"
   - "**/test_*.rs"
   - "**/*_test_*.rs"
-  # bacnet-ops' decode fixtures: built only for tests and the doc-hidden
+  # bacnet-tool's decode fixtures: built only for tests and the doc-hidden
   # test-support feature.
-  - crates/bacnet-ops/src/decode/testing.rs
+  - crates/bacnet-tool/src/decode/testing.rs
   # Tests of the repository scripts.
   - "**/test_*.py"
   - "scripts/ci/test-*"

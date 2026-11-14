@@ -12,8 +12,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Row, Table, Wrap};
 
-use bacnet_ops::bbmd::matrix::GRID_CAP;
-use bacnet_ops::bbmd::{Cell, Finding, Matrix, NotFollowed, Unfollowed};
+use bacnet_tool::bbmd::matrix::GRID_CAP;
+use bacnet_tool::bbmd::{Cell, Finding, Matrix, NotFollowed, Unfollowed};
 
 use super::{ADDRESS, note};
 use crate::tui::app::App;

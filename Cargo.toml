@@ -21,6 +21,7 @@ members = [
     "crates/bacnet-server",
     "crates/bacnet-endpoint",
     "crates/bacnet-ops",
+    "crates/bacnet-tool",
     # The MCP server (#2066): out of default-members, with the CLI.
     "crates/bacnet-mcp",
     "crates/bacnet-integration-tests",
@@ -71,6 +72,7 @@ default-members = [
     "crates/bacnet-server",
     "crates/bacnet-endpoint",
     "crates/bacnet-ops",
+    "crates/bacnet-tool",
     "crates/bacnet-integration-tests",
     "benchmarks",
 ]
@@ -114,6 +116,7 @@ bacnet-device-core = { version = "0.15.0", path = "crates/bacnet-device-core", d
 bacnet-server = { version = "0.15.0", path = "crates/bacnet-server" }
 bacnet-endpoint = { version = "0.15.0", path = "crates/bacnet-endpoint" }
 bacnet-ops = { version = "0.15.0", path = "crates/bacnet-ops" }
+bacnet-tool = { version = "0.15.0", path = "crates/bacnet-tool" }
 bacnet-mcp = { version = "0.15.0", path = "crates/bacnet-mcp", default-features = false }
 thiserror = { version = "2", default-features = false }
 bitflags = "2"

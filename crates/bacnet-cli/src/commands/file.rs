@@ -7,8 +7,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::destination::Destination;
 use bacnet_services::file::FileWriteAccessMethod;
 use bacnet_services::file::{AtomicReadFileAck, FileAccessMethod, FileReadAckMethod};
 use bacnet_transport::port::TransportPort;
