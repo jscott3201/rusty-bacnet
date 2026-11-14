@@ -6061,6 +6061,38 @@ OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. It is not audited, as the other
 `BACnetServer.set_reliability_local` (#2469), and an endpoint session has its
 own (see [Endpoint local writes](#endpoint-local-writes)).
 
+#### Binary Input and Output Polarity
+
+Binary Input and Binary Output hold a Polarity and a physical side (#2580).
+`set_polarity(Polarity)` takes NORMAL or REVERSE (VALUE_OUT_OF_RANGE for
+anything else); Polarity stays read-only on the network. On a running server
+the routes are:
+
+| Route | Object | What it does |
+| --- | --- | --- |
+| `set_physical_input_local(&oid, on)` | Binary Input | Takes the state the hardware reads, `true` for ON. In service Present_Value becomes it through Polarity (Table 12-7); out of service the state is kept and Present_Value stays the client's. |
+| `set_present_value_local(&oid, value)` | Binary Input | Takes a logical value, as before, and records the physical state it implies under the current Polarity. Refused out of service. |
+| `physical_output_local(&oid)` | Binary Output | The state to drive the hardware to, `true` for ON: the commanded Present_Value through Polarity (Table 12-9), held where it was while Out_Of_Service is TRUE. |
+| `set_polarity_local(&oid, polarity)` | both | Changes Polarity. |
+
+Without a server, the objects' own `set_physical_input`, `set_present_value`,
+`set_polarity` and `physical_output`, or `ObjectDatabase::physical_output`,
+do the same with no COV or event processing; `LocalInputValue::PhysicalInput`
+and `LocalInputValue::Polarity` reach a served object through its
+`LocalInput`, which is how firmware's `Reporter::apply_local` sets them.
+
+A Polarity change in service re-derives a Binary Input's Present_Value from
+the physical state it holds (Clause 12.6.11), so a steady input flips, and a
+subscriber hears of it; an input that has had no state from the application
+keeps its Present_Value. A Binary Output keeps its Present_Value and its
+physical output follows at once. Out of service neither moves (Clauses
+12.6.10, 12.7.10 and 12.7.11), and the return to service derives the
+Present_Value or physical output from the latest state and Polarity.
+CHANGE_OF_STATE, COMMAND_FAILURE and COV all work on the logical
+Present_Value, and Feedback_Value is logical too: the application reports
+the controlled device's state as an INACTIVE or ACTIVE Present_Value would
+name it. Neither object serves Change_Of_State_Count or Elapsed_Active_Time.
+
 #### Schedule & Notification (6)
 
 | Type | Constructor |

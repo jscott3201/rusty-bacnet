@@ -12,6 +12,12 @@ use bacnet_types::enums::PropertyIdentifier as P;
 ///
 /// Commandable binary output with 16-level priority array.
 /// Uses Enumerated values: 0 = inactive, 1 = active.
+///
+/// The application drives its physical output to
+/// [`Self::physical_output`], the commanded Present_Value through Polarity
+/// (#2580). Feedback_Value stays logical: the application reports the
+/// controlled device's state as an INACTIVE or ACTIVE Present_Value would
+/// name it.
 pub struct BinaryOutputObject {
     pub(super) core: IoCore,
     /// COMMAND_FAILURE event detector.
@@ -21,14 +27,20 @@ pub struct BinaryOutputObject {
     feedback_value: u32,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
-    /// Polarity: 0 = normal, 1 = reverse.
-    polarity: u32,
+    polarity: Polarity,
+    /// The physical output's state, ON as `true`, as it was driven when
+    /// Out_Of_Service last became TRUE: what [`Self::physical_output`]
+    /// gives while it stays TRUE.
+    held_output: bool,
     /// Implemented paired command-source tracking (Clause 19.5).
     value_source: crate::command_source::ValueSourceTracking,
 }
 
 impl BinaryOutputObject {
     /// Create a new Binary Output object; fails if `instance` exceeds the object-identifier range.
+    ///
+    /// Polarity starts NORMAL, and Present_Value INACTIVE, the
+    /// Relinquish_Default, so the physical output starts OFF.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let mut core = IoCore::new(ObjectType::BINARY_OUTPUT, instance, name.into())?;
         // A Binary Output starts with event detection off (#216).
@@ -41,9 +53,42 @@ impl BinaryOutputObject {
             feedback_value: 0,
             priority_array: [None; 16],
             relinquish_default: 0,
-            polarity: 0,
+            polarity: Polarity::NORMAL,
+            held_output: false,
             value_source: crate::command_source::ValueSourceTracking::default(),
         })
+    }
+
+    /// The state to drive the physical output to, ON as `true` (#2580).
+    ///
+    /// In service it is Present_Value through Polarity: ON for ACTIVE under
+    /// NORMAL, OFF for ACTIVE under REVERSE (Table 12-9). While
+    /// Out_Of_Service is TRUE the output is decoupled from Present_Value
+    /// (Clause 12.7.10): this stays at the state it had when Out_Of_Service
+    /// became TRUE, while commands keep moving Present_Value and a Polarity
+    /// change waits too. The return to service drives the output from the
+    /// Present_Value and Polarity of that moment. A running server gives it
+    /// through `BACnetServer::physical_output_local`.
+    pub fn physical_output(&self) -> bool {
+        if self.core.out_of_service {
+            self.held_output
+        } else {
+            across_polarity(is_active(self.present_value), self.polarity)
+        }
+    }
+
+    /// Set Polarity, NORMAL or REVERSE (#2580); any other value fails with
+    /// PROPERTY / VALUE_OUT_OF_RANGE and changes nothing. A new object's
+    /// is NORMAL, and a client can't write it.
+    ///
+    /// Present_Value doesn't change. In service, [`Self::physical_output`]
+    /// follows at once (Clause 12.7.11); while Out_Of_Service is TRUE the
+    /// output stays as it is, and the return to service drives it with the
+    /// new Polarity. On a running server use
+    /// `BACnetServer::set_polarity_local`.
+    pub fn set_polarity(&mut self, polarity: Polarity) -> Result<(), Error> {
+        self.polarity = checked_polarity(polarity)?;
+        Ok(())
     }
 
     /// Build with application-owned Tags storage. Saved Tags override configured
@@ -127,7 +172,7 @@ impl BACnetObject for BinaryOutputObject {
             P::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            P::POLARITY => Ok(PropertyValue::Enumerated(self.polarity)),
+            P::POLARITY => Ok(PropertyValue::Enumerated(self.polarity.to_raw())),
             P::PROPERTY_LIST => {
                 crate::property_metadata::read_property_list(&self.property_metadata(), array_index)
             }
@@ -202,11 +247,16 @@ impl BACnetObject for BinaryOutputObject {
         // and supports values beyond NO_FAULT_DETECTED; the core takes the
         // Reliability write. `is_writable_property` stays statically true
         // because it describes capability.
+        let driven = self.physical_output();
         if let Some(result) =
             self.core
                 .write(&mut self.event_detector, property, array_index, &value)
         {
-            return result.map(drop);
+            if result? == crate::io_core::CoreWrite::OutOfService && self.core.out_of_service {
+                // Out of service the output stays where it was driven.
+                self.held_output = driven;
+            }
+            return Ok(());
         }
         if let Some(result) = self.binary.write(property, value) {
             return result;
@@ -230,6 +280,21 @@ impl BACnetObject for BinaryOutputObject {
     }
 
     crate::traits::lend_reliability_eval!();
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// Polarity, the one input a Binary Output takes: its Present_Value is
+/// commanded, never supplied.
+impl crate::traits::LocalInput for BinaryOutputObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::Polarity(polarity) = input else {
+            return Err(crate::traits::not_supported());
+        };
+        self.set_polarity(polarity)
+    }
 }
 
 impl crate::creation::Creatable for BinaryOutputObject {}

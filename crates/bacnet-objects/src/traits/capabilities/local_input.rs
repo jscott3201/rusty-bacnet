@@ -1,6 +1,7 @@
 //! The local input capability: values the application in the same device
 //! pushes into an object, outside any network write.
 
+use bacnet_types::enums::Polarity;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
@@ -59,6 +60,16 @@ pub enum LocalInputValue {
     /// (#2497). Only the first is writable over the network, and only per
     /// element; the application sets all three whole.
     LoadControl(LoadControlSetting),
+    /// The state the application read from a Binary Input's physical
+    /// input, `true` for ON (#2580). The object derives Present_Value from
+    /// it through Polarity while in service, and only keeps it while
+    /// Out_Of_Service is TRUE. A logical value goes in as
+    /// [`PresentValue`](Self::PresentValue) instead.
+    PhysicalInput(bool),
+    /// The Polarity of a Binary Input or Binary Output, NORMAL or REVERSE
+    /// (#2580). The property is read-only on the network, so this is the
+    /// application's route to it on a served object.
+    Polarity(Polarity),
 }
 
 impl LocalInputValue {
@@ -101,7 +112,10 @@ impl LocalInputValue {
 /// - input pulses: the Accumulator;
 /// - Program_State: the Program;
 /// - Shed_Levels, Full_Duty_Baseline and State_Description: the Load
-///   Control.
+///   Control;
+/// - a physical input state: the Binary Input;
+/// - Polarity: the Binary Input and the Binary Output, which takes no
+///   other input.
 pub trait LocalInput {
     /// Apply `input`, or leave the object unchanged and return an error.
     ///
@@ -111,6 +125,8 @@ pub trait LocalInput {
     /// refuse a Present_Value with PROPERTY / WRITE_ACCESS_DENIED while
     /// Out_Of_Service is TRUE, so a client's simulated value stays served;
     /// a value of the wrong datatype or out of range fails as the
-    /// property's network write would.
+    /// property's network write would. A Binary Input's physical input
+    /// state and Polarity are taken either way, since neither replaces a
+    /// simulated Present_Value.
     fn apply_local_input(&mut self, input: LocalInputValue) -> Result<(), Error>;
 }

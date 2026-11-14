@@ -240,6 +240,7 @@ mod server_methods {
     mod accumulator_methods;
     mod audit_log_methods;
     mod averaging_methods;
+    mod binary_io_methods;
     mod channel_methods;
     mod clock_zone;
     mod constructor;
