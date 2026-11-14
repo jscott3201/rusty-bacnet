@@ -10,7 +10,9 @@
 //! route) holds up its own lane only. A confirmed entry holds its lane until
 //! its first attempt is handed off; its retries run in its worker. With
 //! every invoke ID leased, it holds the lane, the destination's later
-//! entries behind it, until one comes back.
+//! entries behind it, until one comes back. A Device recipient the server
+//! holds no fresh binding for holds its lane the same way while the device
+//! is looked for, until its I-Am or the end of the wait for it (#1368).
 //!
 //! The lane map is a `std::sync::Mutex`, taken after the database guard and
 //! never held across an await, nor while anything is logged, since a
@@ -28,8 +30,7 @@
 //! every writer waiting on them goes on.
 
 use super::super::event_forwarding::ForwardingBudget;
-use super::super::event_suppression::EventNotificationCounters;
-use super::awaited::OwnedDelivery;
+use super::super::event_suppression::{EventNotificationCounters, EventSuppressions};
 use super::*;
 use bacnet_encoding::constructed::encode_event_notification;
 use bacnet_services::alarm_event::{EventNotificationRequest, ForwardedEventNotification};
@@ -163,19 +164,39 @@ impl Settle {
 }
 
 /// Wait for `settle`, at most `timeout_ms` (the APDU timeout), so a change's
-/// event notifications are handed off before its COV fanout (#889). When the
-/// time runs out the fanout goes on, and the wait is counted in
-/// `cov_wait_expired`, so a stalled destination can't hold every writer's
-/// request for longer.
+/// event notifications are handed off before its COV fanout (#889): whether
+/// they were. When the time runs out the fanout goes on, and the wait is
+/// counted in `cov_wait_expired`, so a stalled destination can't hold every
+/// writer's request for longer.
 pub(in crate::server) async fn settled(
     settle: Option<oneshot::Receiver<()>>,
     timeout_ms: u64,
     transactions: &NotificationTransactions,
-) {
-    if !settled_within(settle, timeout_ms).await {
+) -> bool {
+    counted(settled_within(settle, timeout_ms).await, transactions)
+}
+
+/// [`settled`] until `deadline`, for a wait that began before the call: the
+/// sweep's, which runs from its pass's commit (#2537).
+pub(in crate::server) async fn settled_by(
+    settle: Option<oneshot::Receiver<()>>,
+    deadline: tokio::time::Instant,
+    transactions: &NotificationTransactions,
+) -> bool {
+    let in_time = match settle {
+        Some(receiver) => tokio::time::timeout_at(deadline, receiver).await.is_ok(),
+        None => true,
+    };
+    counted(in_time, transactions)
+}
+
+/// `in_time`, once a wait that ran out is counted in `cov_wait_expired`.
+fn counted(in_time: bool, transactions: &NotificationTransactions) -> bool {
+    if !in_time {
         let mut lanes = lanes(transactions);
         lanes.counts.cov_wait_expired = lanes.counts.cov_wait_expired.saturating_add(1);
     }
+    in_time
 }
 
 /// Wait for `settle`, at most `timeout_ms`: whether it settled in time. For
@@ -370,6 +391,52 @@ impl EventLanes {
     }
 }
 
+/// The handles a destination's lane task owns, for an [`EventDelivery`].
+struct OwnedDelivery<T: TransportPort + 'static> {
+    db: Arc<RwLock<ObjectDatabase>>,
+    network: Arc<NetworkLayer<T>>,
+    comm_state: Arc<CommState>,
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    notification_transactions: Arc<NotificationTransactions>,
+    device_bindings: Arc<RwLock<DeviceBindingTable>>,
+    suppressions: Arc<EventSuppressions>,
+    retry_timeout_ms: u64,
+    local_apdu_capacity: u32,
+    device: ObjectIdentifier,
+}
+
+impl<T: TransportPort + 'static> OwnedDelivery<T> {
+    fn of(ctx: &EventDelivery<'_, T>) -> Self {
+        Self {
+            db: Arc::clone(ctx.db),
+            network: Arc::clone(ctx.network),
+            comm_state: Arc::clone(ctx.comm_state),
+            learned_routers: Arc::clone(ctx.learned_routers),
+            notification_transactions: Arc::clone(ctx.notification_transactions),
+            device_bindings: Arc::clone(ctx.device_bindings),
+            suppressions: Arc::clone(ctx.suppressions),
+            retry_timeout_ms: ctx.retry_timeout_ms,
+            local_apdu_capacity: ctx.local_apdu_capacity,
+            device: ctx.device,
+        }
+    }
+
+    fn delivery(&self) -> EventDelivery<'_, T> {
+        EventDelivery {
+            db: &self.db,
+            network: &self.network,
+            comm_state: &self.comm_state,
+            learned_routers: &self.learned_routers,
+            notification_transactions: &self.notification_transactions,
+            device_bindings: &self.device_bindings,
+            suppressions: &self.suppressions,
+            retry_timeout_ms: self.retry_timeout_ms,
+            local_apdu_capacity: self.local_apdu_capacity,
+            device: self.device,
+        }
+    }
+}
+
 /// The handles the lanes one notification opens share, made once, the first
 /// time it opens one: a notification to many idle destinations clones the
 /// server's handles once, not once per lane.
@@ -395,8 +462,7 @@ pub(in crate::server) async fn join_sealed(transactions: &NotificationTransactio
 }
 
 /// Wait until no lane is open: every notification pushed so far is handed
-/// off, or waits for its device's I-Am. For tests whose senders no longer
-/// wait on their lanes.
+/// off or dropped. For tests whose senders no longer wait on their lanes.
 ///
 /// It yields first, which moves no clock, so a test on paused time that
 /// measures a window isn't moved past it; a lane that waits on a timer is
@@ -428,21 +494,22 @@ pub(in crate::server) fn lanes_held(transactions: &NotificationTransactions) -> 
     })
 }
 
-/// Count a notification dropped because its Device recipient's queue, which
-/// waits for the device's I-Am or for an invoke ID, already held
-/// [`MAX_LANE_ENTRIES`], as the device's lane would (#2537); warned once the
-/// lock is let go.
-pub(super) fn dropped_from_device_queue(
+/// Drop every entry waiting in `destination`'s lane behind the one its task
+/// is sending: a Device recipient's, whose device didn't answer the Who-Is
+/// they all waited for (#1368). How many, for the caller to count; they go
+/// once the lock is let go.
+pub(super) fn drop_waiting(
     transactions: &NotificationTransactions,
-    device: ObjectIdentifier,
-) {
-    let state = lane_state(transactions);
-    state.lock().dropped(LaneDrop::OwnLane);
-    warn_throttled!(
-        state.warning,
-        %device,
-        "A Device recipient's queue is full; notification dropped"
-    );
+    destination: &BACnetRecipient,
+) -> usize {
+    let mut lanes = lanes(transactions);
+    let Some(at) = lanes.position(destination) else {
+        return 0;
+    };
+    let waiting = std::mem::take(&mut lanes.lanes[at].entries);
+    lanes.entries -= waiting.len();
+    drop(lanes);
+    waiting.len()
 }
 
 /// Log a lane task that panicked, as it is reaped.

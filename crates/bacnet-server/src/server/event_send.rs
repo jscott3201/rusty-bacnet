@@ -3,6 +3,8 @@
 //! its destination's lane (#2537) and reaches it through
 //! [`BACnetServer::send_to_recipient`].
 
+use super::binding_probes::{DeviceLookup, LookupMiss, LookupStart, can_look_for};
+use super::device_bindings::DeviceResolution;
 use super::event_forwarding::ForwardingBudget;
 use super::event_recipient_route::{
     ConfirmedRecipientRoute, ConfirmedRouteRefusal, RecipientRoute,
@@ -13,16 +15,13 @@ use super::*;
 use bacnet_device_core::event::network_priority;
 use bacnet_types::constructed::BACnetRecipient;
 
-#[path = "event_awaited_recipients.rs"]
-mod awaited;
-pub(super) use awaited::AwaitingRecipients;
-use awaited::DeviceRoute;
 #[path = "event_lanes.rs"]
 mod lanes;
 #[cfg(test)]
 pub(super) use lanes::lanes_drained;
 pub(super) use lanes::{
-    LaneEntry, LaneHandles, LanePayload, LaneState, Settle, join_sealed, lanes, made_lanes, settled,
+    LaneEntry, LaneHandles, LanePayload, LaneState, Settle, join_sealed, lanes, made_lanes,
+    settled, settled_by,
 };
 
 /// Why a confirmed notification ended at an attempt with nothing sent.
@@ -44,8 +43,8 @@ const UNCONFIRMED_HEADER_LEN: usize = 2;
 /// The service request a notification sends to one process identifier.
 pub(super) type EncodeFor<'a> = &'a (dyn Fn(u32) -> Result<Bytes, Error> + Send + Sync);
 
-/// Whether a notification may take a resolved route. Shared, so a
-/// notification that waits for its device's I-Am keeps it (#1368).
+/// Whether a notification may take a resolved route. Shared by the copies a
+/// notification's lanes send.
 pub(super) type AdmitsRoute = Arc<dyn Fn(&RecipientRoute) -> bool + Send + Sync>;
 
 /// One event notification on its way to its recipients.
@@ -72,10 +71,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// [`EventNotificationCounters`].
     ///
     /// A Device recipient the server holds no fresh binding for is looked
-    /// for with a targeted Who-Is (#1368), and its notification waits for the
-    /// I-Am in its device's queue, which a task of its own drains, so the
-    /// lane goes on at once. While the queue holds anything, the device's
-    /// next notifications join it, in order.
+    /// for first ([`Self::device_route`]), which holds its lane.
     ///
     /// For a confirmed notification it returns a receiver that resolves once
     /// the notification's first attempt is handed to the network, or once it
@@ -100,11 +96,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 RecipientRoute::resolve_address(address, is_link_broadcast)
             }
             BACnetRecipient::Device(identifier) => {
-                match Self::device_route(ctx, outbound, *identifier, process_id, confirmed).await {
-                    DeviceRoute::Now(resolution) => {
-                        RecipientRoute::from_device_resolution(resolution)
-                    }
-                    DeviceRoute::Queued | DeviceRoute::Done => return None,
+                let class = outbound.notification_class;
+                match Self::device_route(ctx, recipient, *identifier, class).await {
+                    Some(resolution) => RecipientRoute::from_device_resolution(resolution),
+                    None => return None,
                 }
             }
         }
@@ -114,13 +109,73 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         Self::send_on_route(ctx, outbound, route, process_id, confirmed).await
     }
 
+    /// The binding to send to `device`, the Device recipient whose lane is
+    /// `recipient`'s, or `None` when nothing is sent and nothing more is
+    /// counted. With no fresh binding the server looks for the device with a
+    /// targeted Who-Is ([`DeviceLookup`], #1368), and the lane waits here,
+    /// this notification at its head and the later ones behind it, until the
+    /// I-Am binds the device or the probe's wait (the APDU timeout, a minute
+    /// at most) runs out (#2537). The table starts the probe under the guard
+    /// it finds no binding under, so an I-Am can't land unseen between the
+    /// two. A device that stays silent drops every notification waiting for
+    /// it, each counted once in `device_recipient_unbound`; one that may not
+    /// be looked for keeps its resolution, which the route's skip counts.
+    /// Nothing is sent or counted when DCC restricts initiation by the end.
+    async fn device_route(
+        ctx: &EventDelivery<'_, T>,
+        recipient: &BACnetRecipient,
+        device: ObjectIdentifier,
+        notification_class: u32,
+    ) -> Option<DeviceResolution> {
+        let lookup = DeviceLookup {
+            network: ctx.network,
+            bindings: ctx.device_bindings,
+            comm_state: ctx.comm_state,
+            wait: Duration::from_millis(ctx.retry_timeout_ms),
+        };
+        let resolution = lookup.resolve(device).await;
+        if !can_look_for(device, &resolution) {
+            return Some(resolution);
+        }
+        let wait = match lookup.start(device).await {
+            LookupStart::Resolved(resolution) => return Some(resolution),
+            LookupStart::NotLooking => return Some(resolution),
+            LookupStart::Disabled => return None,
+            LookupStart::Waiting(wait) => wait,
+        };
+        wait.answered().await;
+        if ctx.comm_state.initiation_restricted() {
+            return None;
+        }
+        match lookup.found(device).await {
+            Ok(resolution) => Some(resolution),
+            Err(LookupMiss::Disabled) => None,
+            Err(LookupMiss::Undiscovered) => {
+                // Those behind it waited for the same I-Am, and this one
+                // `found()` decides for them all: an I-Am that lands between
+                // the miss and the drop still drops them.
+                let behind = lanes::drop_waiting(ctx.notification_transactions, recipient);
+                for _ in 0..=behind {
+                    ctx.suppressions
+                        .record(EventSuppression::DeviceRecipientUnbound);
+                }
+                warn!(
+                    notification_class,
+                    %device,
+                    dropped = behind + 1,
+                    "Skipping Device recipient: its device didn't answer a Who-Is"
+                );
+                None
+            }
+        }
+    }
+
     /// Send `outbound` to one recipient, `process_id`, along `route`, its
     /// resolved and localized route, confirmed or not as it asks: the second
-    /// half of [`Self::send_to_recipient`], which a notification that waited
-    /// for its device's I-Am takes once it has a route. For a confirmed one
-    /// whose worker started, a receiver that resolves once its first attempt
-    /// is handed to the network.
-    pub(super) async fn send_on_route(
+    /// half of [`Self::send_to_recipient`]. For a confirmed one whose worker
+    /// started, a receiver that resolves once its first attempt is handed to
+    /// the network.
+    async fn send_on_route(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
         route: RecipientRoute,
@@ -239,8 +294,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }) = confirmed_route
         {
             // With every invoke ID leased, the notification waits here for
-            // one, counted once, so its lane (or its device's queue) holds
-            // and the destination's later entries stay behind it (#2537).
+            // one, counted once, so its lane holds and the destination's
+            // later entries stay behind it (#2537).
             // Should DCC restrict initiation meanwhile, the first attempt
             // withdraws it, uncounted.
             let reservation = notification_transactions.reserve_waiting(
@@ -410,8 +465,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         invoke_id = id,
                         "EventNotification withdrawn: DCC restricts initiation"
                     ),
-                    // The device's observed binding ran out before a
-                    // retry: the server no longer holds an address for
+                    // The device's observed binding ran out before an
+                    // attempt (a retry, or a first one that waited for its
+                    // invoke ID): the server no longer holds an address for
                     // it, as when the first send finds none, so it counts
                     // where that skip does.
                     Err(Withdrawal::BindingLapsed) => {
@@ -419,7 +475,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         warn!(
                             invoke_id = id,
                             "EventNotification withdrawn: the recipient's observed \
-                             binding expired before a retry"
+                             binding expired before an attempt"
                         );
                     }
                 }

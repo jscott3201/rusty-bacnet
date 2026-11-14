@@ -12,6 +12,9 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, EventState};
 
+#[path = "sweep_hand_off_tests.rs"]
+mod hand_off;
+
 /// Analog Inputs AI-1, AI-2, ... reading 50, inside their limits, each
 /// reporting every transition of OUT_OF_RANGE through a broadcasting
 /// Notification Class 0 after its own Time_Delay.
@@ -333,4 +336,289 @@ async fn the_floor_never_delays_the_periodic_sweep() {
         tokio::time::sleep_until(at(millis)).await;
         assert_eq!(notified(&sent), expected, "at {millis} ms");
     }
+}
+
+/// A database whose AI-1 alarms through Notification Class 1 to Device 9,
+/// which the server holds no binding for and which never answers, and whose
+/// AI-2 alarms through the broadcasting class 0; both after 1 s.
+fn database_with_a_silent_device() -> (ObjectDatabase, Vec<ObjectIdentifier>) {
+    let (mut db, oids) = database(&[1, 1]);
+    let mut nc1 = bacnet_objects::notification_class::NotificationClass::new(1, "NC-1").unwrap();
+    let device_9 = ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap();
+    let recipient = bacnet_types::constructed::BACnetRecipient::Device(device_9);
+    let to_device = super::event_recipient_routing_tests::destination_for(recipient, false);
+    nc1.add_destination(to_device).unwrap();
+    db.add(Box::new(nc1)).unwrap();
+    let class = PropertyValue::Unsigned(1);
+    let ai1 = db.get_mut(&oids[0]).unwrap();
+    ai1.write_property(PropertyIdentifier::NOTIFICATION_CLASS, None, class, None)
+        .unwrap();
+    (db, oids)
+}
+
+/// A sweep pass whose notification waits in a lane (here for a Device
+/// recipient's I-Am, #2537) holds up no later pass: AI-2's alarm, due at
+/// 2.5 s, goes out then, while AI-1's lane still waits for Device 9.
+#[tokio::test(start_paused = true)]
+async fn a_pass_waiting_on_a_lane_holds_up_no_later_sweep() {
+    let (transport, sent) = recording_transport();
+    let (db, oids) = database_with_a_silent_device();
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    let start = tokio::time::Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    tokio::time::sleep_until(at(100)).await;
+    begin_condition(&server, &oids[0]).await; // due at 1.1 s, to Device 9
+    tokio::time::sleep_until(at(1_500)).await;
+    begin_condition(&server, &oids[1]).await; // due at 2.5 s, broadcast
+    for (millis, expected) in [(2_490, &[][..]), (2_610, &[2])] {
+        tokio::time::sleep_until(at(millis)).await;
+        assert_eq!(notified(&sent), expected, "at {millis} ms");
+    }
+}
+
+/// The COV subscriber of the sweep fanout tests.
+const SUBSCRIBER: [u8; 6] = [10, 0, 0, 5, 0xBA, 0xC0];
+
+/// A transport that records unicasts too; with `hold`, each event
+/// notification's send waits for a permit of the semaphore returned.
+fn sweep_transport(hold: bool) -> (TestTransport, SendLog, Arc<Semaphore>) {
+    let permits = Arc::new(Semaphore::new(0));
+    let gate = Arc::clone(&permits);
+    let transport = TestTransport::builder()
+        .local_mac(&crate::server::test_transport::BIP_LOCAL_MAC)
+        .on_send(move |frame| {
+            let gate = Arc::clone(&gate);
+            async move {
+                let event = matches!(frame.apdu(), Apdu::UnconfirmedRequest(request)
+                    if request.service_choice
+                        == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION);
+                if hold && event {
+                    gate.acquire().await.unwrap().forget();
+                }
+                Ok(())
+            }
+        })
+        .build();
+    let sent = transport.sent();
+    (transport, sent, permits)
+}
+
+/// [`SUBSCRIBER`] subscribes to the COV of each of `oids`.
+async fn subscribe(server: &BACnetServer<TestTransport>, oids: &[ObjectIdentifier]) {
+    for (process, oid) in (1..).zip(oids) {
+        let subscription = bacnet_device_core::cov::CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&SUBSCRIBER),
+            subscriber_network: None,
+            subscriber_process_identifier: process,
+            monitored_object_identifier: *oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_observation: None,
+            monitored_property: None,
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        };
+        server
+            .cov_table
+            .write()
+            .await
+            .subscribe(subscription)
+            .unwrap();
+    }
+}
+
+/// The COV reports among `frames`, in order: the object's instance, and
+/// whether its Status_Flags say IN_ALARM.
+fn reports(frames: &[crate::server::test_transport::SentFrame]) -> Vec<(u32, bool)> {
+    frames
+        .iter()
+        .filter_map(|frame| match frame.apdu() {
+            Apdu::UnconfirmedRequest(request)
+                if request.service_choice
+                    == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION =>
+            {
+                let n = COVNotificationRequest::decode(&request.service_request).unwrap();
+                let in_alarm = n
+                    .list_of_values
+                    .iter()
+                    .find(|value| value.property_identifier == PropertyIdentifier::STATUS_FLAGS)
+                    .and_then(|flags| flags.value.last().copied())
+                    .is_some_and(|bits| bits & 0x80 != 0);
+                Some((n.monitored_object_identifier.instance_number(), in_alarm))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The COV fanouts of sweep passes go in the order the passes ran, each
+/// behind its own pass's event notifications: AI-2's alarm is out at 2.5 s,
+/// but its COV report waits behind AI-1's, which waits for Device 9's lane.
+#[tokio::test(start_paused = true)]
+async fn sweep_cov_fanouts_keep_sweep_order_behind_a_waiting_lane() {
+    let (transport, sent, _) = sweep_transport(false);
+    let (db, oids) = database_with_a_silent_device();
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    subscribe(&server, &oids).await;
+    let start = tokio::time::Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    tokio::time::sleep_until(at(100)).await;
+    begin_condition(&server, &oids[0]).await;
+    tokio::time::sleep_until(at(1_500)).await;
+    begin_condition(&server, &oids[1]).await;
+    let before = sent.len();
+    let reported = || -> Vec<u32> {
+        let frames = sent.frames();
+        reports(&frames[before..])
+            .into_iter()
+            .map(|(instance, _)| instance)
+            .collect()
+    };
+    tokio::time::sleep_until(at(2_610)).await;
+    assert_eq!(notified(&sent), [2], "AI-2's alarm is out");
+    assert_eq!(reported(), [], "its COV report waits behind AI-1's");
+    tokio::time::sleep_until(at(4_500)).await;
+    assert_eq!(reported(), [1, 2]);
+}
+
+/// Each pass's COV report waits for its notifications at most the APDU
+/// timeout from that pass's commit, not from the end of the wait before it:
+/// passes committing at 1.1, 2.5 and 3.9 s behind notifications that never
+/// go out report at 4.1, 5.5 and 6.9 s, each wait counted.
+#[tokio::test(start_paused = true)]
+async fn each_pass_reports_within_the_cap_of_its_own_commit() {
+    let (transport, sent, _held) = sweep_transport(true);
+    let (db, oids) = database(&[1, 1, 1]);
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    subscribe(&server, &oids).await;
+    let start = tokio::time::Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    let begins = [100, 1_500, 2_900];
+    let mut alarmed = Vec::new();
+    let mut seen = 0;
+    for millis in (0..12_000).step_by(50) {
+        tokio::time::sleep_until(at(millis)).await;
+        if let Some(object) = begins.iter().position(|begin| *begin == millis) {
+            begin_condition(&server, &oids[object]).await;
+        }
+        let frames = sent.frames();
+        for (instance, in_alarm) in reports(&frames[seen..]) {
+            if in_alarm {
+                alarmed.push((instance, millis));
+            }
+        }
+        seen = frames.len();
+    }
+    assert_eq!(alarmed.len(), 3, "{alarmed:?}");
+    for ((instance, reported), begin) in alarmed.into_iter().zip(begins) {
+        let committed = begin + 1_000;
+        let within = committed + 3_000..=committed + 3_100;
+        assert!(within.contains(&reported), "AI-{instance} at {reported} ms");
+    }
+    let counters = server.event_notification_counters();
+    assert_eq!(counters.cov_wait_expired, 3);
+}
+
+/// An object two passes behind a held lane fan out for is reported once,
+/// with the later pass, after that pass's notification: no report gives the
+/// later state while its notification is still held, and the alarm the
+/// earlier pass's notification told of never shows in a COV report.
+#[tokio::test(start_paused = true)]
+async fn passes_behind_a_held_lane_merge_their_reports_of_one_object() {
+    let (transport, sent, held) = sweep_transport(true);
+    let (db, oids) = database(&[1]);
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    let start = tokio::time::Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    tokio::time::sleep_until(at(100)).await;
+    begin_condition(&server, &oids[0]).await; // in alarm at 1.1 s
+    // Subscribed after the write's own fanout, so the sweep's is the first.
+    subscribe(&server, &oids).await;
+    tokio::time::sleep_until(at(1_200)).await;
+    // The condition ends unseen by the write path: a sweep sees it, and
+    // AI-1 is back to NORMAL a second later.
+    let high_limit = PropertyValue::Real(80.0);
+    let mut db = server.database().write().await;
+    let ai1 = db.get_mut(&oids[0]).unwrap();
+    ai1.write_property(PropertyIdentifier::HIGH_LIMIT, None, high_limit, None)
+        .unwrap();
+    drop(db);
+    let before = sent.len();
+    let reported = || reports(&sent.frames()[before..]);
+    tokio::time::sleep_until(at(3_500)).await;
+    let db = server.database().read().await;
+    let state = db
+        .get(&oids[0])
+        .unwrap()
+        .read_property(PropertyIdentifier::EVENT_STATE, None);
+    drop(db);
+    assert!(
+        matches!(state, Ok(PropertyValue::Enumerated(0))),
+        "both passes made"
+    );
+    assert_eq!(reported(), []);
+    held.add_permits(1); // the alarm's notification
+    tokio::time::sleep_until(at(3_800)).await;
+    assert_eq!(reported(), [], "the return's notification is still held");
+    held.add_permits(1);
+    tokio::time::sleep_until(at(4_000)).await;
+    assert_eq!(reported(), [(1, false)], "one report, merged");
+}
+
+/// Past 64 passes waiting behind a held lane, a pass fans out at its
+/// commit, its wait counted only when its own notification is held (AI-66's
+/// is; AI-67 sends none); `stop()` with the queue full returns, and nothing
+/// goes out after it.
+#[tokio::test(start_paused = true)]
+async fn past_the_bound_a_pass_fans_out_at_once_counted_only_if_held() {
+    let (transport, sent, _held) = sweep_transport(true);
+    let (mut db, oids) = database(&[1; 67]);
+    // AI-2 to AI-65, and AI-67, commit with no notification to wait for.
+    let off = PropertyValue::BitString {
+        unused_bits: 5,
+        data: vec![0],
+    };
+    for oid in oids[1..65].iter().chain(&oids[66..]) {
+        let object = db.get_mut(oid).unwrap();
+        object
+            .write_property(PropertyIdentifier::EVENT_ENABLE, None, off.clone(), None)
+            .unwrap();
+    }
+    let config = ServerConfig {
+        cov_retry_timeout_ms: 120_000,
+        ..ServerConfig::default()
+    };
+    let mut server = BACnetServer::start(config, db, transport)
+        .await
+        .expect("server should start");
+    subscribe(&server, &[oids[0], oids[1], oids[64], oids[65], oids[66]]).await;
+    let start = tokio::time::Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    for (k, oid) in (0..).zip(&oids) {
+        tokio::time::sleep_until(at(100 + 200 * k)).await;
+        begin_condition(&server, oid).await;
+    }
+    // AI-66's pass commits at 14.1 s, with AI-1's waiting and 64 behind it,
+    // and AI-67's at 14.3 s.
+    let before = sent.len();
+    tokio::time::sleep_until(at(14_500)).await;
+    assert_eq!(reports(&sent.frames()[before..]), [(66, true), (67, true)]);
+    assert_eq!(server.event_notification_counters().cov_wait_expired, 1);
+    tokio::time::timeout(Duration::from_secs(30), server.stop())
+        .await
+        .expect("stop returns")
+        .unwrap();
+    let stopped = sent.len();
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    assert_eq!(sent.len(), stopped, "nothing after stop() returns");
 }

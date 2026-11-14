@@ -13,7 +13,9 @@
 
 use super::device_bindings::{DeviceBindingTable, OBSERVED_BINDING_TTL};
 use super::event_notifications_tests::local_broadcast_destination;
-use super::event_recipient_routing_tests::{address_recipient, destination_for, is_who_is};
+use super::event_recipient_routing_tests::{
+    address_recipient, destination_for, is_who_is, with_silent_devices,
+};
 use super::*;
 use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, TestTransport};
 use bacnet_device_core::event::CommittedIntrinsicTransition;
