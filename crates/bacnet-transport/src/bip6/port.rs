@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_types::bip_port::{BipPortMode, ForeignRegistration};
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
@@ -486,6 +487,14 @@ async fn send_register_foreign_device_v6(
 }
 
 impl TransportPort for Bip6Transport {
+    fn data_link(&self) -> Option<DataLink> {
+        Some(DataLink::Bip6)
+    }
+
+    fn bip6_transport(&self) -> Option<&Bip6Transport> {
+        Some(self)
+    }
+
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         true
     }

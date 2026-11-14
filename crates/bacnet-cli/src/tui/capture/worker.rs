@@ -19,8 +19,6 @@ use std::time::{Duration, SystemTime};
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::target::AddressStyle;
-use bacnet_transport::bip::BipTransport;
-use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::mstp::MstpTransport;
 use bacnet_transport::mstp::codec::Frame;
 use bacnet_transport::mstp::monitor::{LineErrorKind, LineEvent, MonitorFrames, MonitorRecord};
@@ -302,10 +300,10 @@ fn from_record(record: MonitorRecord, epoch: SystemTime) -> CaptureFrame {
 /// The frame tap of a transport the CLI builds, and its link.
 pub(crate) fn tap_of<T: TransportPort + 'static>(transport: &T) -> Option<(FrameTap, Framing)> {
     let any = transport as &dyn Any;
-    if let Some(bip) = any.downcast_ref::<BipTransport>() {
+    if let Some(bip) = transport.bip_transport() {
         return Some((bip.frame_tap().clone(), Framing::Bip));
     }
-    if let Some(bip6) = any.downcast_ref::<Bip6Transport>() {
+    if let Some(bip6) = transport.bip6_transport() {
         return Some((bip6.frame_tap().clone(), Framing::Bip6));
     }
     #[cfg(feature = "sc-tls")]

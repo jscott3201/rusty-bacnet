@@ -16,6 +16,7 @@ use core::fmt;
 /// assert_eq!(DataLink::Mstp.to_string(), "MS/TP");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DataLink {
     /// BACnet/IP over UDP (Annex J).
     Bip,

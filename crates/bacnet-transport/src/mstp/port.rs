@@ -1,6 +1,7 @@
 use bacnet_mstp_codec::BROADCAST_MAC;
 use bacnet_mstp_core::{Duration as CoreDuration, QueueRefusal};
 use bacnet_time::HostClock;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use tokio::sync::{Mutex, mpsc};
 
@@ -219,6 +220,10 @@ impl<S: SerialPort> MstpTransport<S> {
 }
 
 impl<S: SerialPort> TransportPort for MstpTransport<S> {
+    fn data_link(&self) -> Option<DataLink> {
+        Some(DataLink::Mstp)
+    }
+
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         true
     }

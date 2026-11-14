@@ -12,6 +12,7 @@ pub use crate::direct_response::{DirectResponse, DirectResponseScope, ResponseSc
 pub use crate::principal::ScPrincipal;
 use bacnet_npdu::NpduLimits;
 use bacnet_types::MacAddr;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use bytes::Bytes;
 use std::sync::Arc;
@@ -486,6 +487,83 @@ pub struct Bip6Port {
 /// Implementations handle the data-link framing (e.g., BVLL for BACnet/IP)
 /// and expose a simple send/receive interface for NPDU bytes.
 pub trait TransportPort: Send + Sync {
+    /// The data link this transport carries, or `None` when it carries no
+    /// one link a caller could name: a router's application port, or a
+    /// test double. Callers that adapt to the link (a target grammar, an
+    /// address format) ask here rather than guess from the concrete type,
+    /// which a wrapper such as [`AnyTransport`](crate::any::AnyTransport)
+    /// hides. Every built-in transport reports its link, and a wrapper must
+    /// forward the underlying answer.
+    fn data_link(&self) -> Option<DataLink> {
+        None
+    }
+
+    /// The B/IP transport this one is or wraps, for what only that type
+    /// offers: BBMD table reads, the foreign-registration state and the
+    /// management counters. `None`, the default, when the link isn't
+    /// BACnet/IP. A wrapper must forward the underlying answer.
+    fn bip_transport(&self) -> Option<&crate::bip::BipTransport> {
+        None
+    }
+
+    /// The B/IP transport underneath this one, or why there is none.
+    ///
+    /// BBMD management (Annex J) and the B/IP counters only exist on a
+    /// [`BipTransport`](crate::bip::BipTransport); this lends it through
+    /// [`bip_transport`](Self::bip_transport), so the same calls work on a
+    /// client over `BipTransport` and on one over
+    /// [`AnyTransport`](crate::any::AnyTransport).
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use bacnet_transport::any::AnyTransport;
+    /// use bacnet_transport::bip::BipTransport;
+    /// use bacnet_transport::loopback::LoopbackTransport;
+    /// use bacnet_transport::port::TransportPort;
+    /// use bacnet_types::data_link::DataLink;
+    /// use bacnet_types::error::Error;
+    ///
+    /// let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    /// let any: AnyTransport = bip.into();
+    /// assert_eq!(any.as_bip()?.management_counters().read_bdt_responses, 0);
+    ///
+    /// let (loopback, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
+    /// let any: AnyTransport = loopback.into();
+    /// assert!(matches!(
+    ///     any.as_bip(),
+    ///     Err(Error::UnsupportedTransport {
+    ///         required: DataLink::Bip,
+    ///         actual: DataLink::Loopback,
+    ///     })
+    /// ));
+    /// # Ok::<(), Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedTransport`] naming this transport's data link when
+    /// it is not BACnet/IP. A transport that reports no data link (a router's
+    /// application port, a test double, or a wrapper that doesn't forward
+    /// [`data_link`](Self::data_link)) refuses with [`Error::Encoding`],
+    /// since it can't say which link it is.
+    fn as_bip(&self) -> Result<&crate::bip::BipTransport, Error> {
+        self.bip_transport().ok_or_else(|| match self.data_link() {
+            Some(actual) => Error::UnsupportedTransport {
+                required: DataLink::Bip,
+                actual,
+            },
+            None => Error::Encoding("transport reports no B/IP link or data link".into()),
+        })
+    }
+
+    /// The B/IPv6 transport this one is or wraps, for what only that type
+    /// offers, such as resolving a peer's VMAC. The B/IPv6 counterpart of
+    /// [`bip_transport`](Self::bip_transport), under the same contract.
+    #[cfg(feature = "ipv6")]
+    fn bip6_transport(&self) -> Option<&crate::bip6::Bip6Transport> {
+        None
+    }
+
     /// Configured broadcast endpoint when this link uses IPv4 BACnet/IP.
     /// `None` means the link does not expose that capability. Wrappers must
     /// forward the underlying value. After `start`, the port is the actual

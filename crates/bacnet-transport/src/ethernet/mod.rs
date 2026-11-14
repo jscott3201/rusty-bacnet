@@ -276,6 +276,7 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
 #[cfg(target_os = "linux")]
 mod transport {
     use super::*;
+    use bacnet_types::data_link::DataLink;
     use nix::ifaddrs::getifaddrs;
     use nix::net::if_::if_nametoindex;
     use nix::sys::socket::LinkAddr;
@@ -517,6 +518,10 @@ mod transport {
     }
 
     impl TransportPort for EthernetTransport {
+        fn data_link(&self) -> Option<DataLink> {
+            Some(DataLink::Ethernet)
+        }
+
         fn supports_local_nonrouter_number_controls(&self) -> bool {
             true
         }
