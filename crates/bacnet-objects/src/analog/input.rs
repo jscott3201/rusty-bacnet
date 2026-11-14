@@ -97,6 +97,9 @@ impl BACnetObject for AnalogInputObject {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         crate::property_metadata::check_read_array_index(self, property, array_index)?;
+        if property == P::PRESENT_VALUE {
+            return Ok(PropertyValue::Real(self.present_value));
+        }
         if let Some(result) = self.core.read(&self.event_detector, property, array_index) {
             return result;
         }
@@ -107,7 +110,6 @@ impl BACnetObject for AnalogInputObject {
             return Ok(value);
         }
         match property {
-            P::PRESENT_VALUE => Ok(PropertyValue::Real(self.present_value)),
             P::PROPERTY_LIST => {
                 crate::property_metadata::read_property_list(&self.property_metadata(), array_index)
             }
@@ -135,7 +137,7 @@ impl BACnetObject for AnalogInputObject {
             self.core
                 .write(&mut self.event_detector, property, array_index, &value)
         {
-            return result;
+            return result.map(drop);
         }
         if let Some(result) = self.analog.write(property, &value) {
             return result;

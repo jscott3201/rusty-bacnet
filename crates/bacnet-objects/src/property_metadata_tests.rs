@@ -14,6 +14,7 @@ use crate::traits::BACnetObject;
 use crate::value_types::{DateValueObject, TimeValueObject};
 
 mod analog;
+mod binary;
 mod groups;
 mod intrinsic;
 
