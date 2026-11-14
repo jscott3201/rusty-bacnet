@@ -214,36 +214,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let request = bacnet_services::device_mgmt::TimeSynchronizationRequest { date, time };
         let mut data = BytesMut::new();
         request.encode(&mut data);
-        let Some((network, address)) = routing else {
-            return self.unconfirmed_request(&mac, service_choice, &data).await;
-        };
-        check_routed_unicast(network, address.len())?;
-        if self.network.local_network_number().get() == Some(network) {
-            if self.network.transport().is_group_destination(&address) {
-                return Err(Error::Encoding(
-                    "routed time synchronization requires a unicast station".into(),
-                ));
+        match routing {
+            None => self.unconfirmed_request(&mac, service_choice, &data).await,
+            Some((network, address)) => {
+                let station = bacnet_types::constructed::BACnetAddress {
+                    network_number: network,
+                    mac_address: MacAddr::from_slice(&address),
+                };
+                self.unconfirmed_request_to(&station, service_choice, &data)
+                    .await
             }
-            return self
-                .unconfirmed_request(&address, service_choice, &data)
-                .await;
         }
-        let apdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
-            service_choice,
-            service_request: data.freeze(),
-        });
-        let mut buf = BytesMut::new();
-        encode_apdu(&mut buf, &apdu)?;
-        self.network
-            .send_apdu_routed(
-                &buf,
-                network,
-                &address,
-                &mac,
-                false,
-                NetworkPriority::Normal,
-            )
-            .await
     }
 }
 

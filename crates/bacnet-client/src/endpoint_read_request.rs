@@ -87,7 +87,7 @@ impl EndpointReadRequest {
     pub(super) fn decode(&self, bytes: &[u8]) -> Result<EndpointReadAck, Error> {
         match self {
             Self::Property(request) => {
-                crate::read_property::decode_ack(request, bytes).map(EndpointReadAck::Property)
+                crate::acks::read_property(request, bytes).map(EndpointReadAck::Property)
             }
             Self::Multiple(request) => {
                 crate::endpoint_rpm::decode_ack(request, bytes).map(EndpointReadAck::Multiple)
