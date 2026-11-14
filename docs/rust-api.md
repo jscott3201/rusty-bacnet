@@ -1045,10 +1045,13 @@ to send again what may have gone nowhere meanwhile. BACnet/SC counts each
 hub connection its recovery makes after losing the one it had (a reconnect
 or a failover, not a move back to the primary). B/IP counts, for a foreign
 device, each registration the BBMD takes after an attempt was refused or
-unanswered or the lease lapsed; a start's first attempt succeeding is none,
-as the broadcasts made before it were held for it. B/IPv6 counts, for a
-foreign device, each registration the BBMD takes after a broadcast went to
-it unproven. MS/TP, Ethernet and B/IPv6 outside foreign mode return `None`.
+unanswered or the lease lapsed, and the next success, even a renewal, after
+the BBMD refused a broadcast with a Distribute-Broadcast-To-Network NAK; a
+start's first attempt succeeding is none, as the broadcasts made before it
+were held for it. B/IPv6 counts, for a foreign device, each registration
+the BBMD takes after a broadcast went to it unproven: before any success,
+after a refusal, while a registration had gone unanswered for 3 seconds, or
+refused by that NAK. MS/TP, Ethernet and B/IPv6 outside foreign mode return `None`.
 The standalone client, once it has asked its network's number, asks again
 then while it is still unknown (#2572). Wrappers and `AnyTransport`
 delegate all three methods: a wrapper around an MS/TP or BACnet/SC
@@ -10172,7 +10175,10 @@ send holds the Who-Is back no further and doesn't count, so the next need
 asks again. After a question went, each return of the link
 (`TransportPort::link_returns`) while the number is still unknown asks once
 more; a known number is kept rather than asked for again (Clause 6.4.19,
-#2572).
+#2572). A caller's own `what_is_network_number` counts as the question. On
+MS/TP a question counts as asked once it is queued for the token; one that
+ages out of the queue before the token comes is not sent again, as MS/TP
+reports no link returns.
 
 Until the answer comes, the table is in an interim state. A relay heard then
 makes a routed row for the same device, so its instance is ambiguous, though
@@ -10192,11 +10198,14 @@ row stays until the purge takes it.
 
 A known number that changes (a learned one replaced by a router's
 configured one, or two configured routers that disagree) is logged as a
-warning naming both. The rows that were local only by the old number (a
+warning naming both, throttled when the number keeps flipping; the table
+follows every change. The rows that were local only by the old number (a
 routed row it folded in, a relay or a routed registration it placed on a
 local row) are dropped then, each reported `Lost`, as nothing now says
-where those devices are; each comes back with its next I-Am. A row a
-device's own I-Am, heard with no SNET, refreshed stays.
+where those devices are. A device that announces itself comes back with
+its next I-Am; one registered with `add_routed_device` never announces, so
+register it again. A row a device's own I-Am, heard with no SNET,
+refreshed stays.
 
 A station is reached by its address too, which is how one of two devices
 sharing an instance is reached (#2560):

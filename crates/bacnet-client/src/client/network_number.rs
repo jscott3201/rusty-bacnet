@@ -71,15 +71,41 @@ impl Asking {
         }
     }
 
+    /// A caller's own What-Is-Network-Number went out
+    /// ([`BACnetClient::what_is_network_number`]): it counts as the
+    /// question, so the next need doesn't ask again.
+    pub(super) fn asked_by_caller(&self) {
+        self.asked.store(true, Ordering::Release);
+    }
+
+    /// The owner's ask for a routed row stored while the number is unknown.
+    /// It never waits on the send lock, so the owner's controls keep
+    /// moving: a busy lock means a question is going out already, and one
+    /// that fails is asked again at the next need.
+    async fn owner_need<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
+        let needed = || {
+            !self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none()
+        };
+        let Ok(_one) = self.sending.try_lock() else {
+            return;
+        };
+        if needed() && ask(network).await {
+            self.asked.store(true, Ordering::Release);
+        }
+    }
+
     /// The link is back: ask again if a question went out before and the
-    /// number is still unknown. A link return never starts the asking.
+    /// number is still unknown. A link return never starts the asking, and
+    /// the owner doesn't wait for a question already going out.
     async fn again<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
         let needed =
             || self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none();
         if !needed() {
             return;
         }
-        let _one = self.sending.lock().await;
+        let Ok(_one) = self.sending.try_lock() else {
+            return;
+        };
         if needed() {
             ask(network).await;
         }
@@ -140,6 +166,9 @@ pub(super) fn spawn<T: TransportPort + 'static>(
         } = owner;
         let notices: TableNotices<'_> = (&device_tx, &collision_tx);
         let mut state = NetworkNumber::default();
+        // Two routers that disagree flip the number on every announcement:
+        // the table follows each flip, the log once an interval.
+        let changes = WarnThrottle::default();
         loop {
             // No branch holds a lock, and each arm finishes its work, the
             // send included, before the next turn polls any of them.
@@ -149,7 +178,7 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                     None => break,
                 },
                 () = asking.wanted.notified() => {
-                    asking.first_need(&network).await;
+                    asking.owner_need(&network).await;
                     continue;
                 }
                 () = link_returned(&mut link_returns) => {
@@ -164,7 +193,8 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                     let after = state.snapshot().0;
                     if after != before {
                         if before != 0 {
-                            warn!(
+                            warn_throttled!(
+                                changes,
                                 previous = before,
                                 number = after,
                                 "this network's number changed; rows made local under the \

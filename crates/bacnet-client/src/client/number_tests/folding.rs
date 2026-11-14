@@ -147,7 +147,9 @@ async fn a_fold_keeps_what_the_device_announced_over_a_placeholder() {
 /// A learned number replaced by a configured one (a router's
 /// announcement): the rows local only by the old number, folded from a
 /// routed row or a relay landed there, are dropped and reported `Lost`; a
-/// device heard directly stays; routed rows on the new number fold.
+/// device heard directly stays, and so does a folded row its device's own
+/// I-Am, with no SNET, has refreshed since; routed rows on the new number
+/// fold.
 #[tokio::test(start_paused = true)]
 async fn a_changed_number_drops_the_rows_local_by_the_old_one() {
     const NEW_NETWORK: u16 = THIS_NETWORK + 1;
@@ -157,11 +159,14 @@ async fn a_changed_number_drops_the_rows_local_by_the_old_one() {
     send_to_client(inbound, &i_am(9), &PEER, None).await;
     send_to_client(inbound, &i_am(9), &ROUTER, relayed(THIS_NETWORK, &PEER)).await;
     send_to_client(inbound, &i_am(10), &ROUTER, relayed(THIS_NETWORK, &[4])).await;
+    send_to_client(inbound, &i_am(14), &ROUTER, relayed(THIS_NETWORK, &[8])).await;
     send_to_client(inbound, &i_am(13), &ROUTER, relayed(NEW_NETWORK, &[7])).await;
     tokio::time::sleep(Duration::from_millis(5)).await;
     site.announce(THIS_NETWORK, 0).await;
-    // A relay after learning lands on a local row by the number alone.
+    // A relay after learning lands on a local row by the number alone;
+    // device 14, folded like device 10, is then heard directly.
     send_to_client(inbound, &i_am(12), &ROUTER, relayed(THIS_NETWORK, &[6])).await;
+    send_to_client(inbound, &i_am(14), &[8], None).await;
     tokio::time::sleep(Duration::from_millis(5)).await;
     assert!(site.client.get_device_at(0, &[6]).await.is_some());
 
@@ -179,6 +184,6 @@ async fn a_changed_number_drops_the_rows_local_by_the_old_one() {
         .iter()
         .map(|d| (d.object_identifier.instance_number(), d.is_local()))
         .collect();
-    assert_eq!(local, [(9, true), (13, true)], "{devices:?}");
+    assert_eq!(local, [(9, true), (13, true), (14, true)], "{devices:?}");
     site.client.stop().await.unwrap();
 }

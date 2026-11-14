@@ -795,13 +795,17 @@ pub trait TransportPort: Send + Sync {
     /// move back to the primary hub while the failover hub still serves is
     /// no return. A started B/IP transport counts, as a foreign device,
     /// each registration the BBMD takes after an attempt was refused or
-    /// unanswered or the lease lapsed; a start's first attempt succeeding
-    /// is no return, since the broadcasts made before it were held for it. A B/IPv6 foreign device
-    /// counts each registration the BBMD takes after a broadcast went to it
-    /// while its latest answer wasn't a success (B/IPv6 holds none, so a
-    /// start's first registration can count). MS/TP, Ethernet and B/IPv6
-    /// outside foreign mode keep the default: an MS/TP node rejoining the
-    /// token ring is not reported.
+    /// unanswered or the lease lapsed, and the next success, a renewal
+    /// included, after the BBMD refused a broadcast with a
+    /// Distribute-Broadcast-To-Network NAK; a start's first attempt
+    /// succeeding is no return, since the broadcasts made before it were
+    /// held for it. A B/IPv6 foreign device counts each registration the
+    /// BBMD takes after a broadcast went to it unproven: before any
+    /// success, after a refusal, while a registration had gone unanswered
+    /// for 3 s, or refused by that NAK (B/IPv6 holds none, so a start's
+    /// first registration can count). MS/TP, Ethernet and B/IPv6 outside
+    /// foreign mode keep the default: an MS/TP node rejoining the token
+    /// ring is not reported.
     ///
     /// Wrappers must delegate.
     fn link_returns(&self) -> Option<watch::Receiver<u64>> {

@@ -100,10 +100,12 @@ pub(super) struct Answers {
     unanswered: u64,
     /// Register-Foreign-Device NAKs taken as answers, from every BBMD.
     refused: u64,
-    /// A broadcast went to the BBMD while its latest answer wasn't a
-    /// success, so it may have dropped it: the next success brings the link
-    /// back (#2572). B/IPv6 holds no broadcasts for the first registration,
-    /// so this covers a start's too.
+    /// A broadcast went to the BBMD while nothing showed it held this
+    /// device's entry (its latest answer wasn't a success, or a
+    /// registration has gone unanswered for [`ANSWER_TIMEOUT`]), or the BBMD
+    /// refused one: it may have dropped it, and the next success brings the
+    /// link back (#2572). B/IPv6 holds no broadcasts for the first
+    /// registration, so this covers a start's too.
     unproven: bool,
 }
 
@@ -259,6 +261,15 @@ impl ForeignTarget {
     /// outstanding.
     pub(in crate::bip6) fn result(&self, peer: SocketAddrV6, code: Bvlc6ResultCode) {
         let mut state = self.lock();
+        if code == Bvlc6ResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK {
+            // The BBMD in use dropped a broadcast and holds no entry for
+            // this device, whatever its last answer said (#2572).
+            let in_use = state.config.bbmd.address();
+            if in_use.is_some_and(|bbmd| same(bbmd, peer)) {
+                state.answers.unproven = true;
+            }
+            return;
+        }
         let back = !state.release_answered(peer, code)
             && state.registration_answered(peer, code, Instant::now());
         drop(state);
@@ -269,10 +280,16 @@ impl ForeignTarget {
     }
 
     /// A broadcast went to the BBMD: unproven unless its latest answer was
-    /// a success.
+    /// a success and no registration since has gone unanswered for
+    /// [`ANSWER_TIMEOUT`].
     pub(in crate::bip6) fn broadcast_sent(&self) {
         let answers = &mut self.lock().answers;
-        if !matches!(answers.last, Some((Bip6RegistrationAnswer::Held, _))) {
+        let held = matches!(answers.last, Some((Bip6RegistrationAnswer::Held, _)));
+        let now = Instant::now();
+        let silent = answers
+            .outstanding
+            .is_some_and(|sent| now.saturating_duration_since(sent.since) >= ANSWER_TIMEOUT);
+        if !held || silent {
             answers.unproven = true;
         }
     }

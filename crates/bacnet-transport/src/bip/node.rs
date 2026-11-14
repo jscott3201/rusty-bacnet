@@ -163,6 +163,11 @@ pub(super) struct NodeState {
     /// so the next registration is the link coming back (#2572). Not set
     /// for the first attempt of a start, whose broadcasts are held.
     lost: bool,
+    /// The BBMD refused a broadcast with a Distribute-Broadcast-To-Network
+    /// NAK (counted as a renewal hint): it dropped it and holds no entry
+    /// for this device, live lease or not, so the next success, even a
+    /// renewal, is the link coming back (#2572).
+    dropped: bool,
     /// The link's returns: `TransportPort::link_returns`.
     returns: watch::Sender<u64>,
 }
@@ -197,6 +202,9 @@ impl NodeState {
             }
         }
         let counters = self.node.take_counters();
+        if counters.renewal_hints > 0 {
+            self.dropped = true;
+        }
         if !self.stopped {
             record.absorb(&counters);
         }
@@ -261,21 +269,29 @@ impl NodeState {
     /// Follow a foreign device's link through its registration (#2572): a
     /// registration lost, refused or unanswered may have dropped the
     /// broadcasts sent meanwhile, and the next registration brings the link
-    /// back. The first attempt's own success is no return: the broadcasts
-    /// made before it were held and go now.
+    /// back; after the BBMD refused a broadcast, so does the next renewal.
+    /// The first attempt's own success is no return: the broadcasts made
+    /// before it were held and go now.
     fn follow_link(&mut self, event: &RegistrationEvent) {
-        match event {
+        let back = match event {
             RegistrationEvent::Registered { .. } => {
-                if std::mem::take(&mut self.lost) {
-                    self.returns
-                        .send_modify(|count| *count = count.wrapping_add(1));
-                }
+                std::mem::take(&mut self.lost) | std::mem::take(&mut self.dropped)
             }
-            RegistrationEvent::Renewed { .. } => self.lost = false,
+            RegistrationEvent::Renewed { .. } => {
+                self.lost = false;
+                std::mem::take(&mut self.dropped)
+            }
             RegistrationEvent::Lapsed
             | RegistrationEvent::Refused { .. }
-            | RegistrationEvent::Unanswered => self.lost = true,
-            _ => {}
+            | RegistrationEvent::Unanswered => {
+                self.lost = true;
+                false
+            }
+            _ => false,
+        };
+        if back {
+            self.returns
+                .send_modify(|count| *count = count.wrapping_add(1));
         }
     }
 }
@@ -364,6 +380,7 @@ impl NodeHandle {
                 refusal_warned: false,
                 stopped: false,
                 lost: false,
+                dropped: false,
                 returns: watch::Sender::new(0),
             }),
             wake: Notify::new(),
