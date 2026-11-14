@@ -10,12 +10,13 @@
 
 use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
-use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportProvenance};
+use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
 use super::envelope_harness::{Harness, broadcast_data, control_npdu};
+use super::ingress_harness::wire_port;
 use super::{BACnetRouter, RouterOptions, RouterPort, SendRequest, StartedRouter};
 use crate::router_table::PortId;
 
@@ -119,71 +120,6 @@ async fn directed_unknown_discovered_via_answer_routes_next_packet() {
 
 // --- Real router: APDU unknown path + stop cancellation ---
 
-struct MemTransport {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
-    outgoing: mpsc::Sender<SendRequest>,
-    mac: [u8; 1],
-}
-
-impl bacnet_transport::port::TransportPort for MemTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, bacnet_types::error::Error> {
-        self.incoming
-            .take()
-            .ok_or_else(|| bacnet_types::error::Error::Encoding("started".into()))
-    }
-    async fn stop(&mut self) -> Result<(), bacnet_types::error::Error> {
-        Ok(())
-    }
-    async fn send_unicast(
-        &self,
-        npdu: &[u8],
-        mac: &[u8],
-    ) -> Result<(), bacnet_types::error::Error> {
-        self.send_unicast_with_data_attributes(npdu, mac, &[]).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), bacnet_types::error::Error> {
-        self.send_broadcast_with_data_attributes(npdu, &[]).await
-    }
-    async fn send_unicast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        mac: &[u8],
-        data_attributes: &[DataAttribute],
-    ) -> Result<(), bacnet_types::error::Error> {
-        self.outgoing
-            .try_send(SendRequest::Unicast {
-                npdu: Bytes::copy_from_slice(npdu),
-                mac: MacAddr::from_slice(mac),
-                data_attributes: data_attributes.to_vec(),
-
-                response: None,
-                reject_origin: None,
-            })
-            .map_err(|_| bacnet_types::error::Error::Encoding("wire full".into()))
-    }
-    async fn send_broadcast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        data_attributes: &[DataAttribute],
-    ) -> Result<(), bacnet_types::error::Error> {
-        self.outgoing
-            .try_send(SendRequest::Broadcast {
-                npdu: Bytes::copy_from_slice(npdu),
-                data_attributes: data_attributes.to_vec(),
-
-                reject_origin: None,
-            })
-            .map_err(|_| bacnet_types::error::Error::Encoding("wire full".into()))
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.mac
-    }
-}
-
 fn apdu_to(net: u16) -> Bytes {
     let npdu = Npdu {
         destination: Some(NpduAddress {
@@ -219,19 +155,11 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
     let (out1, mut wire1) = mpsc::channel(16);
     let ports = vec![
         RouterPort {
-            transport: MemTransport {
-                incoming: Some(rx0),
-                outgoing: out0,
-                mac: [1],
-            },
+            transport: wire_port(1, rx0, out0),
             network_number: 1000,
         },
         RouterPort {
-            transport: MemTransport {
-                incoming: Some(_rx1),
-                outgoing: out1,
-                mac: [2],
-            },
+            transport: wire_port(2, _rx1, out1),
             network_number: 2000,
         },
     ];
@@ -325,19 +253,11 @@ async fn stop_cancels_pending_discovery() {
     let (out1, _wire1) = mpsc::channel(16);
     let ports = vec![
         RouterPort {
-            transport: MemTransport {
-                incoming: Some(rx0),
-                outgoing: out0,
-                mac: [1],
-            },
+            transport: wire_port(1, rx0, out0),
             network_number: 1000,
         },
         RouterPort {
-            transport: MemTransport {
-                incoming: Some(_rx1),
-                outgoing: out1,
-                mac: [2],
-            },
+            transport: wire_port(2, _rx1, out1),
             network_number: 2000,
         },
     ];

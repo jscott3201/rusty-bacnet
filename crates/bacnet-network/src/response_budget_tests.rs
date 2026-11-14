@@ -3,12 +3,11 @@
 //! length. A direct capability can't be built in this crate; bacnet-server's
 //! `direct_principal_tests::responses` budget tests pin that arm, and fail
 //! when the header length is wrong.
-use std::sync::{Arc, Mutex};
-
 use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_npdu::NpduLimits;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::{MacAddr, error::Error};
+use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::TestTransport;
+use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
@@ -17,42 +16,14 @@ use crate::router::{BACnetRouter, RouterOptions, RouterPort};
 /// The cap each port reports, well under the largest NPDU.
 const PORT_NPDU: u16 = 600;
 
-#[derive(Clone)]
-struct Port {
-    incoming: Arc<Mutex<Option<mpsc::Receiver<ReceivedNpdu>>>>,
-    mac: [u8; 1],
-}
-
-impl TransportPort for Port {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.lock().unwrap().take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_mac(&self) -> &[u8] {
-        &self.mac
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        480
-    }
-    fn max_npdu(&self) -> NpduLimits {
-        NpduLimits::both(PORT_NPDU)
-    }
-}
-
-fn port(mac: u8) -> (Port, mpsc::Sender<ReceivedNpdu>) {
+fn port(mac: u8) -> (TestTransport, mpsc::Sender<ReceivedNpdu>) {
     let (frames, incoming) = mpsc::channel(8);
-    let port = Port {
-        incoming: Arc::new(Mutex::new(Some(incoming))),
-        mac: [mac],
-    };
+    let port = TestTransport::builder()
+        .local_mac(&[mac])
+        .inbound(incoming)
+        .receive_capacity(480)
+        .max_npdu(NpduLimits::both(PORT_NPDU))
+        .build();
     (port, frames)
 }
 

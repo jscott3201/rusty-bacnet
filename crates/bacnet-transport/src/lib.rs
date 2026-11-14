@@ -104,6 +104,9 @@ mod sys;
 pub mod tap;
 #[cfg(feature = "sc-tls")]
 mod tcp_connect;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_transport;
 #[cfg(feature = "sc-tls")]
 mod tls_reject;
 mod udp_metadata;
