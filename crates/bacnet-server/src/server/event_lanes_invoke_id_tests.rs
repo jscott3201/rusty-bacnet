@@ -87,7 +87,8 @@ async fn wait_sent_to(rig: &Rig, mac: &[u8], count: usize) -> Vec<(bool, u32)> {
 }
 
 /// With every invoke ID leased, the next confirmed notification waits at its
-/// lane's head, uncounted, and a later unconfirmed one to the same
+/// lane's head, counted once as a wait and not dropped, and a later
+/// unconfirmed one to the same
 /// destination waits behind it; the broadcast destination's lane goes on.
 /// One ID coming back sends the held entry, then the rest, in commit order.
 #[tokio::test(start_paused = true)]
@@ -344,5 +345,63 @@ async fn a_worker_that_panics_gives_its_invoke_id_back() {
     assert_eq!((other, held), (vec![(true, FAULT)], vec![(true, FAULT)]));
     assert_eq!(*rig.probe.panic_on.lock().unwrap(), None, "a send panicked");
     assert_eq!(waited(&rig), 1, "the other destination waited");
+    spy.assert_logged_unlocked(1);
+}
+
+/// Two lanes wait and one ID comes back: one of them sends, the other wakes,
+/// finds none and waits again, and each wait counts once.
+#[tokio::test(start_paused = true)]
+async fn each_wait_counts_once_however_often_it_wakes() {
+    let rig = Rig::start(|db| {
+        ai_objects(db);
+        class_0(
+            db,
+            vec![
+                to_mac(&OTHER, true, EventTransitionBits::all()),
+                to_mac(&HELD, true, EventTransitionBits::all()),
+            ],
+        );
+    })
+    .await;
+    let mut leases = lease_every_id(&rig.server.notification_transactions);
+    rig.reliability(Reliability::NO_SENSOR).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(waited(&rig), 2, "both heads wait");
+    drop(leases.pop());
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let sent = sent_to(&rig, &OTHER).len() + sent_to(&rig, &HELD).len();
+    assert_eq!(sent, 1, "one took the ID");
+    assert_eq!(waited(&rig), 2, "the other waits again, not counted again");
+}
+
+/// A transaction state that can lease no invoke ID at all (poisoned by a
+/// panic) drops the confirmed head with a warning: the unconfirmed entry
+/// behind it goes out, the lane closes, no writer is held, and nothing
+/// counts as a wait.
+#[tokio::test(start_paused = true)]
+async fn a_state_that_can_lease_no_id_drops_the_entry_and_the_lane_goes_on() {
+    let rig = Rig::start(|db| {
+        ai_objects(db);
+        class_0(
+            db,
+            vec![
+                to_mac(&HELD, true, EventTransitionBits::TO_FAULT),
+                to_mac(&HELD, false, EventTransitionBits::TO_NORMAL),
+            ],
+        );
+    })
+    .await;
+    let (spy, _guard) = LaneLockSpy::install(&rig.server.notification_transactions);
+    rig.server.notification_transactions.poison_state_for_test();
+    let started = tokio::time::Instant::now();
+    rig.reliability(Reliability::NO_SENSOR).await;
+    rig.reliability(Reliability::NO_FAULT_DETECTED).await;
+    assert_eq!(wait_sent_to(&rig, &HELD, 1).await, [(false, NORMAL)]);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "no writer waited"
+    );
+    assert_eq!(lanes(&rig.server.notification_transactions).open(), 0);
+    assert_eq!(waited(&rig), 0);
     spy.assert_logged_unlocked(1);
 }

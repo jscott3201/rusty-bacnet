@@ -261,9 +261,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 // The transaction state can lease no ID at all, poisoned by
                 // a panic or out of generations, so nothing would end a
-                // wait: dropped, and said.
+                // wait: dropped, and said, at most once per interval.
                 Err(error) => {
-                    warn!(%error, "No confirmed transaction for an EventNotification; dropped");
+                    warn_throttled!(
+                        lanes::lane_state(notification_transactions).unleasable(),
+                        %error,
+                        "No confirmed transaction for an EventNotification; dropped"
+                    );
                     return None;
                 }
             };

@@ -5703,13 +5703,16 @@ and how each limit behaves.
 
 #### `event_notification_counters() -> EventNotificationCounters`
 
-Sample the totals of event notifications the server did not deliver: a dict
+Sample the totals of event notifications the server did not deliver, and of
+two waits that keep their order (`confirmed_waited_for_invoke_id`,
+`cov_wait_expired`): a dict
 holding every field of the Rust `EventNotificationCounters` under the same name,
 typed as the `EventNotificationCounters` TypedDict in the stub. Every field is a
 running total that starts at zero on each `start()` and saturates at 2**64-1.
 Each field is read on its own, so one sample is not an atomic aggregate. Like
 `cov_counters()`, it raises `RuntimeError` before start and after stop. Each
-counted refusal also logs a warning; the counters are the running signal.
+counted refusal also logs a warning, and each wait for an invoke ID a debug
+line; the counters are the running signal.
 
 ```python
 counters = await server.event_notification_counters()

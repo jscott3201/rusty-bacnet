@@ -89,14 +89,14 @@ enum Sent {
 /// layer, so the lanes log only after letting it go. Install it on a
 /// current-thread runtime, where only the logging thread can hold it.
 #[derive(Clone)]
-struct LaneLockSpy {
+pub(in crate::server) struct LaneLockSpy {
     transactions: Arc<NotificationTransactions>,
     /// Events seen, and the messages of those that found the lock held.
     seen: Arc<StdMutex<(usize, Vec<String>)>>,
 }
 
 impl LaneLockSpy {
-    fn install(
+    pub(in crate::server) fn install(
         transactions: &Arc<NotificationTransactions>,
     ) -> (Self, tracing::subscriber::DefaultGuard) {
         let spy = Self {
@@ -109,7 +109,7 @@ impl LaneLockSpy {
 
     /// Every event this crate logged so far, and whether any found the
     /// lanes' lock held.
-    fn assert_logged_unlocked(&self, at_least: usize) {
+    pub(in crate::server) fn assert_logged_unlocked(&self, at_least: usize) {
         let (events, held) = &*self.seen.lock().unwrap();
         assert!(*events >= at_least, "{events} events logged");
         assert!(held.is_empty(), "logged under the lanes' lock: {held:?}");

@@ -10,6 +10,7 @@
 use crate::server::command_remote_write_tests::{deliver, device, disable_initiation};
 use crate::server::cov_wire_test_support::*;
 use crate::server::event_recipient_routing_tests::{address_recipient, destination_for};
+use crate::server::event_send::lanes::tests::LaneLockSpy;
 use crate::server::remote_write_discovery_tests::{
     everywhere, i_am, next_who_is, targeted, who_is_sent,
 };
@@ -464,6 +465,7 @@ async fn transitions(h: &Harness, count: usize) {
 #[tokio::test(start_paused = true)]
 async fn a_device_queue_waiting_for_an_invoke_id_holds_64() {
     let mut h = start(true).await;
+    let (spy, _guard) = LaneLockSpy::install(&h.server.notification_transactions);
     let leases = h.server.notification_transactions.lease_every_invoke_id();
     hold_device_9(&h).await;
     transitions(&h, 1_100).await;
@@ -474,6 +476,8 @@ async fn a_device_queue_waiting_for_an_invoke_id_holds_64() {
         (1_100 - super::MAX_LANE_ENTRIES as u64, 0)
     );
     assert_eq!(counters.confirmed_waited_for_invoke_id, 1);
+    // The drops' warning went out after the lanes' lock was let go.
+    spy.assert_logged_unlocked(1);
     drop(leases);
     h.server.stop().await.unwrap();
 }
@@ -496,5 +500,37 @@ async fn a_held_device_leaves_room_for_another_to_be_looked_for() {
     let counters = h.server.event_notification_counters();
     assert_eq!(counters.device_recipient_unbound, 0);
     drop(leases);
+    h.server.stop().await.unwrap();
+}
+
+/// A device's queue holds 64 while it waits for the device's I-Am too: past
+/// them the newest are dropped and counted in `lane_full`, none as unbound,
+/// and the 64 go out in order once the I-Am comes (#2537).
+#[tokio::test(start_paused = true)]
+async fn a_device_queue_waiting_for_its_i_am_holds_64() {
+    let mut h = start(false).await;
+    h.write_local(85.0).await;
+    next_who_is(&h).await;
+    transitions(&h, 69).await;
+    assert_eq!(waiting(&h), super::MAX_LANE_ENTRIES);
+    let counters = h.server.event_notification_counters();
+    assert_eq!(
+        (counters.lane_full, counters.device_recipient_unbound),
+        (70 - super::MAX_LANE_ENTRIES as u64, 0)
+    );
+    deliver(&h, &i_am(9), &DEVICE_9, None).await;
+    h.settle().await;
+    let sent = to_states(&h, &DEVICE_9);
+    assert_eq!(sent.len(), super::MAX_LANE_ENTRIES, "the 64 held");
+    let alternating = sent.iter().enumerate().all(|(at, state)| {
+        *state
+            == if at % 2 == 0 {
+                bacnet_types::enums::EventState::HIGH_LIMIT
+            } else {
+                bacnet_types::enums::EventState::NORMAL
+            }
+    });
+    assert!(alternating, "in the order they were made: {sent:?}");
+    assert_eq!(waiting(&h), 0);
     h.server.stop().await.unwrap();
 }

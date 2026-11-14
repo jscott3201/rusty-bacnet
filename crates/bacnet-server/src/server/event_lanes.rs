@@ -193,12 +193,24 @@ pub(in crate::server) async fn settled_within(
 }
 
 /// The lanes behind their lock, made the first time they are needed, and
-/// the throttle on the warning for a dropped notification beside it, so the
-/// warning goes out after the lock is let go.
+/// the throttles on their warnings beside it, so a warning goes out after
+/// the lock is let go.
 #[derive(Default)]
 pub(in crate::server) struct LaneState {
     lanes: std::sync::Mutex<EventLanes>,
+    /// For a notification dropped at a bound.
     warning: bacnet_transport::warn_throttle::WarnThrottle,
+    /// For a confirmed notification dropped because the transaction state
+    /// can lease no invoke ID at all.
+    unleasable: bacnet_transport::warn_throttle::WarnThrottle,
+}
+
+impl LaneState {
+    /// The throttle on the warning for a confirmed notification the
+    /// transaction state can lease no invoke ID for.
+    pub(super) fn unleasable(&self) -> &bacnet_transport::warn_throttle::WarnThrottle {
+        &self.unleasable
+    }
 }
 
 /// The lanes: each destination's waiting entries, and the tasks that drain
@@ -444,7 +456,7 @@ fn observe(result: Result<(), tokio::task::JoinError>) {
 
 /// `transactions`' lane state, made the first time it is needed: one
 /// structure, whichever caller gets there first.
-fn lane_state(transactions: &NotificationTransactions) -> &LaneState {
+pub(super) fn lane_state(transactions: &NotificationTransactions) -> &LaneState {
     transactions.event_lanes.get_or_init(Box::default)
 }
 
@@ -617,4 +629,4 @@ impl<T: TransportPort + 'static> Drop for LaneTask<T> {
 
 #[cfg(test)]
 #[path = "event_lanes_tests.rs"]
-mod tests;
+pub(super) mod tests;

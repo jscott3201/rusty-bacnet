@@ -1,14 +1,17 @@
-//! Lifetime counters for event notifications the server did not deliver (#1142).
+//! Lifetime counters for event notifications the server did not deliver
+//! (#1142), and for the waits that keep their order (#2537).
 use super::*;
 use bacnet_objects::notification_class::RecipientLookupOutcome;
 use std::sync::atomic::AtomicU64;
 
-/// Lifetime totals of event notifications that were not delivered, each
-/// saturating at `u64::MAX`. A new server starts at zero, and the totals stay
-/// readable after `stop()`. Fields are sampled independently, not as one
-/// atomic aggregate. Each refusal also logs a warning (the forwarding cap's
-/// at most once a minute); these totals are the
-/// running signal, not an audit log.
+/// Lifetime totals of event notifications that were not delivered, and of
+/// two waits that keep their order (`confirmed_waited_for_invoke_id` and
+/// `cov_wait_expired`), each saturating at `u64::MAX`. A new server starts at
+/// zero, and the totals stay readable after `stop()`. Fields are sampled
+/// independently, not as one atomic aggregate. Each refusal also logs a
+/// warning (the forwarding cap's at most once a minute), and each wait for
+/// an invoke ID a debug line; these totals are the running signal, not an
+/// audit log.
 ///
 /// The first four count transitions (event or acknowledgment notifications)
 /// whose Notification Class lookup failed closed, so no recipient received
@@ -26,8 +29,9 @@ use std::sync::atomic::AtomicU64;
 /// recipient at a broadcast or other group address. The warning logged with
 /// each skip names the finer reason.
 ///
-/// The next three count confirmed notifications to one recipient that were
-/// never acknowledged.
+/// The next three count confirmed notifications to one recipient: the first,
+/// those that waited for an invoke ID, which are not dropped (each logged at
+/// debug), and the two after it, those never acknowledged.
 ///
 /// The next one counts unconfirmed notifications whose send failed at the
 /// transport, once per destination. The transition's other destinations are
@@ -151,8 +155,8 @@ pub struct EventNotificationCounters {
     pub cov_wait_expired: u64,
 }
 
-/// One undelivered event notification, as counted in
-/// [`EventNotificationCounters`].
+/// One undelivered event notification, or one that waited for an invoke ID,
+/// as counted in [`EventNotificationCounters`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EventSuppression {
     NotificationClassMissing,

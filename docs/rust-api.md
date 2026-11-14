@@ -11587,30 +11587,32 @@ configured list, clear the storage.
 
 `BACnetServer::event_notification_counters()` returns an
 `EventNotificationCounters` snapshot: lifetime totals of event notifications the
-server did not deliver, each saturating at `u64::MAX`, zero for a new server and
-still readable after `stop()`. Fields are sampled independently.
+server did not deliver, and of two waits that keep their order
+(`confirmed_waited_for_invoke_id`, `cov_wait_expired`), each saturating at
+`u64::MAX`, zero for a new server and still readable after `stop()`. Fields are
+sampled independently.
 
 ```rust
 let counters = server.event_notification_counters();
-counters.notification_class_missing;    // no Notification Class with that number
-counters.recipient_list_unavailable;    // its Recipient_List could not be read
-counters.recipient_list_invalid;        // the list did not decode as a whole
-counters.recipient_list_too_long;       // a custom class served more than 32 destinations
-counters.device_recipient_unbound;      // a Device recipient with no current binding
-counters.recipient_unroutable;          // a recipient no binding or retry can route
-counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast or group address
-counters.confirmed_waited_for_invoke_id; // waited in its lane for a free invoke ID
-counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
-counters.confirmed_unanswered;          // no acknowledgment after the last retry
-counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused
-counters.apdu_too_large;                // a notification longer than the local APDU size
-counters.received_not_forwarded;        // a received notification no forwarder took
-counters.forwarding_cap_dropped;        // a destination past the forwarding cap
-counters.received_not_logged;           // a received notification past its source's allowance
-counters.lane_full;                     // dropped: its destination's lane held 64
-counters.lanes_entries_full;            // dropped: 1,024 waiting across the lanes
-counters.lanes_full;                    // dropped: 256 destinations waiting
-counters.cov_wait_expired;              // a COV fanout that stopped waiting at the APDU timeout
+counters.notification_class_missing;     // no Notification Class with that number
+counters.recipient_list_unavailable;     // its Recipient_List could not be read
+counters.recipient_list_invalid;         // the list did not decode as a whole
+counters.recipient_list_too_long;        // a custom class served more than 32 destinations
+counters.device_recipient_unbound;       // a Device recipient with no current binding
+counters.recipient_unroutable;           // a recipient no binding or retry can route
+counters.confirmed_broadcast_recipient;  // confirmed requested at a broadcast or group address
+counters.confirmed_waited_for_invoke_id; // waited for a free invoke ID, in its lane or its device's queue
+counters.confirmed_rejected;             // the recipient answered Error, Reject or Abort
+counters.confirmed_unanswered;           // no acknowledgment after the last retry
+counters.unconfirmed_send_failed;        // an unconfirmed send the transport refused
+counters.apdu_too_large;                 // a notification longer than the local APDU size
+counters.received_not_forwarded;         // a received notification no forwarder took
+counters.forwarding_cap_dropped;         // a destination past the forwarding cap
+counters.received_not_logged;            // a received notification past its source's allowance
+counters.lane_full;                      // dropped: its destination's lane held 64
+counters.lanes_entries_full;             // dropped: 1,024 waiting across the lanes
+counters.lanes_full;                     // dropped: 256 destinations waiting
+counters.cov_wait_expired;               // a COV fanout that stopped waiting at the APDU timeout
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment

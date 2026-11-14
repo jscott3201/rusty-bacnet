@@ -411,6 +411,18 @@ impl NotificationTransactions {
         }
     }
 
+    /// Poison the transaction state, as a panic under its lock would, for
+    /// tests of a state that can lease no invoke ID at all.
+    #[cfg(test)]
+    pub(super) fn poison_state_for_test(self: &Arc<Self>) {
+        let transactions = Arc::clone(self);
+        let _ = std::thread::spawn(move || {
+            let _held = transactions.core.state.lock().unwrap();
+            panic!("poison the notification state");
+        })
+        .join();
+    }
+
     /// Lease every invoke ID to another peer, for tests that need none
     /// free.
     #[cfg(test)]

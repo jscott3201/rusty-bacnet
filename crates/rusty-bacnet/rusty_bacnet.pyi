@@ -5012,7 +5012,7 @@ class ForwarderSaveCounters(TypedDict):
     failed_saves: int
 
 class EventNotificationCounters(TypedDict):
-    """Undelivered event notifications, zero at each start; independent u64 totals, saturating at 2**64-1."""
+    """Undelivered event notifications, and confirmed ones that waited for an invoke ID or COV fanouts that stopped waiting; zero at each start; independent u64 totals, saturating at 2**64-1."""
     notification_class_missing: int
     recipient_list_unavailable: int
     recipient_list_invalid: int
