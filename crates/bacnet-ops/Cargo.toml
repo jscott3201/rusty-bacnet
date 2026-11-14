@@ -40,6 +40,7 @@ libc.workspace = true
 [dev-dependencies]
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
+bacnet-transport = { workspace = true, features = ["test-support"] }
 # The text-form round trips of the parsers (`parse::rdf_tests`).
 proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

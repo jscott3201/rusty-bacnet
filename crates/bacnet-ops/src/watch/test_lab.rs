@@ -16,17 +16,16 @@ use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::{SendMode, StartMode, TestTransport, TestTransportHandle};
 use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetCOVSubscription;
 use bacnet_types::enums::{
     AbortReason, EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
     RejectReason,
 };
-use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::Bytes;
-use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::{Hub, Point, WatchOptions, Watched};
@@ -59,33 +58,6 @@ pub(super) struct Quirks {
     pub(super) late_cov_ack: AtomicBool,
 }
 
-/// The client's link to the lab device.
-pub(super) struct Link {
-    inner: LoopbackTransport,
-    quirks: Arc<Quirks>,
-    /// Each confirmed request sent: its service and when.
-    sent: Arc<Mutex<Vec<(u8, Instant)>>>,
-    inject: Arc<Mutex<Option<mpsc::Sender<ReceivedNpdu>>>>,
-}
-
-impl Link {
-    /// Answer request `invoke` with `apdu`'s tail, as the device would.
-    fn answer(&self, apdu: Vec<u8>) {
-        let mut frame = vec![1, 0];
-        frame.extend(apdu);
-        let inject = self.inject.lock().unwrap().clone();
-        if let Some(inject) = inject {
-            let _ = inject.try_send(ReceivedNpdu::unverified(
-                Bytes::from(frame),
-                MacAddr::from_slice(&[2]),
-                false,
-                Vec::new(),
-                None,
-            ));
-        }
-    }
-}
-
 /// Whether `npdu` acknowledges a SubscribeCOV.
 fn is_cov_ack(npdu: &ReceivedNpdu) -> bool {
     decode_npdu(npdu.npdu.clone()).is_ok_and(|decoded| {
@@ -100,86 +72,116 @@ fn take(counter: &AtomicU8) -> bool {
         .is_ok()
 }
 
-impl TransportPort for Link {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let mut from_device = self.inner.start().await?;
-        let (sender, receiver) = mpsc::channel(256);
-        *self.inject.lock().unwrap() = Some(sender.clone());
-        let quirks = Arc::clone(&self.quirks);
-        tokio::spawn(async move {
-            while let Some(npdu) = from_device.recv().await {
+/// The client's link to the lab device: `inner`, relayed through a channel
+/// the link can also inject answers into, recording each confirmed request
+/// in `sent` and playing `quirks`.
+pub(super) fn link(
+    inner: LoopbackTransport,
+    quirks: Arc<Quirks>,
+    sent: Arc<Mutex<Vec<(u8, Instant)>>>,
+) -> TestTransport {
+    let builder = TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .start(StartMode::Relay(256));
+    let (late, injecting) = (builder.handle(), builder.handle());
+    let inbound_quirks = Arc::clone(&quirks);
+    builder
+        .on_inbound(move |npdu| {
+            let quirks = Arc::clone(&inbound_quirks);
+            let late = late.clone();
+            async move {
                 if quirks.slow_cov_ack.load(Ordering::Relaxed) && is_cov_ack(&npdu) {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
                 if quirks.late_cov_ack.load(Ordering::Relaxed) && is_cov_ack(&npdu) {
-                    let sender = sender.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        let _ = sender.send(npdu).await;
-                    });
-                    continue;
+                    if let Some(sender) = late.inbound() {
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            let _ = sender.send(npdu).await;
+                        });
+                    }
+                    return None;
                 }
-                if sender.send(npdu).await.is_err() {
-                    break;
-                }
+                Some(npdu)
             }
-        });
-        Ok(receiver)
+        })
+        .intercept(move |frame| {
+            let verdict = if frame.broadcast {
+                true
+            } else {
+                forwards(&frame, &quirks, &sent, &injecting)
+            };
+            async move { verdict }
+        })
+        .build()
+}
+
+/// Answer request `invoke` with `apdu`'s tail, as the device would.
+fn answer(handle: &TestTransportHandle, apdu: Vec<u8>) {
+    let mut frame = vec![1, 0];
+    frame.extend(apdu);
+    if let Some(inject) = handle.inbound() {
+        let _ = inject.try_send(ReceivedNpdu::unverified(
+            Bytes::from(frame),
+            MacAddr::from_slice(&[2]),
+            false,
+            Vec::new(),
+            None,
+        ));
     }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inject.lock().unwrap().take();
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let decoded = decode_npdu(Bytes::copy_from_slice(npdu))?;
-        let apdu = &decoded.payload;
-        if !decoded.is_network_message() && apdu.len() >= 4 && apdu[0] >> 4 == 0 {
-            let (invoke, service) = (apdu[2], apdu[3]);
-            self.sent.lock().unwrap().push((service, Instant::now()));
-            let quirks = &self.quirks;
-            if quirks.muted.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            if service == RPM {
-                if quirks.refuse_rpm.load(Ordering::Relaxed) {
-                    let reason = RejectReason::UNRECOGNIZED_SERVICE.to_raw();
-                    self.answer(vec![0x60, invoke, reason]);
-                    return Ok(());
-                }
-                if take(&quirks.abort_rpm) {
-                    let reason = AbortReason::SEGMENTATION_NOT_SUPPORTED.to_raw();
-                    self.answer(vec![0x71, invoke, reason]);
-                    return Ok(());
-                }
-                if quirks.fail_rpm.load(Ordering::Relaxed) {
-                    let class = ErrorClass::OBJECT.to_raw() as u8;
-                    let code = ErrorCode::UNKNOWN_OBJECT.to_raw() as u8;
-                    self.answer(vec![0x50, invoke, RPM, 0x91, class, 0x91, code]);
-                    return Ok(());
-                }
-            }
-            if service == SUBSCRIBE_COV && take(&quirks.swallow_cov) {
-                return Ok(());
-            }
-        } else if self.quirks.muted.load(Ordering::Relaxed) {
-            return Ok(());
+}
+
+/// Whether a unicast goes on to the device, after the quirks have had their
+/// say: a confirmed request is recorded, and the ones the device would
+/// refuse or abort are answered here instead.
+fn forwards(
+    frame: &bacnet_transport::test_transport::SentFrame,
+    quirks: &Quirks,
+    sent: &Mutex<Vec<(u8, Instant)>>,
+    handle: &TestTransportHandle,
+) -> bool {
+    let Ok(decoded) = decode_npdu(frame.npdu.clone()) else {
+        return true;
+    };
+    let apdu = &decoded.payload;
+    if !decoded.is_network_message() && apdu.len() >= 4 && apdu[0] >> 4 == 0 {
+        let (invoke, service) = (apdu[2], apdu[3]);
+        sent.lock().unwrap().push((service, Instant::now()));
+        if quirks.muted.load(Ordering::Relaxed) {
+            return false;
         }
-        self.inner.send_unicast(npdu, mac).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
+        if service == RPM {
+            if quirks.refuse_rpm.load(Ordering::Relaxed) {
+                let reason = RejectReason::UNRECOGNIZED_SERVICE.to_raw();
+                answer(handle, vec![0x60, invoke, reason]);
+                return false;
+            }
+            if take(&quirks.abort_rpm) {
+                let reason = AbortReason::SEGMENTATION_NOT_SUPPORTED.to_raw();
+                answer(handle, vec![0x71, invoke, reason]);
+                return false;
+            }
+            if quirks.fail_rpm.load(Ordering::Relaxed) {
+                let class = ErrorClass::OBJECT.to_raw() as u8;
+                let code = ErrorCode::UNKNOWN_OBJECT.to_raw() as u8;
+                answer(handle, vec![0x50, invoke, RPM, 0x91, class, 0x91, code]);
+                return false;
+            }
+        }
+        if service == SUBSCRIBE_COV && take(&quirks.swallow_cov) {
+            return false;
+        }
+        true
+    } else {
+        !quirks.muted.load(Ordering::Relaxed)
     }
 }
 
 pub(super) struct Lab {
-    pub(super) hub: Hub<Link>,
-    pub(super) engine: Arc<Engine<Link>>,
+    pub(super) hub: Hub<TestTransport>,
+    pub(super) engine: Arc<Engine<TestTransport>>,
     pub(super) server: BACnetServer<LoopbackTransport>,
     pub(super) quirks: Arc<Quirks>,
     sent: Arc<Mutex<Vec<(u8, Instant)>>>,
@@ -244,12 +246,7 @@ impl Lab {
             apdu_retries: 0,
             ..ClientConfig::default()
         };
-        let link = Link {
-            inner: client_port,
-            quirks: Arc::clone(&quirks),
-            sent: Arc::clone(&sent),
-            inject: Arc::new(Mutex::new(None)),
-        };
+        let link = link(client_port, Arc::clone(&quirks), Arc::clone(&sent));
         let client = BACnetClient::start(config, link).await.unwrap();
         client.add_device(LAB, &[2]).await.unwrap();
         let engine = Arc::new(Engine::new(
