@@ -38,6 +38,8 @@ fn change(write: LocalWrite<'_>, value: PropertyValue) -> LocalChange {
         LocalWrite::ApplicationLoadControl(setting) => {
             LocalInputValue::LoadControl(setting.clone())
         }
+        LocalWrite::ApplicationPhysicalInput(on) => LocalInputValue::PhysicalInput(on),
+        LocalWrite::ApplicationPolarity(polarity) => LocalInputValue::Polarity(polarity),
         LocalWrite::ApplicationReliability(reliability) => {
             return LocalChange::Reliability(reliability);
         }

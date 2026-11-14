@@ -22,12 +22,19 @@ mod staging_plans;
 
 #[path = "local_load_control.rs"]
 mod load_control;
+
+#[path = "local_binary_io.rs"]
+mod binary_io;
 pub(super) use finish::Committed;
 pub(super) use finish::local_runtime;
 
 #[cfg(test)]
 #[path = "input_present_value_tests.rs"]
 mod input_present_value_tests;
+
+#[cfg(test)]
+#[path = "binary_io_local_tests.rs"]
+mod binary_io_local_tests;
 
 #[cfg(test)]
 #[path = "staging_local_writes_tests.rs"]
@@ -83,6 +90,12 @@ pub(super) enum LocalWrite<'s> {
     /// The application setting a Load Control's Shed_Levels,
     /// Full_Duty_Baseline or State_Description (#2497).
     ApplicationLoadControl(&'s bacnet_objects::load_control::LoadControlSetting),
+    /// The application reporting a Binary Input's physical input state, ON
+    /// as `true` (#2580).
+    ApplicationPhysicalInput(bool),
+    /// The application setting a Binary Input's or Output's Polarity
+    /// (#2580).
+    ApplicationPolarity(bacnet_types::enums::Polarity),
     /// One value of an inbound WriteGroup for a Channel's `Present_Value`, at
     /// the priority the request gave it (Clause 15.11). Under the write guard
     /// the Channel takes it only while its Control_Groups still holds `group`
@@ -264,7 +277,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Analog, Binary and Multi-state Inputs, noncommandable Values, Loop
     /// (the control algorithm's output) and Life Safety Point and Zone opt in.
     /// Binary Input values are logical INACTIVE/ACTIVE states after Polarity,
-    /// not raw physical states. The update runs the existing post-write
+    /// not raw physical states: a raw state goes through
+    /// [`BACnetServer::set_physical_input_local`]. The update runs the existing post-write
     /// intrinsic-event and COV processing after the database lock is released;
     /// configured delays and distribution policy still control delivery, and a
     /// COV_Increment still filters Present_Value reports.

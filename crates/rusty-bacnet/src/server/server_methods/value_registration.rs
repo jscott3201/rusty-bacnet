@@ -10,7 +10,7 @@ use super::super::*;
 use crate::algorithm_keywords::AlgorithmKeywords;
 use crate::object_options::{keep_reporting, present_value_access, provision_profile};
 use crate::types::PyBitString;
-use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::enums::{EngineeringUnits, Polarity};
 
 #[pymethods]
 impl BACnetServer {
@@ -165,9 +165,15 @@ impl BACnetServer {
 
     /// Add a Binary Input object to the server (before starting).
     ///
-    /// The parameter keywords are as on `add_analog_input`.
+    /// The parameter keywords are as on `add_analog_input`. `polarity` is
+    /// a `Polarity` or its number: NORMAL (0, the default) or REVERSE (1),
+    /// which inverts the state `set_physical_input_local` reports on its
+    /// way to Present_Value; any other int, negative included, raises
+    /// BacnetProtocolError VALUE_OUT_OF_RANGE. Clients
+    /// can read Polarity but not write it; `set_polarity_local` changes it
+    /// later.
     #[pyo3(signature = (
-        instance, name, *, tags=None, profile_location=None, profile_name=None,
+        instance, name, *, polarity=0, tags=None, profile_location=None, profile_name=None,
         alarm_value=None, time_delay=None, time_delay_normal=None,
         storage_path=None, clear_written_reporting=false
     ))]
@@ -176,6 +182,7 @@ impl BACnetServer {
         &self,
         instance: u32,
         name: &str,
+        #[pyo3(from_py_with = crate::types::int_enums::polarity_arg)] polarity: u32,
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
@@ -189,6 +196,7 @@ impl BACnetServer {
         let mut bi = keep_reporting(
             || {
                 let mut bi = BinaryInputObject::new(instance, name)?;
+                bi.set_polarity(Polarity::from_raw(polarity))?;
                 parameters.apply(&mut bi)?;
                 Ok(bi)
             },
@@ -203,9 +211,15 @@ impl BACnetServer {
 
     /// Add a Binary Output object to the server (before starting).
     ///
-    /// The parameter keywords are as on `add_analog_input`.
+    /// The parameter keywords are as on `add_analog_input`. `polarity` is
+    /// a `Polarity` or its number: NORMAL (0, the default) or REVERSE (1),
+    /// which inverts the state `physical_output_local` gives for the
+    /// commanded Present_Value; any other int, negative included, raises
+    /// BacnetProtocolError VALUE_OUT_OF_RANGE. Clients
+    /// can read Polarity but not write it; `set_polarity_local` changes it
+    /// later.
     #[pyo3(signature = (
-        instance, name, *, tags=None, profile_location=None, profile_name=None,
+        instance, name, *, polarity=0, tags=None, profile_location=None, profile_name=None,
         time_delay=None, time_delay_normal=None,
         storage_path=None, clear_written_reporting=false
     ))]
@@ -214,6 +228,7 @@ impl BACnetServer {
         &self,
         instance: u32,
         name: &str,
+        #[pyo3(from_py_with = crate::types::int_enums::polarity_arg)] polarity: u32,
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
@@ -226,6 +241,7 @@ impl BACnetServer {
         let mut bo = keep_reporting(
             || {
                 let mut bo = BinaryOutputObject::new(instance, name)?;
+                bo.set_polarity(Polarity::from_raw(polarity))?;
                 parameters.apply(&mut bo)?;
                 Ok(bo)
             },

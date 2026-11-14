@@ -417,6 +417,7 @@ def add_binary_input(
     instance: int,
     name: str,
     *,
+    polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
@@ -430,6 +431,13 @@ def add_binary_input(
 
 Profile and parameter keywords as on `add_analog_input`.
 
+`polarity` is a `Polarity` or its number: NORMAL (0, the default)
+or REVERSE (1), which inverts the state `set_physical_input_local`
+reports on its way to Present\_Value. Any other int, negative
+included, raises BacnetProtocolError VALUE\_OUT\_OF\_RANGE. Clients can
+read Polarity but not write it; `set_polarity_local` changes it
+later.
+
 ### BACnetServer.add_binary_output
 
 ```python
@@ -438,6 +446,7 @@ def add_binary_output(
     instance: int,
     name: str,
     *,
+    polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
@@ -449,6 +458,13 @@ def add_binary_output(
 ```
 
 Profile and parameter keywords as on `add_analog_input`.
+
+`polarity` is a `Polarity` or its number: NORMAL (0, the default)
+or REVERSE (1), which inverts the state `physical_output_local`
+gives for the commanded Present\_Value. Any other int, negative
+included, raises BacnetProtocolError VALUE\_OUT\_OF\_RANGE. Clients can
+read Polarity but not write it; `set_polarity_local` changes it
+later.
 
 ### BACnetServer.add_binary_value
 
@@ -2296,7 +2312,8 @@ and Unsigned 1..=Number\_Of\_States for Multi-state Input. A noncommandable
 Analog, Binary or Multi-state Value takes the same datatype as its Input
 counterpart; a commandable one raises OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED
 (use `write_property_local` with a priority). Binary values are
-BACnet logical values after Polarity, not raw hardware/interface levels.
+BACnet logical values after Polarity, not raw hardware/interface levels
+(a raw Binary Input state goes through `set_physical_input_local`).
 An object with Out\_Of\_Service set rejects this update to preserve
 network simulation ownership. A Life Safety Point or Zone takes an
 Enumerated BACnetLifeSafetyState (standard, or 256..=65535) whether or
@@ -2330,6 +2347,68 @@ Reliability\_Evaluation\_Inhibit is TRUE. A value outside
 BACnetReliability (11, 26 to 63, or past 65535) raises
 VALUE\_OUT\_OF\_RANGE. An unknown object raises UNKNOWN\_OBJECT and one that
 takes no Reliability OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED. Raises
+RuntimeError before `start()`.
+
+### BACnetServer.set_physical_input_local
+
+```python
+def set_physical_input_local(
+    self,
+    object_id: ObjectIdentifier,
+    on: bool,
+) -> Awaitable[None]
+```
+
+Report the state the application read from a Binary Input's
+physical input, `True` for ON.
+
+In service Present\_Value becomes that state through Polarity: ACTIVE
+for ON under NORMAL (0), INACTIVE for ON under REVERSE (1). A logical
+value goes through `set_present_value_local` instead. This route is
+taken while Out\_Of\_Service is set too: Present\_Value then keeps a
+client's simulated value, and the return to service derives it from
+the latest input. Event and COV processing see the logical
+Present\_Value. An unknown object raises UNKNOWN\_OBJECT and any object
+other than a Binary Input OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED.
+Raises RuntimeError before `start()`.
+
+### BACnetServer.set_polarity_local
+
+```python
+def set_polarity_local(
+    self,
+    object_id: ObjectIdentifier,
+    polarity: Polarity | int,
+) -> Awaitable[None]
+```
+
+Set the Polarity of a Binary Input or Binary Output: a `Polarity`
+or its number, NORMAL (0) or REVERSE (1). Clients can't write it.
+
+In service a Binary Input derives Present\_Value again from the
+physical input it last took, and a Binary Output drives its physical
+output from its unchanged Present\_Value with the new Polarity; out of
+service neither changes until the return to service. Any other int,
+negative included, raises VALUE\_OUT\_OF\_RANGE before anything is
+awaited, an unknown object UNKNOWN\_OBJECT and any other object
+OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED. Raises RuntimeError before
+`start()`.
+
+### BACnetServer.physical_output_local
+
+```python
+def physical_output_local(self, object_id: ObjectIdentifier) -> Awaitable[bool]
+```
+
+The state to drive a Binary Output's physical output to, `True`
+for ON.
+
+In service it is the commanded Present\_Value through Polarity: ON for
+ACTIVE under NORMAL, OFF for ACTIVE under REVERSE. While
+Out\_Of\_Service is set it stays at the state it had when
+Out\_Of\_Service was set, though commands keep moving Present\_Value. An
+unknown object raises UNKNOWN\_OBJECT and any object other than a
+Binary Output OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED. Raises
 RuntimeError before `start()`.
 
 ### BACnetServer.report_access_event_local
