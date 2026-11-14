@@ -103,7 +103,7 @@ Layer 6.5: bacnet-ops    the operations core: no UI, no MCP dependency
              decode       frames, NPDUs and APDUs as summaries and field trees (phase 1)
              label        object, property and priority names
              limits       RequestLimits: global rate cap, one request per device
-             engine       Reader, and the Engine facade over BACnetClient
+             engine       Reader, and the Client facade over BACnetClient
              safety       plan, ledger, audit, lock, desk            (phase 3)
              watch        ref-counted COV and poll hub               (phase 2)
            bacnet-mcp    the MCP surface over bacnet-ops::engine     (phase 1)
@@ -155,20 +155,20 @@ application layer reader became `bacnet_ops::decode` (`bacnet_tool::decode` sinc
 
 Every item the CLI or MCP needs is `pub` and documented; helpers private to
 a module stay private. The TUI's browser, watch list and write previews use
-`engine::Reader` directly with their own stop flags. The new `Engine`
-facade is not yet used by the CLI: the one-shot `alarms` prints the raw
+`engine::Reader` directly with their own stop flags. The new `Client`
+facade (`Engine` until #2560) is not yet used by the CLI: the one-shot `alarms` prints the raw
 acknowledgment, which the facade decodes, so switching it would change the
 output. MCP is the facade's first caller. (Since phase 2 the TUI's watch
-worker also runs on `Engine`, for the shared watch hub; the one-shot
+worker also runs on `Client`, for the shared watch hub; the one-shot
 commands still don't use it.)
 
 ### 4.3 The engine
 
-`Engine<T>` owns an `Arc<BACnetClient<T>>`, an `Arc<RequestLimits>` shared
-with any other worker on the client, and the set of devices that refused
-ReadPropertyMultiple. Its calls take a device instance, looked up in the
-client's discovery table, so routed devices work through the
-`*_from_device` client calls.
+`Client<T>` owns an `Arc<BACnetClient<T>>`, an `Arc<RequestLimits>` shared
+with any other worker on the client, and the set of addresses whose
+devices refused ReadPropertyMultiple. Its reads are on `Device` handles
+(#2560): a tool's instance is looked up in the client's discovery table
+and read at the address that claims it, a routed one through its router.
 
 | Call | What it does |
 |---|---|
