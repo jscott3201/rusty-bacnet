@@ -357,7 +357,7 @@ async fn a_passive_server_takes_only_session_and_ledger() {
     for uri in [
         AI1,
         "bacnet://devices",
-        "bacnet://devices/after/5",
+        "bacnet://devices/after/5/0/00",
         "bacnet://alarms",
     ] {
         let error = agent.subscribe(uri).await.unwrap_err();
@@ -391,7 +391,7 @@ async fn the_device_list_is_announced_to_a_legacy_subscriber() {
 /// unsubscribed one isn't.
 #[tokio::test(start_paused = true)]
 async fn a_device_list_page_is_announced_to_a_legacy_subscriber() {
-    const PAGE: &str = "bacnet://devices/after/302";
+    const PAGE: &str = "bacnet://devices/after/302/2001/0c";
     let mut lab = Lab::start(Policy::default()).await;
     lab.agent.initialize_legacy().await;
     for uri in ["bacnet://devices", PAGE] {
@@ -431,7 +431,7 @@ async fn device_list_pages_count_against_the_uri_bound() {
     let mut lab = Lab::start(policy).await;
     lab.agent.initialize_legacy().await;
     let pages: Vec<String> = (0..5)
-        .map(|n| format!("bacnet://devices/after/{n}"))
+        .map(|n| format!("bacnet://devices/after/{n}/0/00"))
         .collect();
     for page in &pages[..4] {
         assert_eq!(lab.agent.subscribe(page).await, Ok(json!({})), "{page}");

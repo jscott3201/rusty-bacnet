@@ -2,8 +2,11 @@
 //! device instance, an object type and instance, a property.
 
 use bacnet_ops::label::kebab;
+use bacnet_ops::octets::hex;
 use bacnet_ops::parse::{parse_object_specifier, parse_property};
 use bacnet_ops::watch::{Point, Watched};
+use bacnet_types::MacAddr;
+use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::value::object_text;
@@ -13,13 +16,76 @@ pub(crate) const ALARMS: &str = "bacnet://alarms";
 pub(crate) const SESSION: &str = "bacnet://session";
 pub(crate) const LEDGER: &str = "bacnet://ledger";
 
+/// Where a device-list page starts after: one row of the discovery table,
+/// named by its instance and its address (network, then the station's MAC
+/// there). Rows are listed in this order, and no two share it, so a page
+/// boundary falls between rows even when several addresses claim one
+/// instance.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct DeviceCursor {
+    pub(crate) instance: u32,
+    pub(crate) network: u16,
+    pub(crate) mac: MacAddr,
+}
+
+impl DeviceCursor {
+    /// `address` is the row's address, as the discovery table keys it.
+    pub(crate) fn new(instance: u32, address: BACnetAddress) -> Self {
+        Self {
+            instance,
+            network: address.network_number,
+            mac: address.mac_address,
+        }
+    }
+
+    /// `{instance}/{network}/{mac as lowercase hex}`.
+    fn path(&self) -> String {
+        format!("{}/{}/{}", self.instance, self.network, hex(&self.mac))
+    }
+
+    fn parse(text: &str) -> Result<Self, String> {
+        let refusal = || {
+            "a device-list cursor is {instance}/{network}/{mac in hex}: an instance 0 to \
+             4194303, a network 0 to 65535, a MAC of at most 18 bytes"
+                .to_string()
+        };
+        let [instance_text, network, mac] = text.split('/').collect::<Vec<_>>()[..] else {
+            return Err(refusal());
+        };
+        let instance = instance(instance_text)?;
+        let network = (!network.is_empty() && network.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| network.parse::<u16>().ok())
+            .flatten()
+            .ok_or_else(refusal)?;
+        Ok(Self {
+            instance,
+            network,
+            mac: unhex(mac).ok_or_else(refusal)?,
+        })
+    }
+}
+
+/// `text` as bytes, from pairs of hex digits (either case).
+fn unhex(text: &str) -> Option<MacAddr> {
+    if !text.len().is_multiple_of(2)
+        || text.len() > 2 * BACnetAddress::MAX_MAC_LEN
+        || !text.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).ok())
+        .collect()
+}
+
 /// A resource the server offers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Uri {
     /// The discovery table's first page.
     Devices,
-    /// The discovery table's page of devices above this instance.
-    DevicesAfter(u32),
+    /// The discovery table's page of devices past this row.
+    DevicesAfter(DeviceCursor),
     /// One device's summary.
     Device(u32),
     /// An object's point facts, or one property.
@@ -45,7 +111,7 @@ pub(crate) fn parse(uri: &str) -> Result<Uri, String> {
         _ => {}
     }
     if let Some(after) = rest.strip_prefix("devices/after/") {
-        return instance(after).map(Uri::DevicesAfter);
+        return DeviceCursor::parse(after).map(Uri::DevicesAfter);
     }
     let rest = rest.strip_prefix("device/").ok_or("no such resource")?;
     let parts: Vec<&str> = rest.split('/').collect();
@@ -104,9 +170,9 @@ fn decode(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// The URI of the device-list page past `instance`.
-pub(crate) fn devices_after(instance: u32) -> String {
-    format!("{DEVICES}/after/{instance}")
+/// The URI of the device-list page past `cursor`'s row.
+pub(crate) fn devices_after(cursor: &DeviceCursor) -> String {
+    format!("{DEVICES}/after/{}", cursor.path())
 }
 
 /// A point's canonical URI.
@@ -179,33 +245,72 @@ mod tests {
         }
     }
 
-    /// A device-list cursor is an instance, validated as a device's is.
+    /// A device-list cursor is an instance, a network and a MAC in hex: a
+    /// row, so the claimants of one instance are told apart (#2589).
     #[test]
-    fn device_list_cursors_parse_as_instances() {
+    fn device_list_cursors_parse_as_rows() {
+        let cursor = |instance, network, mac: &[u8]| {
+            Ok(Uri::DevicesAfter(DeviceCursor {
+                instance,
+                network,
+                mac: MacAddr::from_slice(mac),
+            }))
+        };
         assert_eq!(
-            parse("bacnet://devices/after/1201"),
-            Ok(Uri::DevicesAfter(1201))
+            parse("bacnet://devices/after/1201/0/0a000002bac0"),
+            cursor(1201, 0, &[10, 0, 0, 2, 0xBA, 0xC0])
         );
         assert_eq!(
-            parse("bacnet://devices/after/4194303"),
-            Ok(Uri::DevicesAfter(4_194_303))
+            parse("bacnet://devices/after/4194303/65535/0A"),
+            cursor(4_194_303, 65535, &[10])
+        );
+        assert_eq!(parse("bacnet://devices/after/0/0/"), cursor(0, 0, &[]));
+        let row = DeviceCursor::new(
+            7,
+            BACnetAddress {
+                network_number: 2001,
+                mac_address: MacAddr::from_slice(&[0x0c, 0xff]),
+            },
         );
         assert_eq!(
-            parse(&devices_after(0)),
-            Ok(Uri::DevicesAfter(0)),
+            parse(&devices_after(&row)),
+            Ok(Uri::DevicesAfter(row.clone())),
             "the URI a page names parses back"
         );
-        let refusal = Err("a device instance is 0 to 4194303".to_string());
+        assert_eq!(devices_after(&row), "bacnet://devices/after/7/2001/0cff");
+        assert!(
+            DeviceCursor::new(
+                1000,
+                BACnetAddress {
+                    network_number: 0,
+                    mac_address: MacAddr::from_slice(&[10, 0, 0, 100])
+                }
+            ) < DeviceCursor::new(
+                1000,
+                BACnetAddress {
+                    network_number: 0,
+                    mac_address: MacAddr::from_slice(&[10, 0, 0, 101])
+                }
+            ),
+            "claimants of one instance are ordered by address"
+        );
         for bad in [
-            "bacnet://devices/after/4194304",
-            "bacnet://devices/after/+1",
-            "bacnet://devices/after/-1",
-            "bacnet://devices/after/1a",
-            "bacnet://devices/after/",
-            "bacnet://devices/after/1/",
-            "bacnet://devices/after/ 1",
+            "bacnet://devices/after/4194304/0/00",
+            "bacnet://devices/after/+1/0/00",
+            "bacnet://devices/after/-1/0/00",
+            "bacnet://devices/after/1a/0/00",
+            "bacnet://devices/after//0/00",
+            "bacnet://devices/after/1201",
+            "bacnet://devices/after/1201/0",
+            "bacnet://devices/after/1/0/00/",
+            "bacnet://devices/after/1/65536/00",
+            "bacnet://devices/after/1/+0/00",
+            "bacnet://devices/after/1/0/0",
+            "bacnet://devices/after/1/0/0g",
+            "bacnet://devices/after/1/0/ 0",
+            "bacnet://devices/after/1/0/0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f00",
         ] {
-            assert_eq!(parse(bad), refusal, "{bad}");
+            assert!(parse(bad).is_err(), "{bad}");
         }
         for bad in [
             "bacnet://devices/",

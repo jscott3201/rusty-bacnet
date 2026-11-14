@@ -363,7 +363,7 @@ the user.
 | URI | Content | A subscription means |
 |---|---|---|
 | `bacnet://devices` | the discovery table's first page, sorted by instance; `next` names the next page when truncated | updated on I-Am arrivals and losses, at most once a second |
-| `bacnet://devices/after/{instance}` | the page of devices above `{instance}` (#2116) | as `bacnet://devices`; a listen stream follows at most 16 pages |
+| `bacnet://devices/after/{instance}/{network}/{mac}` | the page of devices after that row, listed by instance then address (#2116, #2589) | as `bacnet://devices`; a listen stream follows at most 16 pages |
 | `bacnet://device/{instance}` | the device summary (cached) | none |
 | `bacnet://device/{instance}/object/{type}:{n}` | the point preset | one managed SubscribeCOV per object with a finite lifetime (300 s, renewed), or polling at 10 s or slower when the device refuses COV |
 | `.../property/{prop}` | one property | SubscribeCOVProperty, or polling |
