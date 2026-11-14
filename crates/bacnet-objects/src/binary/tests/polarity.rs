@@ -257,6 +257,14 @@ fn bo_out_of_service_holds_the_physical_output() {
     assert!(!bo.physical_output(), "Polarity waits");
     set_out_of_service(&mut bo, false);
     assert!(bo.physical_output(), "INACTIVE under REVERSE");
+
+    // The held state is the one Polarity gave the output, not Present_Value.
+    let mut reverse = BinaryOutputObject::new(2, "BO-2").unwrap();
+    reverse.set_polarity(Polarity::REVERSE).unwrap();
+    set_out_of_service(&mut reverse, true);
+    assert!(reverse.physical_output(), "INACTIVE under REVERSE, held");
+    command(&mut reverse, ACTIVE);
+    assert!(reverse.physical_output(), "still held ON");
 }
 
 /// COMMAND_FAILURE compares the logical Present_Value with a logical

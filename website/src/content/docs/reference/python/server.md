@@ -417,7 +417,7 @@ def add_binary_input(
     instance: int,
     name: str,
     *,
-    polarity: int = 0,
+    polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
@@ -431,11 +431,12 @@ def add_binary_input(
 
 Profile and parameter keywords as on `add_analog_input`.
 
-`polarity` is 0 for NORMAL (the default) or 1 for REVERSE, which
-inverts the state `set_physical_input_local` reports on its way to
-Present\_Value; another value raises BacnetProtocolError
-VALUE\_OUT\_OF\_RANGE. Clients can read Polarity but not write it;
-`set_polarity_local` changes it later.
+`polarity` is a `Polarity` or its number: NORMAL (0, the default)
+or REVERSE (1), which inverts the state `set_physical_input_local`
+reports on its way to Present\_Value. Any other int, negative
+included, raises BacnetProtocolError VALUE\_OUT\_OF\_RANGE. Clients can
+read Polarity but not write it; `set_polarity_local` changes it
+later.
 
 ### BACnetServer.add_binary_output
 
@@ -445,7 +446,7 @@ def add_binary_output(
     instance: int,
     name: str,
     *,
-    polarity: int = 0,
+    polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
@@ -458,11 +459,12 @@ def add_binary_output(
 
 Profile and parameter keywords as on `add_analog_input`.
 
-`polarity` is 0 for NORMAL (the default) or 1 for REVERSE, which
-inverts the state `physical_output_local` gives for the commanded
-Present\_Value; another value raises BacnetProtocolError
-VALUE\_OUT\_OF\_RANGE. Clients can read Polarity but not write it;
-`set_polarity_local` changes it later.
+`polarity` is a `Polarity` or its number: NORMAL (0, the default)
+or REVERSE (1), which inverts the state `physical_output_local`
+gives for the commanded Present\_Value. Any other int, negative
+included, raises BacnetProtocolError VALUE\_OUT\_OF\_RANGE. Clients can
+read Polarity but not write it; `set_polarity_local` changes it
+later.
 
 ### BACnetServer.add_binary_value
 
@@ -2376,20 +2378,21 @@ Raises RuntimeError before `start()`.
 def set_polarity_local(
     self,
     object_id: ObjectIdentifier,
-    polarity: int,
+    polarity: Polarity | int,
 ) -> Awaitable[None]
 ```
 
-Set the Polarity of a Binary Input or Binary Output: 0 for NORMAL,
-1 for REVERSE. Clients can't write it.
+Set the Polarity of a Binary Input or Binary Output: a `Polarity`
+or its number, NORMAL (0) or REVERSE (1). Clients can't write it.
 
 In service a Binary Input derives Present\_Value again from the
 physical input it last took, and a Binary Output drives its physical
 output from its unchanged Present\_Value with the new Polarity; out of
-service neither changes until the return to service. Another value
-raises VALUE\_OUT\_OF\_RANGE, an unknown object UNKNOWN\_OBJECT and any
-other object OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED. Raises
-RuntimeError before `start()`.
+service neither changes until the return to service. Any other int,
+negative included, raises VALUE\_OUT\_OF\_RANGE before anything is
+awaited, an unknown object UNKNOWN\_OBJECT and any other object
+OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED. Raises RuntimeError before
+`start()`.
 
 ### BACnetServer.physical_output_local
 

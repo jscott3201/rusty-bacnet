@@ -39,21 +39,22 @@ impl BACnetServer {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Set the Polarity of a Binary Input or Binary Output: 0 for NORMAL,
-    /// 1 for REVERSE. Clients can't write it.
+    /// Set the Polarity of a Binary Input or Binary Output: a `Polarity`
+    /// or its number, NORMAL (0) or REVERSE (1). Clients can't write it.
     ///
     /// In service a Binary Input derives Present_Value again from the
     /// physical input it last took, and a Binary Output drives its physical
     /// output from its unchanged Present_Value with the new Polarity; out
-    /// of service neither changes until the return to service. Another
-    /// value raises VALUE_OUT_OF_RANGE, an unknown object UNKNOWN_OBJECT
-    /// and any other object OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    /// of service neither changes until the return to service. Any other
+    /// int, negative included, raises VALUE_OUT_OF_RANGE, an unknown object
+    /// UNKNOWN_OBJECT and any other object
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     #[pyo3(signature = (object_id, polarity))]
     fn set_polarity_local<'py>(
         &self,
         py: Python<'py>,
         object_id: PyObjectIdentifier,
-        polarity: u32,
+        #[pyo3(from_py_with = crate::types::int_enums::polarity_arg)] polarity: u32,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let oid = object_id.to_rust();

@@ -15,12 +15,16 @@ from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
     BacnetProtocolError,
+    BipEndpoint,
     ErrorClass,
     ErrorCode,
+    MstpEndpoint,
     ObjectIdentifier,
     ObjectType,
+    Polarity,
     PropertyIdentifier,
     PropertyValue,
+    ScEndpoint,
 )
 
 NOTIFICATION_TIMEOUT = 2.0
@@ -29,6 +33,9 @@ ACTIVE = PropertyValue.enumerated(1)
 BI = ObjectIdentifier(ObjectType.BINARY_INPUT, 2)
 BO = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 3)
 NORMAL_BI = ObjectIdentifier(ObjectType.BINARY_INPUT, 4)
+HELD_BO = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 5)
+# Every int but NORMAL and REVERSE, however far out, is VALUE_OUT_OF_RANGE.
+OUT_OF_RANGE = (2, -1, 2**32, -(2**70), 2**70, Polarity.from_raw(7))
 
 
 def stub_methods() -> dict[str, ast.FunctionDef]:
@@ -53,8 +60,9 @@ def make_server() -> BACnetServer:
         broadcast_address="127.0.0.1",
     )
     server.add_binary_input(2, "BI-2", polarity=1)
-    server.add_binary_output(3, "BO-3", polarity=1)
+    server.add_binary_output(3, "BO-3", polarity=Polarity.REVERSE)
     server.add_binary_input(4, "BI-4")
+    server.add_binary_output(5, "BO-5", polarity=Polarity.REVERSE)
     return server
 
 
@@ -83,15 +91,51 @@ class BinaryPolarityTests(unittest.TestCase):
                 self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
                 self.assertEqual(parameter.default, 0)
                 stub = stubs[name]
-                keywords = [argument.arg for argument in stub.args.kwonlyargs]
-                self.assertIn("polarity", keywords)
+                keywords = {
+                    argument.arg: ast.unparse(argument.annotation)
+                    for argument in stub.args.kwonlyargs
+                    if argument.annotation is not None
+                }
+                self.assertEqual(keywords["polarity"], "Polarity | int")
+        set_polarity = stubs["set_polarity_local"].args.args[2]
+        assert set_polarity.annotation is not None
+        self.assertEqual(ast.unparse(set_polarity.annotation), "Polarity | int")
 
     def test_builders_refuse_a_polarity_past_reverse(self) -> None:
         server = make_server()
         for add in (server.add_binary_input, server.add_binary_output):
-            with self.subTest(builder=add.__name__):
+            for polarity in OUT_OF_RANGE:
+                with self.subTest(builder=add.__name__, polarity=polarity):
+                    with self.assertRaises(BacnetProtocolError) as raised:
+                        add(9, f"{add.__name__}-9", polarity=polarity)
+                    self.assertEqual(
+                        raised.exception.error_code,
+                        ErrorCode.VALUE_OUT_OF_RANGE.to_raw(),
+                    )
+            for polarity in (True, "1", 1.0):
+                with self.subTest(builder=add.__name__, polarity=polarity):
+                    with self.assertRaises(TypeError):
+                        add(9, f"{add.__name__}-9", polarity=polarity)
+
+    def test_endpoint_binary_input_takes_polarity(self) -> None:
+        for cls in (BipEndpoint, ScEndpoint, MstpEndpoint):
+            with self.subTest(endpoint=cls.__name__):
+                parameter = inspect.signature(cls.add_binary_input).parameters["polarity"]
+                self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertEqual(parameter.default, 0)
+        endpoint = BipEndpoint(
+            device_instance=503_081,
+            vendor_id=42,
+            interface="127.0.0.1",
+            port=0,
+            broadcast_address="127.0.0.1",
+        )
+        endpoint.add_binary_input(1, "BI-1", polarity=Polarity.REVERSE)
+        endpoint.add_binary_input(2, "BI-2", polarity=0)
+        for polarity in OUT_OF_RANGE:
+            with self.subTest(polarity=polarity):
                 with self.assertRaises(BacnetProtocolError) as raised:
-                    add(9, f"{add.__name__}-9", polarity=2)
+                    endpoint.add_binary_input(3, "BI-3", polarity=polarity)
                 self.assertEqual(
                     raised.exception.error_code, ErrorCode.VALUE_OUT_OF_RANGE.to_raw()
                 )
@@ -113,7 +157,7 @@ class BinaryPolarityTests(unittest.TestCase):
                 apdu_timeout_ms=2_000,
             ) as client:
                 # Polarity reads as configured over the wire and refuses a write.
-                for oid, expected in ((BI, 1), (BO, 1), (NORMAL_BI, 0)):
+                for oid, expected in ((BI, 1), (BO, 1), (NORMAL_BI, 0), (HELD_BO, 1)):
                     self.assertEqual(
                         await client.read_property(
                             address, oid, PropertyIdentifier.POLARITY
@@ -209,14 +253,36 @@ class BinaryPolarityTests(unittest.TestCase):
                     priority=8,
                 )
                 self.assertFalse(await server.physical_output_local(BO))
-                await server.set_polarity_local(BO, 0)
+                await server.set_polarity_local(BO, Polarity.NORMAL)
                 self.assertTrue(await server.physical_output_local(BO))
+
+                # Out of service a REVERSE output holds the state Polarity
+                # gave it: ON for the INACTIVE it had, whatever it is
+                # commanded to meanwhile.
+                await server.write_property_local(
+                    HELD_BO,
+                    PropertyIdentifier.OUT_OF_SERVICE,
+                    PropertyValue.boolean(True),
+                    source_object=None,
+                )
+                self.assertTrue(await server.physical_output_local(HELD_BO))
+                await client.write_property(
+                    address,
+                    HELD_BO,
+                    PropertyIdentifier.PRESENT_VALUE,
+                    ACTIVE,
+                    priority=8,
+                )
+                self.assertTrue(await server.physical_output_local(HELD_BO))
 
                 unsupported = ErrorCode.OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
                 for call, code in (
                     (lambda: server.physical_output_local(BI), unsupported),
                     (lambda: server.set_physical_input_local(BO, True), unsupported),
-                    (lambda: server.set_polarity_local(BI, 2), ErrorCode.VALUE_OUT_OF_RANGE),
+                    *(
+                        (lambda p=p: server.set_polarity_local(BI, p), ErrorCode.VALUE_OUT_OF_RANGE)
+                        for p in OUT_OF_RANGE
+                    ),
                 ):
                     with self.assertRaises(BacnetProtocolError) as refused:
                         await call()

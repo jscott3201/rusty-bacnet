@@ -1,5 +1,5 @@
-"""EngineeringUnits, ErrorClass, ErrorCode, RejectReason and AbortReason are
-IntEnum classes (#1816).
+"""EngineeringUnits, ErrorClass, ErrorCode, RejectReason, AbortReason and
+Polarity are IntEnum classes (#1816, #2580).
 
 Members are ints: they compare equal to their numbers, hash like them and go
 wherever an int goes, so code written against plain ints keeps working. A
@@ -18,7 +18,7 @@ import unittest
 
 from rusty_bacnet import (
     AbortReason, AuditOperation, BACnetClient, BACnetServer, BacnetProtocolError, EngineeringUnits, ErrorClass,
-    ErrorCode, ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue,
+    ErrorCode, ObjectIdentifier, ObjectType, Polarity, PropertyIdentifier, PropertyValue,
     RejectReason,
 )
 
@@ -28,6 +28,7 @@ CLASSES = {
     ErrorCode: 2**16 - 1,
     RejectReason: 2**8 - 1,
     AbortReason: 2**8 - 1,
+    Polarity: 2**32 - 1,
 }
 
 
@@ -53,6 +54,7 @@ class IntEnumClassTests(unittest.TestCase):
         self.assertEqual(ErrorCode.UNKNOWN_OBJECT, 31)
         self.assertEqual(RejectReason.UNRECOGNIZED_SERVICE, 9)
         self.assertEqual(AbortReason.SEGMENTATION_NOT_SUPPORTED, 4)
+        self.assertEqual((Polarity.NORMAL, Polarity.REVERSE), (0, 1))
         self.assertEqual({31: "found"}[ErrorCode.UNKNOWN_OBJECT], "found")
         self.assertEqual((ErrorClass.OBJECT, ErrorCode.UNKNOWN_OBJECT), (1, 31))
 

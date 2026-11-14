@@ -166,9 +166,10 @@ impl BACnetServer {
     /// Add a Binary Input object to the server (before starting).
     ///
     /// The parameter keywords are as on `add_analog_input`. `polarity` is
-    /// 0 for NORMAL (the default) or 1 for REVERSE, which inverts the state
-    /// `set_physical_input_local` reports on its way to Present_Value;
-    /// another value raises BacnetProtocolError VALUE_OUT_OF_RANGE. Clients
+    /// a `Polarity` or its number: NORMAL (0, the default) or REVERSE (1),
+    /// which inverts the state `set_physical_input_local` reports on its
+    /// way to Present_Value; any other int, negative included, raises
+    /// BacnetProtocolError VALUE_OUT_OF_RANGE. Clients
     /// can read Polarity but not write it; `set_polarity_local` changes it
     /// later.
     #[pyo3(signature = (
@@ -181,7 +182,7 @@ impl BACnetServer {
         &self,
         instance: u32,
         name: &str,
-        polarity: u32,
+        #[pyo3(from_py_with = crate::types::int_enums::polarity_arg)] polarity: u32,
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
@@ -211,9 +212,10 @@ impl BACnetServer {
     /// Add a Binary Output object to the server (before starting).
     ///
     /// The parameter keywords are as on `add_analog_input`. `polarity` is
-    /// 0 for NORMAL (the default) or 1 for REVERSE, which inverts the state
-    /// `physical_output_local` gives for the commanded Present_Value;
-    /// another value raises BacnetProtocolError VALUE_OUT_OF_RANGE. Clients
+    /// a `Polarity` or its number: NORMAL (0, the default) or REVERSE (1),
+    /// which inverts the state `physical_output_local` gives for the
+    /// commanded Present_Value; any other int, negative included, raises
+    /// BacnetProtocolError VALUE_OUT_OF_RANGE. Clients
     /// can read Polarity but not write it; `set_polarity_local` changes it
     /// later.
     #[pyo3(signature = (
@@ -226,7 +228,7 @@ impl BACnetServer {
         &self,
         instance: u32,
         name: &str,
-        polarity: u32,
+        #[pyo3(from_py_with = crate::types::int_enums::polarity_arg)] polarity: u32,
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,

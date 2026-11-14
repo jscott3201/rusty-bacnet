@@ -140,10 +140,10 @@ macro_rules! endpoint_builders {
             }
 
             /// Add a Binary Input object (before start). Profile keywords as
-            /// on `add_analog_input`, `alarm_value` and the delays as on
-            /// `BACnetServer.add_binary_input`.
+            /// on `add_analog_input`, `polarity`, `alarm_value` and the
+            /// delays as on `BACnetServer.add_binary_input`.
             #[pyo3(signature = (
-                        instance, name, *, tags=None, profile_location=None, profile_name=None,
+                        instance, name, *, polarity=0, tags=None, profile_location=None, profile_name=None,
                         alarm_value=None, time_delay=None, time_delay_normal=None
                     ))]
             #[allow(clippy::too_many_arguments)]
@@ -151,6 +151,7 @@ macro_rules! endpoint_builders {
                 &self,
                 instance: u32,
                 name: &str,
+                #[pyo3(from_py_with = $crate::types::int_enums::polarity_arg)] polarity: u32,
                 tags: Option<&Bound<'_, PyAny>>,
                 profile_location: Option<String>,
                 profile_name: Option<String>,
@@ -161,6 +162,7 @@ macro_rules! endpoint_builders {
                 let pending = $crate::endpoint::common::PendingObject::BinaryInput {
                     instance,
                     name: name.to_string(),
+                    polarity: bacnet_types::enums::Polarity::from_raw(polarity),
                     profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
                     parameters: $crate::algorithm_keywords::AlgorithmKeywords::binary(
                         alarm_value, time_delay, time_delay_normal,

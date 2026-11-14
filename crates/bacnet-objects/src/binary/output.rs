@@ -252,8 +252,11 @@ impl BACnetObject for BinaryOutputObject {
             self.core
                 .write(&mut self.event_detector, property, array_index, &value)
         {
-            if result? == crate::io_core::CoreWrite::OutOfService && self.core.out_of_service {
-                // Out of service the output stays where it was driven.
+            if result? == crate::io_core::CoreWrite::OutOfService {
+                // Out of service the output stays where it was driven. Any
+                // other Boolean write leaves it as it was: back in service
+                // `physical_output` reads no held state, and TRUE again
+                // stores the state already held.
                 self.held_output = driven;
             }
             return Ok(());

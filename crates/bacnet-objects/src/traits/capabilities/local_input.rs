@@ -126,7 +126,8 @@ pub trait LocalInput {
     /// Out_Of_Service is TRUE, so a client's simulated value stays served;
     /// a value of the wrong datatype or out of range fails as the
     /// property's network write would. A Binary Input's physical input
-    /// state and Polarity are taken either way, since neither replaces a
-    /// simulated Present_Value.
+    /// state, and the Polarity of a Binary Input or Binary Output, are
+    /// taken in or out of service, since none of them replaces a simulated
+    /// Present_Value.
     fn apply_local_input(&mut self, input: LocalInputValue) -> Result<(), Error>;
 }
