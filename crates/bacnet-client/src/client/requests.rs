@@ -208,7 +208,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let unsegmented_apdu_size = 4 + service_data.len();
         let target_transport_max_apdu = self.target_transport_max_apdu_length(target);
 
-        let (peer_max_apdu, remote_max_segments, advertised, peer_segmentation) = {
+        let (peer_max_apdu, remote_max_segments, advertised, peer_segmentation, sized_by) = {
             let dt = self.device_table.lock();
             // A routed peer's row is keyed by the SNET/SADR of the NPDU that
             // carried its I-Am, never by the router's MAC (Clause 5.2.1.2
@@ -225,7 +225,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             } else {
                 LengthBoundedBy::LocalConfig(max_apdu)
             };
-            (max_apdu, max_seg, advertised, peer_segmentation)
+            let sized_by = device.is_some().then_some((network, mac));
+            (max_apdu, max_seg, advertised, peer_segmentation, sized_by)
         };
         check_transmittable_length(advertised, target_transport_max_apdu)?;
         if routed_path_max_apdu.is_some_and(|path_max_apdu| {
@@ -270,6 +271,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         remote_max_segments,
                         routed_forwarded_npci_len,
                         routed_path_lease: path_lease.as_ref(),
+                        sized_by,
                     },
                 )
                 .await;
@@ -364,6 +366,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 registration.progress,
             )
             .await;
+        self.note_answer(sized_by, &response);
         if response.is_ok()
             && let Some(lease) = path_lease.as_ref()
         {
@@ -373,33 +376,31 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         response.and_then(Self::confirmed_response_result)
     }
 
-    /// Wait through AWAIT_CONFIRMATION and SEGMENTED_CONF without allowing
-    /// their timers to cancel each other's phase.
-    ///
     /// An answer from the device, an acknowledgment or its Error, Reject or
-    /// Abort, starts the age of its discovery-table row again, so a device
-    /// that keeps answering stays in the table without repeating its I-Am
-    /// (#2560). A router's refusal is no answer from the device.
-    pub(super) async fn wait_for_confirmed_response(
+    /// Abort, starts the age of the discovery-table row that sized the
+    /// request (`sized_by`) again, so a device that keeps answering stays in
+    /// the table without repeating its I-Am (#2560). A router's refusal is
+    /// no answer from the device. With no such row the table isn't locked
+    /// again.
+    pub(super) fn note_answer(
         &self,
-        wait_for: ConfirmedWait<'_>,
-        response_rx: oneshot::Receiver<TsmResponse>,
-        progress_rx: ProgressReceiver,
-    ) -> Result<TsmResponse, Error> {
-        let response = self
-            .wait_for_confirmed_completion(wait_for, response_rx, progress_rx)
-            .await;
-        if let Ok(
-            TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Remote { .. },
-        ) = &response
+        sized_by: Option<(u16, &[u8])>,
+        response: &Result<TsmResponse, Error>,
+    ) {
+        if let Some((network, mac)) = sized_by
+            && let Ok(
+                TsmResponse::SimpleAck
+                | TsmResponse::ComplexAck { .. }
+                | TsmResponse::Remote { .. },
+            ) = response
         {
-            let (network, mac) = wait_for.target.station();
             self.device_table.lock().answered(network, mac);
         }
-        response
     }
 
-    async fn wait_for_confirmed_completion(
+    /// Wait through AWAIT_CONFIRMATION and SEGMENTED_CONF without allowing
+    /// their timers to cancel each other's phase.
+    pub(super) async fn wait_for_confirmed_response(
         &self,
         wait_for: ConfirmedWait<'_>,
         mut response_rx: oneshot::Receiver<TsmResponse>,

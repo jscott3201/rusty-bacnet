@@ -371,6 +371,11 @@ impl DeviceTable {
         network: u16,
         mac: &[u8],
     ) -> Option<(&DiscoveredDevice, PeerSegmentation)> {
+        // A client that names its devices by address may have no rows: a
+        // request then builds no key.
+        if self.rows.is_empty() {
+            return None;
+        }
         self.rows
             .get(&Key::at(network, mac))
             .map(|e| (&e.device, e.segmentation))

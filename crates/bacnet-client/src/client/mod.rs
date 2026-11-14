@@ -863,8 +863,8 @@ enum ConfirmedTarget<'a> {
 }
 
 impl<'a> ConfirmedTarget<'a> {
-    /// The address a reply comes from, as the discovery table keys it:
-    /// network 0 and the MAC for a local target.
+    /// The device's address as the discovery table keys it: network 0 and
+    /// the MAC for a local target.
     fn station(&self) -> (u16, &'a [u8]) {
         match *self {
             Self::Local { mac } => (0, mac),
