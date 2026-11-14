@@ -2,6 +2,7 @@ use super::*;
 use bacnet_services::rpm::{
     ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
 };
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 fn specs() -> Vec<ReadAccessSpecification> {
@@ -95,7 +96,7 @@ fn response(invoke: u8, ack: &ReadPropertyMultipleACK) -> Apdu {
 }
 async fn records(
     receiver: &mut bacnet_network::layer::ApduReceiver,
-    sink: &NetworkLayer<BusPort>,
+    sink: &NetworkLayer<TestTransport>,
     confirmed: bool,
     n: usize,
 ) -> Vec<BACnetAuditNotification> {

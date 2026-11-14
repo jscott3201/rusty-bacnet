@@ -5,7 +5,7 @@ use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use bacnet_types::enums::{AuditLevel, PropertyIdentifier};
 use bacnet_types::primitives::PropertyValue;
 use std::borrow::Cow;
@@ -20,50 +20,41 @@ struct Observations {
     bip_reads: AtomicUsize,
 }
 
-struct ObservedTransport {
-    inner: LoopbackTransport,
-    observed: Arc<Observations>,
-}
-
-impl TransportPort for ObservedTransport {
-    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
-        self.observed.bip_reads.fetch_add(1, Ordering::SeqCst);
-        // Before start, an unrelated placeholder: the started link's
-        // broadcast endpoint is a fact learned post-start, which the source
-        // routes then recheck.
-        Some(if self.observed.starts.load(Ordering::SeqCst) == 0 {
-            std::net::SocketAddrV4::new([198, 51, 100, 255].into(), 0)
-        } else {
-            std::net::SocketAddrV4::new([192, 168, 1, 255].into(), 47808)
+/// `inner` behind a transport that counts starts, stops, sends and reads of
+/// its B/IP broadcast endpoint in `observed`. That endpoint is an unrelated
+/// placeholder before start; the started link's is a fact learned
+/// post-start, which the source routes then recheck.
+fn observed_transport(inner: LoopbackTransport, observed: Arc<Observations>) -> TestTransport {
+    let (on_start, on_stop, on_send, on_read) = (
+        Arc::clone(&observed),
+        Arc::clone(&observed),
+        Arc::clone(&observed),
+        observed,
+    );
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .on_start(move || {
+            on_start.starts.fetch_add(1, Ordering::SeqCst);
         })
-    }
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.observed.starts.fetch_add(1, Ordering::SeqCst);
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.observed.stops.fetch_add(1, Ordering::SeqCst);
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.observed.sends.fetch_add(1, Ordering::SeqCst);
-        self.inner.send_unicast(npdu, mac).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.observed.sends.fetch_add(1, Ordering::SeqCst);
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
+        .before_stop(move || {
+            on_stop.stops.fetch_add(1, Ordering::SeqCst);
+            async { Ok(()) }
+        })
+        .on_send(move |_| {
+            on_send.sends.fetch_add(1, Ordering::SeqCst);
+            async { Ok(()) }
+        })
+        .on_bip_broadcast_endpoint(move || {
+            on_read.bip_reads.fetch_add(1, Ordering::SeqCst);
+            Some(if on_read.starts.load(Ordering::SeqCst) == 0 {
+                std::net::SocketAddrV4::new([198, 51, 100, 255].into(), 0)
+            } else {
+                std::net::SocketAddrV4::new([192, 168, 1, 255].into(), 47808)
+            })
+        })
+        .build()
 }
 
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -110,17 +101,14 @@ fn database() -> ObjectDatabase {
 fn session(
     role: SessionRole,
 ) -> (
-    EndpointSession<ObservedTransport>,
+    EndpointSession<TestTransport>,
     LoopbackTransport,
     Arc<Observations>,
 ) {
     let (inner, peer) = LoopbackTransport::pair(vec![1], vec![2]);
     let observed = Arc::new(Observations::default());
     let session = EndpointSession::new(
-        ObservedTransport {
-            inner,
-            observed: observed.clone(),
-        },
+        observed_transport(inner, observed.clone()),
         role,
         SessionConfig::default(),
     )
@@ -233,7 +221,7 @@ async fn both_shares_source_database_with_responder_and_startup_is_silent() {
 }
 
 async fn rejected(
-    session: &mut EndpointSession<ObservedTransport>,
+    session: &mut EndpointSession<TestTransport>,
     observed: &Observations,
     expected: &str,
 ) {

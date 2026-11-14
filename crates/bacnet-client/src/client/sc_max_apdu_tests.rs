@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Instant;
 
 use bacnet_encoding::apdu::{self, Apdu, SegmentAck, SimpleAck, encode_apdu};
@@ -10,6 +8,7 @@ use bacnet_transport::sc::{LoopbackWebSocket, ScReconnectConfig, ScTransport, We
 use bacnet_transport::sc_frame::{
     ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message,
 };
+use bacnet_transport::test_transport::{SendMode, TestTransport, TestTransportHandle};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -22,55 +21,19 @@ use crate::discovery::DiscoveredDevice;
 use super::BACnetClient;
 
 /// A loopback transport whose egress APDU limit a test sets, and can change
-/// while the client runs through the shared handle.
-struct LimitedTransport {
+/// while the client runs through the returned handle.
+fn limited_transport(
     inner: LoopbackTransport,
-    max_apdu_length: Arc<AtomicU16>,
-}
-
-impl LimitedTransport {
-    fn new(inner: LoopbackTransport, max_apdu_length: u16) -> (Self, Arc<AtomicU16>) {
-        let limit = Arc::new(AtomicU16::new(max_apdu_length));
-        let transport = Self {
-            inner,
-            max_apdu_length: Arc::clone(&limit),
-        };
-        (transport, limit)
-    }
-}
-
-impl TransportPort for LimitedTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, bacnet_types::error::Error> {
-        self.inner.start().await
-    }
-
-    async fn stop(&mut self) -> Result<(), bacnet_types::error::Error> {
-        self.inner.stop().await
-    }
-
-    async fn send_unicast(
-        &self,
-        npdu: &[u8],
-        mac: &[u8],
-    ) -> Result<(), bacnet_types::error::Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), bacnet_types::error::Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.max_apdu_length.load(Ordering::Relaxed)
-    }
+    max_apdu_length: u16,
+) -> (TestTransport, TestTransportHandle) {
+    let transport = TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .egress_limit(max_apdu_length)
+        .build();
+    let handle = transport.handle();
+    (transport, handle)
 }
 
 async fn send_peer_apdu(
@@ -166,7 +129,7 @@ async fn client_segments_known_device_requests_to_live_transport_limit() {
     let peer_mac = vec![0x02];
     let (client_inner, mut peer_transport) =
         LoopbackTransport::pair(client_mac.clone(), peer_mac.clone());
-    let (client_transport, _) = LimitedTransport::new(client_inner, 478);
+    let (client_transport, _) = limited_transport(client_inner, 478);
     let mut peer_rx = peer_transport.start().await.unwrap();
 
     let mut client = BACnetClient::generic_builder()
@@ -268,7 +231,7 @@ async fn client_routed_unsegmented_request_accounts_for_npdu_overhead_bucket() {
     let remote_mac = vec![0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
     let (client_inner, mut router_transport) =
         LoopbackTransport::pair(client_mac.clone(), router_mac.clone());
-    let (client_transport, _) = LimitedTransport::new(client_inner, 1024);
+    let (client_transport, _) = limited_transport(client_inner, 1024);
     let mut router_rx = router_transport.start().await.unwrap();
 
     let mut client = BACnetClient::generic_builder()
@@ -399,7 +362,7 @@ struct SeenRequest {
 /// device-table row for, ack every segment and the request, and return
 /// each request PDU the peer saw.
 async fn write_to_unknown_peer(
-    client: &BACnetClient<LimitedTransport>,
+    client: &BACnetClient<TestTransport>,
     peer: &LoopbackTransport,
     peer_rx: &mut mpsc::Receiver<ReceivedNpdu>,
     len: usize,
@@ -461,13 +424,13 @@ async fn limited_client(
     configured_max_apdu: u16,
     start_limit: u16,
 ) -> (
-    BACnetClient<LimitedTransport>,
-    Arc<AtomicU16>,
+    BACnetClient<TestTransport>,
+    TestTransportHandle,
     LoopbackTransport,
     mpsc::Receiver<ReceivedNpdu>,
 ) {
     let (client_inner, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let (transport, limit) = LimitedTransport::new(client_inner, start_limit);
+    let (transport, limit) = limited_transport(client_inner, start_limit);
     let peer_rx = peer.start().await.unwrap();
     let client = BACnetClient::generic_builder()
         .transport(transport)
@@ -488,7 +451,7 @@ async fn client_follows_a_rising_transport_limit_up_to_the_configured_maximum() 
     for (configured, raised, expected) in [(1476, 1024, 1024), (480, 1476, 480)] {
         let (mut client, limit, mut peer, mut peer_rx) = limited_client(configured, 206).await;
         assert_eq!(client.max_apdu_length(), 206);
-        limit.store(raised, Ordering::Relaxed);
+        limit.set_egress_limit(raised);
         assert_eq!(client.max_apdu_length(), expected);
 
         let seen = write_to_unknown_peer(&client, &peer, &mut peer_rx, 1400).await;
@@ -515,7 +478,7 @@ async fn client_follows_a_falling_transport_limit() {
     assert_eq!(seen[0].advertised_max_apdu, 1476);
     assert!(!seen[0].segmented);
 
-    limit.store(478, Ordering::Relaxed);
+    limit.set_egress_limit(478);
     assert_eq!(client.max_apdu_length(), 206);
     let seen = write_to_unknown_peer(&client, &peer, &mut peer_rx, 900).await;
     // Segments fill the live limit; the advertised bucket is the one below it.

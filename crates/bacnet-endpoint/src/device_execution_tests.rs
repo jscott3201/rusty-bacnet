@@ -1,5 +1,5 @@
 use super::*;
-use crate::session::bus_port::BusPort;
+use crate::session::bus_port::bus_port;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
@@ -27,7 +27,7 @@ async fn wire_contract(writes: bool, custom: bool) {
             .role(SessionRole::ServerOnly)
             .database(db)
             .device(identity)
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
     if writes {
         endpoint = endpoint.with_device_writes(Arc::new(|_| true));
@@ -175,7 +175,7 @@ async fn endpoint_execution_profile_refusals_precede_ingress_and_allow_repair() 
                     .with_services(&declared),
             );
             assert!(session.start().await.is_err());
-            assert_eq!(starts.load(Ordering::SeqCst), 0);
+            assert_eq!(starts.starts(), 0);
             assert_eq!(
                 session.lifecycle.load(Ordering::Acquire),
                 Lifecycle::Ready as u8
@@ -183,7 +183,7 @@ async fn endpoint_execution_profile_refusals_precede_ingress_and_allow_repair() 
             session.identity = Some(crate::DeviceIdentity::new(123, 42).unwrap());
             session.start().await.unwrap();
             session.stop().await.unwrap();
-            assert_eq!(starts.load(Ordering::SeqCst), 1);
+            assert_eq!(starts.starts(), 1);
         }
     }
 }
@@ -200,7 +200,7 @@ async fn endpoint_client_only_keeps_local_declaration_without_responder_claim() 
     session.start().await.unwrap();
     assert!(session.server().is_none());
     assert_eq!(session.identity().unwrap().services(), declared);
-    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    assert_eq!(starts.starts(), 1);
     session.stop().await.unwrap();
 }
 
@@ -215,7 +215,7 @@ async fn generated_identity_preflight_failure_can_change_identity_and_retry() {
             .with_services(&[]),
     );
     assert!(session.start().await.is_err());
-    assert_eq!(starts.load(Ordering::SeqCst), 0);
+    assert_eq!(starts.starts(), 0);
     assert!(
         session.database.is_none(),
         "failed stock generation is not committed"
@@ -228,7 +228,7 @@ async fn generated_identity_preflight_failure_can_change_identity_and_retry() {
             .unwrap(),
     );
     session.start().await.unwrap();
-    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    assert_eq!(starts.starts(), 1);
     assert_eq!(
         session
             .database
@@ -257,7 +257,7 @@ async fn endpoint_wildcard_keeps_frozen_identity_and_identity_free_selection_sta
         if composed {
             builder = builder.device(identity.clone());
         }
-        let mut endpoint = builder.build_session_over(BusPort::new()).unwrap();
+        let mut endpoint = builder.build_session_over(bus_port()).unwrap();
         endpoint.start().await.unwrap();
         let mut client = bus_client().await;
         let mac = bacnet_transport::bvll::encode_bip_mac(

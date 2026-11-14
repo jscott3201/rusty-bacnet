@@ -121,7 +121,8 @@ impl TestTransportBuilder {
     }
 
     /// Report `endpoint` as a NORMAL B/IP bind, so a server can register a
-    /// Network Port on this link; the transport then holds the port's lease.
+    /// Network Port on this link; the transport then holds the port's lease
+    /// until `stop` or the drop.
     pub fn normal_bip(self, endpoint: SocketAddrV4) -> Self {
         self.bip_port(BipPort::new(endpoint, BipPortMode::Normal))
     }
@@ -139,6 +140,12 @@ impl TestTransportBuilder {
     pub fn bip6_port(mut self, port: Bip6Port) -> Self {
         self.transport.bip6_port = Some(port);
         self
+    }
+
+    /// Shorthand for `start(StartMode::Replace(Some(receiver)))`: start the
+    /// inner transport, but take this receiver instead of its own.
+    pub fn replace_inbound(self, receiver: mpsc::Receiver<ReceivedNpdu>) -> Self {
+        self.start(StartMode::Replace(Some(receiver)))
     }
 
     /// Shorthand for `start(StartMode::Inbound(Some(receiver)))`.
@@ -231,6 +238,37 @@ impl TestTransportBuilder {
         self
     }
 
+    /// Await this hook's future at the end of a `start` that succeeded, after
+    /// `on_started`: a start the test holds open once the link is up (its
+    /// error fails the start, but the link was started).
+    pub fn after_start<F>(mut self, hook: impl Fn() -> F + Send + Sync + 'static) -> Self
+    where
+        F: Future<Output = Result<(), Error>> + Send + 'static,
+    {
+        let hook: StopHook = Arc::new(move || -> HookFuture { Box::pin(hook()) });
+        self.transport.hooks.after_start = Some(hook);
+        self
+    }
+
+    /// Filter the answer to `bip_port` with a hook: it gets the port set here
+    /// or the inner transport's, and returns what the transport reports. A port
+    /// that appears or goes as the link runs.
+    pub fn on_bip_port(
+        mut self,
+        hook: impl Fn(Option<BipPort>) -> Option<BipPort> + Send + Sync + 'static,
+    ) -> Self {
+        self.transport.hooks.on_bip_port = Some(Arc::new(hook));
+        self
+    }
+
+    /// Run a callback with each Network Port lease handed to the transport,
+    /// before it is held or passed to the inner transport: a witness of the
+    /// lease's lifetime.
+    pub fn on_retain_lease(mut self, hook: impl Fn(&Arc<()>) + Send + Sync + 'static) -> Self {
+        self.transport.hooks.on_retain_lease = Some(Arc::new(hook));
+        self
+    }
+
     /// Run a hook on every recorded send, after it is logged and before the
     /// built-in controls. The hook's future is part of the send future, so
     /// dropping the send drops it; its error becomes the send's result.
@@ -255,6 +293,33 @@ impl TestTransportBuilder {
     {
         let hook: StopHook = Arc::new(move || -> HookFuture { Box::pin(hook()) });
         self.transport.hooks.start_gate = Some(hook);
+        self
+    }
+
+    /// Await this hook's future at the top of every `stop`, before the
+    /// `on_stop` hook or the inner transport's stop; its error ends the stop
+    /// with the inner transport untouched, a fresh inbound channel still
+    /// open and any held Network Port lease still held. A stop the test
+    /// holds open, to drop or release it there, with the rest of the stop
+    /// still running.
+    pub fn before_stop<F>(mut self, hook: impl Fn() -> F + Send + Sync + 'static) -> Self
+    where
+        F: Future<Output = Result<(), Error>> + Send + 'static,
+    {
+        let hook: StopHook = Arc::new(move || -> HookFuture { Box::pin(hook()) });
+        self.transport.hooks.before_stop = Some(hook);
+        self
+    }
+
+    /// Await this hook's future after a `stop` that succeeded (the `on_stop`
+    /// hook or the inner transport's stop), before the stop returns; its error
+    /// becomes the stop's result. Not run when the stop failed.
+    pub fn after_stop<F>(mut self, hook: impl Fn() -> F + Send + Sync + 'static) -> Self
+    where
+        F: Future<Output = Result<(), Error>> + Send + 'static,
+    {
+        let hook: StopHook = Arc::new(move || -> HookFuture { Box::pin(hook()) });
+        self.transport.hooks.after_stop = Some(hook);
         self
     }
 

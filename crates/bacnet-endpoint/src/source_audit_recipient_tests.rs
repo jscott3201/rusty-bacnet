@@ -31,7 +31,7 @@ fn reliability(object: &dyn BACnetObject) -> PropertyValue {
 fn configured_session(
     role: SessionRole,
 ) -> (
-    EndpointSession<ObservedTransport>,
+    EndpointSession<TestTransport>,
     LoopbackTransport,
     Arc<Observations>,
 ) {

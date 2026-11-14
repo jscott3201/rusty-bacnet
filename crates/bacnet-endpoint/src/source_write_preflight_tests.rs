@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::bus_port::bus_port;
 use bacnet_types::error::RemoteError;
 
 #[tokio::test(start_paused = true)]
@@ -230,7 +231,7 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
             ..Default::default()
         },
         db,
-        BusPort::new(),
+        bus_port(),
     )
     .await
     .unwrap();

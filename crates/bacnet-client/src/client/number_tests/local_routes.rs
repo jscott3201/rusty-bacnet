@@ -18,6 +18,7 @@ use bacnet_encoding::{
     npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu},
 };
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier, Segmentation};
 use bacnet_types::error::Error;
@@ -57,7 +58,7 @@ fn routed(network: u16) -> Route {
 async fn client(
     learned: bool,
 ) -> (
-    BACnetClient<Capture>,
+    BACnetClient<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::Receiver<Sent>,
 ) {
@@ -241,7 +242,7 @@ const LONG_WRITE: [u8; 300] = [0x44; 300];
 async fn client_with_routed_row(
     segmentation: Segmentation,
 ) -> (
-    BACnetClient<Capture>,
+    BACnetClient<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::Receiver<Sent>,
 ) {
@@ -337,7 +338,7 @@ fn relayed_from(network: u16, station: &[u8]) -> Option<NpduAddress> {
 /// Send a WriteProperty to the peer, routed to this network or straight to
 /// its MAC, while `peer` answers it, and return how long it took to complete.
 async fn write_answered_by(
-    client: &BACnetClient<Capture>,
+    client: &BACnetClient<TestTransport>,
     routed: bool,
     peer: impl std::future::Future<Output = ()>,
 ) -> Duration {

@@ -37,13 +37,14 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::mstp::{
     LoopbackSerial, MstpConfig, MstpExecutionMode, MstpTransport, SerialPort,
 };
-use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::port::{DataAttribute, TransportPort, TransportProvenance};
+use bacnet_transport::test_transport::{StartMode, TestTransport};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::{MacAddr, error::Error};
 use bytes::{Bytes, BytesMut};
 use mstp_wire::{FrameType, MstpFrame, pfm_frame, token_frame};
 use rb17_harness::*;
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{RwLock, oneshot};
 
 async fn dropped_sender_impl(mode: MstpExecutionMode, frames: Frames) {
     // Client-only session has no server role: the lone reply sender is
@@ -183,56 +184,24 @@ async fn mstp_token_pfm_during_work_extended_dedicated() {
 /// `send_started` fires on send entry so the test can prove the session
 /// task consumed the first command (and is stalled) before filling the
 /// single free slot — no scheduling assumption.
-struct StallTransport {
-    tx: Option<mpsc::Sender<ReceivedNpdu>>,
-    send_started: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl StallTransport {
-    fn new() -> (Self, Arc<std::sync::atomic::AtomicBool>) {
-        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        (
-            Self {
-                tx: None,
-                send_started: Arc::clone(&flag),
-            },
-            flag,
-        )
-    }
-}
-
-impl TransportPort for StallTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let (tx, rx) = mpsc::channel(8);
-        self.tx = Some(tx);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        self.send_started
-            .store(true, std::sync::atomic::Ordering::Release);
-        std::future::pending::<()>().await;
-        #[allow(unreachable_code)]
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        std::future::pending::<()>().await;
-        #[allow(unreachable_code)]
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[0x09]
-    }
+///
+/// The returned flag is set when the first unicast starts; that send, and
+/// every broadcast, never finishes. The link stays open (the handle keeps
+/// the inbound sender) until the stack stops it.
+fn stall_transport() -> (TestTransport, Arc<std::sync::atomic::AtomicBool>) {
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started = Arc::clone(&flag);
+    let transport = TestTransport::builder()
+        .local_mac(&[0x09])
+        .start(StartMode::Fresh(8))
+        .on_send(move |frame| {
+            if !frame.broadcast {
+                started.store(true, std::sync::atomic::Ordering::Release);
+            }
+            std::future::pending()
+        })
+        .build();
+    (transport, flag)
 }
 
 #[tokio::test]
@@ -281,7 +250,7 @@ async fn mstp_queue_and_admission_bounds_release() {
     // the first send occupies the task (proven via `send_started`, not
     // scheduling); the second fills the single slot; the third is rejected
     // as full instead of hanging, and stop releases the stalled waiters.
-    let (stall, send_started) = StallTransport::new();
+    let (stall, send_started) = stall_transport();
     let mut ingress = EndpointIngress::new(stall, 1);
     let receivers = ingress.start().await.expect("ingress must start");
     let egress = receivers.egress;

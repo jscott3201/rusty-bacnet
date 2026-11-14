@@ -7,46 +7,24 @@ use super::*;
 use bacnet_encoding::apdu::{ConfirmedRequest, decode_apdu};
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
 /// A link that hands up what the test feeds it, from any source MAC, reports
 /// each send with its destination, and counts MAC 0xFF as a group.
-struct GroupSourceLink {
-    inbound_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
+fn group_source_link(
+    inbound_rx: mpsc::Receiver<ReceivedNpdu>,
     sends: mpsc::UnboundedSender<(MacAddr, Bytes)>,
-}
-
-impl TransportPort for GroupSourceLink {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.inbound_rx.take().expect("transport started once"))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let sent = (MacAddr::from_slice(mac), Bytes::copy_from_slice(npdu));
-        let _ = self.sends.send(sent);
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send_unicast(npdu, &[]).await
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[0x01]
-    }
-
-    fn is_group_destination(&self, mac: &[u8]) -> bool {
-        mac == [0xFF]
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .inbound(inbound_rx)
+        .on_is_group_destination(|mac| mac == [0xFF])
+        .on_send(move |frame| {
+            let _ = sends.send((frame.mac, frame.npdu));
+            async { Ok(()) }
+        })
+        .build()
 }
 
 /// A ConfirmedCOVNotification for `process_id` from link-layer `source`,
@@ -103,10 +81,7 @@ fn notification_from(source: u8, process_id: u32) -> ReceivedNpdu {
 async fn a_confirmed_request_from_a_group_source_is_ignored_and_counted() {
     let (inbound_tx, inbound_rx) = mpsc::channel(8);
     let (sends, mut sent) = mpsc::unbounded_channel();
-    let link = GroupSourceLink {
-        inbound_rx: Some(inbound_rx),
-        sends,
-    };
+    let link = group_source_link(inbound_rx, sends);
     let mut client = BACnetClient::start(ClientConfig::default(), link)
         .await
         .unwrap();

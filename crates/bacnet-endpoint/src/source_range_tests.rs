@@ -1,9 +1,10 @@
 use super::*;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::primitives::{Date, Time};
 
 fn range_start(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     mac: &[u8],
     range: Option<RangeSpec>,
 ) -> tokio::task::JoinHandle<Result<ReadRangeAck, Error>> {
