@@ -37,7 +37,7 @@ use crate::class::Class;
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::octets::hex;
 
-pub use send::{item_json, reach, turn};
+pub use send::{Unsent, item_json, reach, turn};
 
 /// Default write session length, in minutes.
 pub const DEFAULT_MINUTES: u32 = 15;

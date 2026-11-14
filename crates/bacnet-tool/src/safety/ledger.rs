@@ -13,7 +13,9 @@
 //! instance keep their entries apart, and a local device needs no Who-Is
 //! after a restart. A file written before then has entries with an instance
 //! and no address; they still load, and a revert finds their device
-//! through the instance, as it did.
+//! through the instance, as it did. A later write merges with one only
+//! when that instance's one claim in the discovery table is at the write's
+//! address; otherwise the two are kept apart.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -157,14 +159,21 @@ impl Entry {
     }
 
     /// True when this entry is for the device `spec` writes to: the same
-    /// instance, at its address. An entry from before #2560, which has no
-    /// address, is matched by the instance alone, as it was written.
-    fn same_device(&self, spec: &WriteSpec) -> bool {
-        self.device == spec.device && self.address.as_ref().is_none_or(|at| *at == spec.address)
+    /// instance, at its address. An entry from before #2560 has no
+    /// address, and is that device only when `unaddressed` says so: when
+    /// the discovery table's one claim to the instance is at `spec`'s
+    /// address, where its revert would go too. Otherwise it may have been
+    /// another device sharing the instance, and is kept apart.
+    fn same_device(&self, spec: &WriteSpec, unaddressed: bool) -> bool {
+        self.device == spec.device
+            && match &self.address {
+                Some(at) => *at == spec.address,
+                None => unaddressed,
+            }
     }
 
-    fn same_target(&self, spec: &WriteSpec, priority: Option<u8>) -> bool {
-        self.same_device(spec)
+    fn same_target(&self, spec: &WriteSpec, priority: Option<u8>, unaddressed: bool) -> bool {
+        self.same_device(spec, unaddressed)
             && self.object_type == spec.object.object_type().to_raw()
             && self.instance == spec.object.instance_number()
             && self.property == spec.property.to_raw()
@@ -173,9 +182,9 @@ impl Entry {
     }
 
     /// A non-commandable entry on the property `spec` names, at any index.
-    fn same_property(&self, spec: &WriteSpec) -> bool {
+    fn same_property(&self, spec: &WriteSpec, unaddressed: bool) -> bool {
         self.priority.is_none()
-            && self.same_device(spec)
+            && self.same_device(spec, unaddressed)
             && self.object_type == spec.object.object_type().to_raw()
             && self.instance == spec.object.instance_number()
             && self.property == spec.property.to_raw()
@@ -256,20 +265,37 @@ impl Ledger {
         &self.entries
     }
 
-    /// The whole-property entry for the property `spec` names, if any.
-    fn whole_entry(&self, spec: &WriteSpec) -> Option<&Entry> {
+    /// True when an entry kept without an address names the device
+    /// `instance`: only then does [`begin`](Self::begin) or
+    /// [`owns`](Self::owns) need to know where its device is.
+    pub(crate) fn has_unaddressed(&self, instance: u32) -> bool {
         self.entries
             .iter()
-            .find(|e| e.index.is_none() && e.same_property(spec))
+            .any(|e| e.address.is_none() && e.device == instance)
+    }
+
+    /// The whole-property entry for the property `spec` names, if any.
+    fn whole_entry(&self, spec: &WriteSpec, unaddressed: bool) -> Option<&Entry> {
+        self.entries
+            .iter()
+            .find(|e| e.index.is_none() && e.same_property(spec, unaddressed))
     }
 
     /// True when the slot `spec` names at `priority` still holds what
     /// this ledger wrote there: `current` is the slot's encoded value now.
-    /// A slot someone has since overwritten is theirs, not ours.
-    pub(crate) fn owns(&self, spec: &WriteSpec, priority: Option<u8>, current: &[u8]) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.same_target(spec, priority) && entry.written.bytes == current)
+    /// A slot someone has since overwritten is theirs, not ours. An entry
+    /// kept without an address counts when `unaddressed` (see
+    /// [`begin`](Self::begin)).
+    pub(crate) fn owns(
+        &self,
+        spec: &WriteSpec,
+        priority: Option<u8>,
+        current: &[u8],
+        unaddressed: bool,
+    ) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.same_target(spec, priority, unaddressed) && entry.written.bytes == current
+        })
     }
 
     /// Record `planned` as sending, merging into an entry for the same
@@ -281,17 +307,26 @@ impl Ledger {
     /// pre-image is the original array, and an element write to an array
     /// with a whole entry records nothing, since that entry's pre-image
     /// already puts the element back.
+    ///
+    /// An entry written before #2560 has no address. It merges with this
+    /// write only when `unaddressed`: the discovery table's one claim to
+    /// the device's instance is at the write's address, so the entry, which
+    /// a revert would find there too, is this device's; it then keeps that
+    /// address. Otherwise the two are kept apart.
     #[doc(hidden)]
-    pub fn begin(&mut self, planned: &Planned, run: &str, at: &str) -> u64 {
+    pub fn begin(&mut self, planned: &Planned, run: &str, at: &str, unaddressed: bool) -> u64 {
         let (spec, priority) = (&planned.spec, planned.priority);
         let seq = self.entries.iter().map(|e| e.seq).max().unwrap_or(0) + 1;
-        if priority.is_none() && spec.index.is_some() && self.whole_entry(spec).is_some() {
+        if priority.is_none()
+            && spec.index.is_some()
+            && self.whole_entry(spec, unaddressed).is_some()
+        {
             return COVERED;
         }
         if let Some(entry) = self
             .entries
             .iter_mut()
-            .find(|e| e.same_target(spec, priority))
+            .find(|e| e.same_target(spec, priority, unaddressed))
         {
             entry.written = planned.value.clone();
             entry.address = Some(spec.address.clone());
@@ -304,16 +339,16 @@ impl Ledger {
         let spec = &planned.spec;
         let mut before = planned.before.clone();
         if priority.is_none() && spec.index.is_none() {
+            let element = |e: &Entry| e.index.is_some() && e.same_property(spec, unaddressed);
             let elements: Vec<Entry> = self
                 .entries
                 .iter()
-                .filter(|e| e.index.is_some() && e.same_property(spec))
+                .filter(|e| element(e))
                 .cloned()
                 .collect();
             if !elements.is_empty() {
                 before = fold::original(before.as_ref(), &elements);
-                self.entries
-                    .retain(|e| !(e.index.is_some() && e.same_property(spec)));
+                self.entries.retain(|e| !element(e));
             }
         }
         self.entries.push(Entry {
@@ -475,10 +510,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ledger = Ledger::open(dir.path()).unwrap();
         let backup = ledger.entries().to_vec();
-        let id = ledger.begin(&planned(stored(42.0), None), "run-a", "t");
+        let id = ledger.begin(&planned(stored(42.0), None), "run-a", "t", false);
         ledger.finish(id, Some(true), &backup);
         let backup = ledger.entries().to_vec();
-        let again = ledger.begin(&planned(stored(43.0), Some(stored(42.0))), "run-a", "t");
+        let again = ledger.begin(
+            &planned(stored(43.0), Some(stored(42.0))),
+            "run-a",
+            "t",
+            false,
+        );
         assert_eq!(again, id, "merged");
         ledger.finish(again, Some(true), &backup);
         assert_eq!(ledger.entries()[0].before, None, "the first pre-image");
@@ -488,11 +528,16 @@ mod tests {
         assert_eq!(reloaded.entries(), ledger.entries());
         // A refused write leaves the entry as it was.
         let backup = ledger.entries().to_vec();
-        let id = ledger.begin(&planned(stored(44.0), None), "run-a", "t");
+        let id = ledger.begin(&planned(stored(44.0), None), "run-a", "t", false);
         ledger.finish(id, Some(false), &backup);
         assert_eq!(ledger.entries(), backup.as_slice());
         // Relinquishing the slot puts back its pre-image (NULL).
-        let id = ledger.begin(&planned(Stored::null(), Some(stored(43.0))), "run-a", "t");
+        let id = ledger.begin(
+            &planned(Stored::null(), Some(stored(43.0))),
+            "run-a",
+            "t",
+            false,
+        );
         ledger.finish(id, Some(true), &backup);
         assert!(ledger.entries().is_empty());
     }
@@ -526,12 +571,12 @@ mod tests {
     fn element_and_whole_writes_to_one_array_revert_to_the_original() {
         let dir = tempfile::tempdir().unwrap();
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        let t1 = ledger.begin(&state_text(Some(2), &["A"], Some(&["S2"])), "r", "t");
+        let t1 = ledger.begin(&state_text(Some(2), &["A"], Some(&["S2"])), "r", "t", false);
         ledger.finish(t1, Some(true), &[]);
         let whole = state_text(None, &["X", "Y", "Z"], Some(&["S1", "A", "S3"]));
-        let t2 = ledger.begin(&whole, "r", "t");
+        let t2 = ledger.begin(&whole, "r", "t", false);
         ledger.finish(t2, Some(true), &[]);
-        let t3 = ledger.begin(&state_text(Some(2), &["B"], Some(&["Y"])), "r", "t");
+        let t3 = ledger.begin(&state_text(Some(2), &["B"], Some(&["Y"])), "r", "t", false);
         assert_eq!(t3, COVERED, "the whole entry covers it");
         ledger.finish(t3, Some(true), &[]);
         let [entry] = ledger.entries() else {
@@ -551,19 +596,19 @@ mod tests {
     fn a_refused_whole_write_unfolds_and_an_unknown_element_stays_unknown() {
         let dir = tempfile::tempdir().unwrap();
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        let t1 = ledger.begin(&state_text(Some(2), &["A"], Some(&["S2"])), "r", "t");
+        let t1 = ledger.begin(&state_text(Some(2), &["A"], Some(&["S2"])), "r", "t", false);
         ledger.finish(t1, Some(true), &[]);
         let backup = ledger.entries().to_vec();
         let whole = state_text(None, &["X", "Y", "Z"], Some(&["S1", "A", "S3"]));
-        let t2 = ledger.begin(&whole, "r", "t");
+        let t2 = ledger.begin(&whole, "r", "t", false);
         assert_eq!(ledger.entries().len(), 1, "folded");
         ledger.finish(t2, Some(false), &backup);
         assert_eq!(ledger.entries(), backup.as_slice());
 
         let resize = state_text(Some(0), &["4"], None);
-        let t0 = ledger.begin(&resize, "r", "t");
+        let t0 = ledger.begin(&resize, "r", "t", false);
         ledger.finish(t0, Some(true), &[]);
-        let t2 = ledger.begin(&whole, "r", "t");
+        let t2 = ledger.begin(&whole, "r", "t", false);
         ledger.finish(t2, Some(true), &[]);
         let [entry] = ledger.entries() else {
             panic!("{:?}", ledger.entries());
@@ -575,7 +620,7 @@ mod tests {
     fn an_unanswered_write_stays_as_unknown() {
         let dir = tempfile::tempdir().unwrap();
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        let id = ledger.begin(&planned(stored(42.0), None), "run-a", "t");
+        let id = ledger.begin(&planned(stored(42.0), None), "run-a", "t", false);
         assert_eq!(ledger.entries()[0].state, State::Sending);
         ledger.finish(id, None, &[]);
         assert_eq!(ledger.entries()[0].state, State::Unknown);
@@ -586,26 +631,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ledger = Ledger::open(dir.path()).unwrap();
         let ours = planned(stored(42.0), None);
-        let id = ledger.begin(&ours, "run-a", "t");
+        let id = ledger.begin(&ours, "run-a", "t", false);
         ledger.finish(id, Some(true), &[]);
-        assert!(ledger.owns(&ours.spec, Some(8), &stored(42.0).bytes));
+        assert!(ledger.owns(&ours.spec, Some(8), &stored(42.0).bytes, false));
         assert!(
-            !ledger.owns(&ours.spec, Some(8), &stored(50.0).bytes),
+            !ledger.owns(&ours.spec, Some(8), &stored(50.0).bytes, false),
             "someone overwrote it"
         );
-        assert!(!ledger.owns(&ours.spec, Some(9), &stored(42.0).bytes));
+        assert!(!ledger.owns(&ours.spec, Some(9), &stored(42.0).bytes, false));
     }
 
     #[test]
     fn revert_order_follows_the_latest_write_and_abandoned_sends_settle() {
         let dir = tempfile::tempdir().unwrap();
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        let first = ledger.begin(&planned(stored(1.0), None), "run-a", "t");
+        let first = ledger.begin(&planned(stored(1.0), None), "run-a", "t", false);
         let mut other = planned(stored(2.0), None);
         other.priority = Some(9);
-        let second = ledger.begin(&other, "run-a", "t");
+        let second = ledger.begin(&other, "run-a", "t", false);
         // Writing the first target again makes it the newest.
-        ledger.begin(&planned(stored(3.0), None), "run-a", "t");
+        ledger.begin(&planned(stored(3.0), None), "run-a", "t", false);
         let order: Vec<u64> = ledger.newest_first().iter().map(|e| e.id).collect();
         assert_eq!(order, [first, second]);
         // Whoever holds the lock settles every send left without a writer,

@@ -130,10 +130,11 @@ impl DeviceAddress {
     }
 
     /// The address as the discovery table and the gates key it on a client
-    /// whose own network is numbered `own`, once known: one on that network
-    /// is the local station at its MAC. A MAC the local network has no form
-    /// for stays as it is.
-    pub(crate) fn localized(self, own: Option<u16>) -> Self {
+    /// whose own network is numbered `own`, once known
+    /// ([`BACnetClient::network_number`]): one on that network is the local
+    /// station at its MAC. A MAC the local network has no form for stays as
+    /// it is.
+    pub fn localized(self, own: Option<u16>) -> Self {
         match own {
             Some(own) if own == self.network => Self::local(&self.mac).unwrap_or(self),
             _ => self,

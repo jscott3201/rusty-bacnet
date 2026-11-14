@@ -161,7 +161,7 @@ async fn a_panicking_write_task_settles_its_entry() {
         let mut ledger = Ledger::open(&path)
             .unwrap()
             .written_by(Origin::mcp("tester"));
-        ledger.begin(&item, run_id(), "t");
+        ledger.begin(&item, run_id(), "t", false);
         ledger.save().unwrap();
         panic!("the write task panics after recording its entry");
     };

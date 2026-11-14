@@ -389,7 +389,9 @@ before it into one entry (its pre-image with each element's put back), and an
 element write after a whole one records nothing new; a refused whole write
 gives the element entries back. Each entry keeps the device's address beside
 its instance, and a write is read, gated, sent and reverted at that one
-address (#2560). `ledger.json` in the workspace is saved atomically before each
+address (#2560), only while the discovery table's row there claims that
+instance; a revert to a local address with no row (after a restart) asks the
+device which it is first. `ledger.json` in the workspace is saved atomically before each
 request goes out and after its answer, so a kill mid-request still leaves the
 entry (state `sending`, or `unknown` after a timeout); a write is not sent if
 the ledger can't be saved. Repeated writes to one target keep the first

@@ -195,7 +195,7 @@ async fn an_array_written_by_element_and_whole_reverts_to_its_original() {
         state_text(None, &["X", "Y", "Z"], &["State 1", "A", "State 3"]),
         state_text(Some(2), &["B"], &["Y"]),
     ] {
-        let id = ledger.begin(&planned, "earlier-run", "2026-10-20T12:00:00.000Z");
+        let id = ledger.begin(&planned, "earlier-run", "2026-10-20T12:00:00.000Z", false);
         ledger.finish(id, Some(true), &[]);
     }
     ledger.save().unwrap();

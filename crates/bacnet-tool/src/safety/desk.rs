@@ -17,7 +17,10 @@
 //! read there, its turn is taken at that address's gate, its requests go
 //! there and its ledger entry keeps it, so a write is never planned at one
 //! device and sent to another, even when another device claims the same
-//! instance meanwhile.
+//! instance meanwhile. Nor is it sent once the address is another
+//! device's: the turn is refused when the discovery table's row there
+//! claims another instance, and a revert to an address with no row asks
+//! the device which it is first ([`Unsent`](super::Unsent)).
 
 use std::future::Future;
 use std::path::Path;
@@ -32,7 +35,7 @@ use super::audit::{Audit, Context, utc_now};
 use super::ledger::{Entry, Ledger, Origin};
 use super::lock::{WorkspaceLock, lock};
 use super::plan::{self, PRE_READ, PreRead};
-use super::send::{item_json, locate, reach, send, turn, write_property};
+use super::send::{item_json, revert_at, send, turn, write_property};
 use super::{Gate, Level, Outcome, Planned, Preview, WriteSpec, run_id};
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::{Halt, Reader, Wanted, unreachable};
@@ -86,6 +89,15 @@ pub trait Caller: Sync {
     /// The ledger changed: written as `sending`, before the request goes.
     fn ledger_changed<'a>(&'a self, _entries: &'a [Entry]) -> Waiting<'a> {
         Box::pin(async {})
+    }
+
+    /// Whether a revert may send a Who-Is to find a device the discovery
+    /// table can't place: a routed address with no row, or an entry kept
+    /// without an address whose instance no row claims. The TUI may; MCP
+    /// never sends one, so its reverts report such an entry as not
+    /// reverted, with why.
+    fn may_look(&self) -> bool {
+        true
     }
 }
 
@@ -374,6 +386,8 @@ impl Desk {
             // The session expired or was disarmed during the re-read.
             return self.not_sent(caller, preview, &why).await;
         }
+        let ledger = self.ledger.as_ref();
+        let unaddressed = unaddressed(client, ledger, &preview.address, preview.device).await;
         let Some(ledger) = &mut self.ledger else {
             return Vec::new();
         };
@@ -382,7 +396,7 @@ impl Desk {
         let ids: Vec<u64> = preview
             .items
             .iter()
-            .map(|item| ledger.begin(item, run_id(), &at))
+            .map(|item| ledger.begin(item, run_id(), &at, unaddressed))
             .collect();
         if !self.save() {
             // Nothing goes out that the ledger couldn't record first.
@@ -415,8 +429,8 @@ impl Desk {
         caller.ledger_changed(&self.entries()).await;
         // One turn at the device for the preview's writes, sent one after
         // another (#1791), at the address they were planned at. With no
-        // route to it, none is sent.
-        let outcomes = match turn(client, rate, &preview.address).await {
+        // route to it, or another device there now, none is sent.
+        let outcomes = match turn(client, rate, &preview.address, preview.device).await {
             Ok(held) => {
                 let outcomes = send(client, preview).await;
                 drop(held);
@@ -493,12 +507,13 @@ impl Desk {
             .filter(|entry| chosen(entry))
             .collect();
         let mut done = Vec::with_capacity(entries.len());
+        let look = caller.may_look();
         for entry in entries {
             let outcome = match (entry.undo(), entry.object()) {
                 _ if caller.gone() => Outcome::NotSent(ENDED.into()),
                 (Some(undo), Some(object)) => {
                     let target = (object, entry.property(), entry.index);
-                    match revert_at(client, rate, &entry).await {
+                    match revert_at(client, rate, &entry, look).await {
                         Ok((address, held)) => {
                             let bytes = undo.bytes.clone();
                             let result =
@@ -532,26 +547,6 @@ impl Desk {
         }
         done
     }
-}
-
-/// Where `entry` is reverted, and the turn there: the address its write
-/// went to, found first when the route to it was lost (a restart, say), or
-/// for an entry written before #2560, which kept none, the one address
-/// claiming its instance.
-async fn revert_at<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    rate: &RequestLimits,
-    entry: &Entry,
-) -> Result<(DeviceAddress, bacnet_ops::limits::Turn), bacnet_types::error::Error> {
-    let address = match &entry.address {
-        Some(address) => {
-            reach(client, address, entry.device).await;
-            address.clone()
-        }
-        None => locate(client, entry.device).await?,
-    };
-    let held = turn(client, rate, &address).await?;
-    Ok((address, held))
 }
 
 /// Read what `specs` need and plan them, the slots `ledger` holds counted
@@ -624,10 +619,31 @@ pub async fn prepare<T: TransportPort + 'static>(
         };
         reads.push(PreRead { rows, element });
     }
+    let unaddressed = unaddressed(client, ledger, address, device).await;
     let ours = |spec: &WriteSpec, priority, now: &[u8]| {
-        ledger.is_some_and(|l| l.owns(spec, priority, now))
+        ledger.is_some_and(|l| l.owns(spec, priority, now, unaddressed))
     };
     plan::preview(specs, &reads, ours, dangerous, batch)
+}
+
+/// Whether `ledger`'s entries kept without an address for `device` (written
+/// before #2560) are the device at `address`: only when the discovery
+/// table's one claim to the instance is there, where their revert would go
+/// too. Two claims, or one elsewhere, keep them apart from a write at
+/// `address` (see [`Ledger::begin`]). Sends nothing.
+async fn unaddressed<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    ledger: Option<&Ledger>,
+    address: &DeviceAddress,
+    device: u32,
+) -> bool {
+    if !ledger.is_some_and(|l| l.has_unaddressed(device)) {
+        return false;
+    }
+    let own = client.network_number();
+    DeviceAddress::claiming(client, device)
+        .await
+        .is_ok_and(|at| at.localized(own) == address.clone().localized(own))
 }
 
 #[cfg(test)]

@@ -10,6 +10,8 @@ use std::time::Duration;
 use bacnet_client::client::ClientConfig;
 use bacnet_encoding::apdu::{Apdu, ComplexAck, SimpleAck, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, encode_npdu};
+use bacnet_encoding::primitives::encode_property_value;
+use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_services::rpm::{ReadAccessResult, ReadPropertyMultipleACK, ReadResultElement};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::test_transport::{SendLog, SentFrame, TestTransport};
@@ -17,7 +19,7 @@ use bacnet_types::enums::{
     ConfirmedServiceChoice, ObjectType, PropertyIdentifier, UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 use tokio::sync::mpsc;
 
@@ -99,19 +101,37 @@ fn ao1_ack() -> ReadPropertyMultipleACK {
     }
 }
 
+/// The Device object's Object_Identifier, read by the wildcard instance,
+/// answered as device `instance`.
+fn identity_ack(instance: u32) -> BytesMut {
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
+    let mut value = BytesMut::new();
+    encode_property_value(&mut value, &PropertyValue::ObjectIdentifier(device)).unwrap();
+    let mut ack = BytesMut::new();
+    ReadPropertyACK {
+        object_identifier: device,
+        property_identifier: PropertyIdentifier::OBJECT_IDENTIFIER,
+        property_array_index: None,
+        property_value: value.to_vec(),
+    }
+    .encode(&mut ack)
+    .unwrap();
+    ack
+}
+
 /// The scripted device's answer to `frame`, from the MAC it went to: AO:1's
-/// pre-images for a ReadPropertyMultiple, a SimpleAck for anything else
-/// confirmed, nothing for a broadcast.
-fn answer(frame: &SentFrame) -> Option<ReceivedNpdu> {
+/// pre-images for a ReadPropertyMultiple; for a ReadProperty (the identity
+/// read by the wildcard instance), its Object_Identifier as device
+/// `identity`, or no answer for `None`; a SimpleAck for anything else
+/// confirmed; nothing for a broadcast.
+fn answer(frame: &SentFrame, identity: Option<u32>) -> Option<ReceivedNpdu> {
     if frame.broadcast {
         return None;
     }
     let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(frame.decode_npdu().payload) else {
         return None;
     };
-    let reply = if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE {
-        let mut ack = BytesMut::new();
-        ao1_ack().encode(&mut ack).unwrap();
+    let complex = |ack: BytesMut| {
         Apdu::ComplexAck(ComplexAck {
             segmented: false,
             more_follows: false,
@@ -121,6 +141,13 @@ fn answer(frame: &SentFrame) -> Option<ReceivedNpdu> {
             service_choice: request.service_choice,
             service_ack: ack.freeze(),
         })
+    };
+    let reply = if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE {
+        let mut ack = BytesMut::new();
+        ao1_ack().encode(&mut ack).unwrap();
+        complex(ack)
+    } else if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
+        complex(identity_ack(identity?))
     } else {
         Apdu::SimpleAck(SimpleAck {
             invoke_id: request.invoke_id,
@@ -151,8 +178,16 @@ struct Lab {
     rate: RequestLimits,
 }
 
-/// A client whose every unicast is answered by the scripted device.
+/// A client whose every unicast is answered by the scripted device, which
+/// says it is device 7 when asked.
 async fn lab() -> Lab {
+    lab_as(Some(DEVICE)).await
+}
+
+/// A client whose every unicast is answered by the scripted device, which
+/// says it is device `identity` when asked which it is (`None`: it
+/// doesn't answer that).
+async fn lab_as(identity: Option<u32>) -> Lab {
     let (inbox, inbound) = mpsc::channel(32);
     let transport = TestTransport::builder()
         .local_mac(&CLIENT)
@@ -160,7 +195,7 @@ async fn lab() -> Lab {
         .on_send(move |frame| {
             let inbox = inbox.clone();
             async move {
-                if let Some(reply) = answer(&frame) {
+                if let Some(reply) = answer(&frame, identity) {
                     let _ = inbox.send(reply).await;
                 }
                 Ok(())
@@ -394,9 +429,10 @@ async fn a_ledger_from_before_addresses_loads_and_reverts_by_instance() {
 }
 
 /// After a restart the discovery table is empty. An entry this release
-/// wrote keeps its address: a local one is reverted there with no Who-Is,
-/// and a routed one with no row asks only its own network for the
-/// instance, then is reported not sent.
+/// wrote keeps its address: a local one is asked which device it is (one
+/// ReadProperty), then reverted there, with no Who-Is; a routed one with no
+/// row asks only its own network for the instance, then is reported not
+/// sent.
 #[tokio::test(start_paused = true)]
 async fn a_revert_after_a_restart_goes_to_the_entrys_address() {
     let dir = tempfile::tempdir().unwrap();
@@ -426,8 +462,11 @@ async fn a_revert_after_a_restart_goes_to_the_entrys_address() {
     let done = desk.revert(&lab.client, &lab.rate, &Armed, |_| true).await;
     assert_eq!(done[0].1, Outcome::Ack, "{done:?}");
     assert!(lab.sent.broadcasts().is_empty(), "no Who-Is");
-    let wp = ConfirmedServiceChoice::WRITE_PROPERTY;
-    assert_eq!(requests(&lab.sent), [(wp, A.to_vec())]);
+    let (rp, wp) = (
+        ConfirmedServiceChoice::READ_PROPERTY,
+        ConfirmedServiceChoice::WRITE_PROPERTY,
+    );
+    assert_eq!(requests(&lab.sent), [(rp, A.to_vec()), (wp, A.to_vec())]);
 
     // A routed entry: one Who-Is, to its network, and nothing else.
     let routed = DeviceAddress::new(2, &[0x05]).unwrap();
@@ -450,3 +489,6 @@ async fn a_revert_after_a_restart_goes_to_the_entrys_address() {
     assert_eq!(to.network, 2);
     assert!(lab.sent.unicasts().is_empty());
 }
+
+#[path = "desk_identity_tests.rs"]
+mod identity;

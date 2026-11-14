@@ -72,7 +72,8 @@ async fn send<T: TransportPort + 'static>(
 ) -> Outcome {
     let device = request.device;
     reach(client, &request.at, device).await;
-    let held = match turn(client, rate, &request.at).await {
+    // Refused, with nothing sent, once another device is at the address.
+    let held = match turn(client, rate, &request.at, device).await {
         Ok(held) => held,
         Err(error) => return Outcome::NotSent(error.to_string()),
     };
