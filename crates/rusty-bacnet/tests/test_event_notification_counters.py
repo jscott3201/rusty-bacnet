@@ -116,23 +116,26 @@ class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
             # NORMAL -> HIGH_LIMIT matches all three destinations and skips each.
             # Device 99 is looked for first with a Who-Is (#1368) and never
             # answers, and the write waits for it, up to the APDU timeout (3 s),
-            # before its COV fanout and its return (#2537). The binding holds
-            # the server for the whole call, so no counter can be read while it
-            # waits; the two that can never be routed counted at the write.
+            # before its COV fanout and its return (#2537). The two that can
+            # never be routed count at once, while the write still waits.
             loop = asyncio.get_running_loop()
             began = loop.time()
-            await server.set_present_value_local(target, PropertyValue.real(2))
+            write = asyncio.ensure_future(
+                server.set_present_value_local(target, PropertyValue.real(2)))
+            expected.update(recipient_unroutable=1, confirmed_broadcast_recipient=1)
+            deadline = began + 2
+            while (await server.event_notification_counters() != expected
+                   and loop.time() < deadline):
+                await asyncio.sleep(0.05)
+            self.assertFalse(write.done(), "the write waits for Device 99")
+            self.assertEqual(await server.event_notification_counters(), expected)
+            await write
             self.assertGreaterEqual(loop.time() - began, 2.5)
-            counters = await server.event_notification_counters()
-            skipped = (counters["recipient_unroutable"],
-                       counters["confirmed_broadcast_recipient"])
-            self.assertEqual(skipped, (1, 1))
 
             # Device 99 counts once the APDU timeout has passed. Whether the
             # write's wait ran out first (cov_wait_expired) isn't asserted here;
             # the Rust lane tests pin both orders.
-            expected.update(recipient_unroutable=1, confirmed_broadcast_recipient=1,
-                            device_recipient_unbound=1)
+            expected.update(device_recipient_unbound=1)
             del expected["cov_wait_expired"]
 
             async def counted():

@@ -5344,7 +5344,8 @@ unknown object or property raises `BacnetProtocolError` with the error a
 network read gets (`UNKNOWN_OBJECT`, for example). A Group whose member rows
 exceed `rpm_max_result_elements` raises `BacnetAbortError` with
 `reason == 9` (OUT_OF_RESOURCES), the abort a network read of it gets. The
-server lock is held for the read, as for `write_property_local`.
+read goes on beside other calls, a local write still waiting for its event
+notifications included.
 
 ```python
 value = await server.read_property(

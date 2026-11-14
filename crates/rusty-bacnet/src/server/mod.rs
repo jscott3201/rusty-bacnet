@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 use bacnet_objects::access_control::{
     AccessCredentialObject, AccessDoorObject, AccessPointObject, AccessRightsObject,
@@ -96,7 +96,11 @@ pub(crate) use audit_configuration::{
 /// Later startup failures retain existing behavior, not general rollback.
 #[pyclass(name = "BACnetServer", module = "rusty_bacnet")]
 pub struct BACnetServer {
-    inner: Arc<Mutex<Option<server::BACnetServer<AppTransport>>>>,
+    /// The running server. Every call takes a read guard, so a local write
+    /// that waits for its event notifications (a Device recipient's I-Am,
+    /// #2537) holds up no other call; `start` and `stop` take the write
+    /// guard, `stop` once the calls in flight have returned.
+    inner: Arc<RwLock<Option<server::BACnetServer<AppTransport>>>>,
     device_instance: u32,
     segmentation_supported: bacnet_types::enums::Segmentation,
     apdu_segment_timeout_ms: u64,

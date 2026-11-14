@@ -91,7 +91,7 @@ impl BACnetServer {
         let inner = Arc::clone(&self.inner);
         let counters = Arc::clone(&self.forwarder_save_counters);
         crate::py_async::future_into_py(py, async move {
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             if guard.is_none() {
                 return Err(PyRuntimeError::new_err("server not started"));
             }

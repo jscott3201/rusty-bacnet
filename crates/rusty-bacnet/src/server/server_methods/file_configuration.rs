@@ -181,7 +181,7 @@ mod tests {
     fn test_server() -> BACnetServer {
         BACnetServer {
             registered_network_port: None,
-            inner: Arc::new(Mutex::new(None)),
+            inner: Arc::new(RwLock::new(None)),
             device_instance: 1,
             segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
             apdu_segment_timeout_ms: 5000,

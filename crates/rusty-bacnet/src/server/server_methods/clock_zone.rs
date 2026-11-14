@@ -26,7 +26,7 @@ impl BACnetServer {
             server::ClockConfig::new(utc_offset_minutes, daylight_savings).map_err(invalid)?;
         let inner = Arc::clone(&self.inner);
         let future = async move {
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
