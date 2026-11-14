@@ -32,9 +32,11 @@ async fn rebind_after_stop(bbmd: bool) {
         inner.enable_bbmd(Vec::new());
     }
     let (bound, address) = oneshot::channel();
+    let transport = observed(inner, bound);
+    let handle = transport.handle();
     let port = RouterPort {
         network_number: 1,
-        transport: observed(inner, bound),
+        transport,
     };
     let mut started = BACnetRouter::start(vec![port], RouterOptions::new())
         .await
@@ -55,6 +57,9 @@ async fn rebind_after_stop(bbmd: bool) {
         "the running ephemeral port is exclusive"
     );
     started.router.stop().await.unwrap();
+    // The router stopped the transport itself: a socket released by the
+    // drop-time abort would also pass the rebind below.
+    assert_eq!((handle.stops(), handle.aborts()), (1, 0));
     assert_eq!(started.router.ports(), snapshots);
     // No retries or scheduling waits: an awaited successful stop is the barrier.
     let rebound = UdpSocket::bind(address)

@@ -24,10 +24,6 @@ use crate::loopback_fixture::{
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
-/// A port whose received frames the test supplies. What the stack sends
-/// through it comes back out of `sent`, as a [`ReceivedNpdu`] whose
-/// `link_layer_group` marks a broadcast, with each unicast's MAC, so the
-/// loopback fixture's helpers read it. See [`injector`].
 /// The test's side of an [`injector`] port.
 struct Link {
     deliver: mpsc::Sender<ReceivedNpdu>,
@@ -47,6 +43,10 @@ impl Link {
     }
 }
 
+/// A port whose received frames the test supplies. What the stack sends
+/// through it comes back out of the link's `sent`, as a [`ReceivedNpdu`]
+/// whose `link_layer_group` marks a broadcast, with each unicast's MAC, so
+/// the loopback fixture's helpers read it.
 fn injector(mac: u8) -> (TestTransport, Link) {
     let (deliver, received) = mpsc::channel(16);
     let (sent_tx, sent) = mpsc::channel(64);

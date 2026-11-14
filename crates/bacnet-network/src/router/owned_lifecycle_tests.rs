@@ -86,11 +86,10 @@ async fn cancelled_failed_stop_preserves_original_errors_and_attempts_later_port
         let (mut port, probe) = port(true);
         port.network_number = index;
         if index == 1 {
-            port.transport.stop_error =
-                Some(Error::Transport(std::io::Error::from_raw_os_error(13)));
+            probe.fail_stop(Error::Transport(std::io::Error::from_raw_os_error(13)));
         }
         if index == 2 {
-            port.transport.stop_error = Some(Error::Encoding("second cleanup failure".into()));
+            probe.fail_stop(Error::Encoding("second cleanup failure".into()));
         }
         ports.push(port);
         probes.push(probe);
@@ -149,8 +148,8 @@ async fn dropping_router_initiates_cleanup_without_a_stop_waiter() {
 
 #[tokio::test(start_paused = true)]
 async fn sender_panic_is_a_retained_failure_and_still_cleans_transport() {
-    let (mut port, probe) = port(false);
-    port.transport.panic_send = true;
+    let (port, probe) = port(false);
+    probe.panic_on_send();
     let mut started = BACnetRouter::start(vec![port], RouterOptions::new())
         .await
         .unwrap();
@@ -197,9 +196,9 @@ async fn unpolled_sender_owner_loss_is_failure_and_runs_abort_fallback() {
 
 #[tokio::test(start_paused = true)]
 async fn transport_stop_panic_is_failure_and_does_not_skip_another_owner() {
-    let (mut a, mut first) = port(false);
+    let (a, mut first) = port(false);
     let (mut b, mut second) = port(false);
-    a.transport.panic_stop = true;
+    first.panic_on_stop();
     b.network_number = 2;
     let mut started = BACnetRouter::start(vec![a, b], RouterOptions::new())
         .await

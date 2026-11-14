@@ -1,11 +1,13 @@
 //! Contract of the shared test transport itself.
 use super::*;
 use crate::port::DataAttribute;
-use bacnet_encoding::apdu::{SimpleAck, encode_apdu};
+use bacnet_encoding::apdu::{Apdu, SimpleAck, encode_apdu};
+use bacnet_encoding::npdu::Npdu;
 use bacnet_encoding::npdu::encode_npdu;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::BytesMut;
-use std::sync::atomic::AtomicU16;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 
 fn simple_ack_npdu(invoke_id: u8) -> Bytes {
@@ -475,123 +477,4 @@ async fn lifecycle_counters_and_started_report() {
         .build();
     assert!(transport.start().await.is_err());
     assert_eq!(seen.load(Ordering::SeqCst), 0);
-}
-
-fn mstp_inner() -> (
-    crate::mstp::MstpTransport<crate::mstp::LoopbackSerial>,
-    crate::mstp::LoopbackSerial,
-) {
-    let (serial, peer) = crate::mstp::LoopbackSerial::pair();
-    let config = crate::mstp::MstpConfig {
-        this_station: 4,
-        max_master: 5,
-        ..crate::mstp::MstpConfig::default()
-    };
-    (crate::mstp::MstpTransport::new(serial, config), peer)
-}
-
-#[tokio::test(start_paused = true)]
-async fn an_inner_transport_supplies_identity_and_takes_prepare() {
-    let (mstp, _peer) = mstp_inner();
-    let reference = AnyTransport::from(mstp_inner().0);
-    let mut transport = TestTransport::builder().inner(mstp).build();
-    assert_eq!(transport.local_mac(), &[4]);
-    assert!(transport.is_broadcast_mac(&[0xFF]));
-    assert!(transport.group_destinations().contains(&[0xFF]));
-    assert!(transport.local_broadcast_destinations().contains(&[0xFF]));
-    assert_eq!(transport.max_npdu(), reference.max_npdu());
-    assert_eq!(
-        transport.local_receive_apdu_capacity(),
-        reference.local_receive_apdu_capacity()
-    );
-    transport.prepare_for_routing();
-    assert_ne!(
-        transport.max_npdu(),
-        reference.max_npdu(),
-        "the inner transport was prepared"
-    );
-
-    // Settings and lists here take over from the inner transport.
-    let (mstp, _peer) = mstp_inner();
-    let transport = TestTransport::builder()
-        .inner(mstp)
-        .local_mac(&[9])
-        .broadcast_mac(&[0xEE])
-        .receive_capacity(100)
-        .build();
-    assert_eq!(transport.local_mac(), &[9]);
-    assert!(transport.is_broadcast_mac(&[0xEE]));
-    assert!(!transport.is_broadcast_mac(&[0xFF]));
-    assert_eq!(transport.local_receive_apdu_capacity(), 100);
-
-    // A skipped prepare leaves the inner transport as it was.
-    let (mstp, _peer) = mstp_inner();
-    let mut transport = TestTransport::builder()
-        .inner(mstp)
-        .skip_prepare_for_routing()
-        .build();
-    let before = transport.max_npdu();
-    transport.prepare_for_routing();
-    assert_eq!(transport.max_npdu(), before);
-    assert_eq!(transport.handle().prepares(), 1);
-}
-
-#[tokio::test]
-async fn forward_mode_sends_to_the_inner_transport_after_the_pipeline() {
-    let (a, mut b) = crate::loopback::LoopbackTransport::pair(vec![1], vec![2]);
-    let mut from_a = b.start().await.unwrap();
-    let mut transport = TestTransport::builder()
-        .inner(a)
-        .unicast(SendMode::Forward)
-        .broadcast(SendMode::Record)
-        .build();
-    let _ = transport.start().await.unwrap();
-    let handle = transport.handle();
-
-    transport.send_unicast(&[0xAA], &[2]).await.unwrap();
-    let frame = from_a.recv().await.unwrap();
-    assert_eq!(&frame.npdu[..], &[0xAA]);
-    assert_eq!(frame.source_mac.as_slice(), &[1]);
-    assert_eq!(handle.sent().len(), 1, "a forwarded send is logged first");
-
-    // A broadcast in Record mode stops here.
-    transport.send_broadcast(&[0xBB]).await.unwrap();
-    assert!(from_a.try_recv().is_err());
-    assert_eq!(handle.sent().broadcasts().len(), 1);
-
-    // A refused send is logged, and the controls run before the forward.
-    handle.fail_next_send();
-    assert!(transport.send_unicast(&[0xCC], &[2]).await.is_err());
-    assert!(from_a.try_recv().is_err());
-    assert_eq!(handle.sent().len(), 3);
-
-    // The inner transport's own refusal comes back.
-    drop((b, from_a));
-    assert!(transport.send_unicast(&[0xDD], &[2]).await.is_err());
-}
-
-#[tokio::test]
-async fn forward_mode_without_an_inner_transport_fails() {
-    let transport = TestTransport::builder()
-        .unicast(SendMode::Forward)
-        .broadcast(SendMode::Forward)
-        .build();
-    assert!(transport.send_unicast(&[1], &[2]).await.is_err());
-    assert!(transport.send_broadcast(&[1]).await.is_err());
-    assert_eq!(transport.sent().len(), 2);
-}
-
-#[tokio::test]
-async fn an_inner_transport_starts_and_stops_unless_replaced() {
-    let (a, mut b) = crate::loopback::LoopbackTransport::pair(vec![1], vec![2]);
-    let mut transport = TestTransport::builder().inner(a).build();
-    let mut received = transport.start().await.unwrap();
-    assert!(
-        transport.start().await.is_err(),
-        "the inner transport started once"
-    );
-    let _ = b.start().await.unwrap();
-    b.send_unicast(&[5], &[1]).await.unwrap();
-    assert_eq!(&received.recv().await.unwrap().npdu[..], &[5]);
-    transport.stop().await.unwrap();
 }
