@@ -3,7 +3,7 @@
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::encode_property_value;
-use bacnet_ops::parse;
+use bacnet_ops::{Priority, parse};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_transport::port::TransportPort;
@@ -38,7 +38,12 @@ pub struct WritePropertyArgs {
 
 /// One property write inside a WritePropertyMultiple object entry:
 /// property, array index, value and priority.
-pub type PropertyWrite = (PropertyIdentifier, Option<u32>, PropertyValue, Option<u8>);
+pub type PropertyWrite = (
+    PropertyIdentifier,
+    Option<u32>,
+    PropertyValue,
+    Option<Priority>,
+);
 
 /// All property writes for one object: object type, instance and its property writes.
 pub type ObjectWrites = (ObjectType, u32, Vec<PropertyWrite>);
@@ -173,7 +178,7 @@ pub async fn write_property_multiple_cmd<T: TransportPort + 'static>(
                         property_identifier: prop,
                         property_array_index: idx,
                         value: encoded,
-                        priority,
+                        priority: priority.map(Priority::get),
                     })
                 })
                 .collect::<Result<Vec<_>, bacnet_types::error::Error>>()?;
@@ -206,7 +211,7 @@ mod tests {
         assert_eq!((*object_type, *instance), (ObjectType::ANALOG_VALUE, 1));
         assert_eq!(writes.len(), 2);
         assert_eq!(writes[0].0, PropertyIdentifier::PRESENT_VALUE);
-        assert_eq!(writes[0].3, Some(8));
+        assert_eq!(writes[0].3, Some(Priority::MANUAL_OPERATOR));
         assert_eq!(writes[1].1, Some(2));
         assert_eq!(specs[1].0, ObjectType::BINARY_VALUE);
     }

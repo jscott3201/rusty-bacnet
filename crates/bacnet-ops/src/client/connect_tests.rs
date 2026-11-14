@@ -15,6 +15,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use super::*;
 use crate::device::Device;
 use crate::target::format_mac;
+use crate::write::{Priority, WritePolicy};
 
 /// A device with one analog input on 127.0.0.1, at a port of its own.
 async fn lab_device(instance: u32) -> BACnetServer<BipTransport> {
@@ -46,10 +47,12 @@ async fn a_bip_client_connects_and_reads_over_loopback() {
         .apdu_retries(1)
         .limits(RequestLimits::new(50))
         .resolve_scope(ResolveScope::Network(5))
+        .write_policy(WritePolicy::default().allow_priorities([Priority::CRITICAL_EQUIPMENT]))
         .connect()
         .await
         .unwrap();
     assert_eq!(client.resolve_scope(), ResolveScope::Network(5));
+    assert!(client.write_policy().allows(Priority::CRITICAL_EQUIPMENT));
     let device: Device = client.device(address.as_str()).await.unwrap();
     assert_eq!(device.resolve_instance().await.unwrap(), 2560);
     let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
@@ -87,6 +90,7 @@ async fn a_builder_client_resolves_locally_by_default() {
         .await
         .unwrap();
     assert_eq!(client.resolve_scope(), ResolveScope::Local);
+    assert_eq!(client.write_policy(), WritePolicy::default());
 }
 
 /// The B/IPv6 builder takes its settings and makes a connect future;

@@ -147,6 +147,40 @@ async fn a_mistyped_name_is_refused_with_the_choices() {
     server.stop().await.unwrap();
 }
 
+/// A priority after the value and a different `--priority` name two, so
+/// the write is refused and nothing written; one out of range is refused
+/// as the arguments are read (#2560).
+#[tokio::test]
+async fn two_priorities_or_one_out_of_range_are_refused() {
+    let (mut server, target) = server().await;
+    let before = read(&target, "ao:1", "pv").await;
+    let both = ["write", "ao:1", "pv", "72.5@8", "--priority", "10"];
+    let output = cli(&target, &both).await;
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("the value names priority 8 and the priority argument 10"),
+        "{stderr}"
+    );
+    assert_eq!(read(&target, "ao:1", "pv").await, before);
+    let output = cli(
+        &target,
+        &["write", "ao:1", "pv", "72.5", "--priority", "17"],
+    )
+    .await;
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("priority must be 1-16, got 17"), "{stderr}");
+    // The same priority in both is that one.
+    ok(
+        &target,
+        &["write", "ao:1", "pv", "72.5@8", "--priority", "8"],
+    )
+    .await;
+    assert_eq!(read(&target, "ao:1", "pa[8]").await, "72.5");
+    server.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn constructed_values_take_json() {
     let (mut server, target) = server().await;

@@ -1631,6 +1631,9 @@ bacnet --allow-write writem 192.168.1.100 av:1 pv=72.5@8,desc='"Zone Temp"' av:2
 | `object:type:inst` | `object:ai:1`, `object:ai,1` | ObjectIdentifier |
 
 Inline priority: append `@N` to any value (e.g., `72.5@8`, `null@16`).
+`write` refuses a value whose `@N` differs from its `--priority`, sending
+nothing, since which one was meant is unknown; the same priority in both
+is fine.
 [Input Forms](#input-forms) lists every form an object, a date or a time
 takes, the coming BACnet RDF encoding's among them.
 
