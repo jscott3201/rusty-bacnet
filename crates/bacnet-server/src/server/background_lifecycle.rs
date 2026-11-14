@@ -49,8 +49,9 @@ pub(super) async fn fault_detection<T: TransportPort + 'static>(fanout: CovFanou
 
 /// The 60-second Schedule pass, and the work an application's own `add` or
 /// `remove` queued on the database (`crate::membership`), woken by
-/// `membership`. The Command runs a pass's writes queue start once its COV
-/// fanout is made, through `runner`.
+/// `membership`. The Command runs a pass's writes queue start through
+/// `runner` as the pass is handed to the tail, without waiting for its event
+/// notifications, as a write's runs do.
 pub(super) async fn schedules<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
     membership: Arc<tokio::sync::Notify>,

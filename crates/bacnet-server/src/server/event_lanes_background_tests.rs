@@ -22,6 +22,9 @@ use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use tokio::time::Instant;
 
+#[path = "event_lanes_background_paths_tests.rs"]
+mod paths;
+
 /// Status_Flags IN_ALARM and FAULT, as the wire's first octet carries them.
 const IN_ALARM: u8 = 0x80;
 const FAULTED: u8 = 0x40;
@@ -78,6 +81,11 @@ fn scheduled(db: &mut ObjectDatabase, active: bool) {
 
 /// [`SUBSCRIBER`] watches every COV-reported property of `oid`.
 async fn watch(rig: &Rig, oid: ObjectIdentifier) {
+    watch_by(rig, oid, None).await;
+}
+
+/// [`watch`], a Present_Value change of `increment` or more reported.
+async fn watch_by(rig: &Rig, oid: ObjectIdentifier, increment: Option<f32>) {
     let mut table = rig.server.cov_table.write().await;
     table
         .subscribe(CovSubscription {
@@ -90,7 +98,7 @@ async fn watch(rig: &Rig, oid: ObjectIdentifier) {
             last_notified_observation: None,
             monitored_property: None,
             monitored_property_array_index: None,
-            cov_increment: None,
+            cov_increment: increment,
             notification_kind: CovNotificationKind::Single,
             timestamped: false,
         })
@@ -457,7 +465,8 @@ impl CovReporting for Frozen {}
 
 /// BV-1 driven by its own deadline, as an application's timed object: the
 /// operation task's first pass arms it 1.5 s on, and the pass then turns
-/// the value active. With `copies`, it reports that from a frozen copy.
+/// the value active, and again `again` later when set. With `copies`, it
+/// reports that from a frozen copy.
 struct Pulsing {
     value: BinaryValueObject,
     /// The local Device, which its commands name as their source.
@@ -465,6 +474,27 @@ struct Pulsing {
     due: Option<Duration>,
     armed: bool,
     copies: bool,
+    again: Option<Duration>,
+}
+
+impl Pulsing {
+    /// BV-1 reporting every transition, its commands from the local Device.
+    fn new(db: &ObjectDatabase, copies: bool, again: Option<Duration>) -> Self {
+        let mut value = BinaryValueObject::new(1, "BV-1").unwrap();
+        let enable = all_transitions();
+        value
+            .write_property(PropertyIdentifier::EVENT_ENABLE, None, enable, None)
+            .unwrap();
+        let source = crate::LocalCommandSource::ServerDevice;
+        Self {
+            value,
+            origin: bacnet_device_core::write::local::resolve_source(db, source).unwrap(),
+            due: None,
+            armed: false,
+            copies,
+            again,
+        }
+    }
 }
 
 impl BACnetObject for Pulsing {
@@ -518,7 +548,7 @@ impl Timed for Pulsing {
         if self.due.is_none_or(|due| now < due) {
             return false;
         }
-        self.due = None;
+        self.due = self.again.take().map(|again| now + again);
         let active = PropertyValue::Enumerated(1);
         let origin = &self.origin;
         let written = self
@@ -549,19 +579,7 @@ impl Timed for Pulsing {
 async fn the_operation_task_commits_a_timed_objects_transition(copies: bool) {
     let t0 = Instant::now();
     let rig = Rig::start(|db| {
-        let mut value = BinaryValueObject::new(1, "BV-1").unwrap();
-        let enable = all_transitions();
-        value
-            .write_property(PropertyIdentifier::EVENT_ENABLE, None, enable, None)
-            .unwrap();
-        let source = crate::LocalCommandSource::ServerDevice;
-        let pulsing = Pulsing {
-            value,
-            origin: bacnet_device_core::write::local::resolve_source(db, source).unwrap(),
-            due: None,
-            armed: false,
-            copies,
-        };
+        let pulsing = Pulsing::new(db, copies, None);
         db.add(Box::new(pulsing)).unwrap();
     })
     .await;
@@ -581,4 +599,143 @@ async fn the_operation_task_commits_a_timed_objects_transition_reported_from_a_c
 #[tokio::test(start_paused = true)]
 async fn the_operation_task_commits_a_timed_objects_transition_reported_from_the_database() {
     the_operation_task_commits_a_timed_objects_transition(false).await;
+}
+
+/// A nonzero Time_Delay a background change seeds counts from the change
+/// (#2535): the operation task turns BV-1 active at 1.5 s, and the sweep,
+/// woken when its two-second delay ends, fires OFFNORMAL at 3.5 s, not at a
+/// sweep's whole second. The task's second write of the same value, at
+/// 2.5 s, leaves the due instant as it was.
+#[tokio::test(start_paused = true)]
+async fn a_background_changes_time_delay_counts_from_it_and_a_repeat_keeps_it() {
+    let t0 = Instant::now();
+    let rig = Rig::start(|db| {
+        let mut pulsing = Pulsing::new(db, false, Some(Duration::from_secs(1)));
+        let delay = PropertyValue::Unsigned(2);
+        let time_delay = PropertyIdentifier::TIME_DELAY;
+        let value = &mut pulsing.value;
+        value.write_property(time_delay, None, delay, None).unwrap();
+        db.add(Box::new(pulsing)).unwrap();
+    })
+    .await;
+    watch(&rig, bv1()).await;
+    sleep_until(t0, 5_000).await;
+    let alarmed = [event(3_500, bv1(), OFFNORMAL), cov(3_500, bv1(), IN_ALARM)];
+    assert_eq!(stamped(&rig, t0), alarmed);
+}
+
+/// AV-7 stepping its Present_Value by one every 10 ms from the operation
+/// task, reporting each step from a frozen copy.
+struct Counting {
+    value: AnalogValueObject,
+    n: u32,
+    due: Duration,
+}
+
+impl BACnetObject for Counting {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.value.object_identifier()
+    }
+    fn object_name(&self) -> &str {
+        self.value.object_name()
+    }
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        self.value.read_property(property, array_index)
+    }
+    fn write_property(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        self.value
+            .write_property(property, array_index, value, priority)
+    }
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        self.value.property_metadata()
+    }
+    fn cov(&self) -> Option<&dyn CovReporting> {
+        self.value.cov()
+    }
+    fn timed(&mut self) -> Option<&mut dyn Timed> {
+        Some(self)
+    }
+}
+
+impl Timed for Counting {
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
+        if now < self.due {
+            return false;
+        }
+        self.due = now + Duration::from_millis(10);
+        self.n += 1;
+        true
+    }
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
+        Some(self.due)
+    }
+    fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
+        let status_flags = PropertyIdentifier::STATUS_FLAGS;
+        Some(Box::new(Frozen {
+            oid: self.object_identifier(),
+            present_value: PropertyValue::Real(self.n as f32),
+            status_flags: self.value.read_property(status_flags, None).unwrap(),
+        }))
+    }
+}
+
+/// The Present_Values [`SUBSCRIBER`]'s COV reports of `oid` carried, in the
+/// order they went.
+fn reported(rig: &Rig, oid: ObjectIdentifier) -> Vec<f32> {
+    let reports = rig.sent.unicasts().into_iter().filter_map(|frame| {
+        let Apdu::UnconfirmedRequest(request) = frame.apdu() else {
+            return None;
+        };
+        let cov = UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION;
+        if frame.mac.as_slice() != SUBSCRIBER || request.service_choice != cov {
+            return None;
+        }
+        let n = COVNotificationRequest::decode(&request.service_request).unwrap();
+        let pv = n
+            .list_of_values
+            .iter()
+            .find(|value| value.property_identifier == PV);
+        let pv = pv.filter(|_| n.monitored_object_identifier == oid)?;
+        Some(f32::from_be_bytes(pv.value[1..5].try_into().unwrap()))
+    });
+    reports.collect()
+}
+
+/// Frozen copies never step back: BV-1's OFFNORMAL at 1.5 s is held, so
+/// the operation task's passes queue behind it; past the bound of 64 each
+/// fans out at once with AV-7's newer count, and the older copies still
+/// queued are dropped when they come up, at the cap or at the release.
+#[tokio::test(start_paused = true)]
+async fn frozen_copies_past_the_bound_never_report_an_older_state() {
+    let t0 = Instant::now();
+    let av7 = av(7);
+    let rig = Rig::start(|db| {
+        db.add(Box::new(Pulsing::new(db, true, None))).unwrap();
+        let units = EngineeringUnits::DEGREES_CELSIUS;
+        let value = AnalogValueObject::new(7, "AV-7", units).unwrap();
+        let due = Duration::ZERO;
+        db.add(Box::new(Counting { value, n: 0, due })).unwrap();
+    })
+    .await;
+    watch_by(&rig, av7, Some(0.5)).await;
+    rig.hold(true, OFFNORMAL);
+    sleep_until(t0, 5_900).await;
+    let held = reported(&rig, av7);
+    rig.release();
+    sleep_until(t0, 6_100).await;
+    let reports = reported(&rig, av7);
+    assert!(held.last() > Some(&400.0), "past the bound: {held:?}");
+    let backwards: Vec<_> = reports.windows(2).filter(|w| w[1] < w[0]).collect();
+    assert!(backwards.is_empty(), "stepped back: {backwards:?}");
+    assert!(reports.len() > held.len(), "reported after the release");
 }

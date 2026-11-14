@@ -307,9 +307,11 @@ impl Request<'_> {
                 // The transition the write causes commits under its guard
                 // too, ahead of a written Schedule's pass (a Schedule has no
                 // intrinsic reporting). WPM evaluates after the pass, since it
-                // can write a Schedule and one of its targets; here an
-                // application's own reporting Schedule-type object gets a
-                // transition the pass causes at the next sweep.
+                // can write a Schedule and one of its targets. The pass
+                // evaluates a Schedule whose Reliability it changes; here an
+                // application's own reporting Schedule-type object whose
+                // Present_Value alone the pass changes gets that transition
+                // at the next sweep.
                 commit_written_transition(|| services.event_delivery(), &mut db, oid, settle);
                 // Any other object is captured once the transition has
                 // committed: one row for the write and its transition (#2535).
@@ -604,9 +606,11 @@ impl Request<'_> {
             if let Some(oid) = written {
                 // The edit's transition commits under its guard too, ahead
                 // of a written Schedule's pass, as after a WriteProperty (WPM
-                // evaluates after it); an application's own reporting
-                // Schedule-type object gets a transition the pass causes at
-                // the next sweep. The edit is captured after it (#2535).
+                // evaluates after it). The pass evaluates a Schedule whose
+                // Reliability it changes; an application's own reporting
+                // Schedule-type object whose Present_Value alone the pass
+                // changes gets that transition at the next sweep. The edit
+                // is captured after it (#2535).
                 let settle = &mut effects.settle;
                 commit_written_transition(|| services.event_delivery(), &mut db, oid, settle);
                 let capture = cov_table.read().await.timed_capture(oid);

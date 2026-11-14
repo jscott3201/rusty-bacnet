@@ -114,8 +114,10 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
         // nothing sees the object half updated (#2530), and its notification
         // joins its recipients' lanes under it, in commit order (#2537). It
         // commits ahead of a written Schedule's pass, as after a
-        // WriteProperty: an application's own reporting Schedule-type object
-        // gets a transition the pass causes at the next sweep.
+        // WriteProperty. The pass evaluates a Schedule whose Reliability it
+        // changes; an application's own reporting Schedule-type object whose
+        // Present_Value alone the pass changes gets that transition at the
+        // next sweep.
         let mut settle = Settle::default();
         commit_written_transition(|| self.event_delivery(), &mut db, oid, &mut settle);
         // Under the write's guard, the database, then the COV table: the

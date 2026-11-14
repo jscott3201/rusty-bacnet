@@ -25,7 +25,12 @@
 //! while an earlier pass's fanout is already reading the object can still be
 //! reported by that earlier fanout, with the state it reads then. A report
 //! from a frozen copy ([`Snapshot`]) tells the state the copy holds and is
-//! never handed on.
+//! never handed on; once a later pass's copy of an object has gone out (one
+//! past the bound goes at once), an earlier pass's copy of it is dropped, so
+//! a subscriber never hears an object step back ([`Copies`]).
+//!
+//! The Command runs a pass's writes queued start as it is handed off, as a
+//! write's runs start, not behind the pass's notifications.
 
 use super::super::binding_probes::after;
 use super::super::command_runs::CommandRunner;
@@ -59,6 +64,50 @@ struct Pass {
     /// The objects an earlier pass handed to this one ([`leave_to_later`]):
     /// this pass reports them itself, never handing them on again.
     handed_in: HashSet<ObjectIdentifier>,
+    /// Its place in the order the task made its passes ([`Copies`]).
+    seq: u64,
+}
+
+/// The order frozen copies are reported in: a pass past the bound fans out
+/// ahead of earlier passes still waiting, so each object keeps the newest
+/// pass whose copy of it has gone out, and an earlier pass's copy is
+/// dropped. Only objects with a copy in a pass not yet fired are kept.
+#[derive(Default)]
+struct Copies {
+    /// The next pass's place in the order.
+    next: u64,
+    /// Per object: how many passes not yet fired hold a copy of it, and the
+    /// latest pass whose copy of it went out.
+    objects: HashMap<ObjectIdentifier, (usize, Option<u64>)>,
+}
+
+impl Copies {
+    /// Number the next pass, counting the copies it holds.
+    fn number(&mut self, snapshots: &[Snapshot]) -> u64 {
+        let seq = self.next;
+        self.next += 1;
+        for (oid, _) in snapshots {
+            self.objects.entry(*oid).or_default().0 += 1;
+        }
+        seq
+    }
+
+    /// Whether pass `seq`'s copy of `oid` goes out: not once a later pass's
+    /// has. Either way that copy no longer waits.
+    fn turn(&mut self, oid: ObjectIdentifier, seq: u64) -> bool {
+        let Some((waiting, sent)) = self.objects.get_mut(&oid) else {
+            return true;
+        };
+        let goes = sent.is_none_or(|sent| sent < seq);
+        if goes {
+            *sent = Some(seq);
+        }
+        *waiting -= 1;
+        if *waiting == 0 {
+            self.objects.remove(&oid);
+        }
+        goes
+    }
 }
 
 /// One task's COV tail: the passes waiting behind the one [`Self::run`] is
@@ -66,13 +115,14 @@ struct Pass {
 /// wake for a pass pushed.
 pub(in crate::server) struct FanoutTail<'a, T: TransportPort + 'static> {
     fanout: &'a CovFanout<T>,
-    /// Starts the Command runs a pass's writes queued once its fanout is made
+    /// Starts the Command runs a pass's writes queued as it is handed off
     /// (the Schedule task's); without one they end unstarted.
     runner: Option<CommandRunner<T>>,
     /// How long a pass waits for its notifications: `cov_retry_timeout_ms`.
     cap: Duration,
     queue: std::sync::Mutex<VecDeque<Pass>>,
     pushed: tokio::sync::Notify,
+    copies: std::sync::Mutex<Copies>,
 }
 
 impl<'a, T: TransportPort + 'static> FanoutTail<'a, T> {
@@ -87,6 +137,7 @@ impl<'a, T: TransportPort + 'static> FanoutTail<'a, T> {
             cap,
             queue: std::sync::Mutex::default(),
             pushed: tokio::sync::Notify::new(),
+            copies: std::sync::Mutex::default(),
         }
     }
 
@@ -96,18 +147,29 @@ impl<'a, T: TransportPort + 'static> FanoutTail<'a, T> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn copies(&self) -> std::sync::MutexGuard<'_, Copies> {
+        self.copies
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Hand the fanout of a pass that has just committed to the tail: what
     /// `committed` and `snapshots` report, behind the notifications counted
-    /// in `settle`, its deadline stamped now. Never waits for a lane: past
+    /// in `settle`, its deadline stamped now. The Command runs its writes
+    /// queued start now. Never waits for a lane: past
     /// [`MAX_WAITING_FANOUTS`] it fans out at once, ahead of the passes still
     /// waiting, counted as a wait that ran out unless its notifications are
     /// out already.
     pub(in crate::server) async fn hand_off(
         &self,
         settle: Settle,
-        committed: CommittedCov,
+        mut committed: CommittedCov,
         snapshots: Vec<Snapshot>,
     ) {
+        let runs = std::mem::take(&mut committed.command_runs);
+        if let Some(runner) = &self.runner {
+            runner.start(runs);
+        }
         let settle = settle.into_wait();
         if settle.is_none() && committed.is_empty() && snapshots.is_empty() {
             return;
@@ -115,6 +177,7 @@ impl<'a, T: TransportPort + 'static> FanoutTail<'a, T> {
         let pass = Pass {
             settle,
             committed,
+            seq: self.copies().number(&snapshots),
             snapshots,
             deadline: after(tokio::time::Instant::now(), self.cap),
             handed_in: HashSet::new(),
@@ -158,22 +221,23 @@ impl<'a, T: TransportPort + 'static> FanoutTail<'a, T> {
         }
     }
 
-    /// `pass`'s COV fanout, then its frozen copies' reports, then the runs
-    /// its writes queued.
+    /// `pass`'s COV fanout, then the reports of its frozen copies no later
+    /// pass's copy has overtaken.
     async fn fire(&self, pass: Pass) {
         let Pass {
             committed,
             snapshots,
+            seq,
             ..
         } = pass;
         self.fanout.fire(&committed).await;
         for (oid, snapshot) in &snapshots {
+            if !self.copies().turn(*oid, seq) {
+                continue;
+            }
             let ctx = self.fanout.notify_context();
             BACnetServer::<T>::fire_cov_notifications_from_snapshot(&ctx, oid, snapshot.as_ref())
                 .await;
-        }
-        if let Some(runner) = &self.runner {
-            runner.start(committed.command_runs);
         }
     }
 }

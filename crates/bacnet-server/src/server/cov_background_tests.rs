@@ -178,7 +178,8 @@ async fn fault_detection_reaches_property_and_timestamped_subscribers_without_an
 /// With event detection on, the fault-detection pass commits the FAULT its
 /// Reliability causes with it (#2535): a timestamped Status_Flags reference
 /// records the two as one row, FAULT with IN_ALARM, not FAULT alone and the
-/// transition a sweep later.
+/// transition a sweep later. The row is captured at the commit: the FAULT's
+/// notification moves the Device clock on before the pass's COV fanout.
 #[tokio::test(start_paused = true)]
 async fn fault_detection_and_its_transition_are_one_timestamped_row() {
     let config = ServerConfig {
@@ -187,9 +188,20 @@ async fn fault_detection_and_its_transition_are_one_timestamped_row() {
     };
     let mut h = Harness::start_with(config, |db| {
         db.remove(&av1()).unwrap();
+        let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
+        let broadcast = super::event_notifications_tests::local_broadcast_destination();
+        nc.add_destination(broadcast).unwrap();
+        db.add(Box::new(nc)).unwrap();
         let mut object =
             AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         object.configure_fault_out_of_range(0.0, 100.0).unwrap();
+        let enable = PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xE0],
+        };
+        object
+            .write_property(PropertyIdentifier::EVENT_ENABLE, None, enable, None)
+            .unwrap();
         db.add(Box::new(object)).unwrap();
     })
     .await;
@@ -202,8 +214,10 @@ async fn fault_detection_and_its_transition_are_one_timestamped_row() {
     h.notification().await;
     h.write_local(150.0).await;
     h.set_clock(40);
+    *h.after_broadcast.lock().unwrap() = Some(at(50));
     tokio::time::sleep(Duration::from_secs(10)).await;
     let timed = h.notification().await;
+    assert_eq!(*h.clock.0.lock().unwrap(), at(50), "FAULT notified");
     let flags: Vec<_> = rows(&timed)
         .into_iter()
         .filter(|(property, _, _)| *property == SF)
