@@ -119,5 +119,12 @@ name = "staged_commit_copies"
 path = "tests/staged_commit_copies.rs"
 required-features = ["event-reporting", "durable-writes"]
 
+# How long a staged request takes at the caps: an ignored, release-build
+# measurement run by hand (#2546).
+[[test]]
+name = "staged_timing"
+path = "tests/staged_timing.rs"
+required-features = ["event-reporting", "durable-writes"]
+
 [lints]
 workspace = true

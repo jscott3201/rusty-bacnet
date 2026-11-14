@@ -24,14 +24,14 @@ const VALUES: PropertyIdentifier = PropertyIdentifier::STATE_CHANGE_VALUES;
 const REFERENCES: PropertyIdentifier = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
 const PRIORITY: PropertyIdentifier = PropertyIdentifier::PRIORITY_FOR_WRITING;
 
-fn values(first: f32) -> StateChangeValues {
+pub(super) fn values(first: f32) -> StateChangeValues {
     core::array::from_fn(|index| match index {
         0 => BACnetTimerStateChangeValue::Primitive(PropertyValue::Real(first)),
         _ => BACnetTimerStateChangeValue::NoValue,
     })
 }
 
-fn reference(instance: u32) -> BACnetDeviceObjectPropertyReference {
+pub(super) fn reference(instance: u32) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference {
         object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance).unwrap(),
         property_identifier: 85,
@@ -49,7 +49,7 @@ fn references_value(references: &[BACnetDeviceObjectPropertyReference]) -> Prope
 }
 
 /// Timer 1 kept in `storage`, configured with `configured` at priority 9.
-fn timer(storage: &Arc<MemoryConfig>, configured: f32) -> TimerObject {
+pub(super) fn timer(storage: &Arc<MemoryConfig>, configured: f32) -> TimerObject {
     let persistence = Arc::clone(storage) as Arc<dyn WriteConfigPersistence>;
     let mut timer = TimerObject::with_persistence(1, "TMR", persistence).unwrap();
     timer
@@ -305,7 +305,11 @@ fn clearing_the_written_set_lets_the_configured_one_apply() {
 }
 
 #[cfg(feature = "durable-writes")]
-fn pending(property: PropertyIdentifier, index: Option<u32>, value: PropertyValue) -> PendingWrite {
+pub(super) fn pending(
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    value: PropertyValue,
+) -> PendingWrite {
     PendingWrite {
         property,
         array_index: index,
@@ -315,7 +319,7 @@ fn pending(property: PropertyIdentifier, index: Option<u32>, value: PropertyValu
 
 /// Stage `writes` on `timer` and wait for the save; the wait releases it.
 #[cfg(feature = "durable-writes")]
-fn staged(timer: &mut TimerObject, writes: &[PendingWrite]) -> crate::durable::SaveWait {
+pub(super) fn staged(timer: &mut TimerObject, writes: &[PendingWrite]) -> crate::durable::SaveWait {
     let StageStep::Staged(wait) = timer.stage_writes(writes) else {
         panic!("the writes didn't stage");
     };
@@ -324,7 +328,7 @@ fn staged(timer: &mut TimerObject, writes: &[PendingWrite]) -> crate::durable::S
 }
 
 #[cfg(feature = "durable-writes")]
-fn make(timer: &mut TimerObject, write: &PendingWrite) -> Result<(), Error> {
+pub(super) fn make(timer: &mut TimerObject, write: &PendingWrite) -> Result<(), Error> {
     let PendingWrite {
         property,
         array_index,
@@ -335,7 +339,7 @@ fn make(timer: &mut TimerObject, write: &PendingWrite) -> Result<(), Error> {
 
 /// What a Timer storage holds of its set and Default_Timeout.
 #[cfg(feature = "durable-writes")]
-fn kept(storage: &MemoryConfig) -> (Option<TimerStateChange>, Option<u64>) {
+pub(super) fn kept(storage: &MemoryConfig) -> (Option<TimerStateChange>, Option<u64>) {
     match storage.saved() {
         Some(WriteConfigSnapshot::Timer(saved)) => (saved.state_change, saved.default_timeout),
         other => panic!("not a Timer's: {other:?}"),
