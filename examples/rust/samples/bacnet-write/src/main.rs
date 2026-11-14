@@ -315,11 +315,16 @@ async fn discover_device(
 
     tokio::time::sleep(Duration::from_secs(args.timeout)).await;
 
-    if client.get_device(args.device).await.is_none() {
-        eprintln!(
-            "ERROR: device {} not found after {}s Who-Is",
+    let missing = match client.get_device(args.device).await {
+        Ok(Some(_)) => None,
+        Ok(None) => Some(format!(
+            "device {} not found after {}s Who-Is",
             args.device, args.timeout
-        );
+        )),
+        Err(e) => Some(e.to_string()),
+    };
+    if let Some(why) = missing {
+        eprintln!("ERROR: {why}");
         let _ = client.stop().await;
         process::exit(1);
     }

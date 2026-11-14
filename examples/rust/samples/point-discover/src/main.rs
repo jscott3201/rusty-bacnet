@@ -708,11 +708,16 @@ async fn main() {
 
         tokio::time::sleep(Duration::from_secs(args.timeout)).await;
 
-        if client.get_device(args.device).await.is_none() {
-            eprintln!(
-                "ERROR: device {} not found after {}s Who-Is",
+        let missing = match client.get_device(args.device).await {
+            Ok(Some(_)) => None,
+            Ok(None) => Some(format!(
+                "device {} not found after {}s Who-Is",
                 args.device, args.timeout
-            );
+            )),
+            Err(e) => Some(e.to_string()),
+        };
+        if let Some(why) = missing {
+            eprintln!("ERROR: {why}");
             eprintln!("Try: --address <device-ip> if you know it (e.g. 192.168.204.200)");
             let _ = client.stop().await;
             process::exit(1);
@@ -722,6 +727,8 @@ async fn main() {
     let discovered = client
         .get_device(args.device)
         .await
+        .ok()
+        .flatten()
         .expect("device table entry");
     let mac = discovered.mac_address.as_slice();
     let addr = format_bip_mac(mac);

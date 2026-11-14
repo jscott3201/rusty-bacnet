@@ -223,15 +223,14 @@ async fn device_table_purge_runs_without_inbound_apdu() {
         segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
-        last_seen: Instant::now()
-            .checked_sub(Duration::from_millis(1))
-            .unwrap_or_else(Instant::now),
+        last_seen: crate::discovery::now(),
         source_network: None,
         source_address: None,
     });
     assert_eq!(client.discovered_devices().await.len(), 1);
 
-    tokio::time::advance(Duration::from_secs(300)).await;
+    // Past the row's 600 s age limit, to the purge tick after it.
+    tokio::time::advance(Duration::from_secs(900)).await;
     tokio::task::yield_now().await;
 
     assert!(client.discovered_devices().await.is_empty());

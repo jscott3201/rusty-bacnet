@@ -40,17 +40,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         property_identifier: bacnet_types::enums::PropertyIdentifier,
         property_array_index: Option<u32>,
     ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
-        let (mac, routing) = {
-            let dt = self.device_table.lock();
-            let device = dt.get(device_instance).ok_or_else(|| {
-                Error::Encoding(format!("device {device_instance} not in device table"))
-            })?;
-            let routing = match (&device.source_network, &device.source_address) {
-                (Some(snet), Some(sadr)) => Some((*snet, sadr.to_vec())),
-                _ => None,
-            };
-            (device.mac_address.to_vec(), routing)
-        };
+        let (mac, routing) = self.resolve_device(device_instance).await?;
 
         if let Some((dnet, dadr)) = routing {
             self.read_property_routed(

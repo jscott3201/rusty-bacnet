@@ -185,13 +185,13 @@ async fn add_routed_device_refuses_a_destination_no_request_could_reach() {
     ] {
         let result = client.add_routed_device(config(dnet, dadr)).await;
         assert!(matches!(result, Err(Error::Encoding(_))), "{result:?}");
-        assert!(client.get_device(ROUTED_DEVICE).await.is_none());
+        assert!(client.get_device(ROUTED_DEVICE).await.unwrap().is_none());
     }
     let longest = vec![3; bacnet_npdu::MAX_MAC_LEN];
     client
         .add_routed_device(config(u16::MAX - 1, longest))
         .await
         .unwrap();
-    assert!(client.get_device(ROUTED_DEVICE).await.is_some());
+    assert!(client.get_device(ROUTED_DEVICE).await.unwrap().is_some());
     client.stop().await.unwrap();
 }

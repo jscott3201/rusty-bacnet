@@ -382,7 +382,7 @@ Properties:
 - `max_apdu_length: int`
 - `segmentation_supported: Segmentation`
 - `vendor_id: int`
-- `seconds_since_seen: float`
+- `seconds_since_seen: float`: Seconds since the device was last heard from when this object was made: its latest I-Am, or its latest answer to one of this client's confirmed requests.
 - `source_network: Optional[int]`
 - `source_address: Optional[bytes]`
 

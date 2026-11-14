@@ -119,8 +119,10 @@ impl<T: TransportPort + 'static> Engine<T> {
         self.client.discovered_devices().await
     }
 
-    /// One device from the discovery table.
-    pub async fn device(&self, instance: u32) -> Option<DiscoveredDevice> {
+    /// The device in the discovery table that claims `instance`, or
+    /// `Ok(None)` when none does. Two or more addresses claiming it fail
+    /// with [`Error::AmbiguousDevice`].
+    pub async fn device(&self, instance: u32) -> Result<Option<DiscoveredDevice>, Error> {
         self.client.get_device(instance).await
     }
 

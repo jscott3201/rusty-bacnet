@@ -319,11 +319,17 @@ impl<T: TransportPort + 'static> Ctx<T> {
             hint: DISCOVER_HINT.into(),
         };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
-        let entry = match parsed {
-            Target::Instance(instance) => engine.device(instance).await.ok_or_else(unknown)?,
-            Target::Routed { dnet, instance } => engine
+        // Two addresses claiming the instance refuse it, naming both.
+        let claimed = async |instance| {
+            engine
                 .device(instance)
                 .await
+                .map_err(|error| ToolError::device(instance, &error))
+        };
+        let entry = match parsed {
+            Target::Instance(instance) => claimed(instance).await?.ok_or_else(unknown)?,
+            Target::Routed { dnet, instance } => claimed(instance)
+                .await?
                 .filter(|found| found.source_network == Some(dnet))
                 .ok_or_else(unknown)?,
             Target::RoutedMac { dnet, mac } => engine
@@ -435,11 +441,18 @@ impl<T: TransportPort + 'static> Ctx<T> {
             };
             match event {
                 Ok(event) if event.kind == DeviceEventKind::Lost => {
+                    // Another address may still claim the instance.
                     let instance = event.device.object_identifier.instance_number();
-                    self.known
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .remove(&instance);
+                    match engine.device(instance).await {
+                        Ok(Some(left)) => self.remember(&left),
+                        Ok(None) => {
+                            self.known
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .remove(&instance);
+                        }
+                        Err(_) => {}
+                    }
                 }
                 Ok(event) => self.remember(&event.device),
                 Err(RecvError::Lagged(_)) => resync = true,

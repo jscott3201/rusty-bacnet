@@ -159,7 +159,7 @@ async fn read_through_the_router(
         .await?;
     let deadline = tokio::time::Instant::now() + WAIT;
     let device = loop {
-        if let Some(device) = client.get_device(DEVICE_INSTANCE).await {
+        if let Some(device) = client.get_device(DEVICE_INSTANCE).await? {
             break device;
         }
         if tokio::time::Instant::now() > deadline {

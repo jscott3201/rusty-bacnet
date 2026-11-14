@@ -584,7 +584,7 @@ async fn found<T: TransportPort + 'static>(
 ) -> bacnet_client::discovery::DiscoveredDevice {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if let Some(found) = client.get_device(instance).await {
+            if let Some(found) = client.get_device(instance).await.unwrap() {
                 break found;
             }
             sleep(Duration::from_millis(10)).await;
