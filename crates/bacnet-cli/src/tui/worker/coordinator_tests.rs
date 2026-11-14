@@ -185,6 +185,7 @@ async fn a_browse_read_without_a_session_fails_under_its_request() {
     let read = Command::Browse {
         req: 9,
         device: 100,
+        at: "10.0.0.100:47808".parse().unwrap(),
         read: crate::tui::point::BrowseRead::Device,
     };
     forward_browse(None, read, 9, 3, &sink).await;

@@ -147,6 +147,8 @@ pub(crate) enum Command {
         req: ReqId,
         /// Device instance, from the discovery table.
         device: u32,
+        /// Where the device answers: the read goes there (#2560).
+        at: DeviceAddress,
         /// What to read.
         read: BrowseRead,
     },
@@ -364,15 +366,6 @@ pub(crate) enum WorkerEvent {
     Updated(DeviceRow),
     /// The client purged a stale device.
     Lost(DeviceRow),
-    /// The addresses claiming one instance changed while two or more claim
-    /// it; the client keeps a row for each.
-    Collision {
-        /// The instance claimed.
-        instance: u32,
-        /// The rows that claim it now: fewer than two once the contest has
-        /// ended.
-        claimants: Vec<DeviceRow>,
-    },
     /// The client's whole table, sent after events were dropped.
     Snapshot(Vec<DeviceRow>),
     /// The Who-Is left; its listen window has started.

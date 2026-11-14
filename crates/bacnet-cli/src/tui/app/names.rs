@@ -384,7 +384,8 @@ impl App {
     }
 
     /// The address the device table shows for `instance`, or nothing for
-    /// a device not in it.
+    /// a device not in it or an instance two rows claim.
+    #[cfg(test)]
     pub(crate) fn device_address(&self, instance: u32) -> &str {
         self.devices
             .get(instance)
@@ -393,6 +394,7 @@ impl App {
 
     /// What is known of `object`'s name on `device`, at the address the
     /// device table shows for it.
+    #[cfg(test)]
     pub(crate) fn name_of(&self, device: u32, object: ObjectIdentifier) -> Option<&Name> {
         self.names.get(device, self.device_address(device), object)
     }

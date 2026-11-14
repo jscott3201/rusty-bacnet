@@ -1,5 +1,10 @@
-//! The device table: rows from I-Am, sorting, filtering, selection and the
-//! duplicate-instance record.
+//! The device table: rows from I-Am, one per address (#2560), sorting,
+//! filtering, selection and the duplicate-instance record.
+//!
+//! Two devices sharing an instance are two rows, each keyed by where it
+//! answers, as the client's discovery table keys them. The duplicate banner
+//! is read off those rows: every claimant of an instance is a row, so the
+//! table knows each contest without the client's collision notices.
 //!
 //! Sorting and filtering live in the model. [`DeviceTable::settle`] rebuilds
 //! the visible order only when something changed, and the view renders only
@@ -7,9 +12,10 @@
 //! already in the session's cache (#1929), and never ask for one.
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
 
+use bacnet_ops::DeviceAddress;
 use bacnet_types::enums::Segmentation;
 
 use super::names::{NameCache, device_object};
@@ -74,14 +80,16 @@ pub(crate) enum Movement {
     End,
 }
 
-/// The live device table.
+/// The live device table, one row per address.
 pub(crate) struct DeviceTable {
-    rows: HashMap<u32, DeviceRow>,
+    rows: HashMap<DeviceAddress, DeviceRow>,
+    /// The addresses claiming each instance.
+    by_instance: HashMap<u32, BTreeSet<DeviceAddress>>,
     sort: SortKey,
     descending: bool,
     filter: String,
-    visible: Vec<u32>,
-    selected: Option<u32>,
+    visible: Vec<DeviceAddress>,
+    selected: Option<DeviceAddress>,
     selected_index: Option<usize>,
     stale: bool,
     /// First visible row, kept by the view between frames.
@@ -100,6 +108,7 @@ impl Default for DeviceTable {
     fn default() -> Self {
         Self {
             rows: HashMap::new(),
+            by_instance: HashMap::new(),
             sort: SortKey::Instance,
             descending: false,
             filter: String::new(),
@@ -116,43 +125,65 @@ impl Default for DeviceTable {
 }
 
 impl DeviceTable {
-    /// Insert a row, or refresh the instance's row from the same address.
-    /// One instance shows one row: another address claiming it leaves the
-    /// row shown, and the duplicate banner names every claimant.
-    pub(crate) fn upsert(&mut self, row: DeviceRow) {
-        let reorders = match self.rows.get(&row.instance) {
-            Some(old) if old.address != row.address => return,
+    /// Insert a row, or refresh the row at its address. Returns the
+    /// instance the address claimed before when it claimed another, so the
+    /// caller's duplicate record can follow both.
+    pub(crate) fn upsert(&mut self, row: DeviceRow) -> Option<u32> {
+        let (reorders, before) = match self.rows.get(&row.at) {
             // A refresh changes only `last_seen` unless the route did.
-            Some(old) => {
+            Some(old) => (
                 self.sort == SortKey::LastSeen
+                    || old.instance != row.instance
+                    || old.address != row.address
                     || old.via != row.via
                     || old.network != row.network
-                    || old.vendor_id != row.vendor_id
-            }
-            None => true,
+                    || old.vendor_id != row.vendor_id,
+                (old.instance != row.instance).then_some(old.instance),
+            ),
+            None => (true, None),
         };
-        self.rows.insert(row.instance, row);
+        if let Some(old) = before {
+            self.unclaim(old, &row.at);
+        }
+        self.by_instance
+            .entry(row.instance)
+            .or_default()
+            .insert(row.at.clone());
+        self.rows.insert(row.at.clone(), row);
         self.stale |= reorders;
+        before
     }
 
-    /// Remove `row`'s instance if the table shows it at `row`'s address.
-    pub(crate) fn remove(&mut self, row: &DeviceRow) {
-        if self
+    /// Remove the row at `row`'s address if it shows `row`'s instance;
+    /// true when it did.
+    pub(crate) fn remove(&mut self, row: &DeviceRow) -> bool {
+        let shown = self
             .rows
-            .get(&row.instance)
-            .is_some_and(|shown| shown.address == row.address)
-        {
-            self.rows.remove(&row.instance);
+            .get(&row.at)
+            .is_some_and(|shown| shown.instance == row.instance);
+        if shown {
+            self.rows.remove(&row.at);
+            self.unclaim(row.instance, &row.at);
             self.stale = true;
+        }
+        shown
+    }
+
+    fn unclaim(&mut self, instance: u32, at: &DeviceAddress) {
+        if let Some(claims) = self.by_instance.get_mut(&instance) {
+            claims.remove(at);
+            if claims.is_empty() {
+                self.by_instance.remove(&instance);
+            }
         }
     }
 
-    /// Replace every row (a resync after dropped events), the first of
-    /// each instance's claimants showing.
+    /// Replace every row (a resync after dropped events).
     pub(crate) fn replace_all(&mut self, rows: Vec<DeviceRow>) {
         self.rows.clear();
+        self.by_instance.clear();
         for row in rows {
-            self.rows.entry(row.instance).or_insert(row);
+            self.upsert(row);
         }
         self.stale = true;
     }
@@ -167,9 +198,29 @@ impl DeviceTable {
         self.rows.is_empty()
     }
 
-    /// Row for an instance.
+    /// The row of the one address claiming `instance`; `None` when none
+    /// does, or two or more do and the instance names neither.
     pub(crate) fn get(&self, instance: u32) -> Option<&DeviceRow> {
-        self.rows.get(&instance)
+        let claims = self.by_instance.get(&instance)?;
+        if claims.len() != 1 {
+            return None;
+        }
+        self.rows.get(claims.first()?)
+    }
+
+    /// The row at `address`.
+    pub(crate) fn at(&self, address: &DeviceAddress) -> Option<&DeviceRow> {
+        self.rows.get(address)
+    }
+
+    /// Every row claiming `instance`, ordered by address.
+    pub(crate) fn claims(&self, instance: u32) -> Vec<&DeviceRow> {
+        self.by_instance
+            .get(&instance)
+            .into_iter()
+            .flatten()
+            .filter_map(|at| self.rows.get(at))
+            .collect()
     }
 
     /// Every row, filtered or not, in no order.
@@ -257,20 +308,25 @@ impl DeviceTable {
                 SortKey::Vendor => a.vendor_id.cmp(&b.vendor_id),
                 SortKey::LastSeen => b.last_seen.cmp(&a.last_seen),
             };
-            direct(order.then(a.instance.cmp(&b.instance)))
+            direct(
+                order
+                    .then(a.instance.cmp(&b.instance))
+                    .then_with(|| a.at.cmp(&b.at)),
+            )
         });
-        self.visible = visible.into_iter().map(|(r, _)| r.instance).collect();
+        self.visible = visible.into_iter().map(|(r, _)| r.at.clone()).collect();
         self.fix_selection();
     }
 
     fn fix_selection(&mut self) {
         self.selected_index = self
             .selected
-            .and_then(|sel| self.visible.iter().position(|&i| i == sel));
+            .as_ref()
+            .and_then(|sel| self.visible.iter().position(|at| at == sel));
         if self.selected_index.is_none() {
             self.selected_index = (!self.visible.is_empty()).then_some(0);
         }
-        self.selected = self.selected_index.map(|i| self.visible[i]);
+        self.selected = self.selected_index.map(|i| self.visible[i].clone());
     }
 
     /// Visible rows in display order. Call [`settle`](Self::settle) first.
@@ -298,7 +354,7 @@ impl DeviceTable {
 
     /// The selected row. Call [`settle`](Self::settle) first.
     pub(crate) fn selected_row(&self) -> Option<&DeviceRow> {
-        self.rows.get(&self.selected?)
+        self.rows.get(self.selected.as_ref()?)
     }
 
     /// Index of the selected row among the visible rows.
@@ -323,7 +379,7 @@ impl DeviceTable {
             Movement::End => last,
         };
         self.selected_index = Some(next);
-        self.selected = Some(self.visible[next]);
+        self.selected = Some(self.visible[next].clone());
     }
 }
 
@@ -379,8 +435,8 @@ struct Claims {
 }
 
 impl Claims {
-    fn of(claimants: &[DeviceRow]) -> Self {
-        let mut addresses: Vec<String> = claimants.iter().map(DeviceRow::located).collect();
+    fn of(claimants: &[&DeviceRow]) -> Self {
+        let mut addresses: Vec<String> = claimants.iter().map(|row| row.located()).collect();
         addresses.sort_unstable();
         let extra = addresses.len().saturating_sub(MAX_ADDRESSES);
         addresses.truncate(MAX_ADDRESSES);
@@ -400,9 +456,9 @@ impl Claims {
     }
 }
 
-/// Instances that more than one address claims, from the client's collision
-/// notices, each of which lists every claimant. Bounded, and the banner text
-/// is rebuilt only when it changes.
+/// Instances that more than one address claims, read off the device
+/// table's rows, which hold every claimant. Bounded, and the banner text is
+/// rebuilt only when it changes.
 #[derive(Default)]
 pub(crate) struct Duplicates {
     by_instance: BTreeMap<u32, Claims>,
@@ -412,7 +468,7 @@ pub(crate) struct Duplicates {
 impl Duplicates {
     /// Note that `claimants` claim `instance` now; fewer than two end the
     /// duplicate.
-    pub(crate) fn set(&mut self, instance: u32, claimants: &[DeviceRow]) {
+    pub(crate) fn set(&mut self, instance: u32, claimants: &[&DeviceRow]) {
         if claimants.len() < 2 {
             if self.by_instance.remove(&instance).is_some() {
                 self.rebuild_banner();
@@ -426,15 +482,12 @@ impl Duplicates {
         self.rebuild_banner();
     }
 
-    /// Rebuild every duplicate from a snapshot of the client's table, which
-    /// lists each claimant, after notices were missed.
-    pub(crate) fn rebuild(&mut self, rows: &[DeviceRow]) {
-        let mut by_instance: BTreeMap<u32, Vec<DeviceRow>> = BTreeMap::new();
+    /// Rebuild every duplicate from the device table's rows, after a
+    /// snapshot replaced them.
+    pub(crate) fn rebuild<'a>(&mut self, rows: impl Iterator<Item = &'a DeviceRow>) {
+        let mut by_instance: BTreeMap<u32, Vec<&DeviceRow>> = BTreeMap::new();
         for row in rows {
-            by_instance
-                .entry(row.instance)
-                .or_default()
-                .push(row.clone());
+            by_instance.entry(row.instance).or_default().push(row);
         }
         self.by_instance = by_instance
             .into_iter()
@@ -514,11 +567,15 @@ mod tests {
             .collect()
     }
 
+    fn refs(rows: &[DeviceRow]) -> Vec<&DeviceRow> {
+        rows.iter().collect()
+    }
+
     #[test]
     fn duplicates_show_four_addresses_and_count_the_rest() {
         let mut duplicates = Duplicates::default();
         let nine = (1..=9).map(|i| format!("10.0.0.{i}:47808"));
-        duplicates.set(7, &claims(7, nine));
+        duplicates.set(7, &refs(&claims(7, nine)));
         assert_eq!(
             duplicates.lines(),
             [
@@ -528,7 +585,7 @@ mod tests {
         );
         // Each notice lists every claimant, so it replaces the last.
         let two = (1..=2).map(|i| format!("10.0.0.{i}:47808"));
-        duplicates.set(7, &claims(7, two));
+        duplicates.set(7, &refs(&claims(7, two)));
         assert_eq!(
             duplicates.lines(),
             ["instance 7 claimed by 10.0.0.1:47808 and 10.0.0.2:47808"]
@@ -540,9 +597,9 @@ mod tests {
     fn a_contest_down_to_one_claimant_leaves_the_banner() {
         let mut duplicates = Duplicates::default();
         let two = |i: u32| claims(i, ["10.0.0.1:47808".into(), "10.0.0.2:47808".into()]);
-        duplicates.set(7, &two(7));
-        duplicates.set(8, &two(8));
-        duplicates.set(7, &claims(7, ["10.0.0.2:47808".into()]));
+        duplicates.set(7, &refs(&two(7)));
+        duplicates.set(8, &refs(&two(8)));
+        duplicates.set(7, &refs(&claims(7, ["10.0.0.2:47808".into()])));
         assert_eq!(duplicates.banner().len(), 1);
         assert!(duplicates.banner()[0].starts_with(" DUPLICATE instance 8"));
         duplicates.set(8, &[]);
@@ -555,7 +612,7 @@ mod tests {
         let mut duplicates = Duplicates::default();
         for instance in 1..=5 {
             let both = ["10.0.0.1:47808".into(), "10.0.0.2:47808".into()];
-            duplicates.set(instance, &claims(instance, both));
+            duplicates.set(instance, &refs(&claims(instance, both)));
         }
         let banner = duplicates.banner();
         assert_eq!(banner.len(), MAX_BANNER_LINES);

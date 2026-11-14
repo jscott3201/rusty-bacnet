@@ -585,6 +585,7 @@ async fn a_passive_session_puts_nothing_on_the_wire() {
         Command::Browse {
             req: 1,
             device: LAB,
+            at: bacnet_ops::DeviceAddress::local(&LAB_MAC).unwrap(),
             read: crate::tui::point::BrowseRead::Device,
         },
         Command::Watch(crate::tui::watched::WatchCommand::Add {

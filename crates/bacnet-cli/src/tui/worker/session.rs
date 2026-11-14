@@ -431,7 +431,6 @@ async fn serve_with<T: TransportPort + 'static>(
     }
     tracing::info!("connected; local address {local}");
     let mut devices = client.device_events();
-    let mut collisions = client.device_collision_events();
     if sink
         .deliver(WorkerEvent::Connected {
             local: local.clone(),
@@ -565,11 +564,6 @@ async fn serve_with<T: TransportPort + 'static>(
                         }
                     }
                     received = devices.recv(), if feed.devices_open => feed.on_device(&sink, received),
-                    received = collisions.recv(), if feed.collisions_open => {
-                        if let Some(event) = feed.on_collision(&sink, received) {
-                            sink.deliver(event).await;
-                        }
-                    }
                     () = tokio::time::sleep_until(deadline), if listening.is_some() => {
                         if let Some((op, _)) = listening.take() {
                             sink.deliver(WorkerEvent::OpFinished { op, outcome: OpOutcome::Completed }).await;

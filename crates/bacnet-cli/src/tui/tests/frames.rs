@@ -82,16 +82,8 @@ fn devices_table_filtered_and_sorted() {
 fn duplicate_instance_banner() {
     for (w, h) in SIZES {
         let mut app = populated();
-        worker(
-            &mut app,
-            WorkerEvent::Collision {
-                instance: 1002,
-                claimants: vec![
-                    row(1002, "10.0.1.22:47808", 5, 9),
-                    row(1002, "10.0.1.99:47808", 5, 13),
-                ],
-            },
-        );
+        let second = row(1002, "10.0.1.99:47808", 5, 13);
+        worker(&mut app, WorkerEvent::Discovered(second));
         assert_snapshot!(format!("duplicate_{w}x{h}"), screen(&mut app, w, h));
     }
 }

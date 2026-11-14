@@ -22,7 +22,7 @@ pub(crate) mod write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bacnet_client::client::{DeviceCollisionEvent, DeviceEvent, DeviceEventKind};
+use bacnet_client::client::{DeviceEvent, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::target::AddressStyle;
@@ -175,15 +175,15 @@ impl EventSink {
     }
 }
 
-/// Folds the client's device and collision broadcasts into UI events.
+/// Folds the client's device broadcasts into UI events: one row per
+/// address, which is all the UI needs to show every claimant of an
+/// instance (#2560).
 pub(crate) struct DeviceFeed {
     style: AddressStyle,
     /// Something was lost, so the UI's table may be out of date.
     pub(crate) needs_resync: bool,
     /// `device_events()` is still open.
     pub(crate) devices_open: bool,
-    /// `device_collision_events()` is still open.
-    pub(crate) collisions_open: bool,
 }
 
 impl DeviceFeed {
@@ -193,7 +193,6 @@ impl DeviceFeed {
             style,
             needs_resync: false,
             devices_open: true,
-            collisions_open: true,
         }
     }
 
@@ -245,33 +244,6 @@ impl DeviceFeed {
                 self.needs_resync = true;
             }
             Err(RecvError::Closed) => self.devices_open = false,
-        }
-    }
-
-    /// Handle one receive from `device_collision_events()`, returning the
-    /// event to deliver. Collisions are rare and important, so the caller
-    /// delivers them with [`EventSink::deliver`] rather than risk a drop.
-    pub(crate) fn on_collision(
-        &mut self,
-        sink: &EventSink,
-        received: Result<DeviceCollisionEvent, RecvError>,
-    ) -> Option<WorkerEvent> {
-        match received {
-            Ok(event) => Some(WorkerEvent::Collision {
-                instance: event.instance,
-                claimants: event.claimants.iter().filter_map(|d| self.row(d)).collect(),
-            }),
-            // A missed notice may have been a contest's end; the snapshot
-            // lists every claimant, so the banner is rebuilt from it.
-            Err(RecvError::Lagged(missed)) => {
-                sink.add_dropped(missed);
-                self.needs_resync = true;
-                None
-            }
-            Err(RecvError::Closed) => {
-                self.collisions_open = false;
-                None
-            }
         }
     }
 }

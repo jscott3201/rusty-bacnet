@@ -240,8 +240,14 @@ impl App {
             let (device, at, address) = (row.instance, row.at.clone(), row.address.clone());
             self.filter_editing = false;
             // The device kept from before is shown again as it was, at the
-            // address it answers from now.
-            if let Some(kept) = self.browser.as_deref_mut().filter(|b| b.device == device) {
+            // address it answers from now; when another row claims its
+            // instance too, only at its own address (#2560).
+            let alone = self.devices.get(device).is_some();
+            if let Some(kept) = self
+                .browser
+                .as_deref_mut()
+                .filter(|b| b.device == device && (b.at == at || alone))
+            {
                 kept.address = address;
                 kept.at = at;
                 self.screen = Screen::Browse;
@@ -250,10 +256,11 @@ impl App {
             let req = self.next_req();
             self.close_browser(out);
             self.screen = Screen::Browse;
-            self.browser = Some(Box::new(Browser::new(device, at, address, req)));
+            self.browser = Some(Box::new(Browser::new(device, at.clone(), address, req)));
             out.push(Command::Browse {
                 req,
                 device,
+                at,
                 read: BrowseRead::Device,
             });
             return;
@@ -270,6 +277,7 @@ impl App {
                     out.push(Command::Browse {
                         req,
                         device: browser.device,
+                        at: browser.at.clone(),
                         read: BrowseRead::Object(object),
                     });
                 }
@@ -316,6 +324,7 @@ impl App {
         out.push(Command::Browse {
             req,
             device: browser.device,
+            at: browser.at.clone(),
             read,
         });
     }

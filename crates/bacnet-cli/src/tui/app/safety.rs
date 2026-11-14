@@ -772,6 +772,7 @@ impl App {
             out.push(Command::Browse {
                 req,
                 device: browser.device,
+                at: browser.at.clone(),
                 read: BrowseRead::Object(object),
             });
         }

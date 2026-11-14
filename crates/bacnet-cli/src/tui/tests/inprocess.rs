@@ -44,8 +44,8 @@ async fn two_servers_with_one_instance_raise_a_banner_naming_both() {
     );
     assert_eq!(
         visible(&mut site.app),
-        [200, 300],
-        "the client keeps one row"
+        [200, 200, 300],
+        "a row for each claimant (#2560)"
     );
     site.stop().await;
 }

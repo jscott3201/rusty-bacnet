@@ -240,7 +240,7 @@ fn objects_pane(frame: &mut Frame, area: Rect, browser: &Browser, names: Names, 
                 let marker = if chosen { ">  " } else { "   " };
                 let text = object_label(*object);
                 let mut spans = vec![Span::raw(format!("{marker}{text}"))];
-                let name = names.text(browser.device, Some(*object));
+                let name = names.text(browser.device, &browser.address, Some(*object));
                 if named && !name.is_empty() {
                     let pad = " ".repeat(label.saturating_sub(text_width(&text)) + 2);
                     let style = if name_marker(name) {

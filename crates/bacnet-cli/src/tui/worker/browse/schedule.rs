@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use bacnet_ops::DeviceAddress;
+
 use crate::tui::point::{BrowseRead, ReqId};
 
 /// A browse request waiting for, or holding, its device.
@@ -18,6 +20,8 @@ use crate::tui::point::{BrowseRead, ReqId};
 pub(crate) struct Job {
     /// Request id.
     pub(crate) req: ReqId,
+    /// Where the device answers: the job's requests go there.
+    pub(crate) at: DeviceAddress,
     /// What it reads.
     pub(crate) read: BrowseRead,
 }
@@ -155,6 +159,7 @@ mod tests {
     fn object(req: ReqId, instance: u32) -> Job {
         Job {
             req,
+            at: "10.0.0.7:47808".parse().unwrap(),
             read: BrowseRead::Object(
                 ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap(),
             ),
@@ -164,6 +169,7 @@ mod tests {
     fn device(req: ReqId) -> Job {
         Job {
             req,
+            at: "10.0.0.7:47808".parse().unwrap(),
             read: BrowseRead::Device,
         }
     }

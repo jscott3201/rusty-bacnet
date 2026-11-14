@@ -271,7 +271,7 @@ fn row<'a>(word: &str, command: &str, devices: &'a DeviceTable) -> Result<&'a De
         Target::RoutedMac { dnet, mac } => at_station(devices, word, dnet, &mac),
         Target::Mac(mac) => {
             let at = DeviceAddress::local(&mac).map_err(|why| format!("'{word}': {why}"))?;
-            devices.rows().find(|row| row.at == at).ok_or_else(missing)
+            devices.at(&at).ok_or_else(missing)
         }
         Target::Bip6(_) => Err(format!(
             "'{word}': {command} takes a device from the device table \
@@ -280,31 +280,22 @@ fn row<'a>(word: &str, command: &str, devices: &'a DeviceTable) -> Result<&'a De
     }
 }
 
-/// The device the table lists at station `mac` on network `dnet` (#1914).
+/// The device the table lists at station `mac` on network `dnet` (#1914):
+/// the table holds one row per address (#2560).
 fn at_station<'a>(
     devices: &'a DeviceTable,
     word: &str,
     dnet: u16,
     mac: &[u8],
 ) -> Result<&'a DeviceRow, String> {
-    let mut found: Vec<&DeviceRow> = devices
-        .rows()
-        .filter(|row| row.at.network() == dnet && row.at.mac() == mac)
-        .collect();
-    found.sort_unstable_by_key(|row| row.instance);
-    match found.as_slice() {
-        [row] => Ok(row),
-        [] => Err(format!(
-            "'{word}': no device in the device table is at that station; run a Who-Is first"
-        )),
-        several => {
-            let list: Vec<String> = several.iter().map(|row| row.instance.to_string()).collect();
-            Err(format!(
-                "'{word}': devices {} share that station; name one by its instance",
-                list.join(", ")
-            ))
-        }
-    }
+    DeviceAddress::new(dnet, mac)
+        .ok()
+        .and_then(|at| devices.at(&at))
+        .ok_or_else(|| {
+            format!(
+                "'{word}': no device in the device table is at that station; run a Who-Is first"
+            )
+        })
 }
 
 fn object(word: &str) -> Result<ObjectIdentifier, String> {
@@ -562,10 +553,10 @@ mod tests {
             let error = super::parse(missing, &devices).unwrap_err();
             assert!(error.contains("no device in the device table"), "{error}");
         }
-        // Two devices behind one station: name one by instance.
+        // One row per address: another instance announced at the station
+        // takes its row, and the station names that one now (#2560).
         devices.upsert(device_row(2003, Some((2, &[5]))));
-        let error = super::parse("watch 2:0x05 ai:1", &devices).unwrap_err();
-        assert!(error.contains("devices 2001, 2003 share"), "{error}");
+        assert_eq!(super::parse("watch 2:0x05 ai:1", &devices), watch(2003, 2));
     }
 
     /// `find` takes the rest of the line as typed, apostrophes and runs of

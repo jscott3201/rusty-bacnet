@@ -49,6 +49,7 @@ async fn browse_for(site: &mut Site, span: Duration) {
     site.send(vec![Command::Browse {
         req: 5_000,
         device: LAB,
+        at: bacnet_ops::DeviceAddress::local(&LAB_MAC).unwrap(),
         read: BrowseRead::Device,
     }])
     .await;
@@ -59,6 +60,7 @@ async fn browse_for(site: &mut Site, span: Duration) {
         site.send(vec![Command::Browse {
             req: 5_001 + u64::from(i),
             device: LAB,
+            at: bacnet_ops::DeviceAddress::local(&LAB_MAC).unwrap(),
             read: BrowseRead::Object(object),
         }])
         .await;
