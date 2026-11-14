@@ -162,6 +162,7 @@ fn encoded(values: &[&str]) -> Stored {
 fn state_text(index: Option<u32>, value: &[&str], before: &[&str]) -> Planned {
     Planned {
         spec: WriteSpec {
+            address: bacnet_ops::DeviceAddress::local(&super::writes::LAB_MAC).unwrap(),
             device: LAB,
             object: msv1(),
             property: PropertyIdentifier::STATE_TEXT,

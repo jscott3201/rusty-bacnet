@@ -576,7 +576,7 @@ async fn serve_with<T: TransportPort + 'static>(
                         }
                     }
                     _ = resync.tick(), if feed.needs_resync => {
-                        let rows = client.discovered_devices().await.iter().map(|d| feed.row(d)).collect();
+                        let rows = client.discovered_devices().await.iter().filter_map(|d| feed.row(d)).collect();
                         if sink.offer(WorkerEvent::Snapshot(rows)) == super::Offer::Sent {
                             feed.needs_resync = false;
                         }

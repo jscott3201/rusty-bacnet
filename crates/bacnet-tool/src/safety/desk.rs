@@ -12,6 +12,12 @@
 //! Sending never watches for the caller going away once a request is out:
 //! a write already sent always gets its outcome into the ledger and the
 //! audit log, even if nobody hears of it.
+//!
+//! A write goes by its [`WriteSpec::address`] (#2560): its pre-images are
+//! read there, its turn is taken at that address's gate, its requests go
+//! there and its ledger entry keeps it, so a write is never planned at one
+//! device and sent to another, even when another device claims the same
+//! instance meanwhile.
 
 use std::future::Future;
 use std::path::Path;
@@ -26,7 +32,7 @@ use super::audit::{Audit, Context, utc_now};
 use super::ledger::{Entry, Ledger, Origin};
 use super::lock::{WorkspaceLock, lock};
 use super::plan::{self, PRE_READ, PreRead};
-use super::send::{find, item_json, send, turn};
+use super::send::{item_json, locate, reach, send, turn, write_property};
 use super::{Gate, Level, Outcome, Planned, Preview, WriteSpec, run_id};
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::{Halt, Reader, Wanted, unreachable};
@@ -408,8 +414,9 @@ impl Desk {
         // By now the write is on disk in both the ledger and the audit log.
         caller.ledger_changed(&self.entries()).await;
         // One turn at the device for the preview's writes, sent one after
-        // another (#1791). With no one address to take it at, none is sent.
-        let outcomes = match turn(client, rate, preview.device).await {
+        // another (#1791), at the address they were planned at. With no
+        // route to it, none is sent.
+        let outcomes = match turn(client, rate, &preview.address).await {
             Ok(held) => {
                 let outcomes = send(client, preview).await;
                 drop(held);
@@ -490,19 +497,13 @@ impl Desk {
             let outcome = match (entry.undo(), entry.object()) {
                 _ if caller.gone() => Outcome::NotSent(ENDED.into()),
                 (Some(undo), Some(object)) => {
-                    find(client, entry.device).await;
-                    match turn(client, rate, entry.device).await {
-                        Ok(held) => {
-                            let result = client
-                                .write_property_to_device(
-                                    entry.device,
-                                    object,
-                                    entry.property(),
-                                    entry.index,
-                                    undo.bytes.clone(),
-                                    entry.priority,
-                                )
-                                .await;
+                    let target = (object, entry.property(), entry.index);
+                    match revert_at(client, rate, &entry).await {
+                        Ok((address, held)) => {
+                            let bytes = undo.bytes.clone();
+                            let result =
+                                write_property(client, &address, target, bytes, entry.priority)
+                                    .await;
                             drop(held);
                             Outcome::of(&result)
                         }
@@ -519,6 +520,7 @@ impl Desk {
             }
             let fields = json!({
                 "target": entry.label(),
+                "address": entry.address.as_ref().map(ToString::to_string),
                 "service": "WriteProperty",
                 "priority": entry.priority,
                 "params": { "value": entry.undo().map(|u| u.text) },
@@ -532,9 +534,30 @@ impl Desk {
     }
 }
 
+/// Where `entry` is reverted, and the turn there: the address its write
+/// went to, found first when the route to it was lost (a restart, say), or
+/// for an entry written before #2560, which kept none, the one address
+/// claiming its instance.
+async fn revert_at<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    rate: &RequestLimits,
+    entry: &Entry,
+) -> Result<(DeviceAddress, bacnet_ops::limits::Turn), bacnet_types::error::Error> {
+    let address = match &entry.address {
+        Some(address) => {
+            reach(client, address, entry.device).await;
+            address.clone()
+        }
+        None => locate(client, entry.device).await?,
+    };
+    let held = turn(client, rate, &address).await?;
+    Ok((address, held))
+}
+
 /// Read what `specs` need and plan them, the slots `ledger` holds counted
 /// as ours (a front end without the workspace's lock reads the file).
-/// Stops once the caller goes.
+/// Every spec names one device at one address, where the pre-images are
+/// read. Stops once the caller goes.
 pub async fn prepare<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     rate: &RequestLimits,
@@ -544,17 +567,18 @@ pub async fn prepare<T: TransportPort + 'static>(
     dangerous: bool,
     ledger: Option<&Ledger>,
 ) -> Result<Preview, String> {
-    let device = specs.first().ok_or("nothing to write")?.device;
-    if specs.iter().any(|spec| spec.device != device) {
+    let first = specs.first().ok_or("nothing to write")?;
+    let (address, device) = (&first.address, first.device);
+    if specs
+        .iter()
+        .any(|spec| spec.device != device || spec.address != *address)
+    {
         return Err("a batch goes to one device".into());
     }
-    let at = DeviceAddress::claiming(client, device)
-        .await
-        .map_err(|error| format!("reading {}: {error}", specs[0].object))?;
     let cancel = AtomicBool::new(false);
     let mut reader = Reader {
         client,
-        device: at,
+        device: address.clone(),
         instance: Some(device),
         rate,
         cancel: &cancel,
@@ -609,3 +633,7 @@ pub async fn prepare<T: TransportPort + 'static>(
 #[cfg(test)]
 #[path = "desk_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "desk_address_tests.rs"]
+mod address_tests;

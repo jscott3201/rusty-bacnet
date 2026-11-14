@@ -157,6 +157,7 @@ pub(super) fn writes_sent(site: &Site) -> usize {
 
 pub(super) fn spec(value: Option<&str>, priority: u8) -> WriteSpec {
     WriteSpec {
+        address: bacnet_ops::DeviceAddress::local(&LAB_MAC).unwrap(),
         device: LAB,
         object: ao1(),
         property: PropertyIdentifier::PRESENT_VALUE,

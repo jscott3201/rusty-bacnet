@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::parse::{parse_object_specifier, parse_property, parse_value_for};
 use bacnet_tool::safety::audit::{Audit, Context};
 use bacnet_tool::safety::desk::{self, Caller};
@@ -220,7 +221,9 @@ fn value_text(value: &Value) -> Result<Option<String>, ToolError> {
 }
 
 /// The writes, checked: numeric targets, values in the grammar.
-fn specs(device: u32, args: &Args) -> Result<Vec<WriteSpec>, ToolError> {
+/// The writes `args` asks for, to `device` at `address`, the address the
+/// call's handle is pinned to (#2560).
+fn specs(address: &DeviceAddress, device: u32, args: &Args) -> Result<Vec<WriteSpec>, ToolError> {
     if args.writes.is_empty() || args.writes.len() > MAX_WRITES {
         return Err(ToolError::invalid(
             "writes",
@@ -259,6 +262,7 @@ fn specs(device: u32, args: &Args) -> Result<Vec<WriteSpec>, ToolError> {
                     .map_err(|e| ToolError::invalid("value", e))?;
             }
             Ok(WriteSpec {
+                address: address.clone(),
                 device,
                 object,
                 property,
@@ -342,7 +346,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let device = ctx.device(call, &args.device).await?;
     let fields = fields(&ctx.principal, peer, raw);
     let refusing = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields.clone());
-    let specs = match specs(device.instance, &args) {
+    let specs = match specs(&device.handle.address(), device.instance, &args) {
         Ok(specs) => specs,
         Err(error @ ToolError::Refused { .. }) => {
             // A policy refusal (Priority_Array), recorded like the others.

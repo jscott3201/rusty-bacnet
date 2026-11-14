@@ -496,6 +496,7 @@ mod tests {
     fn claim(instance: u32, address: &str) -> DeviceRow {
         DeviceRow {
             instance,
+            at: address.parse().unwrap(),
             address: address.into(),
             via: None,
             network: None,

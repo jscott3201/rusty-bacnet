@@ -12,6 +12,7 @@
 //! | priority 6, kept for minimum on and off times (Clause 19.2.3) | blocked, or T3 with `dangerous = true` |
 
 use bacnet_encoding::primitives::{decode_priority_date_time, encode_property_value};
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all};
 use bacnet_ops::label::PRIORITIES;
 use bacnet_types::enums::PropertyIdentifier;
@@ -60,14 +61,19 @@ pub(crate) const DEFAULT_PRIORITY: u8 = 16;
 pub(crate) const PRIORITY_6: &str = "priority 6 is reserved for minimum on and off times \
      (Clause 19.2.3); a profile with dangerous = true allows it";
 
-/// The revert of `entries`, all to one device, as a preview of the writes
-/// that put their pre-images back, for a person to confirm (#2185): each
-/// at the tier of the write it undoes, at least T1. `None` when they span
-/// devices or there are none; an entry whose old value is unknown is left
-/// out, as revert leaves it.
-pub fn undo_preview(entries: &[super::ledger::Entry]) -> Option<Preview> {
+/// The revert of `entries`, all to the device at `address`, as a preview
+/// of the writes that put their pre-images back, for a person to confirm
+/// (#2185): each at the tier of the write it undoes, at least T1. `None`
+/// when they span devices (two instances, or an entry that went to another
+/// address) or there are none; an entry whose old value is unknown is left
+/// out, as revert leaves it. An entry written before #2560 keeps no
+/// address: the caller names where its device is now.
+pub fn undo_preview(entries: &[super::ledger::Entry], address: &DeviceAddress) -> Option<Preview> {
     let device = entries.first()?.device;
-    if entries.iter().any(|e| e.device != device) {
+    if entries
+        .iter()
+        .any(|e| e.device != device || e.address.as_ref().is_some_and(|at| at != address))
+    {
         return None;
     }
     let items: Vec<Planned> = entries
@@ -83,6 +89,7 @@ pub fn undo_preview(entries: &[super::ledger::Entry]) -> Option<Preview> {
             let property = entry.property();
             Some(Planned {
                 spec: WriteSpec {
+                    address: address.clone(),
                     device,
                     object,
                     property,
@@ -104,6 +111,7 @@ pub fn undo_preview(entries: &[super::ledger::Entry]) -> Option<Preview> {
         .collect();
     let gate = overall(&items, false);
     Some(Preview {
+        address: address.clone(),
         device,
         items,
         batch: false,
@@ -174,7 +182,8 @@ pub(crate) fn preview(
     dangerous: bool,
     batch: bool,
 ) -> Result<Preview, String> {
-    let device = specs.first().ok_or("nothing to write")?.device;
+    let first = specs.first().ok_or("nothing to write")?;
+    let (address, device) = (first.address.clone(), first.device);
     if let Some(why) = repeated_target(&specs.iter().collect::<Vec<_>>()) {
         return Err(why);
     }
@@ -185,6 +194,7 @@ pub(crate) fn preview(
         .collect::<Result<Vec<_>, _>>()?;
     let gate = overall(&items, batch);
     Ok(Preview {
+        address,
         device,
         items,
         batch,

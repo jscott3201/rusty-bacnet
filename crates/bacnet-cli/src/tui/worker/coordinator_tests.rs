@@ -209,6 +209,7 @@ async fn a_manage_request_without_a_session_is_refused_under_its_request() {
         req: 7,
         request: Box::new(Request {
             device: 100,
+            at: "10.0.0.100:47808".parse().unwrap(),
             action: Action::Reinit {
                 state: bacnet_types::enums::ReinitializedState::WARMSTART,
             },

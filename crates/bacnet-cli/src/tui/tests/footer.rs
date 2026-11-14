@@ -365,6 +365,7 @@ fn a_declined_preview_says_so_in_the_footer() {
     app.overlay = Overlay::Safety(Box::new(Modal::Confirm {
         req: 1,
         change: Change::Write(Box::new(Preview {
+            address: bacnet_ops::DeviceAddress::local(&[10, 0, 0, 100, 0xBA, 0xC0]).unwrap(),
             device: 100,
             items: Vec::new(),
             batch: false,

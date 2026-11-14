@@ -9,8 +9,9 @@
 //! - `csv on|off`: log watched values to the profile workspace, or stop.
 //! - `writem DEVICE OBJECT PROPERTY VALUE[@PRIORITY] ...`: one
 //!   WritePropertyMultiple to the device, any number of `OBJECT PROPERTY
-//!   VALUE` groups, previewed and confirmed at T2 or above. Needs an armed
-//!   write session.
+//!   VALUE` groups, previewed and confirmed at T2 or above. DEVICE is a row
+//!   of the device table as `watch` takes it, or its address; the write
+//!   goes to that row's address. Needs an armed write session.
 //! - `bbmd [ADDRESS]`: show and read that BBMD's tables on the Network screen
 //!   (`ip` or `ip:port`, port 47808 by default); `bbmd` alone goes back to
 //!   the tables of the BBMD the session registers with.
@@ -36,6 +37,7 @@ mod words;
 
 use std::time::Duration;
 
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::parse::{parse_object_specifier, parse_property, parse_value_for_with_priority};
 use bacnet_ops::target::{Target, parse_target};
 use bacnet_types::enums::{EnableDisable, PropertyIdentifier};
@@ -46,7 +48,7 @@ use super::devices::DeviceTable;
 use super::monitor::Setting;
 use super::{App, FLASH_FOR, FilterKey, Overlay};
 use crate::commands::device::{parse_enable_disable, parse_reinit_state};
-use crate::tui::message::Command;
+use crate::tui::message::{Command, DeviceRow};
 use crate::tui::safety::WriteSpec;
 use crate::tui::safety::manage::{Action, DccTime};
 use crate::tui::watched::{Point, WatchCommand};
@@ -243,7 +245,10 @@ fn device(word: &str, command: &str, devices: &DeviceTable) -> Result<(u32, Opti
     match parse_target(word)? {
         Target::Instance(instance) => Ok((instance, None)),
         Target::Routed { dnet, instance } => Ok((instance, Some(dnet))),
-        Target::RoutedMac { dnet, mac } => Ok((at_station(devices, word, dnet, &mac)?, Some(dnet))),
+        Target::RoutedMac { dnet, mac } => {
+            let row = at_station(devices, word, dnet, &mac)?;
+            Ok((row.instance, Some(dnet)))
+        }
         _ => Err(format!(
             "'{word}': {command} takes a device from the device table \
              (N, dnet:N or dnet:0xMAC)"
@@ -251,28 +256,49 @@ fn device(word: &str, command: &str, devices: &DeviceTable) -> Result<(u32, Opti
     }
 }
 
+/// The row of the device table `word` names, for a command that goes to
+/// one address (#2560): its instance (`dnet:N` on one network), the routed
+/// station the table shows (`dnet:0xMAC`), or a local address it lists.
+fn row<'a>(word: &str, command: &str, devices: &'a DeviceTable) -> Result<&'a DeviceRow, String> {
+    let missing =
+        || format!("'{word}': no device in the device table is that one; run a Who-Is first");
+    match parse_target(word)? {
+        Target::Instance(instance) => devices.get(instance).ok_or_else(missing),
+        Target::Routed { dnet, instance } => devices
+            .get(instance)
+            .filter(|row| row.network == Some(dnet))
+            .ok_or_else(missing),
+        Target::RoutedMac { dnet, mac } => at_station(devices, word, dnet, &mac),
+        Target::Mac(mac) => {
+            let at = DeviceAddress::local(&mac).map_err(|why| format!("'{word}': {why}"))?;
+            devices.rows().find(|row| row.at == at).ok_or_else(missing)
+        }
+        Target::Bip6(_) => Err(format!(
+            "'{word}': {command} takes a device from the device table \
+             (N, dnet:N, dnet:0xMAC or its address)"
+        )),
+    }
+}
+
 /// The device the table lists at station `mac` on network `dnet` (#1914).
-/// The table writes a routed device's address as that station, so it is
-/// read back and compared as a target, whatever case the hex was typed in.
-fn at_station(devices: &DeviceTable, word: &str, dnet: u16, mac: &[u8]) -> Result<u32, String> {
-    let mut found: Vec<u32> = devices
+fn at_station<'a>(
+    devices: &'a DeviceTable,
+    word: &str,
+    dnet: u16,
+    mac: &[u8],
+) -> Result<&'a DeviceRow, String> {
+    let mut found: Vec<&DeviceRow> = devices
         .rows()
-        .filter(|row| row.network == Some(dnet))
-        .filter(|row| {
-            matches!(parse_target(&row.address),
-                Ok(Target::RoutedMac { dnet: network, mac: station })
-                    if network == dnet && station == mac)
-        })
-        .map(|row| row.instance)
+        .filter(|row| row.at.network() == dnet && row.at.mac() == mac)
         .collect();
-    found.sort_unstable();
+    found.sort_unstable_by_key(|row| row.instance);
     match found.as_slice() {
-        [instance] => Ok(*instance),
+        [row] => Ok(row),
         [] => Err(format!(
             "'{word}': no device in the device table is at that station; run a Who-Is first"
         )),
         several => {
-            let list: Vec<String> = several.iter().map(u32::to_string).collect();
+            let list: Vec<String> = several.iter().map(|row| row.instance.to_string()).collect();
             Err(format!(
                 "'{word}': devices {} share that station; name one by its instance",
                 list.join(", ")
@@ -332,8 +358,9 @@ fn find_name(rest: &str) -> String {
     rest.to_string()
 }
 
-/// `OBJECT PROPERTY VALUE[@P]` groups, checked with the one-shot parsers.
-fn writes(device: u32, words: &[Word]) -> Result<Vec<WriteSpec>, String> {
+/// `OBJECT PROPERTY VALUE[@P]` groups to the device of `row`, checked with
+/// the one-shot parsers.
+fn writes(row: &DeviceRow, words: &[Word]) -> Result<Vec<WriteSpec>, String> {
     if words.is_empty() || !words.len().is_multiple_of(3) {
         return Err("writem DEVICE then OBJECT PROPERTY VALUE[@P] groups".into());
     }
@@ -344,7 +371,8 @@ fn writes(device: u32, words: &[Word]) -> Result<Vec<WriteSpec>, String> {
             let object = object(&group[0].text)?;
             let (value, priority) = value(&group[2], object, property, index)?;
             Ok(WriteSpec {
-                device,
+                address: row.at.clone(),
+                device: row.instance,
                 object,
                 property,
                 index,
@@ -377,7 +405,7 @@ pub(crate) fn parse(text: &str, devices: &DeviceTable) -> Result<Line, String> {
     let plain: Vec<&str> = args.iter().map(|w| w.text.as_str()).collect();
     match (syntax.name, plain.as_slice()) {
         ("writem", [target, ..]) => Ok(Line::Writem(writes(
-            device(target, "writem", devices)?.0,
+            row(target, "writem", devices)?,
             &args[1..],
         )?)),
         ("watch", [target, object_word, rest @ ..]) => {
@@ -468,15 +496,21 @@ mod tests {
     use super::*;
     use crate::tui::message::DeviceRow;
 
-    /// A line read with an empty device table.
+    /// A line read with a device table holding device 100.
     fn parse(text: &str) -> Result<Line, String> {
-        super::parse(text, &DeviceTable::default())
+        let mut devices = DeviceTable::default();
+        devices.upsert(device_row(100, None));
+        super::parse(text, &devices)
     }
 
     /// A table row for `instance`, routed at `station` when given.
     fn device_row(instance: u32, station: Option<(u16, &[u8])>) -> DeviceRow {
         DeviceRow {
             instance,
+            at: match station {
+                Some((network, mac)) => DeviceAddress::new(network, mac).unwrap(),
+                None => format!("10.0.0.{}:47808", instance % 250).parse().unwrap(),
+            },
             address: match station {
                 Some((network, mac)) => routed_station(network, mac).unwrap(),
                 None => format!("10.0.0.{}:47808", instance % 250),

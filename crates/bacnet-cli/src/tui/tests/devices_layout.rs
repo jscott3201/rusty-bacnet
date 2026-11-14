@@ -56,7 +56,7 @@ fn site() -> App {
         discovered(3005, 8, Some((3, &[5]))),
     ];
     for device in &devices {
-        worker(&mut app, WorkerEvent::Discovered(feed.row(device)));
+        worker(&mut app, WorkerEvent::Discovered(feed.row(device).unwrap()));
     }
     tick(&mut app, at(5));
     app

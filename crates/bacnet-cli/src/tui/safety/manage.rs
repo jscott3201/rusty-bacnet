@@ -135,6 +135,8 @@ impl Action {
 pub(crate) struct Request {
     /// The device instance.
     pub(crate) device: u32,
+    /// Where it answers: the request goes there (#2560).
+    pub(crate) at: bacnet_ops::DeviceAddress,
     /// What to ask.
     pub(crate) action: Action,
     /// The password; `None` sends none.
@@ -173,7 +175,7 @@ impl Request {
         }
         json!({
             "service": self.action.service(),
-            "target": { "device": self.device },
+            "target": { "device": self.device, "address": self.at.to_string() },
             "params": params,
             "tier": "T3",
         })
@@ -194,6 +196,7 @@ mod tests {
     fn requests_name_their_service_state_and_device() {
         let dcc = Request {
             device: 100,
+            at: "10.0.0.100:47808".parse().unwrap(),
             action: Action::Dcc {
                 state: EnableDisable::DISABLE_INITIATION,
                 time: DccTime::Minutes(30),
@@ -206,6 +209,7 @@ mod tests {
         );
         let reinit = Request {
             device: 7,
+            at: "10.0.0.7:47808".parse().unwrap(),
             action: Action::Reinit {
                 state: ReinitializedState::ACTIVATE_CHANGES,
             },
@@ -239,6 +243,7 @@ mod tests {
     fn the_password_shows_only_as_present() {
         let mut dcc = Request {
             device: 100,
+            at: "10.0.0.100:47808".parse().unwrap(),
             action: Action::Dcc {
                 state: EnableDisable::DISABLE,
                 time: DccTime::Forever,

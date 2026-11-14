@@ -24,6 +24,7 @@ fn manage(req: u64) -> Command {
         req,
         request: Box::new(Request {
             device: LAB,
+            at: bacnet_ops::DeviceAddress::local(&super::writes::LAB_MAC).unwrap(),
             action: Action::Dcc {
                 state: EnableDisable::DISABLE_INITIATION,
                 time: DccTime::Default,

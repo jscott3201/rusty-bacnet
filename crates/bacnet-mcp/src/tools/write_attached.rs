@@ -75,7 +75,7 @@ enum Work {
 /// rebuilt, must match item for item (target, priority, the value put back
 /// and the value it replaces), on one device this server may reach.
 fn changed(confirmed: &Preview, current: &[Entry], policy: &crate::Policy) -> Option<String> {
-    let Some(now) = bacnet_tool::safety::plan::undo_preview(current) else {
+    let Some(now) = bacnet_tool::safety::plan::undo_preview(current, &confirmed.address) else {
         return Some("the entries confirmed have changed".into());
     };
     if !policy.allows_device(now.device) {

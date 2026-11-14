@@ -7,10 +7,18 @@
 //! even a kill mid-request leaves a record. Repeated writes to one slot or
 //! property keep the first pre-image; a write that puts back the pre-image
 //! (relinquishing a slot that was empty, say) closes the entry.
+//!
+//! An entry keeps the address its write went to and the device's instance
+//! (#2560): a revert goes back to that address, so two devices sharing an
+//! instance keep their entries apart, and a local device needs no Who-Is
+//! after a restart. A file written before then has entries with an instance
+//! and no address; they still load, and a revert finds their device
+//! through the instance, as it did.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use bacnet_ops::DeviceAddress;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use serde::{Deserialize, Serialize};
@@ -51,6 +59,11 @@ pub struct Entry {
     pub at: String,
     /// Device instance.
     pub device: u32,
+    /// Where the device answered the write: a revert goes there. `None`
+    /// for an entry written before #2560, whose device a revert finds
+    /// through its instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<DeviceAddress>,
     /// Object type, raw.
     pub object_type: u32,
     /// Object instance.
@@ -143,8 +156,15 @@ impl Entry {
         }
     }
 
+    /// True when this entry is for the device `spec` writes to: the same
+    /// instance, at its address. An entry from before #2560, which has no
+    /// address, is matched by the instance alone, as it was written.
+    fn same_device(&self, spec: &WriteSpec) -> bool {
+        self.device == spec.device && self.address.as_ref().is_none_or(|at| *at == spec.address)
+    }
+
     fn same_target(&self, spec: &WriteSpec, priority: Option<u8>) -> bool {
-        self.device == spec.device
+        self.same_device(spec)
             && self.object_type == spec.object.object_type().to_raw()
             && self.instance == spec.object.instance_number()
             && self.property == spec.property.to_raw()
@@ -155,16 +175,22 @@ impl Entry {
     /// A non-commandable entry on the property `spec` names, at any index.
     fn same_property(&self, spec: &WriteSpec) -> bool {
         self.priority.is_none()
-            && self.device == spec.device
+            && self.same_device(spec)
             && self.object_type == spec.object.object_type().to_raw()
             && self.instance == spec.object.instance_number()
             && self.property == spec.property.to_raw()
     }
 
-    /// Both entries are non-commandable writes to one property.
+    /// Both entries are non-commandable writes to one property of one
+    /// device (one without an address matching by its instance).
     fn same_array(&self, other: &Entry) -> bool {
+        let one_device = match (&self.address, &other.address) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
+        };
         self.priority.is_none()
             && other.priority.is_none()
+            && one_device
             && (self.device, self.object_type, self.instance, self.property)
                 == (
                     other.device,
@@ -268,6 +294,7 @@ impl Ledger {
             .find(|e| e.same_target(spec, priority))
         {
             entry.written = planned.value.clone();
+            entry.address = Some(spec.address.clone());
             entry.state = State::Sending;
             entry.seq = seq;
             entry.origin = self.origin.clone();
@@ -294,6 +321,7 @@ impl Ledger {
             run: run.into(),
             at: at.into(),
             device: spec.device,
+            address: Some(spec.address.clone()),
             object_type: spec.object.object_type().to_raw(),
             instance: spec.object.instance_number(),
             property: spec.property.to_raw(),
@@ -422,6 +450,7 @@ mod tests {
     fn planned(value: Stored, before: Option<Stored>) -> Planned {
         Planned {
             spec: WriteSpec {
+                address: DeviceAddress::local(&[10, 0, 0, 100, 0xBA, 0xC0]).unwrap(),
                 device: 100,
                 object: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
                 property: PropertyIdentifier::PRESENT_VALUE,

@@ -26,6 +26,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, them
             object,
             relinquish,
             form,
+            ..
         } => {
             let what = if *relinquish { "Relinquish" } else { "Write" };
             let title = format!(" {what}: device {device} {} ", object_label(*object));

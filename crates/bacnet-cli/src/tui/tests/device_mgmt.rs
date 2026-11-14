@@ -159,6 +159,7 @@ async fn without_the_dangerous_opt_in_both_are_refused_and_nothing_is_sent() {
     }
     let request = Request {
         device: LAB,
+        at: bacnet_ops::DeviceAddress::local(&LAB_MAC).unwrap(),
         action: Action::Reinit {
             state: ReinitializedState::COLDSTART,
         },

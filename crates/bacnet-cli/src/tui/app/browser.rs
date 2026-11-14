@@ -8,6 +8,7 @@
 
 use std::cell::Cell;
 
+use bacnet_ops::DeviceAddress;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::devices::Movement;
@@ -74,6 +75,8 @@ pub(crate) enum ViewState {
 pub(crate) struct Browser {
     /// The device instance.
     pub(crate) device: u32,
+    /// Where it answers: its reads and writes go there (#2560).
+    pub(crate) at: DeviceAddress,
     /// Where it answered from, for the title.
     pub(crate) address: String,
     /// The device card, once read.
@@ -93,9 +96,10 @@ pub(crate) struct Browser {
 }
 
 impl Browser {
-    fn new(device: u32, address: String, device_req: ReqId) -> Self {
+    fn new(device: u32, at: DeviceAddress, address: String, device_req: ReqId) -> Self {
         Self {
             device,
+            at,
             address,
             card: None,
             list: ListState::Card,
@@ -233,19 +237,20 @@ impl App {
                 self.flash("No device selected. Press d to send a Who-Is.", FLASH_FOR);
                 return;
             };
-            let (device, address) = (row.instance, row.address.clone());
+            let (device, at, address) = (row.instance, row.at.clone(), row.address.clone());
             self.filter_editing = false;
             // The device kept from before is shown again as it was, at the
             // address it answers from now.
             if let Some(kept) = self.browser.as_deref_mut().filter(|b| b.device == device) {
                 kept.address = address;
+                kept.at = at;
                 self.screen = Screen::Browse;
                 return;
             }
             let req = self.next_req();
             self.close_browser(out);
             self.screen = Screen::Browse;
-            self.browser = Some(Box::new(Browser::new(device, address, req)));
+            self.browser = Some(Box::new(Browser::new(device, at, address, req)));
             out.push(Command::Browse {
                 req,
                 device,
@@ -352,7 +357,12 @@ mod tests {
     #[test]
     fn stale_results_are_dropped() {
         let ai = |n| ObjectIdentifier::new(ObjectType::ANALOG_INPUT, n).unwrap();
-        let mut browser = Browser::new(7, "10.0.0.7:47808".into(), 1);
+        let mut browser = Browser::new(
+            7,
+            "10.0.0.7:47808".parse().unwrap(),
+            "10.0.0.7:47808".into(),
+            1,
+        );
         browser.object_req = Some(3);
         browser.view = ViewState::Reading(ai(2));
         assert!(!browser.apply(2, view(1)), "an earlier object read");
@@ -385,7 +395,12 @@ mod tests {
         use crate::tui::app::{Action, update};
         let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         let mut app = crate::tui::tests::connected_app();
-        let mut browser = Browser::new(7, "10.0.0.7:47808".into(), 1);
+        let mut browser = Browser::new(
+            7,
+            "10.0.0.7:47808".parse().unwrap(),
+            "10.0.0.7:47808".into(),
+            1,
+        );
         browser.objects.set(vec![ai]);
         app.browser = Some(Box::new(browser));
         app.screen = Screen::Browse;

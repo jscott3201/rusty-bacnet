@@ -170,7 +170,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     if ctx.attached.is_some() {
         // The TUI holds the workspace: the person there confirms the
         // revert, and its desk does it (#2185).
-        return attached(ctx, &entries, wanted, (workspace, account, sending, fields));
+        return attached(ctx, &entries, wanted, (workspace, account, sending, fields)).await;
     }
     let work = {
         let ctx = Arc::clone(ctx);
@@ -206,7 +206,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
 /// pre-images back, for the TUI to confirm at the tier of the writes they
 /// undo. Refused across devices, since the dialog confirms one device; with
 /// nothing to put back, nothing is asked and nothing sent.
-fn attached<T: TransportPort + 'static>(
+async fn attached<T: TransportPort + 'static>(
     ctx: &Arc<Ctx<T>>,
     entries: &[Entry],
     wanted: Option<BTreeSet<u64>>,
@@ -230,7 +230,23 @@ fn attached<T: TransportPort + 'static>(
         .cloned()
         .collect();
     let ids: BTreeSet<u64> = chosen.iter().map(|e| e.id).collect();
-    let preview = bacnet_tool::safety::plan::undo_preview(&chosen);
+    // Where the entries' writes went; one written before #2560 kept no
+    // address, so its device is the one the discovery table holds for its
+    // instance (nothing is sent to find it).
+    let address = match chosen.iter().find_map(|e| e.address.clone()) {
+        Some(address) => Some(address),
+        None => match chosen.first() {
+            Some(entry) => {
+                let client = ctx.client()?.low_level();
+                let found = bacnet_ops::DeviceAddress::claiming(client, entry.device).await;
+                Some(found.map_err(|error| ToolError::device(entry.device, &error))?)
+            }
+            None => None,
+        },
+    };
+    let preview = address
+        .as_ref()
+        .and_then(|address| bacnet_tool::safety::plan::undo_preview(&chosen, address));
     match preview {
         Some(mut preview) if !preview.items.is_empty() => {
             // The planner's tier, never blocked here: `undo_preview` plans

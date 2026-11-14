@@ -9,7 +9,7 @@ use bacnet_client::client::BACnetClient;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_tool::class::Class;
 use bacnet_tool::safety::desk::{Caller, ENDED};
-use bacnet_tool::safety::{find, turn};
+use bacnet_tool::safety::{reach, turn};
 use bacnet_transport::port::TransportPort;
 
 use super::{PASSIVE, Runner, tell};
@@ -70,8 +70,8 @@ async fn send<T: TransportPort + 'static>(
     request: &Request,
 ) -> Outcome {
     let device = request.device;
-    find(client, device).await;
-    let held = match turn(client, rate, device).await {
+    reach(client, &request.at, device).await;
+    let held = match turn(client, rate, &request.at).await {
         Ok(held) => held,
         Err(error) => return Outcome::NotSent(error.to_string()),
     };

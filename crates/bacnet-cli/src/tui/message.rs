@@ -7,6 +7,7 @@
 use std::net::{Ipv4Addr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
+use bacnet_ops::DeviceAddress;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_types::enums::Segmentation;
 
@@ -185,6 +186,9 @@ pub(crate) enum Command {
 pub(crate) struct DeviceRow {
     /// Device instance.
     pub(crate) instance: u32,
+    /// Where it answers: what identifies it, and where its reads and
+    /// writes go (#2560).
+    pub(crate) at: DeviceAddress,
     /// Where it is, as a target the CLI reads back: its own address, or
     /// for a routed device its routed station, `2:0x05`.
     pub(crate) address: String,

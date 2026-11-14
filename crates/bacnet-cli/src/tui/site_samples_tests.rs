@@ -101,6 +101,10 @@ fn devices() -> DeviceTable {
     for (instance, station) in [(1001, None), (2001, Some((2u16, [5u8])))] {
         table.upsert(DeviceRow {
             instance,
+            at: match station {
+                Some((network, mac)) => bacnet_ops::DeviceAddress::new(network, &mac).unwrap(),
+                None => "10.0.1.20:47808".parse().unwrap(),
+            },
             address: match station {
                 Some((network, mac)) => routed_station(network, &mac).unwrap(),
                 None => "10.0.1.20:47808".into(),
