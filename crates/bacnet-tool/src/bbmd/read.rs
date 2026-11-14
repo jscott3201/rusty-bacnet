@@ -68,10 +68,7 @@ fn settle<E, R>(read: Result<Vec<E>, BvlcExchangeError>, row: fn(&E) -> R) -> Ou
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use bacnet_client::client::{BACnetClient, ClientConfig};
-    use bacnet_ops::limits::RequestLimits;
     use bacnet_transport::loopback::LoopbackTransport;
 
     use super::*;
@@ -88,7 +85,7 @@ mod tests {
             let low = BACnetClient::start(ClientConfig::default(), transport)
                 .await
                 .unwrap();
-            Client::new(Arc::new(low), Arc::new(RequestLimits::new(0)))
+            Client::over(low)
         };
         let bip_port = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
         let client = client_on(bip_port.into()).await;

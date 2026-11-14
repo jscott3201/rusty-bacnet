@@ -25,6 +25,8 @@ bacnet discover 1000-2000 --wait 3
 
 The range limits the requested device instances; it does not make a broadcast into a unicast operation. Confirm the interface, broadcast destination, and network owner approval before expanding the scope.
 
+With no scope option the Who-Is is a local broadcast: it reaches this BACnet network, across its BBMDs, but no router passes it on, so devices behind routers don't answer it. `--dnet 2` asks one remote network, and `--global` every network. On a large routed site every device answers a global Who-Is, so keep a range on it. The terminal UI's Who-Is form, the MCP discover tool and Python's `discover()` and `who_is()` start from the same local scope.
+
 <Diagram file="discovery-path.svg" title="Choose the discovery path" description="A directed Who-Is followed by an I-Am and a property read." />
 
 ## Work across subnet boundaries

@@ -193,7 +193,7 @@ async fn a_reused_address_with_no_other_claim_fails_unsent() {
     let before = sent.len();
     let error = name_of(&device).await.unwrap_err();
     assert!(
-        matches!(&error, OpsError::UnknownDevice { target } if target == "1001"),
+        matches!(&error, OpsError::UnknownDevice { target, asked: None } if target == "1001"),
         "{error}"
     );
     assert_eq!(sent.len(), before, "nothing sent");

@@ -14,8 +14,10 @@
 //!   properties and priorities are named;
 //! - [`limits`]: the global request-rate cap, the one-request-per-device
 //!   gate, rates per network and per-caller accounts;
-//! - [`client`](mod@client): [`Client`], the high-level client: Who-Is and
-//!   discovery over those limits;
+//! - [`client`](mod@client): [`Client`], the high-level client: its connect
+//!   builders ([`Client::bip`] and the others), and discovery over those
+//!   limits ([`Discover`], a local broadcast unless it names another
+//!   [`Scope`]);
 //! - [`device`]: [`DeviceAddress`], where a device answers, and the
 //!   [`Device`] handle, pinned to an address or following an instance, whose
 //!   methods are the read operations (properties, the object list, a device
@@ -38,6 +40,8 @@
 //! classes, frame decoding and the BBMD survey) are the `bacnet-tool`
 //! crate (#2560).
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 pub mod client;
 pub mod device;
 pub mod error;
@@ -52,7 +56,7 @@ pub mod reading;
 pub mod target;
 pub mod watch;
 
-pub use client::Client;
+pub use client::{Client, Discover, ResolveScope, Scope};
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};

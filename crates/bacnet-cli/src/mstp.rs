@@ -17,10 +17,11 @@ use bacnet_types::error::Error;
 use crate::output::OutputFormat;
 
 /// The baud rates an MS/TP port may run at (Clause 9.2.3).
-pub(crate) const BAUD_RATES: [u32; 6] = [9_600, 19_200, 38_400, 57_600, 76_800, 115_200];
+pub(crate) const BAUD_RATES: [u32; 6] = bacnet_transport::mstp::STANDARD_BAUD_RATES;
 
-/// `--mstp-baud`'s default, the Python bindings' too.
-pub(crate) const DEFAULT_BAUD: u32 = 38_400;
+/// `--mstp-baud`'s default: the host tools' rate, the Python bindings' and
+/// `bacnet_ops::Client::mstp`'s too.
+pub(crate) const DEFAULT_BAUD: u32 = bacnet_transport::mstp::HOST_BAUD_RATE;
 
 /// The highest MAC a master station may have, and Max_Master's limit.
 pub(crate) const MAX_MASTER_MAC: u8 = 127;
