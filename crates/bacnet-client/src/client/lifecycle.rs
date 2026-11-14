@@ -99,7 +99,7 @@ impl Controls {
 /// this timer on every turn (#1978 item 8); the loop ends it when it ends
 /// itself, and `stop()` and drop abort both.
 fn spawn_device_purge(
-    device_table: Arc<SyncMutex<DeviceTable>>,
+    device_table: Arc<network_number::Discovery>,
     device_tx: broadcast::Sender<DeviceEvent>,
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
 ) -> JoinHandle<()> {
@@ -165,7 +165,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let numbers = network
             .transport()
             .supports_local_nonrouter_number_controls();
-        let asking = Arc::new(network_number::Asking::new(numbers));
         let link_returns = numbers
             .then(|| network.transport().link_returns())
             .flatten()
@@ -178,7 +177,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let tsm = Arc::new(SyncMutex::new(new_coordinated_tsm(&config, coordinator)));
         let tsm_dispatch = Arc::clone(&tsm);
-        let device_table = Arc::new(SyncMutex::new(DeviceTable::new()));
+        let device_table = Arc::new(network_number::Discovery::new(numbers));
         let device_table_dispatch = Arc::clone(&device_table);
         let network_dispatch = Arc::clone(&network);
         let (cov_tx, _) =
@@ -195,10 +194,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let device_collision_tx_dispatch = device_collision_tx.clone();
         let (number_tx, network_number_task) = if numbers {
             let owner = network_number::Owner {
-                table: Arc::clone(&device_table),
+                discovery: Arc::clone(&device_table),
                 device_tx: device_tx.clone(),
                 collision_tx: device_collision_tx.clone(),
-                asking: Arc::clone(&asking),
                 link_returns,
             };
             let (tx, task) = network_number::spawn(&network, owner);
@@ -241,7 +239,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             device_collision_tx.clone(),
         );
         let device_purge = device_purge_task.abort_handle();
-        let asking_dispatch = Arc::clone(&asking);
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
             let mut controls = Controls::new(
@@ -348,7 +345,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         device_tx: &device_tx_dispatch,
                                         device_collision_tx: &device_collision_tx_dispatch,
                                         i_have_tx: &i_have_tx_dispatch,
-                                        asking: &asking_dispatch,
                                         seg_ack_senders: &seg_ack_senders_dispatch,
                                         decode_warning: &decode_warning,
                                         response_warning: &response_warning,
@@ -412,7 +408,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             #[cfg(test)]
             response_warning: response_warning_hook,
             local_mac,
-            asking,
             routed_path_limits,
             group_source_request_drops,
             pacer,

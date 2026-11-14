@@ -27,7 +27,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             device_tx,
             device_collision_tx,
             i_have_tx,
-            asking,
             seg_ack_senders,
             decode_warning,
             response_warning,
@@ -484,7 +483,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 "Received IAm"
                             );
                             let routed_while_unknown = device_events::heard_i_am(
-                                device_table,
+                                &device_table.table,
                                 device_events::IAmSource {
                                     mac: source_mac,
                                     network: source_network,
@@ -497,7 +496,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             // unknown may be a local device's twin: ask
                             // (#2572), through the Number owner.
                             if routed_while_unknown {
-                                asking.want();
+                                device_table.asking.want();
                             }
                         }
                         Err(e) => {

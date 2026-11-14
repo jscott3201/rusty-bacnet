@@ -793,13 +793,13 @@ pub trait TransportPort: Send + Sync {
     /// BACnet/SC counts each hub connection its recovery makes after the
     /// connection it had was lost, to the same hub or the failover hub; a
     /// move back to the primary hub while the failover hub still serves is
-    /// no return. A started B/IP transport counts, as a foreign device,
-    /// each registration the BBMD takes after an attempt was refused or
-    /// unanswered or the lease lapsed, and the next success, a renewal
-    /// included, after the BBMD refused a broadcast with a
-    /// Distribute-Broadcast-To-Network NAK; a start's first attempt
-    /// succeeding is no return, since the broadcasts made before it were
-    /// held for it. A B/IPv6 foreign device counts each registration the
+    /// no return. B/IP reports one in every mode, counted across restarts;
+    /// it moves, for a foreign device, with each registration the BBMD
+    /// takes after an attempt was refused or unanswered or the lease
+    /// lapsed, and with the next success, a renewal included, after the
+    /// BBMD refused a broadcast with a Distribute-Broadcast-To-Network NAK;
+    /// a start's first attempt succeeding is no return, since the
+    /// broadcasts made before it were held for it. A B/IPv6 foreign device counts each registration the
     /// BBMD takes after a broadcast went to it unproven: before any
     /// success, after a refusal, while a registration had gone unanswered
     /// for 3 s, or refused by that NAK (B/IPv6 holds none, so a start's

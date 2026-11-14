@@ -250,7 +250,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // A routed row stored while the number is unknown may be a local
         // device's twin: ask, once (#2572).
         if this_network.is_none() {
-            self.asking.first_need(&self.network).await;
+            self.device_table.asking.first_need(&self.network).await;
         }
         Ok(())
     }

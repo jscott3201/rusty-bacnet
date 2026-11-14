@@ -146,7 +146,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await?;
         // It is the client's question too: a later Who-Is or routed row
         // doesn't ask again (#2572).
-        self.asking.asked_by_caller();
+        self.device_table.asking.asked_by_caller();
         Ok(())
     }
 

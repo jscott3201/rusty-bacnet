@@ -112,14 +112,42 @@ impl Asking {
     }
 }
 
+/// The discovery table, and beside it in the same allocation the asking
+/// that storing a routed row can call for. The client and its dispatch
+/// task hold this one `Arc` where they held the table's alone, so neither
+/// grows a field on the request path, and the table sits first, where it
+/// always sat; a request's lookups reach it unchanged (#2572).
+#[repr(C)]
+#[derive(Debug)]
+pub(super) struct Discovery {
+    pub(super) table: SyncMutex<DeviceTable>,
+    pub(super) asking: Asking,
+}
+
+impl Discovery {
+    pub(super) fn new(numbers: bool) -> Self {
+        Self {
+            table: SyncMutex::new(DeviceTable::new()),
+            asking: Asking::new(numbers),
+        }
+    }
+}
+
+impl std::ops::Deref for Discovery {
+    type Target = SyncMutex<DeviceTable>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.table
+    }
+}
+
 /// What the owner keeps beside the layer: the discovery table its learning
-/// folds, with that table's subscribers, the asking it shares with the
-/// client, and the link's returns, when the transport reports them.
+/// folds and the asking it shares with the client, the table's
+/// subscribers, and the link's returns, when the transport reports them.
 pub(super) struct Owner {
-    pub(super) table: Arc<SyncMutex<DeviceTable>>,
+    pub(super) discovery: Arc<Discovery>,
     pub(super) device_tx: broadcast::Sender<DeviceEvent>,
     pub(super) collision_tx: broadcast::Sender<DeviceCollisionEvent>,
-    pub(super) asking: Arc<Asking>,
     pub(super) link_returns: Option<watch::Receiver<u64>>,
 }
 
@@ -158,12 +186,12 @@ pub(super) fn spawn<T: TransportPort + 'static>(
     let network = Arc::clone(network);
     let task = tokio::spawn(async move {
         let Owner {
-            table,
+            discovery,
             device_tx,
             collision_tx,
-            asking,
             mut link_returns,
         } = owner;
+        let (table, asking) = (&discovery.table, &discovery.asking);
         let notices: TableNotices<'_> = (&device_tx, &collision_tx);
         let mut state = NetworkNumber::default();
         // Two routers that disagree flip the number on every announcement:
@@ -202,7 +230,7 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                             );
                         }
                         let this_network = network.local_network_number();
-                        device_events::learned_number(&table, this_network, state, notices);
+                        device_events::learned_number(table, this_network, state, notices);
                     }
                 }
                 NumberControl::WhatIs => {

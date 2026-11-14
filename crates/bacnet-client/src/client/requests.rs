@@ -673,7 +673,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// back.
     pub(super) async fn ask_before(&self, service_choice: UnconfirmedServiceChoice) {
         if service_choice == UnconfirmedServiceChoice::WHO_IS {
-            self.asking.first_need(&self.network).await;
+            self.device_table.asking.first_need(&self.network).await;
         }
     }
 

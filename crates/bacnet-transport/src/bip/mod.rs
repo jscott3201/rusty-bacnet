@@ -44,6 +44,7 @@ mod client_snapshot;
 mod counter_reads;
 mod datagram;
 mod exchange;
+mod link_returns;
 pub use bacnet_bip_core::node::ExchangeRefusal;
 pub use exchange::BvlcExchangeError;
 mod foreign_device;
@@ -455,10 +456,10 @@ impl TransportPort for BipTransport {
         self.network_port_lease = Some(lease);
         Ok(())
     }
-    /// A foreign device's registration after a loss (#2572); `None` before
-    /// start.
+    /// A foreign device's registration after a loss (#2572), counted
+    /// across restarts.
     fn link_returns(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
-        self.node.as_ref().map(|node| node.link_returns())
+        Some(self.client_record.returns.subscribe())
     }
 
     fn supports_local_nonrouter_number_controls(&self) -> bool {

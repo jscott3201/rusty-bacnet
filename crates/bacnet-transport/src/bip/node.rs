@@ -35,7 +35,7 @@ use bacnet_bip_core::node::{
 use bacnet_time::HostClock;
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{Notify, oneshot, watch};
+use tokio::sync::{Notify, oneshot};
 use tracing::{debug, info, warn};
 
 use super::BipSocket;
@@ -158,18 +158,6 @@ pub(super) struct NodeState {
     refusal_warned: bool,
     /// Set by stop: no request starts, and nothing more is counted.
     pub(super) stopped: bool,
-    /// A foreign device's registration was lost, refused or unanswered
-    /// since its lease was last proven: broadcasts may have gone nowhere,
-    /// so the next registration is the link coming back (#2572). Not set
-    /// for the first attempt of a start, whose broadcasts are held.
-    lost: bool,
-    /// The BBMD refused a broadcast with a Distribute-Broadcast-To-Network
-    /// NAK (counted as a renewal hint): it dropped it and holds no entry
-    /// for this device, live lease or not, so the next success, even a
-    /// renewal, is the link coming back (#2572).
-    dropped: bool,
-    /// The link's returns: `TransportPort::link_returns`.
-    returns: watch::Sender<u64>,
 }
 
 impl NodeState {
@@ -189,7 +177,10 @@ impl NodeState {
                 }
                 Action::ReleaseHeld => self.release.extend(self.held.drain(..)),
                 Action::DiscardHeld => self.held.clear(),
-                Action::Registration(event) => self.log_registration(event),
+                Action::Registration(event) => {
+                    record.returns.event(&event);
+                    self.log_registration(event);
+                }
                 Action::ReleasePrevious {
                     exchange,
                     to,
@@ -203,7 +194,7 @@ impl NodeState {
         }
         let counters = self.node.take_counters();
         if counters.renewal_hints > 0 {
-            self.dropped = true;
+            record.returns.broadcast_dropped();
         }
         if !self.stopped {
             record.absorb(&counters);
@@ -228,7 +219,6 @@ impl NodeState {
             log_release(bbmd, outcome);
             return;
         }
-        self.follow_link(&event);
         // Every other event follows an attempt, so it has a BBMD to name.
         let Mode::Foreign(Foreign {
             bbmd: Some(bbmd), ..
@@ -261,37 +251,6 @@ impl NodeState {
                 debug!("Foreign registration attempt did not return a matched result");
             }
             other => debug!(?other, "Foreign registration event"),
-        }
-    }
-}
-
-impl NodeState {
-    /// Follow a foreign device's link through its registration (#2572): a
-    /// registration lost, refused or unanswered may have dropped the
-    /// broadcasts sent meanwhile, and the next registration brings the link
-    /// back; after the BBMD refused a broadcast, so does the next renewal.
-    /// The first attempt's own success is no return: the broadcasts made
-    /// before it were held and go now.
-    fn follow_link(&mut self, event: &RegistrationEvent) {
-        let back = match event {
-            RegistrationEvent::Registered { .. } => {
-                std::mem::take(&mut self.lost) | std::mem::take(&mut self.dropped)
-            }
-            RegistrationEvent::Renewed { .. } => {
-                self.lost = false;
-                std::mem::take(&mut self.dropped)
-            }
-            RegistrationEvent::Lapsed
-            | RegistrationEvent::Refused { .. }
-            | RegistrationEvent::Unanswered => {
-                self.lost = true;
-                false
-            }
-            _ => false,
-        };
-        if back {
-            self.returns
-                .send_modify(|count| *count = count.wrapping_add(1));
         }
     }
 }
@@ -379,9 +338,6 @@ impl NodeHandle {
                 releasing: false,
                 refusal_warned: false,
                 stopped: false,
-                lost: false,
-                dropped: false,
-                returns: watch::Sender::new(0),
             }),
             wake: Notify::new(),
             attempt_hook: OnceLock::new(),
@@ -505,10 +461,10 @@ impl NodeHandle {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The link's returns: one more each time a foreign device registers
-    /// again after its registration was lost, refused or unanswered.
-    pub(super) fn link_returns(&self) -> watch::Receiver<u64> {
-        self.lock().returns.subscribe()
+    /// The link's returns, which the client record keeps (#2572).
+    #[cfg(test)]
+    pub(super) fn link_returns(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.record.returns.subscribe()
     }
 
     /// Call into the node now, under the lock, then drain what it asks for

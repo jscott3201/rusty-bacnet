@@ -1037,28 +1037,29 @@ global broadcasts and control fan-outs never draw a reply. The reply enters
 the existing bounded priority queue; refusing that reply cannot start a loop.
 Other failures do not imply a length refusal, even if the port's limit changed.
 
-The default `max_npdu_changes()` result, `None`, says the limit never changes
-once started, which holds for the other
-built-in transports. `link_returns()` is the same kind of receiver for the
-link itself: a count that rises each time the link comes back, for a stack
-to send again what may have gone nowhere meanwhile. BACnet/SC counts each
-hub connection its recovery makes after losing the one it had (a reconnect
-or a failover, not a move back to the primary). B/IP counts, for a foreign
-device, each registration the BBMD takes after an attempt was refused or
-unanswered or the lease lapsed, and the next success, even a renewal, after
-the BBMD refused a broadcast with a Distribute-Broadcast-To-Network NAK; a
-start's first attempt succeeding is none, as the broadcasts made before it
-were held for it. B/IPv6 counts, for a foreign device, each registration
-the BBMD takes after a broadcast went to it unproven: before any success,
-after a refusal, while a registration had gone unanswered for 3 seconds, or
-refused by that NAK. MS/TP, Ethernet and B/IPv6 outside foreign mode return `None`.
-The standalone client, once it has asked its network's number, asks again
-then while it is still unknown (#2572). Wrappers and `AnyTransport`
-delegate all three methods: a wrapper around an MS/TP or BACnet/SC
-transport that doesn't loses its real limit, and one around a transport
-with returns loses those too. A custom transport that carries more than
-1,497 octets must override `max_npdu()`, or a router refuses what it could have sent; one that carries
-less must too, or the router assumes 1,497.
+The default `max_npdu_changes()` result, `None`, says the limit never
+changes once started, which holds for the other built-in transports.
+`link_returns()` is the same kind of receiver for the link itself: a count
+that rises each time the link comes back, for a stack to send again what may
+have gone nowhere meanwhile. BACnet/SC counts each hub connection its
+recovery makes after losing the one it had (a reconnect or a failover, not a
+move back to the primary). B/IP reports a count in every mode, kept across
+restarts, which moves for a foreign device: each registration the BBMD takes
+after an attempt was refused or unanswered or the lease lapsed, and the next
+success, even a renewal, after the BBMD refused a broadcast with a
+Distribute-Broadcast-To-Network NAK; a start's first attempt succeeding is
+none, as the broadcasts made before it were held for it. B/IPv6 counts, for
+a foreign device, each registration the BBMD takes after a broadcast went to
+it unproven: before any success, after a refusal, while a registration had
+gone unanswered for 3 seconds, or refused by that NAK. MS/TP, Ethernet and
+B/IPv6 outside foreign mode return `None`. The standalone client, once it
+has asked its network's number, asks again then while it is still unknown
+(#2572). Wrappers and `AnyTransport` delegate all three methods: a wrapper
+around an MS/TP or BACnet/SC transport that doesn't loses its real limit,
+and one around a transport with returns loses those too. A custom transport
+that carries more than 1,497 octets must override `max_npdu()`, or a router
+refuses what it could have sent; one that carries less must too, or the
+router assumes 1,497.
 
 ### Feature Flags
 

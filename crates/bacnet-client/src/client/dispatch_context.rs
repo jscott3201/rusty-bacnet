@@ -7,7 +7,7 @@ pub(super) struct DispatchContext<'a, T: TransportPort + 'static> {
     /// Transaction state machine.
     pub(super) tsm: &'a Arc<SyncMutex<Tsm>>,
     /// Discovered-device table.
-    pub(super) device_table: &'a Arc<SyncMutex<DeviceTable>>,
+    pub(super) device_table: &'a Arc<network_number::Discovery>,
     /// Network layer used to send replies.
     pub(super) network: &'a Arc<NetworkLayer<T>>,
     /// Broadcast channel for COV notifications.
@@ -22,9 +22,6 @@ pub(super) struct DispatchContext<'a, T: TransportPort + 'static> {
     pub(super) device_collision_tx: &'a broadcast::Sender<DeviceCollisionEvent>,
     /// Broadcast channel for received I-Haves.
     pub(super) i_have_tx: &'a broadcast::Sender<ReceivedIHave>,
-    /// When the client asks its network's number: storing a routed row
-    /// while it is unknown wants an ask (#2572).
-    pub(super) asking: &'a network_number::Asking,
     /// Routes for SegmentAcks awaiting an outgoing segmented request.
     pub(super) seg_ack_senders: &'a Arc<SyncMutex<HashMap<SegAckKey, SegmentAckRoute>>>,
     /// The client's throttle on warnings for received APDUs and service

@@ -602,7 +602,9 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     config: ClientConfig,
     network: Arc<NetworkLayer<T>>,
     tsm: Arc<SyncMutex<Tsm>>,
-    device_table: Arc<SyncMutex<DeviceTable>>,
+    /// The discovery table, with the asking for the network's number
+    /// beside it (#2572).
+    device_table: Arc<network_number::Discovery>,
     cov_tx: broadcast::Sender<ReceivedCOVNotification>,
     event_tx: broadcast::Sender<ReceivedEventNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
@@ -631,8 +633,6 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     #[cfg(test)]
     response_warning: Arc<WarnThrottle>,
     local_mac: MacAddr,
-    /// When the client asks its network's number (#2572).
-    asking: Arc<network_number::Asking>,
     routed_path_limits: Arc<RoutedPathLimits>,
     /// See [`Self::group_source_request_drops`].
     group_source_request_drops: Arc<std::sync::atomic::AtomicU64>,

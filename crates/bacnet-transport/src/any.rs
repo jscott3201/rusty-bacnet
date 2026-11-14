@@ -667,10 +667,15 @@ mod tests {
         let (_hub_end, ws) = crate::sc_hub::ws_limits_test_support::initiating_pair().await;
         let any: AnyTransport = ScTransport::new(ws, [0x02; 6]).into();
         assert_refused(&any, DataLink::Sc);
-        // The wrapper hands on SC's link returns (#2572); B/IP has none.
+        // The wrapper hands on the link's returns (#2572): SC's, and B/IP's,
+        // which a foreign device's registration moves; MS/TP has none.
         assert_eq!(any.link_returns().map(|returns| *returns.borrow()), Some(0));
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-        assert!(AnyTransport::from(bip).link_returns().is_none());
+        let returns = AnyTransport::from(bip).link_returns();
+        assert_eq!(returns.map(|returns| *returns.borrow()), Some(0));
+        let (serial, _) = LoopbackSerial::pair();
+        let mstp: AnyTransport = MstpTransport::new(serial, MstpConfig::default()).into();
+        assert!(mstp.link_returns().is_none());
     }
 
     #[test]
