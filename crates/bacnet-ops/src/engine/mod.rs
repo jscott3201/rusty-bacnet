@@ -1,49 +1,51 @@
 //! The read operations every front end shares, over one client and one set
 //! of request limits.
 //!
-//! [`Reader`] is the reading strategy for one device: each request waits
-//! for its turn at the device's gate and the global rate cap
+//! [`Reader`] is the reading strategy for one device at its address: each
+//! request waits for its turn at the device's gate and the global rate cap
 //! ([`RequestLimits`]), a property list goes by ReadPropertyMultiple with a
 //! ReadProperty fallback, and the Object_List falls back to element-by-element
 //! reads. The TUI's browser, watch list and write previews use it directly,
 //! with their own stop flags.
 //!
 //! [`Client`] is the facade the MCP server builds on: it owns the
-//! low-level client, the limits and the per-device memory of RPM refusals,
-//! and offers the read operations as plain async calls on a device
-//! instance. A device is looked up in the low-level client's discovery
-//! table, so routed devices work as the `*_from_device` client calls route
-//! them. Cancelling a call means dropping its future: a turn's wait is
-//! cancel-safe, and a request already sent is abandoned to the client's
-//! transaction state machine. A `Client` is cheap to clone: clones share
-//! one client, one set of limits and one memory.
+//! low-level client, the limits and the per-address memory of RPM
+//! refusals, and hands out [`Device`] handles, whose methods are the read
+//! operations as plain async calls. Cancelling a call means dropping its
+//! future: a turn's wait is cancel-safe, and a request already sent is
+//! abandoned to the client's transaction state machine. A `Client` is
+//! cheap to clone: clones share one client, one set of limits and one
+//! memory.
 
 mod discover;
 mod log;
 mod read;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_client::log_reader::{LogCursor, LogPage, read_log_page};
-use bacnet_services::alarm_event::GetEventInformationAck;
-use bacnet_services::alarm_summary::GetAlarmSummaryAck;
-use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+use tokio::sync::broadcast;
 
 pub use self::discover::WhoIsScope;
 pub use self::log::Naming;
+pub(crate) use self::log::PagedLog;
 pub use self::read::{
-    Halt, ListRead, MAX_OBJECTS, ReadVia, Reader, RpmFailure, Wanted, network_of, rpm_failure,
-    rpm_rows, timed_out, unreachable,
+    Halt, ListRead, MAX_OBJECTS, ReadVia, Reader, RpmFailure, Wanted, rpm_failure, rpm_rows,
+    timed_out, unreachable,
 };
+use crate::device::{ClientEvent, DeviceAddress};
 use crate::format::{RawRow, object_name};
-use crate::limits::{RequestLimits, Turn};
+use crate::limits::RequestLimits;
+
+#[cfg(doc)]
+use crate::device::Device;
 
 /// The Device properties a device summary reads (Clause 12.11): who made
 /// it, what it runs, and what it can do. The TUI's device card shows them.
@@ -63,9 +65,13 @@ pub const DEVICE_PROPERTIES: [PropertyIdentifier; 13] = [
     PropertyIdentifier::DATABASE_REVISION,
 ];
 
+/// How long a handle made from an instance no address claims waits for
+/// the device's I-Am, unless [`Client::set_resolve_wait`] says otherwise.
+pub const RESOLVE_WAIT: Duration = Duration::from_secs(3);
+
 /// The stop flag of the client's readers. Nothing sets it: a call is
 /// cancelled by dropping its future.
-static NEVER_STOPPED: AtomicBool = AtomicBool::new(false);
+pub(crate) static NEVER_STOPPED: AtomicBool = AtomicBool::new(false);
 
 /// One object's properties as read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,25 +108,36 @@ impl DeviceSummary {
 /// The high-level BACnet client: the read operations over one low-level
 /// [`BACnetClient`], shared by every caller.
 ///
-/// Calls to one device queue at its gate, one request outstanding at a
-/// time, and every request takes a slot under the global rate cap, so many
-/// callers can share a client without overrunning a device. Cheap to
+/// A device is reached through a [`Device`] handle ([`device`](Self::device)),
+/// made from its address, its instance or a discovery result. Calls to one
+/// device queue at its gate, keyed by its address, one request outstanding
+/// at a time, and every request takes a slot under the global rate cap, so
+/// many callers can share a client without overrunning a device. Cheap to
 /// clone: clones share everything.
 pub struct Client<T: TransportPort + 'static> {
-    shared: Arc<Shared<T>>,
+    pub(crate) shared: Arc<Shared<T>>,
 }
 
-/// What a [`Client`]'s clones share.
+/// What a [`Client`]'s clones share. Each std mutex is held only to look up
+/// or record an entry, never across an await.
 pub(crate) struct Shared<T: TransportPort + 'static> {
     pub(crate) client: Arc<BACnetClient<T>>,
     limits: Arc<RequestLimits>,
-    /// Devices that refused ReadPropertyMultiple, read by ReadProperty
-    /// from then on. The lock is held only to look up or record a device,
-    /// never across an await.
-    no_rpm: Mutex<HashSet<u32>>,
+    /// Addresses whose device refused ReadPropertyMultiple, read by
+    /// ReadProperty from then on.
+    no_rpm: Mutex<HashSet<DeviceAddress>>,
     /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
+    /// Where each instance a handle follows was last reached.
+    pub(crate) follows: Mutex<HashMap<u32, DeviceAddress>>,
+    /// The instances devices named for their address, from the one read by
+    /// the wildcard instance a handle made from an address needed.
+    pub(crate) instances: Mutex<HashMap<DeviceAddress, u32>>,
+    /// How long a handle by instance waits for an I-Am; `None` sends no
+    /// Who-Is at all.
+    resolve_wait: Mutex<Option<Duration>>,
+    pub(crate) events: broadcast::Sender<ClientEvent>,
 }
 
 impl<T: TransportPort + 'static> Clone for Client<T> {
@@ -129,6 +146,11 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
             shared: Arc::clone(&self.shared),
         }
     }
+}
+
+/// Lock `mutex`, past a panic elsewhere.
+pub(crate) fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl<T: TransportPort + 'static> Client<T> {
@@ -141,6 +163,10 @@ impl<T: TransportPort + 'static> Client<T> {
                 limits,
                 no_rpm: Mutex::new(HashSet::new()),
                 hubs: AtomicU32::new(0),
+                follows: Mutex::new(HashMap::new()),
+                instances: Mutex::new(HashMap::new()),
+                resolve_wait: Mutex::new(Some(RESOLVE_WAIT)),
+                events: broadcast::channel(64).0,
             }),
         }
     }
@@ -171,23 +197,39 @@ impl<T: TransportPort + 'static> Client<T> {
         &self.shared.client
     }
 
-    /// True once `device` has refused ReadPropertyMultiple.
-    pub fn refused_rpm(&self, device: u32) -> bool {
-        self.no_rpm().contains(&device)
+    /// How long a handle made from an instance that no address claims
+    /// waits for the device's I-Am after one Who-Is ([`RESOLVE_WAIT`] at
+    /// first). `None` sends no Who-Is: such a handle fails at once with
+    /// [`Error::UnknownDevice`], as does a routed address the discovery
+    /// table holds no router for. Applies to every clone.
+    pub fn set_resolve_wait(&self, wait: Option<Duration>) {
+        *lock(&self.shared.resolve_wait) = wait;
     }
 
-    fn no_rpm(&self) -> std::sync::MutexGuard<'_, HashSet<u32>> {
-        self.shared
-            .no_rpm
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    /// See [`set_resolve_wait`](Self::set_resolve_wait).
+    pub fn resolve_wait(&self) -> Option<Duration> {
+        *lock(&self.shared.resolve_wait)
     }
 
-    /// A reader for `device`, by RPM unless the device refused it before.
-    pub(crate) fn reader(&self, device: u32) -> Reader<'_, T> {
+    /// A receiver of this client's own events: a handle that follows an
+    /// instance moving to another address. Lossy under load, like every
+    /// client channel.
+    pub fn events(&self) -> broadcast::Receiver<ClientEvent> {
+        self.shared.events.subscribe()
+    }
+
+    /// True once the device at `device` has refused ReadPropertyMultiple.
+    pub fn refused_rpm(&self, device: &DeviceAddress) -> bool {
+        lock(&self.shared.no_rpm).contains(device)
+    }
+
+    /// A reader for the device at `device`, by RPM unless it refused it
+    /// before.
+    pub(crate) fn reader(&self, device: &DeviceAddress, instance: Option<u32>) -> Reader<'_, T> {
         Reader {
             client: &self.shared.client,
-            device,
+            device: device.clone(),
+            instance,
             rate: &self.shared.limits,
             cancel: &NEVER_STOPPED,
             rpm: !self.refused_rpm(device),
@@ -197,126 +239,13 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Remember a refusal `reader` met.
     pub(crate) fn settle(&self, reader: &Reader<'_, T>) {
         if !reader.rpm {
-            self.no_rpm().insert(reader.device);
+            lock(&self.shared.no_rpm).insert(reader.device.clone());
         }
     }
 
-    /// The properties `wanted` of `object` on `device`: one
-    /// ReadPropertyMultiple, or ReadProperty each once the device has
-    /// refused RPM. A property the device can't give is an error row,
-    /// not a failed read.
-    pub async fn read(
-        &self,
-        device: u32,
-        object: ObjectIdentifier,
-        wanted: Wanted<'_>,
-    ) -> Result<PropertyRead, Error> {
-        let mut reader = self.reader(device);
-        let read = reader.properties(object, wanted).await;
-        self.settle(&reader);
-        let (rows, via) = read.map_err(device_error)?;
-        Ok(PropertyRead { object, rows, via })
-    }
-
-    /// One property of `object` on `device`, or one element of it
-    /// (`index` 0 is an array's length), as its raw application-tagged
-    /// value.
-    pub async fn read_property(
-        &self,
-        device: u32,
-        object: ObjectIdentifier,
-        property: PropertyIdentifier,
-        index: Option<u32>,
-    ) -> Result<Vec<u8>, Error> {
-        self.reader(device)
-            .rp(object, property, index)
-            .await
-            .map_err(device_error)
-    }
-
-    /// `device`'s Object_List: whole, or element by element when the
-    /// device can't send it in one answer (at most [`MAX_OBJECTS`]).
-    pub async fn list_objects(&self, device: u32) -> Result<ListRead, Error> {
-        self.reader(device)
-            .object_list(|_, _| {})
-            .await
-            .map_err(device_error)
-    }
-
-    /// `device`'s [`DEVICE_PROPERTIES`].
-    pub async fn describe_device(&self, device: u32) -> Result<DeviceSummary, Error> {
-        let object = ObjectIdentifier::new(ObjectType::DEVICE, device)?;
-        let PropertyRead { rows, via, .. } = self
-            .read(device, object, Wanted::List(&DEVICE_PROPERTIES))
-            .await?;
-        Ok(DeviceSummary { device, rows, via })
-    }
-
-    /// One page of at most `page_size` records of `log` (a Trend Log,
-    /// Trend Log Multiple, Event Log or Audit Log) on `device`, from
-    /// `cursor`; the page says where to read next.
-    ///
-    /// A page can take more than one request (the log's record counts,
-    /// then the ReadRange). It holds the device's gate throughout, so they
-    /// still go one at a time, and each takes a rate slot of its own.
-    pub async fn read_trend(
-        &self,
-        device: u32,
-        log: ObjectIdentifier,
-        cursor: LogCursor,
-        page_size: u16,
-    ) -> Result<LogPage, Error> {
-        let network = network_of(self.low_level(), self.limits(), device).await;
-        let _turn = self.limits().turn_on(device, network).await;
-        let requester = log::PagedLog {
-            client: self.low_level(),
-            limits: self.limits(),
-            device,
-            network,
-            first: AtomicBool::new(true),
-        };
-        // The requester's calls route by device, so the link MAC is unused.
-        read_log_page(&requester, &[], log, cursor, page_size).await
-    }
-
-    /// `device`'s turn under the limits, on its network.
-    async fn turn(&self, device: u32) -> Turn {
-        let network = network_of(self.low_level(), self.limits(), device).await;
-        self.limits().turn_on(device, network).await
-    }
-
-    /// One GetEventInformation answer from `device`: the objects with an
-    /// event state other than normal or with transitions not yet
-    /// acknowledged. `after` continues from the last object of the
-    /// previous answer while that answer said more events remain.
-    pub async fn alarms(
-        &self,
-        device: u32,
-        after: Option<ObjectIdentifier>,
-    ) -> Result<GetEventInformationAck, Error> {
-        let _turn = self.turn(device).await;
-        self.low_level()
-            .get_event_information_from_device(device, after)
-            .await
-    }
-
-    /// `device`'s GetAlarmSummary answer: the objects whose alarms it
-    /// reports this way.
-    pub async fn alarm_summary(&self, device: u32) -> Result<GetAlarmSummaryAck, Error> {
-        let _turn = self.turn(device).await;
-        self.low_level().get_alarm_summary_from_device(device).await
-    }
-
-    /// `device`'s GetEnrollmentSummary answer for `request`'s filters.
-    pub async fn enrollment_summary(
-        &self,
-        device: u32,
-        request: &GetEnrollmentSummaryRequest,
-    ) -> Result<GetEnrollmentSummaryAck, Error> {
-        let _turn = self.turn(device).await;
-        self.low_level()
-            .get_enrollment_summary_from_device(device, request)
-            .await
+    /// Remember that the device at `address` refused ReadPropertyMultiple.
+    pub(crate) fn refuse_rpm(&self, address: &DeviceAddress) {
+        lock(&self.shared.no_rpm).insert(address.clone());
     }
 }
 

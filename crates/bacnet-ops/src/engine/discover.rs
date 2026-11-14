@@ -123,13 +123,6 @@ impl<T: TransportPort + 'static> Client<T> {
         self.low_level().discovered_devices().await
     }
 
-    /// The device in the discovery table that claims `instance`, or
-    /// `Ok(None)` when none does. Two or more addresses claiming it fail
-    /// with [`Error::AmbiguousDevice`].
-    pub async fn device(&self, instance: u32) -> Result<Option<DiscoveredDevice>, Error> {
-        self.low_level().get_device(instance).await
-    }
-
     /// A receiver of the discovery table's changes: devices found,
     /// refreshed and lost. Lossy under load, like every client channel; the
     /// table ([`devices`](Self::devices)) stays the truth.

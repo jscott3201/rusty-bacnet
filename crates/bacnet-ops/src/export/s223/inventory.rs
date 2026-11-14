@@ -38,7 +38,7 @@
 //!
 //! A front end that pages the export (the MCP tool) takes the Object_List
 //! its own way and reads the rest piece by piece, as the inventory does:
-//! [`Client::inventory_device`] and [`Client::inventory_object`].
+//! [`Device::inventory_device`] and [`Device::inventory_object`].
 
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType, PropertyIdentifier as P};
@@ -49,43 +49,46 @@ use super::{
     Access, Analog, Binary, Detail, DeviceInfo, Entry, Integer, Inventory, InventoryOptions,
     MultiState, Point, PointKind,
 };
-use crate::engine::{Client, Halt, Reader, Wanted, device_error, unreachable};
+use crate::device::{Device, sent};
+use crate::engine::{Halt, Reader, Wanted, device_error, unreachable};
 use crate::format::{RawRow, StateTexts, decode_all};
 use crate::label::{kebab, object_label};
 
-impl<T: TransportPort + 'static> Client<T> {
-    /// `device`'s objects of the types `options` names, as the Standard
+impl<T: TransportPort + 'static> Device<T> {
+    /// The device's objects of the types `options` names, as the Standard
     /// 223 export reads them ([`read_inventory`]). Fails only when the
     /// device's name or Object_List can't be read. A value without a
     /// Priority_Array reads as [`Access::ReadOnly`], writable or not.
-    pub async fn inventory(
-        &self,
-        device: u32,
-        options: &InventoryOptions,
-    ) -> Result<Inventory, Error> {
-        let mut reader = self.reader(device);
-        let inventory = read_inventory(&mut reader, options).await;
-        self.settle(&reader);
-        inventory.map_err(device_error)
+    pub async fn inventory(&self, options: &InventoryOptions) -> Result<Inventory, Error> {
+        let instance = self.resolve_instance().await?;
+        sent!(self, |at| {
+            let mut reader = self.client().reader(at, Some(instance));
+            let inventory = read_inventory(&mut reader, options).await;
+            self.client().settle(&reader);
+            inventory.map_err(device_error)
+        })
     }
 
-    /// `device`'s Device object as the inventory reads it at `detail`: at
+    /// The Device object as the inventory reads it at `detail`: at
     /// [`Detail::Export`] one ReadProperty of its Object_Name, at
     /// [`Detail::Full`] its name and Description by one RPM (or a
     /// ReadProperty each). The text is exactly as the device sent it, and a
     /// property it gave none of is `None`. Fails only when the device
     /// doesn't answer.
-    pub async fn inventory_device(&self, device: u32, detail: Detail) -> Result<DeviceInfo, Error> {
-        let mut reader = self.reader(device);
-        let read = read_device(&mut reader, detail).await;
-        self.settle(&reader);
-        read.map_err(device_error)
+    pub async fn inventory_device(&self, detail: Detail) -> Result<DeviceInfo, Error> {
+        let instance = self.resolve_instance().await?;
+        sent!(self, |at| {
+            let mut reader = self.client().reader(at, Some(instance));
+            let read = read_device(&mut reader, detail).await;
+            self.client().settle(&reader);
+            read.map_err(device_error)
+        })
     }
 
-    /// One object of `device` as the inventory reads it at `detail`, with
+    /// One object as the inventory reads it at `detail`, with
     /// the same properties: one ReadPropertyMultiple, or a ReadProperty
     /// each once the device has refused RPM (remembered, as
-    /// [`Client::read`] does). A read the device refuses, or a property
+    /// [`Device::read`] does). A read the device refuses, or a property
     /// every object of the type has that it can't give, comes back as
     /// [`Entry::Failed`], which the export skips; an optional property it
     /// can't give is `None`. An object of a type the export doesn't read
@@ -94,20 +97,23 @@ impl<T: TransportPort + 'static> Client<T> {
     /// stops answering is an error.
     pub async fn inventory_object(
         &self,
-        device: u32,
         object: ObjectIdentifier,
         detail: Detail,
     ) -> Result<Entry, Error> {
-        let mut reader = self.reader(device);
-        let read = read_object(&mut reader, object, detail).await;
-        self.settle(&reader);
-        read.map_err(device_error)
+        sent!(self, |at| {
+            let mut reader = self.client().reader(at, self.instance());
+            let read = read_object(&mut reader, object, detail).await;
+            self.client().settle(&reader);
+            read.map_err(device_error)
+        })
     }
 }
 
 /// The objects of the types `options` names on `reader`'s device, with
 /// what the export needs of each (see the module docs). A reader that
 /// meets a refusal of RPM leaves `rpm` false, for its owner to remember.
+/// A reader that doesn't know its device's instance reads it first, by the
+/// wildcard instance ([`Reader::instance`]).
 pub async fn read_inventory<T: TransportPort + 'static>(
     reader: &mut Reader<'_, T>,
     options: &InventoryOptions,
@@ -150,8 +156,9 @@ async fn read_device<T: TransportPort + 'static>(
     reader: &mut Reader<'_, T>,
     detail: Detail,
 ) -> Result<DeviceInfo, Halt> {
+    let instance = reader.instance().await?;
     let device = reader.device_object()?;
-    let mut info = DeviceInfo::new(reader.device);
+    let mut info = DeviceInfo::new(instance);
     let rows = match detail {
         // One ReadProperty, as the export has always read it.
         Detail::Export => match reader.rp(device, P::OBJECT_NAME, None).await {

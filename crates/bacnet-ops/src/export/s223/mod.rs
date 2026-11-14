@@ -13,7 +13,7 @@
 //!
 //! The work comes in two halves:
 //!
-//! - [`Client::inventory`](crate::engine::Client::inventory) (or
+//! - [`Device::inventory`](crate::Device::inventory) (or
 //!   [`read_inventory`] over a [`Reader`](crate::engine::Reader)) reads
 //!   what the export needs into plain data, an [`Inventory`]: the device's
 //!   name, its Object_List, then one request for each exported object, all

@@ -14,7 +14,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::PropertyValue;
 use tokio::time::Instant;
 
-use super::test_lab::{LAB, Lab, RP, RPM, SUBSCRIBE_COV, ai, nc, object, oid, settle};
+use super::test_lab::{Lab, RP, RPM, SUBSCRIBE_COV, ai, lab_at, nc, object, oid, settle};
 use super::tests::present_value;
 use super::*;
 
@@ -90,7 +90,7 @@ async fn a_device_refusing_rpm_is_polled_by_readproperty() {
         .map(|n| lab.hub.watch(object(nc(n))).unwrap())
         .collect();
     settle().await;
-    assert!(lab.engine.refused_rpm(LAB));
+    assert!(lab.engine.refused_rpm(&lab_at()));
     let from = Instant::now();
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert_eq!(lab.sent(RPM, from), 0, "{:?}", lab.services());
@@ -112,7 +112,7 @@ async fn a_failed_batch_is_read_one_property_at_a_time() {
     tokio::time::sleep(Duration::from_secs(11)).await;
     assert_eq!(lab.sent(RPM, from), 1);
     assert_eq!(lab.sent(RP, from), 3 * POINT_PROPERTIES.len());
-    assert!(!lab.engine.refused_rpm(LAB));
+    assert!(!lab.engine.refused_rpm(&lab_at()));
     for lease in &leases {
         let snapshot = lease.snapshot();
         assert_eq!((snapshot.polls, snapshot.state), (1, State::Live));

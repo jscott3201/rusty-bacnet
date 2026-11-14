@@ -21,6 +21,7 @@ use bacnet_types::enums::{AbortReason, ErrorClass, ObjectType, PropertyIdentifie
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use crate::device::{DeviceAddress, Path};
 use crate::format::{RawRow, RowError, decode_all};
 use crate::limits::{RequestLimits, Turn};
 
@@ -61,6 +62,7 @@ pub enum Halt {
 }
 
 /// What [`Reader::properties`] reads.
+#[derive(Debug, Clone, Copy)]
 pub enum Wanted<'a> {
     /// Every property (ALL, or Property_List over ReadProperty).
     All,
@@ -122,22 +124,6 @@ pub fn timed_out(error: &Error) -> bool {
     }
 }
 
-/// The network `device` is on, for limits that pace networks: its routed
-/// network, or 0 for the local one. `None` when the limits don't pace
-/// networks, so the lookup is skipped, or the device isn't known, or two
-/// addresses claim it (the request then fails on that).
-pub async fn network_of<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    limits: &RequestLimits,
-    device: u32,
-) -> Option<u16> {
-    if !limits.paces_networks() {
-        return None;
-    }
-    let found = client.get_device(device).await.ok()??;
-    Some(found.source_network.unwrap_or(0))
-}
-
 /// How an Object_List read went.
 #[derive(Debug)]
 pub struct ListRead {
@@ -152,11 +138,21 @@ pub struct ListRead {
 
 /// Reads one device, one request at a time, each with its turn at the
 /// device's gate and the global rate cap.
+///
+/// Every request goes to the device's address: to its MAC on this network,
+/// or to its station behind a router, through the router the low-level
+/// client's discovery table holds for it. A device named only by its
+/// instance is looked up first ([`DeviceAddress::of`] on its row, or a
+/// [`Device`](crate::Device) handle).
 pub struct Reader<'a, T: TransportPort + 'static> {
     /// The client the requests go through.
     pub client: &'a BACnetClient<T>,
-    /// The device instance read, looked up in the client's discovery table.
-    pub device: u32,
+    /// Where the device answers: every request goes there, and waits for
+    /// that address's gate.
+    pub device: DeviceAddress,
+    /// The device's instance, for its Device object; `None` until known,
+    /// and then [`instance`](Self::instance) asks the device once.
+    pub instance: Option<u32>,
     /// The limits each request waits for.
     pub rate: &'a RequestLimits,
     /// Set to stop the read before its next request.
@@ -174,8 +170,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }
-        let network = network_of(self.client, self.rate, self.device).await;
-        let turn = self.rate.turn_on(self.device, network).await;
+        let turn = self.rate.turn(&self.device).await;
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }
@@ -191,16 +186,55 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }
-        self.rate.wait_device_free(self.device).await;
+        self.rate.wait_device_free(&self.device).await;
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }
         Ok(())
     }
 
-    /// The Device object.
+    /// The Device object: by its instance once known, else by the
+    /// wildcard instance, which a device answers as its own (Clause
+    /// 15.5.2).
     pub fn device_object(&self) -> Result<ObjectIdentifier, Halt> {
-        ObjectIdentifier::new(ObjectType::DEVICE, self.device).map_err(Halt::Device)
+        let instance = self.instance.unwrap_or(ObjectIdentifier::WILDCARD_INSTANCE);
+        ObjectIdentifier::new(ObjectType::DEVICE, instance).map_err(Halt::Device)
+    }
+
+    /// The device's instance: as known, or from one ReadProperty of its
+    /// Device object's Object_Identifier by the wildcard instance,
+    /// remembered for the reader's later calls.
+    pub async fn instance(&mut self) -> Result<u32, Halt> {
+        if let Some(instance) = self.instance {
+            return Ok(instance);
+        }
+        let any = self.device_object()?;
+        let data = self
+            .rp(any, PropertyIdentifier::OBJECT_IDENTIFIER, None)
+            .await?;
+        let instance = match decode_all(&data).as_deref() {
+            Some([PropertyValue::ObjectIdentifier(device)])
+                if device.object_type() == ObjectType::DEVICE =>
+            {
+                device.instance_number()
+            }
+            _ => {
+                return Err(Halt::Device(Error::decoding(
+                    0,
+                    "the device's Object_Identifier is not one Device object identifier",
+                )));
+            }
+        };
+        self.instance = Some(instance);
+        Ok(instance)
+    }
+
+    /// The path to the device, from the client's discovery table for one
+    /// behind a router.
+    async fn path(&self) -> Result<Path, Halt> {
+        Path::to(self.client, &self.device)
+            .await
+            .map_err(Halt::Device)
     }
 
     /// ReadProperty, routed if the device is.
@@ -211,10 +245,26 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         index: Option<u32>,
     ) -> Result<Vec<u8>, Halt> {
         let _turn = self.turn().await?;
-        self.client
-            .read_property_from_device(self.device, object, property, index)
+        self.path()
+            .await?
+            .read_property(self.client, object, property, index)
             .await
             .map(|ack| ack.property_value)
+            .map_err(Halt::Device)
+    }
+
+    /// ReadPropertyMultiple of `specs`, in the turn the caller holds
+    /// ([`turn`](Self::turn)): for a caller that decides what to ask only
+    /// once its turn has come, as the TUI's name reads do.
+    pub async fn rpm_in(
+        &self,
+        _turn: &Turn,
+        specs: Vec<ReadAccessSpecification>,
+    ) -> Result<ReadPropertyMultipleACK, Halt> {
+        self.path()
+            .await?
+            .read_property_multiple(self.client, specs)
+            .await
             .map_err(Halt::Device)
     }
 
@@ -237,12 +287,8 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
                 })
                 .collect(),
         };
-        let _turn = self.turn().await?;
-        let ack = self
-            .client
-            .read_property_multiple_from_device(self.device, vec![spec])
-            .await
-            .map_err(Halt::Device)?;
+        let turn = self.turn().await?;
+        let ack = self.rpm_in(&turn, vec![spec]).await?;
         Ok(rpm_rows(ack))
     }
 

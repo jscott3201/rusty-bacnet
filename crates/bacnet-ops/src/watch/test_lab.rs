@@ -33,6 +33,11 @@ use crate::engine::Client;
 use crate::limits::RequestLimits;
 
 pub(super) const LAB: u32 = 1001;
+
+/// Where the lab device answers.
+pub(super) fn lab_at() -> crate::DeviceAddress {
+    crate::DeviceAddress::local(&[2]).unwrap()
+}
 pub(super) const RPM: u8 = 14;
 pub(super) const RP: u8 = 12;
 pub(super) const SUBSCRIBE_COV: u8 = 5;

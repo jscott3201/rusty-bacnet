@@ -572,6 +572,7 @@ version = "0.15.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
+ "bacnet-network",
  "bacnet-objects",
  "bacnet-server",
  "bacnet-services",

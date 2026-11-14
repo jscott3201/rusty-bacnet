@@ -26,6 +26,7 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::Bytes;
 
 use super::*;
+use crate::device::DeviceAddress;
 use crate::format::{Floats, RowError, StateTexts, ValueFormat, decode_all};
 
 /// The lab device's instance.
@@ -136,6 +137,16 @@ async fn lab_on<C: TransportPort + 'static>(
     (engine, server)
 }
 
+/// The lab device's handle, following its instance.
+async fn lab_device<C: TransportPort + 'static>(engine: &Client<C>) -> crate::Device<C> {
+    engine.device(LAB).await.unwrap()
+}
+
+/// Where the lab device answers.
+fn lab_at() -> DeviceAddress {
+    DeviceAddress::local(&[2]).unwrap()
+}
+
 async fn stop<C: TransportPort + 'static>(
     engine: Client<C>,
     mut server: BACnetServer<LoopbackTransport>,
@@ -156,9 +167,9 @@ async fn stop<C: TransportPort + 'static>(
 async fn reads_properties_by_rpm_and_formats_them() {
     let (engine, server) = lab().await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
-    let read = engine
+    let read = lab_device(&engine)
+        .await
         .read(
-            LAB,
             ai,
             Wanted::List(&[PropertyIdentifier::PRESENT_VALUE, PropertyIdentifier::UNITS]),
         )
@@ -180,9 +191,9 @@ async fn reads_properties_by_rpm_and_formats_them() {
         "21.5 °C"
     );
     // One element of an array, by ReadProperty.
-    let length = engine
+    let length = lab_device(&engine)
+        .await
         .read_property(
-            LAB,
             oid(ObjectType::ANALOG_OUTPUT, 1),
             PropertyIdentifier::PRIORITY_ARRAY,
             Some(0),
@@ -190,7 +201,7 @@ async fn reads_properties_by_rpm_and_formats_them() {
         .await
         .unwrap();
     assert_eq!(decode_all(&length).unwrap(), [PropertyValue::Unsigned(16)]);
-    assert!(!engine.refused_rpm(LAB));
+    assert!(!engine.refused_rpm(&lab_at()));
     stop(engine, server).await;
 }
 
@@ -198,7 +209,7 @@ async fn reads_properties_by_rpm_and_formats_them() {
 #[tokio::test(start_paused = true)]
 async fn lists_objects_and_describes_the_device() {
     let (engine, server) = lab().await;
-    let list = engine.list_objects(LAB).await.unwrap();
+    let list = lab_device(&engine).await.list_objects().await.unwrap();
     assert!(!list.indexed);
     assert_eq!(list.stopped, None);
     for object in [
@@ -209,7 +220,7 @@ async fn lists_objects_and_describes_the_device() {
     ] {
         assert!(list.objects.contains(&object), "{object:?} in {list:?}");
     }
-    let summary = engine.describe_device(LAB).await.unwrap();
+    let summary = lab_device(&engine).await.describe_device().await.unwrap();
     assert_eq!(summary.device, LAB);
     assert_eq!(summary.rows.len(), DEVICE_PROPERTIES.len());
     let properties: Vec<_> = summary.rows.iter().map(|(p, _)| *p).collect();
@@ -224,8 +235,9 @@ async fn lists_objects_and_describes_the_device() {
 async fn reads_trend_pages_and_alarms() {
     let (engine, server) = lab().await;
     let log = oid(ObjectType::TREND_LOG, 1);
-    let first = engine
-        .read_trend(LAB, log, LogCursor::Oldest, 2)
+    let first = lab_device(&engine)
+        .await
+        .read_trend(log, LogCursor::Oldest, 2)
         .await
         .unwrap();
     let LogRecords::TrendLog(records) = &first.records else {
@@ -233,7 +245,11 @@ async fn reads_trend_pages_and_alarms() {
     };
     assert_eq!(records.len(), 2);
     assert!(!first.done);
-    let second = engine.read_trend(LAB, log, first.next, 2).await.unwrap();
+    let second = lab_device(&engine)
+        .await
+        .read_trend(log, first.next, 2)
+        .await
+        .unwrap();
     let LogRecords::TrendLog(records) = &second.records else {
         panic!("trend records: {second:?}");
     };
@@ -241,7 +257,7 @@ async fn reads_trend_pages_and_alarms() {
     assert_eq!(records[0].log_datum, LogDatum::RealValue(2.0));
     assert!(second.done);
 
-    let alarms = engine.alarms(LAB, None).await.unwrap();
+    let alarms = lab_device(&engine).await.alarms(None).await.unwrap();
     assert!(alarms.list_of_event_summaries.is_empty());
     assert!(!alarms.more_events);
     stop(engine, server).await;
@@ -251,7 +267,7 @@ async fn reads_trend_pages_and_alarms() {
 #[tokio::test(start_paused = true)]
 async fn an_unknown_device_fails() {
     let (engine, server) = lab().await;
-    let error = engine.describe_device(4242).await.unwrap_err();
+    let error = engine.device(4242).await.unwrap_err();
     assert!(error.to_string().contains("4242"), "{error}");
     stop(engine, server).await;
 }
@@ -269,14 +285,22 @@ async fn a_refusal_of_rpm_is_remembered_per_device() {
         PropertyIdentifier::PRESENT_VALUE,
         PropertyIdentifier::STATE_TEXT,
     ];
-    assert!(!engine.refused_rpm(LAB));
-    let first = engine.read(LAB, ai, Wanted::List(&wanted)).await.unwrap();
+    assert!(!engine.refused_rpm(&lab_at()));
+    let first = lab_device(&engine)
+        .await
+        .read(ai, Wanted::List(&wanted))
+        .await
+        .unwrap();
     assert_eq!(first.via, ReadVia::Rp);
-    assert!(engine.refused_rpm(LAB), "the refusal is remembered");
-    assert!(!engine.refused_rpm(LAB + 1));
+    assert!(engine.refused_rpm(&lab_at()), "the refusal is remembered");
+    assert!(!engine.refused_rpm(&DeviceAddress::local(&[3]).unwrap()));
     let rejected = rejections(engine.low_level().transport());
     assert_eq!(rejected, 1);
-    let second = engine.read(LAB, ai, Wanted::List(&wanted)).await.unwrap();
+    let second = lab_device(&engine)
+        .await
+        .read(ai, Wanted::List(&wanted))
+        .await
+        .unwrap();
     assert_eq!(second.via, ReadVia::Rp);
     assert_eq!(
         rejections(engine.low_level().transport()),
@@ -304,7 +328,11 @@ async fn a_missing_property_is_a_typed_error_row() {
     let (engine, server) = lab().await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let wanted = [PropertyIdentifier::STATE_TEXT];
-    let read = engine.read(LAB, ai, Wanted::List(&wanted)).await.unwrap();
+    let read = lab_device(&engine)
+        .await
+        .read(ai, Wanted::List(&wanted))
+        .await
+        .unwrap();
     assert_eq!(read.via, ReadVia::Rpm);
     let error = read.rows[0].1.as_ref().unwrap_err();
     assert_eq!(
@@ -385,30 +413,40 @@ async fn every_call_waits_for_the_device_gate() {
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let log = oid(ObjectType::TREND_LOG, 1);
     let wait = std::time::Duration::from_secs(30);
-    let held = engine.limits().gate(LAB).acquire_owned().await.unwrap();
+    let held = engine
+        .limits()
+        .gate(&lab_at())
+        .acquire_owned()
+        .await
+        .unwrap();
     let pv = [PropertyIdentifier::PRESENT_VALUE];
     assert!(
-        tokio::time::timeout(wait, engine.read(LAB, ai, Wanted::List(&pv)))
+        tokio::time::timeout(wait, lab_device(&engine).await.read(ai, Wanted::List(&pv)))
             .await
             .is_err()
     );
     assert!(
-        tokio::time::timeout(wait, engine.list_objects(LAB))
+        tokio::time::timeout(wait, lab_device(&engine).await.list_objects())
             .await
             .is_err()
     );
     assert!(
-        tokio::time::timeout(wait, engine.read_trend(LAB, log, LogCursor::Oldest, 2))
-            .await
-            .is_err()
+        tokio::time::timeout(
+            wait,
+            lab_device(&engine)
+                .await
+                .read_trend(log, LogCursor::Oldest, 2)
+        )
+        .await
+        .is_err()
     );
     assert!(
-        tokio::time::timeout(wait, engine.alarms(LAB, None))
+        tokio::time::timeout(wait, lab_device(&engine).await.alarms(None))
             .await
             .is_err()
     );
     drop(held);
-    tokio::time::timeout(wait, engine.alarms(LAB, None))
+    tokio::time::timeout(wait, lab_device(&engine).await.alarms(None))
         .await
         .expect("the gate is free")
         .unwrap();
@@ -426,7 +464,9 @@ async fn a_trend_page_is_charged_per_request() {
     let first = Arc::new(Account::new(None));
     let page = charged(
         Arc::clone(&first),
-        engine.read_trend(LAB, log, LogCursor::Oldest, 2),
+        lab_device(&engine)
+            .await
+            .read_trend(log, LogCursor::Oldest, 2),
     )
     .await
     .unwrap();
@@ -438,7 +478,7 @@ async fn a_trend_page_is_charged_per_request() {
     let second = Arc::new(Account::new(None));
     charged(
         Arc::clone(&second),
-        engine.read_trend(LAB, log, page.next, 2),
+        lab_device(&engine).await.read_trend(log, page.next, 2),
     )
     .await
     .unwrap();
@@ -457,7 +497,9 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
     let account = Arc::new(Account::new(None));
     let (columns, naming) = charged(
         Arc::clone(&account),
-        engine.log_columns(LAB, oid(ObjectType::TREND_LOG, 2)),
+        lab_device(&engine)
+            .await
+            .log_columns(oid(ObjectType::TREND_LOG, 2)),
     )
     .await;
     assert_eq!(account.requests(), 1);
@@ -480,8 +522,9 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
 
     // Trend log 1 has no reference; trend log 9 doesn't exist.
     for log in [1, 9] {
-        let (columns, naming) = engine
-            .log_columns(LAB, oid(ObjectType::TREND_LOG, log))
+        let (columns, naming) = lab_device(&engine)
+            .await
+            .log_columns(oid(ObjectType::TREND_LOG, log))
             .await;
         assert!(columns.is_empty(), "trend log {log}: {columns:?}");
         // A refusal is an answer, not a timeout (#2131).
@@ -490,7 +533,9 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
     let account = Arc::new(Account::new(None));
     let (columns, _) = charged(
         Arc::clone(&account),
-        engine.log_columns(LAB, oid(ObjectType::EVENT_LOG, 1)),
+        lab_device(&engine)
+            .await
+            .log_columns(oid(ObjectType::EVENT_LOG, 1)),
     )
     .await;
     assert!(columns.is_empty());
@@ -504,10 +549,15 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
 async fn a_who_is_fills_the_table() {
     let (engine, server) = lab().await;
     engine.low_level().clear_devices().await;
-    assert!(engine.device(LAB).await.unwrap().is_none());
+    assert!(engine.low_level().get_device(LAB).await.unwrap().is_none());
     engine.who_is(WhoIsScope::Local, None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let found = engine.device(LAB).await.unwrap().expect("the lab device");
+    let found = engine
+        .low_level()
+        .get_device(LAB)
+        .await
+        .unwrap()
+        .expect("the lab device");
     assert_eq!(found.vendor_id, 42);
     assert!(
         engine

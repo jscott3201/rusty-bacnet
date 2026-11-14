@@ -241,6 +241,16 @@ fn passing(pass: usize) -> Faults {
     }
 }
 
+/// The lab device's handle, following its instance.
+pub(super) async fn lab_device(engine: &Client<TestTransport>) -> crate::Device<TestTransport> {
+    engine.device(LAB).await.unwrap()
+}
+
+/// Where the lab device answers.
+pub(super) fn lab_at() -> crate::DeviceAddress {
+    crate::DeviceAddress::local(&[2]).unwrap()
+}
+
 pub(super) async fn stop(
     engine: Client<TestTransport>,
     mut server: BACnetServer<LoopbackTransport>,
@@ -273,8 +283,9 @@ fn commandable(point: &Point) -> bool {
 #[tokio::test(start_paused = true)]
 async fn reads_each_exported_object_once() {
     let (engine, server) = lab(Faults::default()).await;
-    let inventory = engine
-        .inventory(LAB, &InventoryOptions::default())
+    let inventory = lab_device(&engine)
+        .await
+        .inventory(&InventoryOptions::default())
         .await
         .unwrap();
     assert_eq!(engine.limits().recent(), 11 + 2, "{inventory:?}");
@@ -322,7 +333,7 @@ async fn reads_each_exported_object_once() {
     let meter = object(ObjectType::INTEGER_VALUE, 1);
     let integer = Integer::new(EngineeringUnits::KILOWATT_HOURS, Access::ReadOnly);
     assert_eq!(meter.kind, PointKind::Integer(integer), "{meter:?}");
-    assert!(!engine.refused_rpm(LAB));
+    assert!(!engine.refused_rpm(&lab_at()));
 
     let turtle = to_turtle(&inventory, &TurtleOptions::default());
     super::tests::check_structure(&turtle);
@@ -346,7 +357,7 @@ async fn reads_each_exported_object_once() {
 async fn types_narrow_what_is_read() {
     let (engine, server) = lab(Faults::default()).await;
     let options = InventoryOptions::new(vec![ObjectType::MULTI_STATE_VALUE]).unwrap();
-    let inventory = engine.inventory(LAB, &options).await.unwrap();
+    let inventory = lab_device(&engine).await.inventory(&options).await.unwrap();
     assert_eq!(engine.limits().recent(), 1 + 2);
     assert_eq!(inventory.entries.len(), 1);
     assert_eq!(
@@ -383,8 +394,8 @@ async fn by_read_property_when_rpm_is_refused() {
         };
         let (engine, server) = lab(refuses).await;
         let options = InventoryOptions::new(vec![object_type]).unwrap();
-        let inventory = engine.inventory(LAB, &options).await.unwrap();
-        assert!(engine.refused_rpm(LAB));
+        let inventory = lab_device(&engine).await.inventory(&options).await.unwrap();
+        assert!(engine.refused_rpm(&lab_at()));
         // The name and the list, the refused RPM, then the ReadProperty.
         assert_eq!(engine.limits().recent(), 2 + 1 + cost, "{object_type}");
         assert!(
@@ -408,8 +419,9 @@ async fn by_read_property_when_rpm_is_refused() {
 #[tokio::test(start_paused = true)]
 async fn a_device_that_stops_answering() {
     let (engine, server) = lab(passing(4)).await;
-    let inventory = engine
-        .inventory(LAB, &InventoryOptions::default())
+    let inventory = lab_device(&engine)
+        .await
+        .inventory(&InventoryOptions::default())
         .await
         .unwrap();
     assert_eq!(inventory.entries.len(), 2, "{inventory:?}");
@@ -424,8 +436,9 @@ async fn a_device_that_stops_answering() {
     stop(engine, server).await;
 
     let (engine, server) = lab(passing(0)).await;
-    let error = engine
-        .inventory(LAB, &InventoryOptions::default())
+    let error = lab_device(&engine)
+        .await
+        .inventory(&InventoryOptions::default())
         .await
         .unwrap_err();
     assert!(crate::engine::unreachable(&error), "{error}");
@@ -445,8 +458,9 @@ async fn a_list_that_stops_early_ends_the_reading() {
         ..Faults::default()
     };
     let (engine, server) = lab(faults).await;
-    let inventory = engine
-        .inventory(LAB, &InventoryOptions::default())
+    let inventory = lab_device(&engine)
+        .await
+        .inventory(&InventoryOptions::default())
         .await
         .unwrap();
     assert!(inventory.entries.is_empty(), "{inventory:?}");
@@ -471,7 +485,8 @@ async fn a_cancel_keeps_what_was_read() {
     let (engine, server) = lab(faults).await;
     let mut reader = Reader {
         client: engine.low_level(),
-        device: LAB,
+        device: lab_at(),
+        instance: Some(LAB),
         rate: engine.limits(),
         cancel: &flag,
         rpm: true,
@@ -495,7 +510,8 @@ async fn a_cancel_keeps_what_was_read() {
     let (engine, server) = lab(faults).await;
     let mut reader = Reader {
         client: engine.low_level(),
-        device: LAB,
+        device: lab_at(),
+        instance: Some(LAB),
         rate: engine.limits(),
         cancel: &flag,
         rpm: true,
@@ -515,13 +531,18 @@ async fn the_pieces_read_as_the_inventory_does() {
     let (engine, server) = lab(Faults::default()).await;
     for detail in [Detail::Export, Detail::Full] {
         let options = InventoryOptions::default().with_detail(detail);
-        let inventory = engine.inventory(LAB, &options).await.unwrap();
+        let inventory = lab_device(&engine).await.inventory(&options).await.unwrap();
         let before = engine.limits().recent();
-        let device = engine.inventory_device(LAB, detail).await.unwrap();
+        let device = lab_device(&engine)
+            .await
+            .inventory_device(detail)
+            .await
+            .unwrap();
         assert_eq!(device, inventory.device);
         for expected in &inventory.entries {
-            let read = engine
-                .inventory_object(LAB, expected.object(), detail)
+            let read = lab_device(&engine)
+                .await
+                .inventory_object(expected.object(), detail)
                 .await;
             assert_eq!(&read.unwrap(), expected);
         }
@@ -531,7 +552,10 @@ async fn the_pieces_read_as_the_inventory_does() {
         );
     }
     let missing = oid(ObjectType::ANALOG_INPUT, 99);
-    let read = engine.inventory_object(LAB, missing, Detail::Export).await;
+    let read = lab_device(&engine)
+        .await
+        .inventory_object(missing, Detail::Export)
+        .await;
     // The device answers each of its properties with an error, so there is
     // no name: the object fails, as the inventory would have it.
     let Entry::Failed {
@@ -549,8 +573,9 @@ async fn the_pieces_read_as_the_inventory_does() {
     assert!(error.starts_with("object-name: "), "{error}");
     // A type the export doesn't map isn't asked for.
     let before = engine.limits().recent();
-    let trend = engine
-        .inventory_object(LAB, oid(ObjectType::TREND_LOG, 1), Detail::Full)
+    let trend = lab_device(&engine)
+        .await
+        .inventory_object(oid(ObjectType::TREND_LOG, 1), Detail::Full)
         .await
         .unwrap();
     assert_eq!(trend.error(), Some("trend-log objects aren't exported"));
@@ -562,25 +587,34 @@ async fn the_pieces_read_as_the_inventory_does() {
         ..Faults::default()
     };
     let (engine, server) = lab(refuses).await;
-    let ai = engine
-        .inventory_object(LAB, oid(ObjectType::ANALOG_INPUT, 1), Detail::Export)
+    let ai = lab_device(&engine)
+        .await
+        .inventory_object(oid(ObjectType::ANALOG_INPUT, 1), Detail::Export)
         .await
         .unwrap();
     let Some(PointKind::Analog(analog)) = ai.point().map(|point| &point.kind) else {
         panic!("{ai:?}");
     };
     assert_eq!(analog.units, EngineeringUnits::DEGREES_FAHRENHEIT);
-    assert!(engine.refused_rpm(LAB));
+    assert!(engine.refused_rpm(&lab_at()));
     // The refused RPM, then a ReadProperty each for the three properties.
     assert_eq!(engine.limits().recent(), 1 + 3);
     stop(engine, server).await;
 
     let (engine, server) = lab(passing(0)).await;
     for detail in [Detail::Export, Detail::Full] {
-        let error = engine.inventory_device(LAB, detail).await.unwrap_err();
+        let error = lab_device(&engine)
+            .await
+            .inventory_device(detail)
+            .await
+            .unwrap_err();
         assert!(crate::engine::unreachable(&error), "{error}");
         let ai = oid(ObjectType::ANALOG_INPUT, 1);
-        let error = engine.inventory_object(LAB, ai, detail).await.unwrap_err();
+        let error = lab_device(&engine)
+            .await
+            .inventory_object(ai, detail)
+            .await
+            .unwrap_err();
         assert!(crate::engine::unreachable(&error), "{error}");
     }
     stop(engine, server).await;
@@ -716,13 +750,24 @@ async fn full_reads_the_device_name_after_an_rpm_error() {
         ..Faults::default()
     };
     let (engine, server) = lab(faults).await;
-    let export = engine.inventory_device(LAB, Detail::Export).await.unwrap();
+    let export = lab_device(&engine)
+        .await
+        .inventory_device(Detail::Export)
+        .await
+        .unwrap();
     let before = engine.limits().recent();
-    let full = engine.inventory_device(LAB, Detail::Full).await.unwrap();
+    let full = lab_device(&engine)
+        .await
+        .inventory_device(Detail::Full)
+        .await
+        .unwrap();
     assert_eq!(full, export);
     assert_eq!(full.name.as_deref(), Some("Lab \"AHU\""));
     // The failed RPM, then the name by ReadProperty.
     assert_eq!(engine.limits().recent() - before, 2);
-    assert!(!engine.refused_rpm(LAB), "an error isn't a refusal of RPM");
+    assert!(
+        !engine.refused_rpm(&lab_at()),
+        "an error isn't a refusal of RPM"
+    );
     stop(engine, server).await;
 }

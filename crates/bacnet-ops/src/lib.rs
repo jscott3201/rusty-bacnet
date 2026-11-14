@@ -14,9 +14,12 @@
 //!   properties and priorities are named;
 //! - [`limits`]: the global request-rate cap, the one-request-per-device
 //!   gate, rates per network and per-caller accounts;
-//! - [`engine`]: [`Client`], the high-level client: the read operations
-//!   (properties, the object list, a device summary, trend log pages and
-//!   alarms) and Who-Is over those limits;
+//! - [`engine`]: [`Client`], the high-level client: Who-Is and discovery
+//!   over those limits, and the reading strategy ([`engine::Reader`]);
+//! - [`device`]: [`DeviceAddress`], where a device answers, and the
+//!   [`Device`] handle, pinned to an address or following an instance, whose
+//!   methods are the read operations (properties, the object list, a device
+//!   summary, trend log pages and alarms);
 //! - [`export`]: a device's objects in another model's terms, so far an
 //!   experimental Standard 223 point list in Turtle (#2436);
 //! - [`watch`]: the watch hub, one managed COV subscription or poller per
@@ -26,6 +29,7 @@
 //! classes, frame decoding and the BBMD survey) are the `bacnet-tool`
 //! crate (#2560).
 
+pub mod device;
 pub mod engine;
 pub mod export;
 pub mod format;
@@ -36,4 +40,5 @@ pub mod parse;
 pub mod target;
 pub mod watch;
 
+pub use device::{Device, DeviceAddress};
 pub use engine::Client;

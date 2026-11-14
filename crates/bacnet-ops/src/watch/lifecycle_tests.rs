@@ -10,7 +10,7 @@ use std::time::Duration;
 use bacnet_types::primitives::PropertyValue;
 use tokio::time::Instant;
 
-use super::test_lab::{LAB, Lab, RP, RPM, SUBSCRIBE_COV, ai, nc, object, settle};
+use super::test_lab::{Lab, RP, RPM, SUBSCRIBE_COV, ai, lab_at, nc, object, settle};
 use super::*;
 
 /// The device notifies as soon as it takes a subscription, which can be
@@ -110,7 +110,7 @@ async fn shutdown_waits_for_the_cancel_of_a_point_given_up() {
     assert_eq!(lab.services(), [RPM, SUBSCRIBE_COV], "unanswered");
     lab.engine.low_level().clear_devices().await;
     // Another request holds the device's gate, so the cancel waits.
-    let held = lab.engine.limits().turn(LAB).await;
+    let held = lab.engine.limits().turn(&lab_at()).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(lease.snapshot().state, State::Gone);
     assert_eq!(lease.snapshot().why, Some(Why::Missing));
@@ -149,7 +149,7 @@ async fn a_renewal_behind_a_full_budget_request_lands_before_expiry() {
     let start = lab.sent_at(SUBSCRIBE_COV)[0];
     let due = start + lifetime - margin;
     tokio::time::sleep_until(due - Duration::from_secs(1)).await;
-    let held = lab.engine.limits().turn(LAB).await;
+    let held = lab.engine.limits().turn(&lab_at()).await;
     tokio::time::sleep(budget).await;
     drop(held);
     tokio::time::sleep(Duration::from_secs(1)).await;
