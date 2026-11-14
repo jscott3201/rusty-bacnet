@@ -12,8 +12,8 @@
 
 use std::time::Duration;
 
-use bacnet_ops::safety::desk::Desk;
-use bacnet_ops::safety::ledger::Entry;
+use bacnet_tool::safety::desk::Desk;
+use bacnet_tool::safety::ledger::Entry;
 use bacnet_transport::port::TransportPort;
 use tokio::sync::watch;
 use tokio::time::Instant;

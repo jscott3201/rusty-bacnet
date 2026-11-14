@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use super::worker::{Next, route};
 use super::{CaptureFrame, Direction, Framing};
 use crate::commands::capture::{build_filter, resolve_device, udp_datagram};
-use bacnet_ops::decode::frame::summarize_frame;
+use bacnet_tool::decode::frame::summarize_frame;
 
 /// How long one read waits before the thread looks at its stop flag.
 pub(crate) const READ_TIMEOUT_MS: i32 = 100;

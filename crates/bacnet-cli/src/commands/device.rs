@@ -1,8 +1,8 @@
 //! Device management commands: DeviceCommunicationControl, ReinitializeDevice,
 //! AcknowledgeAlarm, CreateObject, DeleteObject, TimeSync.
 
+use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::destination::Destination;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{EnableDisable, EventState, ObjectType, ReinitializedState};

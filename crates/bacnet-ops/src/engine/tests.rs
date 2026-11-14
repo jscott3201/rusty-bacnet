@@ -492,21 +492,6 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
     .await;
     assert!(columns.is_empty());
     assert_eq!(account.requests(), 0, "an Event Log has no reference");
-
-    // The one-shot CLI's path, by Destination: the same names, and the
-    // same fallback for a refused read.
-    let to = crate::destination::Destination::Device(LAB);
-    let named = to
-        .log_columns(&engine.client, oid(ObjectType::TREND_LOG, 2))
-        .await;
-    assert_eq!(
-        named.column(0).map(|column| column.property),
-        Some(PropertyIdentifier::EVENT_STATE)
-    );
-    let refused = to
-        .log_columns(&engine.client, oid(ObjectType::TREND_LOG, 9))
-        .await;
-    assert!(refused.is_empty(), "{refused:?}");
     stop(engine, server).await;
 }
 
@@ -595,37 +580,4 @@ fn timeouts_are_a_kind_of_unreachable() {
         assert_eq!(super::timed_out(&error), timeout, "{error}");
         assert_eq!(super::unreachable(&error), gone, "{error}");
     }
-}
-
-#[path = "state_text_tests.rs"]
-mod state_text_tests;
-
-/// The BBMD reads follow the link under a wrapper: an engine over the mixed
-/// transport holding B/IP reaches the B/IP transport, and one holding
-/// loopback sends nothing (#2560).
-#[tokio::test]
-async fn the_bbmd_reads_see_through_the_mixed_transport() {
-    use bacnet_transport::any::AnyTransport;
-    use bacnet_transport::bip::BipTransport;
-    use std::net::Ipv4Addr;
-
-    let engine_on = async |transport: AnyTransport| {
-        let client = BACnetClient::start(ClientConfig::default(), transport)
-            .await
-            .unwrap();
-        Engine::new(Arc::new(client), Arc::new(RequestLimits::new(0)))
-    };
-    let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-    let engine = engine_on(bip.into()).await;
-    assert!(engine.bip().is_some());
-    assert_eq!(engine.registration_bbmd(), None);
-
-    let (loopback, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
-    let engine = engine_on(loopback.into()).await;
-    assert!(engine.bip().is_none());
-    let bbmd = "10.0.0.2:47808".parse().unwrap();
-    assert!(matches!(
-        engine.read_bdt(bbmd).await,
-        crate::bbmd::Outcome::Unreachable(_)
-    ));
 }

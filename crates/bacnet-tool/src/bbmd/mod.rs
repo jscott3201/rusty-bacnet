@@ -2,13 +2,15 @@
 //! reading a table gave, the breadth-first survey that follows each BDT to
 //! the BBMDs it lists, and the consistency matrix over the tables read
 //! ([`matrix`]). The TUI's Network screen and the MCP server's network map
-//! share it; [`Engine`](crate::engine::Engine) reads the tables.
+//! share it; [`read_bdt`] and [`read_fdt`] read the tables through an
+//! [`Engine`](bacnet_ops::engine::Engine).
 //!
 //! Only the read side of BVLL is used: Read-Broadcast-Distribution-Table
 //! and Read-Foreign-Device-Table (Annex J.2.3 and J.2.7). Nothing here
 //! writes a table or registers.
 
 pub mod matrix;
+mod read;
 
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
@@ -20,6 +22,7 @@ use bacnet_transport::bvll::BvlcResultCode;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 
 pub use self::matrix::{Cell, Finding, Matrix, Probe};
+pub use self::read::{bip, read_bdt, read_fdt, registration_bbmd};
 
 /// The most BBMDs a survey reads. A larger set comes back with the rest
 /// unread ([`Outcome::Skipped`]).

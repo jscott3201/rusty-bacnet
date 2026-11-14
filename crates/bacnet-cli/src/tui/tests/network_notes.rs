@@ -11,7 +11,7 @@ use super::network_frames::{LOCAL, at_ip, bdt_row, fdt_row, registered};
 use super::*;
 use crate::tui::app::network::View;
 use crate::tui::network::{BdtRow, NetworkEvent};
-use bacnet_ops::bbmd::{Here, NotFollowed, Probe, Unfollowed};
+use bacnet_tool::bbmd::{Here, NotFollowed, Probe, Unfollowed};
 
 fn address(ip: [u8; 4], port: u16) -> SocketAddrV4 {
     SocketAddrV4::new(Ipv4Addr::from(ip), port)

@@ -8,7 +8,7 @@
 //! lock across an await: each is one BVLC exchange through the transport,
 //! and the transport's own timer fails one that goes unanswered, so a read
 //! this loop is not polling for a moment still ends on time. A survey reads
-//! up to [`SURVEY_AT_ONCE`](bacnet_ops::bbmd::SURVEY_AT_ONCE) BDTs at once
+//! up to [`SURVEY_AT_ONCE`](bacnet_tool::bbmd::SURVEY_AT_ONCE) BDTs at once
 //! (#1823).
 
 use std::collections::VecDeque;
@@ -17,7 +17,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::bbmd::{Here, Probe, Unfollowed};
+use bacnet_tool::bbmd::{Here, Probe, Unfollowed};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::TransportPort;
@@ -35,7 +35,7 @@ const STATUS_EVERY: Duration = Duration::from_secs(1);
 // The survey's bounds: a larger set is drawn with the rest unread (a BDT
 // of a hundred entries would not fit a terminal anyway).
 #[cfg(test)]
-pub(crate) use bacnet_ops::bbmd::{MAX_SURVEY, SURVEY_AT_ONCE};
+pub(crate) use bacnet_tool::bbmd::{MAX_SURVEY, SURVEY_AT_ONCE};
 
 /// Requests waiting behind the running one.
 const MAX_QUEUED: usize = 8;
@@ -167,9 +167,9 @@ async fn execute(bip: &BipTransport, command: NetworkCommand, local: SocketAddrV
 }
 
 /// Read the BDT of `seed`, then of every BBMD a table read lists, breadth
-/// first, up to [`MAX_SURVEY`](bacnet_ops::bbmd::MAX_SURVEY) reads; the rest
+/// first, up to [`MAX_SURVEY`](bacnet_tool::bbmd::MAX_SURVEY) reads; the rest
 /// come back skipped. `here` is where this client is: entries no read may
-/// go to are not followed ([`bacnet_ops::bbmd::NotFollowed`]), and come
+/// go to are not followed ([`bacnet_tool::bbmd::NotFollowed`]), and come
 /// back beside the probes.
 async fn survey(bip: &BipTransport, seed: SocketAddrV4, here: Here) -> Surveyed {
     survey_with(seed, here, |bbmd| async move {
@@ -182,7 +182,7 @@ async fn survey(bip: &BipTransport, seed: SocketAddrV4, here: Here) -> Surveyed 
 }
 
 /// [`survey`] with `read` giving each BBMD's probe: the shared survey
-/// ([`bacnet_ops::bbmd::survey`]) from one seed. The BBMDs past the
+/// ([`bacnet_tool::bbmd::survey`]) from one seed. The BBMDs past the
 /// survey's limit come back skipped, and the entries not followed beside
 /// the probes, for the matrix view to list with their reasons (#2130).
 async fn survey_with<F, R>(seed: SocketAddrV4, here: Here, read: F) -> Surveyed
@@ -192,7 +192,8 @@ where
 {
     let read = &read;
     let found =
-        bacnet_ops::bbmd::survey(&[seed], here, |bbmd| async move { (read(bbmd).await, ()) }).await;
+        bacnet_tool::bbmd::survey(&[seed], here, |bbmd| async move { (read(bbmd).await, ()) })
+            .await;
     let read = found.read.into_iter().map(|s| (s.bbmd, s.probe));
     let unread = found.unread.into_iter().map(|bbmd| (bbmd, Probe::Skipped));
     (read.chain(unread).collect(), found.not_followed)

@@ -37,10 +37,10 @@ use super::{Field, tags};
 #[path = "service_password.rs"]
 mod password;
 
-use crate::format::alarms::{EventSummaryData, cell};
-use crate::format::notification::EventValues;
-use crate::format::{Floats, StateTexts, ValueFormat, format_property_value, timestamp_text};
-use crate::label::{kebab, object_label};
+use bacnet_ops::format::alarms::{EventSummaryData, cell};
+use bacnet_ops::format::notification::EventValues;
+use bacnet_ops::format::{Floats, StateTexts, ValueFormat, format_property_value, timestamp_text};
+use bacnet_ops::label::{kebab, object_label};
 use password::{PASSWORD, hide_passwords};
 
 /// Which parameters an APDU carries.

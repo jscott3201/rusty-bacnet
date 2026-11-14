@@ -10,8 +10,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use bacnet_ops::safety::ledger::{Entry, Ledger};
-use bacnet_ops::safety::{FrontEnd, Outcome};
+use bacnet_tool::safety::ledger::{Entry, Ledger};
+use bacnet_tool::safety::{FrontEnd, Outcome};
 use bacnet_transport::port::TransportPort;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -217,7 +217,7 @@ fn attached<T: TransportPort + 'static>(
         Map<String, Value>,
     ),
 ) -> Result<Step, ToolError> {
-    use bacnet_ops::safety::{Gate, Tier};
+    use bacnet_tool::safety::{Gate, Tier};
     // Only entries whose old value is known: the dialog shows each one's
     // revert, and the desk sends exactly those (`write_attached`).
     let chosen: Vec<Entry> = entries
@@ -230,7 +230,7 @@ fn attached<T: TransportPort + 'static>(
         .cloned()
         .collect();
     let ids: BTreeSet<u64> = chosen.iter().map(|e| e.id).collect();
-    let preview = bacnet_ops::safety::plan::undo_preview(&chosen);
+    let preview = bacnet_tool::safety::plan::undo_preview(&chosen);
     match preview {
         Some(mut preview) if !preview.items.is_empty() => {
             // The planner's tier, never blocked here: `undo_preview` plans
@@ -255,7 +255,7 @@ fn attached<T: TransportPort + 'static>(
         // reported from the ledger as read.
         _ => {
             let left = entries.iter().filter(|e| ours(e, &ctx.principal)).count();
-            let unknown = || Outcome::NotSent(bacnet_ops::safety::desk::UNKNOWN_PRE_IMAGE.into());
+            let unknown = || Outcome::NotSent(bacnet_tool::safety::desk::UNKNOWN_PRE_IMAGE.into());
             let done: Vec<(Entry, Outcome)> = entries
                 .iter()
                 .filter(|e| {

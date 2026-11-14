@@ -127,7 +127,7 @@ async fn a_read_property_over_bip_shows_the_tapped_request_and_response() {
     server.stop().await.unwrap();
 }
 
-fn flat_labels(fields: &[bacnet_ops::decode::tree::Field]) -> Vec<String> {
+fn flat_labels(fields: &[bacnet_tool::decode::tree::Field]) -> Vec<String> {
     let mut out = Vec::new();
     for field in fields {
         out.push(field.label.clone());

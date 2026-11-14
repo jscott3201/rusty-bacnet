@@ -58,7 +58,7 @@ pub(super) fn report(
         NetworkReport::RejectMessageToNetwork(reject) => DiscoveryEvent::Rejected {
             router: from,
             network: reject.network,
-            reason: bacnet_ops::decode::frame::kebab(reject.reason),
+            reason: bacnet_tool::decode::frame::kebab(reject.reason),
         },
         _ => return None,
     })

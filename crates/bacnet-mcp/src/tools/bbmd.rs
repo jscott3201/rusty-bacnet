@@ -11,7 +11,7 @@
 //! local B/IP network (network 0 from here), so the policy must allow it.
 //! A listed address is device data, so one no read may go to (all zeros,
 //! broadcast, multicast, loopback, our own) is reported, not read
-//! ([`bacnet_ops::bbmd::NotFollowed`]).
+//! ([`bacnet_tool::bbmd::NotFollowed`]).
 //!
 //! **Charging.** Each table read is one request under the local network's
 //! rate, the global one and the principal's tokens. The survey reads at
@@ -29,12 +29,12 @@ use std::time::Duration;
 
 use std::net::Ipv4Addr;
 
-use bacnet_ops::bbmd::{
-    FdtRow, Finding, Here, MAX_SURVEY, Matrix, NO_ANSWER, NotFollowed, Outcome, Probe,
-    SURVEY_AT_ONCE, Survey, address_of, survey,
-};
 use bacnet_ops::engine::Engine;
 use bacnet_ops::label::kebab;
+use bacnet_tool::bbmd::{
+    self, FdtRow, Finding, Here, MAX_SURVEY, Matrix, NO_ANSWER, NotFollowed, Outcome, Probe,
+    SURVEY_AT_ONCE, Survey, address_of, survey,
+};
 use bacnet_transport::bvll::BvlcResultCode;
 use bacnet_transport::port::TransportPort;
 use serde_json::{Value, json};
@@ -77,7 +77,7 @@ pub(super) async fn plan<T: TransportPort + 'static>(
 ) -> Result<Plan, ToolError> {
     // Every BBMD this server can reach is on its own B/IP network.
     ctx.allow_network(0)?;
-    if engine.bip().is_none() {
+    if bbmd::bip(engine).is_none() {
         return Err(ToolError::refused(
             "needs-bip",
             "BBMD tables belong to BACnet/IP: this server's link is not B/IP",
@@ -96,7 +96,7 @@ pub(super) async fn plan<T: TransportPort + 'static>(
             format!("at most {MAX_NAMED} BBMDs"),
         ));
     }
-    let mut seeds: Vec<SocketAddrV4> = engine.registration_bbmd().into_iter().collect();
+    let mut seeds: Vec<SocketAddrV4> = bbmd::registration_bbmd(engine).into_iter().collect();
     for text in named {
         let address: SocketAddrV4 = text
             .parse()
@@ -185,7 +185,7 @@ async fn known<T: TransportPort + 'static>(
 /// listing it isn't read back, and its broadcast address. A `bip()` client
 /// always has both.
 fn here<T: TransportPort + 'static>(engine: &Engine<T>) -> Here {
-    let bip = engine.bip();
+    let bip = bbmd::bip(engine);
     Here {
         own: bip
             .and_then(|bip| address_of(bip.local_mac()))
@@ -220,9 +220,9 @@ async fn read<T: TransportPort + 'static>(
     call: &Call,
     bbmd: SocketAddrV4,
 ) -> (Probe, Fdt) {
-    let probe = within_budget(call, engine.read_bdt(bbmd)).await;
+    let probe = within_budget(call, bbmd::read_bdt(engine, bbmd)).await;
     let fdt = match probe {
-        Outcome::Table(_) => Some(within_budget(call, engine.read_fdt(bbmd)).await),
+        Outcome::Table(_) => Some(within_budget(call, bbmd::read_fdt(engine, bbmd)).await),
         _ => None,
     };
     (probe, fdt)

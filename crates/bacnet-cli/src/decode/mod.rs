@@ -3,12 +3,12 @@
 //! Takes raw UDP payload bytes (starting with BVLC header 0x81) and decodes
 //! through all protocol layers. No pcap dependency — always compiled.
 //!
-//! The network and application layers are `bacnet_ops::decode`'s, which
+//! The network and application layers are `bacnet_tool::decode`'s, which
 //! the TUI's capture screen (#971) and the MCP server's `bacnet_decode`
 //! share; it also reads the other links' frames and decodes a frame into a
 //! tree of fields.
 
-use bacnet_ops::decode::{DecodedNpdu, decode_npdu_layer};
+use bacnet_tool::decode::{DecodedNpdu, decode_npdu_layer};
 use bacnet_transport::bvll::{self, BvlcFunction};
 use serde::Serialize;
 

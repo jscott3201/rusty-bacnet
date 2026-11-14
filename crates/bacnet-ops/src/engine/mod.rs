@@ -16,7 +16,6 @@
 //! dropping its future: a turn's wait is cancel-safe, and a request
 //! already sent is abandoned to the client's transaction state machine.
 
-mod bbmd;
 mod discover;
 mod log;
 mod read;
@@ -37,10 +36,9 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 pub use self::discover::WhoIsScope;
 pub use self::log::Naming;
-pub(crate) use self::read::rpm_rows;
 pub use self::read::{
     Halt, ListRead, MAX_OBJECTS, ReadVia, Reader, RpmFailure, Wanted, network_of, rpm_failure,
-    timed_out, unreachable,
+    rpm_rows, timed_out, unreachable,
 };
 use crate::format::{RawRow, object_name};
 use crate::limits::{RequestLimits, Turn};

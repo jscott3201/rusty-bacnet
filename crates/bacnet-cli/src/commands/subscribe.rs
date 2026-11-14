@@ -4,13 +4,13 @@
 //! command watches and cancelled when it stops, so it leaves nothing behind
 //! on the device. A lifetime of 0 asks for one that never expires (Clause
 //! 13.14.1.1.4); it stays after the CLI exits, which is why the write guard
-//! treats it as a write (`bacnet_ops::class`).
+//! treats it as a write (`bacnet_tool::class`).
 
 use std::future::Future;
 use std::time::Duration;
 
+use crate::destination::Destination;
 use bacnet_client::client::{BACnetClient, COVNotificationDelivery, ReceivedCOVNotification};
-use bacnet_ops::destination::Destination;
 use bacnet_ops::target::routed_station;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;

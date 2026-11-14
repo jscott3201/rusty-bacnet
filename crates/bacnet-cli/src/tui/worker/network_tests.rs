@@ -10,7 +10,7 @@ use bacnet_transport::bbmd::BdtEntry;
 use bacnet_transport::bvll::BvlcResultCode;
 use tokio::time::Instant;
 
-use bacnet_ops::bbmd::Matrix;
+use bacnet_tool::bbmd::Matrix;
 
 use super::*;
 
@@ -241,7 +241,7 @@ async fn a_real_survey_waits_out_silent_peers_together() {
 /// that listed them and why, for the matrix view to list (#2130).
 #[tokio::test(start_paused = true)]
 async fn entries_not_followed_come_back_with_their_reason() {
-    use bacnet_ops::bbmd::{NotFollowed, Unfollowed};
+    use bacnet_tool::bbmd::{NotFollowed, Unfollowed};
     let row = |address: SocketAddrV4| BdtRow {
         address,
         mask: Ipv4Addr::BROADCAST,

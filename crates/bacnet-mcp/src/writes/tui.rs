@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use bacnet_ops::safety::{Preview, Tier};
+use bacnet_tool::safety::{Preview, Tier};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -50,7 +50,7 @@ pub const MAX_QUEUED: usize = 4;
 
 /// How long the TUI's dialog waits for an answer before it declines the
 /// request: the TUI's own preview lifetime.
-pub const LIFETIME: Duration = bacnet_ops::safety::PREVIEW_LIFETIME;
+pub const LIFETIME: Duration = bacnet_tool::safety::PREVIEW_LIFETIME;
 
 /// The longest an agent's call waits for the TUI: a full queue, each
 /// request answered at the last moment, and a little more.
@@ -350,7 +350,7 @@ impl WaitingApprover for TuiApprover<'_> {
 
 #[cfg(test)]
 mod tests {
-    use bacnet_ops::safety::Gate;
+    use bacnet_tool::safety::Gate;
 
     use super::*;
 
