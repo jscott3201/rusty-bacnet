@@ -6,6 +6,7 @@ use crate::transport::{
     DEFAULT_SC_CONNECT_TIMEOUT_MS, check_sc_connect_timeout, parse_sc_device_uuid_arg,
     parse_sc_vmac_arg, same_hub_url,
 };
+use bacnet_ops::octets::{hex, hex_sep};
 use bacnet_transport::sc::ScReconnectConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -243,20 +244,22 @@ impl DeviceUuid {
 
 impl fmt::Display for Vmac {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let [a, b, c, d, e, g] = self.0;
-        write!(f, "{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{g:02x}")
+        f.write_str(&hex_sep(&self.0, ":"))
     }
 }
 
 impl fmt::Display for DeviceUuid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, byte) in self.0.iter().enumerate() {
-            if matches!(i, 4 | 6 | 8 | 10) {
-                f.write_str("-")?;
-            }
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
+        let b = &self.0;
+        write!(
+            f,
+            "{}-{}-{}-{}-{}",
+            hex(&b[..4]),
+            hex(&b[4..6]),
+            hex(&b[6..8]),
+            hex(&b[8..10]),
+            hex(&b[10..])
+        )
     }
 }
 

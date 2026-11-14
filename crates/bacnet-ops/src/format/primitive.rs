@@ -6,20 +6,14 @@ use bacnet_types::primitives::{Date, PropertyValue, Time};
 
 use super::Floats;
 use crate::label::{kebab, object_label};
+use crate::octets::{hex, hex_sep};
 
 /// Significant digits a display float keeps.
 const DISPLAY_DIGITS: usize = 6;
 
 /// Octets shown as hex, `[raw 0e 0f]`.
 pub(super) fn raw(data: &[u8]) -> String {
-    format!("[raw {}]", hex(data, " "))
-}
-
-pub(super) fn hex(data: &[u8], separator: &str) -> String {
-    data.iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(separator)
+    format!("[raw {}]", hex_sep(data, " "))
 }
 
 /// A float with at most six significant digits and no trailing zeros, in
@@ -73,7 +67,7 @@ pub(super) fn text(property: PropertyIdentifier, value: &PropertyValue, floats: 
         PropertyValue::Real(v) => float(f64::from(*v), v.to_string(), floats),
         PropertyValue::Double(v) => float(*v, v.to_string(), floats),
         PropertyValue::OctetString(bytes) if bytes.is_empty() => "(no octets)".into(),
-        PropertyValue::OctetString(bytes) => format!("0x{}", hex(bytes, "")),
+        PropertyValue::OctetString(bytes) => format!("0x{}", hex(bytes)),
         // Quoted, so an empty or padded string shows.
         PropertyValue::CharacterString(s) => format!("\"{s}\""),
         PropertyValue::BitString { .. } => bits(property, value),

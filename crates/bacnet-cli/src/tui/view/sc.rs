@@ -24,9 +24,10 @@ use super::{Theme, WIDE_WIDTH};
 use crate::tui::app::App;
 use crate::tui::app::devices::age_label;
 use crate::tui::app::sc::{ScState, Severity, View};
+use crate::tui::profile::sc::Vmac;
 use crate::tui::sc::credentials::signature_algorithm;
 use crate::tui::sc::doctor::{CONNECTED, Diagnosis, Mark, PHASES};
-use crate::tui::sc::{CertSummary, hub_name, uuid_text, vmac_text};
+use crate::tui::sc::{CertSummary, hub_name, uuid_text};
 pub(super) use layout::Row;
 
 /// The timeline's least height, borders included: one event line.
@@ -294,14 +295,14 @@ fn status_rows<'a>(app: &App, theme: &Theme) -> Vec<Row<'a>> {
 
 fn identity_rows<'a>(sc: &ScState, now: Instant, theme: &Theme) -> Vec<Row<'a>> {
     let (vmac, uuid) = match &sc.identity {
-        Some(identity) => (vmac_text(&identity.vmac), uuid_text(&identity.uuid)),
+        Some(identity) => (Vmac(identity.vmac).to_string(), uuid_text(&identity.uuid)),
         None => ("unknown".into(), "unknown".into()),
     };
     let hub_vmac = sc
         .link
         .as_ref()
         .and_then(|(link, _)| link.hub_vmac)
-        .map_or("unknown".into(), |v| vmac_text(&v));
+        .map_or("unknown".into(), |v| Vmac(v).to_string());
     let w = IDENTITY_LABEL;
     let mut rows = vec![
         field("Local VMAC", w, vmac, theme.accent(), theme),

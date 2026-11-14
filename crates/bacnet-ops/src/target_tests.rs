@@ -386,3 +386,22 @@ fn mstp_targets_need_the_mstp_transport() {
         })
     );
 }
+
+#[test]
+fn mac_text_is_pinned_for_both_link_kinds() {
+    let cases: [(&[u8], &str, &str); 5] = [
+        (&[], "", ""),
+        (&[7], "07", "07"),
+        (&[0x00, 0x04, 0xD2], "bip6:0x0004D2", "bip6:0x0004D2"),
+        (
+            &[10, 0, 0, 1, 0xBA, 0xC0],
+            "10.0.0.1:47808",
+            "0a:00:00:01:ba:c0",
+        ),
+        (&[2, 0, 0, 0, 0, 1], "2.0.0.0:1", "02:00:00:00:00:01"),
+    ];
+    for (mac, ip_port, sc) in cases {
+        assert_eq!(format_mac(mac), ip_port);
+        assert_eq!(format_sc_mac(mac), sc);
+    }
+}

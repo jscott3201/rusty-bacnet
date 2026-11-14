@@ -24,8 +24,10 @@ fn named(b: u8, dir: &Path) -> PathBuf {
 fn unsalted(dir: &Path) -> PathBuf {
     let canonical = std::fs::canonicalize(dir).unwrap();
     let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
-    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
-    PathBuf::from(format!(r"\\.\pipe\rusty-bacnet-mcp-{hex}"))
+    PathBuf::from(format!(
+        r"\\.\pipe\rusty-bacnet-mcp-{}",
+        bacnet_ops::octets::hex(&digest[..16])
+    ))
 }
 
 /// Write `bytes` to a new private file at `path`, as the salt is made.
