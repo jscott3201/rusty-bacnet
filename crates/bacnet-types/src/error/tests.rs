@@ -108,7 +108,7 @@ fn protocol_error_display() {
 /// An ambiguous instance names every claimant, local ones by MAC alone and
 /// routed ones with their network, as the CLI's target grammar writes a
 /// routed station (#2560).
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 #[test]
 fn ambiguous_device_names_every_candidate() {
     let at = |network_number, mac: &[u8]| BACnetAddress {

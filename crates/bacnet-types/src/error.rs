@@ -15,8 +15,10 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use core::fmt;
 use core::time::Duration;
 
+#[cfg(feature = "std")]
+use crate::constructed::BACnetAddress;
 #[cfg(feature = "alloc")]
-use crate::constructed::{BACnetAddress, BACnetObjectPropertyReference};
+use crate::constructed::BACnetObjectPropertyReference;
 use crate::data_link::DataLink;
 #[cfg(feature = "alloc")]
 use crate::enums::PropertyIdentifier;
@@ -56,10 +58,10 @@ impl fmt::Display for NotAdvancing {
 
 /// [`Error::AmbiguousDevice`]'s addresses: `0x0a000001bac0` on the local
 /// network, `2:0x05` on network 2.
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 struct Candidates<'a>(&'a [BACnetAddress]);
 
-#[cfg(feature = "alloc")]
+#[cfg(feature = "std")]
 impl fmt::Display for Candidates<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, address) in self.0.iter().enumerate() {
@@ -82,8 +84,9 @@ impl fmt::Display for Candidates<'_> {
 ///
 /// It is `#[non_exhaustive]`, so a `match` on it outside this crate needs a
 /// wildcard arm. Some variants exist only with a feature, and any crate in a
-/// build can turn that on: `Error::Transport` needs `std`, and the variants
-/// that hold a `String` or a `Box` need `alloc`. Without the attribute a
+/// build can turn that on: `Error::Transport` and `Error::AmbiguousDevice`
+/// need `std`, and the variants that hold a `String` or a `Box` need
+/// `alloc`. Without the attribute a
 /// match written against a smaller build would stop compiling (#1604).
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -216,8 +219,9 @@ pub enum Error {
     /// A request named a device by its instance, and two or more addresses
     /// in the client's discovery table claim that instance, so which device
     /// is meant is unknown. Nothing was sent. Name one of `candidates` by
-    /// its address instead. Only with `alloc`.
-    #[cfg(feature = "alloc")]
+    /// its address instead. Only with `std`, which the client needs: a
+    /// firmware image built with `alloc` alone links none of it.
+    #[cfg(feature = "std")]
     #[error(
         "device {instance} is claimed by {} addresses: {}; name one by its address",
         candidates.len(),
