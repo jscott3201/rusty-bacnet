@@ -45,6 +45,7 @@ use bacnet_types::error::Error;
 use crate::common;
 use crate::durable::PendingWrite;
 use crate::event::{ChangeOfStateDetector, CommandFailureDetector, OutOfRangeDetector};
+use crate::io_core::IoDetector;
 use crate::snapshot::write_config::parameters as format;
 use crate::write_config::AlgorithmWriteConfig;
 
@@ -66,13 +67,13 @@ pub(crate) trait AlgorithmDetector: Default {
     fn write_parameter(&mut self, write: &PendingWrite, states: Option<u32>) -> Result<(), Error>;
 }
 
-/// Write one of the two time delays on `$detector`, as every object does:
-/// through the generic event-row macro.
-macro_rules! write_delay {
-    ($detector:expr, $write:expr) => {
-        common::write_generic_event_properties!($detector, $write.property, &$write.value)
-            .unwrap_or_else(|| Err(common::unknown_property_error()))
-    };
+/// Make `write` of one of the detector's event rows as the objects holding
+/// it do: through its [`IoDetector`] write, the one their `write_property`
+/// reaches through the core.
+fn write_event_row<D: IoDetector>(detector: &mut D, write: &PendingWrite) -> Result<(), Error> {
+    detector
+        .write(write.property, &write.value)
+        .unwrap_or_else(|| Err(common::unknown_property_error()))
 }
 
 impl AlgorithmDetector for OutOfRangeDetector {
@@ -105,9 +106,7 @@ impl AlgorithmDetector for OutOfRangeDetector {
     }
 
     fn write_parameter(&mut self, write: &PendingWrite, _: Option<u32>) -> Result<(), Error> {
-        // The detector's event rows, as the analog objects write them.
-        crate::io_core::IoDetector::write(self, write.property, &write.value)
-            .unwrap_or_else(|| Err(common::unknown_property_error()))
+        write_event_row(self, write)
     }
 }
 
@@ -147,7 +146,7 @@ impl AlgorithmDetector for ChangeOfStateDetector {
                 write.value.clone(),
                 states,
             ),
-            _ => write_delay!(self, write),
+            _ => write_event_row(self, write),
         }
     }
 }
@@ -168,7 +167,7 @@ impl AlgorithmDetector for CommandFailureDetector {
     }
 
     fn write_parameter(&mut self, write: &PendingWrite, _: Option<u32>) -> Result<(), Error> {
-        write_delay!(self, write)
+        write_event_row(self, write)
     }
 }
 

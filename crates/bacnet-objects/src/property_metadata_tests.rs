@@ -17,6 +17,7 @@ mod analog;
 mod binary;
 mod groups;
 mod intrinsic;
+mod multistate;
 
 /// The log types whose Log_Buffer only ReadRange (and AuditLogQuery) serve:
 /// a read of it answers PROPERTY / READ_ACCESS_DENIED (Clauses 12.25.14,

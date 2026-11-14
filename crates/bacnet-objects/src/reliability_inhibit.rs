@@ -36,12 +36,6 @@ impl ReliabilityInhibitState {
         self.enabled
     }
 
-    #[inline]
-    pub(crate) fn read(self, property: PropertyIdentifier) -> Option<PropertyValue> {
-        (property == PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT)
-            .then_some(PropertyValue::Boolean(self.enabled))
-    }
-
     /// Apply a Reliability_Evaluation_Inhibit write atomically.
     ///
     /// TRUE immediately normalizes Reliability unless the current OOS period

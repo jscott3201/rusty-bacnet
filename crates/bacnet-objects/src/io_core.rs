@@ -20,11 +20,10 @@
 //! makes a detector an [`IoDetector`]; the change-of-state and
 //! command-failure detectors are made one below, and the analog module
 //! makes OUT_OF_RANGE one with its parameter rows. The shared macros that
-//! wire an object's reporting name the core's fields by their path
-//! (`core.event_history` for
-//! [`impl_builtin_intrinsic_reporting!`](crate::event::impl_builtin_intrinsic_reporting),
-//! `in core` for
-//! [`impl_reporting_persistence!`](crate::write_config::reporting::impl_reporting_persistence)).
+//! wire an object's reporting
+//! ([`impl_builtin_intrinsic_reporting!`](crate::event::impl_builtin_intrinsic_reporting),
+//! [`impl_reporting_persistence!`](crate::write_config::reporting::impl_reporting_persistence))
+//! find the detector in `event_detector` and the rest in `core`.
 //!
 //! The row groups below are the stretches the nine property tables share;
 //! each table joins them with its own rows ([`joined_rows!`](crate::property_metadata::joined_rows)).
@@ -64,7 +63,7 @@ pub(crate) struct IoCore {
     pub(crate) reliability: Reliability,
     /// The object's own Reliability, set aside while Out_Of_Service is TRUE
     /// and a client may simulate one.
-    pub(crate) reliability_before_out_of_service: Option<Reliability>,
+    reliability_before_out_of_service: Option<Reliability>,
     pub(crate) reliability_inhibit: ReliabilityInhibitState,
     /// Event_Detection_Enable. FALSE suspends the event state machine
     /// (Clause 13.2.2.1).
@@ -156,11 +155,10 @@ impl IoCore {
     ///
     /// Only this entry and [`Self::write`] are made per detector type; the
     /// rest is one copy for every object, as far as the inliner leaves it
-    /// one. In the firmware images, which hold analog and binary objects,
-    /// [`Self::read_own`] and [`Self::write_own`] are one copy each; an
-    /// image with a single I/O type gets them inlined into that type's own
-    /// routes instead. Check again once all nine objects are on the core,
-    /// and mark the two `#[inline(never)]` only if the images need it.
+    /// one. In every firmware image (one with two of the nine types, one
+    /// with all nine) [`Self::read_own`] and [`Self::write_own`] are one
+    /// copy each, so neither is marked `#[inline(never)]`; an image with a
+    /// single I/O type would get them inlined into that type's own routes.
     pub(crate) fn read<D: IoDetector>(
         &self,
         detector: &D,

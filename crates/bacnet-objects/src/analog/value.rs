@@ -176,7 +176,7 @@ impl AnalogValueObject {
 crate::io_core::impl_profile!(AnalogValueObject);
 super::impl_analog_properties!(AnalogValueObject);
 super::impl_fault_out_of_range!(AnalogValueObject);
-crate::write_config::reporting::impl_reporting_persistence!(AnalogValueObject, in core);
+crate::write_config::reporting::impl_reporting_persistence!(AnalogValueObject);
 
 impl BACnetObject for AnalogValueObject {
     crate::traits::lend_audit_policy!();
@@ -361,11 +361,7 @@ crate::traits::impl_audit_policy!(AnalogValueObject);
 
 crate::event::impl_builtin_intrinsic_reporting!(
     AnalogValueObject,
-    event_detector,
-    core.event_history,
     [present_value],
-    core.reliability,
-    core.event_detection_enable,
     OutOfRangeDetector::ALGORITHM
 );
 
