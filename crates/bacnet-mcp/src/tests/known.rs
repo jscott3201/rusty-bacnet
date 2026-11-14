@@ -59,8 +59,7 @@ async fn an_address_announcing_another_instance_forgets_the_old_one() {
     let knows = |lab: &Lab, instance| lab.mcp.ctx().reach_known(instance);
     until(&lab, |lab| knows(lab, alias), "the alias is known").await;
 
-    let transport = lab.client.transport();
-    transport.inject(&i_am(7), &alias_mac(alias)).await;
+    lab.inject(&i_am(7), &alias_mac(alias)).await;
     until(
         &lab,
         |lab| knows(lab, 7) && !knows(lab, alias),

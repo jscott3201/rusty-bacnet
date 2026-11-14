@@ -48,7 +48,7 @@ rcgen.workspace = true
 # The COV table's test hooks, for the table tests (#2303).
 bacnet-device-core = { workspace = true, features = ["std", "test-support"] }
 bacnet-client.workspace = true
-bacnet-transport.workspace = true
+bacnet-transport = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }
 
 [lints]
