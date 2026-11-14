@@ -26,7 +26,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
-use bacnet_ops::engine::{Halt, Reader, RpmFailure, rpm_failure, unreachable};
+use bacnet_ops::client::{Halt, Reader, RpmFailure, rpm_failure, unreachable};
 use bacnet_ops::format::{MAX_NAME_CHARS, name_text};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
@@ -336,6 +336,31 @@ pub(crate) async fn read_names<T, F, R>(
     }
 }
 
+/// What [`read_names`] does when the device fails a batch, for a job that
+/// can't place its device (no one address claims its instance): one batch
+/// is reported unreachable, and the rest are asked for when it next
+/// answers.
+pub(crate) async fn abandon_names<F, R>(
+    queue: &Mutex<NameQueue>,
+    (device, client, error): (u32, u16, &bacnet_types::error::Error),
+    mut report: F,
+) where
+    F: FnMut(ReqId, String, Vec<NameRead>) -> R,
+    R: std::future::Future<Output = ()>,
+{
+    let (req, address, batch) = lock(queue).take_batch(true, client);
+    if batch.is_empty() {
+        return;
+    }
+    tracing::info!("device {device}: names not read ({error}); asking again when it next answers");
+    let left = lock(queue).abandon(&address, &[]);
+    let read = left
+        .into_iter()
+        .map(|o| (o, ReadName::Unreachable))
+        .collect();
+    report(req, address, read).await;
+}
+
 /// One batch: by RPM when the device takes it and the batch has more than
 /// one name, else by ReadProperty each; either way only the names the UI
 /// still wants when the request goes. Returns what was answered, and why
@@ -416,7 +441,7 @@ async fn rpm_names<T: TransportPort + 'static>(
     if wanted(batch).is_empty() {
         return Ok(Vec::new());
     }
-    let _turn = reader.turn().await?;
+    let turn = reader.turn().await?;
     let batch = wanted(batch);
     if batch.is_empty() {
         return Ok(Vec::new());
@@ -431,11 +456,8 @@ async fn rpm_names<T: TransportPort + 'static>(
             }],
         })
         .collect();
-    let ack = reader
-        .client
-        .read_property_multiple_from_device(reader.device, specs)
-        .await
-        .map_err(Halt::Device)?;
+    let ack = reader.rpm_in(&turn, specs).await?;
+    drop(turn);
     Ok(batch
         .iter()
         .map(|&object| {

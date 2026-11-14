@@ -8,16 +8,14 @@ use std::sync::atomic::AtomicBool;
 
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::engine::{Halt, Reader};
+use bacnet_ops::DeviceAddress;
+use bacnet_ops::client::{Halt, Reader};
 use bacnet_ops::export::s223::{
     InventoryOptions, TurtleOptions, WritePriority, read_inventory, write_turtle,
 };
-use bacnet_ops::format::decode_all;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::parse::parse_object_type;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::args::ExportFormat;
 use crate::output::screen;
@@ -53,9 +51,14 @@ pub async fn export_cmd<T: TransportPort + 'static>(
     {
         return Err(format!("output file already exists: {}", path.display()).into());
     }
-    let device = match crate::resolve_destination(client, target).await? {
-        Destination::Device(instance) => instance,
-        Destination::Mac(mac) => device_at(client, &mac).await?,
+    // By instance, at the address the discovery table holds for it; by
+    // address, at it, the instance read once from the device (#2560).
+    let (address, instance) = match crate::resolve_destination(client, target).await? {
+        Destination::Device(instance) => (
+            DeviceAddress::claiming(client, instance).await?,
+            Some(instance),
+        ),
+        Destination::Mac(mac) => (DeviceAddress::local(&mac)?, None),
     };
     // A one-shot command has the device to itself: no rate cap beyond the
     // client's --min-interval-ms, one request at a time.
@@ -63,7 +66,8 @@ pub async fn export_cmd<T: TransportPort + 'static>(
     let never = AtomicBool::new(false);
     let mut reader = Reader {
         client,
-        device,
+        device: address,
+        instance,
         rate: &limits,
         cancel: &never,
         rpm: true,
@@ -73,6 +77,7 @@ pub async fn export_cmd<T: TransportPort + 'static>(
         Err(Halt::Device(error)) => return Err(error.into()),
         Err(Halt::Cancelled) => return Err("the export was stopped".into()),
     };
+    let device = inventory.device.instance;
     let mut text = String::new();
     let counts = write_turtle(&inventory, &turtle, &mut text)?;
     let to = match output {
@@ -104,38 +109,4 @@ pub async fn export_cmd<T: TransportPort + 'static>(
         .into()),
         None => Ok(()),
     }
-}
-
-/// The instance of the device at `mac`, from its Device object read by the
-/// wildcard instance, which a device answers as its own. The client's
-/// discovery table gets the device when it doesn't hold it yet, since the
-/// export reads by instance; one it holds at another address is refused.
-async fn device_at<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    mac: &[u8],
-) -> Result<u32> {
-    let any = ObjectIdentifier::new(ObjectType::DEVICE, ObjectIdentifier::WILDCARD_INSTANCE)?;
-    let ack = client
-        .read_property(mac, any, PropertyIdentifier::OBJECT_IDENTIFIER, None)
-        .await?;
-    let instance = match decode_all(&ack.property_value).as_deref() {
-        Some([PropertyValue::ObjectIdentifier(device)])
-            if device.object_type() == ObjectType::DEVICE =>
-        {
-            device.instance_number()
-        }
-        _ => return Err("the device didn't name its Device object".into()),
-    };
-    match client.get_device(instance).await? {
-        None => client.add_device(instance, mac).await?,
-        Some(known) if known.source_network.is_none() && known.mac_address.as_slice() == mac => {}
-        Some(_) => {
-            return Err(format!(
-                "device {instance} answers at this address, but the discovery table holds it \
-                 at another; export it by instance"
-            )
-            .into());
-        }
-    }
-    Ok(instance)
 }

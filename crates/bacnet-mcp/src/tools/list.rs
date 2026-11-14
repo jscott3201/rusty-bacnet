@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, PoisonError};
 
-use bacnet_ops::engine::{MAX_OBJECTS, Wanted, unreachable};
+use bacnet_ops::client::{MAX_OBJECTS, Wanted, unreachable};
 use bacnet_ops::format::decode_all;
 use bacnet_ops::parse::parse_object_type;
 use bacnet_transport::port::TransportPort;
@@ -196,9 +196,8 @@ fn count(data: &[u8]) -> Option<u32> {
 pub(super) async fn listing<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     call: &Call,
-    device: &Device,
+    device: &Device<T>,
 ) -> Result<Listing, ToolError> {
-    let engine = ctx.engine()?;
     let lock = {
         let mut locks = ctx
             .list_locks
@@ -225,8 +224,9 @@ pub(super) async fn listing<T: TransportPort + 'static>(
         .map_err(|e| ToolError::invalid("device", e.to_string()))?;
     let list = PropertyIdentifier::OBJECT_LIST;
     let read_count = async |whole: Option<&Error>| -> Result<u32, ToolError> {
-        let data = engine
-            .read_property(device.instance, list_object, list, Some(0))
+        let data = device
+            .handle
+            .read_property(list_object, list, Some(0))
             .await
             .map_err(|e| failed(whole.unwrap_or(&e)))?;
         let total = count(&data).ok_or_else(|| {
@@ -257,10 +257,7 @@ pub(super) async fn listing<T: TransportPort + 'static>(
                 (fresh_partial(now), false)
             }
         }
-        None => match engine
-            .read_property(device.instance, list_object, list, None)
-            .await
-        {
+        None => match device.handle.read_property(list_object, list, None).await {
             Ok(data) => {
                 let whole = CachedList {
                     at: Instant::now(),
@@ -283,8 +280,9 @@ pub(super) async fn listing<T: TransportPort + 'static>(
         if read_here > 0 && call.out_of_time() {
             break;
         }
-        match engine
-            .read_property(device.instance, list_object, list, Some(next))
+        match device
+            .handle
+            .read_property(list_object, list, Some(next))
             .await
         {
             Ok(data) => objects.extend(identifiers(&data)),
@@ -378,7 +376,6 @@ pub(super) async fn run<T: TransportPort + 'static>(
     } else {
         ctx.policy.caps.objects
     };
-    let engine = ctx.engine()?;
     let cap = ctx.policy.caps.text;
     let mut objects = Vec::new();
     let mut resume = None;
@@ -390,12 +387,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
         let text = object_text(object.object_type(), object.instance_number());
         let mut row = json!({ "object": text });
         if args.names {
-            let name = engine
-                .read(
-                    device.instance,
-                    *object,
-                    Wanted::List(&[PropertyIdentifier::OBJECT_NAME]),
-                )
+            let name = device
+                .handle
+                .read(*object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
                 .await
                 .ok()
                 .and_then(|read| row_text(&read.rows, PropertyIdentifier::OBJECT_NAME));

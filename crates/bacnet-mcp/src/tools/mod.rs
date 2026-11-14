@@ -238,8 +238,8 @@ pub(crate) async fn call<T: TransportPort + 'static>(
     // A cancelled call (`notifications/cancelled`, or the host going away)
     // drops its future, and with it any gate, lock or slot it waits for:
     // nothing more is sent, and what it was charged is still logged. The
-    // call's own engine requests run one after another inside that one
-    // future, so none is left queued and unpolled.
+    // call's own requests run one after another inside that one future,
+    // so none is left queued and unpolled.
     let work = tokio::time::timeout(budget + GRACE, charged(account, run));
     let finished = tokio::select! {
         finished = work => finished,

@@ -149,25 +149,25 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let limit = args.limit()?;
     let cursor = args.cursor(ctx, NAME, raw)?;
     let device = ctx.device(call, &args.device).await?;
-    let engine = ctx.engine()?;
     let object = object_text(log.object_type(), log.instance_number());
     let source = format!("device {} {object} log-buffer", device.instance);
     let cap = ctx.policy.caps.text;
     let mut columns = LogColumns::default();
     let mut summary = Summary::default();
     let mut pager = Pager::new(device.instance, log, cursor, limit);
-    while let Some(page) = pager.next(engine, call).await? {
+    while let Some(page) = pager.next(&device.handle, call).await? {
         if pager.pages == 1 {
             // What each column samples, to name its values: one charged
             // read a call, once the device has answered, so a silent one
             // costs a single timeout; a failure names nothing (#2091).
-            let (named, by_reference) = engine.log_columns(device.instance, log).await;
+            let (named, by_reference) = device.handle.log_columns(log).await;
             columns = named;
             // Then the state texts of the objects whose states columns
             // sample, one charged request an object, skipped once the
             // budget is spent (#2122).
-            let by_texts = engine
-                .log_state_texts(device.instance, &mut columns, || call.out_of_time())
+            let by_texts = device
+                .handle
+                .log_state_texts(&mut columns, || call.out_of_time())
                 .await;
             // Naming never fails the read, but its timeouts count (#2131).
             for naming in [by_reference, by_texts] {

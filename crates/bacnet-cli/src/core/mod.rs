@@ -3,9 +3,9 @@
 //! Anything that both front ends need lives here, so the TUI does not grow a
 //! second copy of a parser or a lookup that the CLI already has. The parts
 //! with no CLI dependency are in the `bacnet-ops` crate (the target grammar,
-//! the value grammar and formatter, the request limits and the read engine)
-//! and the `bacnet-tool` crate (the class table), which the MCP server
-//! shares too.
+//! the value grammar and formatter, the request limits and the high-level
+//! client) and the `bacnet-tool` crate (the class table), which the MCP
+//! server shares too.
 
 pub(crate) mod guard;
 // Only the TUI picks an interface; a one-shot binds --interface or all.

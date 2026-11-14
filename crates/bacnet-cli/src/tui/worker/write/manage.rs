@@ -9,7 +9,7 @@ use bacnet_client::client::BACnetClient;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_tool::class::Class;
 use bacnet_tool::safety::desk::{Caller, ENDED};
-use bacnet_tool::safety::find;
+use bacnet_tool::safety::{find, turn};
 use bacnet_transport::port::TransportPort;
 
 use super::{PASSIVE, Runner, tell};
@@ -71,7 +71,10 @@ async fn send<T: TransportPort + 'static>(
 ) -> Outcome {
     let device = request.device;
     find(client, device).await;
-    let turn = rate.turn(device).await;
+    let held = match turn(client, rate, device).await {
+        Ok(held) => held,
+        Err(error) => return Outcome::NotSent(error.to_string()),
+    };
     let password = request.password.as_ref().map(|p| p.expose().to_owned());
     let result = match request.action {
         Action::Dcc { state, time } => {
@@ -85,6 +88,6 @@ async fn send<T: TransportPort + 'static>(
                 .await
         }
     };
-    drop(turn);
+    drop(held);
     Outcome::of(&result)
 }

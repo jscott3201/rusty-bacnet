@@ -20,9 +20,10 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::engine::{RpmFailure, network_of, rpm_failure, unreachable};
+use crate::client::{RpmFailure, rpm_failure, unreachable};
+use crate::device::{DeviceAddress, Path};
 use crate::format::{RawRow, RowError};
-use crate::limits::{RequestLimits, Turn};
+use crate::limits::RequestLimits;
 
 /// Rows read by one ReadPropertyMultiple when polling.
 pub const MAX_BATCH: usize = 16;
@@ -61,25 +62,31 @@ pub struct Polled<K> {
     pub unreachable: bool,
 }
 
-/// `device`'s turn, on its network when the limits pace networks.
-async fn turn<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    limits: &RequestLimits,
-    device: u32,
-) -> Turn {
-    let network = network_of(client, limits, device).await;
-    limits.turn_on(device, network).await
-}
-
-/// Read every row in `rows` of `device`, by RPM while `rpm` holds.
+/// Read every row in `rows` of the device at `device`, by RPM while `rpm`
+/// holds. A routed address the discovery table holds no router for fails
+/// every row at once, with nothing sent.
 pub async fn poll<K: Copy, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
-    device: u32,
+    device: &DeviceAddress,
     rows: &[PollRow<K>],
     mut rpm: bool,
 ) -> Polled<K> {
     let started_rpm = rpm;
+    let path = match Path::to(client, device).await {
+        Ok(path) => path,
+        Err(error) => {
+            return Polled {
+                rows: rows
+                    .iter()
+                    .map(|row| (row.key, Err(error.to_string())))
+                    .collect(),
+                refused_rpm: false,
+                unreachable: false,
+            };
+        }
+    };
+    let path = &path;
     let mut read = Vec::with_capacity(rows.len());
     let mut silent: Option<Error> = None;
     let mut batches: VecDeque<&[PollRow<K>]> = batches(rows).collect();
@@ -89,7 +96,7 @@ pub async fn poll<K: Copy, T: TransportPort + 'static>(
             continue;
         }
         if rpm {
-            match rpm_batch(client, limits, device, batch).await {
+            match rpm_batch(client, limits, (device, path), batch).await {
                 Ok(rows) => {
                     read.extend(rows);
                     continue;
@@ -126,7 +133,7 @@ pub async fn poll<K: Copy, T: TransportPort + 'static>(
                 read.push((row.key, Err(error.to_string())));
                 continue;
             }
-            match one_by_one(client, limits, device, row).await {
+            match one_by_one(client, limits, (device, path), row).await {
                 Ok(rows) => read.push((row.key, Ok(rows))),
                 Err(error) => {
                     read.push((row.key, Err(error.to_string())));
@@ -172,14 +179,14 @@ fn batches<K>(rows: &[PollRow<K>]) -> impl Iterator<Item = &[PollRow<K>]> {
 async fn one_by_one<K, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
-    device: u32,
+    (device, path): (&DeviceAddress, &Path),
     row: &PollRow<K>,
 ) -> Result<Vec<RawRow>, Error> {
     let mut rows = Vec::with_capacity(row.one_by_one);
     for &(property, index) in row.wanted.iter().take(row.one_by_one.max(1)) {
-        let turn = turn(client, limits, device).await;
-        let read = client
-            .read_property_from_device(device, row.object, property, index)
+        let turn = limits.turn(device).await;
+        let read = path
+            .read_property(client, row.object, property, index)
             .await;
         drop(turn);
         let value = match read {
@@ -196,7 +203,7 @@ async fn one_by_one<K, T: TransportPort + 'static>(
 async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
-    device: u32,
+    (device, path): (&DeviceAddress, &Path),
     batch: &[PollRow<K>],
 ) -> Result<Vec<(K, Result<Vec<RawRow>, String>)>, Error> {
     let specs = batch
@@ -215,10 +222,8 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
                 .collect(),
         })
         .collect();
-    let turn = turn(client, limits, device).await;
-    let ack = client
-        .read_property_multiple_from_device(device, specs)
-        .await;
+    let turn = limits.turn(device).await;
+    let ack = path.read_property_multiple(client, specs).await;
     drop(turn);
     let ack = ack?;
     // The answer lists the objects in the order they were asked for; a row

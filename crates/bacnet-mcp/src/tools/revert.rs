@@ -117,7 +117,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             ));
         }
     };
-    ctx.engine()?;
+    ctx.client()?;
     let workspace =
         ctx.policy.writes.workspace.clone().ok_or_else(|| {
             ToolError::refused("write-not-granted", "no workspace for the ledger")
@@ -177,13 +177,13 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         let workspace = workspace.clone();
         let fields = fields.clone();
         async move {
-            let engine = ctx.engine()?;
+            let client = ctx.client()?;
             let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
             let mut desk = open(&ctx, &workspace, &caller).await?;
             let principal = ctx.principal.clone();
             let before = desk.entries();
             let done = desk
-                .revert(engine.client(), engine.limits(), &caller, |entry| {
+                .revert(client.low_level(), client.limits(), &caller, |entry| {
                     ours(entry, &principal)
                         && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
                 })

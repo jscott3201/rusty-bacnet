@@ -48,6 +48,7 @@ fn routed_row(dnet: u16, dadr: &[u8]) -> DiscoveredDevice {
         max_segments_accepted: None,
         vendor_id: 0,
         last_seen: std::time::Instant::now(),
+        last_announced: None,
         source_network: Some(dnet),
         source_address: Some(MacAddr::from_slice(dadr)),
     }

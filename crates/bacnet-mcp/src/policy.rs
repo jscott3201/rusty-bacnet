@@ -195,7 +195,7 @@ impl Policy {
         })
     }
 
-    /// The request limits the engine runs under: the global rate, and a
+    /// The request limits the client runs under: the global rate, and a
     /// rate per network.
     pub fn request_limits(&self) -> RequestLimits {
         let overlay = self.overlay();

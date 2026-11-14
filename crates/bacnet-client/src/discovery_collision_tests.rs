@@ -14,6 +14,7 @@ fn local_device(instance: u32, mac: &[u8], last_seen: Instant) -> DiscoveredDevi
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen,
+        last_announced: None,
         source_network: None,
         source_address: None,
     }

@@ -1,4 +1,4 @@
-//! The engine half of a write, shared by the TUI's write worker and the MCP
+//! The client half of a write, shared by the TUI's write worker and the MCP
 //! server (#2068): read what a write needs and plan it, send a confirmed
 //! preview through the ledger and the audit log, and revert ledger entries.
 //!
@@ -26,9 +26,10 @@ use super::audit::{Audit, Context, utc_now};
 use super::ledger::{Entry, Ledger, Origin};
 use super::lock::{WorkspaceLock, lock};
 use super::plan::{self, PRE_READ, PreRead};
-use super::send::{find, item_json, send};
+use super::send::{find, item_json, send, turn};
 use super::{Gate, Level, Outcome, Planned, Preview, WriteSpec, run_id};
-use bacnet_ops::engine::{Halt, Reader, Wanted, unreachable};
+use bacnet_ops::DeviceAddress;
+use bacnet_ops::client::{Halt, Reader, Wanted, unreachable};
 use bacnet_ops::limits::RequestLimits;
 
 /// Why a passive session refuses anything that transmits.
@@ -407,10 +408,15 @@ impl Desk {
         // By now the write is on disk in both the ledger and the audit log.
         caller.ledger_changed(&self.entries()).await;
         // One turn at the device for the preview's writes, sent one after
-        // another (#1791).
-        let turn = rate.turn(preview.device).await;
-        let outcomes = send(client, preview).await;
-        drop(turn);
+        // another (#1791). With no one address to take it at, none is sent.
+        let outcomes = match turn(client, rate, preview.device).await {
+            Ok(held) => {
+                let outcomes = send(client, preview).await;
+                drop(held);
+                outcomes
+            }
+            Err(error) => vec![Outcome::NotSent(error.to_string()); preview.items.len()],
+        };
         for ((item, id), outcome) in preview.items.iter().zip(&ids).zip(&outcomes) {
             if let Some(ledger) = &mut self.ledger {
                 ledger.finish(*id, outcome.applied(), &backup);
@@ -485,19 +491,23 @@ impl Desk {
                 _ if caller.gone() => Outcome::NotSent(ENDED.into()),
                 (Some(undo), Some(object)) => {
                     find(client, entry.device).await;
-                    let turn = rate.turn(entry.device).await;
-                    let result = client
-                        .write_property_to_device(
-                            entry.device,
-                            object,
-                            entry.property(),
-                            entry.index,
-                            undo.bytes.clone(),
-                            entry.priority,
-                        )
-                        .await;
-                    drop(turn);
-                    Outcome::of(&result)
+                    match turn(client, rate, entry.device).await {
+                        Ok(held) => {
+                            let result = client
+                                .write_property_to_device(
+                                    entry.device,
+                                    object,
+                                    entry.property(),
+                                    entry.index,
+                                    undo.bytes.clone(),
+                                    entry.priority,
+                                )
+                                .await;
+                            drop(held);
+                            Outcome::of(&result)
+                        }
+                        Err(error) => Outcome::NotSent(error.to_string()),
+                    }
                 }
                 _ => Outcome::NotSent(UNKNOWN_PRE_IMAGE.into()),
             };
@@ -538,10 +548,14 @@ pub async fn prepare<T: TransportPort + 'static>(
     if specs.iter().any(|spec| spec.device != device) {
         return Err("a batch goes to one device".into());
     }
+    let at = DeviceAddress::claiming(client, device)
+        .await
+        .map_err(|error| format!("reading {}: {error}", specs[0].object))?;
     let cancel = AtomicBool::new(false);
     let mut reader = Reader {
         client,
-        device,
+        device: at,
+        instance: Some(device),
         rate,
         cancel: &cancel,
         rpm: true,

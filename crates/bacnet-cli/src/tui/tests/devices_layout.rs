@@ -37,6 +37,7 @@ fn discovered(instance: u32, vendor_id: u16, routed: Option<(u16, &[u8])>) -> Di
         max_segments_accepted: None,
         vendor_id,
         last_seen: at(3),
+        last_announced: None,
         source_network: routed.map(|(network, _)| network),
         source_address: routed.map(|(_, station)| MacAddr::from_slice(station)),
     }

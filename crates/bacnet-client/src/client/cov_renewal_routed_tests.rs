@@ -227,6 +227,7 @@ fn a_discovered_device_is_routed_when_its_i_am_came_through_a_router() {
         max_segments_accepted: None,
         vendor_id: 0,
         last_seen: std::time::Instant::now(),
+        last_announced: None,
         source_network: routed.map(|(network, _)| network),
         source_address: routed.map(|(_, address)| MacAddr::from_slice(address)),
     };

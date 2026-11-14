@@ -12,6 +12,8 @@ use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use serde_json::{Value, json};
 
 use super::{Outcome, Planned, Preview};
+use bacnet_ops::DeviceAddress;
+use bacnet_ops::limits::{RequestLimits, Turn};
 use bacnet_ops::octets::hex;
 
 /// How long a revert waits for a device it had to look for.
@@ -98,6 +100,28 @@ pub(crate) fn batch_outcomes(items: &[Planned], result: &Result<(), Error>) -> V
             _ => outcome.clone(),
         })
         .collect()
+}
+
+/// The turn at the gate of the address `device` (an instance) has in the
+/// discovery table now, which its reads take too (#2560).
+///
+/// The write itself still goes by the instance (`write_property_to_device`
+/// and the like), which the low-level client looks up again: the two
+/// lookups agree unless the table changes between them. Part B of #2560
+/// closes that gap by sending to the address the turn was taken at.
+///
+/// # Errors
+///
+/// [`Error::AmbiguousDevice`] or [`Error::UnknownDevice`] when no one
+/// address claims it: the caller reports the write as not sent and sends
+/// nothing, so no write goes past the gate.
+pub async fn turn<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    rate: &RequestLimits,
+    device: u32,
+) -> Result<Turn, Error> {
+    let address = DeviceAddress::claiming(client, device).await?;
+    Ok(rate.turn(&address).await)
 }
 
 /// Make sure the client knows where `device` is before writing to it: a

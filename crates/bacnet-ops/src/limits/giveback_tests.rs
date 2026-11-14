@@ -6,6 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Waker};
 
+use super::tests::at;
 use super::*;
 
 /// A wait polled once, so it has booked its slot and sleeps until it.
@@ -30,7 +31,7 @@ fn network_waits(limits: &RequestLimits, network: u16, count: u32) -> Vec<Wait<'
     (0..count)
         .map(|device| {
             booked(Box::pin(async move {
-                drop(limits.turn_on(device, Some(network)).await)
+                drop(limits.turn(&at(network, device)).await)
             }))
         })
         .collect()
@@ -46,7 +47,7 @@ async fn next_global(limits: &RequestLimits) -> Duration {
 /// How long one more request to `network` waits from now.
 async fn next_on(limits: &RequestLimits, network: u16) -> Duration {
     let start = Instant::now();
-    drop(limits.turn_on(99, Some(network)).await);
+    drop(limits.turn(&at(network, 99)).await);
     Instant::now() - start
 }
 
@@ -92,7 +93,7 @@ async fn a_slot_given_back_between_live_waits_is_taken_first() {
 #[tokio::test(start_paused = true)]
 async fn dropped_waits_give_back_their_network_slots() {
     let limits = RequestLimits::new(0).with_network_rates(20, [(2001, 2)]);
-    drop(limits.turn_on(50, Some(2001)).await);
+    drop(limits.turn(&at(2001, 50)).await);
     drop(network_waits(&limits, 2001, 4));
     assert_eq!(next_on(&limits, 2001).await, Duration::from_millis(500));
 }
@@ -109,7 +110,7 @@ async fn waits_under_an_overlay_give_their_slots_back() {
         rates: vec![(2001, 1)],
     };
     limits.set_overlay(Some(&overlay));
-    drop(limits.turn_on(50, Some(2001)).await);
+    drop(limits.turn(&at(2001, 50)).await);
     drop(network_waits(&limits, 2001, 3));
     assert_eq!(next_on(&limits, 2001).await, Duration::from_secs(1));
 
@@ -170,9 +171,9 @@ async fn a_request_withdrawn_after_its_token_gives_it_back() {
 
     let limits = RequestLimits::new(0);
     let (bucket, account) = fresh();
-    let busy = limits.turn(1).await;
+    let busy = limits.turn(&at(0, 1)).await;
     let wait = booked(Box::pin(charged(Arc::clone(&account), async {
-        drop(limits.turn(1).await);
+        drop(limits.turn(&at(0, 1)).await);
     })));
     drop(wait);
     drop(busy);

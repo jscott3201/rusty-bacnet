@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use std::net::Ipv4Addr;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::label::kebab;
 use bacnet_tool::bbmd::{
     self, FdtRow, Finding, Here, MAX_SURVEY, Matrix, NO_ANSWER, NotFollowed, Outcome, Probe,
@@ -72,12 +72,12 @@ pub(super) struct Plan {
 /// Check that a survey may go and claim its minute; nothing is sent.
 pub(super) async fn plan<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    engine: &Engine<T>,
+    client: &Client<T>,
     named: &[String],
 ) -> Result<Plan, ToolError> {
     // Every BBMD this server can reach is on its own B/IP network.
     ctx.allow_network(0)?;
-    if bbmd::bip(engine).is_none() {
+    if bbmd::bip(client).is_none() {
         return Err(ToolError::refused(
             "needs-bip",
             "BBMD tables belong to BACnet/IP: this server's link is not B/IP",
@@ -96,20 +96,20 @@ pub(super) async fn plan<T: TransportPort + 'static>(
             format!("at most {MAX_NAMED} BBMDs"),
         ));
     }
-    let mut seeds: Vec<SocketAddrV4> = bbmd::registration_bbmd(engine).into_iter().collect();
+    let mut seeds: Vec<SocketAddrV4> = bbmd::registration_bbmd(client).into_iter().collect();
     for text in named {
         let address: SocketAddrV4 = text
             .parse()
             .map_err(|_| ToolError::invalid("bbmds", format!("{text}: not an ip:port")))?;
         // The same rule as for the peers a table lists: no broadcast,
         // multicast, loopback or own address is read.
-        if let Some(why) = NotFollowed::check_address(address, &here(engine)) {
+        if let Some(why) = NotFollowed::check_address(address, &here(client)) {
             return Err(ToolError::invalid(
                 "bbmds",
                 format!("{address} is no BBMD a read may go to ({})", why.as_str()),
             ));
         }
-        if !known(ctx, engine, address).await {
+        if !known(ctx, client, address).await {
             return Err(ToolError::refused(
                 "address-not-known",
                 format!(
@@ -160,7 +160,7 @@ pub(super) fn release<T: TransportPort + 'static>(ctx: &Ctx<T>, plan: &Plan) {
 /// a router heard.
 async fn known<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    engine: &Engine<T>,
+    client: &Client<T>,
     address: SocketAddrV4,
 ) -> bool {
     let router = {
@@ -172,7 +172,7 @@ async fn known<T: TransportPort + 'static>(
         })
     };
     router
-        || engine.devices().await.iter().any(|found| {
+        || client.devices().await.iter().any(|found| {
             found.source_network.is_none()
                 && address_of(&found.mac_address) == Some(address)
                 && ctx
@@ -184,8 +184,8 @@ async fn known<T: TransportPort + 'static>(
 /// Where this server is on its B/IP link: its own address, so a table
 /// listing it isn't read back, and its broadcast address. A `bip()` client
 /// always has both.
-fn here<T: TransportPort + 'static>(engine: &Engine<T>) -> Here {
-    let bip = bbmd::bip(engine);
+fn here<T: TransportPort + 'static>(client: &Client<T>) -> Here {
+    let bip = bbmd::bip(client);
     Here {
         own: bip
             .and_then(|bip| address_of(bip.local_mac()))
@@ -198,11 +198,11 @@ fn here<T: TransportPort + 'static>(engine: &Engine<T>) -> Here {
 /// left unsent gives its minute back.
 pub(super) async fn run<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    engine: &Engine<T>,
+    client: &Client<T>,
     call: &Call,
     plan: &Plan,
 ) -> Value {
-    let found = survey(&plan.seeds, here(engine), |bbmd| read(engine, call, bbmd)).await;
+    let found = survey(&plan.seeds, here(client), |bbmd| read(client, call, bbmd)).await;
     if found
         .read
         .iter()
@@ -216,13 +216,13 @@ pub(super) async fn run<T: TransportPort + 'static>(
 /// One BBMD's BDT, then its FDT when the BDT was read; a read the call's
 /// budget has no time for is not sent.
 async fn read<T: TransportPort + 'static>(
-    engine: &Engine<T>,
+    client: &Client<T>,
     call: &Call,
     bbmd: SocketAddrV4,
 ) -> (Probe, Fdt) {
-    let probe = within_budget(call, bbmd::read_bdt(engine, bbmd)).await;
+    let probe = within_budget(call, bbmd::read_bdt(client, bbmd)).await;
     let fdt = match probe {
-        Outcome::Table(_) => Some(within_budget(call, bbmd::read_fdt(engine, bbmd)).await),
+        Outcome::Table(_) => Some(within_budget(call, bbmd::read_fdt(client, bbmd)).await),
         _ => None,
     };
     (probe, fdt)

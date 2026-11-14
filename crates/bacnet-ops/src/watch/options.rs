@@ -167,7 +167,7 @@ pub struct WatchOptions {
     /// Points watched at once, those still cancelling included.
     pub max_points: usize,
     /// The hub's own rate, taken by each request it sends but cancels;
-    /// `None` for none beyond the engine's limits.
+    /// `None` for none beyond the client's limits.
     pub bucket: Option<Arc<TokenBucket>>,
     /// It serves agents (the MCP server's hub): the request-rate meter
     /// counts its requests as theirs (#2185).

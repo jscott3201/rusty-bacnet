@@ -158,7 +158,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
     args: Args,
     raw: &Map<String, Value>,
 ) -> Result<Value, ToolError> {
-    ctx.engine()?;
+    ctx.client()?;
     let Some(hub) = ctx.hub.as_ref() else {
         return Err(ToolError::refused("passive", "the server is passive"));
     };

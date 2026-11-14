@@ -2,7 +2,7 @@
 //! identifiers only: hosts show resource lists to the model and the user.
 //!
 //! A read runs like a tool call: under its own account and budget, every
-//! request through the engine's limits, cancelled by dropping it. A watched
+//! request through the client's limits, cancelled by dropping it. A watched
 //! point is read from the watch hub, which sends nothing. Content is JSON,
 //! with device text in envelopes and values as `{display, typed}`, the
 //! tools' shapes, and a `cost` block.
@@ -66,7 +66,7 @@ pub(crate) fn list<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Vec<Resource> {
         ),
     ];
     all.into_iter()
-        .filter(|(uri, ..)| ctx.engine.is_some() || *uri == SESSION || *uri == LEDGER)
+        .filter(|(uri, ..)| ctx.client.is_some() || *uri == SESSION || *uri == LEDGER)
         .map(|(uri, name, title, description)| {
             Resource::new(uri, name)
                 .with_title(title)
@@ -78,7 +78,7 @@ pub(crate) fn list<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Vec<Resource> {
 
 /// The resource templates; none in passive mode.
 pub(crate) fn templates<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Vec<ResourceTemplate> {
-    if ctx.engine.is_none() {
+    if ctx.client.is_none() {
         return Vec::new();
     }
     [

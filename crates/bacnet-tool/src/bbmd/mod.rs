@@ -2,8 +2,8 @@
 //! reading a table gave, the breadth-first survey that follows each BDT to
 //! the BBMDs it lists, and the consistency matrix over the tables read
 //! ([`matrix`]). The TUI's Network screen and the MCP server's network map
-//! share it; [`read_bdt`] and [`read_fdt`] read the tables through an
-//! [`Engine`](bacnet_ops::engine::Engine).
+//! share it; [`read_bdt`] and [`read_fdt`] read the tables through a
+//! [`Client`](bacnet_ops::Client).
 //!
 //! Only the read side of BVLL is used: Read-Broadcast-Distribution-Table
 //! and Read-Foreign-Device-Table (Annex J.2.3 and J.2.7). Nothing here

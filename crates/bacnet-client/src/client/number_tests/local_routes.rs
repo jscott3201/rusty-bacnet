@@ -628,6 +628,7 @@ async fn the_local_row_sizes_and_is_refreshed_by_a_routed_named_request() {
             max_segments_accepted: None,
             vendor_id: 1,
             last_seen: seen,
+            last_announced: None,
             source_network: None,
             source_address: None,
         });

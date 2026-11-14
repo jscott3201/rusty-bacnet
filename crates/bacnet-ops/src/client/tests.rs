@@ -1,4 +1,4 @@
-//! The engine against an in-process lab device over a loopback link.
+//! The client against an in-process lab device over a loopback link.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,6 +26,7 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::Bytes;
 
 use super::*;
+use crate::device::DeviceAddress;
 use crate::format::{Floats, RowError, StateTexts, ValueFormat, decode_all};
 
 /// The lab device's instance.
@@ -91,16 +92,16 @@ fn binary_value(instance: u32, active: &str, inactive: &str) -> BinaryValueObjec
 }
 
 /// The lab: a device with an analog input, an analog output, two binary
-/// values and two trend logs, an engine over a client paired with it, and
-/// the server to stop.
-async fn lab() -> (Engine<LoopbackTransport>, BACnetServer<LoopbackTransport>) {
+/// values and two trend logs, a client over a low-level client paired with
+/// it, and the server to stop.
+async fn lab() -> (Client<LoopbackTransport>, BACnetServer<LoopbackTransport>) {
     lab_on(|port| port).await
 }
 
 /// [`lab`], with the client's link wrapped by `wrap`.
 async fn lab_on<C: TransportPort + 'static>(
     wrap: fn(LoopbackTransport) -> C,
-) -> (Engine<C>, BACnetServer<LoopbackTransport>) {
+) -> (Client<C>, BACnetServer<LoopbackTransport>) {
     let identity = DeviceIdentity::new(LAB, 42).unwrap();
     let mut ai = AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(21.5);
@@ -128,22 +129,35 @@ async fn lab_on<C: TransportPort + 'static>(
         apdu_retries: 0,
         ..ClientConfig::default()
     };
-    let client = BACnetClient::start(config, wrap(client_port))
+    let low = BACnetClient::start(config, wrap(client_port))
         .await
         .unwrap();
-    client.add_device(LAB, &[2]).await.unwrap();
-    let engine = Engine::new(Arc::new(client), Arc::new(RequestLimits::new(0)));
-    (engine, server)
+    low.add_device(LAB, &[2]).await.unwrap();
+    let client = Client::new(Arc::new(low), Arc::new(RequestLimits::new(0)));
+    (client, server)
+}
+
+/// The lab device's handle, following its instance.
+async fn lab_device<C: TransportPort + 'static>(client: &Client<C>) -> crate::Device<C> {
+    client.device(LAB).await.unwrap()
+}
+
+/// Where the lab device answers.
+fn lab_at() -> DeviceAddress {
+    DeviceAddress::local(&[2]).unwrap()
 }
 
 async fn stop<C: TransportPort + 'static>(
-    engine: Engine<C>,
+    client: Client<C>,
     mut server: BACnetServer<LoopbackTransport>,
 ) {
-    let Ok(mut client) = Arc::try_unwrap(engine.client) else {
-        panic!("the engine holds the only client");
+    let Some(low) = client.into_low_level() else {
+        panic!("the test holds the only client");
     };
-    client.stop().await.unwrap();
+    let Ok(mut low) = Arc::try_unwrap(low) else {
+        panic!("the client holds the only low-level client");
+    };
+    low.stop().await.unwrap();
     server.stop().await.unwrap();
 }
 
@@ -151,11 +165,11 @@ async fn stop<C: TransportPort + 'static>(
 /// formatter shows it.
 #[tokio::test(start_paused = true)]
 async fn reads_properties_by_rpm_and_formats_them() {
-    let (engine, server) = lab().await;
+    let (client, server) = lab().await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
-    let read = engine
+    let read = lab_device(&client)
+        .await
         .read(
-            LAB,
             ai,
             Wanted::List(&[PropertyIdentifier::PRESENT_VALUE, PropertyIdentifier::UNITS]),
         )
@@ -177,9 +191,9 @@ async fn reads_properties_by_rpm_and_formats_them() {
         "21.5 °C"
     );
     // One element of an array, by ReadProperty.
-    let length = engine
+    let length = lab_device(&client)
+        .await
         .read_property(
-            LAB,
             oid(ObjectType::ANALOG_OUTPUT, 1),
             PropertyIdentifier::PRIORITY_ARRAY,
             Some(0),
@@ -187,15 +201,15 @@ async fn reads_properties_by_rpm_and_formats_them() {
         .await
         .unwrap();
     assert_eq!(decode_all(&length).unwrap(), [PropertyValue::Unsigned(16)]);
-    assert!(!engine.refused_rpm(LAB));
-    stop(engine, server).await;
+    assert!(!client.refused_rpm(&lab_at()));
+    stop(client, server).await;
 }
 
 /// The object list and the device summary come from the Device object.
 #[tokio::test(start_paused = true)]
 async fn lists_objects_and_describes_the_device() {
-    let (engine, server) = lab().await;
-    let list = engine.list_objects(LAB).await.unwrap();
+    let (client, server) = lab().await;
+    let list = lab_device(&client).await.list_objects().await.unwrap();
     assert!(!list.indexed);
     assert_eq!(list.stopped, None);
     for object in [
@@ -206,23 +220,24 @@ async fn lists_objects_and_describes_the_device() {
     ] {
         assert!(list.objects.contains(&object), "{object:?} in {list:?}");
     }
-    let summary = engine.describe_device(LAB).await.unwrap();
+    let summary = lab_device(&client).await.describe_device().await.unwrap();
     assert_eq!(summary.device, LAB);
     assert_eq!(summary.rows.len(), DEVICE_PROPERTIES.len());
     let properties: Vec<_> = summary.rows.iter().map(|(p, _)| *p).collect();
     assert_eq!(properties, DEVICE_PROPERTIES);
     assert!(summary.name().is_some(), "{summary:?}");
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// A trend log reads page by page from the oldest record, and alarms
 /// decode (the lab has none).
 #[tokio::test(start_paused = true)]
 async fn reads_trend_pages_and_alarms() {
-    let (engine, server) = lab().await;
+    let (client, server) = lab().await;
     let log = oid(ObjectType::TREND_LOG, 1);
-    let first = engine
-        .read_trend(LAB, log, LogCursor::Oldest, 2)
+    let first = lab_device(&client)
+        .await
+        .read_trend(log, LogCursor::Oldest, 2)
         .await
         .unwrap();
     let LogRecords::TrendLog(records) = &first.records else {
@@ -230,7 +245,11 @@ async fn reads_trend_pages_and_alarms() {
     };
     assert_eq!(records.len(), 2);
     assert!(!first.done);
-    let second = engine.read_trend(LAB, log, first.next, 2).await.unwrap();
+    let second = lab_device(&client)
+        .await
+        .read_trend(log, first.next, 2)
+        .await
+        .unwrap();
     let LogRecords::TrendLog(records) = &second.records else {
         panic!("trend records: {second:?}");
     };
@@ -238,45 +257,53 @@ async fn reads_trend_pages_and_alarms() {
     assert_eq!(records[0].log_datum, LogDatum::RealValue(2.0));
     assert!(second.done);
 
-    let alarms = engine.alarms(LAB, None).await.unwrap();
+    let alarms = lab_device(&client).await.alarms(None).await.unwrap();
     assert!(alarms.list_of_event_summaries.is_empty());
     assert!(!alarms.more_events);
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// A device that isn't in the discovery table fails the read.
 #[tokio::test(start_paused = true)]
 async fn an_unknown_device_fails() {
-    let (engine, server) = lab().await;
-    let error = engine.describe_device(4242).await.unwrap_err();
+    let (client, server) = lab().await;
+    let error = client.device(4242).await.unwrap_err();
     assert!(error.to_string().contains("4242"), "{error}");
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// A device that rejects ReadPropertyMultiple is read by ReadProperty
-/// instead, and the engine remembers it: the next read of that device goes
+/// instead, and the client remembers it: the next read of that device goes
 /// straight to ReadProperty, with the same values. Errors stay structured
 /// on both paths.
 #[tokio::test(start_paused = true)]
 async fn a_refusal_of_rpm_is_remembered_per_device() {
-    let (engine, server) = lab_on(refuses_rpm).await;
+    let (client, server) = lab_on(refuses_rpm).await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     // State_Text: an analog input has none.
     let wanted = [
         PropertyIdentifier::PRESENT_VALUE,
         PropertyIdentifier::STATE_TEXT,
     ];
-    assert!(!engine.refused_rpm(LAB));
-    let first = engine.read(LAB, ai, Wanted::List(&wanted)).await.unwrap();
+    assert!(!client.refused_rpm(&lab_at()));
+    let first = lab_device(&client)
+        .await
+        .read(ai, Wanted::List(&wanted))
+        .await
+        .unwrap();
     assert_eq!(first.via, ReadVia::Rp);
-    assert!(engine.refused_rpm(LAB), "the refusal is remembered");
-    assert!(!engine.refused_rpm(LAB + 1));
-    let rejected = rejections(engine.client.transport());
+    assert!(client.refused_rpm(&lab_at()), "the refusal is remembered");
+    assert!(!client.refused_rpm(&DeviceAddress::local(&[3]).unwrap()));
+    let rejected = rejections(client.low_level().transport());
     assert_eq!(rejected, 1);
-    let second = engine.read(LAB, ai, Wanted::List(&wanted)).await.unwrap();
+    let second = lab_device(&client)
+        .await
+        .read(ai, Wanted::List(&wanted))
+        .await
+        .unwrap();
     assert_eq!(second.via, ReadVia::Rp);
     assert_eq!(
-        rejections(engine.client.transport()),
+        rejections(client.low_level().transport()),
         rejected,
         "no RPM was tried again"
     );
@@ -291,17 +318,21 @@ async fn a_refusal_of_rpm_is_remembered_per_device() {
         Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
         "{missing:?}"
     );
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// An RPM answer's per-property error comes back as the device's class and
 /// code, shown as `CLASS:CODE`.
 #[tokio::test(start_paused = true)]
 async fn a_missing_property_is_a_typed_error_row() {
-    let (engine, server) = lab().await;
+    let (client, server) = lab().await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let wanted = [PropertyIdentifier::STATE_TEXT];
-    let read = engine.read(LAB, ai, Wanted::List(&wanted)).await.unwrap();
+    let read = lab_device(&client)
+        .await
+        .read(ai, Wanted::List(&wanted))
+        .await
+        .unwrap();
     assert_eq!(read.via, ReadVia::Rpm);
     let error = read.rows[0].1.as_ref().unwrap_err();
     assert_eq!(
@@ -313,7 +344,7 @@ async fn a_missing_property_is_a_typed_error_row() {
     );
     assert_eq!(error.to_string(), "PROPERTY:UNKNOWN_PROPERTY");
     assert_eq!(RowError::NoValue.to_string(), "no value");
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// The invoke ID of `npdu` when it is a local, unsegmented
@@ -378,38 +409,48 @@ fn rejections(transport: &TestTransport) -> usize {
 /// device holds it, nothing goes, and once it is free the call completes.
 #[tokio::test(start_paused = true)]
 async fn every_call_waits_for_the_device_gate() {
-    let (engine, server) = lab().await;
+    let (client, server) = lab().await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let log = oid(ObjectType::TREND_LOG, 1);
     let wait = std::time::Duration::from_secs(30);
-    let held = engine.limits().gate(LAB).acquire_owned().await.unwrap();
+    let held = client
+        .limits()
+        .gate(&lab_at())
+        .acquire_owned()
+        .await
+        .unwrap();
     let pv = [PropertyIdentifier::PRESENT_VALUE];
     assert!(
-        tokio::time::timeout(wait, engine.read(LAB, ai, Wanted::List(&pv)))
+        tokio::time::timeout(wait, lab_device(&client).await.read(ai, Wanted::List(&pv)))
             .await
             .is_err()
     );
     assert!(
-        tokio::time::timeout(wait, engine.list_objects(LAB))
+        tokio::time::timeout(wait, lab_device(&client).await.list_objects())
             .await
             .is_err()
     );
     assert!(
-        tokio::time::timeout(wait, engine.read_trend(LAB, log, LogCursor::Oldest, 2))
-            .await
-            .is_err()
+        tokio::time::timeout(
+            wait,
+            lab_device(&client)
+                .await
+                .read_trend(log, LogCursor::Oldest, 2)
+        )
+        .await
+        .is_err()
     );
     assert!(
-        tokio::time::timeout(wait, engine.alarms(LAB, None))
+        tokio::time::timeout(wait, lab_device(&client).await.alarms(None))
             .await
             .is_err()
     );
     drop(held);
-    tokio::time::timeout(wait, engine.alarms(LAB, None))
+    tokio::time::timeout(wait, lab_device(&client).await.alarms(None))
         .await
         .expect("the gate is free")
         .unwrap();
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// A trend page is charged for every request it sends, not once per page:
@@ -418,12 +459,14 @@ async fn every_call_waits_for_the_device_gate() {
 #[tokio::test(start_paused = true)]
 async fn a_trend_page_is_charged_per_request() {
     use crate::limits::{Account, charged};
-    let (engine, server) = lab().await;
+    let (client, server) = lab().await;
     let log = oid(ObjectType::TREND_LOG, 1);
     let first = Arc::new(Account::new(None));
     let page = charged(
         Arc::clone(&first),
-        engine.read_trend(LAB, log, LogCursor::Oldest, 2),
+        lab_device(&client)
+            .await
+            .read_trend(log, LogCursor::Oldest, 2),
     )
     .await
     .unwrap();
@@ -435,12 +478,12 @@ async fn a_trend_page_is_charged_per_request() {
     let second = Arc::new(Account::new(None));
     charged(
         Arc::clone(&second),
-        engine.read_trend(LAB, log, page.next, 2),
+        lab_device(&client).await.read_trend(log, page.next, 2),
     )
     .await
     .unwrap();
     assert_eq!(second.requests(), 1);
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// A log's columns come from its Log_DeviceObjectProperty in one charged
@@ -450,11 +493,13 @@ async fn a_trend_page_is_charged_per_request() {
 async fn log_columns_read_the_reference_once_and_fall_back() {
     use crate::format::LoggedProperty;
     use crate::limits::{Account, charged};
-    let (engine, server) = lab().await;
+    let (client, server) = lab().await;
     let account = Arc::new(Account::new(None));
     let (columns, naming) = charged(
         Arc::clone(&account),
-        engine.log_columns(LAB, oid(ObjectType::TREND_LOG, 2)),
+        lab_device(&client)
+            .await
+            .log_columns(oid(ObjectType::TREND_LOG, 2)),
     )
     .await;
     assert_eq!(account.requests(), 1);
@@ -477,8 +522,9 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
 
     // Trend log 1 has no reference; trend log 9 doesn't exist.
     for log in [1, 9] {
-        let (columns, naming) = engine
-            .log_columns(LAB, oid(ObjectType::TREND_LOG, log))
+        let (columns, naming) = lab_device(&client)
+            .await
+            .log_columns(oid(ObjectType::TREND_LOG, log))
             .await;
         assert!(columns.is_empty(), "trend log {log}: {columns:?}");
         // A refusal is an answer, not a timeout (#2131).
@@ -487,38 +533,45 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
     let account = Arc::new(Account::new(None));
     let (columns, _) = charged(
         Arc::clone(&account),
-        engine.log_columns(LAB, oid(ObjectType::EVENT_LOG, 1)),
+        lab_device(&client)
+            .await
+            .log_columns(oid(ObjectType::EVENT_LOG, 1)),
     )
     .await;
     assert!(columns.is_empty());
     assert_eq!(account.requests(), 0, "an Event Log has no reference");
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// A local Who-Is puts the lab device in the table; a device instance is
 /// no station address for a directed one.
 #[tokio::test(start_paused = true)]
 async fn a_who_is_fills_the_table() {
-    let (engine, server) = lab().await;
-    engine.client.clear_devices().await;
-    assert!(engine.device(LAB).await.unwrap().is_none());
-    engine.who_is(WhoIsScope::Local, None).await.unwrap();
+    let (client, server) = lab().await;
+    client.low_level().clear_devices().await;
+    assert!(client.low_level().get_device(LAB).await.unwrap().is_none());
+    client.who_is(WhoIsScope::Local, None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let found = engine.device(LAB).await.unwrap().expect("the lab device");
+    let found = client
+        .low_level()
+        .get_device(LAB)
+        .await
+        .unwrap()
+        .expect("the lab device");
     assert_eq!(found.vendor_id, 42);
     assert!(
-        engine
+        client
             .devices()
             .await
             .iter()
             .any(|d| d.object_identifier.instance_number() == LAB)
     );
-    let refused = engine
+    let refused = client
         .who_is(WhoIsScope::Directed("1234"), None)
         .await
         .unwrap_err();
     assert!(refused.to_string().contains("station address"), "{refused}");
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// The client's side of the lab link, refusing every broadcast, as a
@@ -536,12 +589,12 @@ fn refuses_broadcasts(inner: LoopbackTransport) -> TestTransport {
 #[tokio::test(start_paused = true)]
 async fn a_refused_who_is_is_not_charged() {
     use crate::limits::{Account, charged};
-    let (engine, server) = lab_on(refuses_broadcasts).await;
+    let (client, server) = lab_on(refuses_broadcasts).await;
     let account = Arc::new(Account::new(None));
-    let sent = charged(Arc::clone(&account), engine.who_is(WhoIsScope::Local, None)).await;
+    let sent = charged(Arc::clone(&account), client.who_is(WhoIsScope::Local, None)).await;
     assert!(sent.is_err());
     assert_eq!(account.requests(), 0);
-    stop(engine, server).await;
+    stop(client, server).await;
 }
 
 /// A timeout is the client's own or the state machine's TSM_TIMEOUT abort;

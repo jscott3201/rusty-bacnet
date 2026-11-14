@@ -31,6 +31,8 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+# The in-process router behind which the handle tests' routed stations sit.
+bacnet-network.workspace = true
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 bacnet-transport = { workspace = true, features = ["test-support"] }

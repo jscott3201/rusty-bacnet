@@ -35,7 +35,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast::error::RecvError;
 
-use bacnet_ops::engine::{RpmFailure, rpm_failure, rpm_rows, unreachable};
+use bacnet_ops::client::{RpmFailure, rpm_failure, rpm_rows, unreachable};
 use bacnet_ops::format::{LogColumns, RawRow, RowError, StateTexts};
 use bacnet_ops::target::{Target, bip6_vmac, parse_target_on};
 
@@ -438,7 +438,7 @@ impl Destination {
     }
 
     /// Name the states `columns` sample with their objects' state texts,
-    /// as [`Engine::log_state_texts`](bacnet_ops::engine::Engine::log_state_texts)
+    /// as [`Device::log_state_texts`](bacnet_ops::Device::log_state_texts)
     /// does: one request an object, each object once, at most
     /// [`MAX_STATE_TEXT_OBJECTS`](bacnet_ops::format::MAX_STATE_TEXT_OBJECTS).
     /// A reference that names a device is read only when it names this

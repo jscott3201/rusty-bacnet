@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::watch::{Hub, Point, WatchOptions, Watched};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -33,8 +33,11 @@ fn ai1() -> ObjectIdentifier {
 /// which the limits sit idle a second.
 async fn spacing(limits: &RequestLimits) -> u128 {
     let start = Instant::now();
-    for device in 7_000..7_003 {
-        drop(limits.turn(device).await);
+    for device in 7_000u32..7_003 {
+        let mut mac = [0; 6];
+        mac[2..].copy_from_slice(&device.to_be_bytes());
+        let at = bacnet_ops::DeviceAddress::local(&mac).unwrap();
+        drop(limits.turn(&at).await);
     }
     let spent = Instant::now() - start;
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -54,7 +57,7 @@ pub(super) async fn agents_are(listener: &Listener, agents: usize) {
 async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
     let lab = lab().await;
     let limits = Arc::new(RequestLimits::new(50));
-    let engine = Arc::new(Engine::new(Arc::clone(&lab.client), Arc::clone(&limits)));
+    let client = Client::new(Arc::clone(&lab.low), Arc::clone(&limits));
     let dir = private_dir();
     let policy = Policy {
         rates: Rates {
@@ -64,7 +67,7 @@ async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
         ..Policy::default()
     };
     let listener = Listener::bind(
-        Arc::clone(&engine),
+        client.clone(),
         policy,
         "tester",
         workspace(dir.path()),
@@ -83,7 +86,7 @@ async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
     agents_are(&listener, 0).await;
     assert_eq!(spacing(&limits).await, 40, "its own again");
     listener.shutdown().await;
-    drop(engine);
+    drop(client);
     lab.stop().await;
 }
 
@@ -116,11 +119,12 @@ async fn agents_share_one_budget_and_the_tui_keeps_its_share() {
     while lab.sends().len() < 8 {
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
-    let engine = lab.engine();
+    let client = lab.client();
     let start = Instant::now();
+    let lab_device = client.device(LAB).await.unwrap();
     for _ in 0..20 {
-        engine
-            .read_property(LAB, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
+        lab_device
+            .read_property(ai1(), PropertyIdentifier::PRESENT_VALUE, None)
             .await
             .unwrap();
     }
@@ -134,22 +138,22 @@ async fn agents_share_one_budget_and_the_tui_keeps_its_share() {
         bridge.await.unwrap().unwrap();
     }
     listener.shutdown().await;
-    drop(engine);
+    drop((lab_device, client));
     lab.stop().await;
 }
 
-/// Acceptance: the TUI's watch hub and the agents' hub on one engine use
+/// Acceptance: the TUI's watch hub and the agents' hub on one client use
 /// different subscriber process ids, so an agent leaving a point the TUI
 /// watches too cancels only its own subscription, and the TUI's keeps
 /// its COV notifications.
 #[tokio::test(start_paused = true)]
 async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
     let lab = lab().await;
-    let engine = lab.engine();
-    let tui = Hub::new(Arc::clone(&engine), WatchOptions::default()).unwrap();
+    let client = lab.client();
+    let tui = Hub::new(client.clone(), WatchOptions::default()).unwrap();
     let dir = private_dir();
     let listener = Listener::bind(
-        Arc::clone(&engine),
+        client.clone(),
         Policy::default(),
         "tester",
         workspace(dir.path()),
@@ -192,7 +196,7 @@ async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
     drop(lease);
     tui.shutdown(Duration::from_secs(5)).await;
     listener.shutdown().await;
-    drop((tui, engine));
+    drop((tui, client));
     lab.stop().await;
 }
 
@@ -237,7 +241,7 @@ async fn unreadable_credentials_are_refused() {
     ] {
         let dir = private_dir();
         let listener = Listener::bind_with(
-            lab.engine(),
+            lab.client(),
             Policy::default(),
             "tester".into(),
             workspace(dir.path()),

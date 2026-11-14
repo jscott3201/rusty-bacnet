@@ -5,7 +5,8 @@
 use std::sync::atomic::AtomicBool;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::engine::{Halt, Reader};
+use bacnet_ops::DeviceAddress;
+use bacnet_ops::client::{Halt, Reader};
 use bacnet_ops::export::s223::{
     Access, DEFAULT_BASE_IRI, Entry, Inventory, InventoryOptions, Point, PointKind, TurtleOptions,
     WritePriority, read_inventory, to_turtle,
@@ -32,21 +33,27 @@ pub(crate) fn options(types: Option<Vec<PyObjectType>>) -> PyResult<InventoryOpt
 
 /// `device`'s inventory over `client`, one request at a time with no rate
 /// cap beyond the client's own `min_request_interval_ms`, as the CLI reads
-/// it. A device that doesn't answer the name read, or a failed read of
-/// the whole Object_List, raises the client's usual error; a failure after
+/// it, at the address the discovery table holds for the instance. An
+/// instance no address claims, or two do, raises before anything is sent;
+/// a device that doesn't answer the name read, or a failed read of the
+/// whole Object_List, raises the client's usual error; a failure after
 /// that ends the reading with `stopped` set.
 pub(crate) async fn read(
     client: &BACnetClient<AppTransport>,
     device: u32,
     options: &InventoryOptions,
 ) -> PyResult<PyInventory223> {
+    let at = DeviceAddress::claiming(client, device)
+        .await
+        .map_err(to_py_err)?;
     let limits = RequestLimits::new(0);
     // Nothing sets the flag: a Python caller cancels by cancelling the task,
     // which drops this future.
     let never = AtomicBool::new(false);
     let mut reader = Reader {
         client,
-        device,
+        device: at,
+        instance: Some(device),
         rate: &limits,
         cancel: &never,
         rpm: true,

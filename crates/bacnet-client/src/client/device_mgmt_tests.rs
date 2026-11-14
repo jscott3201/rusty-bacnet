@@ -382,6 +382,7 @@ async fn device_mgmt_unknown_device_and_invalid_time_routes_send_nothing() {
             max_segments_accepted: None,
             vendor_id: 0,
             last_seen: std::time::Instant::now(),
+            last_announced: None,
             source_network: Some(network),
             source_address: Some(MacAddr::from_slice(&address)),
         });

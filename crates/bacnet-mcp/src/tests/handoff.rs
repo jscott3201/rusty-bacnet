@@ -51,7 +51,8 @@ fn hold_the_gate(lab: &Lab, hold: Duration) -> tokio::task::JoinHandle<()> {
         // The pre-read went at once and holds the gate for 500 ms; this
         // queues behind it, and the write's own turn behind this.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let turn = limits.turn(LAB).await;
+        let at = bacnet_ops::DeviceAddress::local(&super::LAB_MAC).unwrap();
+        let turn = limits.turn(&at).await;
         tokio::time::sleep(hold).await;
         drop(turn);
     })

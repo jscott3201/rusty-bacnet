@@ -292,6 +292,7 @@ async fn the_device_purge_runs_while_apdus_keep_arriving() {
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: crate::discovery::now(),
+        last_announced: None,
         source_network: None,
         source_address: None,
     });

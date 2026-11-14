@@ -314,6 +314,7 @@ mod tests {
             max_segments_accepted: None,
             vendor_id: 24,
             last_seen: std::time::Instant::now(),
+            last_announced: None,
             source_network: routed.map(|(network, _)| network),
             source_address: routed.map(|(_, mac)| MacAddr::from_slice(mac)),
         };

@@ -125,8 +125,8 @@ impl<T: TransportPort + 'static> DeskJob<T> {
             fields,
             work,
         } = self;
-        let engine = match ctx.engine() {
-            Ok(engine) => engine,
+        let client = match ctx.client() {
+            Ok(client) => client,
             Err(error) => {
                 // No client to send with: say so, rather than vanish.
                 match work {
@@ -151,8 +151,8 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                 let sent = match desk.write_refusal(&caller, &preview, false) {
                     Some(why) => desk.not_sent(&caller, &preview, &why).await,
                     None => {
-                        let (client, limits) = (engine.client(), engine.limits());
-                        let execute = desk.execute(client, limits, &caller, &preview, false);
+                        let (low, limits) = (client.low_level(), client.limits());
+                        let execute = desk.execute(low, limits, &caller, &preview, false);
                         charged(account, execute).await
                     }
                 };
@@ -200,7 +200,7 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                     let _ = done.send(Err(ToolError::refused("stale", message)));
                     return Vec::new();
                 }
-                let revert = desk.revert(engine.client(), engine.limits(), &caller, chosen);
+                let revert = desk.revert(client.low_level(), client.limits(), &caller, chosen);
                 let undone = charged(account, revert).await;
                 ctx.writes.signals.ledger_settled(&before, desk, false);
                 let left = desk

@@ -185,7 +185,7 @@ fn active(columns: &LogColumns, column: usize) -> Option<&str> {
     columns.state_texts(column).active.as_deref()
 }
 
-/// A log's columns come from its Log_DeviceObjectProperty, as the engine
+/// A log's columns come from its Log_DeviceObjectProperty, as the client
 /// reads them (#2091): the referenced property names the column, and a
 /// refused read names nothing.
 #[tokio::test(start_paused = true)]

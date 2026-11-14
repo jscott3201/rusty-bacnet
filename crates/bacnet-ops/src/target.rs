@@ -234,19 +234,38 @@ pub fn parse_target_on<T: TransportPort + 'static>(
     }
     let target = parse_target(s)?;
     if let Target::Mac(mac) = &target {
-        if bip6 && mac.len() == 6 {
-            return Err(format!(
-                "'{s}' is a 6-octet MAC; a B/IPv6 node is addressed by its 3-octet VMAC (bip6:...)"
-            ));
-        }
-        if mstp && mac.len() != 1 {
-            return Err(format!(
-                "'{s}' is a {}-octet MAC; an MS/TP station is addressed by mstp:N",
-                mac.len()
-            ));
-        }
+        check_local_mac(transport, mac, s)?;
     }
     Ok(target)
+}
+
+/// Refuse a MAC on the local network that `transport`'s link doesn't
+/// address stations by, as [`parse_target_on`] refuses one written for it,
+/// with `shown` naming it: B/IPv6 refuses six octets, MS/TP any length but
+/// one, and every other link the one octet of an MS/TP station and the
+/// three of a B/IPv6 VMAC.
+pub fn check_local_mac<T: TransportPort + 'static>(
+    transport: &T,
+    mac: &[u8],
+    shown: &str,
+) -> Result<(), String> {
+    let bip6 = as_bip6(transport).is_some();
+    let mstp = is_mstp(transport);
+    match mac.len() {
+        6 if bip6 => Err(format!(
+            "'{shown}' is a 6-octet MAC; a B/IPv6 node is addressed by its 3-octet VMAC (bip6:...)"
+        )),
+        n if mstp && n != 1 => Err(format!(
+            "'{shown}' is a {n}-octet MAC; an MS/TP station is addressed by mstp:N"
+        )),
+        3 if !bip6 => Err(format!(
+            "'{shown}' is a B/IPv6 VMAC: bip6: addresses need the --ipv6 transport"
+        )),
+        1 if !mstp => Err(format!(
+            "'{shown}' is an MS/TP station: mstp: addresses need the --mstp transport"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Find the VMAC of the B/IPv6 node at `peer`, the MAC a command sends to.

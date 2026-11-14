@@ -2,7 +2,7 @@
 //! a point (a first read, then a managed COV subscription), cancelling
 //! one, and polling a batch.
 //!
-//! Every request takes its turn at the device's gate in the engine's
+//! Every request takes its turn at the device's gate in the client's
 //! limits, so the hub, the browser and the writes never have more than one
 //! confirmed request outstanding to a device between them. The managed
 //! subscription's renewals, sent by its own task once per lifetime, take
@@ -25,7 +25,8 @@ use super::options::{Fallback, Reads};
 use super::poll::{self, PollRow, Polled};
 use super::shared::Shared;
 use super::{Inner, Point, Watched};
-use crate::engine::{Halt, network_of, unreachable};
+use crate::client::{Halt, unreachable};
+use crate::device::DeviceAddress;
 use crate::format::{RawRow, RowError};
 
 /// How long one cancel may take before it is given up.
@@ -76,6 +77,28 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> PollRow<u3
     }
 }
 
+/// Where the device at the address `target` names is: the hub's points
+/// name a device by its instance, and its requests and its gate go to the
+/// address its row has (#2560; the hub keys on addresses in slice 6).
+fn address_of(target: &CovTarget) -> Option<DeviceAddress> {
+    match target {
+        CovTarget::Local { mac } => DeviceAddress::local(mac).ok(),
+        CovTarget::Routed {
+            network, address, ..
+        } => DeviceAddress::new(*network, address).ok(),
+        _ => None,
+    }
+}
+
+/// The address of the device that claims `instance` in the discovery
+/// table: the one row, or why there is none to read.
+async fn find<T: TransportPort + 'static>(
+    inner: &Inner<T>,
+    instance: u32,
+) -> Result<DeviceAddress, Error> {
+    DeviceAddress::claiming(inner.client.low_level(), instance).await
+}
+
 /// Look `shared`'s device up and note where it is, read the point once,
 /// and subscribe unless the read had no answer.
 pub(super) async fn start<T: TransportPort + 'static>(
@@ -83,9 +106,10 @@ pub(super) async fn start<T: TransportPort + 'static>(
     shared: Arc<Shared>,
 ) -> Started {
     let (process, point) = (shared.process, shared.point);
-    let engine = &inner.engine;
-    let device = match engine.device(point.device).await {
-        Ok(Some(device)) => device,
+    let client = &inner.client;
+    let found = client.low_level().get_device(point.device).await;
+    let device = match found {
+        Ok(Some(device)) if DeviceAddress::of(&device).is_some() => device,
         found => {
             // An instance two addresses claim fails as the first read
             // would; polls by the instance work again once one is left.
@@ -97,12 +121,13 @@ pub(super) async fn start<T: TransportPort + 'static>(
             };
         }
     };
+    let address = DeviceAddress::of(&device).expect("checked above");
     let target = CovTarget::of_device(&device);
     // Before anything is sent: the device may notify as soon as it takes
     // the subscription, before this job is back with the scheduler, and
     // the receiver only takes notifications from where the device is.
     shared.lock().target = Some(target.clone());
-    let first = read(&inner, &point).await;
+    let first = read(&inner, &point, &address).await;
     let read_at = Some((Instant::now(), SystemTime::now()));
     if let Err(error) = &first
         && unreachable(error)
@@ -115,7 +140,7 @@ pub(super) async fn start<T: TransportPort + 'static>(
             outcome: None,
         };
     }
-    let outcome = subscribe(&inner, target.clone(), process, point).await;
+    let outcome = subscribe(&inner, (target.clone(), &address), process, point).await;
     Started {
         target: Some(target),
         first: Some(first),
@@ -130,11 +155,12 @@ pub(super) async fn start<T: TransportPort + 'static>(
 async fn read<T: TransportPort + 'static>(
     inner: &Inner<T>,
     point: &Point,
+    address: &DeviceAddress,
 ) -> Result<Vec<RawRow>, Error> {
-    let engine = &inner.engine;
+    let client = &inner.client;
     let reads = &inner.options.reads;
     let mut wanted = wanted(reads, point);
-    let mut reader = engine.reader(point.device);
+    let mut reader = client.reader(address, Some(point.device));
     let alone = wanted.len() == 1 && reads.first.is_empty() && !reads.name;
     if let Watched::Property { property, index } = point.watched
         && (alone || index.is_some())
@@ -156,7 +182,7 @@ async fn read<T: TransportPort + 'static>(
         reads.state_texts,
     )
     .await;
-    engine.settle(&reader);
+    client.settle(&reader);
     read.map_err(|halt| match halt {
         Halt::Device(error) => error,
         Halt::Cancelled => Error::Encoding("the read was stopped".into()),
@@ -167,22 +193,19 @@ async fn read<T: TransportPort + 'static>(
 /// SubscribeCOVProperty for one property, unconfirmed and finite.
 async fn subscribe<T: TransportPort + 'static>(
     inner: &Inner<T>,
-    target: CovTarget,
+    (target, address): (CovTarget, &DeviceAddress),
     process: u32,
     point: Point,
 ) -> Result<ManagedCOVSubscription, Error> {
-    let engine = &inner.engine;
     let options = &inner.options;
-    let client = engine.client();
-    let limits = engine.limits();
-    let device = point.device;
-    let network = network_of(client, limits, device).await;
+    let client = inner.client.low_level();
+    let limits = inner.client.limits();
     let managed = ManagedCOVSubscriptionOptions::default()
         .with_renewal_margin(options.renewal_margin)
-        .with_renewal_gate(limits.gate(device));
+        .with_renewal_gate(limits.gate(address));
     // The first request goes under this turn; renewals take the gate
     // themselves.
-    let _turn = limits.turn_on(device, network).await;
+    let _turn = limits.turn(address).await;
     match point.watched {
         Watched::Object => {
             Arc::clone(client)
@@ -213,19 +236,31 @@ async fn subscribe<T: TransportPort + 'static>(
     }
 }
 
-/// Poll `rows` of `device` together, by RPM unless it refused it.
+/// Poll `rows` of `device` together, by RPM unless it refused it, at the
+/// address its row in the discovery table has now.
 pub(super) async fn poll<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     device: u32,
     rows: Vec<PollRow<u32>>,
 ) -> Polled<u32> {
-    let engine = &inner.engine;
-    let rpm = !engine.refused_rpm(device);
-    let polled = poll::poll(engine.client(), engine.limits(), device, &rows, rpm).await;
+    let client = &inner.client;
+    let address = match find(&inner, device).await {
+        Ok(address) => address,
+        Err(error) => {
+            return Polled {
+                rows: rows
+                    .iter()
+                    .map(|row| (row.key, Err(error.to_string())))
+                    .collect(),
+                refused_rpm: false,
+                unreachable: false,
+            };
+        }
+    };
+    let rpm = !client.refused_rpm(&address);
+    let polled = poll::poll(client.low_level(), client.limits(), &address, &rows, rpm).await;
     if polled.refused_rpm {
-        let mut reader = engine.reader(device);
-        reader.rpm = false;
-        engine.settle(&reader);
+        client.refuse_rpm(&address);
     }
     polled
 }
@@ -242,12 +277,14 @@ pub(super) async fn cancel<T: TransportPort + 'static>(
     target: CovTarget,
     managed: Option<ManagedCOVSubscription>,
 ) {
-    let engine = &inner.engine;
-    let client = engine.client();
-    let limits = engine.limits();
+    let client = inner.client.low_level();
+    let limits = inner.client.limits();
     let cancel = async {
-        let network = network_of(client, limits, point.device).await;
-        let _turn = limits.turn_on(point.device, network).await;
+        let address = match address_of(&target) {
+            Some(address) => address,
+            None => find(&inner, point.device).await?,
+        };
+        let _turn = limits.turn(&address).await;
         if let Some(managed) = managed {
             managed.stop().await;
         }

@@ -32,7 +32,7 @@ use super::poll::Polled;
 use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
 use super::{Inner, Source, State, Why};
-use crate::engine::unreachable;
+use crate::client::unreachable;
 use crate::limits::charged;
 
 /// How often the scheduler looks at renewals and what is due.

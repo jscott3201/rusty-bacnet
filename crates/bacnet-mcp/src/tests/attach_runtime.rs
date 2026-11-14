@@ -68,7 +68,7 @@ async fn a_panicking_request_ends_only_its_session_on_the_listeners_threads() {
     let dir = private_dir();
     let own = SessionRuntime::Own;
     let listener = Listener::bind(
-        lab.engine(),
+        lab.client(),
         Policy::default(),
         "tester",
         workspace(dir.path()),
@@ -147,7 +147,7 @@ async fn a_dropped_listener_lets_its_sessions_end_on_record() {
     let lab = lab().await;
     let dir = private_dir();
     let listener = Listener::bind(
-        lab.engine(),
+        lab.client(),
         Policy::default(),
         "tester",
         workspace(dir.path()),

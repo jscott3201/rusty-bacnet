@@ -114,7 +114,7 @@ async fn a_device_found_between_pages_shifts_nothing() {
     assert_eq!(instances(&first), [300, 301, 302]);
     for (instance, host) in [(100, 100), (1000, 101)] {
         let mac = [10, 0, 0, host, 0xBA, 0xC0];
-        lab.client.add_device(instance, &mac).await.unwrap();
+        lab.low.add_device(instance, &mac).await.unwrap();
     }
     let next = first["next"].as_str().unwrap().to_string();
     let rest = follow(&mut lab, &next).await;
@@ -211,7 +211,7 @@ async fn a_stream_follows_at_most_the_page_cap() {
     let (_, accepted) = lab.agent.listen(&asked).await;
     let expected: Vec<&str> = asked[..MAX_DEVICE_PAGES + 1].to_vec();
     assert_eq!(accepted, expected);
-    lab.client.clear_devices().await;
+    lab.low.clear_devices().await;
     lab.server.broadcast_i_am().await.unwrap();
     let updates = lab.agent.drain(UPDATED, Duration::from_secs(3)).await;
     let mut told: Vec<&str> = updates
@@ -233,7 +233,7 @@ async fn every_followed_page_is_announced_when_a_device_arrives() {
     let uris = ["bacnet://devices", "bacnet://devices/after/302"];
     let (_, accepted) = lab.agent.listen(&uris).await;
     assert_eq!(accepted, uris);
-    lab.client.clear_devices().await;
+    lab.low.clear_devices().await;
     for _ in 0..3 {
         lab.server.broadcast_i_am().await.unwrap();
     }

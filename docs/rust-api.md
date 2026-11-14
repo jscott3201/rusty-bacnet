@@ -11766,20 +11766,61 @@ terminal UI and its MCP server share: no terminal or MCP dependency, just a
 (`target`), object, property and value parsing (`parse`), display text
 (`format`, `label`; `format::alarms` renders alarm and event summaries),
 request limits (`limits`: the global rate cap, the one request per device
-gate and per-caller accounts), the watch hub (`watch`) and the read engine
-(`engine`). `engine::Engine::new(client,
+gate and per-caller accounts), the watch hub (`watch`), the high-level
+client (`client`) and device identity (`device`). `Client::new(client,
 limits)` wraps an `Arc<BACnetClient<T>>` and an `Arc<RequestLimits>`
-(`RequestLimits::new(per_second)`, 0 for no cap); its async reads take a
-device instance: `read`, `read_property`, `list_objects`, `describe_device`,
-`read_trend` (trend, event and audit log pages), `alarms`, `alarm_summary`
-and `enrollment_summary`.
+(`RequestLimits::new(per_second)`, 0 for no cap), and is cheap to clone.
+`client.device(target).await?` gives a `Device` handle: from an address
+(`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there (an
+address on the client's own network, once `BACnetClient::network_number`
+knows it, is the local station), from an instance (`1234`, or `2:1234` on
+one network) it follows the one address claiming it (none: one Who-Is,
+waiting `with_resolve_wait`'s time, a clone's own setting; two or more,
+then or after the wait: `Error::AmbiguousDevice`), and from a discovery
+result it is pinned and knows the instance. The handle's async reads are
+`read`, `read_property`, `list_objects`, `describe_device`, `read_trend`
+(trend, event and audit log pages), `alarms`, `alarm_summary`,
+`enrollment_summary` and the 223 inventory's. A device's gate, turns and
+memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
+two devices sharing an instance stay apart and one device named two ways
+waits at one gate. A following handle moves to the one other address on its
+network claiming the instance, and tells `Client::events`
+(`ClientEvent::Moved`): before a request when another device has announced
+itself at its address; after a request times out, or finds no route to a
+routed address, when its row is gone; and after a timeout while its address
+still claims the instance, when only the other address answered the one
+Who-Is an earlier timeout sent for it (at most one every `QUIET` for the
+handles following it). A clone that sends no Who-Is
+(`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
+announced `QUIET` before the other's. A duplicate claim is no move. A pinned
+handle stays, and `Device::moved_to` says where its instance is heard now,
+by the I-Am times.
 
 `bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
 `bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,
 previews, the ledger and the audit log, #2068), the command classes
 (`class`), frame decoding with no traffic (`decode`), and B/IP BBMD table
-reads through an `Engine` and the checks over them (`bbmd`). An application
+reads through a `Client` and the checks over them (`bbmd`). An application
 on `bacnet-ops` doesn't need it.
+
+### Engine becomes Client
+
+`bacnet_ops::Engine` was renamed in #2560 and its reads moved to `Device`,
+with no aliases left behind:
+
+| Was | Now |
+|---|---|
+| `bacnet_ops::engine::Engine<T>`, held in an `Arc` | `bacnet_ops::Client<T>`, cheap to clone; `Hub::new` and `McpServer::new` take it by value |
+| the module `bacnet_ops::engine` (`Reader`, `Wanted`, `WhoIsScope`, `ReadVia`, `unreachable`, ...) | `bacnet_ops::client` |
+| `engine.client()` | `client.low_level()` |
+| `engine.read(device, object, wanted)` and `read_property`, `list_objects`, `describe_device`, `read_trend`, `alarms`, `alarm_summary`, `enrollment_summary`, `log_columns`, `log_state_texts`, `inventory`, `inventory_device`, `inventory_object` with the instance first | the same method on `client.device(device).await?`, without it |
+| `engine.device(instance)`, the discovery table's row | `client.low_level().get_device(instance)` |
+| `engine.refused_rpm(instance)` | `client.refused_rpm(&address)` |
+| `RequestLimits::turn(u32)`, `turn_on(u32, Option<u16>)`, `gate(u32)`, `wait_device_free(u32)` | `turn`, `gate` and `wait_device_free` with a `&DeviceAddress`, whose network paces the request |
+| `engine::Reader { device: u32, .. }` | `Reader { device: DeviceAddress, instance: Option<u32>, .. }`; `Reader::instance` reads a missing instance by the wildcard, `Reader::rpm_in` sends an RPM in a turn the caller holds |
+| `engine::network_of` | gone: the address carries the network |
+| `watch::poll::poll(client, limits, u32, ..)` | `poll(client, limits, &DeviceAddress, ..)` |
+| an address target turned into an instance with `add_device` first (the CLI export) | `DeviceAddress::claiming(client, instance)` for the other way round, or a handle from the address |
 
 ### Moved to bacnet-tool
 
@@ -11793,20 +11834,24 @@ behind. Add a `bacnet-tool` dependency and change the paths:
 | `bacnet_ops::decode` (`frame`, `tree`, `decode_npdu_layer`) | `bacnet_tool::decode` |
 | `bacnet_ops::decode::testing` (feature `test-support`) | `bacnet_tool::decode::testing` (`bacnet-tool`'s `test-support`) |
 | `bacnet_ops::bbmd` (rows, `survey`, `matrix`) | `bacnet_tool::bbmd` |
-| `engine.bip()`, `engine.registration_bbmd()` | `bacnet_tool::bbmd::bip(&engine)`, `bacnet_tool::bbmd::registration_bbmd(&engine)` |
-| `engine.read_bdt(bbmd)`, `engine.read_fdt(bbmd)` | `bacnet_tool::bbmd::read_bdt(&engine, bbmd)`, `bacnet_tool::bbmd::read_fdt(&engine, bbmd)` |
+| `engine.bip()`, `engine.registration_bbmd()` | `bacnet_tool::bbmd::bip(&client)`, `bacnet_tool::bbmd::registration_bbmd(&client)` |
+| `engine.read_bdt(bbmd)`, `engine.read_fdt(bbmd)` | `bacnet_tool::bbmd::read_bdt(&client, bbmd)`, `bacnet_tool::bbmd::read_fdt(&client, bbmd)` |
 | `bacnet_ops::destination` | private to `bacnet-cli`, its only user |
 
 `bacnet-ops` itself gains three public items the moved code reads:
-`engine::rpm_rows`, `format::timestamp_text` and `format::alarms::cell`.
+`client::rpm_rows`, `format::timestamp_text` and `format::alarms::cell`.
 
 `bacnet-mcp` (#2066, experimental) is a Model Context Protocol server over
-that engine, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).
-`McpServer::new(engine, policy, principal)` takes an
-`Option<Arc<Engine<T>>>` (`None` for passive mode, which sends nothing), a
+that client, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).
+`McpServer::new(client, policy, principal)` takes an
+`Option<Client<T>>` (`None` for passive mode, which sends nothing), a
 `Policy` it validates, and the caller's principal; `serve_stdio()` or
-`serve(reader, writer)` run it. Build the engine's limits from
-`Policy::request_limits()` so the policy's rates hold. It is read-only unless a
+`serve(reader, writer)` run it. Build the client's limits from
+`Policy::request_limits()` so the policy's rates hold. The server's client
+never sends a Who-Is to find a device (`with_resolve_wait(None)`, on its
+own clone, so a TUI sharing the client keeps its own): a tool names one the
+discovery table holds, and each call reads through a handle pinned to the
+row the policy checked. It is read-only unless a
 profile opts into writes. The [MCP server guide](mcp.md) covers its tools
 and profiles, and [its design](design/mcp.md) the reasoning.
 
@@ -11826,6 +11871,8 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Encode(EncodeError)`, `Error::Range(RangeError)` | A value an encoder, validator or constructor refused, with a static label |
 | `Error::Encoding(msg)` | A formatted local encoding or configuration error (transport, network, client and server) |
 | `Error::Transport(io_error)` | Transport I/O failure |
+| `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
+| `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |
 
 ---
 

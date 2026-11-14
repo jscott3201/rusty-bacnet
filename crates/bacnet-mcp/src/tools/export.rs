@@ -7,7 +7,7 @@
 //! (read whole, or element by element and resumed across calls), reads the
 //! device's name, then reads the objects of the selected types one at a
 //! time from the cursor's place
-//! ([`Engine::inventory_object`](bacnet_ops::engine::Engine::inventory_object)).
+//! ([`Device::inventory_object`](bacnet_ops::Device::inventory_object)).
 //! Its Turtle stays under [`MAX_TURTLE`] bytes: it ends before an object
 //! likely to pass that, and an object that passes it anyway goes back to
 //! the next page, to be read again there; a point too large for any page
@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use bacnet_ops::engine::timed_out;
+use bacnet_ops::client::timed_out;
 use bacnet_ops::export::s223::{
     Counts, DEFAULT_BASE_IRI, Detail, DeviceInfo, Entry, Inventory, InventoryOptions,
     TurtleOptions, WritePriority, write_turtle,
@@ -217,7 +217,6 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let device = ctx.device(call, &args.device).await?;
     let position = Position::from(start(ctx, NAME, args.cursor.as_deref(), raw)?);
     let first = position.index;
-    let engine = ctx.engine()?;
     let instance = device.instance;
     let listing = listing(ctx, call, &device).await?;
     let mut body = json!({
@@ -262,8 +261,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
              without a cursor"
         )));
     }
-    let device_info = engine
-        .inventory_device(instance, Detail::Export)
+    let device_info = device
+        .handle
+        .inventory_device(Detail::Export)
         .await
         .map_err(|e| ToolError::device(instance, &e))?;
     let name = device_info.name.as_deref().map_or(Value::Null, |name| {
@@ -279,10 +279,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
             resume = Some(at);
             break;
         }
-        match engine
-            .inventory_object(instance, object, Detail::Export)
-            .await
-        {
+        match device.handle.inventory_object(object, Detail::Export).await {
             Ok(entry) => {
                 if !page.push(entry) {
                     // Past the cap with others: it heads the next page.

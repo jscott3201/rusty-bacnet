@@ -644,7 +644,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     }
     let leases = claim.as_ref().map_or(&[][..], |c| &c.leases[..]);
     follow.set(
-        ctx.engine.as_deref(),
+        ctx.client.as_ref(),
         &ctx.writes.signals,
         uris.iter()
             .map(|name| {

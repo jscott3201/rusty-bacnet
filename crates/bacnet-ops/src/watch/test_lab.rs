@@ -29,10 +29,15 @@ use bytes::Bytes;
 use tokio::time::Instant;
 
 use super::{Hub, Point, WatchOptions, Watched};
-use crate::engine::Engine;
+use crate::client::Client;
 use crate::limits::RequestLimits;
 
 pub(super) const LAB: u32 = 1001;
+
+/// Where the lab device answers.
+pub(super) fn lab_at() -> crate::DeviceAddress {
+    crate::DeviceAddress::local(&[2]).unwrap()
+}
 pub(super) const RPM: u8 = 14;
 pub(super) const RP: u8 = 12;
 pub(super) const SUBSCRIBE_COV: u8 = 5;
@@ -181,7 +186,7 @@ fn forwards(
 
 pub(super) struct Lab {
     pub(super) hub: Hub<TestTransport>,
-    pub(super) engine: Arc<Engine<TestTransport>>,
+    pub(super) client: Client<TestTransport>,
     pub(super) server: BACnetServer<LoopbackTransport>,
     pub(super) quirks: Arc<Quirks>,
     sent: Arc<Mutex<Vec<(u8, Instant)>>>,
@@ -247,16 +252,13 @@ impl Lab {
             ..ClientConfig::default()
         };
         let link = link(client_port, Arc::clone(&quirks), Arc::clone(&sent));
-        let client = BACnetClient::start(config, link).await.unwrap();
-        client.add_device(LAB, &[2]).await.unwrap();
-        let engine = Arc::new(Engine::new(
-            Arc::new(client),
-            Arc::new(RequestLimits::new(0)),
-        ));
-        let hub = Hub::new(Arc::clone(&engine), options).unwrap();
+        let low = BACnetClient::start(config, link).await.unwrap();
+        low.add_device(LAB, &[2]).await.unwrap();
+        let client = Client::new(Arc::new(low), Arc::new(RequestLimits::new(0)));
+        let hub = Hub::new(client.clone(), options).unwrap();
         Self {
             hub,
-            engine,
+            client,
             server,
             quirks,
             sent,
@@ -316,13 +318,13 @@ impl Lab {
     pub(super) async fn stop(self) {
         assert!(self.hub.shutdown(Duration::from_secs(30)).await);
         drop(self.hub);
-        let Ok(engine) = Arc::try_unwrap(self.engine) else {
-            panic!("the hub let go of the engine");
+        let Some(low) = self.client.into_low_level() else {
+            panic!("the hub let go of the client");
         };
-        let Ok(mut client) = Arc::try_unwrap(engine.client) else {
-            panic!("the engine holds the only client");
+        let Ok(mut low) = Arc::try_unwrap(low) else {
+            panic!("the client holds the only low-level client");
         };
-        client.stop().await.unwrap();
+        low.stop().await.unwrap();
         let mut server = self.server;
         server.stop().await.unwrap();
     }

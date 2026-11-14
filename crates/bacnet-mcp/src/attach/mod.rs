@@ -1,10 +1,10 @@
 //! TUI-attached mode (#2185; design §8.1, §9): the terminal UI listens on
 //! a local socket in its profile's workspace, and each agent that
-//! connects gets an MCP session of its own over the TUI's engine, so the
+//! connects gets an MCP session of its own over the TUI's client, so the
 //! agent's requests share the TUI's client, transport and request limits.
 //! The sessions share one watch hub and one principal bucket, as they are
 //! one principal, and while any is attached the profile's `[mcp]` limits
-//! join the engine's. `bacnet mcp connect` bridges an agent host's stdio
+//! join the client's. `bacnet mcp connect` bridges an agent host's stdio
 //! to that socket ([`bridge()`]).
 //!
 //! Only this OS user may connect. On Unix, checked three ways: the
@@ -32,10 +32,10 @@
 //! on threads named [`SESSION_THREADS`]: a host whose panic hook restores
 //! its terminal (the TUI's) leaves a panic on those threads alone, and the
 //! session it hit ends, audited, while the host and other agents carry on
-//! (#2203). The engine, its client and transport stay on the host's
-//! runtime; the sessions reach them through Tokio's synchronization, which
-//! works across runtimes, and their own timers and socket I/O run on their
-//! runtime.
+//! (#2203). The client, its low-level client and transport stay on the
+//! host's runtime; the sessions reach them through Tokio's synchronization,
+//! which works across runtimes, and their own timers and socket I/O run on
+//! their runtime.
 //!
 //! Sessions over the socket are read-only unless the profile offers
 //! writes (`mcp_writes = "elicit"`) and the TUI lends its write desk
@@ -66,7 +66,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_transport::port::TransportPort;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{mpsc, watch};
@@ -278,13 +278,13 @@ impl std::fmt::Debug for Listener {
 
 impl Listener {
     /// Listen on [`socket_path`] of `workspace.dir` for agents of this OS
-    /// user, each served by a session over `engine` under `policy` as
+    /// user, each served by a session over `client` under `policy` as
     /// `principal`, audited in the workspace, the sessions run on
     /// `runtime`. Read-only unless the policy offers writes and the TUI
     /// lends its write `desk`: then the TUI takes the agents' write
     /// requests from [`approvals`](Self::approvals). Needs a Tokio
-    /// runtime, which must outlive the listener: the engine's client and
-    /// transport run on it.
+    /// runtime, which must outlive the listener: the client's low-level client
+    /// and transport run on it.
     ///
     /// Refused when another listener holds the workspace's lock. On Unix,
     /// the workspace must be this user's own directory, not a symbolic
@@ -295,7 +295,7 @@ impl Listener {
     /// other users list it; when its salt file isn't this user's alone
     /// or is corrupt; or when the run's nonce can't be published.
     pub async fn bind<T: TransportPort + 'static>(
-        engine: Arc<Engine<T>>,
+        client: Client<T>,
         policy: Policy,
         principal: impl Into<String>,
         workspace: Workspace,
@@ -304,7 +304,7 @@ impl Listener {
     ) -> Result<Self, AttachError> {
         let principal = principal.into();
         Self::bind_with(
-            engine,
+            client,
             policy,
             principal,
             workspace,
@@ -316,14 +316,14 @@ impl Listener {
 
     /// [`bind`](Self::bind), identifying peers with `credentials`.
     pub(crate) async fn bind_with<T: TransportPort + 'static>(
-        engine: Arc<Engine<T>>,
+        client: Client<T>,
         mut policy: Policy,
         principal: String,
         workspace: Workspace,
         (credentials, runtime): (Credentials, SessionRuntime),
         desk: Option<mpsc::Sender<DeskJob<T>>>,
     ) -> Result<Self, AttachError> {
-        // The listener always has an engine, so a caller's passive policy
+        // The listener always has a client, so a caller's passive policy
         // is overridden. Writes go over the socket only with the TUI's
         // desk to write through, and only as the TUI approves them: not by
         // the client's confirmation, an armed MCP session or a plan grant.
@@ -354,7 +354,7 @@ impl Listener {
         // the sessions' runtime.
         let (mut endpoint, incoming) = preflight.bind(&workspace.dir, &handle)?;
         let entered = handle.enter();
-        let shared = match Shared::new(Some(&engine), &policy) {
+        let shared = match Shared::new(Some(&client), &policy) {
             Ok(shared) => shared,
             Err(error) => {
                 endpoint.remove();
@@ -379,7 +379,7 @@ impl Listener {
             board: board.clone(),
             lending,
             overlay: policy.overlay(),
-            engine,
+            client,
             policy,
             shared,
             principal,

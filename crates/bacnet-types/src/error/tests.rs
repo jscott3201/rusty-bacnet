@@ -134,6 +134,19 @@ fn ambiguous_device_names_every_candidate() {
     );
 }
 
+/// An unknown device names it as the request did (#2560).
+#[cfg(feature = "std")]
+#[test]
+fn unknown_device_names_the_device() {
+    let error = Error::UnknownDevice {
+        device: "2:0x05".into(),
+    };
+    assert_eq!(
+        error.to_string(),
+        "device 2:0x05 is not known to the client; discover it first"
+    );
+}
+
 #[cfg(feature = "alloc")]
 #[test]
 fn structured_error_display_names_the_detail() {

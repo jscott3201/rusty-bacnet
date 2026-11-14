@@ -1,6 +1,6 @@
 //! The round trip from a point list (#2445): a database built from the
 //! list by `bacnet_objects::points::build_database`, served over the lab
-//! link and read back by `Engine::inventory` at [`Detail::Full`], gives the
+//! link and read back by `Client::inventory` at [`Detail::Full`], gives the
 //! list again; an absent field reads back as the object's default; and
 //! what `Full` costs, by RPM and by ReadProperty.
 
@@ -8,7 +8,7 @@ use bacnet_objects::device_identity::DeviceIdentity;
 use bacnet_objects::points::build_database;
 use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType};
 
-use super::inventory_tests::{Faults, LAB, refusing_rpm, serve, stop};
+use super::inventory_tests::{Faults, LAB, lab_device, refusing_rpm, serve, stop};
 use super::tests::oid;
 use super::*;
 
@@ -182,10 +182,10 @@ async fn read_back(
     options: &InventoryOptions,
 ) -> (Inventory, usize) {
     let database = build_database(list, &identity()).unwrap();
-    let (engine, server) = serve(faults, identity(), database).await;
-    let inventory = engine.inventory(LAB, options).await.unwrap();
-    let requests = engine.limits().recent();
-    stop(engine, server).await;
+    let (client, server) = serve(faults, identity(), database).await;
+    let inventory = lab_device(&client).await.inventory(options).await.unwrap();
+    let requests = client.limits().recent();
+    stop(client, server).await;
     (inventory, requests)
 }
 

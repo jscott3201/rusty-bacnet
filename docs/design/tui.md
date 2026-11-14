@@ -535,7 +535,7 @@ crates/bacnet-cli/src/
 `safety/` holds the TUI's side of the write session model (the device
 management requests, the password `Secret`, the app and worker messages); the
 shared core (levels, tiers and planning, ledger, audit writer, workspace lock,
-and the engine half of a write) is `bacnet_tool::safety` (since #2068, in `bacnet-ops` until #2560), which the
+and the client half of a write) is `bacnet_tool::safety` (since #2068, in `bacnet-ops` until #2560), which the
 MCP server uses too. `worker/write/` and `worker/passive.rs` are its worker side, and
 `app/safety.rs` and `view/safety.rs` its dialogs (#964). Each screen has its
 own app and view modules. The profile store in `profile/` keeps B/IP, SC and

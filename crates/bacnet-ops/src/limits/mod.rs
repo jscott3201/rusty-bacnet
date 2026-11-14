@@ -5,7 +5,10 @@
 //! and one gate per device, so a device never has more than one of our
 //! confirmed requests outstanding, whether the browser, the watch list, a
 //! write or a managed COV renewal sent it (#1791). Small devices often
-//! handle one transaction at a time.
+//! handle one transaction at a time. A gate is keyed by the device's
+//! [`DeviceAddress`], so a device named by its instance and by its
+//! address has one gate, and two devices sharing an instance have two
+//! (#2560).
 //!
 //! The MCP server adds two layers (#2066): a rate per network, since a slow
 //! MS/TP trunk behind a router takes far fewer requests than the IP side
@@ -25,6 +28,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 use self::schedule::{Booking, Schedule};
+use crate::device::DeviceAddress;
 
 /// How long, in seconds, the request-rate meter ([`RequestLimits::recent`])
 /// remembers a request.
@@ -44,7 +48,7 @@ pub const METER_WINDOW_SECS: u64 = 10;
 pub struct RequestLimits {
     interval: Duration,
     state: Mutex<Slots>,
-    gates: Mutex<HashMap<u32, Arc<Semaphore>>>,
+    gates: Mutex<HashMap<DeviceAddress, Arc<Semaphore>>>,
     networks: Option<Networks>,
     /// Limits that join these for a while ([`set_overlay`](Self::set_overlay)).
     /// The lock is held only to swap or clone the layer, never across an
@@ -218,7 +222,7 @@ impl RequestLimits {
     /// Let `overlay` join these limits until it is replaced or cleared
     /// (`None`): requests then keep to the stricter of the two global
     /// rates, and per network to the stricter of the two. The switch
-    /// takes effect from the next request; no engine is rebuilt.
+    /// takes effect from the next request; no client is rebuilt.
     pub fn set_overlay(&self, overlay: Option<&Overlay>) {
         let layer = overlay.map(|overlay| {
             let networks = Networks::new(overlay.network, overlay.rates.iter().copied());
@@ -241,40 +245,36 @@ impl RequestLimits {
             .clone()
     }
 
-    /// True when requests are spaced per network too, so a request has to
-    /// say which network its device is on ([`turn_on`](Self::turn_on)).
+    /// True when requests are spaced per network too.
     pub fn paces_networks(&self) -> bool {
         self.networks.is_some() || self.layer().is_some()
     }
 
     /// `device`'s gate: one permit, held by whichever request to it is
     /// outstanding. A managed COV subscription takes it for its renewals.
-    pub fn gate(&self, device: u32) -> Arc<Semaphore> {
+    pub fn gate(&self, device: &DeviceAddress) -> Arc<Semaphore> {
         let mut gates = self.gates.lock().unwrap_or_else(PoisonError::into_inner);
-        Arc::clone(
-            gates
-                .entry(device)
-                .or_insert_with(|| Arc::new(Semaphore::new(1))),
-        )
+        if let Some(gate) = gates.get(device) {
+            return Arc::clone(gate);
+        }
+        let gate = Arc::new(Semaphore::new(1));
+        gates.insert(device.clone(), Arc::clone(&gate));
+        gate
     }
 
-    /// Wait for `device`'s gate, then for this request's slot. The turn
-    /// holds the gate until it is dropped, so keep it for exactly the one
-    /// request: a job that takes a second turn while holding the first
-    /// waits on itself.
+    /// Wait for `device`'s gate, then for this request's slot under its
+    /// network's rate (when the limits pace networks) and the global one.
+    /// The turn holds the gate until it is dropped, so keep it for exactly
+    /// the one request: a job that takes a second turn while holding the
+    /// first waits on itself.
     ///
-    /// The gate comes first so a request queued behind another one to the
+    /// The caller's token, when its [`Account`] has a bucket, comes first,
+    /// so a caller waiting for its own rate doesn't hold the device's gate.
+    /// The gate comes next so a request queued behind another one to the
     /// same device holds no slot meanwhile. The wait is cancel-safe: a
     /// dropped wait leaves the semaphore's queue.
-    pub async fn turn(&self, device: u32) -> Turn {
-        self.turn_on(device, None).await
-    }
-
-    /// [`turn`](Self::turn) for a device on `network` (0 for the local
-    /// one; `None` when unknown, which skips the network's rate). The
-    /// caller's token, when its [`Account`] has a bucket, comes first, so
-    /// a caller waiting for its own rate doesn't hold the device's gate.
-    pub async fn turn_on(&self, device: u32, network: Option<u16>) -> Turn {
+    pub async fn turn(&self, device: &DeviceAddress) -> Turn {
+        let network = Some(device.network());
         let account = account::current();
         let start = Instant::now();
         // Held until the request goes: a wait dropped before gives it back.
@@ -347,7 +347,7 @@ impl RequestLimits {
 
     /// Wait until `device`'s gate is free and a request could go at once,
     /// taking neither; see [`wait_free`](Self::wait_free) for why.
-    pub async fn wait_device_free(&self, device: u32) {
+    pub async fn wait_device_free(&self, device: &DeviceAddress) {
         drop(self.gate(device).acquire_owned().await);
         self.wait_free().await;
     }
@@ -467,8 +467,16 @@ impl RequestLimits {
 mod giveback_tests;
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+
+    /// Device `device` on `network`, as a test names it: a six-octet MAC
+    /// holding the number.
+    pub(in crate::limits) fn at(network: u16, device: u32) -> DeviceAddress {
+        let mut mac = [0; 6];
+        mac[2..].copy_from_slice(&device.to_be_bytes());
+        DeviceAddress::new(network, &mac).unwrap()
+    }
 
     /// Requests are spaced `1 / per_second` apart, whatever the caller,
     /// and a cap of zero never waits.
@@ -518,8 +526,8 @@ mod tests {
     }
 
     /// A network with its own rate is held to it, whatever the global cap,
-    /// while another network goes at the default; a request whose network
-    /// is unknown takes only the global slot.
+    /// while another network goes at the default. A device's network is
+    /// its address's, so every request is paced by it.
     #[tokio::test(start_paused = true)]
     async fn a_slow_network_is_held_to_its_rate() {
         let limits = RequestLimits::new(0).with_network_rates(20, [(2001, 2)]);
@@ -527,18 +535,15 @@ mod tests {
         let start = Instant::now();
         let mut slow = Vec::new();
         for device in 0..5 {
-            drop(limits.turn_on(device, Some(2001)).await);
+            drop(limits.turn(&at(2001, device)).await);
             slow.push((Instant::now() - start).as_millis());
         }
         assert_eq!(slow, [0, 500, 1000, 1500, 2000]);
         let before = Instant::now();
         for device in 10..14 {
-            drop(limits.turn_on(device, Some(0)).await);
+            drop(limits.turn(&at(0, device)).await);
         }
         assert_eq!(Instant::now() - before, Duration::from_millis(150));
-        let before = Instant::now();
-        drop(limits.turn_on(20, None).await);
-        assert_eq!(Instant::now(), before);
     }
 
     /// An overlay holds requests to its rates while it is in force, the
@@ -550,13 +555,13 @@ mod tests {
         let spaced = async |limits: &RequestLimits, network| {
             let start = Instant::now();
             for device in 0..3 {
-                drop(limits.turn_on(device, network).await);
+                drop(limits.turn(&at(network, device)).await);
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
             (Instant::now() - start - Duration::from_secs(1)).as_millis()
         };
         assert!(!limits.paces_networks());
-        assert_eq!(spaced(&limits, None).await, 40, "its own 50 a second");
+        assert_eq!(spaced(&limits, 0).await, 40, "its own 50 a second");
         let overlay = Overlay {
             global: 10,
             network: 20,
@@ -564,16 +569,17 @@ mod tests {
         };
         limits.set_overlay(Some(&overlay));
         assert!(limits.paces_networks());
-        assert_eq!(spaced(&limits, None).await, 200, "the overlay's 10");
-        assert_eq!(spaced(&limits, Some(2001)).await, 1000, "network 2001's 2");
+        assert_eq!(spaced(&limits, 0).await, 200, "the overlay's 10");
+        assert_eq!(spaced(&limits, 2001).await, 1000, "network 2001's 2");
         limits.set_overlay(Some(&Overlay {
             global: 100,
+            network: 0,
             ..overlay
         }));
-        assert_eq!(spaced(&limits, None).await, 40, "the stricter, its own");
+        assert_eq!(spaced(&limits, 0).await, 40, "the stricter, its own");
         limits.set_overlay(None);
         assert!(!limits.paces_networks());
-        assert_eq!(spaced(&limits, Some(2001)).await, 40, "its own again");
+        assert_eq!(spaced(&limits, 2001).await, 40, "its own again");
     }
 
     /// Per network the overlay joins the limits' own rates, the stricter
@@ -585,7 +591,7 @@ mod tests {
         let spaced = async |limits: &RequestLimits, network| {
             let start = Instant::now();
             for device in 0..3 {
-                drop(limits.turn_on(device, Some(network)).await);
+                drop(limits.turn(&at(network, device)).await);
             }
             let spent = (Instant::now() - start).as_millis();
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -604,13 +610,13 @@ mod tests {
             ..overlay
         }));
         for device in 0..3 {
-            drop(limits.turn(device).await);
+            drop(limits.turn(&at(0, device)).await);
         }
         limits.set_overlay(None);
         let start = Instant::now();
         limits.wait_free().await;
         let before = limits.recent();
-        drop(limits.turn(9).await);
+        drop(limits.turn(&at(0, 9)).await);
         assert_eq!(Instant::now(), start, "no wait on slots booked ahead");
         assert_eq!(limits.recent(), before + 1, "and on the meter now");
     }
@@ -624,7 +630,7 @@ mod tests {
         let account = Arc::new(Account::new(Some(bucket)));
         charged(Arc::clone(&account), async {
             for _ in 0..3 {
-                drop(limits.turn(1).await);
+                drop(limits.turn(&at(0, 1)).await);
             }
             limits.slot(None).await;
         })
@@ -633,7 +639,7 @@ mod tests {
         // The bucket's rate, 2 a second, outweighs the global 10.
         assert_eq!(account.throttled(), Duration::from_millis(1500));
         // Uncharged requests count nowhere.
-        drop(limits.turn(1).await);
+        drop(limits.turn(&at(0, 1)).await);
         assert_eq!(account.requests(), 4);
     }
 
@@ -642,10 +648,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_meter_counts_agents_requests_apart() {
         let limits = RequestLimits::new(10);
-        drop(limits.turn(1).await);
+        drop(limits.turn(&at(0, 1)).await);
         charged(Arc::new(Account::new(None)), limits.slot(None)).await;
         charged(Arc::new(Account::agent(None)), async {
-            drop(limits.turn(2).await);
+            drop(limits.turn(&at(0, 2)).await);
             limits.slot(None).await;
         })
         .await;

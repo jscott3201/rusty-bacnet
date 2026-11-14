@@ -218,9 +218,12 @@ async fn a_large_device_comes_in_pages() {
         next_start += read;
     }
     assert_eq!(next_start, 136);
-    let engine = lab.mcp.ctx().engine().unwrap();
-    let inventory = engine
-        .inventory(LAB, &InventoryOptions::default())
+    let client = lab.mcp.ctx().client().unwrap();
+    let inventory = client
+        .device(LAB)
+        .await
+        .unwrap()
+        .inventory(&InventoryOptions::default())
         .await
         .unwrap();
     assert_eq!(

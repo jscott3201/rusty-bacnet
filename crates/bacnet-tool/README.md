@@ -10,7 +10,7 @@ doesn't need it.
 - `safety`: the write-safety core the terminal UI and the MCP server
   share: session levels, confirmation tiers, the write preview, the
   crash-safe ledger of pre-images, the redacted append-only audit log,
-  the workspace lock, and the engine half of a write (read again, refuse a
+  the workspace lock, and the client half of a write (read again, refuse a
   stale preview, record, send, settle, revert).
 - `class`: what each command does to a device (read, write or device
   management), the table the front ends' safety levels share.
@@ -18,7 +18,7 @@ doesn't need it.
   NPDUs and APDUs as one-line summaries and trees of fields with their
   octet ranges, with no traffic.
 - `bbmd`: B/IP broadcast management tables as plain data, the BDT and FDT
-  reads through the `bacnet-ops` engine and its limits, the survey that
+  reads through the `bacnet-ops` client and its limits, the survey that
   follows each BDT to the BBMDs it lists, and the consistency matrix over
   them (one-way entries, missing own entries, mismatched masks).
 

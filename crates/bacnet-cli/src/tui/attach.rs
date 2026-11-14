@@ -1,23 +1,22 @@
 //! The TUI's MCP listener (#2185; design §9): while a profile is open,
 //! agents attach through `bacnet mcp connect` to a local socket in its
 //! workspace (on Windows, a named pipe named after it), and each gets an
-//! MCP session on the session's own engine, so their reads share the
-//! client, the transport and the rate meter. With `mcp_writes = "elicit"`
-//! the agents may write too: the write worker lends them its desk, and
-//! each write waits for the person here to confirm it in the preview
-//! dialog (`app::agents`); this loop hands the requests to the app. The
-//! listener runs beside the session's workers and ends with the session:
-//! every agent's session ends gracefully and the socket file goes. The
-//! agents' sessions run on the listener's own runtime, whose threads the
-//! panic hook leaves alone (#2203).
+//! MCP session on the session's own `bacnet_ops` client, so their reads
+//! share the low-level client, the transport and the rate meter. With
+//! `mcp_writes = "elicit"` the agents may write too: the write worker
+//! lends them its desk, and each write waits for the person here to
+//! confirm it in the preview dialog (`app::agents`); this loop hands the
+//! requests to the app. The listener runs beside the session's workers
+//! and ends with the session: every agent's session ends gracefully and
+//! the socket file goes. The agents' sessions run on the listener's own
+//! runtime, whose threads the panic hook leaves alone (#2203).
 
 use std::path::Path;
-use std::sync::Arc;
 
 use bacnet_mcp::Policy;
 use bacnet_mcp::attach::DeskJob;
 use bacnet_mcp::policy::Workspace;
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_transport::port::TransportPort;
 use tokio::sync::mpsc;
 
@@ -103,13 +102,13 @@ pub(crate) fn plan(
     }))
 }
 
-/// Run `plan`'s listener over `engine` until `stop` closes (the session
+/// Run `plan`'s listener over `client` until `stop` closes (the session
 /// loop ended) or the session is cancelled, handing the UI the agents'
 /// count and their write requests, their writes run on the write worker's
 /// `desk`; then end their sessions and remove the socket. While an agent
-/// is attached the `[mcp]` limits join the engine's, the listener's doing.
+/// is attached the `[mcp]` limits join the client's, the listener's doing.
 pub(crate) async fn run<T: TransportPort + 'static>(
-    engine: &Arc<Engine<T>>,
+    client: &Client<T>,
     plan: Option<&Plan>,
     sink: &EventSink,
     mut stop: mpsc::Receiver<()>,
@@ -126,7 +125,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         SessionRuntime::Callers
     };
     let bound = Listener::bind(
-        Arc::clone(engine),
+        client.clone(),
         plan.policy.clone(),
         plan.principal.clone(),
         plan.workspace.clone(),

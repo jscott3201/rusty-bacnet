@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use bacnet_ops::engine::{Wanted, unreachable};
+use bacnet_ops::client::{Wanted, unreachable};
 use bacnet_ops::format::{self, RawRow, RowError};
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::charged;
@@ -56,17 +56,16 @@ pub(super) async fn point<T: TransportPort + 'static>(
     call: &Call,
     point: Point,
 ) -> Result<Value, ToolError> {
-    ctx.device(call, &DeviceArg::Number(point.device)).await?;
+    let device = ctx.device(call, &DeviceArg::Number(point.device)).await?;
     if let Some(snapshot) = ctx.hub.as_ref().and_then(|hub| hub.peek(&point)) {
         return Ok(point_body(ctx, &point, &snapshot.rows, Some(&snapshot)));
     }
-    let engine = ctx.engine()?;
     let failed = |error| ToolError::device(point.device, &error);
     let rows: Vec<RawRow> = match point.watched {
         Watched::Object => {
-            engine
+            device
+                .handle
                 .read(
-                    point.device,
                     point.object,
                     Wanted::List(&bacnet_ops::watch::POINT_PROPERTIES),
                 )
@@ -75,8 +74,9 @@ pub(super) async fn point<T: TransportPort + 'static>(
                 .rows
         }
         Watched::Property { property, index } => {
-            match engine
-                .read_property(point.device, point.object, property, index)
+            match device
+                .handle
+                .read_property(point.object, property, index)
                 .await
             {
                 Ok(data) => vec![(property, Ok(data))],
@@ -181,8 +181,8 @@ pub(super) async fn devices<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     after: Option<u32>,
 ) -> Result<Value, ToolError> {
-    let engine = ctx.engine()?;
-    let mut devices = engine.devices().await;
+    let client = ctx.client()?;
+    let mut devices = client.devices().await;
     devices.retain(|found| {
         ctx.policy.allows_network(found.source_network.unwrap_or(0))
             && ctx
@@ -274,8 +274,8 @@ pub(super) async fn alarms<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     call: &Call,
 ) -> Result<Value, ToolError> {
-    let engine = ctx.engine()?;
-    let mut devices: Vec<u32> = engine
+    let client = ctx.client()?;
+    let mut devices: Vec<u32> = client
         .devices()
         .await
         .into_iter()
@@ -402,8 +402,8 @@ pub(super) fn session<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
             "legacy": ctx.subs.legacy_count(),
         },
     });
-    if let Some(engine) = &ctx.engine {
-        let limits = engine.limits();
+    if let Some(client) = &ctx.client {
+        let limits = client.limits();
         body["rate"] = json!({
             "requests_last_10_s": limits.recent(),
             "agents_requests_last_10_s": limits.recent_agents(),

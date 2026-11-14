@@ -13,7 +13,7 @@
 //! labels padded to the longest among the objects listed, and leaves the
 //! names out when fewer than [`MIN_NAME`] columns are left for them.
 
-use bacnet_ops::engine::ReadVia;
+use bacnet_ops::client::ReadVia;
 use bacnet_ops::label::{PRIORITIES, kebab, object_label, priority_label};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
