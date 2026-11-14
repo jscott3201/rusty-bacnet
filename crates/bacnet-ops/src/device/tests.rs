@@ -90,6 +90,25 @@ async fn a_lost_row_forgets_the_wildcard_read() {
     stop(vec![lab]).await;
 }
 
+/// The instance read by the wildcard also goes when another device
+/// announces itself at the address with no row there lost: describing
+/// the device reads the new one's (the reviewer's probe P7).
+#[tokio::test(start_paused = true)]
+async fn a_new_device_at_the_address_forgets_the_wildcard_read() {
+    let bus = Bus::new();
+    let (client, _) = client(&bus).await;
+    let mut first = server(bus.port(2), 2002, "first").await;
+    let device = client.device(at(2)).await.unwrap();
+    assert_eq!(device.resolve_instance().await.unwrap(), 2002);
+    first.stop().await.unwrap();
+    let second = server(bus.port(2), N, "second").await;
+    bus.i_am(2, N);
+    settle().await;
+    assert_eq!(device.instance(), None, "forgotten");
+    assert_eq!(device.describe_device().await.unwrap().device, N);
+    stop(vec![second]).await;
+}
+
 /// Two devices sharing an instance: each is reached by its address, and
 /// the instance alone is refused, naming both.
 #[tokio::test(start_paused = true)]
@@ -249,6 +268,28 @@ async fn two_answers_to_the_one_who_is_are_ambiguous() {
         "{error}"
     );
     stop(servers).await;
+}
+
+/// A second answer to the one Who-Is that comes a little after the first
+/// is heard too: the handle is refused as ambiguous (the reviewer's probe
+/// P9).
+#[tokio::test(start_paused = true)]
+async fn a_second_answer_a_little_later_is_ambiguous() {
+    let bus = Bus::new();
+    let (client, _) = client(&bus).await;
+    let lab = server(bus.port(2), N, "A").await;
+    let late = std::sync::Arc::clone(&bus);
+    let answer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        late.i_am(3, N);
+    });
+    let error = client.device(N).await.unwrap_err();
+    assert!(
+        matches!(&error, Error::AmbiguousDevice { instance: N, candidates } if candidates.len() == 2),
+        "{error}"
+    );
+    answer.await.unwrap();
+    stop(vec![lab]).await;
 }
 
 /// An address is checked against the link as a target written for it is:

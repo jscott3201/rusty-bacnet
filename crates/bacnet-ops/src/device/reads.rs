@@ -1,7 +1,8 @@
 //! A [`Device`]'s read operations: the same requests the client's
 //! [`Reader`](crate::client::Reader) sends, one at a time at the device's
 //! gate, with the client's memory of an RPM refusal. A following handle
-//! looks for its device again after a request finds it unreachable
+//! checks where its device is before each request ([`Device::target`]),
+//! and looks for it again after one times out or finds no route
 //! ([`Device::retry`]).
 
 use std::ops::ControlFlow;

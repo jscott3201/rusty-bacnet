@@ -133,16 +133,19 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
-    /// Where each instance a handle follows is reached now, while one does
-    /// (at most `device::follow::REMEMBERED`).
+    /// Where each instance a handle follows is reached now, and when its
+    /// handles last asked where it went, while one does (at most
+    /// `device::follow::REMEMBERED`).
     pub(crate) follows: Mutex<Follows>,
     /// The instances devices named for their address, from the one read by
     /// the wildcard instance a handle made from an address needed (at most
     /// `device::follow::REMEMBERED`); one goes when the discovery table
-    /// loses a row at its address.
+    /// loses a row at its address, or a device there announces another
+    /// instance.
     pub(crate) instances: Mutex<HashMap<DeviceAddress, u32>>,
-    /// The discovery table's changes, for the rows it loses.
-    pub(crate) lost: Mutex<broadcast::Receiver<DeviceEvent>>,
+    /// The discovery table's changes, for the rows it loses and the
+    /// instances announced at each address.
+    pub(crate) changes: Mutex<broadcast::Receiver<DeviceEvent>>,
     pub(crate) events: broadcast::Sender<ClientEvent>,
 }
 
@@ -164,7 +167,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// A client over the low-level `client`, under `limits` (shared with
     /// any other worker on the same low-level client).
     pub fn new(client: Arc<BACnetClient<T>>, limits: Arc<RequestLimits>) -> Self {
-        let lost = Mutex::new(client.device_events());
+        let changes = Mutex::new(client.device_events());
         Self {
             shared: Arc::new(Shared {
                 client,
@@ -173,7 +176,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 hubs: AtomicU32::new(0),
                 follows: Mutex::new(HashMap::new()),
                 instances: Mutex::new(HashMap::new()),
-                lost,
+                changes,
                 events: broadcast::channel(64).0,
             }),
             resolve_wait: Some(RESOLVE_WAIT),
@@ -208,11 +211,14 @@ impl<T: TransportPort + 'static> Client<T> {
 
     /// A clone of this client whose handles made from an instance that no
     /// address claims wait `wait` for the device's I-Am after one Who-Is
-    /// ([`RESOLVE_WAIT`] for [`new`](Self::new)'s). `None` sends no
-    /// Who-Is: such a handle fails at once with [`Error::UnknownDevice`],
-    /// as does a routed address the discovery table holds no router for.
-    /// The setting is the clone's alone, and its clones' and handles':
-    /// the other clones keep theirs.
+    /// ([`RESOLVE_WAIT`] for [`new`](Self::new)'s), and whose following
+    /// handles, after a request times out, ask once where the device went
+    /// and give the answers that long (see [`QUIET`](crate::device::QUIET)).
+    /// `None` sends no Who-Is: such a handle fails at once with
+    /// [`Error::UnknownDevice`], as does a routed address the discovery
+    /// table holds no router for, and a following one goes by the
+    /// discovery table's I-Am times alone. The setting is the clone's
+    /// alone, and its clones' and handles': the other clones keep theirs.
     pub fn with_resolve_wait(&self, wait: Option<Duration>) -> Self {
         Self {
             shared: Arc::clone(&self.shared),

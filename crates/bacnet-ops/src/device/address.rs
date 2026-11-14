@@ -129,6 +129,17 @@ impl DeviceAddress {
         self.network == 0
     }
 
+    /// The address as the discovery table and the gates key it on a client
+    /// whose own network is numbered `own`, once known: one on that network
+    /// is the local station at its MAC. A MAC the local network has no form
+    /// for stays as it is.
+    pub(crate) fn localized(self, own: Option<u16>) -> Self {
+        match own {
+            Some(own) if own == self.network => Self::local(&self.mac).unwrap_or(self),
+            _ => self,
+        }
+    }
+
     /// The address as a link of `style` shows it: as [`Display`](fmt::Display)
     /// writes it, but six local octets on BACnet/SC are a VMAC, written as
     /// hex (`02:00:00:00:00:01`), as the TUI shows them. Both forms read

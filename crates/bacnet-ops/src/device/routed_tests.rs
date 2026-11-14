@@ -178,3 +178,56 @@ async fn an_address_on_the_own_network_is_local() {
     assert_eq!(routed.address(), local.address());
     lab.stop().await;
 }
+
+/// Handles named with the own network's number before the client learns
+/// it reach the local station once it does, at its gate, and the instance
+/// alone finds that one station (the reviewer's probe P5').
+#[tokio::test(start_paused = true)]
+async fn handles_named_before_the_number_is_learned_are_local_after() {
+    use bacnet_client::discovery::RoutedDeviceConfig;
+    use bacnet_types::enums::Segmentation;
+
+    let mut lab = Routed::new(|near| near.numbered_port(1)).await;
+    lab.servers
+        .push(server(lab.near.port(2), 2002, "near").await);
+    let low = Arc::clone(lab.client.low_level());
+    low.add_routed_device(RoutedDeviceConfig {
+        instance: 2002,
+        router_mac: mac(254).to_vec(),
+        remote_network: 1,
+        remote_mac: mac(2).to_vec(),
+        max_apdu_length: 1476,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
+        max_segments_accepted: None,
+    })
+    .await
+    .unwrap();
+    let pinned = lab.client.device("1:0x0A000002BAC0").await.unwrap();
+    let following = lab.client.device("1:2002").await.unwrap();
+    let routed = DeviceAddress::new(1, &mac(2)).unwrap();
+    assert_eq!(pinned.address(), routed, "the number isn't known yet");
+    assert_eq!(following.address(), routed);
+    low.what_is_network_number(None).await.unwrap();
+    for _ in 0..50 {
+        if low.network_number().is_some() {
+            break;
+        }
+        settle().await;
+    }
+    assert_eq!(low.network_number(), Some(1), "the router said");
+    let local = lab.client.device("10.0.0.2:47808").await.unwrap();
+    assert_eq!(pinned.address(), local.address());
+    assert_eq!(following.address(), local.address());
+    let by_instance = lab.client.device(2002).await.unwrap();
+    assert_eq!(by_instance.address(), local.address());
+    let held = lab.client.limits().gate(&local.address()).acquire_owned();
+    let held = held.await.unwrap();
+    for handle in [&pinned, &following] {
+        let read = tokio::time::timeout(Duration::from_secs(10), name_of(handle)).await;
+        assert!(read.is_err(), "{handle:?} went past the local gate");
+    }
+    drop(held);
+    assert_eq!(name_of(&pinned).await.unwrap(), "near");
+    assert_eq!(name_of(&following).await.unwrap(), "near");
+    lab.stop().await;
+}

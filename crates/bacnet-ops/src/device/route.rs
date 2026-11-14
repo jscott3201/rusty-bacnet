@@ -36,12 +36,14 @@ pub(crate) enum Path {
 }
 
 impl Path {
-    /// The path to `address`: its MAC for a local one, and for a routed one
+    /// The path to `address`: its MAC for a local one (one on `client`'s
+    /// own network too, once it knows the number), and for a routed one
     /// the router its row in `client`'s discovery table names.
     pub(crate) async fn to<T: TransportPort + 'static>(
         client: &BACnetClient<T>,
         address: &DeviceAddress,
     ) -> Result<Self, Error> {
+        let address = address.clone().localized(client.network_number());
         if address.is_local() {
             return Ok(Self::Local(MacAddr::from_slice(address.mac())));
         }

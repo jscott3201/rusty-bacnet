@@ -415,7 +415,8 @@ async fn by_read_property_when_rpm_is_refused() {
 
 /// A device that stops answering partway ends the reading: what was read
 /// is kept, and the inventory says where it stopped. One that never
-/// answers fails it once, at its name.
+/// answers fails it once, at its name, and the handle, following the
+/// instance, asks once where it went.
 #[tokio::test(start_paused = true)]
 async fn a_device_that_stops_answering() {
     let (client, server) = lab(passing(4)).await;
@@ -442,7 +443,7 @@ async fn a_device_that_stops_answering() {
         .await
         .unwrap_err();
     assert!(crate::client::unreachable(&error), "{error}");
-    assert_eq!(client.limits().recent(), 1);
+    assert_eq!(client.limits().recent(), 2, "the name, and one Who-Is");
     stop(client, server).await;
 }
 

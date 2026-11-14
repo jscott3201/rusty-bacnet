@@ -6,6 +6,7 @@ use std::time::Duration;
 use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_services::who_is::IAmRequest;
+use bacnet_transport::port::ReceivedNpdu;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, Segmentation, UnconfirmedServiceChoice};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -127,5 +128,30 @@ async fn a_read_stays_on_the_device_the_policy_checked() {
         "{answer}"
     );
     assert_eq!(lab.sends().len() - before, 1, "one request, to the lab");
+    lab.stop().await;
+}
+
+/// Once the client knows its own network's number, `number:instance`
+/// names a device on the local network, as the client's handles key it:
+/// the lab device answers as `7:1201` on network 7.
+#[tokio::test(start_paused = true)]
+async fn the_own_network_number_names_the_local_network() {
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.agent.initialize().await;
+    let arguments = json!({ "device": format!("7:{LAB}") });
+    let result = lab
+        .agent
+        .call("bacnet_describe_device", arguments.clone())
+        .await;
+    assert_eq!(result["isError"], json!(true), "not yet: {result}");
+    // A router on the link broadcasts this network's number, configured.
+    let says = bytes::Bytes::from_static(&[1, 0x80, 0x13, 0, 7, 1]);
+    let inbox = lab.inbox.inbound().expect("started");
+    let from = MacAddr::from_slice(&LAB_MAC);
+    let frame = ReceivedNpdu::unverified(says, from, true, Vec::new(), None);
+    inbox.send(frame).await.unwrap();
+    until(&lab, |lab| lab.low.network_number() == Some(7), "learned").await;
+    let result = lab.agent.call("bacnet_describe_device", arguments).await;
+    assert_ne!(result["isError"], json!(true), "{result}");
     lab.stop().await;
 }

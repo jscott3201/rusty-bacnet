@@ -181,11 +181,17 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }
-        let turn = self.rate.turn(&self.device).await;
+        let turn = self.rate.turn(&self.gate()).await;
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }
         Ok(turn)
+    }
+
+    /// The address the device's gate keys on: an address on the client's
+    /// own network, once it knows the number, is the local station's.
+    fn gate(&self) -> DeviceAddress {
+        self.device.clone().localized(self.client.network_number())
     }
 
     /// Wait until a request could go at once, without taking the device's
@@ -197,7 +203,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }
-        self.rate.wait_device_free(&self.device).await;
+        self.rate.wait_device_free(&self.gate()).await;
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }

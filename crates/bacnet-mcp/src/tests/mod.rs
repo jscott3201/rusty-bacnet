@@ -134,11 +134,14 @@ pub(crate) fn recording(
     indexed_only: bool,
     mute_after: Arc<Mutex<Option<usize>>>,
 ) -> (TestTransport, TestTransportHandle) {
+    // Number controls on, so a Network-Number-Is a test injects teaches
+    // the client its network's number; the client sends none unasked.
     let builder = TestTransport::builder()
         .inner(inner)
         .unicast(SendMode::Forward)
         .broadcast(SendMode::Forward)
-        .start(StartMode::Relay(256));
+        .start(StartMode::Relay(256))
+        .number_controls();
     let inbox = builder.handle();
     let handle = builder.handle();
     let log = Arc::clone(&sent);

@@ -242,6 +242,17 @@ pub(super) async fn server(
         .unwrap()
 }
 
+/// Who-Is requests in `log`.
+pub(super) fn who_is(log: &SendLog) -> usize {
+    log.broadcasts()
+        .iter()
+        .filter(|frame| {
+            matches!(frame.apdu(), Apdu::UnconfirmedRequest(request)
+                if request.service_choice == UnconfirmedServiceChoice::WHO_IS)
+        })
+        .count()
+}
+
 /// Confirmed requests of `service` in `log`, to `to`.
 pub(super) fn requests(log: &SendLog, service: ConfirmedServiceChoice, to: u8) -> usize {
     log.unicasts()

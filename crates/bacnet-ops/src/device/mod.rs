@@ -24,21 +24,32 @@
 //!   instance.
 //!
 //! A pinned handle never moves: [`Device::moved_to`] says when its
-//! instance is heard at one other address while its own has gone quiet. A
-//! following handle looks again, once, when a request times out, or finds
-//! no route left to a routed address: when exactly one other address on
-//! its network claims the instance and its own has gone quiet the same
-//! way, it moves there, tells [`Client::events`] ([`ClientEvent::Moved`])
-//! and retries; two or more fail as ambiguous, and otherwise the error
-//! stays as it was. Handles following one instance on one network share
-//! where it is, so one moving takes the others with it.
+//! instance is heard at one other address while its own has gone quiet
+//! ([`QUIET`]). A following handle moves to the one other address on its
+//! network claiming its instance, tells [`Client::events`]
+//! ([`ClientEvent::Moved`]) and sends there, when:
+//!
+//! - before a request, another device has announced itself at its address
+//!   (with no other claim the request fails as [`Error::UnknownDevice`],
+//!   with two or more as ambiguous, and nothing is sent);
+//! - after a request timed out, or found no route left to a routed
+//!   address, no row there claims the instance any more;
+//! - after a request timed out while its address still claims the
+//!   instance, only the other address answered the one Who-Is for the
+//!   instance an earlier timeout sent ([`QUIET`] says how often it asks,
+//!   and how a clone that sends no Who-Is decides instead).
+//!
+//! Two or more other claims fail a timed-out request as ambiguous, and
+//! otherwise its error stays as it was. Handles following one instance on
+//! one network share where it is, so one moving takes the others with it.
 
-/// Evaluate `$body` with `$at` the device's address, and for a following
-/// handle whose request timed out or found no route once more where it
-/// moved to ([`Device::retry`]). For a function returning `Result<_, Error>`.
+/// Evaluate `$body` with `$at` where the device is reached now
+/// ([`Device::target`]), and for a following handle whose request timed
+/// out or found no route once more where it moved to ([`Device::retry`]).
+/// For a function returning `Result<_, Error>`.
 macro_rules! sent {
     ($device:expr, |$at:ident| $body:expr) => {{
-        let address = $device.address();
+        let address = $device.target().await?;
         let result = {
             let $at = &address;
             $body
@@ -67,17 +78,31 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
 pub use self::address::DeviceAddress;
+use self::follow::Followed;
 pub(crate) use self::follow::Follows;
-use self::follow::{Elsewhere, Followed};
 pub(crate) use self::route::Path;
 use crate::client::{Client, lock};
 
 /// How long an address must have been quiet before another announcing its
-/// instance counts as the device moving there, for [`Device::moved_to`]
-/// and a following handle alike: two devices sharing an instance both
-/// answer one Who-Is within this of each other. A duplicate that boots
-/// and announces itself longer than this after the last Who-Is the first
-/// answered reads as a move, until a Who-Is hears them both again.
+/// instance counts as the device moving there, where only the discovery
+/// table can say: for [`Device::moved_to`], which sends nothing, and for a
+/// following handle of a clone that sends no Who-Is
+/// ([`Client::with_resolve_wait`] `None`), after a request times out. Two
+/// devices sharing an instance both answer one Who-Is within this of each
+/// other. A duplicate that boots and announces itself longer than this
+/// after the last Who-Is the first answered reads as a move, until a
+/// Who-Is hears them both again. A row registered by hand, never
+/// announced, is never quiet by this alone.
+///
+/// A following handle of a clone that may send asks instead. When a
+/// request times out while one other address claims its instance, or
+/// none does, it sends one Who-Is for the instance on its network, at
+/// most one every `QUIET` for the handles following it: a device gone for
+/// good costs one Who-Is every `QUIET`, not one every read. A later
+/// timeout, once the Who-Is has had the clone's resolve wait for its
+/// answers, moves the handle only if the other address answered and its
+/// own has not been heard from since, by an I-Am or an answer; a device
+/// that misses a read but answers keeps its handles.
 pub const QUIET: Duration = Duration::from_secs(30);
 
 /// What names a device for [`Client::device`].
@@ -161,8 +186,10 @@ pub struct Duplicate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClientEvent {
-    /// A handle following `instance` found it unreachable at `from` and
-    /// moved to `to`, the one other address claiming it.
+    /// A handle following `instance` found it gone from `from` (another
+    /// device announced itself there, or it stopped answering there while
+    /// `to` answered for it) and moved to `to`, the one other address
+    /// claiming it.
     Moved {
         /// The device instance.
         instance: u32,
@@ -222,12 +249,15 @@ impl<T: TransportPort + 'static> std::fmt::Debug for Device<T> {
 
 impl<T: TransportPort + 'static> Device<T> {
     /// Where the device answers now: a pinned handle's address, or where a
-    /// following handle last reached its instance.
+    /// following handle last reached its instance. An address on the
+    /// client's own network is the local station's, once the client knows
+    /// the network's number, however the handle was named.
     pub fn address(&self) -> DeviceAddress {
-        match &self.pin {
+        let address = match &self.pin {
             Pin::At(address) => address.clone(),
-            Pin::Follows { at, .. } => lock(at).clone(),
-        }
+            Pin::Follows { at, .. } => lock(at).at.clone(),
+        };
+        self.client.localized(address)
     }
 
     /// The device instance, when known: from discovery, the discovery
@@ -235,7 +265,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// instance made earlier ([`resolve_instance`](Self::resolve_instance)).
     pub fn instance(&self) -> Option<u32> {
         self.instance.or_else(|| match &self.pin {
-            Pin::At(address) => self.client.remembered(address),
+            Pin::At(_) => self.client.remembered(&self.address()),
             Pin::Follows { instance, .. } => Some(*instance),
         })
     }
@@ -254,7 +284,8 @@ impl<T: TransportPort + 'static> Device<T> {
     /// from one ReadProperty of the Device object's Object_Identifier by
     /// the wildcard instance, which the client remembers for the address,
     /// so it is read once: until the discovery table loses a row at that
-    /// address, which may mean another device has it now.
+    /// address, or a device there announces another instance, which may
+    /// mean another device has it now.
     pub async fn resolve_instance(&self) -> Result<u32, Error> {
         if let Some(instance) = self.instance() {
             return Ok(instance);
@@ -273,20 +304,25 @@ impl<T: TransportPort + 'static> Device<T> {
     /// the discovery table holds a claim to that instance at, while this
     /// handle's own address has gone quiet: its row is gone, or claims
     /// another instance now, or last announced itself at least [`QUIET`]
-    /// before the other did. Answers to requests don't count as
+    /// before the other did (a row registered by hand, never announced,
+    /// isn't quiet by that). Answers to requests don't count as
     /// announcements, so another device answering at a reused address
     /// doesn't hide a move. `None` otherwise, and always for a following
     /// handle, which moves itself. Sends nothing.
     pub async fn moved_to(&self) -> Option<DeviceAddress> {
-        let (Pin::At(here), Some(instance)) = (&self.pin, self.instance()) else {
+        let (Pin::At(_), Some(instance)) = (&self.pin, self.instance()) else {
             return None;
         };
-        match self.client.elsewhere(instance, None, here).await {
-            Elsewhere::Moved(to) => Some(to),
-            Elsewhere::Nowhere | Elsewhere::Duplicate | Elsewhere::Contested(_) => None,
-        }
+        let here = self.address();
+        self.client
+            .elsewhere(instance, None, &here)
+            .await
+            .by_announcements()
     }
 }
+
+#[cfg(test)]
+mod ask_tests;
 
 #[cfg(test)]
 mod follow_tests;

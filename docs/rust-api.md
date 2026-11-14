@@ -11783,13 +11783,18 @@ result it is pinned and knows the instance. The handle's async reads are
 `enrollment_summary` and the 223 inventory's. A device's gate, turns and
 memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
 two devices sharing an instance stay apart and one device named two ways
-waits at one gate. A following handle whose request times out, or finds no
-route to a routed address, moves to the one other address on its network
-claiming the instance once its own has gone quiet (its row gone, claiming
-another instance, or announced `QUIET` before the other's) and tells
-`Client::events` (`ClientEvent::Moved`); a duplicate claim is no move. A
-pinned one stays, and `Device::moved_to` says where its instance is heard
-now, by the same rule.
+waits at one gate. A following handle moves to the one other address on its
+network claiming the instance, and tells `Client::events`
+(`ClientEvent::Moved`): before a request when another device has announced
+itself at its address; after a request times out, or finds no route to a
+routed address, when its row is gone; and after a timeout while its address
+still claims the instance, when only the other address answered the one
+Who-Is an earlier timeout sent for it (at most one every `QUIET` for the
+handles following it). A clone that sends no Who-Is
+(`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
+announced `QUIET` before the other's. A duplicate claim is no move. A pinned
+handle stays, and `Device::moved_to` says where its instance is heard now,
+by the I-Am times.
 
 `bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
 `bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,

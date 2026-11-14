@@ -15,6 +15,16 @@ use super::{Device, DeviceAddress, DeviceRef, Discovered, Duplicate, Pin};
 use crate::client::{Client, WhoIsScope};
 use crate::target::{Target, bip6_vmac, check_local_mac, parse_target_on};
 
+/// How long the one Who-Is for an instance no address claims listens on
+/// past the first answer, for a second device claiming it too (within the
+/// resolve wait). Two devices answer one Who-Is moments apart, not
+/// together: a few milliseconds apart on an IP link, but on an MS/TP trunk
+/// each answers only when the token reaches it, which on a slow or busy
+/// trunk is hundreds of milliseconds. Half a second keeps a handle's first
+/// lookup quick while hearing a duplicate on all but the slowest trunks;
+/// one heard later still shows in the table, as a duplicate.
+const SETTLE: Duration = Duration::from_millis(500);
+
 impl<T: TransportPort + 'static> Client<T> {
     /// A handle on the device `target` names ([`DeviceRef`]); see the
     /// [module docs](crate::device) for the rules.
@@ -80,10 +90,7 @@ impl<T: TransportPort + 'static> Client<T> {
             check_local_mac(self.low_level().transport(), address.mac(), &shown)
                 .map_err(Error::OutOfRange)?;
         }
-        let mut row = self
-            .low_level()
-            .get_device_at(address.network(), address.mac())
-            .await;
+        let mut row = self.row_at(&address).await;
         if row.is_none() && !address.is_local() {
             row = Some(self.find(&address, None).await?);
         }
@@ -97,12 +104,30 @@ impl<T: TransportPort + 'static> Client<T> {
     /// `address` as the discovery table and the gates key it: one on this
     /// client's own network is the local station at its MAC, once the
     /// client knows the network's number. Until then the two stay apart.
-    fn localized(&self, address: DeviceAddress) -> DeviceAddress {
-        match self.low_level().network_number() {
-            Some(own) if own == address.network() => {
-                DeviceAddress::local(address.mac()).unwrap_or(address)
-            }
-            _ => address,
+    /// Applied wherever an address is used, not only when a handle is
+    /// made, so a handle made before the number was learned keys as the
+    /// local station once it is.
+    pub(super) fn localized(&self, address: DeviceAddress) -> DeviceAddress {
+        address.localized(self.low_level().network_number())
+    }
+
+    /// `network` as the discovery table numbers it: this client's own
+    /// network, once known, is the local one (0).
+    pub(super) fn scope(&self, network: Option<u16>) -> Option<u16> {
+        let own = self.low_level().network_number();
+        network.map(|network| if Some(network) == own { 0 } else { network })
+    }
+
+    /// The discovery table's row for the station at `address`: for a
+    /// local one, while this client knows its own network's number, also
+    /// a routed row on that network the table hasn't folded into a local
+    /// one yet.
+    pub(super) async fn row_at(&self, address: &DeviceAddress) -> Option<DiscoveredDevice> {
+        let low = self.low_level();
+        let row = low.get_device_at(address.network(), address.mac()).await;
+        match (row, low.network_number()) {
+            (None, Some(own)) if address.is_local() => low.get_device_at(own, address.mac()).await,
+            (row, _) => row,
         }
     }
 
@@ -111,17 +136,18 @@ impl<T: TransportPort + 'static> Client<T> {
     /// or the one that answers a Who-Is, so long as no other answered it
     /// too.
     async fn following(&self, instance: u32, network: Option<u16>) -> Result<Device<T>, Error> {
-        let network = network.map(|n| match self.low_level().network_number() {
-            Some(own) if own == n => 0,
-            _ => n,
-        });
+        let network = self.scope(network);
         let claims = self.claims(instance, network).await;
         let address = match claims.as_slice() {
             [] => {
                 let row = self.find_instance(instance, network).await?;
-                let address = DeviceAddress::of(&row).ok_or_else(|| unknown(instance, network))?;
-                // Two devices answering the one Who-Is are both in the
-                // table once the first answer is.
+                let address = DeviceAddress::of(&row)
+                    .map(|address| self.localized(address))
+                    .ok_or_else(|| unknown(instance, network))?;
+                // A second device answers the one Who-Is a little after
+                // the first, not with it: `find_instance` listened on for
+                // SETTLE past the first answer, so one in that time is in
+                // the table now.
                 let claims = self.claims(instance, network).await;
                 if claims.len() > 1 {
                     return Err(ambiguous(instance, &claims));
@@ -144,8 +170,11 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// The addresses whose rows claim `instance`, on `network` when one is
-    /// named, ordered by address.
+    /// named, ordered by address. A station on this client's own network
+    /// is the local one, once the number is known: a routed row for it the
+    /// table hasn't folded yet is no second claim.
     pub(super) async fn claims(&self, instance: u32, network: Option<u16>) -> Vec<DeviceAddress> {
+        let own = self.low_level().network_number();
         let mut claims: Vec<DeviceAddress> = match self.low_level().get_device(instance).await {
             Ok(found) => found
                 .as_ref()
@@ -158,25 +187,33 @@ impl<T: TransportPort + 'static> Client<T> {
                 .collect(),
             Err(_) => Vec::new(),
         };
-        if let Some(network) = network {
+        for claim in &mut claims {
+            *claim = claim.clone().localized(own);
+        }
+        claims.sort();
+        claims.dedup();
+        if let Some(network) = self.scope(network) {
             claims.retain(|address| address.network() == network);
         }
         claims
     }
 
     /// The device claiming `instance` that answers one Who-Is for it, to
-    /// `network` when named (this one for 0) and globally otherwise.
+    /// `network` when named (this one for 0) and globally otherwise,
+    /// listening [`SETTLE`] past its answer for a second.
     async fn find_instance(
         &self,
         instance: u32,
         network: Option<u16>,
     ) -> Result<DiscoveredDevice, Error> {
         let range = DeviceInstanceRange::single(instance)?;
+        let own = self.low_level().network_number();
         let found = self
-            .wait_for(network, Some(range), |row| {
+            .wait_for(network, Some(range), SETTLE, |row| {
                 row.object_identifier.instance_number() == instance
                     && network.is_none_or(|n| {
-                        DeviceAddress::of(row).is_some_and(|address| address.network() == n)
+                        DeviceAddress::of(row)
+                            .is_some_and(|address| address.localized(own).network() == n)
                     })
             })
             .await?;
@@ -191,7 +228,7 @@ impl<T: TransportPort + 'static> Client<T> {
         range: Option<DeviceInstanceRange>,
     ) -> Result<DiscoveredDevice, Error> {
         let found = self
-            .wait_for(Some(address.network()), range, |row| {
+            .wait_for(Some(address.network()), range, Duration::ZERO, |row| {
                 DeviceAddress::of(row).as_ref() == Some(address)
             })
             .await?;
@@ -201,12 +238,16 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// Send one Who-Is (to `network`, or globally) for `range`, and wait
-    /// up to [`resolve_wait`](Self::resolve_wait) for a row `wanted`
-    /// takes; `None` when none came, or the client sends no Who-Is.
+    /// up to [`resolve_wait`](Self::resolve_wait) for a row `wanted` takes,
+    /// then up to `settle` more, within that wait, for one at another
+    /// address, which ends the wait at once. The first such row; `None`
+    /// when none came, or the client sends no Who-Is. A caller that wants
+    /// every answer reads the table after.
     async fn wait_for(
         &self,
         network: Option<u16>,
         range: Option<DeviceInstanceRange>,
+        settle: Duration,
         wanted: impl Fn(&DiscoveredDevice) -> bool,
     ) -> Result<Option<DiscoveredDevice>, Error> {
         let Some(wait) = self.resolve_wait() else {
@@ -214,27 +255,39 @@ impl<T: TransportPort + 'static> Client<T> {
         };
         // Subscribed before asking, so the answer can't slip in between.
         let mut events = self.device_events();
-        let scope = match network {
-            Some(0) => WhoIsScope::Local,
-            Some(network) => WhoIsScope::Network(network),
-            None => WhoIsScope::Global,
-        };
-        self.who_is(scope, range).await?;
-        let deadline = tokio::time::Instant::now() + wait;
+        self.who_is(WhoIsScope::on(network), range).await?;
+        let mut deadline = tokio::time::Instant::now() + wait;
+        let mut first: Option<DiscoveredDevice> = None;
         loop {
-            match tokio::time::timeout_at(deadline, events.recv()).await {
-                Err(_) | Ok(Err(RecvError::Closed)) => return Ok(None),
+            let row = match tokio::time::timeout_at(deadline, events.recv()).await {
+                Err(_) | Ok(Err(RecvError::Closed)) => return Ok(first),
                 Ok(Ok(event)) if event.kind != DeviceEventKind::Lost && wanted(&event.device) => {
-                    return Ok(Some(event.device));
+                    event.device
                 }
-                Ok(Ok(_)) => {}
-                // A missed answer is in the table.
+                Ok(Ok(_)) => continue,
+                // Missed answers are in the table: the first, or a second
+                // for the caller to read there.
                 Ok(Err(RecvError::Lagged(_))) => {
+                    if first.is_some() {
+                        return Ok(first);
+                    }
                     let table = self.low_level().discovered_devices().await;
-                    if let Some(row) = table.into_iter().find(|row| wanted(row)) {
-                        return Ok(Some(row));
+                    match table.into_iter().find(|row| wanted(row)) {
+                        Some(row) => row,
+                        None => continue,
                     }
                 }
+            };
+            match &first {
+                None if settle.is_zero() => return Ok(Some(row)),
+                None => {
+                    deadline = deadline.min(tokio::time::Instant::now() + settle);
+                    first = Some(row);
+                }
+                Some(seen) if DeviceAddress::of(seen) != DeviceAddress::of(&row) => {
+                    return Ok(first);
+                }
+                Some(_) => {}
             }
         }
     }
@@ -335,7 +388,7 @@ pub(super) fn ambiguous(instance: u32, claims: &[DeviceAddress]) -> Error {
 
 /// The unknown-device error for `instance`, named as the caller did (on
 /// this client's own network, by the instance alone).
-fn unknown(instance: u32, network: Option<u16>) -> Error {
+pub(super) fn unknown(instance: u32, network: Option<u16>) -> Error {
     Error::UnknownDevice {
         device: match network {
             Some(network) if network != 0 => format!("{network}:{instance}"),

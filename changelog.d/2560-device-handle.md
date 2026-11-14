@@ -1,8 +1,8 @@
 ---
 section: Added
 ---
-- `bacnet_ops::DeviceAddress` and `Device` handles: pinned to an address,
-  or following an instance on one network or any, moving only once its old
-  address has gone quiet; an ambiguous instance is refused naming every
-  address. `Client::duplicates` and `events` report duplicates and moves
+- `bacnet_ops::DeviceAddress` and `Device` handles, pinned to an address or
+  following an instance: moving when another device takes its address, or
+  after a timeout once only another address answered the Who-Is it sent
+  (one per `QUIET`). `Client::duplicates` and `events` report both
   (#2560).

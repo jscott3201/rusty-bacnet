@@ -156,7 +156,7 @@ application layer reader became `bacnet_ops::decode` (`bacnet_tool::decode` sinc
 Every item the CLI or MCP needs is `pub` and documented; helpers private to
 a module stay private. The TUI's browser, watch list and write previews use
 `client::Reader` directly with their own stop flags. The new `Client`
-facade (`Engine` until #2560) is not yet used by the CLI: the one-shot `alarms` prints the raw
+facade is not yet used by the CLI: the one-shot `alarms` prints the raw
 acknowledgment, which the facade decodes, so switching it would change the
 output. MCP is the facade's first caller. (Since phase 2 the TUI's watch
 worker also runs on `Client`, for the shared watch hub; the one-shot

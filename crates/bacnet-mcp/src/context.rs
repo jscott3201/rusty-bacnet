@@ -359,8 +359,12 @@ impl<T: TransportPort + 'static> Ctx<T> {
                     Ok(None) => return Err(unknown()),
                     Err(error) => return Err(failed(Some(instance), error)),
                 };
+                // The client's own network, once it knows the number, is
+                // the local one, as its handles key it.
+                let own = client.low_level().network_number();
+                let local = |network: u16| if Some(network) == own { 0 } else { network };
                 if let Target::Routed { dnet, .. } = parsed
-                    && entry.source_network.unwrap_or(0) != dnet
+                    && local(entry.source_network.unwrap_or(0)) != local(dnet)
                 {
                     return Err(unknown());
                 }

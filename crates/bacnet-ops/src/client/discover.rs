@@ -30,6 +30,17 @@ pub enum WhoIsScope<'a> {
     Global,
 }
 
+impl WhoIsScope<'static> {
+    /// To `network` (this one for 0), or globally for `None`.
+    pub(crate) fn on(network: Option<u16>) -> Self {
+        match network {
+            Some(0) => Self::Local,
+            Some(network) => Self::Network(network),
+            None => Self::Global,
+        }
+    }
+}
+
 impl<T: TransportPort + 'static> Client<T> {
     /// Send one Who-Is to `scope`, for the devices in `range` (all for
     /// `None`), under the rate cap. The answers land in the discovery table
