@@ -1,3 +1,4 @@
+use super::lifecycle::DEVICE_PURGE_INTERVAL;
 use super::*;
 use bacnet_encoding::apdu::{UnconfirmedRequest, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, encode_npdu};
@@ -92,7 +93,7 @@ async fn device_events_emit_discovered_and_updated_for_i_am() {
         event.device.segmentation_supported,
         Segmentation::SEGMENTED_BOTH
     );
-    let row = client.get_device(1001).await.unwrap();
+    let row = client.get_device(1001).await.unwrap().unwrap();
     assert_eq!(row.vendor_id, 84);
     assert_eq!(row.max_apdu_length, 480);
     assert_eq!(row.segmentation_supported, Segmentation::SEGMENTED_BOTH);
@@ -104,8 +105,11 @@ async fn device_events_emit_discovered_and_updated_for_i_am() {
     client.stop().await.unwrap();
 }
 
+/// A second address claiming an instance gets a row of its own, announced
+/// like any new device, and the collision notice lists both claimants; the
+/// first row is untouched, and a lookup by the instance names both (#2560).
 #[tokio::test]
-async fn collision_event_retains_authoritative_route_without_device_update() {
+async fn a_second_claimant_is_discovered_and_reported_with_the_first() {
     let client_mac = vec![0x01];
     let incoming_mac = vec![0x02];
     let retained_mac = vec![0x03];
@@ -132,7 +136,6 @@ async fn collision_event_retains_authoritative_route_without_device_update() {
     };
     client.device_table.lock().upsert(retained);
 
-    let before_send = Instant::now();
     sender_transport
         .send_unicast(
             &i_am_npdu_with_capabilities(1001, 84, 480, Segmentation::SEGMENTED_BOTH),
@@ -140,55 +143,50 @@ async fn collision_event_retains_authoritative_route_without_device_update() {
         )
         .await
         .unwrap();
-    let event = timeout(Duration::from_secs(1), collision_events.recv())
+    let event = timeout(Duration::from_secs(1), device_events.recv())
+        .await
+        .expect("timed out waiting for the discovered event")
+        .expect("device event channel closed");
+    assert_eq!(event.kind, DeviceEventKind::Discovered);
+    assert_eq!(event.device.mac_address.as_slice(), incoming_mac.as_slice());
+    let collision = timeout(Duration::from_secs(1), collision_events.recv())
         .await
         .expect("timed out waiting for collision event")
         .expect("device collision event channel closed");
-    let after_receive = Instant::now();
 
-    assert_eq!(event.retained.object_identifier.instance_number(), 1001);
-    assert_eq!(
-        event.retained.mac_address.as_slice(),
-        retained_mac.as_slice()
-    );
-    assert_eq!(event.retained.max_apdu_length, 1024);
-    assert_eq!(
-        event.retained.segmentation_supported,
-        Segmentation::SEGMENTED_RECEIVE
-    );
-    assert_eq!(event.retained.max_segments_accepted, Some(8));
-    assert_eq!(event.retained.vendor_id, 42);
-    assert_eq!(event.retained.last_seen, retained_seen);
-    assert!(event.retained.is_local());
-    assert_eq!(event.incoming.object_identifier.instance_number(), 1001);
-    assert_eq!(
-        event.incoming.mac_address.as_slice(),
-        incoming_mac.as_slice()
-    );
-    assert_eq!(event.incoming.max_apdu_length, 480);
-    assert_eq!(
-        event.incoming.segmentation_supported,
-        Segmentation::SEGMENTED_BOTH
-    );
-    assert_eq!(event.incoming.max_segments_accepted, None);
-    assert_eq!(event.incoming.vendor_id, 84);
-    assert!(event.incoming.last_seen >= before_send);
-    assert!(event.incoming.last_seen <= after_receive);
-    assert!(event.incoming.is_local());
-    assert!(matches!(
-        device_events.try_recv(),
-        Err(broadcast::error::TryRecvError::Empty)
-    ));
+    assert_eq!(collision.instance, 1001);
+    assert!(!collision.is_resolved());
+    let [incoming, kept] = collision.claimants.as_slice() else {
+        panic!("expected two claimants, got {:?}", collision.claimants);
+    };
+    assert_eq!(incoming.mac_address.as_slice(), incoming_mac.as_slice());
+    assert_eq!(incoming.max_apdu_length, 480);
+    assert_eq!(incoming.vendor_id, 84);
+    assert!(incoming.is_local());
+    assert_eq!(kept.mac_address.as_slice(), retained_mac.as_slice());
+    assert_eq!(kept.max_apdu_length, 1024);
+    assert_eq!(kept.segmentation_supported, Segmentation::SEGMENTED_RECEIVE);
+    assert_eq!(kept.max_segments_accepted, Some(8));
+    assert_eq!(kept.vendor_id, 42);
+    assert_eq!(kept.last_seen, retained_seen);
 
-    let row = client.get_device(1001).await.unwrap();
-    assert_eq!(row.mac_address.as_slice(), retained_mac.as_slice());
-    assert_eq!(row.max_apdu_length, 1024);
-    assert_eq!(row.segmentation_supported, Segmentation::SEGMENTED_RECEIVE);
-    assert_eq!(row.max_segments_accepted, Some(8));
-    assert_eq!(row.vendor_id, 42);
+    let at = |mac: &[u8]| bacnet_types::constructed::BACnetAddress {
+        network_number: 0,
+        mac_address: MacAddr::from_slice(mac),
+    };
+    let expected = [at(&incoming_mac), at(&retained_mac)];
+    for error in [
+        client.get_device(1001).await.unwrap_err(),
+        client.resolve_device(1001).await.unwrap_err(),
+    ] {
+        assert!(
+            matches!(&error, Error::AmbiguousDevice { instance: 1001, candidates } if candidates[..] == expected[..]),
+            "{error:?}"
+        );
+    }
+    let row = client.get_device_at(0, &retained_mac).await.unwrap();
     assert_eq!(row.last_seen, retained_seen);
-    let resolved = client.resolve_device(1001).await.unwrap();
-    assert_eq!(resolved, (retained_mac, None));
+    assert_eq!(client.discovered_devices().await.len(), 2);
 
     client.stop().await.unwrap();
 }
@@ -213,14 +211,13 @@ async fn device_events_emit_lost_when_purge_removes_stale_device() {
         segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
-        last_seen: Instant::now()
-            .checked_sub(Duration::from_millis(1))
-            .unwrap_or_else(Instant::now),
+        last_seen: crate::discovery::now(),
         source_network: None,
         source_address: None,
     });
 
-    tokio::time::advance(Duration::from_secs(300)).await;
+    // Past the row's age limit, to the purge tick after it.
+    tokio::time::advance(DEVICE_PURGE_INTERVAL * 3).await;
     tokio::task::yield_now().await;
     tokio::task::yield_now().await;
 
@@ -229,5 +226,45 @@ async fn device_events_emit_lost_when_purge_removes_stale_device() {
     assert_eq!(event.device.object_identifier.instance_number(), 2001);
     assert!(client.discovered_devices().await.is_empty());
 
+    client.stop().await.unwrap();
+}
+
+/// One address announcing another instance: one device took the place of
+/// another, so subscribers hear the old one lost and then the new one
+/// discovered, and the old instance is gone from the table (#2560).
+#[tokio::test]
+async fn an_address_announcing_another_instance_loses_the_old_one() {
+    let (client_transport, sender_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut client = BACnetClient::generic_builder()
+        .transport(client_transport)
+        .build()
+        .await
+        .unwrap();
+    let mut events = client.device_events();
+    for instance in [7, 8] {
+        sender_transport
+            .send_unicast(&i_am_npdu(instance, 1), client.local_mac())
+            .await
+            .unwrap();
+    }
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let event = timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("timed out waiting for a device event")
+            .expect("device event channel closed");
+        seen.push((event.kind, event.device.object_identifier.instance_number()));
+    }
+    assert_eq!(
+        seen,
+        [
+            (DeviceEventKind::Discovered, 7),
+            (DeviceEventKind::Lost, 7),
+            (DeviceEventKind::Discovered, 8),
+        ]
+    );
+    assert!(client.get_device(7).await.unwrap().is_none());
+    assert!(client.get_device(8).await.unwrap().is_some());
+    assert_eq!(client.discovered_devices().await.len(), 1);
     client.stop().await.unwrap();
 }

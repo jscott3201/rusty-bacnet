@@ -189,9 +189,9 @@ async fn device_discovery_via_iam() {
     assert_eq!(devices[0].max_apdu_length, 1476);
 
     // Also test get_device
-    let dev = client.get_device(5678).await;
+    let dev = client.get_device(5678).await.unwrap();
     assert!(dev.is_some());
-    assert!(client.get_device(9999).await.is_none());
+    assert!(client.get_device(9999).await.unwrap().is_none());
 
     net_b.stop().await.unwrap();
     client.stop().await.unwrap();

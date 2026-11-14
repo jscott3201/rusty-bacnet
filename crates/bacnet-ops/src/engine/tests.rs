@@ -546,10 +546,10 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
 async fn a_who_is_fills_the_table() {
     let (engine, server) = lab().await;
     engine.client.clear_devices().await;
-    assert!(engine.device(LAB).await.is_none());
+    assert!(engine.device(LAB).await.unwrap().is_none());
     engine.who_is(WhoIsScope::Local, None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let found = engine.device(LAB).await.expect("the lab device");
+    let found = engine.device(LAB).await.unwrap().expect("the lab device");
     assert_eq!(found.vendor_id, 42);
     assert!(
         engine

@@ -291,9 +291,7 @@ async fn the_device_purge_runs_while_apdus_keep_arriving() {
         segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
-        last_seen: Instant::now()
-            .checked_sub(Duration::from_millis(1))
-            .unwrap_or_else(Instant::now),
+        last_seen: crate::discovery::now(),
         source_network: None,
         source_address: None,
     });
@@ -302,7 +300,8 @@ async fn the_device_purge_runs_while_apdus_keep_arriving() {
 
     // The runtime is never idle now, so paused time moves only by hand. The
     // flood announces no device events, so the Lost one is the first.
-    tokio::time::advance(DEVICE_PURGE_INTERVAL).await;
+    // Past the row's age limit, to the purge tick after it.
+    tokio::time::advance(DEVICE_PURGE_INTERVAL * 3).await;
     let mut turns = 0;
     let event = loop {
         match events.try_recv() {

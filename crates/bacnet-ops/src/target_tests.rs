@@ -4,6 +4,43 @@ use bacnet_transport::bip::BipTransport;
 
 use super::*;
 
+/// The addresses an ambiguous-instance error names read back as targets
+/// for the same station (#2560): bacnet-types writes them without knowing
+/// the transport, so this pins the two crates to one syntax.
+#[test]
+fn ambiguous_device_candidates_read_back() {
+    use bacnet_types::constructed::BACnetAddress;
+    let at = |network_number, mac: &[u8]| BACnetAddress {
+        network_number,
+        mac_address: bacnet_types::MacAddr::from_slice(mac),
+    };
+    let candidates = vec![
+        at(0, &[5]),
+        at(0, &[0x40, 0xAB, 0xCD]),
+        at(0, &[10, 0, 0, 1, 0xBA, 0xC0]),
+        at(2, &[0x05]),
+    ];
+    let text = Error::AmbiguousDevice {
+        instance: 9,
+        candidates: candidates.clone().into(),
+    }
+    .to_string();
+    let list = text
+        .split_once("addresses: ")
+        .and_then(|(_, rest)| rest.split_once("; "))
+        .map(|(list, _)| list)
+        .unwrap();
+    let parsed: Vec<BACnetAddress> = list
+        .split(", ")
+        .map(|word| match parse_target(word) {
+            Ok(Target::Mac(mac)) => at(0, &mac),
+            Ok(Target::RoutedMac { dnet, mac }) => at(dnet, &mac),
+            other => panic!("{word} reads back as {other:?}"),
+        })
+        .collect();
+    assert_eq!(parsed, candidates, "{text}");
+}
+
 /// Each MAC prints as a target the CLI reads back: a B/IPv6 VMAC as
 /// `bip6:0x……`, not as hex, which no target form takes.
 #[test]

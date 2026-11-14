@@ -124,7 +124,7 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Get a list of all discovered devices.
+    /// Get a list of all discovered devices, one per address.
     fn discovered_devices<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
@@ -138,7 +138,8 @@ impl BACnetClient {
         })
     }
 
-    /// Look up a discovered device by instance number.
+    /// Look up a discovered device by instance number. Two or more
+    /// addresses claiming it raise `BacnetAmbiguousDeviceError`.
     fn get_device<'py>(&self, py: Python<'py>, instance: u32) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
@@ -146,6 +147,7 @@ impl BACnetClient {
             let c = started(&inner).await?;
             Ok(c.get_device(instance)
                 .await
+                .map_err(to_py_err)?
                 .map(PyDiscoveredDevice::from_rust))
         })
     }

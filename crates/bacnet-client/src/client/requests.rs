@@ -208,25 +208,25 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let unsegmented_apdu_size = 4 + service_data.len();
         let target_transport_max_apdu = self.target_transport_max_apdu_length(target);
 
-        let (peer_max_apdu, remote_max_segments, advertised, peer_segmentation) = {
+        let (peer_max_apdu, remote_max_segments, advertised, peer_segmentation, sized_by) = {
             let dt = self.device_table.lock();
-            // A routed peer is recorded under the router's MAC, so only the
-            // SNET/SADR of the NPDU that carried its I-Am identifies it
-            // (Clause 5.2.1.2 term (c) binds the peer's Max APDU Length
-            // Accepted regardless of how the peer is reached).
-            let (device, peer_segmentation) = match named {
-                ConfirmedTarget::Local { mac } => {
-                    (dt.get_by_mac(mac), dt.local_peer_segmentation(mac))
-                }
-                ConfirmedTarget::Routed {
-                    dest_network,
-                    dest_mac,
-                    ..
-                } => (
-                    dt.get_by_network_address(dest_network, dest_mac),
-                    dt.routed_peer_segmentation(dest_network, dest_mac),
-                ),
-            };
+            // A routed peer's row is keyed by the SNET/SADR of the NPDU that
+            // carried its I-Am, never by the router's MAC (Clause 5.2.1.2
+            // term (c) binds the peer's Max APDU Length Accepted regardless
+            // of how the peer is reached).
+            // A routed target on this client's own network is the local
+            // device it is sent to, whose row sizes it when it has no
+            // routed row (#1358).
+            let mut sized_by = named.station();
+            let mut found = dt.peer(sized_by.0, sized_by.1);
+            if found.is_none()
+                && let (ConfirmedTarget::Routed { .. }, ConfirmedTarget::Local { mac }) =
+                    (named, target)
+            {
+                sized_by = (0, mac);
+                found = dt.peer(0, mac);
+            }
+            let (device, peer_segmentation) = found.unzip();
             let max_apdu = device
                 .map(|d| u16::try_from(d.max_apdu_length).unwrap_or(u16::MAX))
                 .unwrap_or(self.config.max_apdu_length);
@@ -236,7 +236,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             } else {
                 LengthBoundedBy::LocalConfig(max_apdu)
             };
-            (max_apdu, max_seg, advertised, peer_segmentation)
+            let sized_by = device.is_some().then_some(sized_by);
+            (max_apdu, max_seg, advertised, peer_segmentation, sized_by)
         };
         check_transmittable_length(advertised, target_transport_max_apdu)?;
         if routed_path_max_apdu.is_some_and(|path_max_apdu| {
@@ -281,6 +282,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         remote_max_segments,
                         routed_forwarded_npci_len,
                         routed_path_lease: path_lease.as_ref(),
+                        sized_by,
                     },
                 )
                 .await;
@@ -375,6 +377,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 registration.progress,
             )
             .await;
+        // Checked here too, so a request no row sized makes no call.
+        if sized_by.is_some() {
+            self.note_answer(sized_by, &response);
+        }
         if response.is_ok()
             && let Some(lease) = path_lease.as_ref()
         {
@@ -382,6 +388,28 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
         guard.mark_completed();
         response.and_then(Self::confirmed_response_result)
+    }
+
+    /// An answer from the device, an acknowledgment or its Error, Reject or
+    /// Abort, starts the age of the discovery-table row that sized the
+    /// request, `sized_by`, again, so a device that keeps answering stays
+    /// in the table without repeating its I-Am (#2560). A router's refusal
+    /// is no answer from the device. With no such row the table isn't locked
+    /// again.
+    pub(super) fn note_answer(
+        &self,
+        sized_by: Option<(u16, &[u8])>,
+        response: &Result<TsmResponse, Error>,
+    ) {
+        if let Some((network, mac)) = sized_by
+            && let Ok(
+                TsmResponse::SimpleAck
+                | TsmResponse::ComplexAck { .. }
+                | TsmResponse::Remote { .. },
+            ) = response
+        {
+            self.device_table.lock().answered(network, mac);
+        }
     }
 
     /// Wait through AWAIT_CONFIRMATION and SEGMENTED_CONF without allowing

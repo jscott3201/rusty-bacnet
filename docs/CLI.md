@@ -543,7 +543,9 @@ otherwise left out. Each column is as wide as its header or its widest cell,
 so a wide terminal leaves the spare room at the right; instance and address
 are never cut. The filter also matches the router. When two addresses answer
 for the same instance, a `DUPLICATE` banner names both (a routed one as
-`2:0x05 via ROUTER`). If the UI falls behind a burst of I-Am traffic, events
+`2:0x05 via ROUTER`) until only one does; the table keeps the row it showed
+first, and a request naming that instance fails with both addresses, so name
+the device by its address. If the UI falls behind a burst of I-Am traffic, events
 are dropped rather than queued without limit; the status bar's `drop` counter shows how many, and the
 table is refreshed from the client's discovery table afterwards.
 

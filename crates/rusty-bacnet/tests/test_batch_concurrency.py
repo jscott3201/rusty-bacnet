@@ -1,6 +1,7 @@
 """Installed batch limit validation, actual B/IP progress, and cancellation."""
 import asyncio
 import ast
+import contextlib
 from pathlib import Path
 import socket
 import unittest
@@ -67,21 +68,25 @@ class BatchConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
 
     async def test_limit_and_completion_order(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
-            peer.bind(("127.0.0.1", 0))
-            peer.setblocking(False)
+        # One peer socket a device: the discovery table holds one device an
+        # address (#2560).
+        with contextlib.ExitStack() as sockets:
+            peers = [sockets.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) for _ in range(3)]
+            for peer in peers:
+                peer.bind(("127.0.0.1", 0))
+                peer.setblocking(False)
             async with BACnetClient(interface="127.0.0.1", port=0) as client:
-                for instance in (1, 2, 3):
+                for instance, peer in zip((1, 2, 3), peers):
                     await client.add_device(instance, f"127.0.0.1:{peer.getsockname()[1]}")
                 task = asyncio.ensure_future(client.read_property_from_devices(requests(METHODS[0], [1, 2, 3]), max_concurrent=2))
                 try:
-                    first, second = await receive(peer), await receive(peer)
+                    first, second = await receive(peers[0]), await receive(peers[1])
                     with self.assertRaises(TimeoutError):
-                        await asyncio.wait_for(asyncio.get_running_loop().sock_recvfrom(peer, 2048), .05)
-                    await reply_read(peer, *second)
-                    third = await receive(peer)
-                    await reply_read(peer, *third)
-                    await reply_read(peer, *first)
+                        await asyncio.wait_for(asyncio.get_running_loop().sock_recvfrom(peers[2], 2048), .05)
+                    await reply_read(peers[1], *second)
+                    third = await receive(peers[2])
+                    await reply_read(peers[2], *third)
+                    await reply_read(peers[0], *first)
                     results = await asyncio.wait_for(task, 2)
                     self.assertEqual([r["device_instance"] for r in results], [2, 3, 1])
                     self.assertEqual([r["request_index"] for r in results], [1, 2, 0])
