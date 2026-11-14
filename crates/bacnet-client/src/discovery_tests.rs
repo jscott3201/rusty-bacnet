@@ -184,8 +184,6 @@ fn routing_fields_naming_no_station_are_not_stored() {
         make_routed_device(7, 0, &MAC),
         make_routed_device(7, u16::MAX, &[0x03]),
         make_routed_device(7, 100, &[]),
-        make_routed_device(7, 100, &[0x03; 19]),
-        local_at(7, &[0x03; 19]),
     ] {
         assert!(device.address().is_none(), "{device:?}");
         assert_eq!(table.heard(device).change, Change::Dropped);
@@ -344,4 +342,22 @@ fn the_cap_counts_one_row_per_address() {
     assert_eq!(instance_of(heard.replaced.as_ref()), Some(0));
     assert_eq!(table.get(0, &mac(1)).unwrap().vendor_id, 7);
     assert_eq!(table.len(), MAX_DEVICE_TABLE_ENTRIES);
+}
+
+/// A lookup finds the same row whether the table is small enough to scan
+/// or searched by key.
+#[test]
+fn lookups_agree_on_small_and_large_tables() {
+    let mut table = DeviceTable::new();
+    for n in 0u8..8 {
+        table.upsert(local_at(u32::from(n), &[n]));
+        table.upsert(make_routed_device(100 + u32::from(n), 5, &[n]));
+        for (network, instance) in [(0, u32::from(n)), (5, 100 + u32::from(n))] {
+            assert_eq!(instance_of(table.get(network, &[n])), Some(instance));
+            let (device, _) = table.peer(network, &[n]).unwrap();
+            assert_eq!(device.object_identifier.instance_number(), instance);
+        }
+        assert!(table.get(0, &[n + 1]).is_none());
+        assert!(table.peer(7, &[n]).is_none());
+    }
 }

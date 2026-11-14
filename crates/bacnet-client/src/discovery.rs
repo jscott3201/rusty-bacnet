@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::time::{Duration, Instant};
 
-use bacnet_npdu::MAX_MAC_LEN;
 use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::Segmentation;
@@ -59,10 +58,9 @@ impl DiscoveredDevice {
     /// network 0 and `mac_address` for a local device, `source_network` and
     /// `source_address` for a routed one. `None` when the routing fields name
     /// no one station: only one of them is set, the network is 0 or 65535,
-    /// or the remote MAC is empty; or when the MAC is longer than any data
-    /// link's ([`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN), 18 octets).
+    /// or the remote MAC is empty.
     pub fn address(&self) -> Option<BACnetAddress> {
-        Key::of(self).as_ref().map(Key::address)
+        Key::of(self).map(Key::address)
     }
 }
 
@@ -109,68 +107,47 @@ struct TableEntry {
     segmentation: PeerSegmentation,
 }
 
-/// A row's address: the network (0 for the local one) and the MAC there,
-/// held inline, so a lookup on the request path builds nothing on the
-/// heap. Ordered by network and then MAC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A row's address: the network (0 for the local one) and the MAC there.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Key {
     network: u16,
-    len: u8,
-    mac: [u8; MAX_MAC_LEN],
+    mac: MacAddr,
 }
 
 impl Key {
-    /// `None` for a MAC longer than any data link's
-    /// ([`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN)), which names no device.
-    fn at(network: u16, mac: &[u8]) -> Option<Self> {
-        let mut octets = [0; MAX_MAC_LEN];
-        octets.get_mut(..mac.len())?.copy_from_slice(mac);
-        Some(Self {
+    fn at(network: u16, mac: &[u8]) -> Self {
+        Self {
             network,
-            len: mac.len() as u8,
-            mac: octets,
-        })
+            mac: MacAddr::from_slice(mac),
+        }
     }
 
     /// The device's address, unless its routing fields name no one station:
     /// one of them alone, network 0 or 65535, or an empty remote MAC.
     fn of(device: &DiscoveredDevice) -> Option<Self> {
         match (device.source_network, &device.source_address) {
-            (None, None) => Self::at(0, &device.mac_address),
-            (Some(network @ 1..=0xFFFE), Some(mac)) if !mac.is_empty() => Self::at(network, mac),
+            (None, None) => Some(Self::at(0, &device.mac_address)),
+            (Some(network @ 1..=0xFFFE), Some(mac)) if !mac.is_empty() => {
+                Some(Self::at(network, mac))
+            }
             _ => None,
         }
     }
 
-    fn mac(&self) -> &[u8] {
-        &self.mac[..usize::from(self.len)]
-    }
-
-    /// Sorts before every key, so `(instance, Key::LOWEST)` starts the
+    /// Sorts before every key, so `(instance, Key::lowest())` starts the
     /// instance's run of claims.
-    const LOWEST: Self = Self {
-        network: 0,
-        len: 0,
-        mac: [0; MAX_MAC_LEN],
-    };
-
-    fn address(&self) -> BACnetAddress {
-        BACnetAddress {
-            network_number: self.network,
-            mac_address: MacAddr::from_slice(self.mac()),
+    fn lowest() -> Self {
+        Self {
+            network: 0,
+            mac: MacAddr::new(),
         }
     }
-}
 
-impl Ord for Key {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        (self.network, self.mac()).cmp(&(other.network, other.mac()))
-    }
-}
-
-impl PartialOrd for Key {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
+    fn address(self) -> BACnetAddress {
+        BACnetAddress {
+            network_number: self.network,
+            mac_address: self.mac,
+        }
     }
 }
 
@@ -316,12 +293,12 @@ impl DeviceTable {
                 }
                 heard.change = Change::Replaced;
                 heard.replaced = Some(old);
-                self.claims.remove(&(previous, key));
+                self.claims.remove(&(previous, key.clone()));
                 Some(previous)
             }
             None if full => return heard,
             None => {
-                self.rows.insert(key, entry);
+                self.rows.insert(key.clone(), entry);
                 heard.change = Change::Inserted;
                 None
             }
@@ -343,11 +320,11 @@ impl DeviceTable {
     /// The addresses that claim `instance`, in order.
     fn claims_of(&self, instance: u32) -> impl Iterator<Item = &Key> + '_ {
         let end = match instance.checked_add(1) {
-            Some(next) => Bound::Excluded((next, Key::LOWEST)),
+            Some(next) => Bound::Excluded((next, Key::lowest())),
             None => Bound::Unbounded,
         };
         self.claims
-            .range((Bound::Included((instance, Key::LOWEST)), end))
+            .range((Bound::Included((instance, Key::lowest())), end))
             .map(|(_, key)| key)
     }
 
@@ -360,8 +337,22 @@ impl DeviceTable {
     /// `mac` is the device's own; on a remote network it is the device's
     /// MAC there (SADR), never the router's.
     pub fn get(&self, network: u16, mac: &[u8]) -> Option<&DiscoveredDevice> {
-        let key = Key::at(network, mac)?;
-        self.rows.get(&key).map(|e| &e.device)
+        self.entry(network, mac).map(|e| &e.device)
+    }
+
+    /// The entry at `mac` on `network`. A few rows, as a small site or a
+    /// client naming its devices by address holds, are scanned, which costs
+    /// less on the request path than building a key to search with.
+    fn entry(&self, network: u16, mac: &[u8]) -> Option<&TableEntry> {
+        const SCANNED: usize = 4;
+        if self.rows.len() <= SCANNED {
+            return self
+                .rows
+                .iter()
+                .find(|(key, _)| key.network == network && key.mac.as_slice() == mac)
+                .map(|(_, entry)| entry);
+        }
+        self.rows.get(&Key::at(network, mac))
     }
 
     /// The rows that claim `instance`, ordered by address: none, one, or
@@ -387,7 +378,11 @@ impl DeviceTable {
         }
         Err(Error::AmbiguousDevice {
             instance,
-            candidates: self.claims_of(instance).map(Key::address).collect(),
+            candidates: self
+                .claims_of(instance)
+                .cloned()
+                .map(Key::address)
+                .collect(),
         })
     }
 
@@ -399,15 +394,15 @@ impl DeviceTable {
         network: u16,
         mac: &[u8],
     ) -> Option<(&DiscoveredDevice, PeerSegmentation)> {
-        let entry = self.rows.get(&Key::at(network, mac)?)?;
-        Some((&entry.device, entry.segmentation))
+        self.entry(network, mac)
+            .map(|e| (&e.device, e.segmentation))
     }
 
     /// The device at `mac` on `network` answered a confirmed request: its
     /// row's age starts again, so a device that keeps answering is not
     /// purged for want of an I-Am.
     pub(crate) fn answered(&mut self, network: u16, mac: &[u8]) {
-        if let Some(entry) = Key::at(network, mac).and_then(|key| self.rows.get_mut(&key)) {
+        if let Some(entry) = self.rows.get_mut(&Key::at(network, mac)) {
             entry.device.last_seen = entry.device.last_seen.max(now());
         }
     }
@@ -445,7 +440,7 @@ impl DeviceTable {
                 now.checked_duration_since(entry.device.last_seen)
                     .is_some_and(|age| age > max_age)
             })
-            .map(|(key, _)| *key)
+            .map(|(key, _)| key.clone())
             .collect();
         let mut purged = Purged::default();
         for key in stale {

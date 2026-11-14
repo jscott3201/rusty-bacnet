@@ -377,7 +377,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 registration.progress,
             )
             .await;
-        self.note_answer(sized_by, &response);
+        // Checked here too, so a request no row sized makes no call.
+        if sized_by.is_some() {
+            self.note_answer(sized_by, &response);
+        }
         if response.is_ok()
             && let Some(lease) = path_lease.as_ref()
         {
@@ -389,11 +392,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// An answer from the device, an acknowledgment or its Error, Reject or
     /// Abort, starts the age of the discovery-table row that sized the
-    /// request (`sized_by`) again, so a device that keeps answering stays in
-    /// the table without repeating its I-Am (#2560). A router's refusal is
-    /// no answer from the device. With no such row the table isn't locked
+    /// request, `sized_by`, again, so a device that keeps answering stays
+    /// in the table without repeating its I-Am (#2560). A router's refusal
+    /// is no answer from the device. With no such row the table isn't locked
     /// again.
-    #[inline]
     pub(super) fn note_answer(
         &self,
         sized_by: Option<(u16, &[u8])>,
