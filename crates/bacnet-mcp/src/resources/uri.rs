@@ -1,5 +1,6 @@
 //! Resource URIs (design §6). Every name is built from identifiers: a
-//! device instance, an object type and instance, a property.
+//! device instance, an object type and instance, a property. A device-list
+//! page is named by the row it follows: an instance at an address.
 
 use bacnet_ops::label::kebab;
 use bacnet_ops::octets::hex;

@@ -173,7 +173,7 @@ under its own account and budget, and a cancelled read sends nothing more.
 | URI | Content | A subscription means |
 |---|---|---|
 | `bacnet://devices` | the first page of the discovery table in reach, sorted by instance, then address (up to the device page size, 200 by default), no device text; nothing sent. `total` counts every device in reach and `truncated` says more follow; then `next` holds the next page's URI | an update when a device arrives or is lost, at most once a second |
-| `bacnet://devices/after/{instance}/{network}/{mac}` | the next page: the devices listed after the row at that instance (digits only, 0 to 4194303), network (0 to 65535) and MAC (lowercase hex, up to 18 bytes), so a page can end between two addresses that claim one instance and each row is listed once. Take the URI from `next` rather than building it. Same page size, `total`, `truncated` and its own `next` | the same as `bacnet://devices`: every subscribed page is told when the list changes. A listen stream follows at most 16 device-list pages, the first included and each spelling counted (the acknowledgment leaves out the rest); a legacy session counts them in its 64 URIs |
+| `bacnet://devices/after/{instance}/{network}/{mac}` | the next page: the devices listed after the row at that instance (digits only, 0 to 4194303), network (0 to 65535) and MAC (hex, up to 18 bytes; `next` writes it in lowercase and either case is accepted; an empty MAC segment is a valid position), so a page can end between two addresses that claim one instance and each row is listed once. Take the URI from `next` rather than building it. Same page size, `total`, `truncated` and its own `next` | the same as `bacnet://devices`: every subscribed page is told when the list changes. A listen stream follows at most 16 device-list pages, the first included and each spelling counted (the acknowledgment leaves out the rest); a legacy session counts them in its 64 URIs |
 | `bacnet://device/{instance}` | `bacnet_describe_device`'s summary, cached five minutes (`cached`) | not honoured: a summary has no updates |
 | `bacnet://device/{instance}/object/{type}:{n}` (or `{type},{n}`) | the point facts (`bacnet_read`'s `preset: "point"` properties); `source` `read` when read just now, `cov` or `poll` when watched, with `state` (`starting`, `live`, `failed`, `unreachable`, `stopped`), `note` (why it is polled or not live), `seq`, `age_ms` and `updates` (notifications, coalesced, polls, renewals) | a watch on the hub |
 | `.../property/{prop}` | one property (`name` or `name[index]`; `[`, `]` and `:` may be percent-encoded) | a property watch (SubscribeCOVProperty) |
@@ -186,10 +186,13 @@ A watched point is read from the hub, which sends nothing. An unwatched one
 is read once. Each device's alarms are read at most once a minute, whoever
 asks: later reads within the minute come from a cache.
 
-The device list pages by instance, not by position (#2116): `next` names
-the last instance listed, so a device discovered between two page reads
-moves nothing already seen. It lands on a later page if its instance is
-above the cursor, or only in `total` if it is below. MCP's own cursors
+The device list pages by row, not by position (#2116, #2589): a row is an
+instance at an address, listed by instance, then network, then MAC, and
+`next` names the last row listed. A device discovered between two page
+reads moves nothing already seen, and several addresses claiming one
+instance can sit across a page boundary without a row lost or repeated.
+A new row lands on a later page if it sorts after the cursor's row, or
+only in `total` if it sorts before it. MCP's own cursors
 page the `*/list` methods only; `resources/read` has none, so the cursor
 lives in the URI. Under `--passive` the template isn't listed.
 

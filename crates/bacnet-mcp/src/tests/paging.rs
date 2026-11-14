@@ -5,6 +5,8 @@
 
 use std::time::Duration;
 
+use bacnet_client::discovery::RoutedDeviceConfig;
+use bacnet_types::enums::Segmentation;
 use serde_json::{Value, json};
 
 use super::{ALIASES, LAB, Lab};
@@ -245,6 +247,110 @@ async fn a_shared_instance_on_a_page_boundary_is_listed_whole() {
         assert_eq!(pages.concat(), whole, "{claimants} claimants, page {page}");
         lab.stop().await;
     }
+}
+
+/// A row as `(instance, network, address)`.
+fn rows_on(body: &Value) -> Vec<(u64, u64, String)> {
+    body["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["instance"].as_u64().unwrap(),
+                row["network"].as_u64().unwrap(),
+                row["address"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Instance 1000 at one MAC, local and routed on networks 2002 and 2003
+/// (#2589): three rows that differ only in network.
+async fn claim_1000_on_networks(lab: &Lab) {
+    let mac = [10, 0, 0, 100, 0xBA, 0xC0];
+    lab.low.add_device(1000, &mac).await.unwrap();
+    for remote_network in [2002, 2003] {
+        lab.low
+            .add_routed_device(RoutedDeviceConfig {
+                instance: 1000,
+                router_mac: super::LAB_MAC.to_vec(),
+                remote_network,
+                remote_mac: mac.to_vec(),
+                max_apdu_length: 480,
+                segmentation_supported: Segmentation::NO_SEGMENTATION,
+                max_segments_accepted: None,
+            })
+            .await
+            .unwrap();
+    }
+}
+
+/// Rows of one instance and MAC that differ only in network are told apart
+/// by the cursor: a boundary between the local row and a routed one, or
+/// between two networks, loses and repeats none.
+#[tokio::test(start_paused = true)]
+async fn rows_differing_only_in_network_are_listed_whole() {
+    let mut lab = Lab::start(paged(200)).await;
+    claim_1000_on_networks(&lab).await;
+    let whole = rows_on(&lab.agent.read("bacnet://devices").await.unwrap());
+    let of_1000: Vec<u64> = whole
+        .iter()
+        .filter(|(i, ..)| *i == 1000)
+        .map(|(_, network, _)| *network)
+        .collect();
+    assert_eq!(of_1000, [0, 2002, 2003], "{whole:?}");
+    lab.stop().await;
+    // Five routed rows come first: page 6 ends on the local row, 7 between
+    // the networks.
+    for page in [6, 7] {
+        let mut lab = Lab::start(paged(page)).await;
+        claim_1000_on_networks(&lab).await;
+        let mut seen = Vec::new();
+        let mut uri = "bacnet://devices".to_string();
+        let mut pages = 0;
+        loop {
+            let body = lab.agent.read(&uri).await.unwrap();
+            seen.extend(rows_on(&body));
+            pages += 1;
+            match body.get("next") {
+                Some(next) => uri = next.as_str().unwrap().to_string(),
+                None => break,
+            }
+        }
+        assert!(pages > 1);
+        assert_eq!(seen, whole, "page {page}");
+        lab.stop().await;
+    }
+}
+
+/// The cursor's row can leave the table between pages (its address
+/// announces another instance): the next page still starts at the row after
+/// where it stood.
+#[tokio::test(start_paused = true)]
+async fn the_cursor_row_leaving_the_table_loses_nothing() {
+    let mut lab = Lab::start(paged(3)).await;
+    let first = lab.agent.read("bacnet://devices").await.unwrap();
+    assert_eq!(instances(&first), [300, 301, 302]);
+    let next = first["next"].as_str().unwrap().to_string();
+    // Network 2001, MAC 0x0c was 302; it now announces 777.
+    lab.low
+        .add_routed_device(RoutedDeviceConfig {
+            instance: 777,
+            router_mac: super::LAB_MAC.to_vec(),
+            remote_network: 2001,
+            remote_mac: vec![12],
+            max_apdu_length: 480,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
+            max_segments_accepted: None,
+        })
+        .await
+        .unwrap();
+    let rest = follow(&mut lab, &next).await.concat();
+    let mut expected: Vec<u64> = lab_devices().split_off(3);
+    expected.insert(2, 777);
+    assert_eq!(rest, expected);
+    lab.stop().await;
 }
 
 /// The template is listed beside the others, named from identifiers.

@@ -191,7 +191,9 @@ pub(crate) fn state_name(state: State) -> &'static str {
 
 /// The row a device is listed by: its instance, then its address as the
 /// discovery table keys it. No two rows share it. A row with no one
-/// station to name (the table keeps none) falls back to its MAC.
+/// station to name (the table keeps none) falls back to its MAC. The table
+/// never stores such a row, so the fallback cannot run; it only spares a
+/// panic.
 fn row_key(found: &DiscoveredDevice) -> uri::DeviceCursor {
     let address = found.address().unwrap_or_else(|| BACnetAddress {
         network_number: 0,
