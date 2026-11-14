@@ -10086,10 +10086,21 @@ client.who_is(None).await?;                             // every device, globall
 client.who_is(Some(DeviceInstanceRange::new(1000, 2000)?)).await?; // a range
 client.who_has(WhoHasObject::Name("Zone Temp".into()), None).await?;
 
-let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>
-let device = client.get_device(1234).await;              // Option<DiscoveredDevice>
+let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>, one per address
+let device = client.get_device(1234).await?;             // Option<DiscoveredDevice>
+let at = client.get_device_at(2, &[0x05]).await;         // by network (0 = local) and MAC
 client.clear_devices().await;                            // reset table
 ```
+
+The discovery table is keyed by address: the network number, 0 for the
+local network, and the MAC on it (#2560). An I-Am from a known address
+refreshes its row, and so does any answer to a confirmed request, so a device
+that keeps answering stays in the table without repeating its I-Am; a silent
+one is purged about ten minutes after it was last heard. Two addresses
+claiming one instance each keep a row, reachable by its address, while
+`get_device` and every `_from_device`/`_to_device` call refuse the instance
+with `Error::AmbiguousDevice`, which lists both. `device_collision_events()`
+reports each change to such a contest, the end included.
 
 Who-Has answers and router discovery (#960):
 

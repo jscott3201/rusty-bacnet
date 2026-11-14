@@ -579,8 +579,10 @@ signals ------------------+      if dirty: terminal.draw(view)
   status bar shows the total. After any loss the worker resynchronises the table
   from the client's own discovery table, at most once a second. Duplicate-
   instance notices are rare and important, so they wait for room instead of
-  being dropped; the record behind the banner keeps at most four addresses per
-  instance and counts the rest, and its text is rebuilt only when it changes.
+  being dropped. Each lists every address claiming the instance; the record
+  behind the banner keeps at most four of them and counts the rest, drops the
+  instance once one address is left, and its text is rebuilt only when it
+  changes.
   Lost devices leave the table with a line in the log pane. Later streams
   (COV, events, frames) get the same treatment.
 - **Latest-value state** (SC link state, MS/TP statistics, FD countdown) will

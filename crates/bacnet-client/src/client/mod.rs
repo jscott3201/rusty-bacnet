@@ -47,7 +47,7 @@ use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, RejectReason, UnconfirmedServiceChoice};
 use bacnet_types::error::{Error, RemoteError};
 
-use crate::discovery::{DeviceTable, DeviceUpsertResult, DiscoveredDevice, RoutedDeviceConfig};
+use crate::discovery::{Change, DeviceTable, DiscoveredDevice, RoutedDeviceConfig};
 use crate::segmentation::{
     SegmentReceiver, SegmentedPduType, duplicate_in_window, max_segment_payload, split_payload,
 };
@@ -75,9 +75,9 @@ pub const DEVICE_EVENT_CHANNEL_CAPACITY: usize = 64;
 /// Type of change observed in the device discovery table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceEventKind {
-    /// A new device instance was inserted into the discovery table.
+    /// An I-Am from a new address added a row to the discovery table.
     Discovered,
-    /// An existing device instance was refreshed by a later I-Am.
+    /// A later I-Am from the same address refreshed its row.
     Updated,
     /// A previously discovered device was purged as stale.
     Lost,
@@ -92,13 +92,21 @@ pub struct DeviceEvent {
     pub device: DiscoveredDevice,
 }
 
-/// Notification emitted when two endpoints claim the same Device instance.
+/// Notification that the addresses claiming one Device instance changed
+/// while two or more claim it, or claimed it just before.
+///
+/// The discovery table keeps a row for every claimant (see
+/// [`DeviceTable`]). A contest begins or grows when an I-Am from another
+/// address claims the instance, and shrinks or ends when the purge removes a
+/// claimant or a claimant announces another instance. Each notice describes
+/// the table after that change.
 #[derive(Debug, Clone)]
 pub struct DeviceCollisionEvent {
-    /// Snapshot of the authoritative discovery-table row that was retained.
-    pub retained: DiscoveredDevice,
-    /// Snapshot constructed from the conflicting incoming I-Am.
-    pub incoming: DiscoveredDevice,
+    /// The Device instance claimed.
+    pub instance: u32,
+    /// The rows that claim it now, ordered by address: two or more while
+    /// the contest lasts, fewer once it has ended.
+    pub claimants: Vec<DiscoveredDevice>,
 }
 
 /// Client configuration.
@@ -855,6 +863,19 @@ enum ConfirmedTarget<'a> {
 }
 
 impl<'a> ConfirmedTarget<'a> {
+    /// The address a reply comes from, as the discovery table keys it:
+    /// network 0 and the MAC for a local target.
+    fn station(&self) -> (u16, &'a [u8]) {
+        match *self {
+            Self::Local { mac } => (0, mac),
+            Self::Routed {
+                dest_network,
+                dest_mac,
+                ..
+            } => (dest_network, dest_mac),
+        }
+    }
+
     fn additional_npdu_header_len(&self) -> u16 {
         match self {
             Self::Local { .. } => 0,
@@ -968,6 +989,8 @@ mod cov_renewal_tests;
 mod cov_tests;
 #[cfg(test)]
 mod device_events_tests;
+#[cfg(test)]
+mod device_identity_tests;
 #[cfg(test)]
 mod dispatch_turn_tests;
 #[cfg(test)]

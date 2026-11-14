@@ -5,6 +5,9 @@ use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Resolve a device instance to its MAC address and optional routing info.
     ///
+    /// Fails with [`Error::AmbiguousDevice`] when two or more addresses
+    /// claim the instance; the device's address names it then.
+    ///
     /// # Snapshot/coherence contract
     ///
     /// This returns an address/routing snapshot taken under one
@@ -20,7 +23,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_instance: u32,
     ) -> Result<(Vec<u8>, Option<(u16, Vec<u8>)>), Error> {
         let dt = self.device_table.lock();
-        let device = dt.get(device_instance).ok_or_else(|| {
+        let device = dt.find(device_instance)?.ok_or_else(|| {
             Error::Encoding(format!("device {device_instance} not in device table"))
         })?;
         let routing = match (&device.source_network, &device.source_address) {
@@ -92,14 +95,30 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// Get a snapshot of all discovered devices.
+    /// Get a snapshot of all discovered devices, one per address, ordered by
+    /// network number and then MAC. An instance two addresses claim is
+    /// listed twice.
     pub async fn discovered_devices(&self) -> Vec<DiscoveredDevice> {
         self.device_table.lock().all()
     }
 
-    /// Look up a discovered device by instance number.
-    pub async fn get_device(&self, instance: u32) -> Option<DiscoveredDevice> {
-        self.device_table.lock().get(instance).cloned()
+    /// Look up the discovered device that claims `instance`, or `Ok(None)`
+    /// when no address does.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AmbiguousDevice`], naming every claimant's address, when two
+    /// or more addresses claim the instance. [`Self::get_device_at`] finds
+    /// each of them.
+    pub async fn get_device(&self, instance: u32) -> Result<Option<DiscoveredDevice>, Error> {
+        Ok(self.device_table.lock().find(instance)?.cloned())
+    }
+
+    /// Look up the discovered device at `mac` on `network`: network 0 is the
+    /// local network; on a remote network `mac` is the device's MAC there,
+    /// not its router's.
+    pub async fn get_device_at(&self, network: u16, mac: &[u8]) -> Option<DiscoveredDevice> {
+        self.device_table.lock().get(network, mac).cloned()
     }
 
     /// Clear the discovered devices table.
@@ -114,7 +133,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// vendor_id 0) are local/manual registration defaults, **not** values
     /// learned from an I-Am; requests to this device are bounded by them
     /// until a real I-Am refreshes the row. The row is unambiguously local:
-    /// routed lookups by SNET/SADR will not match it.
+    /// routed lookups by SNET/SADR will not match it. Like a discovered
+    /// row, it is one claim on `instance`: another address claiming it too
+    /// makes the instance ambiguous (see [`DeviceTable`]).
     pub async fn add_device(&self, instance: u32, mac: &[u8]) -> Result<(), Error> {
         let oid = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,
@@ -127,7 +148,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
             max_segments_accepted: None,
             vendor_id: 0,
-            last_seen: std::time::Instant::now(),
+            last_seen: crate::discovery::now(),
             source_network: None,
             source_address: None,
         };
@@ -180,7 +201,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             segmentation_supported: config.segmentation_supported,
             max_segments_accepted: config.max_segments_accepted,
             vendor_id: 0,
-            last_seen: std::time::Instant::now(),
+            last_seen: crate::discovery::now(),
             source_network: Some(config.remote_network),
             source_address: Some(MacAddr::from_slice(&config.remote_mac)),
         };

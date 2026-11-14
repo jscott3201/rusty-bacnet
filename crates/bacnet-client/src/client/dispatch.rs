@@ -495,34 +495,32 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 segmentation_supported: i_am.segmentation_supported,
                                 max_segments_accepted: None,
                                 vendor_id: i_am.vendor_id,
-                                last_seen: std::time::Instant::now(),
+                                last_seen: crate::discovery::now(),
                                 source_network: src_net,
                                 source_address: src_addr,
                             };
-                            let status = {
+                            // The notices are built under the lock, so each
+                            // describes the table this I-Am left.
+                            let (change, collisions) = {
                                 let mut table = device_table.lock();
-                                table.upsert_with_result(device.clone())
+                                let heard = table.heard(device.clone());
+                                let collisions: Vec<DeviceCollisionEvent> = heard
+                                    .contested
+                                    .iter()
+                                    .map(|&instance| DeviceCollisionEvent::of(&table, instance))
+                                    .collect();
+                                (heard.change, collisions)
                             };
-                            match status {
-                                DeviceUpsertResult::Inserted => {
-                                    let _ = device_tx.send(DeviceEvent {
-                                        kind: DeviceEventKind::Discovered,
-                                        device,
-                                    });
-                                }
-                                DeviceUpsertResult::Updated => {
-                                    let _ = device_tx.send(DeviceEvent {
-                                        kind: DeviceEventKind::Updated,
-                                        device,
-                                    });
-                                }
-                                DeviceUpsertResult::Collision { retained } => {
-                                    let _ = device_collision_tx.send(DeviceCollisionEvent {
-                                        retained,
-                                        incoming: device,
-                                    });
-                                }
-                                DeviceUpsertResult::Dropped => {}
+                            let kind = match change {
+                                Change::Inserted => Some(DeviceEventKind::Discovered),
+                                Change::Updated => Some(DeviceEventKind::Updated),
+                                Change::Dropped => None,
+                            };
+                            if let Some(kind) = kind {
+                                let _ = device_tx.send(DeviceEvent { kind, device });
+                            }
+                            for collision in collisions {
+                                let _ = device_collision_tx.send(collision);
                             }
                         }
                         Err(e) => {

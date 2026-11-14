@@ -168,6 +168,29 @@ Attributes:
 - `expected: int`
 - `got: int`
 
+## BacnetAmbiguousDeviceError
+
+`class BacnetAmbiguousDeviceError(BacnetError)`
+
+Raised when a call names a device by its instance and two or more
+addresses in the discovery table claim that instance, so which device is
+meant is unknown (#2560). Nothing was sent. Each claimant keeps its own
+entry in `discovered_devices()` and stays reachable by its address;
+once only one claims the instance, by the purge or a new I-Am, the
+instance works again.
+
+Attributes:
+instance: The device instance the call named.
+candidates: Every claimant as `(network, mac)`, ordered by network
+and then MAC: network 0 is the local network, where `mac` is
+the device's own; on another network it is the device's MAC
+there.
+
+Attributes:
+
+- `instance: int`
+- `candidates: list[tuple[int, bytes]]`
+
 ## BacnetTransportError
 
 `class BacnetTransportError(BacnetError, OSError)`

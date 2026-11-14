@@ -16,7 +16,7 @@ use core::fmt;
 use core::time::Duration;
 
 #[cfg(feature = "alloc")]
-use crate::constructed::BACnetObjectPropertyReference;
+use crate::constructed::{BACnetAddress, BACnetObjectPropertyReference};
 use crate::data_link::DataLink;
 #[cfg(feature = "alloc")]
 use crate::enums::PropertyIdentifier;
@@ -51,6 +51,30 @@ impl fmt::Display for NotAdvancing {
                  the device answered with no records"
             ),
         }
+    }
+}
+
+/// [`Error::AmbiguousDevice`]'s addresses: `0x0a000001bac0` on the local
+/// network, `2:0x05` on network 2.
+#[cfg(feature = "alloc")]
+struct Candidates<'a>(&'a [BACnetAddress]);
+
+#[cfg(feature = "alloc")]
+impl fmt::Display for Candidates<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, address) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            if address.network_number != 0 {
+                write!(f, "{}:", address.network_number)?;
+            }
+            f.write_str("0x")?;
+            for octet in address.mac_address.iter() {
+                write!(f, "{octet:02x}")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -188,6 +212,24 @@ pub enum Error {
     /// instead. Read again leniently to keep its items.
     #[error("ReadRange acknowledgement refused: {0}")]
     ReadRangeViolation(ReadRangeViolation),
+
+    /// A request named a device by its instance, and two or more addresses
+    /// in the client's discovery table claim that instance, so which device
+    /// is meant is unknown. Nothing was sent. Name one of `candidates` by
+    /// its address instead. Only with `alloc`.
+    #[cfg(feature = "alloc")]
+    #[error(
+        "device {instance} is claimed by {} addresses: {}; name one by its address",
+        candidates.len(),
+        Candidates(candidates)
+    )]
+    AmbiguousDevice {
+        /// The Device instance the request named.
+        instance: u32,
+        /// Every address that claims it, ordered by network number and then
+        /// MAC: network 0 is the local network.
+        candidates: Vec<BACnetAddress>,
+    },
 
     /// A paged log read asked for the records from one sequence number and
     /// the device answered with a page starting before it, so reading on

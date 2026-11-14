@@ -289,13 +289,18 @@ async fn objects_are_found_by_name_type_and_object() {
             json!({ "object": "ao:1", "range": "1201-1202" }),
         )
         .await;
-    // 1202 is another instance the lab answers for: it has no Device
-    // object of its own, so its list fails and it is skipped, not fatal.
+    // 1202 is another lab device at its own address, holding the same
+    // objects.
     let body = ok(&by_object);
     assert_eq!(body["searched"], json!([1201, 1202]));
-    assert_eq!(body["matches"].as_array().unwrap().len(), 1, "{body}");
-    assert_eq!(body["skipped"][0]["device"], json!(1202));
-    assert_eq!(body["skipped"][0]["error"]["code"], json!("unknown-object"));
+    let devices: Vec<&Value> = body["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| &m["device"])
+        .collect();
+    assert_eq!(devices, [&json!(1201), &json!(1202)], "{body}");
+    assert_eq!(body["skipped"], json!([]));
 
     let nothing = lab
         .agent
@@ -323,7 +328,7 @@ async fn find_pages_resume_across_devices() {
     let mut skipped = Vec::new();
     let mut pages = Vec::new();
     let mut cursor: Option<String> = None;
-    for _ in 0..10 {
+    for _ in 0..20 {
         let mut call = args.clone();
         if let Some(cursor) = &cursor {
             call["cursor"] = json!(cursor);
@@ -346,24 +351,27 @@ async fn find_pages_resume_across_devices() {
             None => break,
         }
     }
-    assert_eq!(
-        seen,
-        [
-            "1201 \"analog-input:1\"",
-            "1201 \"analog-input:3\"",
-            "1201 \"trend-log:1\"",
-            "1201 \"trend-log:2\"",
-            "1201 \"trend-log:3\"",
-            "1201 \"trend-log:4\"",
-            "1201 \"trend-log:5\"",
-        ]
-    );
-    // A full page ends before the next device: 1202 is read only on the
-    // last page, which finds nothing there and ends the search.
+    let objects = [
+        "\"analog-input:1\"",
+        "\"analog-input:3\"",
+        "\"trend-log:1\"",
+        "\"trend-log:2\"",
+        "\"trend-log:3\"",
+        "\"trend-log:4\"",
+        "\"trend-log:5\"",
+    ];
+    let wanted: Vec<String> = [1201, 1202]
+        .iter()
+        .flat_map(|device| objects.iter().map(move |object| format!("{device} {object}")))
+        .collect();
+    assert_eq!(seen, wanted);
+    // A full page ends before the next device: 1202, another lab device at
+    // its own address, is read only once 1201 is done, and its last match
+    // ends the search.
     let mut wanted: Vec<(Value, usize)> = vec![(json!([1201]), 1); 7];
-    wanted.push((json!([1202]), 0));
+    wanted.extend(vec![(json!([1202]), 1); 7]);
     assert_eq!(pages, wanted);
-    assert_eq!(skipped, [json!(1202)], "skipped once, on the last page");
+    assert!(skipped.is_empty(), "{skipped:?}");
 
     lab.stop().await;
 }

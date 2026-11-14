@@ -747,7 +747,7 @@ Read-only device information from WhoIs/IAm discovery (frozen).
 | `.max_apdu_length` | `int` | Max APDU the device accepts |
 | `.segmentation_supported` | `Segmentation` | Segmentation capability |
 | `.vendor_id` | `int` | Vendor identifier |
-| `.seconds_since_seen` | `float` | Seconds since last IAm |
+| `.seconds_since_seen` | `float` | Seconds since the device was last heard from: its last I-Am, or its last answer to one of the client's confirmed requests |
 | `.source_network` | `int \| None` | Remote network number (if routed) |
 | `.source_address` | `bytes \| None` | Remote MAC address (if routed) |
 
@@ -1885,7 +1885,10 @@ to finish.
 
 #### `discovered_devices() -> list[DiscoveredDevice]`
 
-Get all discovered devices (populated by WhoIs/IAm).
+Get all discovered devices (populated by WhoIs/IAm), one per address: a
+device instance that two addresses claim is listed once for each (#2560). A
+device stays listed while it answers the client's confirmed requests, I-Am or
+not, and leaves about ten minutes after it was last heard from.
 
 ```python
 await client.who_is()
@@ -1897,7 +1900,9 @@ for dev in devices:
 
 #### `get_device(instance) -> DiscoveredDevice | None`
 
-Look up a specific device by instance number.
+Look up a specific device by instance number: `None` when no address claims
+it. When two or more addresses claim it, it raises
+`BacnetAmbiguousDeviceError`, whose `candidates` names each one.
 
 ```python
 dev = await client.get_device(1234)
@@ -1968,6 +1973,9 @@ await client.add_device(1234, "192.168.1.100:47808")
 ### Auto-Routing (by device instance)
 
 These methods look up the device address from the discovery table. Useful when you've already discovered devices.
+When two or more addresses claim the instance, each raises
+`BacnetAmbiguousDeviceError` before sending anything; reach each device by its
+address instead.
 
 #### `read_property_from_device(device_instance, object_id, property_id, array_index=None) -> PropertyValue`
 
@@ -5884,6 +5892,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetLogNotAdvancingError` | A paged log read can't advance: the device answered from before the record asked for, or with none its counts say it holds. `requested` and `returned` (`None` when it sent none) name the sequence numbers |
 | `BacnetBvlcNakError` | A BBMD refused a management request (`read_bdt` and its siblings) with a BVLC-Result NAK; `result_code` holds its code |
 | `BacnetBvlcUnexpectedResponseError` | A management request was answered by a BVLC message it doesn't take; `expected` and `got` hold the function codes |
+| `BacnetAmbiguousDeviceError` | A call named a device by instance and two or more addresses claim it; nothing was sent. `instance` is the instance and `candidates` lists each claimant as `(network, mac)`, network 0 the local one |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
 | `BacnetRouterCloseError` | A `BACnetRouter`'s cleanup failed; `failures` holds a tuple of `RouterCleanupFailure` records (see [B/IP router](#bip-router)) |
 

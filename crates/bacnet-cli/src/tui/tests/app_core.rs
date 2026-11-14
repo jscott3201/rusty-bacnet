@@ -278,29 +278,32 @@ fn a_newer_who_is_supersedes_the_running_one() {
     assert!(op.running(), "the stale result did not end the new request");
 }
 
+/// Each collision notice lists every claimant, and the table keeps
+/// showing the row it showed first.
 #[test]
 fn collisions_record_every_address_for_the_banner() {
     let mut app = connected_app();
-    let retained = row(200, "10.0.0.20:47808", 1, 0);
-    let incoming = row(200, "10.0.0.21:47808", 1, 0);
-    worker(
-        &mut app,
-        WorkerEvent::Collision {
-            retained: retained.clone(),
-            incoming,
-        },
-    );
-    worker(
-        &mut app,
-        WorkerEvent::Collision {
-            retained,
-            incoming: row(200, "10.0.0.22:47808", 1, 0),
-        },
-    );
+    let claimants: Vec<_> = (20..=22)
+        .map(|host| row(200, &format!("10.0.0.{host}:47808"), 1, 0))
+        .collect();
+    for (seen, claimant) in claimants.iter().enumerate() {
+        worker(&mut app, WorkerEvent::Discovered(claimant.clone()));
+        worker(
+            &mut app,
+            WorkerEvent::Collision {
+                instance: 200,
+                claimants: claimants[..=seen].to_vec(),
+            },
+        );
+    }
     assert_eq!(
         app.duplicates.lines(),
         ["instance 200 claimed by 10.0.0.20:47808, 10.0.0.21:47808 and 10.0.0.22:47808"]
     );
+    assert_eq!(app.devices.get(200).unwrap().address, "10.0.0.20:47808");
+    // A claimant the table doesn't show leaving takes no row with it.
+    worker(&mut app, WorkerEvent::Lost(claimants[2].clone()));
+    assert_eq!(app.devices.get(200).unwrap().address, "10.0.0.20:47808");
 }
 
 #[test]

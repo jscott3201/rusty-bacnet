@@ -251,8 +251,8 @@ impl DeviceFeed {
     ) -> Option<WorkerEvent> {
         match received {
             Ok(event) => Some(WorkerEvent::Collision {
-                retained: self.row(&event.retained),
-                incoming: self.row(&event.incoming),
+                instance: event.instance,
+                claimants: event.claimants.iter().map(|d| self.row(d)).collect(),
             }),
             Err(RecvError::Lagged(missed)) => {
                 sink.add_dropped(missed);

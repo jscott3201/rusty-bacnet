@@ -210,23 +210,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let (peer_max_apdu, remote_max_segments, advertised, peer_segmentation) = {
             let dt = self.device_table.lock();
-            // A routed peer is recorded under the router's MAC, so only the
-            // SNET/SADR of the NPDU that carried its I-Am identifies it
-            // (Clause 5.2.1.2 term (c) binds the peer's Max APDU Length
-            // Accepted regardless of how the peer is reached).
-            let (device, peer_segmentation) = match named {
-                ConfirmedTarget::Local { mac } => {
-                    (dt.get_by_mac(mac), dt.local_peer_segmentation(mac))
-                }
-                ConfirmedTarget::Routed {
-                    dest_network,
-                    dest_mac,
-                    ..
-                } => (
-                    dt.get_by_network_address(dest_network, dest_mac),
-                    dt.routed_peer_segmentation(dest_network, dest_mac),
-                ),
-            };
+            // A routed peer's row is keyed by the SNET/SADR of the NPDU that
+            // carried its I-Am, never by the router's MAC (Clause 5.2.1.2
+            // term (c) binds the peer's Max APDU Length Accepted regardless
+            // of how the peer is reached).
+            let (network, mac) = named.station();
+            let (device, peer_segmentation) = dt.peer(network, mac).unzip();
             let max_apdu = device
                 .map(|d| u16::try_from(d.max_apdu_length).unwrap_or(u16::MAX))
                 .unwrap_or(self.config.max_apdu_length);
@@ -386,7 +375,31 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Wait through AWAIT_CONFIRMATION and SEGMENTED_CONF without allowing
     /// their timers to cancel each other's phase.
+    ///
+    /// An answer from the device, an acknowledgment or its Error, Reject or
+    /// Abort, starts the age of its discovery-table row again, so a device
+    /// that keeps answering stays in the table without repeating its I-Am
+    /// (#2560). A router's refusal is no answer from the device.
     pub(super) async fn wait_for_confirmed_response(
+        &self,
+        wait_for: ConfirmedWait<'_>,
+        response_rx: oneshot::Receiver<TsmResponse>,
+        progress_rx: ProgressReceiver,
+    ) -> Result<TsmResponse, Error> {
+        let response = self
+            .wait_for_confirmed_completion(wait_for, response_rx, progress_rx)
+            .await;
+        if let Ok(
+            TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Remote { .. },
+        ) = &response
+        {
+            let (network, mac) = wait_for.target.station();
+            self.device_table.lock().answered(network, mac);
+        }
+        response
+    }
+
+    async fn wait_for_confirmed_completion(
         &self,
         wait_for: ConfirmedWait<'_>,
         mut response_rx: oneshot::Receiver<TsmResponse>,

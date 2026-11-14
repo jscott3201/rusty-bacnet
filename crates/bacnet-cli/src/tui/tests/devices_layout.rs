@@ -172,17 +172,25 @@ fn a_new_router_is_filtered_again() {
     assert_eq!(visible(&mut app), [2001]);
 }
 
-/// Two routers reporting the same station for one instance: the banner
-/// names the station through each router, not the station twice.
+/// One station on two networks claiming one instance: the banner names
+/// each station with the router it answers through.
 #[test]
-fn a_routed_duplicate_names_both_routers() {
+fn a_routed_duplicate_names_each_station_with_its_router() {
     let mut app = connected_app();
-    let retained = routed_row(2001, (2, &[5]), "10.0.1.1:47808", 24, 1);
-    let incoming = routed_row(2001, (2, &[5]), "10.0.1.2:47808", 24, 2);
-    worker(&mut app, WorkerEvent::Collision { retained, incoming });
+    let claimants = vec![
+        routed_row(2001, (2, &[5]), "10.0.1.1:47808", 24, 1),
+        routed_row(2001, (3, &[5]), "10.0.1.2:47808", 24, 2),
+    ];
+    worker(
+        &mut app,
+        WorkerEvent::Collision {
+            instance: 2001,
+            claimants,
+        },
+    );
     let banner = app.duplicates.banner().join(" ");
-    for router in ["10.0.1.1:47808", "10.0.1.2:47808"] {
-        assert!(banner.contains(&format!("2:0x05 via {router}")), "{banner}");
+    for station in ["2:0x05 via 10.0.1.1:47808", "3:0x05 via 10.0.1.2:47808"] {
+        assert!(banner.contains(station), "{banner}");
     }
 }
 

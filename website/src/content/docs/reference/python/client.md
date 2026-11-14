@@ -515,7 +515,8 @@ Reject-Message-To-Network messages the client receives from now on
 def discovered_devices(self) -> Awaitable[list[DiscoveredDevice]]
 ```
 
-Return all devices discovered so far.
+Return all devices discovered so far, one per address: a device
+instance two addresses claim is listed for each (#2560).
 
 ### BACnetClient.get_device
 
@@ -523,7 +524,9 @@ Return all devices discovered so far.
 def get_device(self, instance: int) -> Awaitable[Optional[DiscoveredDevice]]
 ```
 
-Look up a discovered device by instance number.
+Look up a discovered device by instance number: None when no
+address claims it, `BacnetAmbiguousDeviceError` when two or more
+do.
 
 ### BACnetClient.clear_devices
 
@@ -637,6 +640,10 @@ def read_property_from_device(
 ```
 
 Read a property from a device by instance number (auto-routing).
+
+Like every `_from_device` and `_to_device` method, it raises
+`BacnetAmbiguousDeviceError` before sending anything when two or
+more addresses claim the instance.
 
 ### BACnetClient.read_property_multiple_from_device
 

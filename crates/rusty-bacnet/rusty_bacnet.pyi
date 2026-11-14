@@ -2600,7 +2600,11 @@ class DiscoveredDevice:
     def vendor_id(self) -> int: ...
 
     @property
-    def seconds_since_seen(self) -> float: ...
+    def seconds_since_seen(self) -> float:
+        """Seconds since the device was last heard from when this object was
+        made: its latest I-Am, or its latest answer to one of this client's
+        confirmed requests."""
+        ...
 
     @property
     def source_network(self) -> Optional[int]: ...
@@ -3008,6 +3012,24 @@ class BacnetBvlcUnexpectedResponseError(BacnetError):
     """
     expected: int
     got: int
+
+class BacnetAmbiguousDeviceError(BacnetError):
+    """Raised when a call names a device by its instance and two or more
+    addresses in the discovery table claim that instance, so which device is
+    meant is unknown (#2560). Nothing was sent. Each claimant keeps its own
+    entry in ``discovered_devices()`` and stays reachable by its address;
+    once only one claims the instance, by the purge or a new I-Am, the
+    instance works again.
+
+    Attributes:
+        instance: The device instance the call named.
+        candidates: Every claimant as ``(network, mac)``, ordered by network
+            and then MAC: network 0 is the local network, where ``mac`` is
+            the device's own; on another network it is the device's MAC
+            there.
+    """
+    instance: int
+    candidates: list[tuple[int, bytes]]
 
 class BacnetTransportError(BacnetError, OSError):
     """Raised when a transport socket or I/O operation fails.
@@ -4150,11 +4172,14 @@ class BACnetClient:
         ...
 
     def discovered_devices(self) -> Awaitable[list[DiscoveredDevice]]:
-        """Return all devices discovered so far."""
+        """Return all devices discovered so far, one per address: a device
+        instance two addresses claim is listed for each (#2560)."""
         ...
 
     def get_device(self, instance: int) -> Awaitable[Optional[DiscoveredDevice]]:
-        """Look up a discovered device by instance number."""
+        """Look up a discovered device by instance number: None when no
+        address claims it, ``BacnetAmbiguousDeviceError`` when two or more
+        do."""
         ...
 
     def clear_devices(self) -> Awaitable[None]:
@@ -4247,7 +4272,12 @@ class BACnetClient:
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
     ) -> Awaitable[PropertyValue]:
-        """Read a property from a device by instance number (auto-routing)."""
+        """Read a property from a device by instance number (auto-routing).
+
+        Like every ``_from_device`` and ``_to_device`` method, it raises
+        ``BacnetAmbiguousDeviceError`` before sending anything when two or
+        more addresses claim the instance.
+        """
         ...
 
     def read_property_multiple_from_device(

@@ -105,6 +105,27 @@ fn protocol_error_display() {
     );
 }
 
+/// An ambiguous instance names every claimant, local ones by MAC alone and
+/// routed ones with their network, as the CLI's target grammar writes a
+/// routed station (#2560).
+#[cfg(feature = "alloc")]
+#[test]
+fn ambiguous_device_names_every_candidate() {
+    let at = |network_number, mac: &[u8]| BACnetAddress {
+        network_number,
+        mac_address: crate::MacAddr::from_slice(mac),
+    };
+    let error = Error::AmbiguousDevice {
+        instance: 1001,
+        candidates: vec![at(0, &[10, 0, 0, 1, 0xBA, 0xC0]), at(2, &[0x05])],
+    };
+    assert_eq!(
+        error.to_string(),
+        "device 1001 is claimed by 2 addresses: 0x0a000001bac0, 2:0x05; \
+         name one by its address"
+    );
+}
+
 #[cfg(feature = "alloc")]
 #[test]
 fn structured_error_display_names_the_detail() {
