@@ -51,8 +51,9 @@ macro_rules! assert_seeded_event_history {
                 },
             },
         ];
-        object.event_history.time_stamps = expected_timestamps.clone();
-        object.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
+        object.core.event_history.time_stamps = expected_timestamps.clone();
+        object.core.event_history.message_texts =
+            ["offnormal".into(), "fault".into(), "normal".into()];
 
         assert_timestamp_array(
             object

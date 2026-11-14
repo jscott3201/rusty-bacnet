@@ -51,7 +51,7 @@ use crate::common::{self, read_generic_event_properties, write_generic_event_pro
 /// CHANGE_OF_STATE on a value it derives.
 #[derive(Debug, Clone)]
 pub(crate) struct ChangeOfStateReporting {
-    /// The detector; named as the shared event-row macros expect.
+    /// The CHANGE_OF_STATE detector.
     event_detector: ChangeOfStateDetector,
     /// Event_Time_Stamps, Event_Message_Texts and the latest transition.
     event_history: EventHistory,
@@ -108,7 +108,7 @@ impl ChangeOfStateReporting {
         if property == PropertyIdentifier::ALARM_VALUES {
             return Some(Ok(enumerated_list_value(&self.event_detector.alarm_values)));
         }
-        if let Some(result) = read_generic_event_properties!(self, property) {
+        if let Some(result) = read_generic_event_properties!(self.event_detector, property) {
             return Some(result);
         }
         self.event_history.read(property, array_index)
@@ -148,7 +148,7 @@ impl ChangeOfStateReporting {
         {
             return Some(result);
         }
-        write_generic_event_properties!(self, property, value.clone())
+        write_generic_event_properties!(self.event_detector, property, value)
     }
 
     /// Back to the starting event state with detection turned off: NORMAL,

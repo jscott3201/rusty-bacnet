@@ -44,7 +44,7 @@ fn rejected_correlation_preserves_detector_pending_and_all_event_history() {
         object.event_detector.acked_transitions,
         object.event_detector.pending.clone(),
         object.event_detector.fault_reliability,
-        object.event_history.clone(),
+        object.core.event_history.clone(),
     );
 
     let error = object
@@ -58,7 +58,7 @@ fn rejected_correlation_preserves_detector_pending_and_all_event_history() {
             object.event_detector.acked_transitions,
             object.event_detector.pending,
             object.event_detector.fault_reliability,
-            object.event_history,
+            object.core.event_history,
         ),
         before
     );
@@ -73,7 +73,7 @@ fn idempotent_valid_correlation_changes_no_detector_or_history_state() {
         object.event_detector.acked_transitions,
         object.event_detector.pending.clone(),
         object.event_detector.fault_reliability,
-        object.event_history.clone(),
+        object.core.event_history.clone(),
     );
 
     object
@@ -86,7 +86,7 @@ fn idempotent_valid_correlation_changes_no_detector_or_history_state() {
             object.event_detector.acked_transitions,
             object.event_detector.pending,
             object.event_detector.fault_reliability,
-            object.event_history,
+            object.core.event_history,
         ),
         before
     );

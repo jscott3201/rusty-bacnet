@@ -522,52 +522,44 @@ pub(crate) fn current_command_priority<T>(
     bacnet_types::primitives::PropertyValue::Null
 }
 
-/// Generic intrinsic-reporting read properties shared by every event detector.
+/// Generic intrinsic-reporting read properties shared by every event detector,
+/// read from `$detector`, the detector itself.
 macro_rules! read_generic_event_properties {
-    ($self:expr_2021, $property:expr_2021) => {
+    ($detector:expr_2021, $property:expr_2021) => {
         match $property {
-            p if p == bacnet_types::enums::PropertyIdentifier::EVENT_STATE => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::Enumerated(
-                    $self.event_detector.event_state.to_raw(),
-                )))
-            }
+            p if p == bacnet_types::enums::PropertyIdentifier::EVENT_STATE => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Enumerated($detector.event_state.to_raw()),
+            )),
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![$self.event_detector.event_enable.to_bacnet()],
+                    data: vec![$detector.event_enable.to_bacnet()],
                 }))
             }
-            p if p == bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::Enumerated(
-                    $self.event_detector.notify_type.to_raw(),
-                )))
-            }
+            p if p == bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Enumerated($detector.notify_type.to_raw()),
+            )),
             p if p == bacnet_types::enums::PropertyIdentifier::NOTIFICATION_CLASS => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::Unsigned(
-                    $self.event_detector.notification_class as u64,
+                    $detector.notification_class as u64,
                 )))
             }
-            p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::Unsigned(
-                    $self.event_detector.time_delay as u64,
-                )))
-            }
+            p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Unsigned($detector.time_delay as u64),
+            )),
             p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL => {
                 // Clause 13.3 supplies pTimeDelay as the fallback when
                 // pTimeDelayNormal is absent —
                 // so the read-back of an unwritten Time_Delay_Normal is
                 // Time_Delay's value, matching the algorithm's behavior.
                 Some(Ok(bacnet_types::primitives::PropertyValue::Unsigned(
-                    $self
-                        .event_detector
-                        .time_delay_normal
-                        .unwrap_or($self.event_detector.time_delay) as u64,
+                    $detector.time_delay_normal.unwrap_or($detector.time_delay) as u64,
                 )))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![$self.event_detector.acked_transitions.to_bacnet()],
+                    data: vec![$detector.acked_transitions.to_bacnet()],
                 }))
             }
             _ => None,
@@ -576,26 +568,26 @@ macro_rules! read_generic_event_properties {
 }
 pub(crate) use read_generic_event_properties;
 
-/// Analog-only intrinsic-reporting read properties for `OutOfRangeDetector`.
+/// Analog-only intrinsic-reporting read properties of `$detector`, an
+/// `OutOfRangeDetector`.
 ///
-/// Event timestamps and message texts are served by `EventHistory::read`,
-/// invoked at every analog call site immediately after this macro.
+/// Event timestamps and message texts are served by `EventHistory::read`.
 macro_rules! read_analog_event_properties {
-    ($self:expr_2021, $property:expr_2021) => {
+    ($detector:expr_2021, $property:expr_2021) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.high_limit),
+                bacnet_types::primitives::PropertyValue::Real($detector.high_limit),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::LOW_LIMIT => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.low_limit),
+                bacnet_types::primitives::PropertyValue::Real($detector.low_limit),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::DEADBAND => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.deadband),
+                bacnet_types::primitives::PropertyValue::Real($detector.deadband),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 6,
-                    data: vec![$self.event_detector.limit_enable.to_bacnet()],
+                    data: vec![$detector.limit_enable.to_bacnet()],
                 }))
             }
             _ => None,
@@ -604,8 +596,8 @@ macro_rules! read_analog_event_properties {
 }
 pub(crate) use read_analog_event_properties;
 
-/// Analog-only intrinsic-reporting write_property arms, for objects whose event_detector is
-/// an `OutOfRangeDetector`.
+/// Analog-only intrinsic-reporting write_property arms, for `$detector`, an
+/// `OutOfRangeDetector`; `$value` is a `&PropertyValue`.
 ///
 /// Handles: HIGH_LIMIT, LOW_LIMIT, DEADBAND, LIMIT_ENABLE.
 ///
@@ -618,14 +610,14 @@ pub(crate) use read_analog_event_properties;
 /// `Some(Err(...))` for type/validation errors,
 /// or `None` if the property is not an event property.
 macro_rules! write_analog_event_properties {
-    ($self:expr_2021, $property:expr_2021, $value:expr_2021) => {
+    ($detector:expr_2021, $property:expr_2021, $value:expr_2021) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT => {
-                if let bacnet_types::primitives::PropertyValue::Real(v) = $value {
+                if let &bacnet_types::primitives::PropertyValue::Real(v) = $value {
                     if let Err(e) = $crate::common::reject_non_finite(v) {
                         Some(Err(e))
                     } else {
-                        $self.event_detector.high_limit = v;
+                        $detector.high_limit = v;
                         Some(Ok(()))
                     }
                 } else {
@@ -633,11 +625,11 @@ macro_rules! write_analog_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::LOW_LIMIT => {
-                if let bacnet_types::primitives::PropertyValue::Real(v) = $value {
+                if let &bacnet_types::primitives::PropertyValue::Real(v) = $value {
                     if let Err(e) = $crate::common::reject_non_finite(v) {
                         Some(Err(e))
                     } else {
-                        $self.event_detector.low_limit = v;
+                        $detector.low_limit = v;
                         Some(Ok(()))
                     }
                 } else {
@@ -645,11 +637,11 @@ macro_rules! write_analog_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::DEADBAND => {
-                if let bacnet_types::primitives::PropertyValue::Real(v) = $value {
+                if let &bacnet_types::primitives::PropertyValue::Real(v) = $value {
                     if v < 0.0 || !v.is_finite() {
                         Some(Err($crate::common::value_out_of_range_error()))
                     } else {
-                        $self.event_detector.deadband = v;
+                        $detector.deadband = v;
                         Some(Ok(()))
                     }
                 } else {
@@ -660,11 +652,11 @@ macro_rules! write_analog_event_properties {
                 // BACnetLimitEnable is a 2-bit production (Clause 21): the
                 // written BitString must declare its canonical shape.
                 if let bacnet_types::primitives::PropertyValue::BitString { unused_bits, data } =
-                    &$value
+                    $value
                 {
                     match $crate::common::check_fixed_width_bit_string(*unused_bits, data, 2) {
                         Ok(byte) => {
-                            $self.event_detector.limit_enable =
+                            $detector.limit_enable =
                                 bacnet_types::bitstring::LimitEnable::from_bacnet(&[byte]);
                             Some(Ok(()))
                         }
@@ -680,19 +672,20 @@ macro_rules! write_analog_event_properties {
 }
 pub(crate) use write_analog_event_properties;
 
-/// Generic intrinsic-reporting write properties shared by every event detector.
+/// Generic intrinsic-reporting write properties shared by every event detector,
+/// written to `$detector`, the detector itself; `$value` is a `&PropertyValue`.
 macro_rules! write_generic_event_properties {
-    ($self:expr_2021, $property:expr_2021, $value:expr_2021) => {
+    ($detector:expr_2021, $property:expr_2021, $value:expr_2021) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 // BACnetEventTransitionBits is a 3-bit production (Clause 21):
                 // the written BitString must declare its canonical shape.
                 if let bacnet_types::primitives::PropertyValue::BitString { unused_bits, data } =
-                    &$value
+                    $value
                 {
                     match $crate::common::check_fixed_width_bit_string(*unused_bits, data, 3) {
                         Ok(byte) => {
-                            $self.event_detector.event_enable =
+                            $detector.event_enable =
                                 bacnet_types::bitstring::EventTransitionBits::from_bacnet(&[byte]);
                             Some(Ok(()))
                         }
@@ -703,10 +696,10 @@ macro_rules! write_generic_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::NOTIFICATION_CLASS => {
-                if let bacnet_types::primitives::PropertyValue::Unsigned(v) = $value {
+                if let &bacnet_types::primitives::PropertyValue::Unsigned(v) = $value {
                     match $crate::common::u64_to_u32(v) {
                         Ok(v32) => {
-                            $self.event_detector.notification_class = v32;
+                            $detector.notification_class = v32;
                             Some(Ok(()))
                         }
                         Err(e) => Some(Err(e)),
@@ -720,7 +713,7 @@ macro_rules! write_generic_event_properties {
                 // {alarm, event, ack-notification} (Clause 21); membership is
                 // derived from NotifyType::ALL_NAMED so a future addendum
                 // constant widens the gate without a second edit.
-                if let bacnet_types::primitives::PropertyValue::Enumerated(v) = $value {
+                if let &bacnet_types::primitives::PropertyValue::Enumerated(v) = $value {
                     let notify_type = bacnet_types::enums::NotifyType::from_raw(v);
                     let named = bacnet_types::enums::NotifyType::ALL_NAMED
                         .iter()
@@ -728,7 +721,7 @@ macro_rules! write_generic_event_properties {
                     if !named {
                         Some(Err($crate::common::value_out_of_range_error()))
                     } else {
-                        $self.event_detector.notify_type = notify_type;
+                        $detector.notify_type = notify_type;
                         Some(Ok(()))
                     }
                 } else {
@@ -736,10 +729,10 @@ macro_rules! write_generic_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY => {
-                if let bacnet_types::primitives::PropertyValue::Unsigned(v) = $value {
+                if let &bacnet_types::primitives::PropertyValue::Unsigned(v) = $value {
                     match $crate::common::u64_to_u32(v) {
                         Ok(v32) => {
-                            $self.event_detector.time_delay = v32;
+                            $detector.time_delay = v32;
                             Some(Ok(()))
                         }
                         Err(e) => Some(Err(e)),
@@ -749,10 +742,10 @@ macro_rules! write_generic_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL => {
-                if let bacnet_types::primitives::PropertyValue::Unsigned(v) = $value {
+                if let &bacnet_types::primitives::PropertyValue::Unsigned(v) = $value {
                     match $crate::common::u64_to_u32(v) {
                         Ok(v32) => {
-                            $self.event_detector.time_delay_normal = Some(v32);
+                            $detector.time_delay_normal = Some(v32);
                             Some(Ok(()))
                         }
                         Err(e) => Some(Err(e)),

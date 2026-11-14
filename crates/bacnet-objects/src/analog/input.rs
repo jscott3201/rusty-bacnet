@@ -1,14 +1,9 @@
 use super::*;
-use crate::common::{
-    read_analog_event_properties, read_generic_event_properties, write_analog_event_properties,
-    write_generic_event_properties,
-};
-use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
+use crate::object_profile::TagsPersistence;
 use crate::prelude::*;
 use crate::property_metadata::PropertyMetadata;
 use alloc::sync::Arc;
-
-mod metadata;
+use bacnet_types::enums::PropertyIdentifier as P;
 
 // ---------------------------------------------------------------------------
 // AnalogInput (type 0)
@@ -16,36 +11,11 @@ mod metadata;
 
 /// BACnet Analog Input object.
 pub struct AnalogInputObject {
-    profile: ProfileState,
-    oid: ObjectIdentifier,
-    name: String,
-    description: String,
-    present_value: f32,
-    units: EngineeringUnits,
-    out_of_service: bool,
-    status_flags: StatusFlags,
-    /// COV_Increment: minimum change threshold for COV notifications.
-    /// Default 0.0 means notify on any write (including no-change).
-    /// Set to a positive value for delta-based filtering.
-    cov_increment: f32,
+    pub(super) core: IoCore,
     event_detector: OutOfRangeDetector,
-    /// Event_Detection_Enable (Clause 12.2). A FALSE value suspends
-    /// event-state-machine evaluation under Clause 13.2.2.1.
-    event_detection_enable: bool,
-    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
-    reliability: Reliability,
-    reliability_before_out_of_service: Option<Reliability>,
-    reliability_inhibit: common::ReliabilityInhibitState,
+    analog: AnalogProperties,
+    present_value: f32,
     fault_out_of_range: FaultOutOfRangeState,
-    /// Optional minimum engineering bound metadata for Present_Value.
-    min_pres_value: Option<f32>,
-    /// Optional maximum engineering bound metadata for Present_Value.
-    max_pres_value: Option<f32>,
-    pub(crate) event_history: EventHistory,
-    /// The reporting settings a write set, kept in storage once the
-    /// object opts in (#2331).
-    #[cfg(feature = "event-reporting")]
-    reporting_store: crate::write_config::reporting::ReportingStore,
 }
 
 impl AnalogInputObject {
@@ -55,28 +25,12 @@ impl AnalogInputObject {
         name: impl Into<String>,
         units: EngineeringUnits,
     ) -> Result<Self, Error> {
-        let _oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance)?;
         Ok(Self {
-            profile: ProfileState::default(),
-            oid: _oid,
-            name: name.into(),
-            description: String::new(),
-            present_value: 0.0,
-            units,
-            out_of_service: false,
-            status_flags: StatusFlags::empty(),
-            cov_increment: 0.0,
+            core: IoCore::new(ObjectType::ANALOG_INPUT, instance, name.into())?,
             event_detector: OutOfRangeDetector::default(),
-            event_detection_enable: true,
-            reliability: Reliability::NO_FAULT_DETECTED,
-            reliability_before_out_of_service: None,
-            reliability_inhibit: common::ReliabilityInhibitState::default(),
+            analog: AnalogProperties::new(units),
+            present_value: 0.0,
             fault_out_of_range: FaultOutOfRangeState::default(),
-            min_pres_value: None,
-            max_pres_value: None,
-            event_history: EventHistory::default(),
-            #[cfg(feature = "event-reporting")]
-            reporting_store: Default::default(),
         })
     }
 
@@ -90,22 +44,8 @@ impl AnalogInputObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::new(instance, name, units)?;
-        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
+        object.core.keep_tags(persistence)?;
         Ok(object)
-    }
-
-    /// Provision independent optional Tags, Profile_Location and Profile_Name
-    /// rows before registration. Tags is writable in either Out_Of_Service state;
-    /// the text rows are network read-only. Invalid configuration leaves the
-    /// previous profile and its attached storage unchanged.
-    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
-        self.profile.provision(profile)
-    }
-
-    /// Wait for queued save attempts to finish; writes report their own outcomes.
-    /// This is not a success receipt. Unstaged synchronous writes block their caller.
-    pub fn wait_for_tag_saves(&self) {
-        self.profile.wait_for_saves();
     }
 
     /// Mutate `Present_Value` on an unattached or otherwise application-owned object.
@@ -135,45 +75,20 @@ impl AnalogInputObject {
         self.present_value = v;
         Ok(())
     }
-
-    /// Set COV_Increment, the smallest Present_Value change that sends a
-    /// COV notification (#2445). A new object uses 0, so any change
-    /// notifies. As for a write of it, a negative or non-finite increment
-    /// is VALUE_OUT_OF_RANGE and the old one stays.
-    pub fn set_cov_increment(&mut self, increment: f32) -> Result<(), Error> {
-        self.cov_increment = common::checked_cov_increment(increment)?;
-        Ok(())
-    }
-
-    /// Set minimum engineering-bound metadata; this is not a reliability fault limit.
-    pub fn set_min_pres_value(&mut self, value: f32) {
-        self.min_pres_value = Some(value);
-    }
-
-    /// Set maximum engineering-bound metadata; this is not a reliability fault limit.
-    pub fn set_max_pres_value(&mut self, value: f32) {
-        self.max_pres_value = Some(value);
-    }
-
-    /// Configure the optional object-owned FAULT_OUT_OF_RANGE algorithm.
-    ///
-    /// Both limits become readable together. Equal limits are valid; non-finite
-    /// limits and a low limit greater than the high limit are rejected without
-    /// changing the prior configuration.
-    pub fn configure_fault_out_of_range(&mut self, low: f32, high: f32) -> Result<(), Error> {
-        self.fault_out_of_range.configure(low, high)
-    }
 }
 
-crate::write_config::reporting::impl_reporting_persistence!(AnalogInputObject);
+crate::io_core::impl_profile!(AnalogInputObject);
+super::impl_analog_properties!(AnalogInputObject);
+super::impl_fault_out_of_range!(AnalogInputObject);
+crate::write_config::reporting::impl_reporting_persistence!(AnalogInputObject, in core);
 
 impl BACnetObject for AnalogInputObject {
     fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
+        self.core.oid
     }
 
     fn object_name(&self) -> &str {
-        &self.name
+        &self.core.name
     }
 
     fn read_property(
@@ -182,60 +97,20 @@ impl BACnetObject for AnalogInputObject {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         crate::property_metadata::check_read_array_index(self, property, array_index)?;
-        // IN_ALARM: override STATUS_FLAGS with event_state before common macro
-        if property == PropertyIdentifier::STATUS_FLAGS {
-            return Ok(common::compute_status_flags(
-                self.status_flags,
-                self.reliability,
-                self.out_of_service,
-                self.event_detector.event_state,
-            ));
-        }
-        if let Some(value) = self.reliability_inhibit.read(property) {
-            return Ok(value);
-        }
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        if let Some(result) = self.core.read(&self.event_detector, property, array_index) {
             return result;
         }
-        if let Some(result) = read_analog_event_properties!(self, property) {
+        if let Some(result) = self.analog.read(property) {
             return result;
-        }
-        if let Some(result) = self.event_history.read(property, array_index) {
-            return result;
-        }
-        if let Some(result) = read_generic_event_properties!(self, property) {
-            return result;
-        }
-        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
-            return Ok(PropertyValue::Boolean(self.event_detection_enable));
         }
         if let Some(value) = self.fault_out_of_range.read_limit(property) {
             return Ok(value);
         }
-        if let Some(result) = self.profile.read(property, array_index) {
-            return result;
-        }
         match property {
-            p if p == PropertyIdentifier::OBJECT_TYPE => {
-                Ok(PropertyValue::Enumerated(ObjectType::ANALOG_INPUT.to_raw()))
+            P::PRESENT_VALUE => Ok(PropertyValue::Real(self.present_value)),
+            P::PROPERTY_LIST => {
+                crate::property_metadata::read_property_list(&self.property_metadata(), array_index)
             }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Real(self.present_value))
-            }
-            p if p == PropertyIdentifier::UNITS => {
-                Ok(PropertyValue::Enumerated(self.units.to_raw()))
-            }
-            p if p == PropertyIdentifier::COV_INCREMENT => {
-                Ok(PropertyValue::Real(self.cov_increment))
-            }
-            p if p == PropertyIdentifier::MIN_PRES_VALUE => match self.min_pres_value {
-                Some(v) => Ok(PropertyValue::Real(v)),
-                None => Err(common::unknown_property_error()),
-            },
-            p if p == PropertyIdentifier::MAX_PRES_VALUE => match self.max_pres_value {
-                Some(v) => Ok(PropertyValue::Real(v)),
-                None => Err(common::unknown_property_error()),
-            },
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -250,76 +125,19 @@ impl BACnetObject for AnalogInputObject {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         crate::write_config::reporting::admit(self, property, array_index, &value)?;
         // AI present-value is writable only when out-of-service
-        if property == PropertyIdentifier::PRESENT_VALUE {
-            if !self.out_of_service {
+        if property == P::PRESENT_VALUE {
+            if !self.core.out_of_service {
                 return Err(common::write_access_denied_error());
             }
             return self.apply_present_value(value);
         }
-        if let Some(result) = self.profile.write(property, array_index, &value) {
-            return result;
-        }
-        if let Some(result) = self.reliability_inhibit.write_inhibit(
-            &mut self.reliability,
-            self.out_of_service,
-            property,
-            &value,
-        ) {
-            return result;
-        }
-        if let Some(result) = self.reliability_inhibit.write_out_of_service(
-            &mut self.out_of_service,
-            &mut self.reliability,
-            &mut self.reliability_before_out_of_service,
-            property,
-            &value,
-        ) {
-            return result.map(|_| ());
-        }
-        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
-            return result;
-        }
-        if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        if let Some(result) = self.reliability_inhibit.write_client_reliability(
-            self.out_of_service,
-            &mut self.reliability,
-            property,
-            &value,
-        ) {
-            return result;
-        }
-        if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
-        {
-            return result;
-        }
-        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
-            if let PropertyValue::Boolean(v) = value {
-                self.event_detection_enable = v;
-                if !v {
-                    self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions =
-                        bacnet_types::bitstring::EventTransitionBits::all();
-                    self.event_detector.pending = None;
-                    self.event_detector.fault_reliability = None;
-                    self.event_history.reset();
-                }
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-        if let Some(result) = write_analog_event_properties!(self, property, value) {
-            return result;
-        }
-        // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
         if let Some(result) =
-            self.event_history
-                .write(property, array_index, &value, self.event_detection_enable)
+            self.core
+                .write(&mut self.event_detector, property, array_index, &value)
         {
             return result;
         }
-        if let Some(result) = write_generic_event_properties!(self, property, value) {
+        if let Some(result) = self.analog.write(property, &value) {
             return result;
         }
         Err(crate::common::unhandled_write_error(
@@ -334,7 +152,11 @@ impl BACnetObject for AnalogInputObject {
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        metadata::for_object(self)
+        let mut rows = Cow::Borrowed(metadata::INPUT);
+        self.fault_out_of_range.add_rows(&mut rows);
+        self.analog.add_rows(&mut rows);
+        self.core.add_profile_rows(&mut rows);
+        rows
     }
 
     crate::traits::lend_cov_reporting!();
@@ -348,57 +170,13 @@ impl BACnetObject for AnalogInputObject {
     }
 }
 
-impl crate::creation::Creatable for AnalogInputObject {
-    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = super::CREATION_ONLY;
-
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        super::initialize_units(&mut self.units, property, value)
-    }
-}
-
-impl crate::traits::CovReporting for AnalogInputObject {
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
-}
-
-impl crate::traits::ReliabilityEval for AnalogInputObject {
-    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return Err(common::write_access_denied_error());
-        }
-        if !common::is_reliability_value_valid(reliability) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.reliability = reliability;
-        self.fault_out_of_range.clear_ownership();
-        Ok(())
-    }
-
-    fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return Ok(ReliabilityEvaluation::Unchanged);
-        }
-        self.fault_out_of_range
-            .evaluate(self.present_value, &mut self.reliability)
-    }
-
-    fn reliability_evaluation_inhibited(&self) -> bool {
-        self.reliability_inhibit.enabled()
-    }
-}
-
 crate::event::impl_builtin_intrinsic_reporting!(
     AnalogInputObject,
     event_detector,
-    event_history,
+    core.event_history,
     [present_value],
-    reliability,
-    event_detection_enable,
+    core.reliability,
+    core.event_detection_enable,
     OutOfRangeDetector::ALGORITHM
 );
 
@@ -409,7 +187,7 @@ impl crate::traits::LocalInput for AnalogInputObject {
             return Err(crate::traits::not_supported());
         };
         // Local safe-ownership policy: preserve the client's OOS simulation.
-        if self.out_of_service {
+        if self.core.out_of_service {
             return Err(common::write_access_denied_error());
         }
         self.apply_present_value(value)
@@ -472,7 +250,7 @@ mod detection_enable_reset_tests {
                 | bacnet_types::bitstring::EventTransitionBits::TO_NORMAL
         );
         assert_eq!(
-            ai.event_history.time_stamps[0],
+            ai.core.event_history.time_stamps[0],
             BACnetTimeStamp::SequenceNumber(41)
         );
     }
@@ -527,10 +305,10 @@ mod detection_enable_reset_tests {
 
         let mut faulted =
             AnalogInputObject::new(2, "AI-fault", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-        faulted.reliability = Reliability::OVER_RANGE;
+        faulted.core.reliability = Reliability::OVER_RANGE;
         let entry = faulted.evaluate_intrinsic_reporting(test_now()).unwrap();
         crate::event::commit_test_proposal(&mut faulted, entry);
-        faulted.reliability = Reliability::NO_SENSOR;
+        faulted.core.reliability = Reliability::NO_SENSOR;
         let reindication = faulted.evaluate_intrinsic_reporting(test_now()).unwrap();
         assert_eq!(
             reindication.change,
@@ -579,12 +357,12 @@ mod detection_enable_reset_tests {
             due: crate::event::test_clock::in_seconds(2),
         });
         ai.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
-        ai.event_history.time_stamps = [
+        ai.core.event_history.time_stamps = [
             BACnetTimeStamp::SequenceNumber(1),
             BACnetTimeStamp::SequenceNumber(2),
             BACnetTimeStamp::SequenceNumber(3),
         ];
-        ai.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
+        ai.core.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
 
         ai.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -610,17 +388,20 @@ mod detection_enable_reset_tests {
         assert!(ai.event_detector.pending.is_none());
         assert!(ai.event_detector.fault_reliability.is_none());
         assert_eq!(
-            ai.event_history.time_stamps,
+            ai.core.event_history.time_stamps,
             [
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(0),
             ]
         );
-        assert_eq!(ai.event_history.original_from_states, [None, None, None]);
-        assert_eq!(ai.event_history.original_to_states, [None, None, None]);
         assert_eq!(
-            ai.event_history.message_texts,
+            ai.core.event_history.original_from_states,
+            [None, None, None]
+        );
+        assert_eq!(ai.core.event_history.original_to_states, [None, None, None]);
+        assert_eq!(
+            ai.core.event_history.message_texts,
             [String::new(), String::new(), String::new()]
         );
     }
@@ -636,10 +417,10 @@ mod detection_enable_reset_tests {
             due: crate::event::test_clock::in_seconds(2),
         });
         ai.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
-        ai.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(7);
-        ai.event_history.original_from_states[0] = Some(EventState::NORMAL);
-        ai.event_history.original_to_states[0] = Some(EventState::HIGH_LIMIT);
-        ai.event_history.message_texts[0] = "offnormal".into();
+        ai.core.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(7);
+        ai.core.event_history.original_from_states[0] = Some(EventState::NORMAL);
+        ai.core.event_history.original_to_states[0] = Some(EventState::HIGH_LIMIT);
+        ai.core.event_history.message_texts[0] = "offnormal".into();
         let error = ai
             .write_property(
                 PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -654,7 +435,7 @@ mod detection_enable_reset_tests {
                 && code == ErrorCode::INVALID_DATA_TYPE)
         );
 
-        assert!(ai.event_detection_enable);
+        assert!(ai.core.event_detection_enable);
         assert_eq!(
             ai.event_detector.event_state,
             bacnet_types::enums::EventState::HIGH_LIMIT
@@ -669,18 +450,18 @@ mod detection_enable_reset_tests {
             Some(bacnet_types::enums::Reliability::NO_SENSOR)
         );
         assert_eq!(
-            ai.event_history.time_stamps[0],
+            ai.core.event_history.time_stamps[0],
             BACnetTimeStamp::SequenceNumber(7)
         );
         assert_eq!(
-            ai.event_history.original_from_states[0],
+            ai.core.event_history.original_from_states[0],
             Some(EventState::NORMAL)
         );
         assert_eq!(
-            ai.event_history.original_to_states[0],
+            ai.core.event_history.original_to_states[0],
             Some(EventState::HIGH_LIMIT)
         );
-        assert_eq!(ai.event_history.message_texts[0], "offnormal");
+        assert_eq!(ai.core.event_history.message_texts[0], "offnormal");
     }
 }
 
@@ -715,7 +496,7 @@ mod fault_out_of_range_non_finite_tests {
 
             assert_value_out_of_range(normal.reliability_eval().unwrap().evaluate_reliability());
             assert_eq!(normal.present_value.to_bits(), non_finite.to_bits());
-            assert_eq!(normal.reliability, Reliability::NO_FAULT_DETECTED);
+            assert_eq!(normal.core.reliability, Reliability::NO_FAULT_DETECTED);
             assert_eq!(
                 normal
                     .read_property(PropertyIdentifier::STATUS_FLAGS, None)
@@ -753,7 +534,7 @@ mod fault_out_of_range_non_finite_tests {
 
             assert_value_out_of_range(owned.reliability_eval().unwrap().evaluate_reliability());
             assert_eq!(owned.present_value.to_bits(), non_finite.to_bits());
-            assert_eq!(owned.reliability, Reliability::UNDER_RANGE);
+            assert_eq!(owned.core.reliability, Reliability::UNDER_RANGE);
             assert_eq!(
                 owned
                     .read_property(PropertyIdentifier::STATUS_FLAGS, None)
