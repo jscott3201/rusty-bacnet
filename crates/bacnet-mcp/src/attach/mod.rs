@@ -66,7 +66,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_transport::port::TransportPort;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{mpsc, watch};
@@ -295,7 +295,7 @@ impl Listener {
     /// other users list it; when its salt file isn't this user's alone
     /// or is corrupt; or when the run's nonce can't be published.
     pub async fn bind<T: TransportPort + 'static>(
-        engine: Arc<Engine<T>>,
+        engine: Client<T>,
         policy: Policy,
         principal: impl Into<String>,
         workspace: Workspace,
@@ -316,7 +316,7 @@ impl Listener {
 
     /// [`bind`](Self::bind), identifying peers with `credentials`.
     pub(crate) async fn bind_with<T: TransportPort + 'static>(
-        engine: Arc<Engine<T>>,
+        engine: Client<T>,
         mut policy: Policy,
         principal: String,
         workspace: Workspace,

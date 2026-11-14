@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::limits::TokenBucket;
 use bacnet_ops::watch::{Hub, WatchOptions};
 use bacnet_transport::port::TransportPort;
@@ -130,10 +130,7 @@ impl<T: TransportPort + 'static> Shared<T> {
     /// A hub over `engine` (with one) and a bucket, under checked `policy`.
     /// With an engine it starts the hub, so it must be called inside a
     /// Tokio runtime.
-    pub(crate) fn new(
-        engine: Option<&Arc<Engine<T>>>,
-        policy: &Policy,
-    ) -> Result<Self, ServeError> {
+    pub(crate) fn new(engine: Option<&Client<T>>, policy: &Policy) -> Result<Self, ServeError> {
         policy
             .validate()
             .map_err(|e| ServeError(format!("the MCP policy: {e}")))?;
@@ -149,7 +146,7 @@ impl<T: TransportPort + 'static> Shared<T> {
                     agent: true,
                     ..WatchOptions::default()
                 };
-                Hub::new(Arc::clone(engine), options)
+                Hub::new(engine.clone(), options)
                     .map_err(|e| ServeError(format!("the watch hub: {e}")))
             })
             .transpose()?;
@@ -185,7 +182,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
     /// runtime. A policy that doesn't validate ([`Policy::validate`]) is
     /// refused.
     pub fn new(
-        engine: Option<Arc<Engine<T>>>,
+        engine: Option<Client<T>>,
         policy: Policy,
         principal: impl Into<String>,
     ) -> Result<Self, ServeError> {
@@ -206,7 +203,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
     /// With `lending`, its writes go through the TUI.
     #[cfg(any(unix, windows))]
     pub(crate) fn attached(
-        engine: Arc<Engine<T>>,
+        engine: Client<T>,
         policy: Policy,
         principal: String,
         (shared, initialize): (&Shared<T>, Duration),
@@ -230,7 +227,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
     }
 
     fn build(
-        engine: Option<Arc<Engine<T>>>,
+        engine: Option<Client<T>>,
         policy: Policy,
         principal: String,
         shared: Shared<T>,

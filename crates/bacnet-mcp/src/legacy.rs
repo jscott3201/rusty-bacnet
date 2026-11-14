@@ -176,7 +176,7 @@ pub(crate) async fn notify<T: TransportPort + 'static>(ctx: Arc<Ctx<T>>, peer: P
 fn follow_legacy<T: TransportPort + 'static>(ctx: &Ctx<T>, follow: &mut Follow) {
     let (uris, signals) = ctx.subs.legacy_snapshot();
     follow.adopt(signals);
-    follow.set(ctx.engine.as_deref(), &ctx.writes.signals, uris);
+    follow.set(ctx.engine.as_ref(), &ctx.writes.signals, uris);
 }
 
 async fn send(peer: &Peer<RoleServer>, uri: String) -> Result<(), rmcp::service::ServiceError> {

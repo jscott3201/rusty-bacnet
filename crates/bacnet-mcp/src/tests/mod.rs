@@ -44,7 +44,7 @@ use bacnet_device_core::event::GetEventInformationBudget;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
 use bacnet_objects::device_identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
@@ -379,7 +379,7 @@ impl Lab {
                 .unwrap();
         }
         let limits = Arc::new(policy.request_limits());
-        let engine = Arc::new(Engine::new(Arc::clone(&client), Arc::clone(&limits)));
+        let engine = Client::new(Arc::clone(&client), Arc::clone(&limits));
         let mcp = McpServer::new(Some(engine), policy, "tester").unwrap();
         let (agent, serving, shutdown) = Agent::connect_until(mcp.clone());
         Self {

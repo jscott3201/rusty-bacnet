@@ -127,7 +127,7 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
     let mut desk = open(&ctx, &workspace, &caller).await?;
     let fresh = desk
         .prepare(
-            engine.client(),
+            engine.low_level(),
             engine.limits(),
             &caller,
             &specs,
@@ -153,7 +153,7 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
     }
     let before = desk.entries();
     let sent = desk
-        .commit(engine.client(), engine.limits(), &caller, &fresh)
+        .commit(engine.low_level(), engine.limits(), &caller, &fresh)
         .await;
     ctx.writes
         .signals
@@ -176,7 +176,7 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     let mut desk = open(&ctx, &workspace, &refusing).await?;
     let preview = desk
         .prepare(
-            engine.client(),
+            engine.low_level(),
             engine.limits(),
             &refusing,
             &specs,
@@ -213,7 +213,7 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     caller.sending = Some(sending);
     let before = desk.entries();
     let sent = desk
-        .commit(engine.client(), engine.limits(), &caller, &preview)
+        .commit(engine.low_level(), engine.limits(), &caller, &preview)
         .await;
     ctx.writes
         .signals

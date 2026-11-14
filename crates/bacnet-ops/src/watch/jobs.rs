@@ -2,7 +2,7 @@
 //! a point (a first read, then a managed COV subscription), cancelling
 //! one, and polling a batch.
 //!
-//! Every request takes its turn at the device's gate in the engine's
+//! Every request takes its turn at the device's gate in the client's
 //! limits, so the hub, the browser and the writes never have more than one
 //! confirmed request outstanding to a device between them. The managed
 //! subscription's renewals, sent by its own task once per lifetime, take
@@ -173,7 +173,7 @@ async fn subscribe<T: TransportPort + 'static>(
 ) -> Result<ManagedCOVSubscription, Error> {
     let engine = &inner.engine;
     let options = &inner.options;
-    let client = engine.client();
+    let client = engine.low_level();
     let limits = engine.limits();
     let device = point.device;
     let network = network_of(client, limits, device).await;
@@ -221,7 +221,7 @@ pub(super) async fn poll<T: TransportPort + 'static>(
 ) -> Polled<u32> {
     let engine = &inner.engine;
     let rpm = !engine.refused_rpm(device);
-    let polled = poll::poll(engine.client(), engine.limits(), device, &rows, rpm).await;
+    let polled = poll::poll(engine.low_level(), engine.limits(), device, &rows, rpm).await;
     if polled.refused_rpm {
         let mut reader = engine.reader(device);
         reader.rpm = false;
@@ -243,7 +243,7 @@ pub(super) async fn cancel<T: TransportPort + 'static>(
     managed: Option<ManagedCOVSubscription>,
 ) {
     let engine = &inner.engine;
-    let client = engine.client();
+    let client = engine.low_level();
     let limits = engine.limits();
     let cancel = async {
         let network = network_of(client, limits, point.device).await;

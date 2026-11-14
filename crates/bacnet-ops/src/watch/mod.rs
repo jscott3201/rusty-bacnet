@@ -31,7 +31,7 @@
 //! Every request a scheduler sends (first reads, subscriptions, polls)
 //! is charged to the hub's own [`Account`], whose token bucket
 //! ([`WatchOptions::bucket`]) holds the hub to its own rate besides the
-//! engine's limits. A shared point costs the same whatever the number of
+//! client's limits. A shared point costs the same whatever the number of
 //! listeners, and notifications cost nothing. Renewals take the device's
 //! gate but no rate slot, as in the TUI; cancels skip the hub's bucket so a
 //! shutdown isn't held to it.
@@ -69,7 +69,7 @@ pub use self::options::{
 };
 pub use self::sample::{Sample, Samples, Via};
 use self::shared::{Arrival, DeviceSlot, Registry, Running, Shared};
-use crate::engine::Engine;
+use crate::engine::Client;
 use crate::format::RawRow;
 use crate::limits::Account;
 
@@ -92,18 +92,18 @@ pub const POINT_PROPERTIES: [PropertyIdentifier; 10] = [
 /// the one-shot commands use.
 const PROCESS_BASE: u32 = 0x4D43_0000;
 
-/// Each hub on an engine takes its own range of this many subscriber
+/// Each hub on a client takes its own range of this many subscriber
 /// process identifiers (#2185): two hubs on one client (the TUI's watch
 /// list and its attached agents') then never share one, so neither's
 /// cancel can end the other's subscription. A hub's `max_points` is held
 /// below the range's size.
 const PROCESS_SPAN: u32 = 0x1_0000;
 
-/// How many ranges an engine hands out before it starts again from the
-/// first: more hubs than this alive on one engine at once could share one.
+/// How many ranges a client hands out before it starts again from the
+/// first: more hubs than this alive on one client at once could share one.
 const PROCESS_RANGES: u32 = 256;
 
-/// The first identifier of the range of an engine's `index`-th hub.
+/// The first identifier of the range of a client's `index`-th hub.
 fn process_base(index: u32) -> u32 {
     PROCESS_BASE + (index % PROCESS_RANGES) * PROCESS_SPAN
 }
@@ -409,7 +409,7 @@ impl std::fmt::Debug for Lease {
 }
 
 struct Inner<T: TransportPort + 'static> {
-    engine: Arc<Engine<T>>,
+    engine: Client<T>,
     options: WatchOptions,
     registry: Arc<Registry>,
     account: Arc<Account>,
@@ -417,7 +417,7 @@ struct Inner<T: TransportPort + 'static> {
     stop_dispatch: watch::Sender<bool>,
 }
 
-/// The watch hub over one engine. Cheap to clone: clones share one hub.
+/// The watch hub over one [`Client`]. Cheap to clone: clones share one hub.
 pub struct Hub<T: TransportPort + 'static> {
     inner: Arc<Inner<T>>,
 }
@@ -433,7 +433,7 @@ impl<T: TransportPort + 'static> Clone for Hub<T> {
 impl<T: TransportPort + 'static> Hub<T> {
     /// A hub over `engine`, under checked `options`. It starts its
     /// notification receiver, so it must be made inside a Tokio runtime.
-    pub fn new(engine: Arc<Engine<T>>, options: WatchOptions) -> Result<Self, String> {
+    pub fn new(engine: Client<T>, options: WatchOptions) -> Result<Self, String> {
         options.validate()?;
         let registry = Arc::new(Registry::new(
             process_base(engine.next_hub()),
@@ -442,7 +442,7 @@ impl<T: TransportPort + 'static> Hub<T> {
             options.reads.property_flags,
         ));
         let (stop_dispatch, stopped) = watch::channel(false);
-        let notifications = engine.client().cov_notifications();
+        let notifications = engine.low_level().cov_notifications();
         let dispatcher = tokio::spawn(dispatch::run(Arc::clone(&registry), notifications, stopped));
         let bucket = options.bucket.clone();
         let account = Arc::new(match options.agent {

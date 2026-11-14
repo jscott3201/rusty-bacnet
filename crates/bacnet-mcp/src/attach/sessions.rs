@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::limits::Overlay;
 use bacnet_tool::safety::audit::Audit;
 use bacnet_tool::safety::{FrontEnd, Level};
@@ -38,7 +38,7 @@ const REFUSALS_PER_MINUTE: u32 = 10;
 
 /// What every session of one listener shares.
 pub(super) struct Sessions<T: TransportPort + 'static> {
-    pub(super) engine: Arc<Engine<T>>,
+    pub(super) engine: Client<T>,
     /// Read-only, unless the TUI lends its desk.
     pub(super) policy: Policy,
     /// The TUI's approval queue and its desk, when writes go through it.
@@ -95,7 +95,7 @@ impl Refusals {
 }
 
 /// Join the `[mcp]` limits to the engine's, or take them off, and say so.
-fn join_limits<T: TransportPort + 'static>(engine: &Engine<T>, overlay: Option<&Overlay>) {
+fn join_limits<T: TransportPort + 'static>(engine: &Client<T>, overlay: Option<&Overlay>) {
     engine.limits().set_overlay(overlay);
     match overlay {
         Some(overlay) => tracing::info!(
@@ -114,7 +114,7 @@ fn join_limits<T: TransportPort + 'static>(engine: &Engine<T>, overlay: Option<&
 /// the last one out takes the `[mcp]` limits off.
 struct Seat<T: TransportPort + 'static> {
     agents: watch::Sender<usize>,
-    engine: Arc<Engine<T>>,
+    engine: Client<T>,
 }
 
 impl<T: TransportPort + 'static> Drop for Seat<T> {
@@ -152,7 +152,7 @@ impl<T: TransportPort + 'static> Sessions<T> {
         }
         let seat = Seat {
             agents: self.agents.clone(),
-            engine: Arc::clone(&self.engine),
+            engine: self.engine.clone(),
         };
         let connection = self.next.fetch_add(1, Ordering::Relaxed);
         let lending =
@@ -164,7 +164,7 @@ impl<T: TransportPort + 'static> Sessions<T> {
                     agent: connection,
                 });
         let server = match McpServer::attached(
-            Arc::clone(&self.engine),
+            self.engine.clone(),
             self.policy.clone(),
             self.principal.clone(),
             (&self.shared, INITIALIZE_WAIT),

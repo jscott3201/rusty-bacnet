@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_tool::bbmd::{address_of, mac};
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
 use bacnet_transport::bip::{
@@ -101,10 +101,7 @@ async fn hostile_bbmd(peer: SocketAddrV4, extra: &[SocketAddrV4]) -> SocketAddrV
 
 /// A server over `client`, under `policy`, and an agent connected to it.
 fn serve(client: &Arc<BACnetClient<BipTransport>>, policy: Policy) -> Agent {
-    let engine = Arc::new(Engine::new(
-        Arc::clone(client),
-        Arc::new(policy.request_limits()),
-    ));
+    let engine = Client::new(Arc::clone(client), Arc::new(policy.request_limits()));
     let mcp = McpServer::new(Some(engine), policy, "tester").unwrap();
     Agent::connect(mcp).0
 }

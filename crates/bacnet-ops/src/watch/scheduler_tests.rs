@@ -277,7 +277,7 @@ async fn a_missing_device_can_be_given_up() {
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.state, State::Gone);
     assert!(snapshot.note.unwrap().contains("device table"));
-    lab.engine.client().add_device(2002, &[2]).await.unwrap();
+    lab.engine.low_level().add_device(2002, &[2]).await.unwrap();
     tokio::time::sleep(Duration::from_secs(120)).await;
     assert!(lab.services().is_empty(), "{:?}", lab.services());
     assert_eq!(lease.snapshot().polls, 0);

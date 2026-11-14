@@ -38,7 +38,7 @@
 //!
 //! A front end that pages the export (the MCP tool) takes the Object_List
 //! its own way and reads the rest piece by piece, as the inventory does:
-//! [`Engine::inventory_device`] and [`Engine::inventory_object`].
+//! [`Client::inventory_device`] and [`Client::inventory_object`].
 
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType, PropertyIdentifier as P};
@@ -49,11 +49,11 @@ use super::{
     Access, Analog, Binary, Detail, DeviceInfo, Entry, Integer, Inventory, InventoryOptions,
     MultiState, Point, PointKind,
 };
-use crate::engine::{Engine, Halt, Reader, Wanted, device_error, unreachable};
+use crate::engine::{Client, Halt, Reader, Wanted, device_error, unreachable};
 use crate::format::{RawRow, StateTexts, decode_all};
 use crate::label::{kebab, object_label};
 
-impl<T: TransportPort + 'static> Engine<T> {
+impl<T: TransportPort + 'static> Client<T> {
     /// `device`'s objects of the types `options` names, as the Standard
     /// 223 export reads them ([`read_inventory`]). Fails only when the
     /// device's name or Object_List can't be read. A value without a
@@ -85,7 +85,7 @@ impl<T: TransportPort + 'static> Engine<T> {
     /// One object of `device` as the inventory reads it at `detail`, with
     /// the same properties: one ReadPropertyMultiple, or a ReadProperty
     /// each once the device has refused RPM (remembered, as
-    /// [`Engine::read`] does). A read the device refuses, or a property
+    /// [`Client::read`] does). A read the device refuses, or a property
     /// every object of the type has that it can't give, comes back as
     /// [`Entry::Failed`], which the export skips; an optional property it
     /// can't give is `None`. An object of a type the export doesn't read

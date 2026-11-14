@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bacnet_client::client::BACnetClient;
 use bacnet_mcp::policy::{ArmMode, Caps, PlanGrant, Rates, Workspace, WriteMode, WritePolicy};
 use bacnet_mcp::{McpServer, Policy};
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 
@@ -382,8 +382,8 @@ async fn serve_on<T: TransportPort + 'static>(
     policy: Policy,
 ) -> crate::CliResult {
     let client = Arc::new(client);
-    let engine = Engine::new(Arc::clone(&client), Arc::new(policy.request_limits()));
-    let server = McpServer::new(Some(Arc::new(engine)), policy, principal())?;
+    let engine = Client::new(Arc::clone(&client), Arc::new(policy.request_limits()));
+    let server = McpServer::new(Some(engine), policy, principal())?;
     let served = server.serve_stdio_until(shutdown_signal()).await;
     // The server has let go of the engine, and with it the client.
     if let Ok(mut client) = Arc::try_unwrap(client) {

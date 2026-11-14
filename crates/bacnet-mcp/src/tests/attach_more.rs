@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::watch::{Hub, Point, WatchOptions, Watched};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -54,7 +54,7 @@ pub(super) async fn agents_are(listener: &Listener, agents: usize) {
 async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
     let lab = lab().await;
     let limits = Arc::new(RequestLimits::new(50));
-    let engine = Arc::new(Engine::new(Arc::clone(&lab.client), Arc::clone(&limits)));
+    let engine = Client::new(Arc::clone(&lab.client), Arc::clone(&limits));
     let dir = private_dir();
     let policy = Policy {
         rates: Rates {
@@ -64,7 +64,7 @@ async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
         ..Policy::default()
     };
     let listener = Listener::bind(
-        Arc::clone(&engine),
+        engine.clone(),
         policy,
         "tester",
         workspace(dir.path()),
@@ -146,10 +146,10 @@ async fn agents_share_one_budget_and_the_tui_keeps_its_share() {
 async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
     let lab = lab().await;
     let engine = lab.engine();
-    let tui = Hub::new(Arc::clone(&engine), WatchOptions::default()).unwrap();
+    let tui = Hub::new(engine.clone(), WatchOptions::default()).unwrap();
     let dir = private_dir();
     let listener = Listener::bind(
-        Arc::clone(&engine),
+        engine.clone(),
         Policy::default(),
         "tester",
         workspace(dir.path()),

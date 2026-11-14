@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::watch::{
@@ -381,10 +381,10 @@ fn csv_line(point: &Point, written: &Written) -> String {
 /// MCP listener's, so it takes the engine's first range of subscriber
 /// process identifiers whatever order the workers start in (#2185).
 pub(crate) fn hub<T: TransportPort + 'static>(
-    engine: &Arc<Engine<T>>,
+    engine: &Client<T>,
     options: &WatchOptions,
 ) -> Result<Hub<T>, String> {
-    Hub::new(Arc::clone(engine), hub_options(options))
+    Hub::new(engine.clone(), hub_options(options))
 }
 
 /// Serve watch commands on `hub` until `commands` closes or the session

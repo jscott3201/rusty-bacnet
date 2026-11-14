@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use serde_json::{Value, json};
 #[cfg(unix)]
 use tokio::io::AsyncReadExt as _;
@@ -108,11 +108,8 @@ fn writes_offered(dir: &Path) -> Policy {
 
 impl Lab {
     /// The lab client's engine, on the lab's limits: the TUI's shared one.
-    pub(super) fn engine(&self) -> Arc<Engine<bacnet_transport::test_transport::TestTransport>> {
-        Arc::new(Engine::new(
-            Arc::clone(&self.client),
-            Arc::clone(&self.limits),
-        ))
+    pub(super) fn engine(&self) -> Client<bacnet_transport::test_transport::TestTransport> {
+        Client::new(Arc::clone(&self.client), Arc::clone(&self.limits))
     }
 
     /// A listener on `dir` over the lab's engine.

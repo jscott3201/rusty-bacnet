@@ -1,6 +1,6 @@
 //! The round trip from a point list (#2445): a database built from the
 //! list by `bacnet_objects::points::build_database`, served over the lab
-//! link and read back by `Engine::inventory` at [`Detail::Full`], gives the
+//! link and read back by `Client::inventory` at [`Detail::Full`], gives the
 //! list again; an absent field reads back as the object's default; and
 //! what `Full` costs, by RPM and by ReadProperty.
 

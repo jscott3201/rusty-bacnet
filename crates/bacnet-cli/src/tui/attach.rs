@@ -12,12 +12,11 @@
 //! panic hook leaves alone (#2203).
 
 use std::path::Path;
-use std::sync::Arc;
 
 use bacnet_mcp::Policy;
 use bacnet_mcp::attach::DeskJob;
 use bacnet_mcp::policy::Workspace;
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_transport::port::TransportPort;
 use tokio::sync::mpsc;
 
@@ -109,7 +108,7 @@ pub(crate) fn plan(
 /// `desk`; then end their sessions and remove the socket. While an agent
 /// is attached the `[mcp]` limits join the engine's, the listener's doing.
 pub(crate) async fn run<T: TransportPort + 'static>(
-    engine: &Arc<Engine<T>>,
+    engine: &Client<T>,
     plan: Option<&Plan>,
     sink: &EventSink,
     mut stop: mpsc::Receiver<()>,
@@ -126,7 +125,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         SessionRuntime::Callers
     };
     let bound = Listener::bind(
-        Arc::clone(engine),
+        engine.clone(),
         plan.policy.clone(),
         plan.principal.clone(),
         plan.workspace.clone(),

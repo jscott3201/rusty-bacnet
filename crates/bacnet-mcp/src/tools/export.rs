@@ -7,7 +7,7 @@
 //! (read whole, or element by element and resumed across calls), reads the
 //! device's name, then reads the objects of the selected types one at a
 //! time from the cursor's place
-//! ([`Engine::inventory_object`](bacnet_ops::engine::Engine::inventory_object)).
+//! ([`Client::inventory_object`](bacnet_ops::Client::inventory_object)).
 //! Its Turtle stays under [`MAX_TURTLE`] bytes: it ends before an object
 //! likely to pass that, and an object that passes it anyway goes back to
 //! the next page, to be read again there; a point too large for any page

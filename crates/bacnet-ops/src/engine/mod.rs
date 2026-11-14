@@ -8,13 +8,15 @@
 //! reads. The TUI's browser, watch list and write previews use it directly,
 //! with their own stop flags.
 //!
-//! [`Engine`] is the facade the MCP server builds on: it owns the client,
-//! the limits and the per-device memory of RPM refusals, and offers the
-//! read operations as plain async calls on a device instance. A device is
-//! looked up in the client's discovery table, so routed devices work as
-//! the `*_from_device` client calls route them. Cancelling a call means
-//! dropping its future: a turn's wait is cancel-safe, and a request
-//! already sent is abandoned to the client's transaction state machine.
+//! [`Client`] is the facade the MCP server builds on: it owns the
+//! low-level client, the limits and the per-device memory of RPM refusals,
+//! and offers the read operations as plain async calls on a device
+//! instance. A device is looked up in the low-level client's discovery
+//! table, so routed devices work as the `*_from_device` client calls route
+//! them. Cancelling a call means dropping its future: a turn's wait is
+//! cancel-safe, and a request already sent is abandoned to the client's
+//! transaction state machine. A `Client` is cheap to clone: clones share
+//! one client, one set of limits and one memory.
 
 mod discover;
 mod log;
@@ -61,8 +63,8 @@ pub const DEVICE_PROPERTIES: [PropertyIdentifier; 13] = [
     PropertyIdentifier::DATABASE_REVISION,
 ];
 
-/// The stop flag of the engine's readers. Nothing sets it: an engine call
-/// is cancelled by dropping its future.
+/// The stop flag of the client's readers. Nothing sets it: a call is
+/// cancelled by dropping its future.
 static NEVER_STOPPED: AtomicBool = AtomicBool::new(false);
 
 /// One object's properties as read.
@@ -97,49 +99,76 @@ impl DeviceSummary {
     }
 }
 
-/// The read operations over one client, shared by every caller.
+/// The high-level BACnet client: the read operations over one low-level
+/// [`BACnetClient`], shared by every caller.
 ///
 /// Calls to one device queue at its gate, one request outstanding at a
 /// time, and every request takes a slot under the global rate cap, so many
-/// callers can share an engine without overrunning a device.
-pub struct Engine<T: TransportPort + 'static> {
+/// callers can share a client without overrunning a device. Cheap to
+/// clone: clones share everything.
+pub struct Client<T: TransportPort + 'static> {
+    shared: Arc<Shared<T>>,
+}
+
+/// What a [`Client`]'s clones share.
+pub(crate) struct Shared<T: TransportPort + 'static> {
     pub(crate) client: Arc<BACnetClient<T>>,
     limits: Arc<RequestLimits>,
     /// Devices that refused ReadPropertyMultiple, read by ReadProperty
     /// from then on. The lock is held only to look up or record a device,
     /// never across an await.
     no_rpm: Mutex<HashSet<u32>>,
-    /// Watch hubs made on this engine, so each takes its own range of
+    /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
 }
 
-impl<T: TransportPort + 'static> Engine<T> {
-    /// An engine over `client`, under `limits` (shared with any other
-    /// worker on the same client).
+impl<T: TransportPort + 'static> Clone for Client<T> {
+    fn clone(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl<T: TransportPort + 'static> Client<T> {
+    /// A client over the low-level `client`, under `limits` (shared with
+    /// any other worker on the same low-level client).
     pub fn new(client: Arc<BACnetClient<T>>, limits: Arc<RequestLimits>) -> Self {
         Self {
-            client,
-            limits,
-            no_rpm: Mutex::new(HashSet::new()),
-            hubs: AtomicU32::new(0),
+            shared: Arc::new(Shared {
+                client,
+                limits,
+                no_rpm: Mutex::new(HashSet::new()),
+                hubs: AtomicU32::new(0),
+            }),
         }
     }
 
-    /// How many watch hubs were made on this engine before this one: a
-    /// client's hubs share its engine, so their subscriptions can't clash.
+    /// The low-level client, once this is its last clone, for a test that
+    /// shuts it down.
+    #[cfg(test)]
+    pub(crate) fn into_low_level(self) -> Option<Arc<BACnetClient<T>>> {
+        Arc::try_unwrap(self.shared)
+            .ok()
+            .map(|shared| shared.client)
+    }
+
+    /// How many watch hubs were made on this client before this one: a
+    /// client's hubs share it, so their subscriptions can't clash.
     pub(crate) fn next_hub(&self) -> u32 {
-        self.hubs.fetch_add(1, Ordering::Relaxed)
+        self.shared.hubs.fetch_add(1, Ordering::Relaxed)
     }
 
     /// The limits every request waits for.
     pub fn limits(&self) -> &RequestLimits {
-        &self.limits
+        &self.shared.limits
     }
 
-    /// The client, for the watch hub's subscriptions and the write desk.
-    pub fn client(&self) -> &Arc<BACnetClient<T>> {
-        &self.client
+    /// The low-level client, for the watch hub's subscriptions, the write
+    /// desk and any service this client doesn't offer.
+    pub fn low_level(&self) -> &Arc<BACnetClient<T>> {
+        &self.shared.client
     }
 
     /// True once `device` has refused ReadPropertyMultiple.
@@ -148,15 +177,18 @@ impl<T: TransportPort + 'static> Engine<T> {
     }
 
     fn no_rpm(&self) -> std::sync::MutexGuard<'_, HashSet<u32>> {
-        self.no_rpm.lock().unwrap_or_else(PoisonError::into_inner)
+        self.shared
+            .no_rpm
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A reader for `device`, by RPM unless the device refused it before.
     pub(crate) fn reader(&self, device: u32) -> Reader<'_, T> {
         Reader {
-            client: &self.client,
+            client: &self.shared.client,
             device,
-            rate: &self.limits,
+            rate: &self.shared.limits,
             cancel: &NEVER_STOPPED,
             rpm: !self.refused_rpm(device),
         }
@@ -234,11 +266,11 @@ impl<T: TransportPort + 'static> Engine<T> {
         cursor: LogCursor,
         page_size: u16,
     ) -> Result<LogPage, Error> {
-        let network = network_of(&self.client, &self.limits, device).await;
-        let _turn = self.limits.turn_on(device, network).await;
+        let network = network_of(self.low_level(), self.limits(), device).await;
+        let _turn = self.limits().turn_on(device, network).await;
         let requester = log::PagedLog {
-            client: &self.client,
-            limits: &self.limits,
+            client: self.low_level(),
+            limits: self.limits(),
             device,
             network,
             first: AtomicBool::new(true),
@@ -249,8 +281,8 @@ impl<T: TransportPort + 'static> Engine<T> {
 
     /// `device`'s turn under the limits, on its network.
     async fn turn(&self, device: u32) -> Turn {
-        let network = network_of(&self.client, &self.limits, device).await;
-        self.limits.turn_on(device, network).await
+        let network = network_of(self.low_level(), self.limits(), device).await;
+        self.limits().turn_on(device, network).await
     }
 
     /// One GetEventInformation answer from `device`: the objects with an
@@ -263,7 +295,7 @@ impl<T: TransportPort + 'static> Engine<T> {
         after: Option<ObjectIdentifier>,
     ) -> Result<GetEventInformationAck, Error> {
         let _turn = self.turn(device).await;
-        self.client
+        self.low_level()
             .get_event_information_from_device(device, after)
             .await
     }
@@ -272,7 +304,7 @@ impl<T: TransportPort + 'static> Engine<T> {
     /// reports this way.
     pub async fn alarm_summary(&self, device: u32) -> Result<GetAlarmSummaryAck, Error> {
         let _turn = self.turn(device).await;
-        self.client.get_alarm_summary_from_device(device).await
+        self.low_level().get_alarm_summary_from_device(device).await
     }
 
     /// `device`'s GetEnrollmentSummary answer for `request`'s filters.
@@ -282,7 +314,7 @@ impl<T: TransportPort + 'static> Engine<T> {
         request: &GetEnrollmentSummaryRequest,
     ) -> Result<GetEnrollmentSummaryAck, Error> {
         let _turn = self.turn(device).await;
-        self.client
+        self.low_level()
             .get_enrollment_summary_from_device(device, request)
             .await
     }
@@ -292,9 +324,9 @@ impl<T: TransportPort + 'static> Engine<T> {
 pub(crate) fn device_error(halt: Halt) -> Error {
     match halt {
         Halt::Device(error) => error,
-        // The engine's readers share NEVER_STOPPED, which nothing sets, and
+        // The client's readers share NEVER_STOPPED, which nothing sets, and
         // a reader halts as cancelled only when its flag is set.
-        Halt::Cancelled => unreachable!("an engine read is never stopped by its flag"),
+        Halt::Cancelled => unreachable!("a client's read is never stopped by its flag"),
     }
 }
 

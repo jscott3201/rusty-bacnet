@@ -20,7 +20,7 @@ use bacnet_client::client::BACnetClient;
 use bacnet_mcp::Policy;
 use bacnet_mcp::attach::{Listener, SessionRuntime};
 use bacnet_mcp::policy::{ArmMode, Workspace, WriteMode, WritePolicy};
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
@@ -74,10 +74,7 @@ fn nothing_listening_is_an_error_on_stderr() {
 }
 
 /// The lab device on a loopback link, and an engine on its client.
-async fn lab() -> (
-    BACnetServer<LoopbackTransport>,
-    Arc<Engine<LoopbackTransport>>,
-) {
+async fn lab() -> (BACnetServer<LoopbackTransport>, Client<LoopbackTransport>) {
     let (client_port, server_port) =
         LoopbackTransport::pair(vec![10, 0, 0, 1, 0xBA, 0xC0], LAB_MAC.to_vec());
     let server = BACnetServer::generic_builder()
@@ -93,8 +90,8 @@ async fn lab() -> (
         .await
         .unwrap();
     client.add_device(LAB, &LAB_MAC).await.unwrap();
-    let engine = Engine::new(Arc::new(client), Arc::new(RequestLimits::new(20)));
-    (server, Arc::new(engine))
+    let engine = Client::new(Arc::new(client), Arc::new(RequestLimits::new(20)));
+    (server, engine)
 }
 
 /// Run `connect` with `args`, send `requests` one line each (waiting for
@@ -176,7 +173,7 @@ async fn connect_bridges_an_agent_to_the_listener() {
             local: "10.0.0.1:47808".into(),
         };
         let own = SessionRuntime::Own;
-        let listener = Listener::bind(Arc::clone(&engine), policy, "tester", place, own, None)
+        let listener = Listener::bind(engine.clone(), policy, "tester", place, own, None)
             .await
             .unwrap();
         let before = engine.limits().recent();
@@ -214,7 +211,11 @@ async fn connect_bridges_an_agent_to_the_listener() {
         assert!(output.status.success(), "exit {:?}", output.status);
     }
     // Every session has let go of the engine, and with it the client.
-    let engine = Arc::try_unwrap(engine).ok().expect("the listener let go");
+    let low_level = Arc::clone(engine.low_level());
     drop(engine);
+    let client = Arc::try_unwrap(low_level)
+        .ok()
+        .expect("the listener let go");
+    drop(client);
     server.stop().await.unwrap();
 }

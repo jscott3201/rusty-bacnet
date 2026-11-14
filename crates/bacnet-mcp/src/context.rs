@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use bacnet_client::client::{DeviceEventKind, DiscoveredRouter};
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::limits::{Account, TokenBucket};
 use bacnet_ops::target::{self, Target};
 use bacnet_ops::watch::{Hub, Point};
@@ -30,7 +30,7 @@ use crate::resources::Cache;
 /// The server's state, shared by every call.
 pub(crate) struct Ctx<T: TransportPort + 'static> {
     /// The engine; `None` in passive mode, where no client is built.
-    pub(crate) engine: Option<Arc<Engine<T>>>,
+    pub(crate) engine: Option<Client<T>>,
     pub(crate) policy: Policy,
     /// The one principal of a stdio server: the process's OS user.
     pub(crate) principal: String,
@@ -299,8 +299,8 @@ const DISCOVER_HINT: &str = "call bacnet_discover first (with a range or network
 
 impl<T: TransportPort + 'static> Ctx<T> {
     /// The engine, or a refusal in passive mode.
-    pub(crate) fn engine(&self) -> Result<&Engine<T>, ToolError> {
-        self.engine.as_deref().ok_or_else(|| {
+    pub(crate) fn engine(&self) -> Result<&Client<T>, ToolError> {
+        self.engine.as_ref().ok_or_else(|| {
             ToolError::refused(
                 "passive",
                 "the server is passive: it builds no client and sends nothing",

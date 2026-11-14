@@ -7,11 +7,11 @@
 //! for the first request and each later one takes a slot of its own, so a
 //! page costs what it sends (#2066).
 //!
-//! Once a Trend Log's first page is answered, [`Engine::log_columns`]
+//! Once a Trend Log's first page is answered, [`Client::log_columns`]
 //! reads what it samples, so its values can be named (#2091): one more
 //! request, charged the same way, once per read rather than once per page.
 //! Asking only after an answer keeps a silent device to one timeout.
-//! [`Engine::log_state_texts`] then reads the state texts of the binary
+//! [`Client::log_state_texts`] then reads the state texts of the binary
 //! and multi-state objects whose states the columns sample (#2122): one
 //! request an object, at most
 //! [`MAX_STATE_TEXT_OBJECTS`](crate::format::MAX_STATE_TEXT_OBJECTS).
@@ -30,7 +30,7 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{Engine, Wanted, timed_out, unreachable};
+use super::{Client, Wanted, timed_out, unreachable};
 use crate::format::{LogColumns, StateTexts};
 use crate::limits::RequestLimits;
 
@@ -108,7 +108,7 @@ impl<T: TransportPort + 'static> LogRequester for PagedLog<'_, T> {
     }
 }
 
-impl<T: TransportPort + 'static> Engine<T> {
+impl<T: TransportPort + 'static> Client<T> {
     /// What each column of `log` on `device` samples, from its
     /// Log_DeviceObjectProperty: one ReadProperty, charged like any other
     /// read, for a Trend Log or Trend Log Multiple, and none for another

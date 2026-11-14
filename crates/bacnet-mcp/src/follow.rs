@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use bacnet_client::client::{DeviceEvent, DeviceEventKind};
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::watch::Changes;
 use bacnet_transport::port::TransportPort;
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -74,7 +74,7 @@ impl Follow {
     /// change not yet announced isn't lost.
     pub(crate) fn set<T: TransportPort + 'static>(
         &mut self,
-        engine: Option<&Engine<T>>,
+        engine: Option<&Client<T>>,
         signals: &Signals,
         uris: Vec<(String, Option<Changes>)>,
     ) {
@@ -110,7 +110,7 @@ impl Follow {
             self.devices = None;
             self.devices_due = None;
         } else if self.devices.is_none() {
-            self.devices = engine.map(Engine::device_events);
+            self.devices = engine.map(Client::device_events);
         }
     }
 

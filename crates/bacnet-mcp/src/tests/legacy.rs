@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::watch::{Hub, WatchOptions};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -185,8 +185,8 @@ async fn a_point_watched_again_is_followed_on_its_new_watch() {
     let mut lab = Lab::start(Policy::default()).await;
     lab.agent.initialize_legacy().await;
     let limits = Arc::new(Policy::default().request_limits());
-    let engine = Arc::new(Engine::new(Arc::clone(&lab.client), limits));
-    let hub = Hub::new(Arc::clone(&engine), WatchOptions::default()).unwrap();
+    let engine = Client::new(Arc::clone(&lab.client), limits);
+    let hub = Hub::new(engine.clone(), WatchOptions::default()).unwrap();
     let Ok(Uri::Point(point)) = uri::parse(AI1) else {
         panic!("a point URI");
     };
@@ -194,7 +194,7 @@ async fn a_point_watched_again_is_followed_on_its_new_watch() {
     let first = hub.watch(point).unwrap();
     let signals = crate::writes::notify::Signals::default();
     follow.set(
-        Some(&*engine),
+        Some(&engine),
         &signals,
         vec![(AI1.to_string(), Some(first.changes()))],
     );
@@ -203,7 +203,7 @@ async fn a_point_watched_again_is_followed_on_its_new_watch() {
     let second = hub.watch(point).unwrap();
     assert!(!second.changes().same(&follow.signal(AI1).unwrap().clone()));
     follow.set(
-        None::<&Engine<TestTransport>>,
+        None::<&Client<TestTransport>>,
         &signals,
         vec![(AI1.to_string(), Some(second.changes()))],
     );

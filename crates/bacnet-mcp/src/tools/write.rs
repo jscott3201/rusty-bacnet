@@ -480,7 +480,7 @@ async fn preview<T: TransportPort + 'static>(
     // ours, and the retry reads everything again under the lock.
     let ledger = Ledger::open(&workspace.dir).ok();
     let preview = desk::prepare(
-        engine.client(),
+        engine.low_level(),
         engine.limits(),
         caller,
         specs,

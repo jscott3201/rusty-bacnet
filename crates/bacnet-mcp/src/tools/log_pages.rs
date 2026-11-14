@@ -5,7 +5,8 @@
 //! the next call.
 
 use bacnet_client::log_reader::{LogCursor, LogPage};
-use bacnet_ops::engine::{Engine, timed_out};
+use bacnet_ops::Client;
+use bacnet_ops::engine::timed_out;
 use bacnet_ops::parse::parse_weekday_digit;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;
@@ -378,7 +379,7 @@ impl Pager {
     /// failed (kept as `stopped`). A first page that fails fails the call.
     pub(super) async fn next<T: TransportPort + 'static>(
         &mut self,
-        engine: &Engine<T>,
+        engine: &Client<T>,
         call: &Call,
     ) -> Result<Option<LogPage>, ToolError> {
         if self.full() || (self.pages > 0 && call.out_of_time()) {

@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use std::net::Ipv4Addr;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::label::kebab;
 use bacnet_tool::bbmd::{
     self, FdtRow, Finding, Here, MAX_SURVEY, Matrix, NO_ANSWER, NotFollowed, Outcome, Probe,
@@ -72,7 +72,7 @@ pub(super) struct Plan {
 /// Check that a survey may go and claim its minute; nothing is sent.
 pub(super) async fn plan<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    engine: &Engine<T>,
+    engine: &Client<T>,
     named: &[String],
 ) -> Result<Plan, ToolError> {
     // Every BBMD this server can reach is on its own B/IP network.
@@ -160,7 +160,7 @@ pub(super) fn release<T: TransportPort + 'static>(ctx: &Ctx<T>, plan: &Plan) {
 /// a router heard.
 async fn known<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    engine: &Engine<T>,
+    engine: &Client<T>,
     address: SocketAddrV4,
 ) -> bool {
     let router = {
@@ -184,7 +184,7 @@ async fn known<T: TransportPort + 'static>(
 /// Where this server is on its B/IP link: its own address, so a table
 /// listing it isn't read back, and its broadcast address. A `bip()` client
 /// always has both.
-fn here<T: TransportPort + 'static>(engine: &Engine<T>) -> Here {
+fn here<T: TransportPort + 'static>(engine: &Client<T>) -> Here {
     let bip = bbmd::bip(engine);
     Here {
         own: bip
@@ -198,7 +198,7 @@ fn here<T: TransportPort + 'static>(engine: &Engine<T>) -> Here {
 /// left unsent gives its minute back.
 pub(super) async fn run<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    engine: &Engine<T>,
+    engine: &Client<T>,
     call: &Call,
     plan: &Plan,
 ) -> Value {
@@ -216,7 +216,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
 /// One BBMD's BDT, then its FDT when the BDT was read; a read the call's
 /// budget has no time for is not sent.
 async fn read<T: TransportPort + 'static>(
-    engine: &Engine<T>,
+    engine: &Client<T>,
     call: &Call,
     bbmd: SocketAddrV4,
 ) -> (Probe, Fdt) {

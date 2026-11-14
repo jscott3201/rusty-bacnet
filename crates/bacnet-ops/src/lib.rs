@@ -14,8 +14,9 @@
 //!   properties and priorities are named;
 //! - [`limits`]: the global request-rate cap, the one-request-per-device
 //!   gate, rates per network and per-caller accounts;
-//! - [`engine`]: the read operations (properties, the object list, a device
-//!   summary, trend log pages and alarms) and Who-Is over those limits;
+//! - [`engine`]: [`Client`], the high-level client: the read operations
+//!   (properties, the object list, a device summary, trend log pages and
+//!   alarms) and Who-Is over those limits;
 //! - [`export`]: a device's objects in another model's terms, so far an
 //!   experimental Standard 223 point list in Turtle (#2436);
 //! - [`watch`]: the watch hub, one managed COV subscription or poller per
@@ -34,3 +35,5 @@ pub mod octets;
 pub mod parse;
 pub mod target;
 pub mod watch;
+
+pub use engine::Client;

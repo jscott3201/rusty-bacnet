@@ -438,7 +438,7 @@ impl Destination {
     }
 
     /// Name the states `columns` sample with their objects' state texts,
-    /// as [`Engine::log_state_texts`](bacnet_ops::engine::Engine::log_state_texts)
+    /// as [`Client::log_state_texts`](bacnet_ops::Client::log_state_texts)
     /// does: one request an object, each object once, at most
     /// [`MAX_STATE_TEXT_OBJECTS`](bacnet_ops::format::MAX_STATE_TEXT_OBJECTS).
     /// A reference that names a device is read only when it names this

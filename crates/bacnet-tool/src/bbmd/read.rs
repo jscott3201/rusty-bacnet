@@ -1,25 +1,25 @@
-//! BBMD table reads through the engine, under the rate cap: the read side
+//! BBMD table reads through the client, under the rate cap: the read side
 //! of BVLL only (Annex J.2.3 and J.2.7), never a table write or a
 //! registration.
 
 use std::net::SocketAddrV4;
 
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_transport::bip::{BipTransport, BvlcExchangeError};
 use bacnet_transport::port::TransportPort;
 
 use super::{BdtRow, FdtRow, Outcome, Probe, mac};
 
-/// The B/IP transport of `engine`'s client, when it has one: the BBMD
-/// reads need it.
-pub fn bip<T: TransportPort + 'static>(engine: &Engine<T>) -> Option<&BipTransport> {
-    engine.client().transport().bip_transport()
+/// The B/IP transport of `engine`'s low-level client, when it has one:
+/// the BBMD reads need it.
+pub fn bip<T: TransportPort + 'static>(engine: &Client<T>) -> Option<&BipTransport> {
+    engine.low_level().transport().bip_transport()
 }
 
-/// The BBMD `engine`'s client last tried to register with as a foreign
-/// device, if any. Reads the transport's registration state and sends
-/// nothing.
-pub fn registration_bbmd<T: TransportPort + 'static>(engine: &Engine<T>) -> Option<SocketAddrV4> {
+/// The BBMD `engine`'s low-level client last tried to register with as a
+/// foreign device, if any. Reads the transport's registration state and
+/// sends nothing.
+pub fn registration_bbmd<T: TransportPort + 'static>(engine: &Client<T>) -> Option<SocketAddrV4> {
     bip(engine)?
         .bvlc_client_snapshot()
         .foreign_registration
@@ -29,7 +29,7 @@ pub fn registration_bbmd<T: TransportPort + 'static>(engine: &Engine<T>) -> Opti
 /// Read `bbmd`'s BDT through `engine`, after a slot under the local
 /// network's rate and the global one. On a client without B/IP it sends
 /// nothing.
-pub async fn read_bdt<T: TransportPort + 'static>(engine: &Engine<T>, bbmd: SocketAddrV4) -> Probe {
+pub async fn read_bdt<T: TransportPort + 'static>(engine: &Client<T>, bbmd: SocketAddrV4) -> Probe {
     let Some(bip) = bip(engine) else {
         return Outcome::Unreachable(NOT_BIP.into());
     };
@@ -39,7 +39,7 @@ pub async fn read_bdt<T: TransportPort + 'static>(engine: &Engine<T>, bbmd: Sock
 
 /// Read `bbmd`'s FDT, as [`read_bdt`].
 pub async fn read_fdt<T: TransportPort + 'static>(
-    engine: &Engine<T>,
+    engine: &Client<T>,
     bbmd: SocketAddrV4,
 ) -> Outcome<Vec<FdtRow>> {
     let Some(bip) = bip(engine) else {
@@ -76,7 +76,7 @@ mod tests {
 
     use super::*;
 
-    /// The BBMD reads follow the link under a wrapper: an engine over the mixed
+    /// The BBMD reads follow the link under a wrapper: a client over the mixed
     /// transport holding B/IP reaches the B/IP transport, and one holding
     /// loopback sends nothing (#2560).
     #[tokio::test]
@@ -88,7 +88,7 @@ mod tests {
             let client = BACnetClient::start(ClientConfig::default(), transport)
                 .await
                 .unwrap();
-            Engine::new(Arc::new(client), Arc::new(RequestLimits::new(0)))
+            Client::new(Arc::new(client), Arc::new(RequestLimits::new(0)))
         };
         let bip_port = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
         let engine = engine_on(bip_port.into()).await;

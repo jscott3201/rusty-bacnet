@@ -306,7 +306,7 @@ pub(super) struct Slot {
     pub(super) leases: usize,
 }
 
-/// What leases, schedulers and the dispatcher share without the engine.
+/// What leases, schedulers and the dispatcher share without the client.
 pub(super) struct Registry {
     pub(super) table: Mutex<Table>,
     pub(super) seq: AtomicU64,

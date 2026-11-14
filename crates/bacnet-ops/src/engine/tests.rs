@@ -1,4 +1,4 @@
-//! The engine against an in-process lab device over a loopback link.
+//! The client against an in-process lab device over a loopback link.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -93,14 +93,14 @@ fn binary_value(instance: u32, active: &str, inactive: &str) -> BinaryValueObjec
 /// The lab: a device with an analog input, an analog output, two binary
 /// values and two trend logs, an engine over a client paired with it, and
 /// the server to stop.
-async fn lab() -> (Engine<LoopbackTransport>, BACnetServer<LoopbackTransport>) {
+async fn lab() -> (Client<LoopbackTransport>, BACnetServer<LoopbackTransport>) {
     lab_on(|port| port).await
 }
 
 /// [`lab`], with the client's link wrapped by `wrap`.
 async fn lab_on<C: TransportPort + 'static>(
     wrap: fn(LoopbackTransport) -> C,
-) -> (Engine<C>, BACnetServer<LoopbackTransport>) {
+) -> (Client<C>, BACnetServer<LoopbackTransport>) {
     let identity = DeviceIdentity::new(LAB, 42).unwrap();
     let mut ai = AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(21.5);
@@ -132,16 +132,19 @@ async fn lab_on<C: TransportPort + 'static>(
         .await
         .unwrap();
     client.add_device(LAB, &[2]).await.unwrap();
-    let engine = Engine::new(Arc::new(client), Arc::new(RequestLimits::new(0)));
+    let engine = Client::new(Arc::new(client), Arc::new(RequestLimits::new(0)));
     (engine, server)
 }
 
 async fn stop<C: TransportPort + 'static>(
-    engine: Engine<C>,
+    engine: Client<C>,
     mut server: BACnetServer<LoopbackTransport>,
 ) {
-    let Ok(mut client) = Arc::try_unwrap(engine.client) else {
-        panic!("the engine holds the only client");
+    let Some(client) = engine.into_low_level() else {
+        panic!("the test holds the only client");
+    };
+    let Ok(mut client) = Arc::try_unwrap(client) else {
+        panic!("the client holds the only low-level client");
     };
     client.stop().await.unwrap();
     server.stop().await.unwrap();
@@ -271,12 +274,12 @@ async fn a_refusal_of_rpm_is_remembered_per_device() {
     assert_eq!(first.via, ReadVia::Rp);
     assert!(engine.refused_rpm(LAB), "the refusal is remembered");
     assert!(!engine.refused_rpm(LAB + 1));
-    let rejected = rejections(engine.client.transport());
+    let rejected = rejections(engine.low_level().transport());
     assert_eq!(rejected, 1);
     let second = engine.read(LAB, ai, Wanted::List(&wanted)).await.unwrap();
     assert_eq!(second.via, ReadVia::Rp);
     assert_eq!(
-        rejections(engine.client.transport()),
+        rejections(engine.low_level().transport()),
         rejected,
         "no RPM was tried again"
     );
@@ -500,7 +503,7 @@ async fn log_columns_read_the_reference_once_and_fall_back() {
 #[tokio::test(start_paused = true)]
 async fn a_who_is_fills_the_table() {
     let (engine, server) = lab().await;
-    engine.client.clear_devices().await;
+    engine.low_level().clear_devices().await;
     assert!(engine.device(LAB).await.unwrap().is_none());
     engine.who_is(WhoIsScope::Local, None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

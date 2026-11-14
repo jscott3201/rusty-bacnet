@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::target::AddressStyle;
 use bacnet_services::who_is::WhoIsRequest;
@@ -451,7 +451,7 @@ async fn serve_with<T: TransportPort + 'static>(
         // Likewise for the MCP listener, which ends its agents' sessions.
         let (attach_stop, attach_stop_rx) = mpsc::channel::<()>(1);
         // The watch list and attached agents read through one engine.
-        let engine = Arc::new(Engine::new(Arc::clone(&client), Arc::clone(&rate)));
+        let engine = Client::new(Arc::clone(&client), Arc::clone(&rate));
         let quiet = options.safety.passive;
         // The browser and the watch list run beside this loop under
         // `join!`, so their jobs keep being polled while an arm here awaits;
@@ -646,7 +646,7 @@ fn lent_desk() -> ((), Option<mpsc::Receiver<std::convert::Infallible>>) {
 /// The MCP listener, while the session runs.
 #[cfg(feature = "mcp")]
 async fn attached<T: TransportPort + 'static>(
-    engine: &Arc<Engine<T>>,
+    engine: &Client<T>,
     sink: &EventSink,
     options: &SessionOptions,
     (stop, desk): (
@@ -660,7 +660,7 @@ async fn attached<T: TransportPort + 'static>(
 /// No MCP listener without the `mcp` feature.
 #[cfg(not(feature = "mcp"))]
 async fn attached<T: TransportPort + 'static>(
-    _engine: &Arc<Engine<T>>,
+    _engine: &Client<T>,
     _sink: &EventSink,
     _options: &SessionOptions,
     _: (mpsc::Receiver<()>, ()),

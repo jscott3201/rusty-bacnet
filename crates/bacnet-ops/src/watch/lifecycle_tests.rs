@@ -108,7 +108,7 @@ async fn shutdown_waits_for_the_cancel_of_a_point_given_up() {
     let lease = lab.hub.watch(object(ai(1))).unwrap();
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     assert_eq!(lab.services(), [RPM, SUBSCRIBE_COV], "unanswered");
-    lab.engine.client().clear_devices().await;
+    lab.engine.low_level().clear_devices().await;
     // Another request holds the device's gate, so the cancel waits.
     let held = lab.engine.limits().turn(LAB).await;
     tokio::time::sleep(Duration::from_secs(2)).await;

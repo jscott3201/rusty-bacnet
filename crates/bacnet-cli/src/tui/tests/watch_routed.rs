@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_device_core::write::local::LocalCommandSource;
-use bacnet_ops::engine::Engine;
+use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::watch::Hub;
 use bacnet_types::enums::PropertyIdentifier;
@@ -89,7 +89,7 @@ async fn a_routed_row_is_cancelled_after_its_device_leaves_the_table() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let rate = Arc::new(RequestLimits::new(0));
-    let engine = Arc::new(Engine::new(Arc::clone(&client), rate));
+    let engine = Client::new(Arc::clone(&client), rate);
     let options = WatchOptions {
         lifetime: 60,
         request_budget: Duration::from_secs(8),

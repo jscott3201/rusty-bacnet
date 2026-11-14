@@ -151,7 +151,7 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                 let sent = match desk.write_refusal(&caller, &preview, false) {
                     Some(why) => desk.not_sent(&caller, &preview, &why).await,
                     None => {
-                        let (client, limits) = (engine.client(), engine.limits());
+                        let (client, limits) = (engine.low_level(), engine.limits());
                         let execute = desk.execute(client, limits, &caller, &preview, false);
                         charged(account, execute).await
                     }
@@ -200,7 +200,7 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                     let _ = done.send(Err(ToolError::refused("stale", message)));
                     return Vec::new();
                 }
-                let revert = desk.revert(engine.client(), engine.limits(), &caller, chosen);
+                let revert = desk.revert(engine.low_level(), engine.limits(), &caller, chosen);
                 let undone = charged(account, revert).await;
                 ctx.writes.signals.ledger_settled(&before, desk, false);
                 let left = desk

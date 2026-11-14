@@ -183,7 +183,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             let principal = ctx.principal.clone();
             let before = desk.entries();
             let done = desk
-                .revert(engine.client(), engine.limits(), &caller, |entry| {
+                .revert(engine.low_level(), engine.limits(), &caller, |entry| {
                     ours(entry, &principal)
                         && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
                 })

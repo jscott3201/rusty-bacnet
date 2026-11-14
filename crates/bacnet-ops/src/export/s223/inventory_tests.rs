@@ -29,7 +29,7 @@ use bytes::Bytes;
 
 use super::tests::oid;
 use super::*;
-use crate::engine::{Engine, Halt, Reader};
+use crate::engine::{Client, Halt, Reader};
 use crate::limits::RequestLimits;
 
 pub(super) const LAB: u32 = 2436;
@@ -190,7 +190,7 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
 
 /// The lab device and an engine over a client paired with it, through a
 /// link with `faults`.
-async fn lab(faults: Faults) -> (Engine<TestTransport>, BACnetServer<LoopbackTransport>) {
+async fn lab(faults: Faults) -> (Client<TestTransport>, BACnetServer<LoopbackTransport>) {
     let identity = DeviceIdentity::new(LAB, 42)
         .unwrap()
         .with_name("Lab \"AHU\"");
@@ -204,7 +204,7 @@ pub(super) async fn serve(
     faults: Faults,
     identity: DeviceIdentity,
     database: ObjectDatabase,
-) -> (Engine<TestTransport>, BACnetServer<LoopbackTransport>) {
+) -> (Client<TestTransport>, BACnetServer<LoopbackTransport>) {
     let instance = identity.instance();
     let (client_port, server_port) = LoopbackTransport::pair(vec![1], vec![2]);
     let server = BACnetServer::generic_builder()
@@ -222,7 +222,7 @@ pub(super) async fn serve(
     let link = link(client_port, faults);
     let client = BACnetClient::start(config, link).await.unwrap();
     client.add_device(instance, &[2]).await.unwrap();
-    let engine = Engine::new(Arc::new(client), Arc::new(RequestLimits::new(0)));
+    let engine = Client::new(Arc::new(client), Arc::new(RequestLimits::new(0)));
     (engine, server)
 }
 
@@ -242,11 +242,14 @@ fn passing(pass: usize) -> Faults {
 }
 
 pub(super) async fn stop(
-    engine: Engine<TestTransport>,
+    engine: Client<TestTransport>,
     mut server: BACnetServer<LoopbackTransport>,
 ) {
-    let Ok(mut client) = Arc::try_unwrap(engine.client) else {
-        panic!("the engine holds the only client");
+    let Some(client) = engine.into_low_level() else {
+        panic!("the test holds the only client");
+    };
+    let Ok(mut client) = Arc::try_unwrap(client) else {
+        panic!("the client holds the only low-level client");
     };
     client.stop().await.unwrap();
     server.stop().await.unwrap();
@@ -467,7 +470,7 @@ async fn a_cancel_keeps_what_was_read() {
     };
     let (engine, server) = lab(faults).await;
     let mut reader = Reader {
-        client: &engine.client,
+        client: engine.low_level(),
         device: LAB,
         rate: engine.limits(),
         cancel: &flag,
@@ -491,7 +494,7 @@ async fn a_cancel_keeps_what_was_read() {
     };
     let (engine, server) = lab(faults).await;
     let mut reader = Reader {
-        client: &engine.client,
+        client: engine.low_level(),
         device: LAB,
         rate: engine.limits(),
         cancel: &flag,

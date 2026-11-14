@@ -1,4 +1,4 @@
-//! Discovery through the engine: Who-Is under the rate cap, and the
+//! Discovery through the client: Who-Is under the rate cap, and the
 //! client's discovery table.
 
 use bacnet_client::client::{DeviceEvent, DiscoveredRouter};
@@ -9,7 +9,7 @@ use bacnet_types::enums::UnconfirmedServiceChoice;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::Engine;
+use super::Client;
 use crate::target::{self, AddressStyle};
 
 /// Why a directed Who-Is refuses a device instance or a routed target.
@@ -30,7 +30,7 @@ pub enum WhoIsScope<'a> {
     Global,
 }
 
-impl<T: TransportPort + 'static> Engine<T> {
+impl<T: TransportPort + 'static> Client<T> {
     /// Send one Who-Is to `scope`, for the devices in `range` (all for
     /// `None`), under the rate cap. The answers land in the discovery table
     /// ([`devices`](Self::devices)) as they arrive.
@@ -41,7 +41,7 @@ impl<T: TransportPort + 'static> Engine<T> {
     ) -> Result<(), Error> {
         let mac = match scope {
             WhoIsScope::Directed(address) => Some(
-                target::address_mac(self.client.transport(), address, NOT_A_STATION)
+                target::address_mac(self.low_level().transport(), address, NOT_A_STATION)
                     .await
                     .map_err(Error::Encoding)?,
             ),
@@ -55,19 +55,23 @@ impl<T: TransportPort + 'static> Engine<T> {
             WhoIsScope::Network(network) => Some(network),
             WhoIsScope::Global => None,
         };
-        self.limits.slot(network).await;
+        self.limits().slot(network).await;
         let sent = match (scope, mac) {
             (WhoIsScope::Local, _) => {
                 let mut buf = BytesMut::new();
                 WhoIsRequest { range }.encode(&mut buf);
-                self.client
+                self.low_level()
                     .broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
                     .await
             }
-            (WhoIsScope::Network(network), _) => self.client.who_is_network(network, range).await,
-            (WhoIsScope::Directed(_), Some(mac)) => self.client.who_is_directed(&mac, range).await,
+            (WhoIsScope::Network(network), _) => {
+                self.low_level().who_is_network(network, range).await
+            }
+            (WhoIsScope::Directed(_), Some(mac)) => {
+                self.low_level().who_is_directed(&mac, range).await
+            }
             (WhoIsScope::Directed(_), None) => unreachable!("a directed Who-Is has its address"),
-            (WhoIsScope::Global, _) => self.client.who_is(range).await,
+            (WhoIsScope::Global, _) => self.low_level().who_is(range).await,
         };
         // An unconfirmed send that fails never left: the caller isn't
         // charged for it.
@@ -89,14 +93,14 @@ impl<T: TransportPort + 'static> Engine<T> {
         wait: std::time::Duration,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<Vec<DiscoveredRouter>, Error> {
-        self.limits.slot(Some(0)).await;
+        self.limits().slot(Some(0)).await;
         let wait = match deadline {
             Some(deadline) => {
                 wait.min(deadline.saturating_duration_since(tokio::time::Instant::now()))
             }
             None => wait,
         };
-        let found = self.client.discover_routers(network, wait).await;
+        let found = self.low_level().discover_routers(network, wait).await;
 
         // A refused send never left, so it isn't charged.
         if found.is_err() {
@@ -109,32 +113,32 @@ impl<T: TransportPort + 'static> Engine<T> {
     /// without sending anything: a device instance or routed target is no
     /// station address.
     pub async fn station_mac(&self, address: &str) -> Result<Vec<u8>, Error> {
-        target::address_mac(self.client.transport(), address, NOT_A_STATION)
+        target::address_mac(self.low_level().transport(), address, NOT_A_STATION)
             .await
             .map_err(Error::Encoding)
     }
 
     /// Every device in the client's discovery table.
     pub async fn devices(&self) -> Vec<DiscoveredDevice> {
-        self.client.discovered_devices().await
+        self.low_level().discovered_devices().await
     }
 
     /// The device in the discovery table that claims `instance`, or
     /// `Ok(None)` when none does. Two or more addresses claiming it fail
     /// with [`Error::AmbiguousDevice`].
     pub async fn device(&self, instance: u32) -> Result<Option<DiscoveredDevice>, Error> {
-        self.client.get_device(instance).await
+        self.low_level().get_device(instance).await
     }
 
     /// A receiver of the discovery table's changes: devices found,
     /// refreshed and lost. Lossy under load, like every client channel; the
     /// table ([`devices`](Self::devices)) stays the truth.
     pub fn device_events(&self) -> tokio::sync::broadcast::Receiver<DeviceEvent> {
-        self.client.device_events()
+        self.low_level().device_events()
     }
 
     /// How this client's link writes addresses.
     pub fn address_style(&self) -> AddressStyle {
-        AddressStyle::of(self.client.transport())
+        AddressStyle::of(self.low_level().transport())
     }
 }

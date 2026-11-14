@@ -11,7 +11,7 @@
 //! (the CLI's `mcp` feature) runs it; `docs/design/mcp.md` has the design.
 //!
 //! - Every tool reaches the network only through
-//!   [`bacnet_ops::engine::Engine`], under its per-device gate and global
+//!   [`bacnet_ops::Client`], under its per-device gate and global
 //!   rate, a rate per network, and a token bucket per principal
 //!   ([`Policy`]). Each result reports what it cost.
 //! - Device-supplied text comes back in an untrusted envelope: cleaned of
