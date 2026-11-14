@@ -184,6 +184,8 @@ fn routing_fields_naming_no_station_are_not_stored() {
         make_routed_device(7, 0, &MAC),
         make_routed_device(7, u16::MAX, &[0x03]),
         make_routed_device(7, 100, &[]),
+        make_routed_device(7, 100, &[0x03; 19]),
+        local_at(7, &[0x03; 19]),
     ] {
         assert!(device.address().is_none(), "{device:?}");
         assert_eq!(table.heard(device).change, Change::Dropped);

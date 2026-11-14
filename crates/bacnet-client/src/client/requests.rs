@@ -393,6 +393,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// the table without repeating its I-Am (#2560). A router's refusal is
     /// no answer from the device. With no such row the table isn't locked
     /// again.
+    #[inline]
     pub(super) fn note_answer(
         &self,
         sized_by: Option<(u16, &[u8])>,
