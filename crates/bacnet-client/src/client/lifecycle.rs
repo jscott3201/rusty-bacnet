@@ -6,13 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc::error::TryRecvError;
 
 pub(super) const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
-#[cfg(not(test))]
-const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
-// Unit tests use Tokio's paused clock, while DeviceTable timestamps use
-// std::time::Instant. Use an immediate threshold so the purge timer is
-// observable without constructing an unrepresentable old Instant on Windows.
-#[cfg(test)]
-const DEVICE_MAX_AGE: Duration = Duration::ZERO;
+/// How long a device stays in the table without an I-Am or an answer to a
+/// confirmed request. Rows age by Tokio's clock, so a test's paused time
+/// ages them too.
+pub(super) const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
 
 impl ClientConfig {
     pub(super) fn validate_request_settings(&self) -> Result<(), Error> {
@@ -97,12 +94,14 @@ impl Controls {
 }
 
 /// Every [`DEVICE_PURGE_INTERVAL`], drop the devices not heard from in
-/// [`DEVICE_MAX_AGE`] and announce each as lost. A task of its own, so the
-/// dispatch loop doesn't poll this timer on every turn (#1978 item 8); the
-/// loop ends it when it ends itself, and `stop()` and drop abort both.
+/// [`DEVICE_MAX_AGE`] and announce each as lost, then each contest that
+/// lost a claimant. A task of its own, so the dispatch loop doesn't poll
+/// this timer on every turn (#1978 item 8); the loop ends it when it ends
+/// itself, and `stop()` and drop abort both.
 fn spawn_device_purge(
     device_table: Arc<SyncMutex<DeviceTable>>,
     device_tx: broadcast::Sender<DeviceEvent>,
+    device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
@@ -116,11 +115,15 @@ fn spawn_device_purge(
             // in that order, so a device it adds back after this purge is
             // announced after its Lost event, never before.
             let mut table = device_table.lock();
-            for device in table.purge_stale_collect(DEVICE_MAX_AGE) {
+            let purged = table.purge_stale_collect(DEVICE_MAX_AGE);
+            for device in purged.lost {
                 let _ = device_tx.send(DeviceEvent {
                     kind: DeviceEventKind::Lost,
                     device,
                 });
+            }
+            for instance in purged.contested {
+                let _ = device_collision_tx.send(DeviceCollisionEvent::of(&table, instance));
             }
         }
     })
@@ -215,7 +218,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         #[cfg(test)]
         let response_warning_hook = Arc::clone(&response_warning);
 
-        let device_purge_task = spawn_device_purge(Arc::clone(&device_table), device_tx.clone());
+        let device_purge_task = spawn_device_purge(
+            Arc::clone(&device_table),
+            device_tx.clone(),
+            device_collision_tx.clone(),
+        );
         let device_purge = device_purge_task.abort_handle();
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();

@@ -126,7 +126,7 @@ async fn device_at<T: TransportPort + 'static>(
         }
         _ => return Err("the device didn't name its Device object".into()),
     };
-    match client.get_device(instance).await {
+    match client.get_device(instance).await? {
         None => client.add_device(instance, mac).await?,
         Some(known) if known.source_network.is_none() && known.mac_address.as_slice() == mac => {}
         Some(_) => {

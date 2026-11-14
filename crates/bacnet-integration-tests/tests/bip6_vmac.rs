@@ -47,8 +47,8 @@ fn reporting(inner: AnyTransport, bound: Arc<OnceLock<SocketAddrV6>>) -> TestTra
         .unicast(SendMode::Forward)
         .broadcast(SendMode::Forward)
         .on_started(move |started| {
-            if let Some(AnyTransport::Bip6(bip6)) = started.inner::<AnyTransport>() {
-                let _ = bound.set(bip6.local_address().expect("started"));
+            if let Some(port) = started.bip6_port {
+                let _ = bound.set(port.endpoint);
             }
         })
         .build()

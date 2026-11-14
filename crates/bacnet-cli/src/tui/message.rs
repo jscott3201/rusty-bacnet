@@ -360,12 +360,14 @@ pub(crate) enum WorkerEvent {
     Updated(DeviceRow),
     /// The client purged a stale device.
     Lost(DeviceRow),
-    /// Two endpoints claim the same instance; the client kept `retained`.
+    /// The addresses claiming one instance changed while two or more claim
+    /// it; the client keeps a row for each.
     Collision {
-        /// The row the client's table kept.
-        retained: DeviceRow,
-        /// The conflicting answer.
-        incoming: DeviceRow,
+        /// The instance claimed.
+        instance: u32,
+        /// The rows that claim it now: fewer than two once the contest has
+        /// ended.
+        claimants: Vec<DeviceRow>,
     },
     /// The client's whole table, sent after events were dropped.
     Snapshot(Vec<DeviceRow>),

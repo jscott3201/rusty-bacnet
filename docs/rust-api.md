@@ -2867,11 +2867,16 @@ fn is_bip(transport: &AnyTransport) -> bool {
 
 Existing variants remain directly constructible as in the example above.
 
-`bacnet_transport::bip::AsBip` lends the `BipTransport` underneath a transport
-that may carry BACnet/IP. `BipTransport` always lends itself; `AnyTransport`
-lends its `Bip` variant and returns `Error::UnsupportedTransport` naming the
-data link for every other variant. The client's BBMD helpers take any transport
-with `AsBip`, and a wrapper transport can implement it by delegating.
+`TransportPort::data_link()` names the link a transport carries (a
+`bacnet_types::data_link::DataLink`, or `None` for a router's application port
+or a test double), and `bip_transport()` and `bip6_transport()` lend the
+`BipTransport` or `Bip6Transport` underneath it, so a caller adapts to the link
+without downcasting. `TransportPort::as_bip()` is built on them: it lends the
+`BipTransport` or returns `Error::UnsupportedTransport` naming the data link.
+`BipTransport` always lends itself and `AnyTransport` lends its `Bip` and `Bip6`
+variants. The client's BBMD helpers work on any transport, and a wrapper
+transport takes part by forwarding `data_link`, `bip_transport` and
+`bip6_transport` to the transport it wraps.
 
 ### BBMD
 
@@ -3064,7 +3069,7 @@ How a foreign device's registration goes, a BBMD's refusal included, is
 `next_attempt_in`, the last attempt's `last_result` and `last_outcome`, and the
 totals. `BACnetClient::foreign_registration()` and
 `BACnetServer::foreign_registration()` read it from a B/IP transport (any
-transport with `AsBip`; the server's fails once it has stopped), and
+transport that reports a B/IP link; the server's fails once it has stopped), and
 `EndpointSession::foreign_registration()` from a session `BipEndpointBuilder`
 built. They read the transport's `bvlc_client_snapshot()` and send nothing. An
 endpoint keeps its transport out of reach, so the builder takes a
@@ -9327,8 +9332,8 @@ at once, registered or not; one sent with no live lease is counted in
 `broadcasts_unregistered`.
 
 The BBMD helpers (`read_bdt`, `write_bdt`, `read_fdt`, `delete_fdt_entry`,
-`register_foreign_device_bvlc`) work on any client whose transport implements
-`AsBip`: a client over `BipTransport`, or one over `AnyTransport` whose variant
+`register_foreign_device_bvlc`) work on any client whose transport reports a B/IP
+transport through `bip_transport`: a client over `BipTransport`, or one over `AnyTransport` whose variant
 is `Bip`. Each fails with a `BvlcExchangeError` (#1822): `Nak` with the
 result code a peer refused with, `NoReply` when nothing answered within the
 three-second wait, `UnexpectedResponse`, `Refused` with the transport's
@@ -9341,7 +9346,8 @@ always an error. On any other variant they return
 sending anything:
 
 ```rust
-use bacnet_transport::bip::{AsBip, BvlcExchangeError};
+use bacnet_transport::bip::BvlcExchangeError;
+use bacnet_transport::port::TransportPort;
 
 // `?` takes both `Error` and `BvlcExchangeError` into the boxed error.
 async fn tables(ip: Ipv4Addr, broadcast: Ipv4Addr, bbmd_mac: &[u8])
@@ -10086,10 +10092,35 @@ client.who_is(None).await?;                             // every device, globall
 client.who_is(Some(DeviceInstanceRange::new(1000, 2000)?)).await?; // a range
 client.who_has(WhoHasObject::Name("Zone Temp".into()), None).await?;
 
-let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>
-let device = client.get_device(1234).await;              // Option<DiscoveredDevice>
+let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>, one per address
+let device = client.get_device(1234).await?;             // Option<DiscoveredDevice>
+let at = client.get_device_at(2, &[0x05]).await;         // by network (0 = local) and MAC
 client.clear_devices().await;                            // reset table
 ```
+
+The discovery table is keyed by address: the network number, 0 for the
+local network, and the MAC on it (#2560). An I-Am from a known address
+refreshes its row, and so does any answer to a confirmed request, so a device
+that keeps answering stays in the table without repeating its I-Am; a silent
+one is purged 10 to 15 minutes after it was last heard (the purge runs
+every 5 minutes and takes rows silent for more than 10). The table holds
+one device per address: an I-Am, `add_device` or `DeviceTable::upsert`
+naming another instance at a known address replaces its row; for an I-Am,
+`device_events()` reports `Lost` for the old instance and `Discovered` for
+the new. Two addresses
+claiming one instance each keep a row, reachable by its address, while
+`get_device` and every `_from_device`/`_to_device` call refuse the instance
+with `Error::AmbiguousDevice`, which lists both. `device_collision_events()`
+reports each change to such a contest, the end included.
+
+An I-Am that a router relays back from the client's own network, with that
+network's number as its SNET, names a local device: once the client has
+learned the number, it lands on the device's local row (#1358). A relay heard
+before then made a routed row for the same device, and the instance is
+ambiguous until the next relay folds that row into the local one, reported
+`Lost`; `add_routed_device` naming the client's own network stores a local
+row the same way. If the number is never learned, the routed row stays until
+the purge takes it.
 
 Who-Has answers and router discovery (#960):
 

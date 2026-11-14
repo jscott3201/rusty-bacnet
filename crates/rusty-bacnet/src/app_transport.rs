@@ -8,10 +8,11 @@
 use bacnet_network::router::RouterApplicationPort;
 use bacnet_npdu::NpduLimits;
 use bacnet_transport::any::AnyTransport;
-use bacnet_transport::bip::{AsBip, BipTransport};
+use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::{
     Bip6Port, BipPort, DataAttribute, GroupDestinations, ReceivedNpdu, TransportPort,
 };
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use tokio::sync::{mpsc, watch};
 
@@ -30,14 +31,6 @@ impl AppTransport {
         match self {
             Self::Link(transport) => Some(transport),
             Self::Router(_) => None,
-        }
-    }
-
-    /// The stack's own B/IPv6 link, if it has one.
-    pub(crate) fn bip6(&self) -> Option<&bacnet_transport::bip6::Bip6Transport> {
-        match self.link()? {
-            AnyTransport::Bip6(transport) => Some(transport),
-            _ => None,
         }
     }
 }
@@ -64,20 +57,6 @@ from_link!(
     bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>
 );
 
-/// A router share has no data link of its own, and `DataLink` has no value
-/// for one, so it refuses with `Error::Encoding` rather than an
-/// `UnsupportedTransport` that would misname it.
-impl AsBip for AppTransport {
-    fn as_bip(&self) -> Result<&BipTransport, Error> {
-        match self {
-            Self::Link(transport) => transport.as_bip(),
-            Self::Router(_) => Err(Error::Encoding(
-                "a stack on a router's application entity has no B/IP link of its own".into(),
-            )),
-        }
-    }
-}
-
 /// Pass a call to the transport either variant holds.
 macro_rules! each {
     ($self:ident, $t:ident => $call:expr) => {
@@ -89,6 +68,19 @@ macro_rules! each {
 }
 
 impl TransportPort for AppTransport {
+    /// A router share has no data link of its own, so it answers `None`.
+    fn data_link(&self) -> Option<DataLink> {
+        self.link()?.data_link()
+    }
+
+    fn bip_transport(&self) -> Option<&BipTransport> {
+        self.link()?.bip_transport()
+    }
+
+    fn bip6_transport(&self) -> Option<&bacnet_transport::bip6::Bip6Transport> {
+        self.link()?.bip6_transport()
+    }
+
     fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
         each!(self, t => t.bip_broadcast_endpoint())
     }

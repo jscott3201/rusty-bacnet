@@ -13,6 +13,11 @@
 //! Builder methods that take a closure erase it at once, so no closure type
 //! ever reaches `TestTransport` or the stack above it.
 //!
+//! Before adding to it: compose the hooks, modes and controls that exist. A
+//! new one must be general (several fixtures need it), small, and pinned by
+//! its own test here; behaviour only one test needs belongs in that test's
+//! hook closure, not in this type.
+//!
 //! A transport can stand in front of another: [`TestTransportBuilder::inner`]
 //! takes any `TransportPort` (a real link, a double, another `TestTransport`)
 //! behind an object-safe adapter, so the type stays concrete. The inner
@@ -31,8 +36,15 @@
 //!    (`block_next_send`) signals `wait_blocked` and waits for one
 //!    `release_sends` permit; then the send fails if `fail_next_send` was
 //!    taken.
-//! 5. `Forward` only: the send goes on to the inner transport and returns its
-//!    result. `ForwardFirst` instead forwards between steps 2 and 3.
+//! 5. `Forward` only: the [`TestTransportBuilder::intercept`] hook, if any,
+//!    decides whether the send goes on (`false` ends it as a success, nothing
+//!    forwarded); then the send goes to the inner transport and returns its
+//!    result. A send that failed or erred in steps 3 or 4 never reaches the
+//!    intercept hook.
+//!
+//!    `ForwardFirst` instead runs the intercept hook and forwards between
+//!    steps 2 and 3, so the hook and the controls see a frame already
+//!    forwarded (or already dropped by the intercept hook).
 
 use std::any::Any;
 use std::future::Future;
@@ -43,6 +55,7 @@ use std::sync::{Arc, PoisonError};
 
 use bacnet_npdu::NpduLimits;
 use bacnet_types::MacAddr;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use bytes::Bytes;
 use tokio::sync::{mpsc, watch};
@@ -140,7 +153,7 @@ pub enum SendMode {
 
 /// What a transport reports once its start has succeeded, for
 /// [`TestTransportBuilder::on_started`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Started<'a> {
     /// The local MAC, as the transport reports it after the start.
     pub local_mac: &'a [u8],
@@ -148,16 +161,10 @@ pub struct Started<'a> {
     pub receive_capacity: u16,
     /// The egress limit, as reported after the start.
     pub egress_limit: u16,
-    inner: Option<&'a dyn std::any::Any>,
-}
-
-impl Started<'_> {
-    /// The inner transport, when there is one and it is a `T`: for a test
-    /// that reads something only the concrete transport knows, such as the
-    /// address it bound.
-    pub fn inner<T: std::any::Any>(&self) -> Option<&T> {
-        self.inner.and_then(|inner| inner.downcast_ref::<T>())
-    }
+    /// The B/IPv6 port the transport reports after the start (its
+    /// [`TransportPort::bip6_port`]): for a test that needs the address an
+    /// ephemeral bind took. `None` for a transport that is not B/IPv6.
+    pub bip6_port: Option<Bip6Port>,
 }
 
 #[derive(Default)]
@@ -205,6 +212,8 @@ pub struct TestTransport {
     shared: Arc<Shared>,
     /// `None` takes the inner transport's answer, or `false`.
     number_controls: Option<bool>,
+    /// See [`TestTransportBuilder::data_link`].
+    data_link: Option<DataLink>,
     /// See [`TestTransportBuilder::bip_port`].
     bip_port: Option<BipPort>,
     /// See [`TestTransportBuilder::bip6_port`].
@@ -256,6 +265,7 @@ impl TestTransport {
                 number_controls: None,
                 bip_port: None,
                 bip6_port: None,
+                data_link: None,
                 max_npdu_changes: None,
                 inner: None,
                 prepare_inner: true,
@@ -392,6 +402,20 @@ impl Drop for TestTransport {
 }
 
 impl TransportPort for TestTransport {
+    fn data_link(&self) -> Option<DataLink> {
+        self.data_link
+            .or_else(|| self.inner.as_ref().and_then(|i| i.data_link()))
+    }
+
+    fn bip_transport(&self) -> Option<&crate::bip::BipTransport> {
+        self.inner.as_ref().and_then(|i| i.bip_transport())
+    }
+
+    #[cfg(feature = "ipv6")]
+    fn bip6_transport(&self) -> Option<&crate::bip6::Bip6Transport> {
+        self.inner.as_ref().and_then(|i| i.bip6_transport())
+    }
+
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         match (self.number_controls, &self.inner) {
             (Some(own), _) => own,
@@ -518,7 +542,7 @@ impl TransportPort for TestTransport {
                 local_mac: self.local_mac(),
                 receive_capacity: self.local_receive_apdu_capacity(),
                 egress_limit: self.egress_apdu_limit(),
-                inner: self.inner.as_deref().map(|inner| inner.as_any()),
+                bip6_port: self.bip6_port(),
             });
         }
         if let Some(hook) = self.hooks.after_start.clone() {

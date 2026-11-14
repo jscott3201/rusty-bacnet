@@ -579,8 +579,10 @@ signals ------------------+      if dirty: terminal.draw(view)
   status bar shows the total. After any loss the worker resynchronises the table
   from the client's own discovery table, at most once a second. Duplicate-
   instance notices are rare and important, so they wait for room instead of
-  being dropped; the record behind the banner keeps at most four addresses per
-  instance and counts the rest, and its text is rebuilt only when it changes.
+  being dropped. Each lists every address claiming the instance; the record
+  behind the banner keeps at most four of them and counts the rest, drops the
+  instance once one address is left, and its text is rebuilt only when it
+  changes.
   Lost devices leave the table with a line in the log pane. Later streams
   (COV, events, frames) get the same treatment.
 - **Latest-value state** (SC link state, MS/TP statistics, FD countdown) will
@@ -659,7 +661,7 @@ parsing, the value formatter).
   `device_collision_events()` and `discovered_devices()`.
 - **APIs later screens will use:** RP and RPM, WP and WPM (local and routed);
   `subscribe_cov`, `manage_cov_subscription` and `cov_notifications()`; the BBMD
-  helpers on any `BACnetClient` whose transport is `AsBip` (`BipTransport`, or
+  helpers on any `BACnetClient` whose transport reports a B/IP link (`BipTransport`, or
   `AnyTransport` with a `Bip` variant); `ScConnectError` and
   `ScWebSocketErrorKind`; the MS/TP `diagnostics()` handle and the
   `MstpMonitor` frame stream.
@@ -863,7 +865,7 @@ cargo nextest run -p bacnet-cli --release -E 'test(drawing_a_full_device_table)'
 
 | Issue | Gap | Needed by |
 |---|---|---|
-| #956 | Done: `BACnetClient::transport()` and the `AsBip` BBMD helpers. Was: no access to transport handles from a built `BACnetClient`: the SC state watch, SC drop counts and BIP counters are unreachable after build, and the BBMD helpers exist only on `BACnetClient<BipTransport>`, so `AnyTransport` loses them | #967, #957, #959 |
+| #956 | Done: `BACnetClient::transport()` and the BBMD helpers. Was: no access to transport handles from a built `BACnetClient`: the SC state watch, SC drop counts and BIP counters are unreachable after build, and the BBMD helpers exist only on `BACnetClient<BipTransport>`, so `AnyTransport` loses them | #967, #957, #959 |
 | #957 | Done: `bacnet_transport::tap::FrameTap`, reached with each transport's `frame_tap()`. Was: no link-level frame tap on any transport, so BVLC control traffic, SC control messages and MS/TP Token, PFM and Reply-Postponed frames are invisible | #971 |
 | #958 | Done: `mstp::monitor::MstpMonitor` and the `diagnostics()` handle. Was: no MS/TP passive monitor, per-station statistics or master list; `MstpDiagnostics` not exposed from builders | #970, #971 |
 | #959 | Done: `ScClientBuilder::failover_hub_url` and `reconnect`, with connection-state changes. Was: SC reconnect, failover and disconnect causes appear only as tracing lines; no active-hub indication, heartbeat statistics or peer certificate; no failover or reconnect options on `ScClientBuilder` | #967 |

@@ -4,6 +4,43 @@ use bacnet_transport::bip::BipTransport;
 
 use super::*;
 
+/// The addresses an ambiguous-instance error names read back as targets
+/// for the same station (#2560): bacnet-types writes them without knowing
+/// the transport, so this pins the two crates to one syntax.
+#[test]
+fn ambiguous_device_candidates_read_back() {
+    use bacnet_types::constructed::BACnetAddress;
+    let at = |network_number, mac: &[u8]| BACnetAddress {
+        network_number,
+        mac_address: bacnet_types::MacAddr::from_slice(mac),
+    };
+    let candidates = vec![
+        at(0, &[5]),
+        at(0, &[0x40, 0xAB, 0xCD]),
+        at(0, &[10, 0, 0, 1, 0xBA, 0xC0]),
+        at(2, &[0x05]),
+    ];
+    let text = Error::AmbiguousDevice {
+        instance: 9,
+        candidates: candidates.clone().into(),
+    }
+    .to_string();
+    let list = text
+        .split_once("addresses: ")
+        .and_then(|(_, rest)| rest.split_once("; "))
+        .map(|(list, _)| list)
+        .unwrap();
+    let parsed: Vec<BACnetAddress> = list
+        .split(", ")
+        .map(|word| match parse_target(word) {
+            Ok(Target::Mac(mac)) => at(0, &mac),
+            Ok(Target::RoutedMac { dnet, mac }) => at(dnet, &mac),
+            other => panic!("{word} reads back as {other:?}"),
+        })
+        .collect();
+    assert_eq!(parsed, candidates, "{text}");
+}
+
 /// Each MAC prints as a target the CLI reads back: a B/IPv6 VMAC as
 /// `bip6:0x……`, not as hex, which no target form takes.
 #[test]
@@ -404,4 +441,59 @@ fn mac_text_is_pinned_for_both_link_kinds() {
         assert_eq!(format_mac(mac), ip_port);
         assert_eq!(format_sc_mac(mac), sc);
     }
+}
+
+/// The target grammar follows the link under a wrapper, not the wrapper's
+/// type: a mixed-transport `AnyTransport` holding each link answers as the
+/// bare link does (#2560).
+#[tokio::test]
+async fn the_grammar_sees_through_the_mixed_transport() {
+    use bacnet_transport::any::AnyTransport;
+
+    let bip6: AnyTransport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(1)).into();
+    assert_eq!(AddressStyle::of(&bip6), AddressStyle::Bip6);
+    assert!(as_bip6(&bip6).is_some());
+    assert_eq!(mac(parse_target_on(&bip6, "bip6:1234")), [0x00, 0x04, 0xD2]);
+    let error = parse_target_on(&bip6, "02:00:00:00:00:01").unwrap_err();
+    assert!(error.contains("3-octet VMAC"), "{error}");
+
+    let bip: AnyTransport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST).into();
+    assert_eq!(AddressStyle::of(&bip), AddressStyle::Bip);
+    assert!(as_bip6(&bip).is_none());
+    assert!(!is_mstp(&bip));
+    let peer = "[::1]:47808".parse().unwrap();
+    assert!(bip6_vmac(&bip, peer).await.unwrap_err().contains("--ipv6"));
+
+    let (serial, _peer) = bacnet_transport::mstp::LoopbackSerial::pair();
+    let mstp = bacnet_transport::mstp::MstpTransport::new(serial, Default::default());
+    let mstp: AnyTransport = mstp.into();
+    assert!(is_mstp(&mstp));
+    assert_eq!(AddressStyle::of(&mstp), AddressStyle::Mstp);
+    assert_eq!(mac(parse_target_on(&mstp, "mstp:5")), [5]);
+}
+
+/// A one-octet MAC is not an MS/TP link: the kind decides, so a loopback
+/// link with a one-octet MAC is not MS/TP (#2560).
+#[test]
+fn mstp_is_the_kind_not_the_mac_length() {
+    let (one_octet, _peer) = bacnet_transport::loopback::LoopbackTransport::pair(vec![1], vec![2]);
+    assert!(!is_mstp(&one_octet));
+    assert_eq!(AddressStyle::of(&one_octet), AddressStyle::Bip);
+}
+
+/// The shared test transport reports the link it stands in front of, and a
+/// link a test sets (#2560).
+#[test]
+fn the_test_transport_forwards_and_sets_the_kind() {
+    use bacnet_transport::test_transport::TestTransport;
+    use bacnet_types::data_link::DataLink;
+
+    let bip6 = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(1));
+    let wrapped = TestTransport::builder().inner(bip6).build();
+    assert_eq!(AddressStyle::of(&wrapped), AddressStyle::Bip6);
+    assert!(as_bip6(&wrapped).is_some());
+
+    let set = TestTransport::builder().data_link(DataLink::Mstp).build();
+    assert!(is_mstp(&set));
+    assert!(as_bip6(&set).is_none());
 }

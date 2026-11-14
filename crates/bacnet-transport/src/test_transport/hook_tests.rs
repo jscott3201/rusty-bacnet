@@ -213,6 +213,88 @@ async fn intercept_decides_what_reaches_the_inner_transport() {
     }
 }
 
+/// Where in a send each step runs, as the names of the steps in order.
+async fn pipeline_order(mode: SendMode, fail_next: bool) -> Vec<&'static str> {
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (hooked, intercepted) = (Arc::clone(&order), Arc::clone(&order));
+    let inner_order = Arc::clone(&order);
+    let inner = TestTransport::builder()
+        .on_send(move |_| {
+            inner_order.lock().unwrap().push("inner");
+            async { Ok(()) }
+        })
+        .unicast(SendMode::Record)
+        .build();
+    let builder = TestTransport::builder()
+        .inner(inner)
+        .unicast(mode)
+        .on_send(move |_| {
+            hooked.lock().unwrap().push("hook");
+            async { Ok(()) }
+        })
+        .intercept(move |_| {
+            intercepted.lock().unwrap().push("intercept");
+            async { true }
+        });
+    let handle = builder.handle();
+    let outer = builder.build();
+    if fail_next {
+        handle.fail_next_send();
+    }
+    let result = outer.send_unicast(&[1], &[2]).await;
+    assert_eq!(result.is_err(), fail_next);
+    let order = order.lock().unwrap().clone();
+    order
+}
+
+#[tokio::test]
+async fn intercept_runs_after_the_hook_and_controls_for_forward_and_before_them_for_forward_first()
+{
+    assert_eq!(
+        pipeline_order(SendMode::Forward, false).await,
+        vec!["hook", "intercept", "inner"]
+    );
+    assert_eq!(
+        pipeline_order(SendMode::ForwardFirst, false).await,
+        vec!["intercept", "inner", "hook"]
+    );
+    // A send the controls fail never reaches the intercept hook under
+    // `Forward`; under `ForwardFirst` the frame is already on its way.
+    assert_eq!(pipeline_order(SendMode::Forward, true).await, vec!["hook"]);
+    assert_eq!(
+        pipeline_order(SendMode::ForwardFirst, true).await,
+        vec!["intercept", "inner", "hook"]
+    );
+}
+
+#[tokio::test]
+async fn relay_capacity_sizes_the_channel_the_handle_and_receiver_share() {
+    for capacity in [3, 8] {
+        let (a, _b) = crate::loopback::LoopbackTransport::pair(vec![1], vec![2]);
+        let mut outer = TestTransport::builder()
+            .inner(a)
+            .start(StartMode::Relay(capacity))
+            .build();
+        let handle = outer.handle();
+        let mut received = outer.start().await.unwrap();
+        let sender = handle.inbound().unwrap();
+        assert_eq!(sender.max_capacity(), capacity);
+        // The channel holds exactly `capacity` unread frames.
+        for n in 0..capacity {
+            let frame = ReceivedNpdu::unverified(
+                Bytes::from(vec![u8::try_from(n).unwrap()]),
+                MacAddr::from_slice(&[3]),
+                false,
+                Vec::new(),
+                None,
+            );
+            sender.try_send(frame).unwrap();
+        }
+        assert_eq!(sender.capacity(), 0);
+        assert_eq!(&received.recv().await.unwrap().npdu[..], &[0]);
+    }
+}
+
 #[tokio::test]
 async fn relay_passes_the_inner_frames_through_the_hook_and_takes_injected_ones() {
     let (a, mut b) = crate::loopback::LoopbackTransport::pair(vec![1], vec![2]);
@@ -258,25 +340,33 @@ async fn relay_passes_the_inner_frames_through_the_hook_and_takes_injected_ones(
 }
 
 #[tokio::test]
-async fn started_reaches_the_concrete_inner_transport_and_sends_see_its_current_limits() {
+async fn started_reports_the_b_ipv6_port_the_inner_transport_does_and_sends_see_its_current_limits()
+{
     let (a, _b) = crate::loopback::LoopbackTransport::pair(vec![1], vec![2]);
-    let macs = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let (seen, other) = (Arc::clone(&macs), Arc::clone(&macs));
+    let port = Bip6Port {
+        endpoint: "[::1]:47808".parse().unwrap(),
+        vmac: None,
+        multicast_group: "ff02::bac0".parse().unwrap(),
+        mode: bacnet_types::bip_port::BipPortMode::Normal,
+    };
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (plain, with_port) = (Arc::clone(&seen), Arc::clone(&seen));
+    let mut outer = TestTransport::builder()
+        .inner(a)
+        .on_started(move |started| plain.lock().unwrap().push(started.bip6_port))
+        .build();
+    let _ = outer.start().await.unwrap();
+    let mut outer = TestTransport::builder()
+        .inner(TestTransport::builder().bip6_port(port.clone()).build())
+        .on_started(move |started| with_port.lock().unwrap().push(started.bip6_port))
+        .build();
+    let _ = outer.start().await.unwrap();
+    let seen = seen.lock().unwrap();
+    assert!(seen[0].is_none());
+    assert_eq!(seen[1].as_ref().map(|p| p.endpoint), Some(port.endpoint));
+
     let inner = TestTransport::builder().receive_capacity(100).build();
     let inner_handle = inner.handle();
-    let builder = TestTransport::builder()
-        .inner(a)
-        .on_started(move |started| {
-            seen.lock().unwrap().push(
-                started
-                    .inner::<crate::loopback::LoopbackTransport>()
-                    .map(|link| link.local_mac().to_vec()),
-            );
-            assert!(started.inner::<TestTransport>().is_none(), "another type");
-        });
-    let mut outer = builder.build();
-    let _ = outer.start().await.unwrap();
-    assert_eq!(*other.lock().unwrap(), vec![Some(vec![1])]);
 
     // A send's hook sees the inner transport's limits as they are now.
     let sampled = Arc::new(std::sync::Mutex::new(Vec::new()));

@@ -68,6 +68,7 @@ mod device_mgmt_capture;
 mod device_mgmt_worker;
 mod devices_layout;
 mod discovery;
+mod duplicates;
 mod event_loop;
 mod footer;
 mod frames;

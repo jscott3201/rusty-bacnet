@@ -856,6 +856,13 @@ async fn send_when_writable(
     }
 }
 
+/// A dropped transport aborts, so no socket or lease outlives it.
+impl Drop for super::BipTransport {
+    fn drop(&mut self) {
+        crate::port::TransportPort::abort(self);
+    }
+}
+
 impl Deref for BipSocket {
     type Target = UdpSocket;
     fn deref(&self) -> &Self::Target {

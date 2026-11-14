@@ -8,6 +8,7 @@ use std::sync::Arc;
 use bacnet_npdu::NpduLimits;
 use bacnet_types::MacAddr;
 use bacnet_types::bip_port::BipPortMode;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use tokio::sync::{mpsc, watch};
 
@@ -108,6 +109,14 @@ impl TestTransportBuilder {
     /// transport's answer applies, or `false`.
     pub fn number_controls(mut self) -> Self {
         self.transport.number_controls = Some(true);
+        self
+    }
+
+    /// Report `link` as the data link, over an inner transport's (default:
+    /// the inner transport's, or none). The concrete B/IP and B/IPv6
+    /// transports stay the inner transport's.
+    pub fn data_link(mut self, link: DataLink) -> Self {
+        self.transport.data_link = Some(link);
         self
     }
 
@@ -317,8 +326,10 @@ impl TestTransportBuilder {
 
     /// Await this hook's future at the top of every `stop`, before the
     /// `on_stop` hook or the inner transport's stop; its error ends the stop
-    /// with the inner transport untouched. A stop the test holds open, to
-    /// drop or release it there, with the rest of the stop still running.
+    /// with the inner transport untouched, a fresh inbound channel still
+    /// open and any held Network Port lease still held. A stop the test
+    /// holds open, to drop or release it there, with the rest of the stop
+    /// still running.
     pub fn before_stop<F>(mut self, hook: impl Fn() -> F + Send + Sync + 'static) -> Self
     where
         F: Future<Output = Result<(), Error>> + Send + 'static,

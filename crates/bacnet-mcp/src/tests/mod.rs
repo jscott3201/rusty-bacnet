@@ -17,6 +17,7 @@ mod confirm;
 mod discovery;
 mod export;
 mod handoff;
+mod known;
 mod legacy;
 mod limits;
 mod listen;
@@ -47,7 +48,7 @@ use bacnet_ops::engine::Engine;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_transport::test_transport::{SendMode, StartMode, TestTransport};
+use bacnet_transport::test_transport::{SendMode, StartMode, TestTransport, TestTransportHandle};
 use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier, Segmentation};
 use bacnet_types::primitives::PropertyValue;
 use serde_json::{Value, json};
@@ -110,27 +111,38 @@ fn whole_list_read(npdu: &[u8]) -> Option<u8> {
     }
 }
 
+/// The link MAC of alias `instance`: 10.0.0.3:47808 on, after the lab.
+pub(crate) fn alias_mac(instance: u32) -> [u8; 6] {
+    let host = u8::try_from(instance - LAB + 2).unwrap();
+    [10, 0, 0, host, 0xBA, 0xC0]
+}
+
 /// The client's side of the lab link, recording when each request went and
 /// to which link MAC (`sent`), and when each answer arrived (`received`).
+/// The lab device is `inner`; each alias has a loopback of its own in
+/// `aliases`: a unicast goes to the one at its MAC (a MAC with no device is
+/// lost, as on a real link), a broadcast to all of them and the lab.
 /// Answers a whole Object_List read with an Abort when `indexed_only`, as a
 /// device that can only send it element by element does. Once `mute_after`
 /// requests have gone, the device stops answering: later requests are
 /// logged but never delivered.
 pub(crate) fn recording(
     inner: LoopbackTransport,
+    aliases: Vec<([u8; 6], Arc<LoopbackTransport>)>,
     sent: SendLog,
     received: Arc<Mutex<Vec<Instant>>>,
     indexed_only: bool,
     mute_after: Arc<Mutex<Option<usize>>>,
-) -> TestTransport {
+) -> (TestTransport, TestTransportHandle) {
     let builder = TestTransport::builder()
         .inner(inner)
         .unicast(SendMode::Forward)
         .broadcast(SendMode::Forward)
         .start(StartMode::Relay(256));
     let inbox = builder.handle();
+    let handle = builder.handle();
     let log = Arc::clone(&sent);
-    builder
+    let transport = builder
         .on_inbound(move |npdu| {
             received.lock().unwrap().push(Instant::now());
             async move { Some(npdu) }
@@ -146,38 +158,49 @@ pub(crate) fn recording(
             async { Ok(()) }
         })
         .intercept(move |frame| {
-            let go = if frame.broadcast {
-                Some(true)
-            } else {
+            let muted = !frame.broadcast && {
                 let sent = sent.lock().unwrap().len();
-                if mute_after.lock().unwrap().is_some_and(|after| sent > after) {
-                    Some(false)
-                } else {
-                    None
-                }
+                mute_after.lock().unwrap().is_some_and(|after| sent > after)
             };
-            let abort = (go.is_none() && indexed_only)
+            let abort = (!frame.broadcast && !muted && indexed_only)
                 .then(|| whole_list_read(&frame.npdu))
                 .flatten();
-            let inbox = inbox.clone();
+            let (inbox, aliases) = (inbox.clone(), aliases.clone());
             async move {
-                if let Some(go) = go {
-                    return go;
+                if muted {
+                    return false;
                 }
-                let Some(invoke_id) = abort else {
+                if frame.broadcast {
+                    for (_, link) in &aliases {
+                        let _ = link.send_broadcast(&frame.npdu).await;
+                    }
                     return true;
-                };
-                // An Abort PDU from the device: segmentation not supported (4).
-                let abort = bytes::Bytes::from(vec![0x01, 0x00, 0x71, invoke_id, 4]);
-                if let Some(inbox) = inbox.inbound() {
-                    let source = bacnet_types::MacAddr::from_slice(&frame.mac);
-                    let back = ReceivedNpdu::unverified(abort, source, false, Vec::new(), None);
-                    let _ = inbox.send(back).await;
                 }
-                false
+                if let Some(invoke_id) = abort {
+                    // An Abort PDU from the device: segmentation not supported (4).
+                    let abort = bytes::Bytes::from(vec![0x01, 0x00, 0x71, invoke_id, 4]);
+                    if let Some(inbox) = inbox.inbound() {
+                        let source = bacnet_types::MacAddr::from_slice(&frame.mac);
+                        let back = ReceivedNpdu::unverified(abort, source, false, Vec::new(), None);
+                        let _ = inbox.send(back).await;
+                    }
+                    return false;
+                }
+                match aliases
+                    .iter()
+                    .find(|(at, _)| at.as_slice() == &frame.mac[..])
+                {
+                    Some((_, link)) => {
+                        let _ = link.send_unicast(&frame.npdu, &frame.mac).await;
+                        false
+                    }
+                    // The lab device's own link, or no device there.
+                    None => frame.mac.as_slice() == LAB_MAC,
+                }
             }
         })
-        .build()
+        .build();
+    (transport, handle)
 }
 
 /// The device's side of the lab link, answering after `delay`, as a slow
@@ -196,8 +219,9 @@ fn delayed(inner: LoopbackTransport, delay: Duration) -> TestTransport {
         .build()
 }
 
-/// Local device instances besides [`LAB`] that the same lab device answers
-/// for, so requests to them go through gates of their own.
+/// Local devices besides [`LAB`], each at its own address
+/// ([`alias_mac`]) with the lab device's objects, so requests to them go
+/// through gates of their own.
 pub(crate) const ALIASES: std::ops::Range<u32> = 1202..1206;
 
 /// A running lab: the device, the client's engine, the MCP server on a
@@ -207,7 +231,13 @@ pub(crate) struct Lab {
     pub(crate) sent: SendLog,
     pub(crate) received: Arc<Mutex<Vec<Instant>>>,
     server: BACnetServer<TestTransport>,
+    /// The [`ALIASES`]' devices, in order.
+    aliases: Vec<BACnetServer<TestTransport>>,
     client: Arc<BACnetClient<TestTransport>>,
+    /// The client's receive side, for [`Lab::inject`].
+    inbox: TestTransportHandle,
+    /// Carry each alias device's frames to the client.
+    forwarding: Vec<JoinHandle<()>>,
     serving: JoinHandle<()>,
     mute: Arc<Mutex<Option<usize>>>,
     /// The engine's request limits, to hold a device's gate from a test.
@@ -259,35 +289,30 @@ impl Lab {
         let identity = DeviceIdentity::new(LAB, 260)
             .unwrap()
             .with_name("Lab device");
-        let mut ai1 =
-            AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_FAHRENHEIT).unwrap();
-        ai1.set_present_value(72.5);
-        let mut ai3 = AnalogInputObject::new(3, "Supply Fan", EngineeringUnits::PERCENT).unwrap();
-        ai3.write_property(
-            PropertyIdentifier::DESCRIPTION,
-            None,
-            PropertyValue::CharacterString(hostile()),
-            None,
-        )
-        .unwrap();
-        let ao = AnalogOutputObject::new(1, "Damper", EngineeringUnits::PERCENT).unwrap();
-        let mut objects: Vec<Box<dyn BACnetObject>> =
-            vec![Box::new(ai1), Box::new(ai3), Box::new(ao)];
-        for instance in 10..10 + extra {
-            let point = AnalogInputObject::new(
-                instance,
-                format!("Point {instance}"),
-                EngineeringUnits::PERCENT,
-            )
-            .unwrap();
-            objects.push(Box::new(point));
-        }
-        if site {
-            objects.extend(site::objects());
-        }
-        let database = build_database_with_extra(&identity, objects).unwrap();
+        let database = build_database_with_extra(&identity, lab_objects(extra, site)).unwrap();
         let (client_port, server_port) =
             LoopbackTransport::pair(AGENT_MAC.to_vec(), LAB_MAC.to_vec());
+        let mut links = Vec::new();
+        let mut from_aliases = Vec::new();
+        let mut aliases = Vec::new();
+        for alias in ALIASES {
+            let (mut client_port, server_port) =
+                LoopbackTransport::pair(AGENT_MAC.to_vec(), alias_mac(alias).to_vec());
+            from_aliases.push(client_port.start().await.unwrap());
+            links.push((alias_mac(alias), Arc::new(client_port)));
+            let identity = DeviceIdentity::new(alias, 260)
+                .unwrap()
+                .with_name(format!("Lab device {alias}"));
+            let database = build_database_with_extra(&identity, lab_objects(extra, site)).unwrap();
+            let server = BACnetServer::generic_builder()
+                .device(identity)
+                .database(database)
+                .transport(delayed(server_port, delay))
+                .build()
+                .await
+                .unwrap();
+            aliases.push(server);
+        }
         let mut builder = BACnetServer::generic_builder();
         if site {
             // One event summary an answer, so alarms page across answers.
@@ -306,8 +331,9 @@ impl Lab {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let received = Arc::new(Mutex::new(Vec::new()));
         let mute = Arc::new(Mutex::new(None));
-        let recording = recording(
+        let (recording, inbox) = recording(
             client_port,
+            links.clone(),
             Arc::clone(&sent),
             Arc::clone(&received),
             indexed_only,
@@ -319,9 +345,24 @@ impl Lab {
             ..ClientConfig::default()
         };
         let client = Arc::new(BACnetClient::start(config, recording).await.unwrap());
+        // Each alias's answers reach the client's receive channel beside the
+        // lab device's own.
+        let mut forwarding = Vec::new();
+        for mut from_alias in from_aliases {
+            let to_client = inbox.inbound().expect("the client started");
+            let received = Arc::clone(&received);
+            forwarding.push(tokio::spawn(async move {
+                while let Some(npdu) = from_alias.recv().await {
+                    received.lock().unwrap().push(Instant::now());
+                    if to_client.send(npdu).await.is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
         client.add_device(LAB, &LAB_MAC).await.unwrap();
         for alias in ALIASES {
-            client.add_device(alias, &LAB_MAC).await.unwrap();
+            client.add_device(alias, &alias_mac(alias)).await.unwrap();
         }
         for instance in 300..305 {
             client
@@ -346,7 +387,10 @@ impl Lab {
             sent,
             received,
             server,
+            aliases,
             client,
+            inbox,
+            forwarding,
             serving,
             mute,
             limits,
@@ -404,7 +448,26 @@ impl Lab {
         (&mut self.serving).await.unwrap();
     }
 
+    /// Hand the client `npdu` as the link MAC `source` sent it.
+    pub(crate) async fn inject(&self, npdu: &[u8], source: &[u8]) {
+        let inbox = self.inbox.inbound().expect("started");
+        let npdu = bytes::Bytes::copy_from_slice(npdu);
+        let source = bacnet_types::MacAddr::from_slice(source);
+        let _ = inbox
+            .send(ReceivedNpdu::unverified(
+                npdu,
+                source,
+                false,
+                Vec::new(),
+                None,
+            ))
+            .await;
+    }
+
     pub(crate) async fn stop(self) {
+        for forwarding in &self.forwarding {
+            forwarding.abort();
+        }
         drop(self.agent);
         if self.shutdown.is_some() {
             self.serving.await.unwrap();
@@ -416,7 +479,42 @@ impl Lab {
         client.stop().await.unwrap();
         let mut server = self.server;
         server.stop().await.unwrap();
+        for mut alias in self.aliases {
+            alias.stop().await.unwrap();
+        }
     }
+}
+
+/// The objects every lab device holds: AI:1 Zone Temp at 72.5, AI:3 with
+/// a [`hostile`] Description, AO:1 Damper, `extra` more analog inputs
+/// from instance 10, and with `site` the site's other objects.
+fn lab_objects(extra: u32, site: bool) -> Vec<Box<dyn BACnetObject>> {
+    let mut ai1 =
+        AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_FAHRENHEIT).unwrap();
+    ai1.set_present_value(72.5);
+    let mut ai3 = AnalogInputObject::new(3, "Supply Fan", EngineeringUnits::PERCENT).unwrap();
+    ai3.write_property(
+        PropertyIdentifier::DESCRIPTION,
+        None,
+        PropertyValue::CharacterString(hostile()),
+        None,
+    )
+    .unwrap();
+    let ao = AnalogOutputObject::new(1, "Damper", EngineeringUnits::PERCENT).unwrap();
+    let mut objects: Vec<Box<dyn BACnetObject>> = vec![Box::new(ai1), Box::new(ai3), Box::new(ao)];
+    for instance in 10..10 + extra {
+        let point = AnalogInputObject::new(
+            instance,
+            format!("Point {instance}"),
+            EngineeringUnits::PERCENT,
+        )
+        .unwrap();
+        objects.push(Box::new(point));
+    }
+    if site {
+        objects.extend(site::objects());
+    }
+    objects
 }
 
 /// The `_meta` every 2026-07-28 request carries.

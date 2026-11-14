@@ -105,6 +105,35 @@ fn protocol_error_display() {
     );
 }
 
+/// An ambiguous instance names every claimant: a routed one as its station
+/// on its network, and a local one by its MAC's length, in the CLI's target
+/// grammar for 1, 3 or 6 octets, which bacnet-ops reads back, and as bare
+/// hex for any other length, which the grammar refuses (#2560).
+#[cfg(feature = "std")]
+#[test]
+fn ambiguous_device_names_every_candidate() {
+    let at = |network_number, mac: &[u8]| BACnetAddress {
+        network_number,
+        mac_address: crate::MacAddr::from_slice(mac),
+    };
+    let error = Error::AmbiguousDevice {
+        instance: 1001,
+        candidates: vec![
+            at(0, &[5]),
+            at(0, &[0x00, 0x04, 0xD2]),
+            at(0, &[10, 0, 0, 1, 0xBA, 0xC0]),
+            at(0, &[1, 2]),
+            at(2, &[0x05]),
+        ]
+        .into(),
+    };
+    assert_eq!(
+        error.to_string(),
+        "device 1001 is claimed by 5 addresses: mstp:5, bip6:0x0004D2, \
+         10.0.0.1:47808, 0x0102, 2:0x05; name one by its address"
+    );
+}
+
 #[cfg(feature = "alloc")]
 #[test]
 fn structured_error_display_names_the_detail() {

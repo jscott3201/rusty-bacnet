@@ -632,7 +632,7 @@ async fn the_cli_client_discovers_and_reads_a_server_on_the_trunk() {
         loop {
             client.who_is(None).await.unwrap();
             for _ in 0..20 {
-                if let Some(device) = client.get_device(SERVER_INSTANCE).await {
+                if let Some(device) = client.get_device(SERVER_INSTANCE).await.unwrap() {
                     return device;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;

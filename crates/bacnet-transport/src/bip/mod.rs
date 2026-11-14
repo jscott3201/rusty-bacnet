@@ -38,7 +38,6 @@ use bacnet_npdu::NpduLimits;
 use bacnet_types::bip_port::{BbmdTables, BipPortMode, ForeignRegistration};
 use bacnet_types::error::Error;
 
-mod access;
 mod bbmd_receive;
 mod bbmd_start;
 mod client_snapshot;
@@ -88,7 +87,6 @@ mod io;
 mod own_broadcast;
 mod rate_limit;
 mod receive_counters;
-pub use access::AsBip;
 pub use fanout::{FanoutCounters, FanoutPolicy};
 #[cfg(test)]
 use ingress::{Arrival, handle_datagram};
@@ -466,6 +464,14 @@ impl BipTransport {
 }
 
 impl TransportPort for BipTransport {
+    fn data_link(&self) -> Option<bacnet_types::data_link::DataLink> {
+        Some(bacnet_types::data_link::DataLink::Bip)
+    }
+
+    fn bip_transport(&self) -> Option<&BipTransport> {
+        Some(self)
+    }
+
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
         if self.registration_closed
             || self.socket.is_some()
@@ -839,12 +845,6 @@ impl TransportPort for BipTransport {
         crate::port::GroupDestinations::new(move |mac| {
             groups.contains(mac) && codec::address_from_slice(mac).is_ok_and(|a| a.port() == port)
         })
-    }
-}
-
-impl Drop for BipTransport {
-    fn drop(&mut self) {
-        self.abort();
     }
 }
 

@@ -477,7 +477,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             remote_max_apdu,
             remote_max_segments,
             routed_forwarded_npci_len,
-            routed_path_lease,
+            ..
         } = limits;
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
@@ -777,6 +777,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
         }
         .await;
+        self.note_answer(limits.sized_by, &result);
 
         #[cfg(test)]
         self.segmented_post_wait_cleanup.pause_if_enabled().await;
@@ -811,7 +812,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         };
 
-        if let Some(lease) = routed_path_lease {
+        if let Some(lease) = limits.routed_path_lease {
             lease.mark_terminal_observed();
         }
         guard.mark_completed();

@@ -1,7 +1,7 @@
 //! The transport of a built client, and the BBMD helpers that reach through it.
 
 use bacnet_transport::bbmd::{BdtEntry, FdtEntryWire};
-use bacnet_transport::bip::{AsBip, BvlcExchangeError, ForeignRegistrationSnapshot};
+use bacnet_transport::bip::{BvlcExchangeError, ForeignRegistrationSnapshot};
 
 use super::*;
 
@@ -136,7 +136,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 /// # Ok(())
 /// # }
 /// ```
-impl<T: TransportPort + AsBip + 'static> BACnetClient<T> {
+impl<T: TransportPort + 'static> BACnetClient<T> {
     /// How this client's foreign-device registration is going (#938): whether
     /// it holds a live lease, the time left on it, and the last attempt's
     /// result and outcome, a BBMD's refusal included. Outside

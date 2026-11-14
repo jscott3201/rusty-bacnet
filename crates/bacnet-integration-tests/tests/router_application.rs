@@ -168,7 +168,7 @@ impl Site {
     async fn found(&self, instance: u32) -> bacnet_client::discovery::DiscoveredDevice {
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if let Some(found) = self.client.get_device(instance).await {
+                if let Some(found) = self.client.get_device(instance).await.unwrap() {
                     break found;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

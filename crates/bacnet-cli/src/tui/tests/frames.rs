@@ -85,8 +85,11 @@ fn duplicate_instance_banner() {
         worker(
             &mut app,
             WorkerEvent::Collision {
-                retained: row(1002, "10.0.1.22:47808", 5, 9),
-                incoming: row(1002, "10.0.1.99:47808", 5, 13),
+                instance: 1002,
+                claimants: vec![
+                    row(1002, "10.0.1.22:47808", 5, 9),
+                    row(1002, "10.0.1.99:47808", 5, 13),
+                ],
             },
         );
         assert_snapshot!(format!("duplicate_{w}x{h}"), screen(&mut app, w, h));

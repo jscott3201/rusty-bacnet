@@ -33,10 +33,11 @@ const CANCEL_WAIT: Duration = Duration::from_secs(30);
 
 /// How a point's start went.
 pub(super) struct Started {
-    /// Where the device is; `None` when it isn't in the device table, and
-    /// then nothing was sent.
+    /// Where the device is; `None` when it isn't in the device table, or
+    /// two addresses claim its instance, and then nothing was sent.
     pub(super) target: Option<CovTarget>,
-    /// The first read, unless the device is missing.
+    /// The first read, unless the device is missing; the ambiguity error
+    /// when two addresses claim its instance.
     pub(super) first: Option<Result<Vec<RawRow>, Error>>,
     /// When the first read ended, for its sample.
     pub(super) read_at: Option<(Instant, SystemTime)>,
@@ -83,13 +84,18 @@ pub(super) async fn start<T: TransportPort + 'static>(
 ) -> Started {
     let (process, point) = (shared.process, shared.point);
     let engine = &inner.engine;
-    let Some(device) = engine.device(point.device).await else {
-        return Started {
-            target: None,
-            first: None,
-            read_at: None,
-            outcome: None,
-        };
+    let device = match engine.device(point.device).await {
+        Ok(Some(device)) => device,
+        found => {
+            // An instance two addresses claim fails as the first read
+            // would; polls by the instance work again once one is left.
+            return Started {
+                target: None,
+                first: found.err().map(Err),
+                read_at: None,
+                outcome: None,
+            };
+        }
     };
     let target = CovTarget::of_device(&device);
     // Before anything is sent: the device may notify as soon as it takes

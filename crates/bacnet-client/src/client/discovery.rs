@@ -5,6 +5,9 @@ use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Resolve a device instance to its MAC address and optional routing info.
     ///
+    /// Fails with [`Error::AmbiguousDevice`] when two or more addresses
+    /// claim the instance; the device's address names it then.
+    ///
     /// # Snapshot/coherence contract
     ///
     /// This returns an address/routing snapshot taken under one
@@ -20,7 +23,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_instance: u32,
     ) -> Result<(Vec<u8>, Option<(u16, Vec<u8>)>), Error> {
         let dt = self.device_table.lock();
-        let device = dt.get(device_instance).ok_or_else(|| {
+        let device = dt.find(device_instance)?.ok_or_else(|| {
             Error::Encoding(format!("device {device_instance} not in device table"))
         })?;
         let routing = match (&device.source_network, &device.source_address) {
@@ -92,14 +95,30 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// Get a snapshot of all discovered devices.
+    /// Get a snapshot of all discovered devices, one per address, ordered by
+    /// network number and then MAC. An instance two addresses claim is
+    /// listed twice.
     pub async fn discovered_devices(&self) -> Vec<DiscoveredDevice> {
         self.device_table.lock().all()
     }
 
-    /// Look up a discovered device by instance number.
-    pub async fn get_device(&self, instance: u32) -> Option<DiscoveredDevice> {
-        self.device_table.lock().get(instance).cloned()
+    /// Look up the discovered device that claims `instance`, or `Ok(None)`
+    /// when no address does.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AmbiguousDevice`], naming every claimant's address, when two
+    /// or more addresses claim the instance. [`Self::get_device_at`] finds
+    /// each of them.
+    pub async fn get_device(&self, instance: u32) -> Result<Option<DiscoveredDevice>, Error> {
+        Ok(self.device_table.lock().find(instance)?.cloned())
+    }
+
+    /// Look up the discovered device at `mac` on `network`: network 0 is the
+    /// local network; on a remote network `mac` is the device's MAC there,
+    /// not its router's.
+    pub async fn get_device_at(&self, network: u16, mac: &[u8]) -> Option<DiscoveredDevice> {
+        self.device_table.lock().get(network, mac).cloned()
     }
 
     /// Clear the discovered devices table.
@@ -114,7 +133,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// vendor_id 0) are local/manual registration defaults, **not** values
     /// learned from an I-Am; requests to this device are bounded by them
     /// until a real I-Am refreshes the row. The row is unambiguously local:
-    /// routed lookups by SNET/SADR will not match it.
+    /// routed lookups by SNET/SADR will not match it. Like a discovered
+    /// row, it is one claim on `instance`: another address claiming it too
+    /// makes the instance ambiguous (see [`DeviceTable`]).
+    ///
+    /// The table holds one device per address: registering `instance` at
+    /// a MAC that holds another instance replaces that row, so
+    /// [`Self::get_device`] no longer finds the instance it held there.
     pub async fn add_device(&self, instance: u32, mac: &[u8]) -> Result<(), Error> {
         let oid = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,
@@ -127,7 +152,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
             max_segments_accepted: None,
             vendor_id: 0,
-            last_seen: std::time::Instant::now(),
+            last_seen: crate::discovery::now(),
             source_network: None,
             source_address: None,
         };
@@ -157,6 +182,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// `remote_network` outside 1..=65534 or a `remote_mac` longer than
     /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) is refused the same way, since
     /// [`BACnetClient::confirmed_request_routed`] refuses that destination.
+    ///
+    /// A `remote_network` that is this client's own network, once the client
+    /// has learned its number, names a local device: it is stored as the
+    /// local row at `remote_mac`, replacing a routed row for that station,
+    /// as requests to it go out locally (#1358). Like the other manual
+    /// registrations, this sends no device or collision notices.
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {
             return Err(Error::Encoding(
@@ -173,18 +204,34 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             bacnet_types::enums::ObjectType::DEVICE,
             config.instance,
         )?;
+        // A station on this client's own network is the local device at that
+        // MAC (#1358): it takes the place of a routed row registered or
+        // heard for it before the number was learned.
+        let this_network = self.network.local_network_number().get();
+        let local = this_network == Some(config.remote_network);
+        let remote_mac = MacAddr::from_slice(&config.remote_mac);
+        let (mac_address, source_network, source_address) = if local {
+            (remote_mac, None, None)
+        } else {
+            let router = MacAddr::from_slice(&config.router_mac);
+            (router, Some(config.remote_network), Some(remote_mac))
+        };
         let device = DiscoveredDevice {
             object_identifier: oid,
-            mac_address: MacAddr::from_slice(&config.router_mac),
+            mac_address,
             max_apdu_length: config.max_apdu_length,
             segmentation_supported: config.segmentation_supported,
             max_segments_accepted: config.max_segments_accepted,
             vendor_id: 0,
-            last_seen: std::time::Instant::now(),
-            source_network: Some(config.remote_network),
-            source_address: Some(MacAddr::from_slice(&config.remote_mac)),
+            last_seen: crate::discovery::now(),
+            source_network,
+            source_address,
         };
-        self.device_table.lock().upsert(device);
+        let mut table = self.device_table.lock();
+        if local {
+            let _ = table.remove(config.remote_network, &config.remote_mac);
+        }
+        table.upsert(device);
         Ok(())
     }
 }

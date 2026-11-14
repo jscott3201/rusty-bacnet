@@ -307,8 +307,8 @@ fn stale_sessions_cannot_restore_rows_collisions_or_connection_state() {
         WorkerEvent::Snapshot(vec![row(7, "old", 1, 0)]),
         WorkerEvent::Discovered(row(8, "old", 1, 0)),
         WorkerEvent::Collision {
-            retained: row(9, "old-a", 1, 0),
-            incoming: row(9, "old-b", 1, 0),
+            instance: 9,
+            claimants: vec![row(9, "old-a", 1, 0), row(9, "old-b", 1, 0)],
         },
     ] {
         worker(
@@ -356,8 +356,8 @@ fn five_devices_for_session(app: &mut App) {
     worker(
         app,
         WorkerEvent::Collision {
-            retained: row(1, "old-a", 1, 0),
-            incoming: row(1, "old-b", 1, 0),
+            instance: 1,
+            claimants: vec![row(1, "old-a", 1, 0), row(1, "old-b", 1, 0)],
         },
     );
 }
