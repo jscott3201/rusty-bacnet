@@ -5,6 +5,8 @@
 //! reverts through its instance; and a revert after a restart goes to the
 //! entry's address with no Who-Is.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_client::client::ClientConfig;
@@ -13,6 +15,7 @@ use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_services::rpm::{ReadAccessResult, ReadPropertyMultipleACK, ReadResultElement};
+use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::test_transport::{SendLog, SentFrame, TestTransport};
 use bacnet_types::enums::{
@@ -41,6 +44,9 @@ impl Caller for Armed {
     }
     fn refusal(&self) -> Option<String> {
         None
+    }
+    fn may_look(&self) -> bool {
+        true
     }
 }
 
@@ -73,9 +79,24 @@ fn spec(address: DeviceAddress) -> WriteSpec {
     }
 }
 
-/// AO:1's pre-images as the scripted device reads them: 1.0, every slot
-/// empty, a relinquish default of 0.0, in service.
-fn ao1_ack() -> ReadPropertyMultipleACK {
+/// AO:1's sixteen priority slots on each scripted device, by its MAC: each
+/// slot's encoded value, NULL (`0x00`) when empty. Writes to Present_Value
+/// at a priority land in them.
+type Slots = Arc<Mutex<HashMap<Vec<u8>, Vec<Vec<u8>>>>>;
+
+/// AO:1's priority slots at `mac` as `slots` holds them.
+fn slots_at(slots: &Slots, mac: &[u8]) -> Vec<Vec<u8>> {
+    slots
+        .lock()
+        .unwrap()
+        .get(mac)
+        .cloned()
+        .unwrap_or_else(|| vec![vec![0x00]; 16])
+}
+
+/// AO:1's pre-images as the scripted device reads them: 1.0, its priority
+/// slots `slots`, a relinquish default of 0.0, in service.
+fn ao1_ack(slots: &[Vec<u8>]) -> ReadPropertyMultipleACK {
     let element = |property, value: Vec<u8>| ReadResultElement {
         property_identifier: property,
         property_array_index: None,
@@ -90,7 +111,7 @@ fn ao1_ack() -> ReadPropertyMultipleACK {
                     PropertyIdentifier::PRESENT_VALUE,
                     vec![0x44, 0x3F, 0x80, 0, 0],
                 ),
-                element(PropertyIdentifier::PRIORITY_ARRAY, vec![0x00; 16]),
+                element(PropertyIdentifier::PRIORITY_ARRAY, slots.concat()),
                 element(
                     PropertyIdentifier::RELINQUISH_DEFAULT,
                     vec![0x44, 0, 0, 0, 0],
@@ -123,8 +144,9 @@ fn identity_ack(instance: u32) -> BytesMut {
 /// pre-images for a ReadPropertyMultiple; for a ReadProperty (the identity
 /// read by the wildcard instance), its Object_Identifier as device
 /// `identity`, or no answer for `None`; a SimpleAck for anything else
-/// confirmed; nothing for a broadcast.
-fn answer(frame: &SentFrame, identity: Option<u32>) -> Option<ReceivedNpdu> {
+/// confirmed, a WriteProperty of a priority slot kept in `slots`; nothing
+/// for a broadcast.
+fn answer(frame: &SentFrame, identity: Option<u32>, slots: &Slots) -> Option<ReceivedNpdu> {
     if frame.broadcast {
         return None;
     }
@@ -144,11 +166,23 @@ fn answer(frame: &SentFrame, identity: Option<u32>) -> Option<ReceivedNpdu> {
     };
     let reply = if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE {
         let mut ack = BytesMut::new();
-        ao1_ack().encode(&mut ack).unwrap();
+        ao1_ack(&slots_at(slots, &frame.mac))
+            .encode(&mut ack)
+            .unwrap();
         complex(ack)
     } else if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
         complex(identity_ack(identity?))
     } else {
+        if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY
+            && let Ok(write) = WritePropertyRequest::decode(&request.service_request)
+            && let Some(priority) = write.priority
+        {
+            let mut held = slots.lock().unwrap();
+            let at = held
+                .entry(frame.mac.to_vec())
+                .or_insert_with(|| vec![vec![0x00]; 16]);
+            at[usize::from(priority) - 1] = write.property_value;
+        }
         Apdu::SimpleAck(SimpleAck {
             invoke_id: request.invoke_id,
             service_choice: request.service_choice,
@@ -176,6 +210,10 @@ struct Lab {
     client: BACnetClient<TestTransport>,
     sent: SendLog,
     rate: RequestLimits,
+    /// AO:1's slots on each scripted device.
+    slots: Slots,
+    /// The client's receive side, for frames a test hands it.
+    inbox: mpsc::Sender<ReceivedNpdu>,
 }
 
 /// A client whose every unicast is answered by the scripted device, which
@@ -188,14 +226,24 @@ async fn lab() -> Lab {
 /// says it is device `identity` when asked which it is (`None`: it
 /// doesn't answer that).
 async fn lab_as(identity: Option<u32>) -> Lab {
+    lab_with(identity, false).await
+}
+
+/// [`lab_as`], on a link that takes the network number controls when
+/// `numbered`, so a Network-Number-Is teaches the client its number.
+async fn lab_with(identity: Option<u32>, numbered: bool) -> Lab {
     let (inbox, inbound) = mpsc::channel(32);
-    let transport = TestTransport::builder()
-        .local_mac(&CLIENT)
-        .inbound(inbound)
+    let slots = Slots::default();
+    let mut builder = TestTransport::builder().local_mac(&CLIENT).inbound(inbound);
+    if numbered {
+        builder = builder.number_controls();
+    }
+    let (replies, held) = (inbox.clone(), Arc::clone(&slots));
+    let transport = builder
         .on_send(move |frame| {
-            let inbox = inbox.clone();
+            let (inbox, slots) = (replies.clone(), Arc::clone(&held));
             async move {
-                if let Some(reply) = answer(&frame, identity) {
+                if let Some(reply) = answer(&frame, identity, &slots) {
                     let _ = inbox.send(reply).await;
                 }
                 Ok(())
@@ -213,6 +261,8 @@ async fn lab_as(identity: Option<u32>) -> Lab {
         client,
         sent,
         rate: RequestLimits::new(0),
+        slots,
+        inbox,
     }
 }
 
@@ -492,3 +542,6 @@ async fn a_revert_after_a_restart_goes_to_the_entrys_address() {
 
 #[path = "desk_identity_tests.rs"]
 mod identity;
+
+#[path = "desk_place_tests.rs"]
+mod place;

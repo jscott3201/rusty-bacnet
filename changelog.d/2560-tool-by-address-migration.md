@@ -2,10 +2,9 @@
 section: Migration notes
 ---
 - **bacnet-tool writes by address (Rust API, #2560):** give each
-  `WriteSpec` the device's `address` (from its handle or discovery-table
-  row) beside `device`; read `Preview::address`; call
-  `safety::turn(client, rate, &address, instance)`, which fails with
-  `safety::Unsent`, and `safety::reach(client, &address, instance)` for
-  `find`; pass the entries' address to `plan::undo_preview`. Ledger entries
-  gain an optional `address`. A `Caller` that must send no Who-Is returns
-  false from `may_look`.
+  `WriteSpec` the device's `address` beside `device`; read
+  `Preview::address`; call `safety::turn(client, rate, &address, instance)`
+  (fails with `safety::Unsent`) and `safety::reach` for `find`; pass the
+  address and the client's own network number to `plan::undo_preview`.
+  Ledger entries gain an optional `address`. Every `Caller` implements
+  `may_look`; `revert_refusal` is optional.

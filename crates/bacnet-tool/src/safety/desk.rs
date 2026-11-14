@@ -19,8 +19,8 @@
 //! device and sent to another, even when another device claims the same
 //! instance meanwhile. Nor is it sent once the address is another
 //! device's: the turn is refused when the discovery table's row there
-//! claims another instance, and a revert to an address with no row asks
-//! the device which it is first ([`Unsent`](super::Unsent)).
+//! claims another instance, and a local address with no row is asked which
+//! device it is first ([`Unsent`](super::Unsent)).
 
 use std::future::Future;
 use std::path::Path;
@@ -32,11 +32,12 @@ use bacnet_transport::port::TransportPort;
 use serde_json::{Map, Value, json};
 
 use super::audit::{Audit, Context, utc_now};
-use super::ledger::{Entry, Ledger, Origin};
+use super::ledger::{Entry, Ledger, Origin, Place};
 use super::lock::{WorkspaceLock, lock};
+use super::place::{Asked, revert_address, turn, turn_asking};
 use super::plan::{self, PRE_READ, PreRead};
-use super::send::{item_json, revert_at, send, turn, write_property};
-use super::{Gate, Level, Outcome, Planned, Preview, WriteSpec, run_id};
+use super::send::{item_json, send, write_property};
+use super::{Gate, Level, Outcome, Planned, Preview, Stored, WriteSpec, run_id};
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::{Halt, Reader, Wanted, unreachable};
 use bacnet_ops::limits::RequestLimits;
@@ -93,11 +94,18 @@ pub trait Caller: Sync {
 
     /// Whether a revert may send a Who-Is to find a device the discovery
     /// table can't place: a routed address with no row, or an entry kept
-    /// without an address whose instance no row claims. The TUI may; MCP
-    /// never sends one, so its reverts report such an entry as not
-    /// reverted, with why.
-    fn may_look(&self) -> bool {
-        true
+    /// without an address whose instance no row claims. Every caller says:
+    /// the TUI may; MCP never sends one, so its reverts report such an
+    /// entry as not reverted, with why.
+    fn may_look(&self) -> bool;
+
+    /// Why the revert of `entry` may not go to `at`, if it may not: `at` is
+    /// where the desk found the entry's device, in its local form, settled
+    /// before anything is sent there (an identity read included). MCP
+    /// checks its policy here, and for an attached revert that `at` is the
+    /// address the person confirmed.
+    fn revert_refusal(&self, _entry: &Entry, _at: &DeviceAddress) -> Option<String> {
+        None
     }
 }
 
@@ -387,7 +395,7 @@ impl Desk {
             return self.not_sent(caller, preview, &why).await;
         }
         let ledger = self.ledger.as_ref();
-        let unaddressed = unaddressed(client, ledger, &preview.address, preview.device).await;
+        let place = place(client, ledger, &preview.address, preview.device).await;
         let Some(ledger) = &mut self.ledger else {
             return Vec::new();
         };
@@ -396,7 +404,7 @@ impl Desk {
         let ids: Vec<u64> = preview
             .items
             .iter()
-            .map(|item| ledger.begin(item, run_id(), &at, unaddressed))
+            .map(|item| ledger.begin(item, run_id(), &at, place))
             .collect();
         if !self.save() {
             // Nothing goes out that the ledger couldn't record first.
@@ -507,25 +515,13 @@ impl Desk {
             .filter(|entry| chosen(entry))
             .collect();
         let mut done = Vec::with_capacity(entries.len());
-        let look = caller.may_look();
+        // One identity read per address with no row, for all the entries.
+        let mut asked = Asked::default();
         for entry in entries {
-            let outcome = match (entry.undo(), entry.object()) {
+            let outcome = match entry.undo() {
                 _ if caller.gone() => Outcome::NotSent(ENDED.into()),
-                (Some(undo), Some(object)) => {
-                    let target = (object, entry.property(), entry.index);
-                    match revert_at(client, rate, &entry, look).await {
-                        Ok((address, held)) => {
-                            let bytes = undo.bytes.clone();
-                            let result =
-                                write_property(client, &address, target, bytes, entry.priority)
-                                    .await;
-                            drop(held);
-                            Outcome::of(&result)
-                        }
-                        Err(error) => Outcome::NotSent(error.to_string()),
-                    }
-                }
-                _ => Outcome::NotSent(UNKNOWN_PRE_IMAGE.into()),
+                Some(undo) => revert_entry(client, rate, caller, (&entry, undo), &mut asked).await,
+                None => Outcome::NotSent(UNKNOWN_PRE_IMAGE.into()),
             };
             if outcome.applied() == Some(true) {
                 if let Some(ledger) = &mut self.ledger {
@@ -547,6 +543,36 @@ impl Desk {
         }
         done
     }
+}
+
+/// Put `undo` back for `entry`: find where its device is, let the caller
+/// refuse that address, take the turn there (asking a local address with no
+/// row which device it is, once per address in `asked`), then write.
+async fn revert_entry<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    rate: &RequestLimits,
+    caller: &dyn Caller,
+    (entry, undo): (&Entry, Stored),
+    asked: &mut Asked,
+) -> Outcome {
+    let Some(object) = entry.object() else {
+        return Outcome::NotSent(UNKNOWN_PRE_IMAGE.into());
+    };
+    let at = match revert_address(client, entry, caller.may_look()).await {
+        Ok(at) => at,
+        Err(error) => return Outcome::NotSent(error.to_string()),
+    };
+    if let Some(why) = caller.revert_refusal(entry, &at) {
+        return Outcome::NotSent(why);
+    }
+    let held = match turn_asking(client, rate, &at, entry.device, asked).await {
+        Ok(held) => held,
+        Err(error) => return Outcome::NotSent(error.to_string()),
+    };
+    let target = (object, entry.property(), entry.index);
+    let result = write_property(client, &at, target, undo.bytes, entry.priority).await;
+    drop(held);
+    Outcome::of(&result)
 }
 
 /// Read what `specs` need and plan them, the slots `ledger` holds counted
@@ -619,31 +645,32 @@ pub async fn prepare<T: TransportPort + 'static>(
         };
         reads.push(PreRead { rows, element });
     }
-    let unaddressed = unaddressed(client, ledger, address, device).await;
+    let place = place(client, ledger, address, device).await;
     let ours = |spec: &WriteSpec, priority, now: &[u8]| {
-        ledger.is_some_and(|l| l.owns(spec, priority, now, unaddressed))
+        ledger.is_some_and(|l| l.owns(spec, priority, now, place))
     };
     plan::preview(specs, &reads, ours, dangerous, batch)
 }
 
-/// Whether `ledger`'s entries kept without an address for `device` (written
-/// before #2560) are the device at `address`: only when the discovery
-/// table's one claim to the instance is there, where their revert would go
-/// too. Two claims, or one elsewhere, keep them apart from a write at
-/// `address` (see [`Ledger::begin`]). Sends nothing.
-async fn unaddressed<T: TransportPort + 'static>(
+/// How `ledger` places a write to the device `device` at `address` among
+/// its entries: the client's own network's number, and whether the entries
+/// kept without an address for `device` (written before #2560) are the
+/// device at `address`. They are only when the discovery table's one claim
+/// to the instance is there, where their revert would go too; two claims,
+/// or one elsewhere, keep them apart (see [`Ledger::begin`]). Sends
+/// nothing.
+async fn place<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     ledger: Option<&Ledger>,
     address: &DeviceAddress,
     device: u32,
-) -> bool {
-    if !ledger.is_some_and(|l| l.has_unaddressed(device)) {
-        return false;
-    }
+) -> Place {
     let own = client.network_number();
-    DeviceAddress::claiming(client, device)
-        .await
-        .is_ok_and(|at| at.localized(own) == address.clone().localized(own))
+    let unaddressed = ledger.is_some_and(|l| l.has_unaddressed(device))
+        && DeviceAddress::claiming(client, device)
+            .await
+            .is_ok_and(|at| at.localized(own) == address.clone().localized(own));
+    Place { own, unaddressed }
 }
 
 #[cfg(test)]

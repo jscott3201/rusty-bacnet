@@ -402,6 +402,17 @@ pub(crate) struct McpCaller<'a> {
     /// TUI's, #2185): its level, refusal and going are this caller's, and
     /// it hears of the ledger's changes too.
     host: Option<&'a dyn Caller>,
+    /// For a revert, what the address the desk finds each entry's device
+    /// at is checked against before anything is sent there (#2560).
+    reverting: Option<Reverting<'a>>,
+}
+
+/// What a revert's entries are checked against where the desk finds their
+/// devices: the server's policy, and for an attached revert the address
+/// the person confirmed, in its local form.
+struct Reverting<'a> {
+    policy: &'a crate::Policy,
+    confirmed: Option<bacnet_ops::DeviceAddress>,
 }
 
 /// The ledger ids a handed-off write has recorded, shared with its call.
@@ -423,6 +434,7 @@ impl McpCaller<'_> {
             sending: None,
             announced: AtomicBool::new(false),
             host: None,
+            reverting: None,
         }
     }
 
@@ -437,6 +449,18 @@ impl<'a> McpCaller<'a> {
     /// This caller, on the desk `host` lends it.
     pub(crate) fn hosted(mut self, host: &'a dyn Caller) -> Self {
         self.host = Some(host);
+        self
+    }
+
+    /// This caller, for a revert under `policy`: each entry's device is
+    /// checked where the desk finds it, and for an attached revert it must
+    /// be at `confirmed` (local form), the address the person confirmed.
+    pub(crate) fn reverting(
+        mut self,
+        policy: &'a crate::Policy,
+        confirmed: Option<bacnet_ops::DeviceAddress>,
+    ) -> Self {
+        self.reverting = Some(Reverting { policy, confirmed });
         self
     }
 }
@@ -486,6 +510,37 @@ impl Caller for McpCaller<'_> {
     /// reports a device it can't reach without one as not reverted.
     fn may_look(&self) -> bool {
         false
+    }
+
+    /// The policy, at the address the desk found (its network, local form)
+    /// and the entry's instance; for an attached revert, the address
+    /// confirmed. Found once, by the desk, so what is checked is what is
+    /// sent to.
+    fn revert_refusal(
+        &self,
+        entry: &bacnet_tool::safety::ledger::Entry,
+        at: &bacnet_ops::DeviceAddress,
+    ) -> Option<String> {
+        let reverting = self.reverting.as_ref()?;
+        let network = at.network();
+        if !reverting.policy.allows_network(network) {
+            return Some(format!(
+                "network {network} is not in this server's [mcp] networks"
+            ));
+        }
+        if !reverting.policy.allows_device(entry.device) {
+            return Some(format!(
+                "device {} is not in this server's [mcp] devices",
+                entry.device
+            ));
+        }
+        match &reverting.confirmed {
+            Some(confirmed) if confirmed != at => Some(format!(
+                "device {} is at {at} now, not at {confirmed} where its revert was confirmed",
+                entry.device
+            )),
+            _ => None,
+        }
     }
 
     fn ledger_changed<'a>(

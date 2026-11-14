@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use bacnet_tool::safety::ledger::{Entry, Ledger};
-use bacnet_tool::safety::{FrontEnd, Outcome};
+use bacnet_tool::safety::{FrontEnd, Outcome, Unsent, revert_address};
 use bacnet_transport::port::TransportPort;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -146,22 +146,18 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             }
         }
     }
-    // The policy checks a device by its address's network and its instance
-    // (#2560): the address the entry's write went to, or for one written
-    // before addresses were kept, the one address claiming its instance now
-    // (nothing is sent to find it).
+    // The policy checks a device by its address's network, in its local
+    // form, and its instance (#2560). An entry written before addresses
+    // were kept is checked where the desk finds its device, as it reverts
+    // it (`McpCaller::reverting`): found once, so what is checked is what
+    // is sent to.
+    let own = client.network_number();
     let chosen = |e: &&Entry| {
         ours(e, &ctx.principal) && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
     };
     for entry in entries.iter().filter(chosen) {
-        let address = match &entry.address {
-            Some(address) => Some(address.clone()),
-            None => bacnet_ops::DeviceAddress::claiming(client, entry.device)
-                .await
-                .ok(),
-        };
-        match address {
-            Some(address) => ctx.allow(&address, entry.device)?,
+        match &entry.address {
+            Some(address) => ctx.allow(&address.clone().localized(own), entry.device)?,
             None if !ctx.policy.allows_device(entry.device) => {
                 return Err(ToolError::refused(
                     "device-not-allowed",
@@ -193,7 +189,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         let fields = fields.clone();
         async move {
             let client = ctx.client()?;
-            let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
+            let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields)
+                .reverting(&ctx.policy, None);
             let mut desk = open(&ctx, &workspace, &caller).await?;
             let principal = ctx.principal.clone();
             let before = desk.entries();
@@ -247,23 +244,27 @@ async fn attached<T: TransportPort + 'static>(
         .cloned()
         .collect();
     let ids: BTreeSet<u64> = chosen.iter().map(|e| e.id).collect();
-    // Where the entries' writes went; one written before #2560 kept no
-    // address, so its device is the one the discovery table holds for its
-    // instance (nothing is sent to find it).
-    let address = match chosen.iter().find_map(|e| e.address.clone()) {
-        Some(address) => Some(address),
-        None => match chosen.first() {
-            Some(entry) => {
-                let client = ctx.client()?.low_level();
-                let found = bacnet_ops::DeviceAddress::claiming(client, entry.device).await;
-                Some(found.map_err(|error| ToolError::device(entry.device, &error))?)
-            }
-            None => None,
-        },
+    // Where the entries' writes went, found as the desk finds it (nothing
+    // is sent); one written before #2560 kept no address, so its device is
+    // the one the discovery table holds for its instance. The job checks
+    // the desk finds the same address again (`McpCaller::reverting`).
+    let client = ctx.client()?.low_level();
+    let first = chosen
+        .iter()
+        .find(|e| e.address.is_some())
+        .or(chosen.first());
+    let address = match first {
+        Some(entry) => Some(
+            revert_address(client, entry, false)
+                .await
+                .map_err(|unsent| unplaced(entry, unsent))?,
+        ),
+        None => None,
     };
+    let own = client.network_number();
     let preview = address
         .as_ref()
-        .and_then(|address| bacnet_tool::safety::plan::undo_preview(&chosen, address));
+        .and_then(|address| bacnet_tool::safety::plan::undo_preview(&chosen, address, own));
     match preview {
         Some(mut preview) if !preview.items.is_empty() => {
             // The planner's tier, never blocked here: `undo_preview` plans
@@ -301,6 +302,28 @@ async fn attached<T: TransportPort + 'static>(
                 ctx, workspace, account, sending, fields, work,
             )))
         }
+    }
+}
+
+/// Why an attached revert of `entry` can't be put to the person: the
+/// device can't be placed without a Who-Is, or an entry from before
+/// addresses names an instance two addresses claim. Nothing was sent.
+fn unplaced(entry: &Entry, unsent: Unsent) -> ToolError {
+    match unsent {
+        Unsent::Contested { .. } => ToolError::refused("ambiguous-device", unsent.to_string()),
+        Unsent::NotLooking { device } => ToolError::UnknownDevice {
+            // Its address, or for an entry from before addresses its instance.
+            device: match entry.address {
+                Some(_) => device,
+                None => entry.device.to_string(),
+            },
+            hint: format!(
+                "this server sends no Who-Is to find the device of ledger entry {}: call \
+                 bacnet_discover first",
+                entry.id
+            ),
+        },
+        other => ToolError::Failed(other.to_string()),
     }
 }
 

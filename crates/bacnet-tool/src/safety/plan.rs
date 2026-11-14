@@ -67,13 +67,22 @@ pub(crate) const PRIORITY_6: &str = "priority 6 is reserved for minimum on and o
 /// when they span devices (two instances, or an entry that went to another
 /// address) or there are none; an entry whose old value is unknown is left
 /// out, as revert leaves it. An entry written before #2560 keeps no
-/// address: the caller names where its device is now.
-pub fn undo_preview(entries: &[super::ledger::Entry], address: &DeviceAddress) -> Option<Preview> {
+/// address: the caller names where its device is now. Addresses compare,
+/// and the preview names its address, in their local form on a client
+/// whose own network is numbered `own` ([`DeviceAddress::localized`]).
+pub fn undo_preview(
+    entries: &[super::ledger::Entry],
+    address: &DeviceAddress,
+    own: Option<u16>,
+) -> Option<Preview> {
     let device = entries.first()?.device;
-    if entries
-        .iter()
-        .any(|e| e.device != device || e.address.as_ref().is_some_and(|at| at != address))
-    {
+    let address = &address.clone().localized(own);
+    if entries.iter().any(|e| {
+        e.device != device
+            || e.address
+                .as_ref()
+                .is_some_and(|at| at.clone().localized(own) != *address)
+    }) {
         return None;
     }
     let items: Vec<Planned> = entries

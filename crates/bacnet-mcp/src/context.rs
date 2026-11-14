@@ -448,7 +448,12 @@ impl<T: TransportPort + 'static> Ctx<T> {
                 network.is_none_or(|n| local(row.source_network.unwrap_or(0)) == local(n))
             })
             .collect();
-        claims.sort_by_key(DeviceAddress::of);
+        // One station per address in its local form: a routed row on this
+        // network the table hasn't folded into the local one yet (#2572) is
+        // no second claim. The sort is stable, so the local row is kept.
+        let at = |row: &DiscoveredDevice| DeviceAddress::of(row).map(|a| a.localized(own));
+        claims.sort_by_key(at);
+        claims.dedup_by_key(|row| at(row));
         claims
     }
 

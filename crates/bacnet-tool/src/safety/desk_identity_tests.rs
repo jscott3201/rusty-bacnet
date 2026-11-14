@@ -60,7 +60,7 @@ async fn a_write_is_not_sent_once_its_address_is_another_device() {
     assert!(
         matches!(
             &refused,
-            Some(Unsent::OtherDevice { address, expected: DEVICE, found: 9 }) if *address == at(&A)
+            Some(Unsent::OtherDevice { address, expected: DEVICE, found: 9, .. }) if *address == at(&A)
         ),
         "{refused:?}"
     );

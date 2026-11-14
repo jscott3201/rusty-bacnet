@@ -310,7 +310,12 @@ fn an_agents_entries_are_listed_and_marked_as_mcp() {
     let mut ledger = Ledger::open(dir.path())
         .unwrap()
         .written_by(Origin::mcp("agent-user"));
-    let id = ledger.begin(&planned, "mcp-run", "2026-10-29T12:00:00.000Z", false);
+    let id = ledger.begin(
+        &planned,
+        "mcp-run",
+        "2026-10-29T12:00:00.000Z",
+        bacnet_tool::safety::ledger::Place::default(),
+    );
     ledger.finish(id, Some(true), &[]);
     ledger.save().unwrap();
     let file = std::fs::read_to_string(dir.path().join("ledger.json")).unwrap();

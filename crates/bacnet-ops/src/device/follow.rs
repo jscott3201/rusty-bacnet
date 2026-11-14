@@ -121,9 +121,8 @@ impl<T: TransportPort + 'static> Device<T> {
         else {
             return Ok(here);
         };
-        let claimed = self
-            .client
-            .row_at(&here)
+        let claimed = here
+            .row(self.client.low_level())
             .await
             .is_none_or(|row| row.object_identifier.instance_number() == *instance);
         if claimed {
@@ -345,14 +344,17 @@ impl<T: TransportPort + 'static> Client<T> {
             (Some(to), None) => to.clone(),
             (Some(_), Some(_)) => return Elsewhere::Contested(claims),
         };
-        let own = self
-            .row_at(here)
+        let own = here
+            .row(self.low_level())
             .await
             .filter(|row| row.object_identifier.instance_number() == instance);
         let Some(own) = own else {
             return Elsewhere::Moved(to);
         };
-        let other = self.row_at(&to).await.and_then(|row| row.last_announced);
+        let other = to
+            .row(self.low_level())
+            .await
+            .and_then(|row| row.last_announced);
         Elsewhere::Shared {
             to,
             seen: own.last_seen,

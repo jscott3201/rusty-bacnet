@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::parse::{parse_object_specifier, parse_property, parse_value_for};
+use bacnet_ops::target::AddressStyle;
 use bacnet_tool::safety::audit::{Audit, Context};
 use bacnet_tool::safety::desk::{self, Caller};
 use bacnet_tool::safety::ledger::Ledger;
@@ -524,7 +525,11 @@ async fn preview<T: TransportPort + 'static>(
                 preview_digest(&preview),
                 arm,
             );
-            Ok(Step::Ask(ask(&preview, tier, arm, state), good_until))
+            let style = client.address_style();
+            Ok(Step::Ask(
+                ask(&preview, tier, (arm, style), state),
+                good_until,
+            ))
         }
         Approval::Refused { reason, message } => {
             let error = ToolError::refused(reason, message);
@@ -546,14 +551,20 @@ pub(super) fn mcp_tier(preview: &Preview, tier: Tier) -> Tier {
     if fallback { Tier::T3 } else { tier }
 }
 
-/// The `input_required` result: the confirmation form and the state.
-fn ask(preview: &Preview, tier: Tier, arm: Option<u32>, state: String) -> InputRequiredResult {
+/// The `input_required` result: the confirmation form and the state. The
+/// address is written as the link writes it (`style`: an SC VMAC as hex).
+fn ask(
+    preview: &Preview,
+    tier: Tier,
+    (arm, style): (Option<u32>, AddressStyle),
+    state: String,
+) -> InputRequiredResult {
     // The address too: the confirmation is bound to it (#2560).
     let mut message = format!(
         "Confirm this {tier:?} BACnet write ({}) to device {} at {}:\n",
         preview.service(),
         preview.device,
-        preview.address
+        preview.address.styled(style)
     );
     for item in &preview.items {
         let before = item.before.as_ref().map_or("NULL", |b| b.text.as_str());

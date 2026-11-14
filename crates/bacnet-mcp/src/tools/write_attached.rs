@@ -73,12 +73,19 @@ enum Work {
 /// what `confirmed` showed: an id taken by another write since, or a write
 /// merged into an entry, changes what a revert would send. Their revert,
 /// rebuilt, must match item for item (target, priority, the value put back
-/// and the value it replaces), on one device this server may reach.
-fn changed(confirmed: &Preview, current: &[Entry], policy: &crate::Policy) -> Option<String> {
-    let Some(now) = bacnet_tool::safety::plan::undo_preview(current, &confirmed.address) else {
+/// and the value it replaces), on one device this server may reach, its
+/// address in its local form on a client whose own network is `own`.
+fn changed(
+    confirmed: &Preview,
+    current: &[Entry],
+    policy: &crate::Policy,
+    own: Option<u16>,
+) -> Option<String> {
+    let at = &confirmed.address;
+    let Some(now) = bacnet_tool::safety::plan::undo_preview(current, at, own) else {
         return Some("the entries confirmed have changed".into());
     };
-    let network = confirmed.address.network();
+    let network = now.address.network();
     if !policy.allows_network(network) {
         return Some(format!(
             "network {network} is not in this server's [mcp] networks"
@@ -196,7 +203,8 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                 };
                 // Exactly what was confirmed, or nothing (#2185).
                 let current: Vec<Entry> = desk.entries().into_iter().filter(chosen).collect();
-                let stale = changed(&confirmed, &current, &ctx.policy);
+                let own = client.low_level().network_number();
+                let stale = changed(&confirmed, &current, &ctx.policy, own);
                 if let Some(detail) = stale {
                     let fields = json!({ "why": "stale", "detail": detail });
                     desk.record(&caller, "declined", fields).await;
@@ -206,6 +214,10 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                     let _ = done.send(Err(ToolError::refused("stale", message)));
                     return Vec::new();
                 }
+                // The desk finds each entry's device again: it must be at
+                // the address confirmed, and in the policy's reach (#2560).
+                let at = confirmed.address.clone().localized(own);
+                let caller = caller.reverting(&ctx.policy, Some(at));
                 let revert = desk.revert(client.low_level(), client.limits(), &caller, chosen);
                 let undone = charged(account, revert).await;
                 ctx.writes.signals.ledger_settled(&before, desk, false);
@@ -413,9 +425,9 @@ mod tests {
         .unwrap();
         let address = entry.address.clone().unwrap();
         let entries = std::slice::from_ref(&entry);
-        let confirmed = undo_preview(entries, &address).unwrap();
+        let confirmed = undo_preview(entries, &address, None).unwrap();
         assert_eq!(
-            changed(&confirmed, entries, &crate::Policy::default()),
+            changed(&confirmed, entries, &crate::Policy::default(), None),
             None
         );
         let narrowed = crate::Policy {
@@ -423,8 +435,13 @@ mod tests {
             ..crate::Policy::default()
         };
         assert_eq!(
-            changed(&confirmed, entries, &narrowed).as_deref(),
+            changed(&confirmed, entries, &narrowed, None).as_deref(),
             Some("network 2001 is not in this server's [mcp] networks")
         );
+        // On network 2001 itself, once the client knows its number, the
+        // station is local, and the narrowed policy reaches it.
+        let confirmed = undo_preview(entries, &address, Some(2001)).unwrap();
+        assert_eq!(confirmed.address.network(), 0);
+        assert_eq!(changed(&confirmed, entries, &narrowed, Some(2001)), None);
     }
 }

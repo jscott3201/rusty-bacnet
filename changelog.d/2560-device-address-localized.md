@@ -1,6 +1,6 @@
 ---
 section: Added
 ---
-- `bacnet_ops::DeviceAddress::localized` gives an address as the client's
-  discovery table keys it once the client knows its own network's number
-  (#2560).
+- `bacnet_ops::DeviceAddress::row` finds the discovery table's row for an
+  address, and `localized` writes a station on the client's own network as
+  the local one (#2560).

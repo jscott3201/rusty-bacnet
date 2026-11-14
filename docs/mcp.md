@@ -470,9 +470,12 @@ Writes go through `bacnet_tool::safety`: the TUI's planner, tiers, ledger
 - **The device at the address.** A write or revert goes to its address
   only while the discovery table's row there claims the device it was
   confirmed for; another instance there now refuses it with nothing sent
-  (#2560). A revert to a local address with no row (after a restart) asks
-  the device which it is first: one ReadProperty of its Device object's
-  Object_Identifier, and no Who-Is.
+  (#2560). A write or revert to a local address with no row (aged out, or
+  after a restart) asks the device which it is first: one ReadProperty of
+  its Device object's Object_Identifier per address, and no Who-Is. A
+  revert is checked against the policy where the desk finds the entry's
+  device, in its local form, and an attached revert only goes to the
+  address the person confirmed.
 - **Plan grants** (`[mcp.plan]`: `devices`, `properties` (`present-value`
   by default), `priority_min` and `priority_max` (8 and 16 by default),
   `max_writes` (1 to 10,000), `hours` (1 to 8), `reason`) run from

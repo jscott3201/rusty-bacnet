@@ -22,6 +22,9 @@ impl Caller for Fixed {
     fn refusal(&self) -> Option<String> {
         self.refusal.clone()
     }
+    fn may_look(&self) -> bool {
+        true
+    }
 }
 
 /// Device 7's MAC.
@@ -130,7 +133,12 @@ async fn an_interrupted_write_settles_as_unknown() {
     let dir = tempfile::tempdir().unwrap();
     {
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger.begin(&planned(12, Gate::Allowed(Tier::T1)), run_id(), "t", false);
+        ledger.begin(
+            &planned(12, Gate::Allowed(Tier::T1)),
+            run_id(),
+            "t",
+            Place::default(),
+        );
         ledger.save().unwrap();
     }
     let mut desk = Desk::open(Some(dir.path()), context(), Origin::default());
@@ -157,7 +165,12 @@ fn an_unknown_front_end_still_loads() {
     let dir = tempfile::tempdir().unwrap();
     {
         let mut ledger = Ledger::open(dir.path()).unwrap();
-        ledger.begin(&planned(12, Gate::Allowed(Tier::T1)), "r", "t", false);
+        ledger.begin(
+            &planned(12, Gate::Allowed(Tier::T1)),
+            "r",
+            "t",
+            Place::default(),
+        );
         ledger.save().unwrap();
     }
     let path = dir.path().join(crate::safety::ledger::FILE);

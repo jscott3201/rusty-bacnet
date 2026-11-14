@@ -22,6 +22,7 @@ pub mod desk;
 pub mod file;
 pub mod ledger;
 pub mod lock;
+mod place;
 pub mod plan;
 mod send;
 
@@ -37,7 +38,8 @@ use crate::class::Class;
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::octets::hex;
 
-pub use send::{Unsent, item_json, reach, turn};
+pub use place::{Unsent, reach, revert_address, turn};
+pub use send::item_json;
 
 /// Default write session length, in minutes.
 pub const DEFAULT_MINUTES: u32 = 15;
