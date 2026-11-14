@@ -38,7 +38,6 @@ use bacnet_npdu::NpduLimits;
 use bacnet_types::bip_port::{BbmdTables, BipPortMode, ForeignRegistration};
 use bacnet_types::error::Error;
 
-mod access;
 mod bbmd_receive;
 mod bbmd_start;
 mod client_snapshot;
@@ -88,7 +87,6 @@ mod io;
 mod own_broadcast;
 mod rate_limit;
 mod receive_counters;
-pub use access::AsBip;
 pub use fanout::{FanoutCounters, FanoutPolicy};
 #[cfg(test)]
 use ingress::{Arrival, handle_datagram};

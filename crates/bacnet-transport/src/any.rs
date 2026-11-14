@@ -509,7 +509,6 @@ impl From<LoopbackTransport> for AnyTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bip::AsBip;
     use crate::mstp::{LoopbackSerial, MstpConfig};
     use std::net::Ipv4Addr;
 

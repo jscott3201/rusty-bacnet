@@ -4,7 +4,7 @@
 use super::*;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
-use bacnet_transport::bip::{AsBip, BvlcExchangeError, ManagementCounters};
+use bacnet_transport::bip::{BvlcExchangeError, ManagementCounters};
 use bacnet_transport::bvll::BvlcResultCode;
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::loopback::LoopbackTransport;
