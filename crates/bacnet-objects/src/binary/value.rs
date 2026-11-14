@@ -250,7 +250,7 @@ impl BACnetObject for BinaryValueObject {
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             return Ok(PropertyValue::Boolean(self.event_detection_enable));
         }
-        if let Some(result) = read_generic_event_properties!(self, property) {
+        if let Some(result) = read_generic_event_properties!(self.event_detector, property) {
             return result;
         }
         if let Some(result) = self.event_history.read(property, array_index) {
@@ -414,7 +414,8 @@ impl BACnetObject for BinaryValueObject {
         {
             return result;
         }
-        if let Some(result) = write_generic_event_properties!(self, property, value) {
+        if let Some(result) = write_generic_event_properties!(self.event_detector, property, &value)
+        {
             return result;
         }
         if let Some(result) = self.reliability_inhibit.write_inhibit(

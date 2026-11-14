@@ -27,7 +27,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
 
         let future = async move {
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;

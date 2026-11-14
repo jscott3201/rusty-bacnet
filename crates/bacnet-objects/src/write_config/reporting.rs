@@ -110,18 +110,18 @@ mod off {
     /// Description setter always applies. A `states:` argument names a
     /// field nothing here reads.
     macro_rules! impl_reporting_persistence {
-        ($object:ty $(, states: $states:ident)?) => {
+        ($object:ty $(, in $core:ident)? $(, states: $states:ident)?) => {
             impl $object {
                 /// Set the description string.
                 pub fn set_description(&mut self, desc: impl Into<String>) {
-                    self.description = desc.into();
+                    self$(.$core)?.description = desc.into();
                 }
 
                 #[cfg(feature = "durable-writes")]
                 fn durable_capability(
                     &mut self,
                 ) -> Option<&mut dyn $crate::durable::DurableWrites> {
-                    self.profile.capability()
+                    self$(.$core)?.profile.capability()
                 }
             }
         };
