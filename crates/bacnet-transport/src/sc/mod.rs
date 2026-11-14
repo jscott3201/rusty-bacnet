@@ -22,6 +22,7 @@ use crate::sc_frame::{BROADCAST_VMAC, ScFunction, Vmac, decode_sc_message, encod
 #[cfg(test)]
 use crate::sc_frame::{ScMessage, decode_sc_bvlc_result};
 use bacnet_npdu::NpduLimits;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 
 mod address_resolution;
@@ -197,6 +198,10 @@ impl<W: WebSocketPort> ScTransport<W> {
 }
 
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
+    fn data_link(&self) -> Option<DataLink> {
+        Some(DataLink::Sc)
+    }
+
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         true
     }

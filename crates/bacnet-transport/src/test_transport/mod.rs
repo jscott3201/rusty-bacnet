@@ -48,6 +48,7 @@ use std::sync::{Arc, PoisonError};
 
 use bacnet_npdu::NpduLimits;
 use bacnet_types::MacAddr;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use bytes::Bytes;
 use tokio::sync::{mpsc, watch};
@@ -183,6 +184,8 @@ pub struct TestTransport {
     shared: Arc<Shared>,
     /// `None` takes the inner transport's answer, or `false`.
     number_controls: Option<bool>,
+    /// See [`TestTransportBuilder::data_link`].
+    data_link: Option<DataLink>,
     /// See [`TestTransportBuilder::bip_port`].
     bip_port: Option<BipPort>,
     /// See [`TestTransportBuilder::bip6_port`].
@@ -234,6 +237,7 @@ impl TestTransport {
                 number_controls: None,
                 bip_port: None,
                 bip6_port: None,
+                data_link: None,
                 max_npdu_changes: None,
                 inner: None,
                 prepare_inner: true,
@@ -360,6 +364,20 @@ impl Drop for TestTransport {
 }
 
 impl TransportPort for TestTransport {
+    fn data_link(&self) -> Option<DataLink> {
+        self.data_link
+            .or_else(|| self.inner.as_ref().and_then(|i| i.data_link()))
+    }
+
+    fn bip_transport(&self) -> Option<&crate::bip::BipTransport> {
+        self.inner.as_ref().and_then(|i| i.bip_transport())
+    }
+
+    #[cfg(feature = "ipv6")]
+    fn bip6_transport(&self) -> Option<&crate::bip6::Bip6Transport> {
+        self.inner.as_ref().and_then(|i| i.bip6_transport())
+    }
+
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         match (self.number_controls, &self.inner) {
             (Some(own), _) => own,

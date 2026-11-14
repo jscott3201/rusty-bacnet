@@ -122,7 +122,7 @@ async fn bip_builders_preserve_foreign_mode_and_registration_status() {
     }
 }
 
-async fn foreign_registration<T: TransportPort + bacnet_transport::bip::AsBip + 'static>(
+async fn foreign_registration<T: TransportPort + 'static>(
     mut client: BACnetClient<T>,
     peer: &UdpSocket,
 ) {
