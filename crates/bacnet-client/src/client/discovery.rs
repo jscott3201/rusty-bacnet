@@ -153,6 +153,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             max_segments_accepted: None,
             vendor_id: 0,
             last_seen: crate::discovery::now(),
+            last_announced: None,
             source_network: None,
             source_address: None,
         };
@@ -224,6 +225,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             max_segments_accepted: config.max_segments_accepted,
             vendor_id: 0,
             last_seen: crate::discovery::now(),
+            last_announced: None,
             source_network,
             source_address,
         };

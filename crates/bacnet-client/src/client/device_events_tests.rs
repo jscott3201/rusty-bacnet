@@ -97,6 +97,8 @@ async fn device_events_emit_discovered_and_updated_for_i_am() {
     assert_eq!(row.vendor_id, 84);
     assert_eq!(row.max_apdu_length, 480);
     assert_eq!(row.segmentation_supported, Segmentation::SEGMENTED_BOTH);
+    // An I-Am is an announcement: it moves both ages (#2560).
+    assert_eq!(row.last_announced, Some(row.last_seen));
     assert!(matches!(
         collisions.try_recv(),
         Err(broadcast::error::TryRecvError::Empty)
@@ -131,6 +133,7 @@ async fn a_second_claimant_is_discovered_and_reported_with_the_first() {
         max_segments_accepted: Some(8),
         vendor_id: 42,
         last_seen: retained_seen,
+        last_announced: None,
         source_network: None,
         source_address: None,
     };
@@ -212,6 +215,7 @@ async fn device_events_emit_lost_when_purge_removes_stale_device() {
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: crate::discovery::now(),
+        last_announced: None,
         source_network: None,
         source_address: None,
     });

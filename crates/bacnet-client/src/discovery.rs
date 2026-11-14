@@ -41,6 +41,11 @@ pub struct DiscoveredDevice {
     /// When the device was last heard from: its latest I-Am, or its latest
     /// answer to one of this client's confirmed requests.
     pub last_seen: Instant,
+    /// When the device last announced itself at this address with an I-Am;
+    /// `None` for a row registered by hand. An answer to a request doesn't
+    /// move it, as it moves `last_seen`, so another device answering at a
+    /// reused address doesn't keep the row's announcement young (#2560).
+    pub last_announced: Option<Instant>,
     /// If this device is behind a router, the BACnet network number it resides on.
     pub source_network: Option<u16>,
     /// If this device is behind a router, its MAC address on the remote network.

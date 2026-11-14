@@ -29,6 +29,7 @@ fn device(instance: u32) -> DiscoveredDevice {
         max_segments_accepted: None,
         vendor_id: 260,
         last_seen: std::time::Instant::now(),
+        last_announced: None,
         source_network: None,
         source_address: None,
     }

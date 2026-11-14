@@ -149,6 +149,7 @@ async fn client_segments_known_device_requests_to_live_transport_limit() {
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now(),
+        last_announced: None,
         source_network: None,
         source_address: None,
     });

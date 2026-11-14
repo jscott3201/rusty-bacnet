@@ -104,9 +104,9 @@ impl fmt::Display for Candidates<'_> {
 ///
 /// It is `#[non_exhaustive]`, so a `match` on it outside this crate needs a
 /// wildcard arm. Some variants exist only with a feature, and any crate in a
-/// build can turn that on: `Error::Transport` and `Error::AmbiguousDevice`
-/// need `std`, and the variants that hold a `String` or a `Box` need
-/// `alloc`. Without the attribute a
+/// build can turn that on: `Error::Transport`, `Error::AmbiguousDevice`
+/// and `Error::UnknownDevice` need `std`, and the variants that hold a
+/// `String` or a `Box` need `alloc`. Without the attribute a
 /// match written against a smaller build would stop compiling (#1604).
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -254,6 +254,19 @@ pub enum Error {
         /// MAC: network 0 is the local network. A boxed slice, not a `Vec`,
         /// so the variant lends `Error` no niche to keep its tag in.
         candidates: Box<[BACnetAddress]>,
+    },
+
+    /// A request named a device the client can't place: no address in its
+    /// discovery table claims the instance, and none answered a Who-Is for
+    /// it, or no router is known for a remote network's station. Nothing
+    /// was sent to the device. Only with `std`, as for
+    /// [`Error::AmbiguousDevice`].
+    #[cfg(feature = "std")]
+    #[error("device {device} is not known to the client; discover it first")]
+    UnknownDevice {
+        /// The device as the request named it: an instance (`1234`,
+        /// `2:1234`) or an address (`2:0x05`).
+        device: String,
     },
 
     /// A paged log read asked for the records from one sequence number and

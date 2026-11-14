@@ -12,6 +12,7 @@ fn make_device(instance: u32) -> DiscoveredDevice {
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now(),
+        last_announced: None,
         source_network: None,
         source_address: None,
     }

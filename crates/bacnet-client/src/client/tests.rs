@@ -224,6 +224,7 @@ async fn device_table_purge_runs_without_inbound_apdu() {
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: crate::discovery::now(),
+        last_announced: None,
         source_network: None,
         source_address: None,
     });
@@ -319,6 +320,7 @@ async fn confirmed_request_does_not_wrap_discovered_max_apdu_length() {
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now(),
+        last_announced: None,
         source_network: None,
         source_address: None,
     });

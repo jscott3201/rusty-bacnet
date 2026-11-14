@@ -43,6 +43,7 @@ pub(super) fn heard_i_am(
         }
         _ => (MacAddr::from_slice(from.mac), None, None, None),
     };
+    let now = crate::discovery::now();
     let device = DiscoveredDevice {
         object_identifier: i_am.object_identifier,
         mac_address,
@@ -50,7 +51,8 @@ pub(super) fn heard_i_am(
         segmentation_supported: i_am.segmentation_supported,
         max_segments_accepted: None,
         vendor_id: i_am.vendor_id,
-        last_seen: crate::discovery::now(),
+        last_seen: now,
+        last_announced: Some(now),
         source_network,
         source_address,
     };

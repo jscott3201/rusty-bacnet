@@ -47,6 +47,7 @@ fn row(network: u16, mac: &[u8], max_apdu: u32, seen: Instant) -> DiscoveredDevi
         max_segments_accepted: None,
         vendor_id: 1,
         last_seen: seen,
+        last_announced: Some(seen),
         source_network: routed.is_some().then_some(network),
         source_address: routed,
     }
@@ -152,6 +153,15 @@ async fn an_acknowledged_segmented_request_restarts_the_age() {
     let result = write(&client, 400).await;
     assert!(result.is_ok(), "{result:?}");
     assert!(last_seen(&client, 0, DEVICE_MAC) > seen, "no refresh");
+    // Only an I-Am announces: whoever answers at the address, the row's
+    // announcement keeps its age (#2560).
+    let announced = client
+        .device_table
+        .lock()
+        .get(0, DEVICE_MAC)
+        .unwrap()
+        .last_announced;
+    assert_eq!(announced, Some(seen), "an answer moved the announcement");
     task.abort();
     client.stop().await.unwrap();
 }
