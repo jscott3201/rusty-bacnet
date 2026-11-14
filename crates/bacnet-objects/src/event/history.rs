@@ -110,10 +110,10 @@ impl<'a> EventTransitionState<'a> {
     }
 }
 
-/// Implement proposal-and-commit intrinsic reporting for the analog,
-/// binary and multi-state Input, Output and Value objects: the
-/// [`EventReporting`](crate::traits::EventReporting) of `$object`, which
-/// lends it with `crate::traits::lend_event_reporting!()`.
+/// Implement proposal-and-commit intrinsic reporting for one of the nine
+/// I/O objects (the analog, binary and multi-state Inputs, Outputs and
+/// Values): the [`EventReporting`](crate::traits::EventReporting) of
+/// `$object`, which lends it with `crate::traits::lend_event_reporting!()`.
 ///
 /// `$object` holds its detector in `event_detector` beside an
 /// [`IoCore`](crate::io_core::IoCore) in `core`, which holds the event

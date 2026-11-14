@@ -4,7 +4,7 @@
 //!
 //! Each holds the state every I/O object shares (`IoCore`), its event
 //! detector (CHANGE_OF_STATE on the Input and the Value, COMMAND_FAILURE on
-//! the Output), the states the three share ([`MultiStateProperties`]:
+//! the Output), the states the three share (`MultiStateProperties`:
 //! Number_Of_States, State_Text and the Reliability they work out from
 //! them) and its own Present_Value; the Input and the Value add
 //! Alarm_Values, the Output a Feedback_Value, and the Output and the Value
@@ -442,9 +442,8 @@ impl OwnedMultiStateFault {
 struct MultiStateProperties {
     number_of_states: u32,
     state_text: Vec<String>,
-    /// The fault Reliability shows because the evaluation set it, until a
-    /// client's `set_reliability` takes Reliability over (first-stage
-    /// ownership).
+    /// The fault Reliability shows because the evaluation set it, until
+    /// `set_reliability` takes Reliability over (first-stage ownership).
     owned_fault: Option<OwnedMultiStateFault>,
 }
 
