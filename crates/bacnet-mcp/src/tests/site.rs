@@ -362,7 +362,11 @@ async fn find_pages_resume_across_devices() {
     ];
     let wanted: Vec<String> = [1201, 1202]
         .iter()
-        .flat_map(|device| objects.iter().map(move |object| format!("{device} {object}")))
+        .flat_map(|device| {
+            objects
+                .iter()
+                .map(move |object| format!("{device} {object}"))
+        })
         .collect();
     assert_eq!(seen, wanted);
     // A full page ends before the next device: 1202, another lab device at

@@ -320,8 +320,7 @@ impl Lab {
             let identity = DeviceIdentity::new(alias, 260)
                 .unwrap()
                 .with_name(format!("Lab device {alias}"));
-            let database =
-                build_database_with_extra(&identity, lab_objects(extra, site)).unwrap();
+            let database = build_database_with_extra(&identity, lab_objects(extra, site)).unwrap();
             let server = BACnetServer::generic_builder()
                 .device(identity)
                 .database(database)
