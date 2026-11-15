@@ -11,11 +11,12 @@ use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, encode_apdu};
-use bacnet_encoding::npdu::{Npdu, encode_npdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device_identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
+use bacnet_services::who_has::IHaveRequest;
 use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::test_transport::{SendLog, TestTransport, TestTransportBuilder};
@@ -201,6 +202,47 @@ impl Bus {
             ..Npdu::default()
         };
         encode_npdu(&mut npdu, &frame).unwrap();
+        self.deliver(&MacAddr::from_slice(&mac(n)), &npdu, None);
+    }
+
+    /// Broadcast an I-Have from station `n`: device `instance` has analog
+    /// input 1, named `name`. With `routed`, it carries that SNET and SADR,
+    /// as a router at station `n` passes one on.
+    pub(super) fn i_have(&self, n: u8, routed: Option<(u16, &[u8])>, instance: u32, name: &str) {
+        let mut service = BytesMut::new();
+        IHaveRequest {
+            device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
+            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            object_name: name.into(),
+        }
+        .encode(&mut service)
+        .unwrap();
+        let apdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
+            service_choice: UnconfirmedServiceChoice::I_HAVE,
+            service_request: service.freeze(),
+        });
+        let mut payload = BytesMut::new();
+        encode_apdu(&mut payload, &apdu).unwrap();
+        let mut npdu = BytesMut::new();
+        let frame = Npdu {
+            source: routed.map(|(network, mac)| NpduAddress {
+                network,
+                mac_address: MacAddr::from_slice(mac),
+            }),
+            payload: payload.freeze(),
+            ..Npdu::default()
+        };
+        encode_npdu(&mut npdu, &frame).unwrap();
+        self.deliver(&MacAddr::from_slice(&mac(n)), &npdu, None);
+    }
+
+    /// Broadcast a Network-Number-Is from station `n`: this network is
+    /// `number`, as configured there.
+    pub(super) fn number_is(&self, n: u8, number: u16) {
+        let [high, low] = number.to_be_bytes();
+        // NPDU version 1, a network message, Network-Number-Is (0x13), the
+        // number, and 1 for configured.
+        let npdu = [0x01, 0x80, 0x13, high, low, 1];
         self.deliver(&MacAddr::from_slice(&mac(n)), &npdu, None);
     }
 

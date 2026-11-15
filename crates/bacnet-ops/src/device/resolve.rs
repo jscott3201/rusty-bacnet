@@ -102,7 +102,7 @@ impl<T: TransportPort + 'static> Client<T> {
         }
         let mut row = address.row(self.low_level()).await;
         if row.is_none() && !address.is_local() {
-            row = Some(self.find(&address, None).await?);
+            row = Some(self.find_station(&address, None).await?);
         }
         Ok(Device {
             client: self.clone(),
@@ -235,7 +235,7 @@ impl<T: TransportPort + 'static> Client<T> {
 
     /// The row of the station at the remote `address`, once it answers a
     /// Who-Is to its network (for `range`, or every device).
-    async fn find(
+    async fn find_station(
         &self,
         address: &DeviceAddress,
         range: Option<DeviceInstanceRange>,

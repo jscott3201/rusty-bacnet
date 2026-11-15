@@ -105,7 +105,7 @@ impl BACnetClient {
         scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let range = device_range(low_limit, high_limit)?;
-        let scope = discovery_scope(scope.as_ref(), &self.transport_type)?;
+        let scope = discovery_scope(scope.as_ref(), &self.transport_type, "Who-Is")?;
         let inner = self.inner.clone();
         let future = async move {
             let c = started(&inner).await?;
@@ -132,7 +132,7 @@ impl BACnetClient {
         scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let range = device_range(low_limit, high_limit)?;
-        let scope = discovery_scope(scope.as_ref(), &self.transport_type)?;
+        let scope = discovery_scope(scope.as_ref(), &self.transport_type, "Who-Is")?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;

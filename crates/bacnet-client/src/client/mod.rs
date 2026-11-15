@@ -971,7 +971,7 @@ pub use event_notifications::{
     DEFAULT_EVENT_CHANNEL_CAPACITY, EventNotificationDelivery, MAX_EVENT_CHANNEL_CAPACITY,
     ReceivedEventNotification,
 };
-pub use i_have::{I_HAVE_CHANNEL_CAPACITY, ReceivedIHave};
+pub use i_have::{I_HAVE_CHANNEL_CAPACITY, MAX_I_HAVE_REPLIES, ReceivedIHave, collect_answers};
 pub use network_reports::{DiscoveredRouter, NETWORK_REPORT_CHANNEL_CAPACITY};
 pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
 pub use write_group::WriteGroupDestination;

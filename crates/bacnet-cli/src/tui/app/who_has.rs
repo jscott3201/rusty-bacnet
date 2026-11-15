@@ -1,15 +1,18 @@
 //! Who-Has and router discovery in the UI (#960).
 //!
-//! - `:find NAME` broadcasts a Who-Has in an active session, or filters
-//!   retained/live observations in a listening passive session. Results
-//!   distinguish device, object and station address.
-//!   `:find` alone closes it.
+//! - `:find NAME` broadcasts a Who-Has in an active session, on this
+//!   network alone unless `--dnet N` or `--global` comes first (#2596), or
+//!   filters retained/live observations in a listening passive session.
+//!   Results distinguish device, object and station address. `:find`
+//!   alone closes it.
 //! - The Network screen's Networks tab maps routers to the networks they
 //!   reach: every I-Am-Router-To-Network heard adds to it, and `r` there
 //!   clears it and asks every router again.
 //! - A router's Reject-Message-To-Network is flashed, naming the network.
 
 use std::time::Instant;
+
+use bacnet_ops::Scope;
 
 use super::network::View;
 use super::watch::Screen;
@@ -62,6 +65,9 @@ fn retain_row(rows: &mut Vec<FoundRow>, row: FoundRow) -> bool {
 pub(crate) struct WhoHasSearch {
     /// The object name searched for.
     pub(crate) name: String,
+    /// Where the Who-Has went: this network alone unless the command
+    /// named another scope.
+    pub(crate) scope: Scope,
     /// When the Who-Has went.
     pub(crate) sent: Instant,
     /// This search filters overheard observations without sending.
@@ -95,19 +101,28 @@ impl App {
         self.passive_listener.is_some() && self.link == Link::Passive
     }
 
-    /// `:find NAME`: search for the object, or with no name close the
-    /// search panel.
-    pub(super) fn find(&mut self, name: String, out: &mut Vec<Command>) {
+    /// `:find NAME`: search for the object, sending the Who-Has to
+    /// `scope`, or with no name close the search panel. A passive session
+    /// sends nothing, so a scope there is refused.
+    pub(super) fn find(&mut self, name: String, scope: Scope, out: &mut Vec<Command>) {
         if name.is_empty() {
             self.who_has = None;
             return;
         }
         let passive = self.passive_listening();
+        if passive && scope != Scope::Local {
+            self.flash(
+                "A passive session sends no Who-Has: :find NAME searches what it overheard.",
+                FLASH_FOR,
+            );
+            return;
+        }
         if !passive && !self.discovery_ready() {
             return;
         }
         self.who_has = Some(WhoHasSearch {
             name: name.clone(),
+            scope: scope.clone(),
             sent: self.now,
             passive,
             found: Vec::new(),
@@ -120,7 +135,7 @@ impl App {
                 search.accept(row.clone());
             }
         } else {
-            out.push(Command::Discovery(DiscoveryCommand::WhoHas { name }));
+            out.push(Command::Discovery(DiscoveryCommand::WhoHas { name, scope }));
         }
     }
 
@@ -179,7 +194,7 @@ impl App {
             ),
             DiscoveryEvent::Refused { command, reason } => {
                 match command {
-                    DiscoveryCommand::WhoHas { name } => {
+                    DiscoveryCommand::WhoHas { name, .. } => {
                         if let Some(search) = self
                             .who_has
                             .as_mut()

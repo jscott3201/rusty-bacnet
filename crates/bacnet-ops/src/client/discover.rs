@@ -1,7 +1,7 @@
-//! Discovery through the client: where a Who-Is goes ([`Scope`]), where a
-//! handle made from a bare instance asks for its device ([`ResolveScope`]),
-//! one discovery ([`Discover`]), Who-Is under the rate cap, and the
-//! client's discovery table.
+//! Discovery through the client: where a Who-Is or a Who-Has goes
+//! ([`Scope`]), where a handle made from a bare instance asks for its
+//! device ([`ResolveScope`]), one discovery ([`Discover`]), Who-Is under the
+//! rate cap, and the client's discovery table.
 
 use std::ops::RangeInclusive;
 use std::time::Duration;
@@ -27,9 +27,10 @@ const NOT_A_STATION: &str =
 /// How long a [`Discover`] listens for answers unless it says otherwise.
 pub const DISCOVER_WAIT: Duration = Duration::from_secs(3);
 
-/// Where a Who-Is goes. The default is this network alone: a broadcast that
-/// reaches every device on a large routed site is a choice, made by naming
-/// one network or every network.
+/// Where a Who-Is ([`Discover`]) or a Who-Has ([`Find`](super::Find))
+/// goes. The default is this network alone: a broadcast that reaches every
+/// device on a large routed site is a choice, made by naming one network or
+/// every network.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Scope {
@@ -97,10 +98,41 @@ impl ResolveScope {
     }
 }
 
+/// Which request a [`Scope`] sends, for the words a refusal uses: the
+/// service, and how the request that carries it names a scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ask {
+    /// A Who-Is, from a [`Discover`].
+    WhoIs,
+    /// A Who-Has, from a [`Find`](super::Find).
+    WhoHas,
+}
+
+impl Ask {
+    fn service(self) -> &'static str {
+        match self {
+            Self::WhoIs => "Who-Is",
+            Self::WhoHas => "Who-Has",
+        }
+    }
+
+    /// The call that sends this request to `scope`, for a refusal to name.
+    fn naming(self, scope: &Scope) -> String {
+        match (self, scope) {
+            (Self::WhoIs, Scope::Local) => "Discover::local()".into(),
+            (Self::WhoIs, Scope::Global) => "Discover::global()".into(),
+            (Self::WhoIs, Scope::Network(network)) => format!("Discover::network({network})"),
+            (Self::WhoIs, Scope::Directed(_)) => "Discover::directed(..)".into(),
+            (Self::WhoHas, Scope::Directed(_)) => "Find::within(Scope::Directed(..))".into(),
+            (Self::WhoHas, scope) => format!("Find::within(Scope::{scope:?})"),
+        }
+    }
+}
+
 impl Scope {
-    /// The network this Who-Is goes out on, for its rate slot: a global one
-    /// reaches every network and takes the global slot alone.
-    fn network(&self) -> Option<u16> {
+    /// The network this request goes out on, for its rate slot: a global
+    /// one reaches every network and takes the global slot alone.
+    pub(crate) fn network(&self) -> Option<u16> {
         match self {
             Self::Local | Self::Directed(_) => Some(0),
             Self::Network(network) => Some(*network),
@@ -108,8 +140,8 @@ impl Scope {
         }
     }
 
-    /// The scope checked before anything is sent against `client`: the
-    /// station's MAC for a directed one.
+    /// The scope of the request `ask` names, checked before anything is
+    /// sent against `client`: the station's MAC for a directed one.
     ///
     /// # Errors
     ///
@@ -119,19 +151,25 @@ impl Scope {
     pub(crate) fn station<T: TransportPort + 'static>(
         &self,
         client: &BACnetClient<T>,
+        ask: Ask,
     ) -> Result<Option<Vec<u8>>, OpsError> {
-        let refused = |network: u16, reason: &str| {
-            OpsError::parse("network", &network.to_string(), reason.to_string())
-        };
+        let refused =
+            |network: u16, reason: String| OpsError::parse("network", &network.to_string(), reason);
         match self {
             Self::Network(0) => Err(refused(
                 0,
-                "network 0 is this network: leave the network out, or use a local scope \
-                 (Discover::local())",
+                format!(
+                    "network 0 is this network: leave the network out, or use a local scope \
+                     ({})",
+                    ask.naming(&Self::Local)
+                ),
             )),
             Self::Network(u16::MAX) => Err(refused(
                 u16::MAX,
-                "network 65535 is every network: use a global scope (Discover::global())",
+                format!(
+                    "network 65535 is every network: use a global scope ({})",
+                    ask.naming(&Self::Global)
+                ),
             )),
             Self::Directed(address) => {
                 let local = address.clone().localized(client.network_number());
@@ -143,9 +181,10 @@ impl Scope {
                     "address",
                     &address.to_string(),
                     format!(
-                        "{address} is on network {network}, and a directed Who-Is goes to one \
-                         station on this network: Discover::network({network}) asks that \
-                         network's devices"
+                        "{address} is on network {network}, and a directed {} goes to one \
+                         station on this network: {} asks that network's devices",
+                        ask.service(),
+                        ask.naming(&Self::Network(network)),
                     ),
                 ))
             }
@@ -269,20 +308,27 @@ impl Discover {
 
     /// The instance range asked, checked.
     pub(crate) fn instances(&self) -> Result<Option<DeviceInstanceRange>, OpsError> {
-        self.range
-            .as_ref()
-            .map(|range| {
-                let (low, high) = (*range.start(), *range.end());
-                DeviceInstanceRange::new(low, high).map_err(|error| {
-                    let reason = match error {
-                        Error::Range(refused) => refused.message().to_string(),
-                        other => other.to_string(),
-                    };
-                    OpsError::parse("range", &format!("{low}-{high}"), reason)
-                })
-            })
-            .transpose()
+        instances(self.range.as_ref())
     }
+}
+
+/// A request's device instance range, checked: both limits within 0 to
+/// 4194303, the low one no greater than the high one.
+pub(crate) fn instances(
+    range: Option<&RangeInclusive<u32>>,
+) -> Result<Option<DeviceInstanceRange>, OpsError> {
+    range
+        .map(|range| {
+            let (low, high) = (*range.start(), *range.end());
+            DeviceInstanceRange::new(low, high).map_err(|error| {
+                let reason = match error {
+                    Error::Range(refused) => refused.message().to_string(),
+                    other => other.to_string(),
+                };
+                OpsError::parse("range", &format!("{low}-{high}"), reason)
+            })
+        })
+        .transpose()
 }
 
 impl<T: TransportPort + 'static> Client<T> {
@@ -294,7 +340,7 @@ impl<T: TransportPort + 'static> Client<T> {
         scope: &Scope,
         range: Option<DeviceInstanceRange>,
     ) -> Result<(), OpsError> {
-        let station = scope.station(self.low_level())?;
+        let station = scope.station(self.low_level(), Ask::WhoIs)?;
         // The network the Who-Is goes out on takes its slot, so a slow one
         // is paced; a global one takes the global slot alone.
         self.limits().slot(scope.network()).await;
