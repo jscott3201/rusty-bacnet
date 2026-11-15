@@ -45,10 +45,21 @@ pub(crate) fn client(core: Arc<BACnetClient<AppTransport>>, policy: WritePolicy)
 /// The handle for the station at `mac` on this client's own network, an
 /// address as `read_property` takes one. It is pinned there and made at
 /// once: nothing is sent, and the discovery table needn't hold the device.
-/// A MAC the client's link can't send to raises ValueError.
+/// A MAC the client's link can't send to raises ValueError, and so does
+/// any on a router's application, which has no network of its own: there
+/// the write would be refused by the router, and the read after it would
+/// come back as rows that name no cause.
 pub(crate) async fn station(client: &OpsClient, mac: &[u8]) -> PyResult<OpsDevice> {
+    if matches!(client.low_level().transport(), AppTransport::Router(_)) {
+        return Err(PyValueError::new_err(
+            "a client on transport='router' has no network of its own, so a local address \
+             names no station it can reach: relinquish and priority_array take a station on \
+             the client's own network",
+        ));
+    }
     let address = DeviceAddress::local(mac).map_err(PyValueError::new_err)?;
-    client.device(address).await.map_err(ops_err)
+    let style = client.address_style();
+    client.device(address).await.map_err(|e| ops_err(e, style))
 }
 
 /// [`Device::relinquish`](bacnet_ops::Device::relinquish) of `object` at
@@ -58,7 +69,11 @@ pub(crate) async fn relinquish(
     object: ObjectIdentifier,
     priority: Priority,
 ) -> PyResult<PyPriorityView> {
-    let view = device.relinquish(object, priority).await.map_err(ops_err)?;
+    let style = device.client().address_style();
+    let view = device
+        .relinquish(object, priority)
+        .await
+        .map_err(|e| ops_err(e, style))?;
     crate::py_async::attach(|py| PyPriorityView::new(py, &view))
 }
 
@@ -68,7 +83,11 @@ pub(crate) async fn priority_array(
     device: &OpsDevice,
     object: ObjectIdentifier,
 ) -> PyResult<PyPriorityView> {
-    let view = device.priority_array(object).await.map_err(ops_err)?;
+    let style = device.client().address_style();
+    let view = device
+        .priority_array(object)
+        .await
+        .map_err(|e| ops_err(e, style))?;
     crate::py_async::attach(|py| PyPriorityView::new(py, &view))
 }
 

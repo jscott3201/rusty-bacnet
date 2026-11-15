@@ -1717,14 +1717,24 @@ with writing Relinquish_Default or with a write at 16. `relinquish` and
 `priority_array` (#2561) name the slot and read the slots back, through the
 high-level client the `bacnet` tool's library uses. Both take an `address`
 as `read_property` does and an `ObjectIdentifier`; the device needn't be in
-the discovery table, and nothing is sent to look it up.
+the discovery table, and nothing is sent to look it up. Here, as everywhere
+in this API, `address` is always an address in the forms of
+[Address Format](#address-format), never a device instance or a target, and
+calls that take targets will name them otherwise.
+
+For now that address is a station on the client's own network: a device
+behind a router can't be named yet. A client on `transport="router"` has no
+network of its own, so both calls refuse every address there with
+`ValueError` on await, sending nothing (`read_property` sends, and the
+router refuses it with `BacnetError`).
 
 #### `relinquish(address, object_id, priority) -> PriorityView`
 
 Writes NULL to the object's Present_Value at `priority`, so the next slot
 down, or Relinquish_Default, takes over; then reads the object's
-Priority_Array, Relinquish_Default and Present_Value back in one
-ReadPropertyMultiple. Two requests in all.
+Priority_Array, Relinquish_Default and Present_Value back. That is one
+WriteProperty and one ReadPropertyMultiple, or a ReadProperty of each of the
+three properties when the device refuses ReadPropertyMultiple.
 
 ```python
 from rusty_bacnet import BacnetReadBackError, BacnetWriteDeniedError
@@ -1735,15 +1745,20 @@ print(after.in_control, after.present_value.text)  # who took over: 12 "50", or 
 ```
 
 - `priority` is required: an int from 1 to 16. A bool, a float or another
-  type raises `TypeError` and another int `ValueError`, as does an address
-  `read_property` refuses, before the Future is made.
-- With nothing sent, on await: `BacnetWriteDeniedError` for a priority the
-  client's `write_policy` refuses (1, 2, 5 and 6 by default), and
-  `ValueError` for an object type with no Priority_Array (an input, or a
-  Channel, which passes each command on to its members).
+  type raises `TypeError` and another int `ValueError`, as does address text
+  the parser refuses, before the Future is made.
+- With nothing sent, on await: `ValueError` for an address the client's link
+  can't carry (a 3-octet VMAC on B/IP, a MAC length no local network uses,
+  any address on `transport="router"`) and for an object type with no
+  Priority_Array (an input, or a Channel, which passes each command on to
+  its members); `BacnetWriteDeniedError` for a priority the client's
+  `write_policy` refuses (1, 2, 5 and 6 by default).
 - The device refusing the write raises `BacnetProtocolError`,
   `BacnetRejectError` or `BacnetAbortError`, and no answer
-  `BacnetTimeoutError`; the write may or may not have been applied then.
+  `BacnetTimeoutError`; the write may or may not have been applied then. A
+  device that never answers raises `BacnetTimeoutError` from both calls,
+  where `read_property` and `write_property` raise `BacnetAbortError` with
+  reason 10 (`AbortReason.TSM_TIMEOUT`).
 - A relinquish the device acknowledged whose read after it failed raises
   `BacnetReadBackError`: the slot is empty, so don't send it again. Its
   `written` is the relinquish as sent and its `__cause__` the read's error.
@@ -1756,10 +1771,11 @@ print(after.in_control, after.present_value.text)  # who took over: 12 "50", or 
 
 #### `priority_array(address, object_id) -> PriorityView`
 
-Reads the same three properties in one ReadPropertyMultiple. An object type
-with no Priority_Array raises `ValueError` with nothing sent, and a device
-that says the object has none `BacnetNoPriorityArrayError` (with `written`
-None).
+Reads the same three properties in one ReadPropertyMultiple, or a
+ReadProperty of each when the device refuses ReadPropertyMultiple. An object
+type with no Priority_Array raises `ValueError` with nothing sent, and a
+device that says the object has none `BacnetNoPriorityArrayError` (with
+`written` None).
 
 ```python
 view = await client.priority_array("192.168.1.100:47808", damper)
@@ -1795,7 +1811,8 @@ async with BACnetClient(write_policy=policy) as client:
 | `.allows(priority)` | Whether a relinquish at that priority may go |
 | `.refused` | The priorities refused, a tuple, 1 first |
 
-A policy is frozen, equal to another refusing the same priorities, hashable,
+A policy is frozen, and so is its class (`WritePolicy.GUARDED` can't be
+reassigned). It is equal to another refusing the same priorities, hashable,
 and copies and pickles as that policy. `client.write_policy` reads it back.
 `write_policy=None`, the default, is `WritePolicy()`. `write_property` and
 the other typed calls are the low-level layer and don't look at the policy.
@@ -1822,7 +1839,8 @@ A `Value` is one value in three forms:
 | `.data` | plain data | The shape of the tool's JSON: None, a bool, an int, a float (a REAL as the shortest decimal that reads back as it) or a str, or a dict or list of them; an enumeration is `{"value": 1, "name": "active"}`. A new copy each time |
 
 A `Written` is a write the device acknowledged, as sent: `.address` (where
-it went, `"ip:port"`, `"mstp:N"` or a B/IPv6 VMAC), `.object_id`,
+it went, in the forms `address` takes: `"ip:port"`, `"mstp:N"`, a B/IPv6
+VMAC, or an SC VMAC in hex such as `"02:00:00:00:00:04"`), `.object_id`,
 `.property_id`, `.array_index`, `.value` (a `Value`, NULL for a relinquish)
 and `.priority`. `PriorityView`, `Value` and `Written` are received values:
 frozen, and they refuse `copy` and `pickle`.

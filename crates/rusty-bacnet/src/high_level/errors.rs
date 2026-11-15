@@ -17,6 +17,7 @@
 //! relinquish twice.
 
 use bacnet_ops::label::{kebab, object_label};
+use bacnet_ops::target::AddressStyle;
 use bacnet_ops::{OpsError, WriteDenied, Written};
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -50,9 +51,10 @@ const DENIED_ATTRIBUTES: [&str; 5] = [
     "array_index",
 ];
 
-/// `error` as the Python exception a high-level call raises. Futures call
-/// this on binding threads, so attributes are set through the exit gate.
-pub(crate) fn ops_err(error: OpsError) -> PyErr {
+/// `error` as the Python exception a high-level call raises, a written
+/// device's address in `style`, the client's link's. Futures call this on
+/// binding threads, so attributes are set through the exit gate.
+pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
     let message = error.to_string();
     // A request that timed out, however the client reported it (the
     // transaction state machine's abort included), is a timeout.
@@ -82,9 +84,9 @@ pub(crate) fn ops_err(error: OpsError) -> PyErr {
         OpsError::Denied(denied) => write_denied(&denied),
         OpsError::ReadBack { written, source } => {
             let error = BacnetReadBackError::new_err(message);
-            let cause = ops_err(*source);
+            let cause = ops_err(*source, style);
             let _ = crate::py_async::attach(|py| {
-                set_written(py, &error, Some(&written));
+                set_written(py, &error, Some(&written), style);
                 error.set_cause(py, Some(cause));
                 Ok(())
             });
@@ -94,7 +96,7 @@ pub(crate) fn ops_err(error: OpsError) -> PyErr {
             object,
             relinquished,
             ..
-        } => no_priority_array(message, object, relinquished.as_deref()),
+        } => no_priority_array(message, object, relinquished.as_deref(), style),
         // UnknownDevice and Paging, which no priority call meets, and any
         // later variant.
         _ => BacnetError::new_err(message),
@@ -144,6 +146,7 @@ fn no_priority_array(
     message: String,
     object: ObjectIdentifier,
     relinquished: Option<&Written>,
+    style: AddressStyle,
 ) -> PyErr {
     let raised = BacnetNoPriorityArrayError::new_err(message);
     let _ = crate::py_async::attach(|py| {
@@ -155,16 +158,17 @@ fn no_priority_array(
             let _ = value.setattr(name, py.None());
         }
         let _ = value.setattr("object_id", PyObjectIdentifier::from_rust(object));
-        set_written(py, &raised, relinquished);
+        set_written(py, &raised, relinquished, style);
         Ok(())
     });
     raised
 }
 
-/// Set `written` on `error`: the acknowledged write, or None.
-fn set_written(py: Python<'_>, error: &PyErr, written: Option<&Written>) {
+/// Set `written` on `error`: the acknowledged write, its address in
+/// `style`, or None.
+fn set_written(py: Python<'_>, error: &PyErr, written: Option<&Written>, style: AddressStyle) {
     let written = written
-        .map(|written| PyWritten::new(py, written).and_then(|w| Py::new(py, w)))
+        .map(|written| PyWritten::new(py, written, style).and_then(|w| Py::new(py, w)))
         .transpose();
     match written {
         Ok(Some(written)) => {

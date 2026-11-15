@@ -22,6 +22,12 @@ use crate::errors::{
     BacnetAbortError, BacnetAmbiguousDeviceError, BacnetError, BacnetProtocolError,
     BacnetRejectError, BacnetTimeoutError,
 };
+use bacnet_ops::target::AddressStyle;
+
+/// [`ops_err`] on a B/IP client.
+fn ops_err_bip(error: OpsError) -> PyErr {
+    ops_err(error, AddressStyle::Bip)
+}
 
 fn station() -> DeviceAddress {
     DeviceAddress::local(&[127, 0, 0, 1, 0xBA, 0xC0]).unwrap()
@@ -143,7 +149,7 @@ fn a_value_holds_its_text_its_data_and_its_typed_form() {
 fn ops_errors_raise_the_typed_calls_classes() {
     Python::initialize();
     Python::attach(|py| {
-        let parse = ops_err(OpsError::Parse {
+        let parse = ops_err_bip(OpsError::Parse {
             what: "object",
             input: "analog-input 1".into(),
             reason: "analog-input 1 keeps no Priority_Array".into(),
@@ -158,7 +164,7 @@ fn ops_errors_raise_the_typed_calls_classes() {
             Error::Timeout(std::time::Duration::from_secs(1)),
             Error::abort(AbortReason::TSM_TIMEOUT),
         ] {
-            let timeout = ops_err(OpsError::Unreachable {
+            let timeout = ops_err_bip(OpsError::Unreachable {
                 device: station(),
                 source,
             });
@@ -168,13 +174,13 @@ fn ops_errors_raise_the_typed_calls_classes() {
             );
             assert!(!timeout.is_instance_of::<BacnetAbortError>(py));
         }
-        let link = ops_err(OpsError::Unreachable {
+        let link = ops_err_bip(OpsError::Unreachable {
             device: station(),
             source: Error::Transport(std::io::Error::other("closed")),
         });
         assert!(link.is_instance_of::<PyOSError>(py) && link.is_instance_of::<BacnetError>(py));
 
-        let refused = ops_err(OpsError::Refused {
+        let refused = ops_err_bip(OpsError::Refused {
             device: station(),
             error: RemoteError::Error {
                 class: ErrorClass::PROPERTY,
@@ -191,7 +197,7 @@ fn ops_errors_raise_the_typed_calls_classes() {
             .extract()
             .unwrap();
         assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw());
-        let rejected = ops_err(OpsError::Refused {
+        let rejected = ops_err_bip(OpsError::Refused {
             device: station(),
             error: RemoteError::Reject {
                 reason: RejectReason::UNRECOGNIZED_SERVICE,
@@ -200,12 +206,12 @@ fn ops_errors_raise_the_typed_calls_classes() {
         });
         assert!(rejected.is_instance_of::<BacnetRejectError>(py));
 
-        let ambiguous = ops_err(OpsError::Ambiguous {
+        let ambiguous = ops_err_bip(OpsError::Ambiguous {
             instance: 7,
             candidates: vec![station(), DeviceAddress::new(2, &[5]).unwrap()],
         });
         assert!(ambiguous.is_instance_of::<BacnetAmbiguousDeviceError>(py));
-        let client = ops_err(OpsError::Client(Error::Encoding("bad".into())));
+        let client = ops_err_bip(OpsError::Client(Error::Encoding("bad".into())));
         assert!(client.value(py).get_type().is(py.get_type::<BacnetError>()));
     });
 }
@@ -218,7 +224,7 @@ fn no_priority_array_is_a_protocol_error_of_its_own() {
     Python::initialize();
     Python::attach(|py| {
         let object = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 3).unwrap();
-        let error = ops_err(OpsError::NoPriorityArray {
+        let error = ops_err_bip(OpsError::NoPriorityArray {
             device: station(),
             object,
             relinquished: None,

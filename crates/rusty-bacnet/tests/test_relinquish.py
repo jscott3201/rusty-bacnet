@@ -21,8 +21,11 @@ from pathlib import Path
 
 import rusty_bacnet
 from rusty_bacnet import (
+    AbortReason,
     BACnetClient,
+    BACnetRouter,
     BACnetServer,
+    BacnetAbortError,
     BacnetError,
     BacnetNoPriorityArrayError,
     BacnetProtocolError,
@@ -40,6 +43,9 @@ from rusty_bacnet import (
     WritePolicy,
     Written,
 )
+
+import test_sc_hub_mtls as mtls
+from test_router_application import bbmd_port, cleanup
 
 DEVICE = 2561
 AO = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
@@ -281,6 +287,22 @@ class RelinquishTests(Lab):
                 c.relinquish(self.address, "ao:1", 8)  # P1 takes an ObjectIdentifier
         self.assertEqual(self.relay.requests, [])
 
+    async def test_an_address_the_link_cannot_carry_fails_on_await(self) -> None:
+        async with client() as c:
+            # A B/IPv6 VMAC's length, and one no local network uses: the
+            # parser takes both, so the Future is made, and the call refuses
+            # them when awaited.
+            for address in ("00:04:d2", "01:02"):
+                for call in (
+                    lambda: c.relinquish(address, AO, 8),
+                    lambda: c.priority_array(address, AO),
+                ):
+                    with self.subTest(address=address):
+                        pending = call()
+                        with self.assertRaises(ValueError):
+                            await pending
+        self.assertEqual(self.relay.requests, [])
+
     async def test_an_object_type_without_priorities_sends_nothing(self) -> None:
         async with client() as c:
             with self.assertRaisesRegex(ValueError, "Priority_Array"):
@@ -397,6 +419,10 @@ class PolicyTests(Lab):
         self.assertNotEqual(policy, GUARDED)
         with self.assertRaises(AttributeError):
             policy.refused = ()  # type: ignore[misc]
+        # The class is immutable too: its GUARDED can't be swapped out.
+        with self.assertRaises(TypeError):
+            WritePolicy.GUARDED = ()  # type: ignore[misc]
+        self.assertEqual(WritePolicy.GUARDED, GUARDED)
         # A copy is the same policy, never the default (test_value_copy_pickle
         # covers every protocol).
         for copied in (copy.copy(opened), copy.deepcopy(opened), pickle.loads(pickle.dumps(opened))):
@@ -442,8 +468,50 @@ class NoAnswerTests(Lab):
         async with client(apdu_timeout_ms=300) as c:
             with self.assertRaises(BacnetTimeoutError) as caught:
                 await c.relinquish(self.address, AO, 8)
-        self.assertNotIsInstance(caught.exception, BacnetReadBackError)
-        self.assertEqual(self.relay.services, [WRITE_PROPERTY])
+            self.assertNotIsInstance(caught.exception, BacnetReadBackError)
+            self.assertEqual(self.relay.services, [WRITE_PROPERTY])
+            with self.assertRaises(BacnetTimeoutError):
+                await c.priority_array(self.address, AO)
+            # The typed calls report the same silence as the transaction
+            # state machine's abort, as the docs say.
+            with self.assertRaises(BacnetAbortError) as written:
+                await c.write_property(
+                    self.address, AO, PV, PropertyValue.null(), priority=8
+                )
+            with self.assertRaises(BacnetAbortError) as read:
+                await c.read_property(self.address, AO, PV)
+        for typed in (written.exception, read.exception):
+            self.assertEqual(typed.reason, AbortReason.TSM_TIMEOUT)
+            self.assertNotIsInstance(typed, BacnetTimeoutError)
+
+
+class CancelledTests(Lab):
+    # The WriteProperty passes; the read after it goes unanswered, for long.
+    passing = 1
+
+    async def test_stop_after_a_relinquish_cancelled_mid_call(self) -> None:
+        c = client(apdu_timeout_ms=10_000)
+        await c.__aenter__()
+        try:
+            pending = asyncio.ensure_future(c.relinquish(self.address, AO, 8))
+            async with asyncio.timeout(10):
+                while len(self.relay.requests) < 2:
+                    await asyncio.sleep(0.01)
+            self.assertEqual(self.relay.services, [WRITE_PROPERTY, READ_PROPERTY_MULTIPLE])
+            pending.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await pending
+        finally:
+            # The cancelled call let go of its handle, so the stop owns the
+            # client and stops it, long before the read would time out.
+            await asyncio.wait_for(c.stop(), 5)
+        with self.assertRaisesRegex(RuntimeError, "not started"):
+            await c.priority_array(self.address, AO)
+        # The same client starts again, and its priority calls work.
+        self.relay.passing = 1_000_000
+        async with c:
+            view = await c.priority_array(self.address, AO)
+        self.assertIsNone(view.slot(8))
 
 
 class ReceivedValueTests(Lab):
@@ -458,6 +526,58 @@ class ReceivedValueTests(Lab):
                     copy.copy(received)
         with self.assertRaises(AttributeError):
             view.in_control = 3  # type: ignore[misc]
+
+
+class RouterTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_local_address_on_a_router_client(self) -> None:
+        # The router's application has no network of its own, so a local
+        # address names no station it can reach: the priority calls refuse
+        # it on await with nothing sent, where read_property sends and the
+        # router refuses it.
+        router = BACnetRouter([bbmd_port(1)], application="client")
+        await router.start()
+        self.addAsyncCleanup(cleanup, router.close)
+        address = (await router.ports())[0].address
+        async with BACnetClient(transport="router", router=router, apdu_timeout_ms=2000) as c:
+            for call in (
+                lambda: c.relinquish(address, AO, 8),
+                lambda: c.priority_array(address, AO),
+            ):
+                pending = call()
+                with self.assertRaisesRegex(ValueError, "transport='router' has no network"):
+                    await asyncio.wait_for(pending, 10)
+            with self.assertRaisesRegex(BacnetError, "no network of its own"):
+                await asyncio.wait_for(c.read_property(address, AO, PV), 10)
+
+
+class ScAddressTests(mtls.MtlsFixture):
+    """On BACnet/SC a written device's address is its VMAC in hex, as the
+    binding writes SC VMACs elsewhere, not six octets read as ip:port."""
+
+    async def test_an_sc_written_names_the_vmac_in_hex(self) -> None:
+        hub = self.hub()
+        self.addAsyncCleanup(self.stop_hub, hub)
+        await asyncio.wait_for(hub.start(), 3)
+        url = await hub.url()
+        sc = dict(transport="sc", sc_hub=url, sc_ca_cert=self.path("site.pem"))
+        server = BACnetServer(
+            3000, sc_vmac=b"\x02\0\0\0\0\x04", sc_device_uuid=mtls.SERVER_UUID,
+            sc_client_cert=self.path("server.pem"), sc_client_key=self.path("server.key"),
+            **sc,
+        )
+        server.add_analog_value(3, "Setpoint", present_value_access="writable")
+        await asyncio.wait_for(server.start(), 5)
+        self.addAsyncCleanup(self.stop_server, server)
+        c = BACnetClient(
+            sc_vmac=b"\x02\0\0\0\0\x02", sc_device_uuid=mtls.CLIENT_UUID,
+            sc_client_cert=self.path("client.pem"), sc_client_key=self.path("client.key"),
+            **sc,
+        )
+        await asyncio.wait_for(c.__aenter__(), 5)
+        self.addAsyncCleanup(self.stop_server, c)
+        with self.assertRaises(BacnetNoPriorityArrayError) as caught:
+            await asyncio.wait_for(c.relinquish("02:00:00:00:00:04", PLAIN, 8), 5)
+        self.assertEqual(caught.exception.written.address, "02:00:00:00:00:04")
 
 
 def stub_class(name: str) -> ast.ClassDef:

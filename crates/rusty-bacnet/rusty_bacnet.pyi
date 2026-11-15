@@ -2824,7 +2824,9 @@ class Written:
     @property
     def address(self) -> str:
         """The device's address the write went to: ``"ip:port"``,
-        ``"mstp:N"``, or a B/IPv6 VMAC (``"bip6:0x0004D2"``)."""
+        ``"mstp:N"``, a B/IPv6 VMAC (``"bip6:0x0004D2"``), or on BACnet/SC
+        its VMAC in hex (``"02:00:00:00:00:04"``), the forms ``address``
+        takes."""
         ...
 
     @property
@@ -2865,8 +2867,8 @@ class WritePolicy:
     gives a policy that allows some of them as well. The check costs no
     traffic: a refused call raises ``BacnetWriteDeniedError`` and sends
     nothing. ``write_property`` and the other typed calls don't look at
-    it. Frozen, equal to another policy refusing the same priorities, and
-    hashable.
+    it. Frozen (the class too: ``GUARDED`` can't be reassigned), equal to
+    another policy refusing the same priorities, and hashable.
 
     Usage::
 
@@ -4214,23 +4216,32 @@ class BACnetClient:
     ) -> Awaitable[PriorityView]:
         """Release a command: NULL written to the object's Present_Value at
         ``priority``, so the next slot down, or Relinquish_Default, takes
-        over. Then the object's priorities as read just after, in one
-        ReadPropertyMultiple: two requests. Nothing is looked up first: the
-        device at ``address`` needn't be in the discovery table.
+        over. Then the object's priorities as read just after: one
+        WriteProperty, then one ReadPropertyMultiple, or a ReadProperty of
+        each of the three properties when the device refuses that.
+
+        ``address`` is a station on this client's own network, in the forms
+        ``read_property`` takes; it is always an address, never a device
+        instance or a target, here and in every later call. Nothing is
+        looked up first: the device needn't be in the discovery table.
 
         ``priority`` is required, an int from 1 to 16: a relinquish names
         the slot it releases, and is never a write of Relinquish_Default.
-        A bool, a float or another type raises TypeError and another int
-        ValueError, as does an address ``read_property`` refuses, before the
-        Future is made. Raised on await, with nothing sent:
+        Before the Future is made, a bool, a float or another type raises
+        TypeError and another int ValueError, as does address text the
+        parser refuses. Raised on await, with nothing sent: ValueError for
+        an address the client's link can't carry (a 3-octet VMAC on B/IP,
+        say, or any address on ``transport="router"``, whose application has
+        no network of its own) and for an object type with no Priority_Array
+        (an input, or a Channel, which passes commands on to its members);
         ``BacnetWriteDeniedError`` for a priority the client's
-        ``write_policy`` refuses (1, 2, 5 and 6 by default), and ValueError
-        for an object type with no Priority_Array (an input, or a Channel,
-        which passes commands on to its members). Then the device's refusal
-        of the write raises ``BacnetProtocolError``, ``BacnetRejectError``
-        or ``BacnetAbortError``, and no answer ``BacnetTimeoutError``: the
-        write may or may not have been applied. A relinquish the device
-        acknowledged whose read after it failed raises
+        ``write_policy`` refuses (1, 2, 5 and 6 by default). Then the
+        device's refusal of the write raises ``BacnetProtocolError``,
+        ``BacnetRejectError`` or ``BacnetAbortError``. A device that never
+        answers raises ``BacnetTimeoutError``, where ``write_property`` and
+        ``read_property`` raise ``BacnetAbortError`` with reason 10
+        (TSM_TIMEOUT); the write may or may not have been applied. A
+        relinquish the device acknowledged whose read after it failed raises
         ``BacnetReadBackError``, and one whose read says the object has no
         Priority_Array raises ``BacnetNoPriorityArrayError``: both hold the
         acknowledged write as ``written``, and it needs no second send.
@@ -4241,14 +4252,19 @@ class BACnetClient:
         self, address: str, object_id: ObjectIdentifier
     ) -> Awaitable[PriorityView]:
         """Read an object's commands: its Priority_Array, Relinquish_Default
-        and Present_Value in one ReadPropertyMultiple, as a
-        ``PriorityView``.
+        and Present_Value in one ReadPropertyMultiple (a ReadProperty of
+        each when the device refuses that), as a ``PriorityView``.
 
-        An address ``read_property`` refuses raises ValueError before the
-        Future is made; an object type with no Priority_Array raises
-        ValueError on await, with nothing sent. A device that says the
-        object has none raises ``BacnetNoPriorityArrayError``, its other
-        refusals the usual protocol errors.
+        ``address`` is as ``relinquish`` takes it: always an address, never
+        a device instance or a target. Address text the parser refuses
+        raises ValueError before the Future is made. An address the
+        client's link can't carry (any on ``transport="router"``), or an
+        object type with no Priority_Array, raises ValueError on await, with
+        nothing sent. A device that says the object has none raises
+        ``BacnetNoPriorityArrayError``, its other refusals the usual
+        protocol errors. A device that never answers raises
+        ``BacnetTimeoutError``, where ``read_property`` raises
+        ``BacnetAbortError`` with reason 10 (TSM_TIMEOUT).
         """
         ...
 

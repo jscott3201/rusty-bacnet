@@ -476,7 +476,7 @@ A write the device acknowledged, as it was sent (#2561): a
 
 Properties:
 
-- `address: str`: The device's address the write went to: `"ip:port"`, `"mstp:N"`, or a B/IPv6 VMAC (`"bip6:0x0004D2"`).
+- `address: str`: The device's address the write went to: `"ip:port"`, `"mstp:N"`, a B/IPv6 VMAC (`"bip6:0x0004D2"`), or on BACnet/SC its VMAC in hex (`"02:00:00:00:00:04"`), the forms `address` takes.
 - `object_id: ObjectIdentifier`: The object written.
 - `property_id: PropertyIdentifier`: The property written.
 - `array_index: Optional[int]`: The array index written, None for the whole property.
@@ -494,8 +494,8 @@ the four a program should not reach by accident. `allow_priorities`
 gives a policy that allows some of them as well. The check costs no
 traffic: a refused call raises `BacnetWriteDeniedError` and sends
 nothing. `write_property` and the other typed calls don't look at
-it. Frozen, equal to another policy refusing the same priorities, and
-hashable.
+it. Frozen (the class too: `GUARDED` can't be reassigned), equal to
+another policy refusing the same priorities, and hashable.
 
 Usage:
 

@@ -4,6 +4,7 @@
 //! acknowledged ([`PyWritten`]).
 
 use bacnet_ops::label::object_label;
+use bacnet_ops::target::AddressStyle;
 use bacnet_ops::{Priority, PriorityView, WritePolicy, Written};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -47,6 +48,7 @@ fn levels(priorities: impl Iterator<Item = Priority>) -> Vec<u8> {
     name = "WritePolicy",
     module = "rusty_bacnet",
     frozen,
+    immutable_type,
     skip_from_py_object
 )]
 #[derive(Clone, Copy)]
@@ -295,8 +297,10 @@ pub(crate) struct PyWritten {
 }
 
 impl PyWritten {
-    /// `written` as Python objects.
-    pub(crate) fn new(py: Python<'_>, written: &Written) -> PyResult<Self> {
+    /// `written` as Python objects, its address as a link of `style`
+    /// writes it: six octets on BACnet/SC are a VMAC, in hex, as the
+    /// binding writes one elsewhere, not an IPv4 address and port.
+    pub(crate) fn new(py: Python<'_>, written: &Written, style: AddressStyle) -> PyResult<Self> {
         let property = written.property;
         let value = PyValue::new(
             property.object.object_type(),
@@ -305,7 +309,7 @@ impl PyWritten {
             &written.value,
         );
         Ok(Self {
-            address: written.device.to_string(),
+            address: written.device.styled(style),
             object: property.object,
             property: property.property,
             index: property.index,
@@ -317,8 +321,9 @@ impl PyWritten {
 
 #[pymethods]
 impl PyWritten {
-    /// The device's address the write went to, as `"ip:port"`, `"mstp:N"`
-    /// or a B/IPv6 VMAC (`"bip6:0x0004D2"`).
+    /// The device's address the write went to, as `"ip:port"`, `"mstp:N"`,
+    /// a B/IPv6 VMAC (`"bip6:0x0004D2"`) or an SC VMAC in hex
+    /// (`"02:00:00:00:00:04"`).
     #[getter]
     fn address(&self) -> &str {
         &self.address
