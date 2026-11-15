@@ -32,8 +32,9 @@ impl BACnetClient {
         let inner = self.inner.clone();
 
         crate::py_async::future_into_py(py, async move {
-            let c = started(&inner).await?;
-            crate::export_223::read(&c, device_instance, &options).await
+            let high = state::high_level(&inner).await?;
+            crate::export_223::read(high.low_level(), high.limits(), device_instance, &options)
+                .await
         })
     }
 }

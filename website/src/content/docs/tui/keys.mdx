@@ -242,7 +242,9 @@ The arm dialog, the write and relinquish forms, the previews, the ledger and the
 | `csv off` | Stop logging |
 | `writem DEVICE OBJECT PROPERTY VALUE[@P] ...` | Several writes to one device in one WritePropertyMultiple, previewed and confirmed at T2 or above; needs an armed session |
 | `bbmd [ADDRESS]` | Show and read that BBMD's tables on the Network screen (`ip` or `ip:port`); with no address, go back to the tables of the BBMD you register with |
-| `find NAME` | Broadcast a Who-Has for the object named NAME and list the answers |
+| `find NAME` | Broadcast a Who-Has on this network for the object named NAME and list the answers |
+| `find --dnet N NAME` | The same Who-Has on remote network N, through its router |
+| `find --global NAME` | The same Who-Has on every network |
 | `find` | Close the Who-Has panel |
 | `mstp rotation MS` | Monitor: flag token rotations longer than this |
 | `mstp hold MS` | Monitor: flag token holds longer than this |

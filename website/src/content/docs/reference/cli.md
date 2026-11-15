@@ -112,7 +112,7 @@ These options go before or after the command. Each command also takes `-h` or `-
 | [`mcp connect`](#bacnet-mcp-connect) | — | Bridge stdin and stdout to the MCP socket (a named pipe on Windows) of a TUI that has the profile open, so an agent shares its client. Its writes, if the profile offers them, wait for confirmation there. Needs the `mcp` feature. |
 | [`mcp authorize`](#bacnet-mcp-authorize) | — | Record, after showing what an agent may reach, that you authorize the MCP server on a profile. Needs a terminal. Needs the `mcp` feature. |
 | [`discover`](#bacnet-discover) | `whois` | Discover BACnet devices (WhoIs): a broadcast on this network alone, which no router passes on, unless --dnet, --global or --target says where else. |
-| [`find`](#bacnet-find) | `whohas` | Find objects by name (WhoHas). |
+| [`find`](#bacnet-find) | `whohas` | Find objects by name (WhoHas): a broadcast on this network alone, which no router passes on, unless --dnet, --global or --target says where else. |
 | [`read`](#bacnet-read) | `rp` | Read a property. |
 | [`export`](#bacnet-export) | — | Export a device's objects in another model's terms (experimental). |
 | [`export 223-experimental`](#bacnet-export-223-experimental) | — | EXPERIMENTAL: the device's analog, binary and multi-state objects and integer values as a proposed ASHRAE Standard 223 point list, in Turtle. |
@@ -261,7 +261,7 @@ Options:
 
 ### bacnet find
 
-Find objects by name (WhoHas).
+Find objects by name (WhoHas): a broadcast on this network alone, which no router passes on, unless --dnet, --global or --target says where else.
 
 Aliases: `whohas`.
 
@@ -277,6 +277,9 @@ Options:
 
 - `--name <NAME>`: Object name to find, as a flag: the same as the positional NAME.
 - `--wait <WAIT>`: Seconds to wait for responses. Default: `3`.
+- `--target <TARGET>`: Send a directed WhoHas to one station on this network instead of broadcasting.
+- `--dnet <DNET>`: Broadcast on one remote network (1 to 65534) instead, through its router.
+- `--global`: Broadcast on every network instead: a global broadcast, which every router passes on, and every device that hears it searches its objects.
 
 ### bacnet read
 

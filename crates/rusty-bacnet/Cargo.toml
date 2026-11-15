@@ -27,6 +27,8 @@ bacnet-device-core = { workspace = true, features = ["std"] }
 bacnet-time.workspace = true
 bacnet-services = { workspace = true, features = ["std"] }
 pyo3.workspace = true
+# A high-level `Value`'s `data`, in the shape of the CLI's JSON (#2561).
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 bytes = { workspace = true, features = ["std"] }
 tokio-rustls.workspace = true

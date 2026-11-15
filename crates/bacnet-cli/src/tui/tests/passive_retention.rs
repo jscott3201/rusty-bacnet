@@ -110,6 +110,7 @@ fn passive_large_matching_results_keep_the_byte_bound() {
     let name = "x".repeat(60_000);
     let mut search = crate::tui::app::who_has::WhoHasSearch {
         name: name.clone(),
+        scope: bacnet_ops::Scope::Local,
         sent: Instant::now(),
         passive: true,
         found: Vec::new(),

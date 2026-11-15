@@ -2,6 +2,7 @@
 //! [`WIDE_WIDTH`] columns when both fit at their content widths, beside it
 //! (#1915). Every state is marked by text as well as colour.
 
+use bacnet_ops::Scope;
 use bacnet_ops::label::object_label;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -78,16 +79,27 @@ fn title(search: &WhoHasSearch, age: &str, listening: bool) -> String {
             search.name
         );
     }
+    let to = match &search.scope {
+        Scope::Network(network) => format!(" on network {network}"),
+        Scope::Global => " on every network".into(),
+        _ => String::new(),
+    };
     format!(
-        " Who-Has \"{}\" | {found} | sent {age} ago | :find closes ",
+        " Who-Has \"{}\"{to} | {found} | sent {age} ago | :find closes ",
         search.name
     )
 }
 
-/// What the panel shows with no result.
+/// What the panel shows with no result: for a Who-Has on this network
+/// alone, that it went no further and how to widen it (#2596).
 fn empty_text(search: &WhoHasSearch) -> String {
     match &search.failed {
         Some(error) => format!("Not sent: {error}"),
+        None if !search.passive && search.scope == Scope::Local => {
+            "No I-Have yet. Only this network was asked: :find --dnet N NAME asks one \
+             remote network, :find --global NAME every network."
+                .to_string()
+        }
         None => "No I-Have yet.".to_string(),
     }
 }
@@ -247,6 +259,7 @@ mod tests {
         let name = "Building 4 East Wing AHU-07 Supply Air Temp Setpoint";
         let search = WhoHasSearch {
             name: name.into(),
+            scope: Scope::Local,
             sent: app.now,
             passive: false,
             found: vec![FoundRow {

@@ -624,6 +624,19 @@ async fn a_refused_who_is_is_not_charged() {
     stop(client, server).await;
 }
 
+/// A Who-Has the transport refuses never left either, so a search that
+/// fails on it isn't charged (#2596).
+#[tokio::test(start_paused = true)]
+async fn a_refused_who_has_is_not_charged() {
+    use crate::limits::{Account, charged};
+    let (client, server) = lab_on(refuses_broadcasts).await;
+    let account = Arc::new(Account::new(None));
+    let found = charged(Arc::clone(&account), client.find(super::Find::name("A"))).await;
+    assert!(found.is_err(), "{found:?}");
+    assert_eq!(account.requests(), 0);
+    stop(client, server).await;
+}
+
 /// A timeout is the client's own or the state machine's TSM_TIMEOUT abort;
 /// a transport failure is unreachable but no timeout, and a refusal is
 /// neither (#2131).

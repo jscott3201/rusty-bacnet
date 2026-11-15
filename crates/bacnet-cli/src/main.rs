@@ -157,13 +157,18 @@ async fn execute_command<T: TransportPort + 'static>(
             name,
             name_flag,
             wait,
+            target,
+            dnet,
+            global,
         } => {
             // clap takes exactly one of the two.
             let name = name
                 .as_ref()
                 .or(name_flag.as_ref())
                 .ok_or("find needs a NAME")?;
-            commands::discover::find_by_name(client, name, *wait, format).await?;
+            let scope =
+                commands::discover::scope(client, target.as_deref(), *dnet, *global).await?;
+            commands::discover::find_by_name(client, name, &scope, *wait, format).await?;
         }
         Command::Read {
             target,

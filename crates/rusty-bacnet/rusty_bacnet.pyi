@@ -11,7 +11,7 @@ import enum
 import ipaddress
 import os
 import pathlib
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import Any, Awaitable, Literal, NotRequired, Optional, TypedDict, Union
 
 UNSPECIFIED: Literal[255]
@@ -2739,6 +2739,171 @@ class Object223Experimental:
     def __repr__(self) -> str: ...
 
 
+class Value:
+    """One value a high-level call read or sent, in three forms (#2561).
+    Refuses ``copy`` and ``pickle``."""
+
+    @property
+    def value(self) -> PropertyValue:
+        """The value as a ``PropertyValue``, shaped as ``read_property`` of
+        the same property returns it (a Priority_Array slot as a read of
+        that slot by its index)."""
+        ...
+
+    @property
+    def text(self) -> str:
+        """The value as text, as the ``bacnet`` tool writes it: every digit
+        of a number, a state or enumeration by its name (``"active"``),
+        ``"null"`` for NULL. No units."""
+        ...
+
+    @property
+    def data(self) -> Any:
+        """The value as plain data, the shape of the ``bacnet`` tool's JSON:
+        None, a bool, an int, a float (a REAL as the shortest decimal that
+        reads back as it) or a str, or a dict or list of them; an
+        enumeration is ``{"value": 1, "name": "active"}``. A new copy each
+        time."""
+        ...
+
+    def __str__(self) -> str:
+        """``text``."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class PriorityView:
+    """An object's commands as read: its Priority_Array's sixteen slots,
+    the slot in control, Relinquish_Default and Present_Value
+    (``BACnetClient.priority_array`` and ``relinquish``, #2561). Refuses
+    ``copy`` and ``pickle``."""
+
+    @property
+    def object_id(self) -> ObjectIdentifier:
+        """The object read."""
+        ...
+
+    @property
+    def slots(self) -> tuple[Optional[Value], ...]:
+        """The sixteen slots, priority 1 first (``slots[7]`` is priority 8):
+        each a ``Value``, or None for an empty slot."""
+        ...
+
+    @property
+    def in_control(self) -> Optional[int]:
+        """The slot in control: the lowest-numbered priority holding a
+        command. None when every slot is empty, so Present_Value follows
+        Relinquish_Default."""
+        ...
+
+    @property
+    def relinquish_default(self) -> Optional[Value]:
+        """Relinquish_Default; None when the device gave none."""
+        ...
+
+    @property
+    def present_value(self) -> Value:
+        """Present_Value."""
+        ...
+
+    def slot(self, priority: int) -> Optional[Value]:
+        """The command at ``priority`` (an int from 1 to 16), None when its
+        slot is empty. Another int raises ValueError, a bool or a non-int
+        TypeError."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class Written:
+    """A write the device acknowledged, as it was sent (#2561): a
+    ``BacnetReadBackError``'s and a ``BacnetNoPriorityArrayError``'s
+    ``written``. Refuses ``copy`` and ``pickle``."""
+
+    @property
+    def address(self) -> str:
+        """The device's address the write went to: ``"ip:port"``,
+        ``"mstp:N"``, a B/IPv6 VMAC (``"bip6:0x0004D2"``), or on BACnet/SC
+        its VMAC in hex (``"02:00:00:00:00:04"``), the forms ``address``
+        takes."""
+        ...
+
+    @property
+    def object_id(self) -> ObjectIdentifier:
+        """The object written."""
+        ...
+
+    @property
+    def property_id(self) -> PropertyIdentifier:
+        """The property written."""
+        ...
+
+    @property
+    def array_index(self) -> Optional[int]:
+        """The array index written, None for the whole property."""
+        ...
+
+    @property
+    def value(self) -> Value:
+        """The value as sent: NULL for a relinquish."""
+        ...
+
+    @property
+    def priority(self) -> Optional[int]:
+        """The priority sent, None when none was."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class WritePolicy:
+    """Which command priorities a ``BACnetClient``'s ``relinquish`` may use,
+    given with its ``write_policy=`` keyword (#2561).
+
+    ``WritePolicy()`` refuses 1 and 2 (life safety, Table 19-1), 5
+    (critical equipment) and 6 (minimum on and off times, Clause 19.2.3):
+    the four a program should not reach by accident. ``allow_priorities``
+    gives a policy that allows some of them as well. The check costs no
+    traffic: a refused call raises ``BacnetWriteDeniedError`` and sends
+    nothing. ``write_property`` and the other typed calls don't look at
+    it. Frozen (the class too: ``GUARDED`` can't be reassigned), equal to
+    another policy refusing the same priorities, and hashable.
+
+    Usage::
+
+        policy = WritePolicy().allow_priorities([1])
+        async with BACnetClient(write_policy=policy) as client:
+            await client.relinquish("192.168.1.100:47808", oid, 1)
+    """
+
+    GUARDED: tuple[int, ...]
+    """The priorities the default refuses: ``(1, 2, 5, 6)``."""
+
+    def __init__(self) -> None:
+        """The default policy, refusing ``GUARDED``."""
+        ...
+
+    def allow_priorities(self, priorities: Iterable[int]) -> WritePolicy:
+        """The same policy, allowing ``priorities`` (ints from 1 to 16) as
+        well; this one is unchanged. One that isn't an int raises TypeError,
+        a bool included, and an int outside 1 to 16 ValueError."""
+        ...
+
+    def allows(self, priority: int) -> bool:
+        """Whether a relinquish at ``priority`` may go."""
+        ...
+
+    @property
+    def refused(self) -> tuple[int, ...]:
+        """The priorities refused, 1 first."""
+        ...
+
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+    def __repr__(self) -> str: ...
+
+
 class CovNotification:
     """A Change-of-Value notification received from a remote device."""
 
@@ -3055,6 +3220,54 @@ class BacnetAmbiguousDeviceError(BacnetError):
     """
     instance: int
     candidates: list[tuple[int, bytes]]
+
+class BacnetWriteDeniedError(BacnetError):
+    """Raised when the client's ``write_policy`` refuses the priority a
+    ``relinquish`` names (#2561): 1, 2, 5 or 6 by default. Nothing was
+    sent. The message says how to allow it:
+    ``BACnetClient(write_policy=WritePolicy().allow_priorities([n]))``.
+
+    Attributes:
+        priority: The priority refused, 1 to 16.
+        relinquish: True for a relinquish.
+        object_id: The object named.
+        property_id: The property named (Present_Value for a relinquish).
+        array_index: The array index named, None for the whole property.
+    """
+    priority: int
+    relinquish: bool
+    object_id: ObjectIdentifier
+    property_id: PropertyIdentifier
+    array_index: Optional[int]
+
+class BacnetReadBackError(BacnetError):
+    """Raised when the device acknowledged a ``relinquish``, so it took
+    effect, but the read of the object's priorities after it failed
+    (#2561). Don't send it again: read them with ``priority_array`` once the
+    device answers. ``__cause__`` is why the read failed, such as a
+    ``BacnetTimeoutError``; this class is not one, so a retry on timeouts
+    leaves it alone.
+
+    Attributes:
+        written: The relinquish as the device acknowledged it.
+    """
+    written: Written
+
+class BacnetNoPriorityArrayError(BacnetProtocolError):
+    """Raised when the device says the object has no Priority_Array, so its
+    Present_Value isn't commandable: a value object built without one
+    (#2561). ``error_class`` and ``error_code`` are the device's PROPERTY
+    and UNKNOWN_PROPERTY. After a ``relinquish``, the device took the NULL
+    first as a write to a property that isn't commandable, which changes
+    nothing, and ``written`` holds it.
+
+    Attributes:
+        object_id: The object.
+        written: The relinquish acknowledged before the read; None for
+            ``priority_array``, which writes nothing.
+    """
+    object_id: ObjectIdentifier
+    written: Optional[Written]
 
 class BacnetTransportError(BacnetError, OSError):
     """Raised when a transport socket or I/O operation fails.
@@ -3834,8 +4047,16 @@ class BACnetClient:
         sc_connect_timeout_ms: int | None = None,
         sc_control_rate_limit: tuple[int, int] | None = None,
         router: Optional[BACnetRouter] = None,
+        write_policy: Optional[WritePolicy] = None,
     ) -> None:
-        """``transport="router"`` with ``router`` (a ``BACnetRouter`` built
+        """``write_policy`` (default None, which is ``WritePolicy()``): the
+        priorities ``relinquish`` may use. The default refuses 1, 2, 5 and 6
+        with ``BacnetWriteDeniedError``, sending nothing;
+        ``WritePolicy().allow_priorities([...])`` allows some of them too
+        (#2561). ``write_property`` and the other typed calls don't look at
+        it. Anything but a ``WritePolicy`` raises TypeError.
+
+        ``transport="router"`` with ``router`` (a ``BACnetRouter`` built
         with ``application="client"`` or ``"client_and_server"``): run the
         client on the router's own application entity (#2071), with the
         router's address on each network as its own. Entry takes the client's
@@ -3983,8 +4204,74 @@ class BACnetClient:
         """Write a single property on a remote device.
 
         Priority is None or 1..16. Invalid u8 priorities raise ValueError
-        synchronously; integers outside u8 raise OverflowError.
+        synchronously; integers outside u8 raise OverflowError. The client's
+        ``write_policy`` doesn't apply: this is the low-level write.
         """
+        ...
+
+    # --- Priorities (#2561) ---
+
+    def relinquish(
+        self, address: str, object_id: ObjectIdentifier, priority: int
+    ) -> Awaitable[PriorityView]:
+        """Release a command: NULL written to the object's Present_Value at
+        ``priority``, so the next slot down, or Relinquish_Default, takes
+        over. Then the object's priorities as read just after: one
+        WriteProperty, then one ReadPropertyMultiple, or a ReadProperty of
+        each of the three properties when the device refuses that.
+
+        ``address`` is a station on this client's own network, in the forms
+        ``read_property`` takes; it is always an address, never a device
+        instance or a target, here and in every later call. Nothing is
+        looked up first: the device needn't be in the discovery table.
+
+        ``priority`` is required, an int from 1 to 16: a relinquish names
+        the slot it releases, and is never a write of Relinquish_Default.
+        Before the Future is made, a bool, a float or another type raises
+        TypeError and another int ValueError, as does address text the
+        parser refuses. Raised on await, with nothing sent: ValueError for
+        an address the client's link can't carry (a 3-octet VMAC on B/IP,
+        say, or any address on ``transport="router"``, whose application has
+        no network of its own) and for an object type with no Priority_Array
+        (an input, or a Channel, which passes commands on to its members);
+        ``BacnetWriteDeniedError`` for a priority the client's
+        ``write_policy`` refuses (1, 2, 5 and 6 by default). Then the
+        device's refusal of the write raises ``BacnetProtocolError``,
+        ``BacnetRejectError`` or ``BacnetAbortError``. A device that never
+        answers raises ``BacnetTimeoutError``, where ``write_property`` and
+        ``read_property`` raise ``BacnetAbortError`` with reason 10
+        (TSM_TIMEOUT); the write may or may not have been applied. A
+        relinquish the device acknowledged whose read after it failed raises
+        ``BacnetReadBackError``, and one whose read says the object has no
+        Priority_Array raises ``BacnetNoPriorityArrayError``: both hold the
+        acknowledged write as ``written``, and it needs no second send.
+        """
+        ...
+
+    def priority_array(
+        self, address: str, object_id: ObjectIdentifier
+    ) -> Awaitable[PriorityView]:
+        """Read an object's commands: its Priority_Array, Relinquish_Default
+        and Present_Value in one ReadPropertyMultiple (a ReadProperty of
+        each when the device refuses that), as a ``PriorityView``.
+
+        ``address`` is as ``relinquish`` takes it: always an address, never
+        a device instance or a target. Address text the parser refuses
+        raises ValueError before the Future is made. An address the
+        client's link can't carry (any on ``transport="router"``), or an
+        object type with no Priority_Array, raises ValueError on await, with
+        nothing sent. A device that says the object has none raises
+        ``BacnetNoPriorityArrayError``, its other refusals the usual
+        protocol errors. A device that never answers raises
+        ``BacnetTimeoutError``, where ``read_property`` raises
+        ``BacnetAbortError`` with reason 10 (TSM_TIMEOUT).
+        """
+        ...
+
+    @property
+    def write_policy(self) -> WritePolicy:
+        """The priorities ``relinquish`` may use, as ``write_policy=`` set
+        them."""
         ...
 
     def read_property_multiple(
@@ -4150,8 +4437,20 @@ class BACnetClient:
         object_id: ObjectIdentifier,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
+        scope: Literal["local", "global"] | int = "local",
     ) -> Awaitable[None]:
-        """Broadcast Who-Has by object identifier.
+        """Send a Who-Has by object identifier. Answers come through
+        ``i_have_events()``.
+
+        ``scope`` says where it goes, as for ``who_is()`` (#2596):
+        ``"local"``, the default, is this network alone, which no router
+        passes on; ``"global"`` is every network, where every device that
+        hears it searches its objects; a number from 1 to 65534 is that
+        remote network, through its router. Another name or number raises
+        ``ValueError``, and another type ``TypeError``, before anything is
+        sent. A client on ``transport="router"`` has no network of its own,
+        so its Who-Has names one, or every one: a local one raises
+        ``ValueError`` saying so.
 
         Give ``low_limit`` and ``high_limit`` together or not at all, each from
         0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
@@ -4164,12 +4463,12 @@ class BACnetClient:
         name: str,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
+        scope: Literal["local", "global"] | int = "local",
     ) -> Awaitable[None]:
-        """Broadcast Who-Has by object name.
-
-        Give ``low_limit`` and ``high_limit`` together or not at all, each from
-        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
-        past 4194303 raises ``ValueError`` before anything is sent.
+        """Send a Who-Has by object name, compared exactly. The limits and
+        ``scope`` follow ``who_has_by_id()``'s rules: this network alone
+        unless ``scope`` names every network (``"global"``) or one remote
+        network by its number.
         """
         ...
 
@@ -4179,13 +4478,20 @@ class BACnetClient:
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
         timeout_ms: int = 3000,
+        scope: Literal["local", "global"] | int = "local",
     ) -> Awaitable[list[IHave]]:
-        """Broadcast a Who-Has for ``object`` (an identifier, or a name) and
-        collect the I-Haves that answer it for ``timeout_ms``: one per device
-        and object, in arrival order; an empty list when none answer. The
-        limits follow ``who_has_by_id()``'s rule (#1850). It holds the
-        started client for the whole wait, so ``stop()`` waits up to
-        ``timeout_ms`` for it."""
+        """Send a Who-Has for ``object`` (an identifier, or a name) and
+        collect the I-Haves that answer it from that scope for
+        ``timeout_ms``: one per device, object and station (a station's copy
+        through a router on this client's own network is its local answer),
+        in arrival order; an empty list when none answer. An I-Have heard
+        from elsewhere during the wait is not an answer, and collection stops
+        at 4096 answers, so a list of exactly that many may have been cut
+        short. The limits and ``scope``
+        follow ``who_has_by_id()``'s rules (#1850, #2596): with the default
+        scope an empty list says only that nothing on this network has the
+        object. It holds the started client for the whole wait, so ``stop()``
+        waits up to ``timeout_ms`` for it."""
         ...
 
     def i_have_events(self) -> Awaitable[IHaveIterator]:

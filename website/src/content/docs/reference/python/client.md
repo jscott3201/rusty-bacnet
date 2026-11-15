@@ -68,6 +68,10 @@ colon hex such as `"01:02:03:04:05:06"` (SC, or `"00:04:d2"` for a
 VMAC), or an MS/TP station. `"[ip]:port"` raises ValueError: use
 `resolve_vmac`. So does a `bip6:` address on any other transport.
 
+Properties:
+
+- `write_policy: WritePolicy`: The priorities `relinquish` may use, as `write_policy=` set them.
+
 ### BACnetClient.__init__
 
 ```python
@@ -112,8 +116,16 @@ def __init__(
     sc_connect_timeout_ms: int | None = None,
     sc_control_rate_limit: tuple[int, int] | None = None,
     router: Optional[BACnetRouter] = None,
+    write_policy: Optional[WritePolicy] = None,
 ) -> None
 ```
+
+`write_policy` (default None, which is `WritePolicy()`): the
+priorities `relinquish` may use. The default refuses 1, 2, 5 and 6
+with `BacnetWriteDeniedError`, sending nothing;
+`WritePolicy().allow_priorities([...])` allows some of them too
+(#2561). `write_property` and the other typed calls don't look at
+it. Anything but a `WritePolicy` raises TypeError.
 
 `transport="router"` with `router` (a `BACnetRouter` built
 with `application="client"` or `"client_and_server"`): run the
@@ -275,7 +287,76 @@ def write_property(
 Write a single property on a remote device.
 
 Priority is None or 1..16. Invalid u8 priorities raise ValueError
-synchronously; integers outside u8 raise OverflowError.
+synchronously; integers outside u8 raise OverflowError. The client's
+`write_policy` doesn't apply: this is the low-level write.
+
+### BACnetClient.relinquish
+
+```python
+def relinquish(
+    self,
+    address: str,
+    object_id: ObjectIdentifier,
+    priority: int,
+) -> Awaitable[PriorityView]
+```
+
+Release a command: NULL written to the object's Present\_Value at
+`priority`, so the next slot down, or Relinquish\_Default, takes
+over. Then the object's priorities as read just after: one
+WriteProperty, then one ReadPropertyMultiple, or a ReadProperty of
+each of the three properties when the device refuses that.
+
+`address` is a station on this client's own network, in the forms
+`read_property` takes; it is always an address, never a device
+instance or a target, here and in every later call. Nothing is
+looked up first: the device needn't be in the discovery table.
+
+`priority` is required, an int from 1 to 16: a relinquish names
+the slot it releases, and is never a write of Relinquish\_Default.
+Before the Future is made, a bool, a float or another type raises
+TypeError and another int ValueError, as does address text the
+parser refuses. Raised on await, with nothing sent: ValueError for
+an address the client's link can't carry (a 3-octet VMAC on B/IP,
+say, or any address on `transport="router"`, whose application has
+no network of its own) and for an object type with no Priority\_Array
+(an input, or a Channel, which passes commands on to its members);
+`BacnetWriteDeniedError` for a priority the client's
+`write_policy` refuses (1, 2, 5 and 6 by default). Then the
+device's refusal of the write raises `BacnetProtocolError`,
+`BacnetRejectError` or `BacnetAbortError`. A device that never
+answers raises `BacnetTimeoutError`, where `write_property` and
+`read_property` raise `BacnetAbortError` with reason 10
+(TSM\_TIMEOUT); the write may or may not have been applied. A
+relinquish the device acknowledged whose read after it failed raises
+`BacnetReadBackError`, and one whose read says the object has no
+Priority\_Array raises `BacnetNoPriorityArrayError`: both hold the
+acknowledged write as `written`, and it needs no second send.
+
+### BACnetClient.priority_array
+
+```python
+def priority_array(
+    self,
+    address: str,
+    object_id: ObjectIdentifier,
+) -> Awaitable[PriorityView]
+```
+
+Read an object's commands: its Priority\_Array, Relinquish\_Default
+and Present\_Value in one ReadPropertyMultiple (a ReadProperty of
+each when the device refuses that), as a `PriorityView`.
+
+`address` is as `relinquish` takes it: always an address, never
+a device instance or a target. Address text the parser refuses
+raises ValueError before the Future is made. An address the
+client's link can't carry (any on `transport="router"`), or an
+object type with no Priority\_Array, raises ValueError on await, with
+nothing sent. A device that says the object has none raises
+`BacnetNoPriorityArrayError`, its other refusals the usual
+protocol errors. A device that never answers raises
+`BacnetTimeoutError`, where `read_property` raises
+`BacnetAbortError` with reason 10 (TSM\_TIMEOUT).
 
 ### BACnetClient.read_property_multiple
 
@@ -442,10 +523,22 @@ def who_has_by_id(
     object_id: ObjectIdentifier,
     low_limit: Optional[int] = None,
     high_limit: Optional[int] = None,
+    scope: Literal["local", "global"] | int = "local",
 ) -> Awaitable[None]
 ```
 
-Broadcast Who-Has by object identifier.
+Send a Who-Has by object identifier. Answers come through
+`i_have_events()`.
+
+`scope` says where it goes, as for `who_is()` (#2596):
+`"local"`, the default, is this network alone, which no router
+passes on; `"global"` is every network, where every device that
+hears it searches its objects; a number from 1 to 65534 is that
+remote network, through its router. Another name or number raises
+`ValueError`, and another type `TypeError`, before anything is
+sent. A client on `transport="router"` has no network of its own,
+so its Who-Has names one, or every one: a local one raises
+`ValueError` saying so.
 
 Give `low_limit` and `high_limit` together or not at all, each from
 0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit
@@ -459,14 +552,14 @@ def who_has_by_name(
     name: str,
     low_limit: Optional[int] = None,
     high_limit: Optional[int] = None,
+    scope: Literal["local", "global"] | int = "local",
 ) -> Awaitable[None]
 ```
 
-Broadcast Who-Has by object name.
-
-Give `low_limit` and `high_limit` together or not at all, each from
-0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit
-past 4194303 raises `ValueError` before anything is sent.
+Send a Who-Has by object name, compared exactly. The limits and
+`scope` follow `who_has_by_id()`'s rules: this network alone
+unless `scope` names every network (`"global"`) or one remote
+network by its number.
 
 ### BACnetClient.who_has_replies
 
@@ -477,15 +570,22 @@ def who_has_replies(
     low_limit: Optional[int] = None,
     high_limit: Optional[int] = None,
     timeout_ms: int = 3000,
+    scope: Literal["local", "global"] | int = "local",
 ) -> Awaitable[list[IHave]]
 ```
 
-Broadcast a Who-Has for `object` (an identifier, or a name) and
-collect the I-Haves that answer it for `timeout_ms`: one per device
-and object, in arrival order; an empty list when none answer. The
-limits follow `who_has_by_id()`'s rule (#1850). It holds the
-started client for the whole wait, so `stop()` waits up to
-`timeout_ms` for it.
+Send a Who-Has for `object` (an identifier, or a name) and
+collect the I-Haves that answer it from that scope for
+`timeout_ms`: one per device, object and station (a station's copy
+through a router on this client's own network is its local answer),
+in arrival order; an empty list when none answer. An I-Have heard
+from elsewhere during the wait is not an answer, and collection stops
+at 4096 answers, so a list of exactly that many may have been cut
+short. The limits and `scope`
+follow `who_has_by_id()`'s rules (#1850, #2596): with the default
+scope an empty list says only that nothing on this network has the
+object. It holds the started client for the whole wait, so `stop()`
+waits up to `timeout_ms` for it.
 
 ### BACnetClient.i_have_events
 

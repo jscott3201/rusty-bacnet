@@ -18,11 +18,12 @@ targets, values and devices the same way and obey the same request limits.
 - `client`: `Client`, the read operations over a `BACnetClient`:
   properties (by ReadPropertyMultiple, falling back to ReadProperty),
   the object list, a device summary, trend log pages, alarms and the
-  alarm and enrollment summaries, and Who-Is and Who-Is-Router-To-Network
-  with the discovery table. `Client::bip()`, `bip6()`, `sc(..)` and
-  `mstp(..)` connect without naming a transport type. A discovery
-  (`Discover`) sends a local broadcast, which no router passes on, unless
-  it names one network or every network.
+  alarm and enrollment summaries, Who-Is and Who-Is-Router-To-Network
+  with the discovery table, and Who-Has. `Client::bip()`, `bip6()`,
+  `sc(..)` and `mstp(..)` connect without naming a transport type. A
+  discovery (`Discover`) or an object search (`Find`) sends a local
+  broadcast, which no router passes on, unless it names one network or
+  every network.
 - `reading` and `error`: what a read returns, a `Value` (typed data,
   display text and the octets sent) a property, gathered into `Readings`
   by a bulk read, which keeps a refused property's error in its row and

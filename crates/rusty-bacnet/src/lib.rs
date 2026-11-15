@@ -18,6 +18,7 @@ mod errors;
 mod event_stream;
 mod export_223;
 mod group_members;
+mod high_level;
 mod hub;
 mod hub_bindings;
 mod load_shedder;
@@ -82,6 +83,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     sc_events::register(m)?;
     discovery::register(m)?;
     export_223::register(m)?;
+    high_level::register(m)?;
     sc_inspection::register(m)?;
     endpoint::register(m)?;
     router::register(m)?;
