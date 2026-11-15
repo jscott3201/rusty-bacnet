@@ -50,3 +50,10 @@ path = "fuzz_targets/service_decode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "tag_tree_decode"
+path = "fuzz_targets/tag_tree_decode.rs"
+test = false
+doc = false
+bench = false
