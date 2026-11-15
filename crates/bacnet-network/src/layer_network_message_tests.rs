@@ -167,9 +167,9 @@ async fn only_the_two_questions_are_sent() {
     }
 }
 
-/// The sendable list is the three messages, and Initialize-Routing-Table
-/// is on it only for the query: `send_network_message` still refuses it
-/// with any payload, so the update form has no way out.
+/// The sendable list is the two questions: `send_network_message` refuses
+/// Initialize-Routing-Table with any payload, so the update form has no
+/// way out.
 #[tokio::test]
 async fn the_update_form_of_initialize_routing_table_cannot_be_sent() {
     assert_eq!(
@@ -177,7 +177,6 @@ async fn the_update_form_of_initialize_routing_table_cannot_be_sent() {
         [
             NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
             NetworkMessageType::WHAT_IS_NETWORK_NUMBER,
-            NetworkMessageType::INITIALIZE_ROUTING_TABLE,
         ]
     );
     // A routing table (one network, port 1, no port info), an empty

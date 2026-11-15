@@ -72,23 +72,32 @@ impl BACnetClient {
     /// `router` is the router's address on the local link: `bytes` as
     /// given, such as a `DiscoveredRouter`'s `mac`, or a string in the
     /// binding's address forms (`"ip:port"`, `"bip6:N"`, hex octets, an
-    /// MS/TP station). A broadcast address raises `BacnetError`.
+    /// MS/TP station). An empty or broadcast address raises `ValueError`.
     ///
     /// A long table comes as several acknowledgements with nothing to mark
-    /// the last, so the call returns after `quiet` seconds with no further
-    /// one, or at `total` seconds from the send, or at `max_entries` (4096
-    /// by default, at least 1); the last two set `truncated`.
+    /// the last, so the call returns once `quiet` seconds pass after the
+    /// last acknowledgement from the router (other traffic does not restart
+    /// it), or at `total` seconds from the send, or at `max_entries` (4096
+    /// by default, at least 1); the last two set `truncated`, which covers
+    /// those bounds only. A quiet end does not prove the table whole: on
+    /// MS/TP, acknowledgements after the first wait for the router's token,
+    /// so use a larger `quiet` on a slow trunk.
     ///
     /// A router with an empty table returns a `RoutingTable` with no
-    /// entries. A router that sends nothing within `wait` seconds raises
+    /// entries, as does an older router's acknowledgement with no data. A
+    /// router that sends nothing within `wait` seconds raises
     /// `BacnetTimeoutError`: one that ignores the message looks the same as
-    /// one that is absent, and neither is an empty table. A router that
+    /// one that is absent (on B/IP, so does one that answers from another
+    /// address or port), and neither is an empty table. A router that
     /// refuses with a Reject-Message-To-Network before any acknowledgement
-    /// raises `BacnetNetworkRejectError` with its `reason` and `network`.
-    /// The bounds are 0 to 3600 seconds (`ValueError` otherwise). A router
-    /// behind another router can't be asked: the query is a local message.
-    /// The call holds the started client for the whole wait, so `stop()`
-    /// waits for it.
+    /// raises `BacnetNetworkRejectError` with its `reason` and `network`;
+    /// rejects with reasons 1, 2 and 4 concern a DNET and are ignored. The
+    /// bounds are 0 to 3600 seconds, and `wait` may not exceed `total`
+    /// (`ValueError` otherwise). A client stopped mid-call raises
+    /// `RuntimeError`. A router behind another router can't be asked: the
+    /// query is a local message. One query runs at a time per client; a
+    /// second call waits for the first. The call holds the started client
+    /// for the whole wait, so `stop()` waits for it.
     #[pyo3(signature = (router, *, wait=3.0, quiet=0.5, total=10.0, max_entries=4096))]
     fn routing_table<'py>(
         &self,
@@ -108,6 +117,11 @@ impl BACnetClient {
         };
         if max_entries == 0 {
             return Err(PyValueError::new_err("max_entries must be at least 1"));
+        }
+        if bounds.first_answer > bounds.total {
+            return Err(PyValueError::new_err(format!(
+                "wait ({wait}) must not be longer than total ({total})"
+            )));
         }
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {

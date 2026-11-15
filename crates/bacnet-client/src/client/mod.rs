@@ -611,6 +611,9 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
     i_have_tx: broadcast::Sender<ReceivedIHave>,
     network_report_tx: broadcast::Sender<bacnet_network::layer::ReceivedNetworkReport>,
+    /// The routing-table query's state (#2612), behind one pointer to keep
+    /// the client small.
+    routing_query: Arc<routing_table::RoutingQueries>,
     dispatch_task: Option<JoinHandle<()>>,
     network_number_task: Option<JoinHandle<()>>,
     /// Purges devices not heard from; see `lifecycle::spawn_device_purge`.
@@ -961,6 +964,7 @@ use routed_path_limits::{
 };
 pub(crate) use transaction_peer::TransactionPeer;
 
+pub use bacnet_network::layer::RoutingTableEntry;
 pub use cov::CovPropertySubscription;
 pub use cov_notifications::{
     COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,

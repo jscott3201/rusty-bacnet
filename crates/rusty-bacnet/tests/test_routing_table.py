@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import pickle
+import socket
 import unittest
 
 import rusty_bacnet as rb
@@ -74,7 +75,7 @@ class RoutingTableTests(unittest.IsolatedAsyncioTestCase):
     async def test_bounds_and_arguments_are_checked(self):
         mac = self.ports[0].mac
         for bad in ({"wait": -1.0}, {"quiet": 3601.0}, {"total": float("nan")},
-                    {"max_entries": 0}):
+                    {"max_entries": 0}, {"wait": 11.0}):
             with self.assertRaises(ValueError, msg=bad):
                 await self.client.routing_table(mac, **bad)
         with self.assertRaises(TypeError):
@@ -82,6 +83,38 @@ class RoutingTableTests(unittest.IsolatedAsyncioTestCase):
         # Keyword-only bounds.
         with self.assertRaises(TypeError):
             await self.client.routing_table(mac, 1.0)
+
+    async def test_a_reject_from_the_router_raises_with_reason_and_network(self):
+        # A scripted "router" on loopback: it answers the query with a
+        # Reject-Message-To-Network, first for a DNET (reason 2, ignored),
+        # then unknown message type (reason 3, which ends the call).
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.setblocking(False)
+        self.addCleanup(sock.close)
+        port_number = sock.getsockname()[1]
+        mac = bytes([127, 0, 0, 1]) + port_number.to_bytes(2, "big")
+        client = rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1")
+        await client.__aenter__()
+        self.addAsyncCleanup(self.cleanup, client.stop)
+
+        async def answer():
+            loop = asyncio.get_running_loop()
+            data, peer = await loop.sock_recvfrom(sock, 2048)
+            # BVLL Original-Unicast-NPDU, then NPDU version 1, network
+            # message, type 3, a reason and a network number.
+            self.assertEqual(data[4:8], b"\x01\x84\x06\x00")
+            for reason, network in ((2, 77), (3, 0)):
+                npdu = bytes([1, 0x80, 3, reason]) + network.to_bytes(2, "big")
+                await loop.sock_sendto(sock, b"\x81\x0a" + (4 + len(npdu)).to_bytes(2, "big") + npdu, peer)
+
+        answering = asyncio.ensure_future(answer())
+        with self.assertRaises(rb.BacnetNetworkRejectError) as caught:
+            await client.routing_table(mac, wait=2.0)
+        await answering
+        self.assertEqual(caught.exception.reason, 3)
+        self.assertEqual(caught.exception.network, 0)
+        self.assertFalse(isinstance(caught.exception, rb.BacnetTimeoutError))
 
     async def test_the_entry_bound_marks_a_cut_table(self):
         table = await self.client.routing_table(self.ports[0].mac, max_entries=2)

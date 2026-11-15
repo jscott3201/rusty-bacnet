@@ -2419,29 +2419,42 @@ own link, without changing it (#2612). The call sends one
 Initialize-Routing-Table with a port count of zero, which only asks; no
 argument can turn it into an update. `router` is the router's address on the
 local link: `bytes` as given (a `DiscoveredRouter`'s `mac`) or a string in
-the binding's address forms. A broadcast address raises `BacnetError`.
+the binding's address forms. An empty or broadcast address raises
+`ValueError`.
 
 The result is a frozen `RoutingTable`: `entries` (frozen `RoutingTableEntry`
-records with `network`, `port_id` and `port_info`, in the router's order),
+records with `network`, `port_id` and `port_info`, the octet string the
+standard leaves open, typically dial-up details; in the router's order),
 `acks` (how many acknowledgements carried them) and `truncated`. A long
 table comes as several acknowledgements with nothing to mark the last, so
-the call returns after `quiet` seconds with no further one, at `total`
-seconds from the send, or at `max_entries` entries (at least 1). The last
-two set `truncated`: the table may be incomplete.
+the call returns once `quiet` seconds pass after the last acknowledgement
+from the router (other traffic does not restart it), at `total` seconds
+from the send, or at `max_entries` entries (at least 1). The last two set
+`truncated`, which covers those bounds only: a quiet end does not prove the
+table whole, since on MS/TP acknowledgements after the first wait for the
+router's token. Use a larger `quiet` on a slow trunk.
 
-- A router with an empty table returns a `RoutingTable` with no entries.
+- A router with an empty table, or an older router's acknowledgement with
+  no data, returns a `RoutingTable` with no entries.
 - A router that sends nothing within `wait` seconds raises
-  `BacnetTimeoutError`. A router that ignores the message (an older one, or
-  one that drops it by policy) looks the same as one that is absent, and
-  neither is an empty table.
+  `BacnetTimeoutError`. A router that ignores the message (an older one)
+  looks the same as one that is absent, and on B/IP so does one that
+  answers from another address or port than the one queried. Neither is an
+  empty table.
 - A router that answers with a Reject-Message-To-Network before any
   acknowledgement raises `BacnetNetworkRejectError`, with the router's
-  `reason` octet and `network`.
+  `reason` octet and `network`. Rejects with reasons 1, 2 and 4 concern a
+  DNET, which this local message has none of, and are ignored.
+- A client stopped mid-call raises `RuntimeError`.
 
-Each bound is 0 to 3600 seconds (`ValueError` otherwise). Only a router on
+Each bound is 0 to 3600 seconds, and `wait` may not exceed `total`
+(`ValueError` otherwise). An acknowledgement from the router's own address
+is taken whether it arrives as a unicast or a broadcast. Only a router on
 the client's own link can be asked: the query is a local message, so a
-router behind another router is out of reach. Like `discover_routers()`, it
-holds the started client for the whole wait.
+router behind another router is out of reach. One query runs at a time per
+client (network messages carry no invoke ID), so a second call waits for
+the first. Like `discover_routers()`, it holds the started client for the
+whole wait.
 
 ```python
 for router in await client.discover_routers():

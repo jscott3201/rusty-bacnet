@@ -2155,27 +2155,33 @@ bacnet --json routing-table 192.168.1.1:47808 --wait 5
 address `whois-router` printed, and changes nothing: it sends an
 Initialize-Routing-Table with a port count of zero, a query the command
 cannot turn into an update. Each entry is a network and the router's
-identifier for the port that reaches it, with the port's dial-up details in
-hex only when it has any. `--wait` is the seconds to wait for the first
-answer (default 3). A long table comes as several answers with nothing to
-mark the last, so the command lists what arrived until the router has been
-quiet for half a second, or ten seconds have passed. `--json` prints an
-object:
+identifier for the port that reaches it (`port_id`), with the port
+information octets in hex only when the entry has any (the standard leaves
+them an octet string, typically dial-up details). `--wait` is the seconds to
+wait for the first answer (default 3); the command then listens up to ten
+seconds more for the rest. A long table comes as several answers with
+nothing to mark the last, so the command lists what arrived until the
+router has been quiet for half a second since its last answer, or the time
+is up. `--json` prints an object:
 
 ```json
 { "router": "192.168.1.1:47808",
-  "entries": [{ "network": 1, "port": 1, "port_info": null },
-              { "network": 2, "port": 2, "port_info": null }],
+  "entries": [{ "network": 1, "port_id": 1, "port_info": null },
+              { "network": 2, "port_id": 2, "port_info": null }],
   "truncated": false }
 ```
 
-`truncated` is `true` when a time or size bound ended the answer, so the
-list may be incomplete. A router that sends nothing is an error, not an
-empty table: an older router that ignores the message, one set to drop it
-and an address with no router all look alike. A router that refuses with a
-Reject-Message-To-Network is an error that names the reason. A router
-behind another router cannot be asked, because the query is a local
-message.
+`truncated` is `true` when the time or size bound ended the answer. It
+covers those bounds only: on MS/TP the answers after the first wait for the
+router's token, so a quiet end does not prove the table whole. A router
+that sends nothing is an error that names the time waited, not an empty
+table: an older router that ignores the message and an address with no
+router look alike, and on B/IP so does a router that answers from another
+address or port than the one asked. A router that refuses with a
+Reject-Message-To-Network is an error that names the reason (rejects for a
+network number are ignored, as this message has none). An older router's
+answer with no data counts as an empty table. A router behind another
+router cannot be asked, because the query is a local message.
 
 ### BBMD Management
 

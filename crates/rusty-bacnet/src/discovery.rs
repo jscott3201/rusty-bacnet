@@ -131,8 +131,9 @@ impl PyRoutingTableEntry {
         self.0.port_id
     }
 
-    /// The port information octets: dial-up details for a point-to-point
-    /// link, empty on any other port.
+    /// The port information octets, which the standard defines only as an
+    /// octet string (typically dial-up details for a point-to-point link);
+    /// empty when the entry has none.
     #[getter]
     fn port_info<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.0.port_info)

@@ -1075,7 +1075,7 @@ Properties:
 
 - `network: int`: The network the entry is for.
 - `port_id: int`: The router's identifier for the port that reaches `network`.
-- `port_info: bytes`: The port information octets: dial-up details for a point-to-point link, empty on any other port.
+- `port_info: bytes`: The port information octets, which the standard defines only as an octet string (typically dial-up details for a point-to-point link); empty when the entry has none.
 
 ## RoutingTable
 
@@ -1086,7 +1086,7 @@ Properties:
 
 - `entries: list[RoutingTableEntry]`: The entries in the order the router listed them, across every acknowledgement. Empty for a router that answered with an empty table: a router that did not answer raises instead.
 - `acks: int`: How many acknowledgements carried the entries.
-- `truncated: bool`: Whether the call stopped at its `total` or `max_entries` bound, or lost acknowledgements, rather than after a quiet interval. A table cut short has no marker of its own, so this is the only sign the list may be incomplete.
+- `truncated: bool`: Whether the call stopped at its `total` or `max_entries` bound, or lost acknowledgements, rather than after a quiet interval. It covers those cases only: a quiet end does not prove the table whole (on MS/TP, acknowledgements after the first wait for the router's token), so use a larger `quiet` on a slow trunk.
 
 ## NetworkReport
 

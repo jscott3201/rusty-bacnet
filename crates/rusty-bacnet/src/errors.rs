@@ -238,6 +238,11 @@ pub(crate) fn routing_table_err(err: bacnet_client::client::RoutingTableError) -
             });
             py_err
         }
+        RoutingTableError::InvalidArgument(why) => pyo3::exceptions::PyValueError::new_err(why),
+        // As the binding reports every other stopped client.
+        RoutingTableError::ClientStopped => {
+            pyo3::exceptions::PyRuntimeError::new_err("client stopped during routing_table()")
+        }
         RoutingTableError::Send(error) => to_py_err(error),
         other => BacnetError::new_err(other.to_string()),
     }

@@ -30,19 +30,30 @@ async fn started() -> (
 /// An Initialize-Routing-Table-Ack from `from`, with `entries` as
 /// (network, port) pairs and no port info, as one message.
 async fn ack(inbound: &mpsc::Sender<ReceivedNpdu>, from: &[u8], entries: &[(u16, u8)]) {
+    inbound.send(ack_npdu(from, entries)).await.unwrap();
+}
+
+fn ack_npdu(from: &[u8], entries: &[(u16, u8)]) -> ReceivedNpdu {
     let mut data = vec![entries.len() as u8];
     for &(network, port) in entries {
         data.extend_from_slice(&network.to_be_bytes());
         data.extend_from_slice(&[port, 0]);
     }
-    control(
-        inbound,
+    control_npdu(
         from,
         NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
         &data,
         None,
     )
-    .await;
+}
+
+fn i_am_router_npdu(from: &[u8]) -> ReceivedNpdu {
+    control_npdu(
+        from,
+        NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
+        &[0, 9],
+        None,
+    )
 }
 
 async fn control(
@@ -52,6 +63,16 @@ async fn control(
     payload: &[u8],
     source: Option<NpduAddress>,
 ) {
+    let npdu = control_npdu(from, message_type, payload, source);
+    inbound.send(npdu).await.unwrap();
+}
+
+fn control_npdu(
+    from: &[u8],
+    message_type: NetworkMessageType,
+    payload: &[u8],
+    source: Option<NpduAddress>,
+) -> ReceivedNpdu {
     let mut buf = BytesMut::new();
     encode_npdu(
         &mut buf,
@@ -63,18 +84,15 @@ async fn control(
         },
     )
     .unwrap();
-    inbound
-        .send(ReceivedNpdu {
-            direct_response: None,
-            npdu: buf.freeze(),
-            source_mac: MacAddr::from_slice(from),
-            link_layer_group: false,
-            data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
-            reply_tx: None,
-        })
-        .await
-        .unwrap();
+    ReceivedNpdu {
+        direct_response: None,
+        npdu: buf.freeze(),
+        source_mac: MacAddr::from_slice(from),
+        link_layer_group: false,
+        data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
+        reply_tx: None,
+    }
 }
 
 fn entry(network: u16, port_id: u8) -> RoutingTableEntry {
@@ -258,6 +276,7 @@ async fn a_reject_after_an_ack_is_ignored() {
 #[tokio::test(start_paused = true)]
 async fn the_total_bound_cuts_a_router_that_never_stops() {
     let wait = RoutingTableWait {
+        first_answer: Duration::from_millis(500),
         total: Duration::from_secs(1),
         ..RoutingTableWait::default()
     };
@@ -307,14 +326,187 @@ async fn a_query_that_cannot_be_sent_is_refused_before_it_goes() {
         max_entries: 0,
         ..RoutingTableWait::default()
     };
-    assert!(matches!(
-        client.routing_table(&ROUTER, empty).await,
-        Err(RoutingTableError::Send(_))
-    ));
+    let late = RoutingTableWait {
+        first_answer: Duration::from_secs(11),
+        ..RoutingTableWait::default()
+    };
+    for wait in [empty, late] {
+        assert!(matches!(
+            client.routing_table(&ROUTER, wait).await,
+            Err(RoutingTableError::InvalidArgument(_))
+        ));
+    }
     assert!(matches!(
         client.routing_table(&[], RoutingTableWait::default()).await,
-        Err(RoutingTableError::Send(_))
+        Err(RoutingTableError::InvalidArgument(_))
     ));
     assert!(outbound.try_recv().is_err(), "nothing was sent");
+    client.stop().await.unwrap();
+}
+
+async fn i_am_router(inbound: &mpsc::Sender<ReceivedNpdu>, from: &[u8]) {
+    control(
+        inbound,
+        from,
+        NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
+        &[0, 9],
+        None,
+    )
+    .await;
+}
+
+/// Only an accepted ack restarts the quiet interval: another station's
+/// announcements every 400 ms do not keep a finished table running to the
+/// total bound.
+#[tokio::test(start_paused = true)]
+async fn other_reports_do_not_restart_the_quiet_interval() {
+    let (result, _) = query(RoutingTableWait::default(), |inbound| async move {
+        ack(&inbound, &ROUTER, &[(2, 1), (3, 1)]).await;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            i_am_router(&inbound, &[9]).await;
+        }
+    })
+    .await;
+    let table = result.unwrap();
+    assert_eq!(table.entries.len(), 2);
+    assert!(!table.truncated, "{table:?}");
+}
+
+/// A reject for a DNET (reasons 1, 2 and 4) is for our routed requests, not
+/// this local query; the others from the router end the call.
+#[tokio::test(start_paused = true)]
+async fn rejects_for_a_dnet_are_ignored_and_the_others_end_the_call() {
+    let reject = |reason: RejectMessageReason| async move {
+        query(RoutingTableWait::default(), |inbound| async move {
+            control(
+                &inbound,
+                &ROUTER,
+                NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
+                &[reason.to_raw(), 0, 77],
+                None,
+            )
+            .await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            ack(&inbound, &ROUTER, &[(2, 1)]).await;
+        })
+        .await
+        .0
+    };
+    for ignored in [
+        RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+        RejectMessageReason::ROUTER_BUSY,
+        RejectMessageReason::MESSAGE_TOO_LONG,
+    ] {
+        let table = reject(ignored).await.unwrap();
+        assert_eq!(table.entries, [entry(2, 1)], "{ignored}");
+    }
+    for ending in [
+        RejectMessageReason::OTHER,
+        RejectMessageReason::UNKNOWN_MESSAGE_TYPE,
+        RejectMessageReason::ADDRESSING_ERROR,
+        RejectMessageReason::from_raw(9),
+    ] {
+        assert!(
+            matches!(reject(ending).await, Err(RoutingTableError::Rejected(_))),
+            "{ending}"
+        );
+    }
+}
+
+/// Two calls to one router run one after the other, so each gets the
+/// 2-entry table once, not both answers.
+#[tokio::test(start_paused = true)]
+async fn concurrent_queries_are_serialized() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let wait = RoutingTableWait::default();
+    let (a, b, ()) = tokio::join!(
+        client.routing_table(&ROUTER, wait),
+        client.routing_table(&ROUTER, wait),
+        async {
+            for _ in 0..2 {
+                outbound.recv().await.expect("a query");
+                ack(&inbound, &ROUTER, &[(2, 1), (3, 1)]).await;
+            }
+        }
+    );
+    for table in [a.unwrap(), b.unwrap()] {
+        assert_eq!(table.entries.len(), 2, "{table:?}");
+        assert_eq!(table.acks, 1);
+    }
+    client.stop().await.unwrap();
+}
+
+/// An older router's ack with no data, while the query is outstanding, is an
+/// empty table; outside a call it is no report at all.
+#[tokio::test(start_paused = true)]
+async fn a_data_less_ack_answers_a_query_only_while_one_waits() {
+    let (result, _) = query(RoutingTableWait::default(), |inbound| async move {
+        control(
+            &inbound,
+            &ROUTER,
+            NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
+            &[],
+            None,
+        )
+        .await;
+    })
+    .await;
+    let table = result.unwrap();
+    assert!(table.entries.is_empty());
+    assert_eq!(table.acks, 1);
+
+    let (mut client, inbound, _outbound) = started().await;
+    let mut reports = client.network_reports();
+    control(
+        &inbound,
+        &ROUTER,
+        NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
+        &[],
+        None,
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), reports.recv())
+            .await
+            .is_err()
+    );
+    client.stop().await.unwrap();
+}
+
+/// A collector that falls behind loses reports and says so with
+/// `truncated`.
+#[tokio::test(start_paused = true)]
+async fn a_lagging_collector_marks_the_table_truncated() {
+    // A link whose queue holds the whole burst, filled before the call
+    // reads any of it: the dispatch task publishes far more reports than
+    // the channel holds before the collector runs.
+    let (inbound, inbound_rx) = mpsc::channel(1024);
+    let (outbound_tx, mut outbound) = mpsc::unbounded_channel();
+    let transport = TestTransport::builder()
+        .local_mac(&[1])
+        .inbound(inbound_rx)
+        .on_send(move |frame| {
+            let _ = outbound_tx.send(frame.npdu);
+            async { Ok(()) }
+        })
+        .build();
+    let mut client = BACnetClient::start(ClientConfig::default(), transport)
+        .await
+        .unwrap();
+    for _ in 0..300 {
+        inbound
+            .try_send(i_am_router_npdu(&[9]))
+            .unwrap_or_else(|_| panic!("queue room"));
+    }
+    inbound
+        .try_send(ack_npdu(&ROUTER, &[(2, 1)]))
+        .unwrap_or_else(|_| panic!("queue room"));
+    let table = client
+        .routing_table(&ROUTER, RoutingTableWait::default())
+        .await
+        .unwrap();
+    assert!(outbound.try_recv().is_ok());
+    assert!(table.truncated, "{table:?}");
     client.stop().await.unwrap();
 }

@@ -33,15 +33,33 @@ pub struct DiscoveredRouter {
 /// Read `control` as a report and hand it to the subscribers; `number` is
 /// what [`NumberControl::parse`] made of it. With no subscriber nothing is
 /// parsed. Never waits.
+///
+/// While `query_outstanding` is set (a routing-table query is waiting), an
+/// Initialize-Routing-Table-Ack with no data is published as an empty
+/// table: this client never sends the update form, so such an ack can only
+/// be an older router's answer to the query. Outside a query it is no
+/// report.
 pub(super) fn publish(
     tx: &broadcast::Sender<ReceivedNetworkReport>,
     control: &ReceivedNetworkControl,
     number: Option<NumberControl>,
+    query_outstanding: &std::sync::atomic::AtomicBool,
 ) {
     if tx.receiver_count() == 0 {
         return;
     }
-    if let Some(report) = ReceivedNetworkReport::parse_with(control, number) {
+    let report = ReceivedNetworkReport::parse_with(control, number).or_else(|| {
+        let empty_ack = control.npdu.message_type
+            == Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
+            && control.npdu.payload.is_empty()
+            && query_outstanding.load(std::sync::atomic::Ordering::Acquire);
+        empty_ack.then(|| ReceivedNetworkReport {
+            source_mac: control.source_mac.clone(),
+            source_network: control.npdu.source.clone(),
+            report: NetworkReport::RoutingTable(Vec::new()),
+        })
+    });
+    if let Some(report) = report {
         let _ = tx.send(report);
     }
 }

@@ -208,6 +208,7 @@ async fn routing_table_lists_the_routers_networks_and_silence_is_an_error() {
         .iter()
         .map(|entry| {
             assert_eq!(entry["port_info"], Value::Null, "{entry}");
+            assert!(entry["port_id"].is_u64(), "{entry}");
             entry["network"].as_u64().unwrap()
         })
         .collect();
@@ -217,7 +218,7 @@ async fn routing_table_lists_the_routers_networks_and_silence_is_an_error() {
     // Nothing listens on the discard port: no table, and the error says
     // the router did not answer.
     let output = routing_table("127.0.0.1:9".into(), "1").await;
-    failure(&output, "sent no routing table");
+    failure(&output, "sent no routing table within 1s");
     server.stop().await.unwrap();
     router.stop().await.unwrap();
 }

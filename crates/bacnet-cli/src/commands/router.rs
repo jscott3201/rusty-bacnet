@@ -81,9 +81,10 @@ pub struct RoutingEntryInfo {
     /// The network.
     pub network: u16,
     /// The router's identifier for the port that reaches it.
-    pub port: u8,
-    /// Dial-up details for a point-to-point link as hex octets, the one
-    /// form they have here; `None` on every other port.
+    pub port_id: u8,
+    /// The port information octets (the standard defines only an octet
+    /// string, typically dial-up details) as hex, the one form they have
+    /// here; `None` when the entry has none.
     pub port_info: Option<String>,
 }
 
@@ -96,7 +97,7 @@ impl RoutingTableInfo {
                 .iter()
                 .map(|entry| RoutingEntryInfo {
                     network: entry.network,
-                    port: entry.port_id,
+                    port_id: entry.port_id,
                     port_info: (!entry.port_info.is_empty()).then(|| {
                         entry
                             .port_info
@@ -122,9 +123,14 @@ pub async fn routing_table_cmd<T: TransportPort + 'static>(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     output::print_waiting(wait_secs);
+    let first_answer = std::time::Duration::from_secs(wait_secs);
+    let default = RoutingTableWait::default();
+    // `--wait` is the first answer's wait, so the total grows to cover it
+    // plus the default total's room for the rest of a long table.
     let wait = RoutingTableWait {
-        first_answer: std::time::Duration::from_secs(wait_secs),
-        ..RoutingTableWait::default()
+        first_answer,
+        total: first_answer + default.total,
+        ..default
     };
     let table = client.routing_table(mac, wait).await?;
     let style = AddressStyle::of(client.transport());
@@ -139,7 +145,7 @@ pub async fn routing_table_cmd<T: TransportPort + 'static>(
                 for entry in &info.entries {
                     table.add_row(vec![
                         entry.network.to_string(),
-                        entry.port.to_string(),
+                        entry.port_id.to_string(),
                         entry.port_info.clone().unwrap_or_default(),
                     ]);
                 }
