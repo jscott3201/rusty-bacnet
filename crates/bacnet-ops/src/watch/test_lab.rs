@@ -54,6 +54,10 @@ pub(super) const SUBSCRIBE_COV: u8 = 5;
 pub(super) struct Quirks {
     /// Nothing sent arrives.
     pub(super) muted: AtomicBool,
+    /// The link refuses to send a ReadProperty or an RPM: nothing leaves,
+    /// and the send fails, as a router's application refuses a station
+    /// that names no network.
+    pub(super) unsent_reads: AtomicBool,
     /// Every RPM is rejected as an unknown service.
     pub(super) refuse_rpm: AtomicBool,
     /// Every RPM fails with an OBJECT-class error, as a device failing a
@@ -113,7 +117,24 @@ pub(super) fn link(
         .start(StartMode::Relay(256));
     let (late, injecting) = (builder.handle(), builder.handle());
     let inbound_quirks = Arc::clone(&quirks);
+    let send_quirks = Arc::clone(&quirks);
     builder
+        .on_send(move |frame| {
+            let read = !frame.broadcast
+                && send_quirks.unsent_reads.load(Ordering::Relaxed)
+                && decode_npdu(frame.npdu.clone()).is_ok_and(|decoded| {
+                    let apdu = &decoded.payload;
+                    apdu.len() >= 4 && apdu[0] >> 4 == 0 && [12, RPM].contains(&apdu[3])
+                });
+            async move {
+                match read {
+                    true => Err(bacnet_types::error::Error::Encoding(
+                        "the link refused the send".into(),
+                    )),
+                    false => Ok(()),
+                }
+            }
+        })
         .on_inbound(move |npdu| {
             let quirks = Arc::clone(&inbound_quirks);
             let late = late.clone();

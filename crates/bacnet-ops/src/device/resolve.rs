@@ -337,12 +337,20 @@ impl<T: TransportPort + 'static> Client<T> {
         let in_range = |row: &DiscoveredDevice| {
             range.is_none_or(|r| r.contains(row.object_identifier.instance_number()))
         };
+        // An I-Am from outside the scope asked, heard during the wait, is
+        // no answer to this Who-Is. The network number is read as each
+        // comes: it may be learned during the wait.
+        let scope = request.scope().clone();
+        let asked = |row: &DiscoveredDevice| {
+            let own = self.low_level().network_number();
+            in_range(row) && DeviceAddress::of(row).is_some_and(|a| scope.covers(&a, own))
+        };
         let mut heard = std::collections::BTreeSet::new();
         let deadline = tokio::time::Instant::now() + request.wait;
         loop {
             match tokio::time::timeout_at(deadline, events.recv()).await {
                 Err(_) | Ok(Err(RecvError::Closed)) => break,
-                Ok(Ok(event)) if event.kind != DeviceEventKind::Lost && in_range(&event.device) => {
+                Ok(Ok(event)) if event.kind != DeviceEventKind::Lost && asked(&event.device) => {
                     heard.extend(DeviceAddress::of(&event.device));
                 }
                 Ok(Ok(_)) => {}
@@ -352,7 +360,7 @@ impl<T: TransportPort + 'static> Client<T> {
                     heard.extend(
                         table
                             .iter()
-                            .filter(|r| in_range(r))
+                            .filter(|r| asked(r))
                             .filter_map(DeviceAddress::of),
                     );
                 }

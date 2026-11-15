@@ -151,3 +151,39 @@ async fn the_low_level_send_takes_the_same_default() {
     );
     assert!(who_is_frames(&sent).is_empty());
 }
+
+/// Only the scope asked answers a discovery: an I-Am heard during the wait
+/// from somewhere the Who-Is didn't go (a local device announcing itself,
+/// or answering another caller) is in the table but not in the result. A
+/// discovery of a remote network lists no local device, a directed one
+/// only its station, and a local or global one the local device.
+#[tokio::test(start_paused = true)]
+async fn an_i_am_from_outside_the_scope_is_no_answer() {
+    let bus = Bus::new();
+    let (client, _sent) = client(&bus).await;
+    let wait = Duration::from_secs(1);
+    let heard = |found: Vec<super::Discovered>| -> Vec<u32> {
+        found.iter().map(|found| found.instance).collect()
+    };
+    for (request, expected) in [
+        (Discover::network(7), vec![]),
+        (Discover::directed(at(2)), vec![1002]),
+        (Discover::directed(at(3)), vec![1003]),
+        (Discover::local(), vec![1002, 1003]),
+        (Discover::global(), vec![1002, 1003]),
+    ] {
+        let (found, ()) = tokio::join!(
+            client.discover(request.clone().wait(wait)),
+            announce_twice(&bus)
+        );
+        assert_eq!(heard(found.unwrap()), expected, "{request:?}");
+    }
+    // Both stay in the table, whichever discovery heard them.
+    assert_eq!(client.devices().await.len(), 2);
+
+    async fn announce_twice(bus: &std::sync::Arc<Bus>) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        bus.i_am(2, 1002);
+        bus.i_am(3, 1003);
+    }
+}

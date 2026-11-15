@@ -506,3 +506,43 @@ async fn a_notified_value_clears_the_whole_objects_error() {
     registry.deliver(&value);
     assert!(shared.lock().failure.is_none(), "a value of the property");
 }
+
+/// A first read the link never sent fails the point the same way whether
+/// the watch reads the whole object or one property: `Phase::Failed`, with
+/// no row of text standing in for a value (#2610). Before, the one-property watch kept the refusal as a row.
+#[tokio::test(start_paused = true)]
+async fn a_first_read_never_sent_fails_both_kinds_of_watch_alike() {
+    // No poll within the test: the point stays as its first read left it.
+    let options = WatchOptions {
+        poll_every: Duration::from_secs(3600),
+        ..WatchOptions::default()
+    };
+    let lab = Lab::start(options).await;
+    lab.quirks.unsent_reads.store(true, Ordering::Relaxed);
+    // No subscription either, whose first notification would bring the
+    // values a read couldn't: the point stays as its first read left it.
+    lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
+    let property = Point {
+        device: lab_at(),
+        object: ai(2),
+        watched: Watched::Property {
+            property: PropertyIdentifier::PRESENT_VALUE,
+            index: None,
+        },
+    };
+    let leases = [
+        lab.hub.watch(object(ai(1))).unwrap(),
+        lab.hub.watch(property).unwrap(),
+    ];
+    settle().await;
+    for lease in &leases {
+        let snapshot = lease.snapshot();
+        assert_eq!(snapshot.state, Phase::Failed, "{:?}", lease.point());
+        let note = snapshot.note.as_deref().unwrap_or_default();
+        assert!(note.contains("COV refused"), "{note}");
+        assert!(snapshot.rows.is_empty(), "{:?}", snapshot.rows);
+    }
+    drop(leases);
+    settle().await;
+    lab.stop().await;
+}

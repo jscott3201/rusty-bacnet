@@ -58,7 +58,9 @@ pub use self::discover::{DISCOVER_WAIT, Discover, ResolveScope, Scope};
 pub use self::find::{FIND_WAIT, Find, FoundObject};
 pub use self::log::Naming;
 pub(crate) use self::log::PagedLog;
-pub(crate) use self::read::{Halt, Reader, RpmFailure, rpm_failure, timed_out, unreachable};
+pub(crate) use self::read::{
+    Halt, Reader, RpmFailure, rpm_failure, timed_out, unreachable, unsent,
+};
 pub use self::read::{ListRead, MAX_OBJECTS, ReadVia, Wanted};
 use crate::device::{ClientEvent, DeviceAddress, Follows};
 use crate::format::Value;

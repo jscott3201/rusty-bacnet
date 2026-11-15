@@ -192,6 +192,26 @@ impl Scope {
         }
     }
 
+    /// Whether a device at `address` is one this scope's Who-Is asked,
+    /// `own` being the client's network number once known: any for a
+    /// global one; for a local one, a station on this network; for a
+    /// remote network, a station on it (this network when it is `own`);
+    /// for a directed one, that station. An I-Am from elsewhere during a
+    /// discovery's wait, unasked or the answer to another's Who-Is, is no
+    /// answer to it, as for a Who-Has (`Scope::answered_by`, #2596).
+    pub(crate) fn covers(&self, address: &DeviceAddress, own: Option<u16>) -> bool {
+        let address = address.clone().localized(own);
+        match self {
+            Self::Global => true,
+            Self::Local => address.is_local(),
+            Self::Network(network) => match address.is_local() {
+                true => own == Some(*network),
+                false => address.network() == *network,
+            },
+            Self::Directed(station) => address == station.clone().localized(own),
+        }
+    }
+
     /// Send the Who-Is, once checked ([`station`](Self::station)).
     pub(crate) async fn send<T: TransportPort + 'static>(
         &self,

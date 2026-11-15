@@ -30,7 +30,7 @@ use super::shared::Shared;
 use super::support::{CovSupport, fills_table, refuses_service};
 use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
-use crate::client::{device_error, unreachable};
+use crate::client::{device_error, unreachable, unsent};
 use crate::device::{DeviceAddress, Path};
 use crate::format::{PropertyError, RawRow};
 
@@ -197,7 +197,9 @@ async fn read<T: TransportPort + 'static>(
             .map_err(device_error)
         {
             Ok(data) => Ok(vec![(property, Ok(data))]),
-            Err(error) if unreachable(&error) => Err(error),
+            // A request never sent fails the first read as it does for a
+            // whole object's (`Reader::properties`, #2610), not as a row.
+            Err(error) if unreachable(&error) || unsent(&error) => Err(error),
             Err(error) => Ok(vec![(property, Err(PropertyError::from(error)))]),
         };
     }
