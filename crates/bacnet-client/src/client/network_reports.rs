@@ -117,9 +117,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// The number of the network this client is on, once a
     /// Network-Number-Is has taught it ([`Self::what_is_network_number`]
-    /// asks); `None` until then, and always on a link that takes no
-    /// network number controls. A routed address naming this network is a
-    /// station on this one.
+    /// asks, and the client asks by itself before its first Who-Is or when
+    /// it first stores a routed device, #2572); `None` until then, and
+    /// always on a link that takes no network number controls. A routed
+    /// address naming this network is a station on this one.
     pub fn network_number(&self) -> Option<u16> {
         self.network.local_network_number().get()
     }
@@ -129,7 +130,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// a router in particular, broadcasts a Network-Number-Is in reply,
     /// which comes as [`NetworkReport::NetworkNumberIs`] through
     /// [`Self::network_reports`]. Ask once and keep the answer: the
-    /// standard doesn't want the question repeated.
+    /// standard doesn't want the question repeated. A question sent counts
+    /// as the one the client otherwise asks on first need (#2572), so a
+    /// later Who-Is doesn't ask again.
     pub async fn what_is_network_number(
         &self,
         destination_mac: Option<&[u8]>,
@@ -140,7 +143,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 &[],
                 destination_mac,
             )
-            .await
+            .await?;
+        // It is the client's question too: a later Who-Is or routed row
+        // doesn't ask again (#2572).
+        self.device_table.asking.asked_by_caller();
+        Ok(())
     }
 
     /// Broadcast a Who-Is-Router-To-Network for `network` (or every

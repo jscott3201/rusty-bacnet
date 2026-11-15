@@ -97,6 +97,9 @@ pub(crate) struct ForeignTarget {
     rearmed: Notify,
     /// This target, for the lookups it starts.
     me: Weak<ForeignTarget>,
+    /// The link's returns: one more each time the BBMD takes a registration
+    /// after broadcasts went unproven (#2572, [`answer`]).
+    returns: tokio::sync::watch::Sender<u64>,
     /// Holds a re-registration after it has read the target and before it
     /// sends, so a test can land an activation while one is in flight.
     #[cfg(test)]
@@ -238,6 +241,7 @@ impl ForeignTarget {
             changed: Notify::new(),
             rearmed: Notify::new(),
             me: me.clone(),
+            returns: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
             gate: tokio::sync::Semaphore::new(tokio::sync::Semaphore::MAX_PERMITS),
             #[cfg(test)]

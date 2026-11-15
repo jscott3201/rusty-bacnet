@@ -499,6 +499,12 @@ impl TransportPort for Bip6Transport {
         true
     }
 
+    /// A foreign device's registration taken after broadcasts went
+    /// unproven (#2572); `None` outside foreign mode.
+    fn link_returns(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.foreign_device.as_ref().map(|fd| fd.link_returns())
+    }
+
     /// NORMAL, or FOREIGN with a live view of its registration, which a
     /// Network Port activation can move while the transport runs. This
     /// transport can't act as a BBMD.
@@ -859,6 +865,7 @@ impl TransportPort for Bip6Transport {
                 .send_to(&buf, bbmd_addr)
                 .await
                 .map_err(Error::Transport)?;
+            fd.broadcast_sent();
             return Ok(());
         }
 

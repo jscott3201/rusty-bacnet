@@ -102,6 +102,7 @@ async fn publish_connected_ws<W: WebSocketPort>(
     *c = restored;
     *current = ws.clone();
     hub_limits.publish(&c);
+    hub_limits.returned();
     state_tx.send_replace(c.state);
     c.hub_vmac
 }

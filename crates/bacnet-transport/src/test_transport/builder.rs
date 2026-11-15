@@ -200,6 +200,14 @@ impl TestTransportBuilder {
         self
     }
 
+    /// Report the link's returns on `returns`, as `link_returns` does
+    /// (default: the inner transport's, else none): the test bumps the
+    /// count to say the link is back.
+    pub fn link_returns(mut self, returns: watch::Receiver<u64>) -> Self {
+        self.transport.link_returns = Some(returns);
+        self
+    }
+
     /// Stand in front of `inner`: a real transport, a test double or another
     /// test transport. It supplies every answer no setting here names (MAC,
     /// limits, group rules, B/IP ports, Number controls), runs `start`,

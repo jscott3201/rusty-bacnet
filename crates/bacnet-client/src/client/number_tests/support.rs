@@ -131,6 +131,18 @@ async fn deliver(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], source: &[u8
         .unwrap();
 }
 
+/// Take the What-Is-Network-Number the client asks on its first need
+/// (#2572), checked to be the next frame it sent and a local broadcast.
+pub async fn asked(outbound: &mut mpsc::Receiver<Sent>) {
+    let sent = bounded(outbound.recv()).await.unwrap();
+    assert!(sent.destination.is_empty(), "a broadcast");
+    assert_eq!(
+        sent.npdu.as_ref(),
+        QUERY,
+        "the local What-Is-Network-Number"
+    );
+}
+
 pub fn number(value: u16, flag: u8) -> Vec<u8> {
     vec![1, 0x80, 0x13, (value >> 8) as u8, value as u8, flag]
 }

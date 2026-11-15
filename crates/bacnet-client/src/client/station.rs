@@ -115,6 +115,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &apdu)?;
+        self.ask_before(service_choice).await;
         self.network
             .send_apdu_routed(&buf, network, mac, router, false, NetworkPriority::Normal)
             .await
