@@ -220,11 +220,24 @@ async fn a_given_up_read_frees_its_slot_at_once() {
     };
     let (rows, ()) = tokio::join!(reader.read_bdt(&mac), answer);
     assert!(rows.unwrap().is_empty());
-    assert!(first.await.is_err());
-    // Given up before it starts: refused, and nothing is sent.
+    // Given up while it waited: the given-up error, not a stop's.
+    let given_up = |error: BvlcExchangeError| match error {
+        BvlcExchangeError::Transport(Error::Encoding(message)) => {
+            assert!(message.contains("given up"), "{message}");
+        }
+        other => panic!("not the given-up error: {other}"),
+    };
+    given_up(first.await.unwrap_err());
+    // Given up before it starts: the same error, and nothing is sent.
     let early = BvlcGiveUp::default();
     early.give_up();
-    assert!(reader.with_give_up(&early).read_fdt(&mac).await.is_err());
+    given_up(
+        reader
+            .with_give_up(&early)
+            .read_fdt(&mac)
+            .await
+            .unwrap_err(),
+    );
     let mut packet = [0; 16];
     assert!(
         tokio::time::timeout(Duration::from_millis(100), peer.recv_from(&mut packet))

@@ -18,9 +18,11 @@ use super::*;
 /// is its IPv4 address and UDP port on any B/IP network, local or not),
 /// `"bip6:N"` or `"bip6:0x..."` (a B/IPv6 VMAC), two or more hex octets
 /// `"aa:bb:..."`, or one octet in decimal as `"N"` or `"mstp:N"` (0 to 254,
-/// so `RoutedTarget(5, "10") == RoutedTarget(5, b"\x0a")`). A one-octet
-/// 255 is refused in either form: it is an MS/TP link's broadcast address,
-/// not a station. `router`, when given, is the next hop's address on the
+/// so `RoutedTarget(5, "10") == RoutedTarget(5, b"\x0a")`). The string
+/// forms refuse 255, MS/TP's broadcast; `b"\xff"` is taken, since it is a
+/// station on an ARCNET network, whose broadcast is 0, and the requester
+/// refuses a router that is a broadcast on the local link. `router`, when
+/// given, is the next hop's address on the
 /// local link, in the same forms or as `bytes`, such as a routed
 /// `DiscoveredDevice`'s `mac_address`; without one, a read goes as one
 /// broadcast on the local link that names the destination network. Anything
@@ -65,12 +67,6 @@ fn mac(value: &Bound<'_, PyAny>, what: &str) -> PyResult<Vec<u8>> {
             value.get_type().name()?
         )));
     };
-    // The string forms refuse it already (`parse_address`).
-    if mac == [0xFF] {
-        return Err(PyValueError::new_err(format!(
-            "RoutedTarget {what} b'\\xff' is an MS/TP link's broadcast address, not a station"
-        )));
-    }
     if !(1..=bacnet_npdu::MAX_MAC_LEN).contains(&mac.len()) {
         return Err(PyValueError::new_err(format!(
             "RoutedTarget {what} must be 1 to {} octets, got {}",

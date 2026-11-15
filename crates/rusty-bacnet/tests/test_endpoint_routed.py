@@ -83,12 +83,13 @@ class RoutedTargetTests(unittest.TestCase):
                      (5, "not an address"), (5, b"\x0a", b""), (5, b"\x0a", "nowhere")):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 rb.RoutedTarget(*args)
-        # A one-octet 255 is an MS/TP link's broadcast, however it is written.
-        for args in ((5, b"\xff"), (5, "255"), (5, b"\x0a", b"\xff"), (5, b"\x0a", "mstp:255")):
+        # The string forms spell an MS/TP station, so 255, its broadcast, is
+        # refused; as bytes it may be an ARCNET station (whose broadcast is 0).
+        for args in ((5, "255"), (5, b"\x0a", "mstp:255")):
             with self.subTest(args=args), self.assertRaisesRegex(ValueError, "broadcast"):
                 rb.RoutedTarget(*args)
-        with self.assertRaisesRegex(ValueError, "not a station"):
-            rb.RoutedTarget(5, b"\xff")
+        self.assertEqual(rb.RoutedTarget(5, b"\xff").address, b"\xff")
+        self.assertEqual(rb.RoutedTarget(5, b"\x0a", router=b"\xff").router, b"\xff")
         for args in ((-1, b"\x0a"), (65536, b"\x0a")):
             with self.subTest(args=args), self.assertRaises(OverflowError):
                 rb.RoutedTarget(*args)

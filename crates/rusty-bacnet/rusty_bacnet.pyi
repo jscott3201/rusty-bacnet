@@ -8140,9 +8140,10 @@ class RoutedTarget:
     any B/IP network, local or not), ``"bip6:N"`` or ``"bip6:0x..."`` (a
     B/IPv6 VMAC), two or more hex octets ``"aa:bb:..."``, or one octet in
     decimal as ``"N"`` or ``"mstp:N"`` (0 to 254), so
-    ``RoutedTarget(5, "10") == RoutedTarget(5, b"\\x0a")``. A one-octet 255
-    is refused in either form: it is an MS/TP link's broadcast address, not
-    a station.
+    ``RoutedTarget(5, "10") == RoutedTarget(5, b"\\x0a")``. The string forms
+    refuse 255 (MS/TP's broadcast); ``b"\\xff"`` is taken, a station on an
+    ARCNET network, whose broadcast is 0. A ``router`` that is a broadcast
+    on the local link is refused when a read is called.
 
     ``router`` is the next hop's address on the local link, in the same
     forms or as ``bytes``, such as a routed ``DiscoveredDevice``'s

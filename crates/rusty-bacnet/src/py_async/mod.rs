@@ -130,11 +130,16 @@ where
     spawn_into_py(py, fut, None)
 }
 
-/// [`future_into_py`], with `on_done` run on the event loop as soon as the
-/// asyncio future is done, cancelled included, before any code awaiting it
-/// resumes (#2612). It is for a cancellation that must release something at
-/// once: the aborted Rust future is only dropped later, on a runtime
-/// thread. `on_done` must not block or attach to Python.
+/// [`future_into_py`], with `on_done` run once the asyncio future is done,
+/// cancelled included (#2612): it is a done callback, so it runs on the
+/// event loop's next turn, not when the future is marked done, and code
+/// that awaits the done future may resume before it (awaiting a done future
+/// doesn't yield, and `gather` completes done children at once). It still
+/// releases sooner than the aborted Rust future, which is dropped later on a
+/// runtime thread. A caller that needs the release at once checks `done()`
+/// itself, as the endpoint's table reads do. If the callback can't be added,
+/// the future is cancelled and `on_done` runs before the error is returned.
+/// `on_done` runs once, attached to Python, and must not block.
 pub(crate) fn future_into_py_on_done<'py, F, T>(
     py: Python<'py>,
     fut: F,

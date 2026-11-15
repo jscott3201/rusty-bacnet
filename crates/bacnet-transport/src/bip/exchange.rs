@@ -143,8 +143,10 @@ impl NodeHandle {
         exchange.sent();
         match response.await {
             Ok(outcome) => Ok(outcome?),
-            // The node drops its waiters when the transport stops: a request
-            // cut off by a stop fails as one made after it does (#2612).
+            // Its waiter went without an answer: it was given up, or the
+            // node dropped it as the transport stopped, and then it fails as
+            // a request made after the stop does (#2612).
+            Err(_) if give_up.is_some_and(BvlcGiveUp::is_given_up) => Err(given_up()),
             Err(_) => Err(super::not_started().into()),
         }
     }
@@ -228,8 +230,17 @@ impl NodeHandle {
 /// would find the same request still in flight and be refused. Give one
 /// read to [`BvlcTableReader::with_give_up`]; [`give_up`](Self::give_up)
 /// ends it then, or keeps it from starting.
+///
+/// A read given up, waiting for its answer or not yet started, fails with
+/// [`BvlcExchangeError::Transport`] carrying an [`Error::Encoding`] that
+/// says it was given up; one that had already ended keeps its own outcome.
 #[derive(Clone, Debug, Default)]
 pub struct BvlcGiveUp(Arc<Mutex<GiveUp>>);
+
+/// The error of a read given up through its [`BvlcGiveUp`].
+fn given_up() -> BvlcExchangeError {
+    BvlcExchangeError::Transport(Error::Encoding("BVLC table read given up".into()))
+}
 
 /// Where a [`BvlcGiveUp`]'s read is.
 #[derive(Debug, Default)]
@@ -259,6 +270,11 @@ impl BvlcGiveUp {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether the read was given up.
+    fn is_given_up(&self) -> bool {
+        matches!(*self.lock(), GiveUp::GivenUp)
+    }
+
     /// Admit the read through `node`, unless it was given up. The slot's
     /// lock is held across the admission, so a give-up can't fall between.
     fn begin(
@@ -270,9 +286,7 @@ impl BvlcGiveUp {
     ) -> Result<(Exchange, oneshot::Receiver<Outcome>), BvlcExchangeError> {
         let mut state = self.lock();
         if matches!(*state, GiveUp::GivenUp) {
-            return Err(BvlcExchangeError::Transport(Error::Encoding(
-                "BVLC table read given up".into(),
-            )));
+            return Err(given_up());
         }
         let (exchange, response) = node.begin(peer, request, timeout)?;
         *state = GiveUp::Admitted(Arc::downgrade(node), exchange.id);

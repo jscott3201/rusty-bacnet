@@ -641,7 +641,7 @@ impl PyBipEndpoint {
         // A cancelled read gives its request up before the same read
         // starts again (#2612).
         let key = (super::table_reads::Table::Bdt, target);
-        let (id, give_up) = self.table_reads.begin(py, key)?;
+        let (id, give_up) = self.table_reads.begin(py)?;
         let reads = give_up.clone();
         let read = async move {
             let rows = bvlc_tables(&inner)
@@ -670,7 +670,7 @@ impl PyBipEndpoint {
         let target = crate::bip_options::bip_mac(&address, "address")?;
         let inner = self.lifecycle.session.clone();
         let key = (super::table_reads::Table::Fdt, target);
-        let (id, give_up) = self.table_reads.begin(py, key)?;
+        let (id, give_up) = self.table_reads.begin(py)?;
         let reads = give_up.clone();
         let read = async move {
             let entries = bvlc_tables(&inner)

@@ -3,15 +3,20 @@
 //! Cancelling a read's asyncio future aborts its Rust task, but the task
 //! drops its request later, on a runtime thread, and asyncio runs the
 //! future's done callbacks only on a later turn of the loop. A read of the
-//! same table from the same BBMD started at once after the cancel would find
-//! that request still in flight and be refused. So each read is kept here by
-//! table and BBMD: a new one gives up the last one whose future is done
-//! before it starts, and a read's done callback gives it up and forgets it.
-//! A read whose future isn't done is still wanted, and a second one beside
-//! it is refused as `BACnetClient`'s is.
+//! same table from the same BBMD started in the same turn as the cancel
+//! would find that request still in flight and be refused. So every read is
+//! kept here, by table and BBMD, until its done callback forgets it, and a
+//! new read first gives up and forgets each kept read whose future is done
+//! or whose event loop is closed, so it can never complete. A read whose
+//! future isn't done is still wanted, and a second one beside it is refused
+//! as `BACnetClient`'s is.
+//!
+//! The done callbacks reach the kept reads through a [`Weak`]: a future
+//! that never completes holds its callback, and the callback must not keep
+//! the reads, and so the future itself, alive.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use bacnet_transport::bip::BvlcGiveUp;
 use pyo3::intern;
@@ -37,7 +42,24 @@ struct Started {
 #[derive(Default)]
 struct Reads {
     next: u64,
-    started: HashMap<TableKey, Started>,
+    started: HashMap<TableKey, Vec<Started>>,
+}
+
+impl Reads {
+    /// Take read `id` of `key` out, if it is kept.
+    fn take(&mut self, key: &TableKey, id: u64) -> Option<Started> {
+        let list = self.started.get_mut(key)?;
+        let at = list.iter().position(|read| read.id == id)?;
+        let read = list.swap_remove(at);
+        if list.is_empty() {
+            self.started.remove(key);
+        }
+        Some(read)
+    }
+}
+
+fn lock(reads: &Mutex<Reads>) -> MutexGuard<'_, Reads> {
+    reads.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The reads one endpoint has started; clones share them.
@@ -45,32 +67,48 @@ struct Reads {
 pub(super) struct TableReads(Arc<Mutex<Reads>>);
 
 impl TableReads {
-    fn lock(&self) -> MutexGuard<'_, Reads> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Number a new read of `key`, first giving up the last one, if its
-    /// future is done: cancelled, most often.
-    pub(super) fn begin(&self, py: Python<'_>, key: TableKey) -> PyResult<(u64, BvlcGiveUp)> {
-        let mut reads = self.lock();
-        let done = match reads.started.get(&key) {
-            Some(last) => last
-                .future
-                .bind(py)
-                .call_method0(intern!(py, "done"))?
-                .is_truthy()?,
-            None => false,
-        };
-        if done && let Some(last) = reads.started.remove(&key) {
-            last.give_up.give_up();
+    /// Number a new read, first giving up and forgetting every kept read
+    /// whose future is done, cancelled most often, or can't complete
+    /// because its event loop is closed. Python runs with the lock released,
+    /// and the forgotten reads are dropped after it.
+    pub(super) fn begin(&self, py: Python<'_>) -> PyResult<(u64, BvlcGiveUp)> {
+        let kept: Vec<(TableKey, u64, Py<PyAny>)> = lock(&self.0)
+            .started
+            .iter()
+            .flat_map(|(key, list)| {
+                list.iter()
+                    .map(|read| (*key, read.id, read.future.clone_ref(py)))
+            })
+            .collect();
+        let mut finished = Vec::new();
+        for (key, id, future) in kept {
+            let future = future.bind(py);
+            let done = future.call_method0(intern!(py, "done"))?.is_truthy()?
+                || future
+                    .call_method0(intern!(py, "get_loop"))?
+                    .call_method0(intern!(py, "is_closed"))?
+                    .is_truthy()?;
+            if done {
+                finished.push((key, id));
+            }
         }
-        reads.next += 1;
-        Ok((reads.next, BvlcGiveUp::default()))
+        let (forgotten, id) = {
+            let mut reads = lock(&self.0);
+            let forgotten: Vec<Started> = finished
+                .iter()
+                .filter_map(|(key, id)| reads.take(key, *id))
+                .collect();
+            reads.next += 1;
+            (forgotten, reads.next)
+        };
+        for read in forgotten {
+            read.give_up.give_up();
+        }
+        Ok((id, BvlcGiveUp::default()))
     }
 
-    /// Keep read `id` of `key`, unless a read of `key` that is still
-    /// wanted is kept already: then this one is refused as in flight, and
-    /// the one that runs is the one to give up later.
+    /// Keep read `id` of `key` until its done callback, or a later
+    /// [`begin`](Self::begin), forgets it.
     pub(super) fn started(
         &self,
         key: TableKey,
@@ -78,28 +116,29 @@ impl TableReads {
         future: &Bound<'_, PyAny>,
         give_up: BvlcGiveUp,
     ) {
-        let started = Started {
+        let read = Started {
             id,
             future: future.clone().unbind(),
             give_up,
         };
-        self.lock().started.entry(key).or_insert(started);
+        lock(&self.0).started.entry(key).or_default().push(read);
     }
 
     /// What read `id`'s done callback runs: give it up, if it still runs,
-    /// and forget it, unless a later read of `key` took its place.
+    /// and forget it.
     pub(super) fn on_done(
         &self,
         key: TableKey,
         id: u64,
         give_up: BvlcGiveUp,
     ) -> impl FnOnce() + Send + 'static {
-        let reads = self.clone();
+        let reads: Weak<Mutex<Reads>> = Arc::downgrade(&self.0);
         move || {
             give_up.give_up();
-            let mut reads = reads.lock();
-            if reads.started.get(&key).is_some_and(|last| last.id == id) {
-                reads.started.remove(&key);
+            if let Some(reads) = reads.upgrade() {
+                // Taken out under the lock, dropped after it.
+                let forgotten = lock(&reads).take(&key, id);
+                drop(forgotten);
             }
         }
     }

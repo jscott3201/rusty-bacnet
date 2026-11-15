@@ -6636,8 +6636,9 @@ arguments in that order, positionally or by keyword:
   port on whichever B/IP network it sits), `"bip6:N"` or `"bip6:0x..."` for
   a B/IPv6 VMAC, two or more hex octets `"aa:bb:..."`, or one octet in
   decimal as `"N"` or `"mstp:N"` (0 to 254): `RoutedTarget(5, "10")` equals
-  `RoutedTarget(5, b"\x0a")`. A one-octet 255 is refused in either form: it
-  is an MS/TP link's broadcast address, not a station.
+  `RoutedTarget(5, b"\x0a")`. The string forms refuse 255 (MS/TP's
+  broadcast), while `b"\xff"` is taken: a station on an ARCNET network,
+  whose broadcast is 0.
 - `router`: the next hop's address on the local link, in the same forms or
   as `bytes` (a routed `DiscoveredDevice`'s `mac_address`, or the `mac` of a
   router `BACnetClient.discover_routers()` found), or `None`.

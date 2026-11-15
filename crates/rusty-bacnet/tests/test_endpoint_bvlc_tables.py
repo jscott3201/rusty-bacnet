@@ -8,6 +8,7 @@ loop has no add_reader.
 import ast
 import asyncio
 import struct
+import time
 import unittest
 
 import rusty_bacnet as rb
@@ -164,6 +165,34 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows, [("127.0.0.2:47808", "255.255.255.255")])
         self.assertEqual(answered, [READ_BDT, READ_BDT])
 
+    async def test_a_read_started_while_the_last_result_is_queued_is_kept(self):
+        # The BBMD answers the first and third requests only.
+        plan, answered = [True, False, True], []
+
+        def handle(datagram, source):
+            answered.append(datagram)
+            return [BDT_ACK] if plan[len(answered) - 1] else None
+
+        peer = self.peer(handle)
+        rows = [("127.0.0.2:47808", "255.255.255.255")]
+        # The loop doesn't turn from here until the third read: the first
+        # read goes out and is answered in Rust, and its result waits on the
+        # loop, its future not done yet.
+        first = self.endpoint.read_bdt(peer.address)
+        time.sleep(1.0)
+        self.assertEqual(len(answered), 1)
+        self.assertFalse(first.done())
+        second = self.endpoint.read_bdt(peer.address)
+        time.sleep(0.5)  # its request goes out unanswered
+        self.assertEqual(len(answered), 2)
+        second.cancel()
+        # In the same turn: the second read is kept beside the first, so
+        # this one gives it up and goes out.
+        third = self.endpoint.read_bdt(peer.address)
+        self.assertEqual(await asyncio.wait_for(third, 5), rows)
+        self.assertEqual(await asyncio.wait_for(first, 5), rows)
+        self.assertEqual(answered, [READ_BDT] * 3)
+
     async def test_bad_arguments_and_lifecycle(self):
         for name in ("read_bdt", "read_fdt"):
             method = getattr(self.endpoint, name)
@@ -193,6 +222,57 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
         for cls in (rb.ScEndpoint, rb.MstpEndpoint, rb.EndpointClient):
             for name in ("read_bdt", "read_fdt"):
                 self.assertFalse(hasattr(cls, name))
+
+
+class TableReadAcrossLoopsTests(unittest.TestCase):
+    def test_a_read_left_on_a_closed_loop_hides_no_later_read(self):
+        """A read whose future is never awaited, on a loop that then closes,
+        can never complete: the next read gives it up and goes out."""
+        # Unanswered: the left-over read, then the cancelled one.
+        plan, answered = [False, True, False, True], []
+
+        def handle(datagram, source):
+            answered.append(datagram)
+            return [BDT_ACK] if plan[len(answered) - 1] else None
+
+        peer = RawPeer(handle)
+        self.addCleanup(peer.close)
+        endpoint = rb.BipEndpoint(ENDPOINT + 3, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.0.0.1", apdu_timeout_ms=3000)
+        rows = [("127.0.0.2:47808", "255.255.255.255")]
+
+        async def leave_one():
+            await endpoint.start()
+            endpoint.read_bdt(peer.address)  # never awaited
+            async with asyncio.timeout(5):
+                while not answered:
+                    await asyncio.sleep(0.01)
+
+        async def read_again():
+            try:
+                # Within the left-over read's 3 seconds: still in flight in Rust.
+                self.assertEqual(await asyncio.wait_for(endpoint.read_bdt(peer.address), 2), rows)
+                cancelled = endpoint.read_bdt(peer.address)
+                async with asyncio.timeout(5):
+                    while len(answered) < 3:
+                        await asyncio.sleep(0.01)
+                cancelled.cancel()
+                again = endpoint.read_bdt(peer.address)  # in the same turn
+                self.assertEqual(await asyncio.wait_for(again, 2), rows)
+            finally:
+                await endpoint.close()
+
+        first = asyncio.new_event_loop()
+        try:
+            first.run_until_complete(leave_one())
+        finally:
+            first.close()
+        second = asyncio.new_event_loop()
+        try:
+            second.run_until_complete(read_again())
+        finally:
+            second.close()
+        self.assertEqual(answered, [READ_BDT] * 4)
 
 
 if __name__ == "__main__":
