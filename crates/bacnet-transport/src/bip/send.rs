@@ -172,11 +172,17 @@ impl NodeHandle {
 
     /// Wake the waiting sends each time the socket can take a datagram, for
     /// as long as the node runs: the transport's task for it, which the stop
-    /// joins, owns `socket`.
+    /// joins, owns `socket`. It runs only after a send would have blocked.
     pub(super) async fn relay_writable(self: Arc<Self>, socket: Arc<BipSocket>) {
         loop {
             self.wants_writable.notified().await;
-            let _ = socket.writable().await;
+            // The poll form, through the socket's one write waker, which
+            // nothing else on this socket uses. `writable()` would add a
+            // caller of tokio's async readiness, which the receive path
+            // awaits for every datagram: with that caller, the optimizer
+            // stopped inlining it there, about 215 instructions a request
+            // in the counting harness's B/IP round trips (#2617).
+            let _ = std::future::poll_fn(|cx| socket.poll_send_ready(cx)).await;
             self.writable.notify_waiters();
         }
     }
