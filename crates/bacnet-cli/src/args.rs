@@ -658,8 +658,8 @@ pub(crate) enum Command {
         /// The router's address on the local network, as `whois-router`
         /// prints it.
         target: String,
-        /// Seconds to wait for the router's first answer.
-        #[arg(long, default_value_t = 3)]
+        /// Seconds to wait for the router's first answer (0 to 3600).
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u64).range(0..=3600))]
         wait: u64,
     },
 

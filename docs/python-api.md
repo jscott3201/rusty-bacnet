@@ -2432,7 +2432,11 @@ from the router (other traffic does not restart it), at `total` seconds
 from the send, or at `max_entries` entries (at least 1). The last two set
 `truncated`, which covers those bounds only: a quiet end does not prove the
 table whole, since on MS/TP acknowledgements after the first wait for the
-router's token. Use a larger `quiet` on a slow trunk.
+router's token. Use a larger `quiet` on a slow trunk. A late acknowledgement
+of an earlier query to the same router can also be counted by the next one
+(nothing pairs answers with questions), so leave a gap between repeated
+queries; entries are reported as received, not deduplicated, so a network
+number can appear twice.
 
 - A router with an empty table, or an older router's acknowledgement with
   no data, returns a `RoutingTable` with no entries.

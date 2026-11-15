@@ -1086,7 +1086,7 @@ Properties:
 
 - `entries: list[RoutingTableEntry]`: The entries in the order the router listed them, across every acknowledgement. Empty for a router that answered with an empty table: a router that did not answer raises instead.
 - `acks: int`: How many acknowledgements carried the entries.
-- `truncated: bool`: Whether the call stopped at its `total` or `max_entries` bound, or lost acknowledgements, rather than after a quiet interval. It covers those cases only: a quiet end does not prove the table whole (on MS/TP, acknowledgements after the first wait for the router's token), so use a larger `quiet` on a slow trunk.
+- `truncated: bool`: Whether the call stopped at its `total` or `max_entries` bound, or lost acknowledgements, rather than after a quiet interval. It covers those cases only: a quiet end does not prove the table whole (on MS/TP, acknowledgements after the first wait for the router's token), so use a larger `quiet` on a slow trunk. A late acknowledgement of an earlier query to the same router can also be counted by the next one (nothing pairs answers with questions), so leave a gap between repeated queries; entries are reported as received, so a network number can appear twice.
 
 ## NetworkReport
 

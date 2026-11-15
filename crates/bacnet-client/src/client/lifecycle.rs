@@ -224,7 +224,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let i_have_tx_dispatch = i_have_tx.clone();
         let (network_report_tx, _) = broadcast::channel(NETWORK_REPORT_CHANNEL_CAPACITY);
         let network_report_tx_dispatch = network_report_tx.clone();
-        let routing_query = Arc::new(routing_table::RoutingQueries::default());
+        let (routing_end, routing_ended) = tokio::sync::watch::channel(());
+        let routing_query = Arc::new(routing_table::RoutingQueries::new(routing_ended));
         let routing_query_dispatch = Arc::clone(&routing_query);
         let seg_ack_senders: Arc<SyncMutex<HashMap<SegAckKey, SegmentAckRoute>>> =
             Arc::new(SyncMutex::new(HashMap::new()));
@@ -258,6 +259,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         );
         let device_purge = device_purge_task.abort_handle();
         let dispatch_task = tokio::spawn(async move {
+            // Dropped when this task ends, however it ends (#2612).
+            let _routing_end = routing_end;
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
             let mut order = TurnOrder::default();
 

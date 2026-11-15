@@ -627,7 +627,7 @@ Arguments:
 
 Options:
 
-- `--wait <WAIT>`: Seconds to wait for the router's first answer. Default: `3`.
+- `--wait <WAIT>`: Seconds to wait for the router's first answer (0 to 3600). Default: `3`.
 
 ### bacnet ack-alarm
 

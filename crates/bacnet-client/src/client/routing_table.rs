@@ -72,7 +72,11 @@ pub struct RoutingTable {
     /// quiet interval. It covers those cases only: a quiet end does not
     /// prove the table whole (on MS/TP, acks after the first wait for the
     /// router's token, Clause 9), so a slow trunk wants a larger
-    /// [`RoutingTableWait::quiet`].
+    /// [`RoutingTableWait::quiet`]. A late ack of an earlier query to the
+    /// same router can also be counted by the next one (nothing pairs
+    /// answers with questions), so leave a gap between repeated queries;
+    /// entries are reported as received, so a network number can appear
+    /// twice.
     pub truncated: bool,
 }
 
@@ -91,16 +95,17 @@ pub enum RoutingTableError {
     },
     /// The router answered with a Reject-Message-To-Network before any
     /// acknowledgement (Clause 6.4.4), with a reason that can answer a
-    /// local message: other error, unknown message type or an addressing
-    /// error. Rejects for a DNET (reasons 1, 2 and 4) belong to routed
+    /// local message: other error, unknown message type, an addressing
+    /// error or an unknown reason value. Rejects for a DNET (reasons 1, 2 and 4) belong to routed
     /// requests and are ignored.
     Rejected(RejectMessageToNetwork),
     /// The call's arguments were refused and nothing was sent: no entries
     /// kept, a first-answer wait longer than the total, or a router
     /// address that is empty or a broadcast.
     InvalidArgument(String),
-    /// The client stopped while the call waited. That is not silence from
-    /// the router.
+    /// The client's dispatch task ended while the call waited (the client
+    /// stopped, its link closed or a seat's node stopped). That is not
+    /// silence from the router.
     ClientStopped,
     /// The query was not sent: the link failed or the client's node had
     /// stopped.
@@ -143,11 +148,18 @@ impl From<Error> for RoutingTableError {
 }
 
 /// What [`BACnetClient::routing_table`] shares with the dispatch task.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct RoutingQueries {
-    /// Set while a query waits: the dispatch task then reads a data-less
-    /// Initialize-Routing-Table-Ack as an empty table.
-    pub(super) outstanding: std::sync::atomic::AtomicBool,
+    /// The router a query waits on, while one does: the dispatch task then
+    /// reads a data-less Initialize-Routing-Table-Ack from exactly that
+    /// MAC, not routed, as an empty table. Locked only for an ack with no
+    /// data, never per APDU.
+    pub(super) outstanding: std::sync::Mutex<Option<MacAddr>>,
+    /// Ends (its sender is dropped) when the dispatch task does, however it
+    /// ends: stop, abort, a closed link or a seat's node stopping. A call
+    /// waits on it, so it returns `ClientStopped` at once. It is never
+    /// sent on, so it costs nothing per APDU.
+    ended: tokio::sync::watch::Receiver<()>,
     /// One routing-table query at a time. Network messages carry no invoke
     /// ID, so two queries to one router would each collect both answers.
     /// The mutex guards no data: holding it across the call's awaits is its
@@ -155,12 +167,28 @@ pub(super) struct RoutingQueries {
     gate: tokio::sync::Mutex<()>,
 }
 
-/// Clears the "query outstanding" flag when the call ends, however it ends.
-struct Outstanding<'a>(&'a std::sync::atomic::AtomicBool);
+impl RoutingQueries {
+    /// State for a client whose dispatch task holds the other end of
+    /// `ended`.
+    pub(super) fn new(ended: tokio::sync::watch::Receiver<()>) -> Self {
+        Self {
+            outstanding: std::sync::Mutex::new(None),
+            ended,
+            gate: tokio::sync::Mutex::new(()),
+        }
+    }
+}
+
+/// Clears the "query outstanding" router when the call ends, however it
+/// ends.
+struct Outstanding<'a>(&'a std::sync::Mutex<Option<MacAddr>>);
 
 impl Drop for Outstanding<'_> {
     fn drop(&mut self) {
-        self.0.store(false, std::sync::atomic::Ordering::Release);
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
@@ -207,9 +235,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// DNET, so a router behind another router is out of reach, and acks
     /// that arrive routed (with a source network) are not taken. An ack is
     /// taken when it comes from `router`'s MAC, whether it arrives as a
-    /// unicast or a broadcast. Network messages carry no invoke ID, so the
-    /// client runs one routing-table query at a time: a second call waits
-    /// for the first to finish.
+    /// unicast or a broadcast.
+    ///
+    /// Nothing pairs an answer with its question, so a late ack of an
+    /// earlier query can be counted by the next query to the same router:
+    /// leave a gap between repeated queries. Entries are reported as
+    /// received, not deduplicated, so a network number can appear twice.
+    ///
+    /// Network messages carry no invoke ID, so the client runs one
+    /// routing-table query at a time: a second call waits for the first,
+    /// and its clock starts when it reaches the gate. A call future left
+    /// unpolled can hold the gate: to cancel one, wrap it in a timeout and
+    /// drop it. With `wait.first_answer` equal to `wait.total`, a complete
+    /// answer that arrives at the end can be marked
+    /// [`RoutingTable::truncated`]. Every bound must fit the clock
+    /// (`InvalidArgument` otherwise).
     pub async fn routing_table(
         &self,
         router: &[u8],
@@ -233,16 +273,29 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
         // Held for the whole call, across its awaits: it guards no data.
         let _one_at_a_time = self.routing_query.gate.lock().await;
+        // The call's clock starts here, once it has the gate. Every instant
+        // is checked: a bound too large for the clock is an argument error,
+        // with nothing sent.
+        let start = tokio::time::Instant::now();
+        let overflow =
+            || RoutingTableError::InvalidArgument("a wait is too long for the clock".into());
+        let end = start.checked_add(wait.total).ok_or_else(overflow)?;
+        let first_deadline = start.checked_add(wait.first_answer).ok_or_else(overflow)?;
+        start.checked_add(wait.quiet).ok_or_else(overflow)?;
+        let mut ended = self.routing_query.ended.clone();
+        if ended.has_changed().is_err() {
+            return Err(RoutingTableError::ClientStopped);
+        }
         // Subscribe first, so no answer can arrive before the receiver.
         let mut rx = self.network_reports();
         self.seat_open()?;
-        self.routing_query
+        *self
+            .routing_query
             .outstanding
-            .store(true, std::sync::atomic::Ordering::Release);
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(MacAddr::from_slice(router));
         let _outstanding = Outstanding(&self.routing_query.outstanding);
         self.network.send_routing_table_query(router).await?;
-        let start = tokio::time::Instant::now();
-        let end = start + wait.total;
         let mut last_ack = start;
         let mut table = RoutingTable {
             entries: Vec::new(),
@@ -251,11 +304,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         };
         loop {
             let deadline = if table.acks == 0 {
-                start + wait.first_answer
+                first_deadline
             } else {
-                (last_ack + wait.quiet).min(end)
+                last_ack
+                    .checked_add(wait.quiet)
+                    .map_or(end, |at| at.min(end))
             };
-            let received = match tokio::time::timeout_at(deadline, rx.recv()).await {
+            let step = tokio::select! {
+                step = tokio::time::timeout_at(deadline, rx.recv()) => step,
+                // The sender is never used: this resolves only when the
+                // dispatch task has ended.
+                _ = ended.changed() => return Err(RoutingTableError::ClientStopped),
+            };
+            let received = match step {
                 Ok(Ok(received)) => received,
                 Ok(Err(RecvError::Lagged(missed))) => {
                     warn!(
@@ -269,7 +330,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 Err(_) => {
                     if table.acks == 0 {
                         return Err(RoutingTableError::NoAnswer {
-                            waited: deadline - start,
+                            waited: deadline.saturating_duration_since(start),
                         });
                     }
                     // The quiet interval is the normal end; the total is a

@@ -384,11 +384,17 @@ async fn the_routing_table_of_a_three_port_router_is_read() {
     );
 
     // A router that is gone gives an error, never an empty table: on this
-    // link the send itself fails.
+    // loopback link its end closing stops the client's dispatch too.
     router.stop().await.unwrap();
     let gone = client
         .routing_table(&[ROUTER_MAC], RoutingTableWait::default())
         .await;
-    assert!(matches!(gone, Err(RoutingTableError::Send(_))), "{gone:?}");
+    assert!(
+        matches!(
+            gone,
+            Err(RoutingTableError::ClientStopped | RoutingTableError::Send(_))
+        ),
+        "{gone:?}"
+    );
     client.stop().await.unwrap();
 }

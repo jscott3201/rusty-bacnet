@@ -219,6 +219,10 @@ async fn routing_table_lists_the_routers_networks_and_silence_is_an_error() {
     // the router did not answer.
     let output = routing_table("127.0.0.1:9".into(), "1").await;
     failure(&output, "sent no routing table within 1s");
+
+    // A wait the clock can't hold is refused by the argument parser.
+    let output = routing_table("127.0.0.1:9".into(), "99999999999").await;
+    failure(&output, "99999999999");
     server.stop().await.unwrap();
     router.stop().await.unwrap();
 }

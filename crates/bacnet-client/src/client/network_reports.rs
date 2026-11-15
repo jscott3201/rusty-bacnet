@@ -34,16 +34,17 @@ pub struct DiscoveredRouter {
 /// what [`NumberControl::parse`] made of it. With no subscriber nothing is
 /// parsed. Never waits.
 ///
-/// While `query_outstanding` is set (a routing-table query is waiting), an
-/// Initialize-Routing-Table-Ack with no data is published as an empty
-/// table: this client never sends the update form, so such an ack can only
-/// be an older router's answer to the query. Outside a query it is no
+/// While a routing-table query waits on a router (`queried`), an
+/// Initialize-Routing-Table-Ack with no data from that router's own MAC, not
+/// routed, is published as an empty table: this client never sends the
+/// update form, so such an ack can only be that router's older-style answer
+/// to the query. From any other source, or outside a query, it is no
 /// report.
 pub(super) fn publish(
     tx: &broadcast::Sender<ReceivedNetworkReport>,
     control: &ReceivedNetworkControl,
     number: Option<NumberControl>,
-    query_outstanding: &std::sync::atomic::AtomicBool,
+    queried: &std::sync::Mutex<Option<MacAddr>>,
 ) {
     if tx.receiver_count() == 0 {
         return;
@@ -52,7 +53,12 @@ pub(super) fn publish(
         let empty_ack = control.npdu.message_type
             == Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
             && control.npdu.payload.is_empty()
-            && query_outstanding.load(std::sync::atomic::Ordering::Acquire);
+            && control.npdu.source.is_none()
+            && queried
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                == Some(&control.source_mac);
         empty_ack.then(|| ReceivedNetworkReport {
             source_mac: control.source_mac.clone(),
             source_network: control.npdu.source.clone(),

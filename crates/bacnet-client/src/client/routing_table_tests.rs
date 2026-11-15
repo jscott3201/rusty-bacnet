@@ -405,6 +405,7 @@ async fn rejects_for_a_dnet_are_ignored_and_the_others_end_the_call() {
         RejectMessageReason::OTHER,
         RejectMessageReason::UNKNOWN_MESSAGE_TYPE,
         RejectMessageReason::ADDRESSING_ERROR,
+        RejectMessageReason::from_raw(5),
         RejectMessageReason::from_raw(9),
     ] {
         assert!(
@@ -471,6 +472,129 @@ async fn a_data_less_ack_answers_a_query_only_while_one_waits() {
             .await
             .is_err()
     );
+    client.stop().await.unwrap();
+}
+
+/// The outstanding router is cleared when a call ends, on the same client:
+/// a data-less ack afterwards is no report.
+#[tokio::test(start_paused = true)]
+async fn the_outstanding_query_clears_after_a_call_on_the_same_client() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let (result, ()) = tokio::join!(
+        client.routing_table(&ROUTER, RoutingTableWait::default()),
+        async {
+            outbound.recv().await.expect("the query");
+            ack(&inbound, &ROUTER, &[(2, 1)]).await;
+        }
+    );
+    result.unwrap();
+    let mut reports = client.network_reports();
+    control(
+        &inbound,
+        &ROUTER,
+        NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
+        &[],
+        None,
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), reports.recv())
+            .await
+            .is_err()
+    );
+    client.stop().await.unwrap();
+}
+
+/// While a query to one router waits, a data-less ack from another MAC (or
+/// routed) is no report, so the call stays silent.
+#[tokio::test(start_paused = true)]
+async fn a_data_less_ack_from_another_source_is_no_report() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let mut reports = client.network_reports();
+    let (result, ()) = tokio::join!(
+        client.routing_table(&ROUTER, RoutingTableWait::default()),
+        async {
+            outbound.recv().await.expect("the query");
+            control(
+                &inbound,
+                &[9],
+                NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
+                &[],
+                None,
+            )
+            .await;
+            control(
+                &inbound,
+                &ROUTER,
+                NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
+                &[],
+                Some(NpduAddress {
+                    network: 5,
+                    mac_address: [4].as_slice().into(),
+                }),
+            )
+            .await;
+        }
+    );
+    assert!(matches!(result, Err(RoutingTableError::NoAnswer { .. })));
+    assert!(reports.try_recv().is_err(), "no report was published");
+    client.stop().await.unwrap();
+}
+
+/// A link that closes mid-call ends the call at once as `ClientStopped`,
+/// not as silence after the whole wait.
+#[tokio::test(start_paused = true)]
+async fn a_closed_link_ends_the_call_as_client_stopped() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let started_at = tokio::time::Instant::now();
+    let (result, ()) = tokio::join!(
+        client.routing_table(&ROUTER, RoutingTableWait::default()),
+        async {
+            outbound.recv().await.expect("the query");
+            drop(inbound);
+        }
+    );
+    assert!(
+        matches!(result, Err(RoutingTableError::ClientStopped)),
+        "{result:?}"
+    );
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    // A later call on the stopped client says so too, without waiting.
+    assert!(matches!(
+        client
+            .routing_table(&ROUTER, RoutingTableWait::default())
+            .await,
+        Err(RoutingTableError::ClientStopped | RoutingTableError::Send(_))
+    ));
+    client.stop().await.unwrap();
+}
+
+/// Bounds too large for the clock are an argument error, nothing sent.
+#[tokio::test(start_paused = true)]
+async fn bounds_too_large_for_the_clock_are_refused() {
+    let (mut client, _inbound, mut outbound) = started().await;
+    for wait in [
+        RoutingTableWait {
+            total: Duration::MAX,
+            first_answer: Duration::from_secs(1),
+            ..RoutingTableWait::default()
+        },
+        RoutingTableWait {
+            first_answer: Duration::MAX,
+            total: Duration::MAX,
+            ..RoutingTableWait::default()
+        },
+        RoutingTableWait {
+            quiet: Duration::MAX,
+            ..RoutingTableWait::default()
+        },
+    ] {
+        assert!(matches!(
+            client.routing_table(&ROUTER, wait).await,
+            Err(RoutingTableError::InvalidArgument(_))
+        ));
+    }
+    assert!(outbound.try_recv().is_err(), "nothing was sent");
     client.stop().await.unwrap();
 }
 
