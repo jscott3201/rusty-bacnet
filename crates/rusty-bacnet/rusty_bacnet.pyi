@@ -3979,7 +3979,8 @@ class Frame:
         ...
     @property
     def missed(self) -> int:
-        """Cumulative subscription queue-overflow count sampled at read time."""
+        """Cumulative queue overflow at the first delivery attempt.
+        Redelivery after cancellation keeps this snapshot; iterator.missed is live."""
         ...
 
 class FrameIterator:
@@ -3987,7 +3988,7 @@ class FrameIterator:
 
     Cancelling a read preserves the next frame and the subscription. Explicit
     close or owner shutdown discards queued frames and wakes pending reads.
-    A frame already delivered to an asyncio Future remains that Future's result.
+    A native delivery admitted before close may still complete its asyncio Future.
     Each subscription is independent and never keeps the owner's socket alive.
     Read from one running event loop; concurrent reads keep arrival order.
     """

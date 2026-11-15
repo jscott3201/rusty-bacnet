@@ -6286,7 +6286,8 @@ link peer, not a forwarded packet's original sender.
 
 The queue holds 1–65536 frames. A full queue drops **new** arrivals without
 delaying the transport. `Frame.missed` samples that subscription's cumulative
-overflow count when read; `FrameIterator.missed` also counts failed deliveries
+overflow count at the first delivery attempt; redelivery after cancellation
+keeps that snapshot. `FrameIterator.missed` also counts failed deliveries
 to Python and remains readable after close. Received datagrams rejected by the
 protocol decoder still appear as raw octets; failed operating-system reads do
 not. Outgoing B/IP, B/IPv6 and SC frames appear before the socket write, even
@@ -6296,8 +6297,9 @@ not all traffic on the network. SC observations are plaintext from inside TLS.
 Cancelling `anext(frames)` leaves the subscription usable and preserves a frame
 being delivered for the next read. `await frames.aclose()` discards queued
 frames, wakes pending reads with `StopAsyncIteration` and releases the
-subscription. Closing or dropping the owner does the same. A frame already
-delivered to an asyncio Future remains that Future's result. Restarting an
+subscription. Closing or dropping the owner does the same. Admission to a native
+read and close share one ordering point: a delivery admitted before close may
+still complete its asyncio Future; no later delivery is admitted. Restarting an
 owner needs a new iterator. Read each iterator from one running event loop;
 concurrent reads keep arrival order. A slow or closed event loop can delay
 redelivery, as on the existing event iterators; explicit close ends that wait.

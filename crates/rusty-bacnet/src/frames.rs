@@ -86,7 +86,8 @@ impl PyFrame {
         PyBytes::new(py, &self.frame.bytes)
     }
 
-    /// This subscription's cumulative queue-overflow count when the event was read.
+    /// Cumulative queue overflow at the first delivery attempt. A cancelled
+    /// read's redelivery keeps this snapshot; use the iterator for a live count.
     #[getter]
     fn missed(&self) -> u64 {
         self.missed
@@ -253,6 +254,7 @@ impl PyFrameIterator {
     }
 
     /// Stop observation, discard queued frames and wake pending reads.
+    /// An already admitted native delivery may still complete its Python Future.
     /// This does not stop the owner or cancel its protocol requests.
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let subscription = self.subscription.clone();

@@ -115,6 +115,16 @@ impl Redelivery {
         self.item().take()
     }
 
+    /// The same short lock orders close against native delivery admission.
+    fn close(&self) {
+        let mut item = self.item();
+        self.closed.store(true, Ordering::Release);
+        let discarded = item.take();
+        drop(item);
+        drop(discarded);
+        self.filled.notify_waiters();
+    }
+
     /// Raise one `RuntimeWarning` for a read held up behind a delivery that
     /// has not settled, from a blocking thread so no runtime worker waits
     /// for the GIL.
@@ -176,10 +186,16 @@ struct Delivery {
 }
 
 impl Delivery {
-    /// Count the item handed out as in flight. Runs under the receiver lock.
-    fn arm(&self) {
+    /// Admit this delivery before close, or refuse it. The slot lock is the
+    /// linearization point shared with close; no Python work runs under it.
+    fn arm(&self) -> bool {
+        let _item = self.slot.item();
+        if self.slot.closed.load(Ordering::Acquire) {
+            return false;
+        }
         self.slot.in_flight.fetch_add(1, Ordering::AcqRel);
         self.armed.store(true, Ordering::Release);
+        true
     }
 
     /// Settle an armed delivery, once; an unarmed one has nothing to settle.
@@ -284,9 +300,7 @@ impl<T: Send + 'static, R: EventSource<T> + 'static> LossyReceiver<T, R> {
     /// End this iterator and wake reads waiting for redelivery. The source's
     /// own close must also wake a read currently waiting on its receiver.
     pub(crate) fn close(&self) {
-        self.slot.closed.store(true, Ordering::Release);
-        self.slot.take();
-        self.slot.filled.notify_waiters();
+        self.slot.close();
     }
 
     /// Items lost so far: to lag, or dropped on the way to a read.
@@ -347,24 +361,21 @@ impl<T: Send + 'static, R: EventSource<T> + 'static> LossyReceiver<T, R> {
                     continue;
                 }
                 if let Some(object) = slot.take() {
-                    delivery.arm();
-                    return Some(Next::Again(object));
+                    return delivery.arm().then_some(Next::Again(object));
                 }
                 tokio::select! {
                     biased;
                     () = &mut wake => {}
                     received = rx.recv() => match received {
                         Ok(item) => {
-                            delivery.arm();
-                            return Some(Next::Fresh(item));
+                            return delivery.arm().then_some(Next::Fresh(item));
                         }
                         Err(RecvError::Lagged(lost)) => {
                             slot.missed.fetch_add(lost, Ordering::Relaxed);
                         }
                         Err(RecvError::Closed) => {
                             let object = slot.take()?;
-                            delivery.arm();
-                            return Some(Next::Again(object));
+                            return delivery.arm().then_some(Next::Again(object));
                         }
                     },
                 }

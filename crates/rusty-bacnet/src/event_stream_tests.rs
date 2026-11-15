@@ -21,6 +21,43 @@ fn in_flight<T>(stream: &LossyReceiver<T>) -> usize {
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_item_returned_by_the_source_after_close_is_not_admitted() {
+    // Close exactly inside the ready receive poll, after next() checked
+    // closed at the top of its loop but before it can admit the delivery.
+    struct CloseOnReceive(Arc<Redelivery>);
+    impl EventSource<u32> for CloseOnReceive {
+        async fn recv(&mut self) -> Result<u32, RecvError> {
+            self.0.close();
+            Ok(7)
+        }
+    }
+    let slot = Arc::new(Redelivery::default());
+    let mut stream = LossyReceiver::from_source(CloseOnReceive(slot.clone()));
+    stream.slot = slot;
+    let (next, hook) = stream.next();
+    assert!(next.await.is_none());
+    assert_eq!(stream.slot.in_flight.load(Ordering::Acquire), 0);
+    hook.settled();
+    assert_eq!(stream.missed(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_admitted_delivery_can_settle_after_close_but_a_later_read_ends() {
+    let (tx, rx) = broadcast::channel(4);
+    let stream = LossyReceiver::new(rx);
+    tx.send(1u32).unwrap();
+    tx.send(2).unwrap();
+    let (next, hook) = stream.next();
+    let admitted = next.await;
+    stream.close();
+    assert!(matches!(admitted, Some(Next::Fresh(1))));
+    assert_eq!(in_flight(&stream), 1);
+    assert!(stream.next().0.await.is_none());
+    hook.settled();
+    assert_eq!(in_flight(&stream), 0);
+}
+
+#[tokio::test(start_paused = true)]
 async fn close_interrupts_an_unsettled_delivery_and_refuses_late_put_back() {
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
