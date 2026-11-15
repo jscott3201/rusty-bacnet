@@ -48,6 +48,7 @@ async def main() -> None:
             addr_second = await second.local_address()
             print(f"first at {addr_first}, second at {addr_second}")
 
+            # Each client is a BACnetClient on its endpoint's one socket (#2617).
             first_client = await first.client()
             second_client = await second.client()
             first_server = await first.server()

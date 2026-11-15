@@ -43,6 +43,13 @@ and join teardown. Cancelling the close Future leaves shutdown running;
 await stop() again to join it. Drain duration depends on outstanding requests.
 Entry is exclusive; entering an already running or closing client fails.
 
+`await endpoint.client()` on a `BipEndpoint`, `ScEndpoint` or
+`MstpEndpoint` gives a client of this class on the endpoint's link
+(#2617), with every call, on the endpoint's one address. Its endpoint
+starts it: `async with` only enters it, and once stopped it stays
+stopped (ask the endpoint for another). Its `stop()` ends the client
+role alone.
+
 Usage:
 
 ```python
@@ -270,7 +277,7 @@ def __aexit__(
 ```python
 def read_property(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     property_id: PropertyIdentifier,
     array_index: Optional[int] = None,
@@ -283,13 +290,15 @@ ACK object/property/index must match. Device/Network Port instance 4194303
 requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
 BacnetError; this method returns the property value, not ACK metadata,
 shaped as `PropertyValue` describes for read results.
+`address` is a `str` on the local link, or a `RoutedTarget` for
+a station behind a router (#2617), as `RoutedTarget` describes.
 
 ### BACnetClient.write_property
 
 ```python
 def write_property(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     property_id: PropertyIdentifier,
     value: PropertyValue,
@@ -303,6 +312,8 @@ Write a single property on a remote device.
 Priority is None or 1..16. Invalid u8 priorities raise ValueError
 synchronously; integers outside u8 raise OverflowError. The client's
 `write_policy` doesn't apply: this is the low-level write.
+`address` is a `str` on the local link, or a `RoutedTarget` for
+a station behind a router (#2617), as `RoutedTarget` describes.
 
 ### BACnetClient.device
 
@@ -358,7 +369,7 @@ target.
 ```python
 def read_property_multiple(
     self,
-    address: str,
+    address: str | RoutedTarget,
     specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]],
 ) -> Awaitable[list[ReadAccessResult]]
 ```
@@ -368,6 +379,8 @@ Read multiple properties from a remote device (ReadPropertyMultiple).
 `specs` is a list of `(object_id, [(property_id, array_index), ...])` tuples.
 Returns ordered object/result dictionaries. Empty request/property lists
 are rejected; this standalone profile still permits property selectors.
+`address` is a `str` on the local link, or a `RoutedTarget`
+(#2617).
 
 ### BACnetClient.write_property_multiple
 
@@ -1118,7 +1131,7 @@ Returns `[{"object_id": ObjectIdentifier, "event_type": EventType, "event_state"
 ```python
 def read_range(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     property_id: PropertyIdentifier,
     array_index: Optional[int] = None,
@@ -1150,13 +1163,15 @@ to zero.
 with BacnetReadRangeViolationError, whose `rule` names it;
 `"lenient"` keeps it and lists the rules in `violations` (#1531).
 Decode a log's records with `decode_log_records`.
+`address` is a `str` on the local link, or a `RoutedTarget` for
+a station behind a router (#2617), as `RoutedTarget` describes.
 
 ### BACnetClient.read_log_page
 
 ```python
 def read_log_page(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     cursor: LogCursor = None,
     page_size: int = 100,
@@ -1181,7 +1196,9 @@ records don't decode raises BacnetError, dropping the records before
 the failing one; an answer that breaks a rule the reader can't
 tolerate, such as an echo that doesn't match, raises
 BacnetReadRangeViolationError. A non-log object or a `page_size`
-outside 1..=32767 raises ValueError before I/O.
+outside 1..=32767 raises ValueError before I/O. `address` is a
+`str` on the local link, or a `RoutedTarget` (#2617); every
+request of a page, the count reads included, goes there.
 
 ### BACnetClient.atomic_read_file
 
