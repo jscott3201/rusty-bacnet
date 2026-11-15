@@ -48,14 +48,19 @@ impl PacedEndpointOperation {
             if !inner.open.load(Ordering::Acquire) {
                 return Err(shutdown_error());
             }
-            tsm.register_coordinated_transaction_with_policy(
-                tsm_mac.clone(),
-                peer,
-                service,
-                false,
-                request.terminal_policy(),
-            )
-            .map_err(|error| Error::Encoding(error.to_string()))?
+            let registered = tsm
+                .register_coordinated_transaction_with_policy(
+                    tsm_mac.clone(),
+                    peer,
+                    service,
+                    false,
+                    request.terminal_policy(),
+                )
+                .map_err(|error| Error::Encoding(error.to_string()))?;
+            // Before the request can be answered: the seat's routing tells
+            // this requester's leases from a full client's by the mark.
+            tsm.mark_endpoint_requester(registered.0);
+            registered
         };
         let max_apdu_length = max_apdu_header_at_or_below(u32::from(inner.max_apdu_length))?;
         let guard = EndpointRequestGuard {

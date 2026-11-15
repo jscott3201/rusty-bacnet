@@ -34,7 +34,7 @@ pub struct ReceivedEventNotification {
 }
 
 impl ReceivedEventNotification {
-    fn decode(
+    pub(super) fn decode(
         data: &[u8],
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
