@@ -213,6 +213,15 @@ fn ops_errors_raise_the_typed_calls_classes() {
         assert!(ambiguous.is_instance_of::<BacnetAmbiguousDeviceError>(py));
         let client = ops_err_bip(OpsError::Client(Error::Encoding("bad".into())));
         assert!(client.value(py).get_type().is(py.get_type::<BacnetError>()));
+
+        // SC TLS material, as the binding's own SC startup reports it.
+        let refused = bacnet_ops::ScNodeTlsConfig::from_pem(b"", b"", b"").unwrap_err();
+        let tls = ops_err_bip(OpsError::from(refused));
+        assert!(tls.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+        assert_eq!(
+            tls.value(py).to_string(),
+            "TLS config error: the CA bundle holds no certificate, so nothing would be trusted"
+        );
     });
 }
 

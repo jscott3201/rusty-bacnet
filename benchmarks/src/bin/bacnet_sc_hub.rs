@@ -68,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("--vmac must not be unknown (all zero) or broadcast (all ff)".into());
     }
     let material = Credentials::load(ca, cert, key, ["--ca", "--cert", "--key"])?;
-    let tls = ScHubTlsConfig::from_der(material.ca, material.chain, material.key)?;
+    let tls = ScHubTlsConfig::from_pem(&material.ca, &material.chain, &material.key)
+        .map_err(|e| material.refused(e))?;
 
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)

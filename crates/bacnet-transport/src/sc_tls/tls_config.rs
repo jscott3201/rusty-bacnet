@@ -1,10 +1,12 @@
 //! Immutable local TLS policy for the built-in SC node driver.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, path::Path, sync::Arc};
 
-use bacnet_types::error::Error;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
+
+use super::ScTlsConfigError;
+use super::material::{Material, refused, verifier_refused};
 
 /// Validated node credentials, explicit server trust, and TLS 1.3-only policy.
 /// Available with `sc-tls`; required by the built-in [`super::TlsWebSocket`].
@@ -26,13 +28,16 @@ use tokio_rustls::{TlsAcceptor, TlsConnector};
 /// the base Standard requires TLS 1.3 support. Other implementations of
 /// [`crate::sc::WebSocketPort`] remain outside this built-in driver guarantee.
 ///
-/// Load owned DER at the application boundary (no file/network I/O here):
+/// Build it from the site's PEM files ([`Self::from_pem_files`]), from PEM
+/// already in memory ([`Self::from_pem`]), or from owned DER
+/// ([`Self::from_der`]). Only `from_pem_files` touches the filesystem; none
+/// uses the network:
 ///
 /// ```
-/// use bacnet_transport::sc_tls::ScNodeTlsConfig;
+/// use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError};
 /// use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 /// fn policy(ca: Vec<CertificateDer<'static>>, chain: Vec<CertificateDer<'static>>,
-///           key: PrivateKeyDer<'static>) -> Result<ScNodeTlsConfig, bacnet_types::error::Error> {
+///           key: PrivateKeyDer<'static>) -> Result<ScNodeTlsConfig, ScTlsConfigError> {
 ///     ScNodeTlsConfig::from_der(ca, chain, key)
 /// }
 /// ```
@@ -68,51 +73,90 @@ pub struct ScNodeTlsConfig {
 }
 
 impl ScNodeTlsConfig {
-    /// Validate owned, nonempty CA and leaf-first certificate chains and a
-    /// usable matching private key. Configuration errors use [`Error::Encoding`].
-    /// No ambient trust, filesystem access, or networking is used.
+    /// Build the policy from owned DER: the site CA certificates to trust,
+    /// this node's leaf-first chain, and the leaf's private key. Both lists
+    /// must be nonempty and every certificate usable, and the key must load
+    /// and belong to the leaf; [`ScTlsConfigError`] names the input that
+    /// fails and why. No ambient trust, filesystem access, or networking is
+    /// used. [`Self::from_pem`] and [`Self::from_pem_files`] take PEM.
     pub fn from_der(
         ca_certs: Vec<CertificateDer<'static>>,
         cert_chain: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
-    ) -> Result<Self, Error> {
-        if cert_chain.is_empty() {
-            return Err(Error::Encoding("no client certificates found".into()));
-        }
-        if ca_certs.is_empty() {
-            return Err(Error::Encoding("no CA certificates found".into()));
-        }
-        let mut roots = rustls::RootCertStore::empty();
-        for cert in ca_certs.clone() {
-            roots
-                .add(cert)
-                .map_err(|e| Error::Encoding(format!("failed to add CA cert: {e}")))?;
-        }
-        for cert in &cert_chain {
-            rustls::server::ParsedCertificate::try_from(cert)
-                .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?;
-        }
-        // Match the hub's fixed provider: caller/global key providers cannot
-        // weaken the built-in provider's certificate/key consistency check.
-        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    ) -> Result<Self, ScTlsConfigError> {
+        Self::build(Material::from_der(ca_certs, cert_chain, key)?)
+    }
+
+    /// Build the policy from PEM text: a CA bundle, this node's chain (leaf
+    /// first), and exactly one unencrypted PKCS#8, SEC1 or PKCS#1 private
+    /// key, in PEM that is well formed throughout. Then checked as
+    /// [`Self::from_der`] checks.
+    ///
+    /// Text outside the PEM sections is ignored and CRLF line ends are
+    /// taken. The CA bundle and chain take `CERTIFICATE` sections and skip
+    /// every other kind: a key beside them is skipped, and so is an
+    /// `X509 CRL`, so a bundle's revocation lists are not applied (no
+    /// revocation checking is done). An input whose only certificates are
+    /// OpenSSL `TRUSTED CERTIFICATE` or PKCS#7 sections is refused as
+    /// [`ScTlsConfigError::UnsupportedCertificate`]. The key input skips
+    /// certificates and EC parameters, so a key may share a file with them.
+    pub fn from_pem(
+        ca_bundle: &[u8],
+        cert_chain: &[u8],
+        private_key: &[u8],
+    ) -> Result<Self, ScTlsConfigError> {
+        Self::build(Material::from_pem(ca_bundle, cert_chain, private_key)?)
+    }
+
+    /// Read three PEM files and build the policy as [`Self::from_pem`]
+    /// does. The CA bundle is read and checked before the identity files
+    /// are read. Each file is read once, here, up to
+    /// [`MAX_PEM_FILE_BYTES`](super::MAX_PEM_FILE_BYTES); a later change to
+    /// them takes a new configuration.
+    ///
+    /// ```no_run
+    /// use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError};
+    /// fn policy() -> Result<ScNodeTlsConfig, ScTlsConfigError> {
+    ///     ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")
+    /// }
+    /// ```
+    pub fn from_pem_files(
+        ca_bundle: impl AsRef<Path>,
+        cert_chain: impl AsRef<Path>,
+        private_key: impl AsRef<Path>,
+    ) -> Result<Self, ScTlsConfigError> {
+        Self::build(Material::from_pem_files(
+            ca_bundle.as_ref(),
+            cert_chain.as_ref(),
+            private_key.as_ref(),
+        )?)
+    }
+
+    fn build(material: Material) -> Result<Self, ScTlsConfigError> {
+        let Material {
+            roots,
+            chain,
+            key,
+            provider,
+        } = material;
         // Same WebPKI policy as with_root_certificates, including its no-CRL
         // defaults. The stable wrapper observes evidence without deciding trust.
         let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
-            Arc::new(roots),
+            Arc::clone(&roots),
             Arc::clone(&provider),
         )
         .allow_unknown_revocation_status()
         .build()
-        .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?;
+        .map_err(verifier_refused)?;
         let config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?
+            .map_err(refused)?
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(super::attempt_capture::ObservingVerifier(
                 verifier,
             )))
-            .with_client_auth_cert(cert_chain.clone(), key.clone_key())
-            .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?;
+            .with_client_auth_cert(chain.clone(), key.clone_key())
+            .map_err(refused)?;
         // Server role for the opt-in direct listener: the same explicit CA
         // trust becomes the mandatory client verifier, the same node chain
         // and key become the server identity, and TLS 1.3-only stays fixed.
@@ -120,24 +164,16 @@ impl ScNodeTlsConfig {
         // dial path (explicit trust, peer verification during TLS) with the
         // roles reversed. Peers without a trusted operational certificate
         // fail the TLS handshake before any BACnet exchange.
-        let mut server_roots = rustls::RootCertStore::empty();
-        for cert in ca_certs {
-            server_roots
-                .add(cert)
-                .map_err(|e| Error::Encoding(format!("failed to add CA cert: {e}")))?;
-        }
-        let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
-            Arc::new(server_roots),
-            provider.clone(),
-        )
-        .build()
-        .map_err(|e| Error::Encoding(format!("TLS server auth error: {e}")))?;
+        let verifier =
+            rustls::server::WebPkiClientVerifier::builder_with_provider(roots, provider.clone())
+                .build()
+                .map_err(verifier_refused)?;
         let server_config = rustls::ServerConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|e| Error::Encoding(format!("TLS server auth error: {e}")))?
+            .map_err(refused)?
             .with_client_cert_verifier(verifier)
-            .with_single_cert(cert_chain, key)
-            .map_err(|e| Error::Encoding(format!("TLS server auth error: {e}")))?;
+            .with_single_cert(chain, key)
+            .map_err(refused)?;
         Ok(Self {
             inner: Arc::new(config),
             server_inner: Arc::new(server_config),

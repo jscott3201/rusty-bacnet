@@ -24,7 +24,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::create_exception;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use super::priorities::PyWritten;
@@ -82,6 +82,8 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
             candidates: candidates.into_iter().map(BACnetAddress::from).collect(),
         }),
         OpsError::Denied(denied) => write_denied(&denied),
+        // As the binding's own SC startup reports TLS material it refused.
+        OpsError::Tls(_) => PyRuntimeError::new_err(format!("TLS config error: {message}")),
         OpsError::ReadBack { written, source } => {
             let error = BacnetReadBackError::new_err(message);
             let cause = ops_err(*source, style);
