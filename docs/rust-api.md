@@ -12110,8 +12110,8 @@ readings, via, stopped }` holds one `Reading { object, property, index,
 value: Result<Value, PropertyError> }` a property, in the order asked for. A
 property the device refuses, one of an object it doesn't have, an element
 past an array's end and an object its answer leaves out are errors in their
-own rows. `stopped` is set only when the device stopped answering part way
-(`unreachable()`); `readings` then keeps what was read before it, an
+own rows. `stopped` is set when the device stopped answering part way
+(`unreachable()`), or the client or its link failed a later request; `readings` then keeps what was read before it, an
 object's properties read before it included. `via` is `ReadVia::Mixed` when
 some objects went by RPM and others by ReadProperty (a batch failed whole, a
 single object too large for one answer, or RPM refused part way through).
@@ -12126,12 +12126,17 @@ object's properties (all of them, or a list) in one RPM, or by ReadProperty
 or when it failed this RPM as a whole, as `read_many` does. `ObjectRead {
 object, readings, via }` has a property the device refused as an error in
 its own row. A device that stops answering fails the read, keeping
-nothing. A request that was never sent (no route to the device's network,
-a link that refuses it, a request that can't be encoded) fails the read
-once with that error in `OpsError::Client`, never as rows of error text;
-the same holds for `read_many`, whatever it read before, `describe_device`,
-`priority_array`, a watch's first read and its polls, and the raw
-`Reader::properties` (#2610).
+nothing. A request the client or its link fails itself (no route to the
+device's network, a link that refuses the send, a request that can't be
+encoded) fails the read once with that error in `OpsError::Client`, never
+as rows of error text; the same holds for `describe_device`,
+`priority_array`, a watch's first read and the raw `Reader::properties`
+(#2610). `read_many` and a watch's poll fail that way only while nothing
+was read: after the first rows they keep them and end with the error in
+`stopped`. A request too long for the link or the routed path
+(`Error::SendTooLong`, `Error::RoutedPathTooLong`) is no such failure: it
+falls back to ReadProperty, as an answer too large does. A subscription
+the client fails to send is asked again, and is no refusal by the device.
 
 Every call fails with `OpsError` (`#[non_exhaustive]`): `Parse { what,
 input, reason }` for text that names nothing this client can address,
@@ -12172,7 +12177,7 @@ request jobs: `Reader`, `Halt`, `RpmFailure`, `rpm_failure`, `rpm_rows`,
 | `Error::Encoding` for an Object_List claiming more than `MAX_OBJECTS` elements | `Error::Range` with both numbers, inside `OpsError::Client` from a `Device` read |
 | `Error::Encoding` for a GetEventInformation answer naming an object twice | `OpsError::Paging(PagingFault::Repeated { .. })` |
 | `target::parse_target_on`, `check_local_mac` and `VmacLookup::NotBip6` refusing a link's address with text naming the CLI's `--ipv6` or `--mstp` | neutral text ending in `target::NEEDS_BIP6` or `target::NEEDS_MSTP`; each front end adds its own hint (the CLI its flag, Python its `transport=` keyword) (#2561) |
-| `Reader::properties` and the batch reader keeping a request that was never sent as a row (`PropertyError::Other`) | `Err(Halt::Device(error))` from `Reader::properties`, and the read's error from `Device::read_many` (#2610) |
+| `Reader::properties` and the batch reader keeping a request the client or link failed as a row (`PropertyError::Other`) | `Err(Halt::Device(error))` from `Reader::properties`; from `Device::read_many` the read's error when nothing was read, else `Readings::stopped` (#2610) |
 
 ### Watching points
 

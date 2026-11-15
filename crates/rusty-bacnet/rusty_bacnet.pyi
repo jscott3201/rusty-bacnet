@@ -2859,10 +2859,12 @@ class Readings:
 
     @property
     def stopped(self) -> Optional[BacnetError]:
-        """Set when the device stopped answering after the read began: the
-        ``BacnetTimeoutError`` or ``BacnetTransportError`` a single read
-        would have raised, never raised here. The properties after
-        ``readings`` weren't read. Always None for ``read_object``."""
+        """Set when the read ended after it began: the device stopped
+        answering (the ``BacnetTimeoutError`` or ``BacnetTransportError`` a
+        single read would have raised), or the client's own link failed a
+        later request (a ``BacnetError``). Never raised here. The
+        properties after ``readings`` weren't read. Always None for
+        ``read_object``."""
         ...
 
     def get(
@@ -3274,10 +3276,13 @@ class Device:
         A property the device refuses, or one of an object it doesn't
         have, never raises: its ``Reading.error`` is set and the rest
         stand. A device that stops answering part way ends the read with
-        what was read, and ``Readings.stopped`` says so. Only what is
-        decided before a request is sent raises: a bad item TypeError or
-        ValueError when the call is made, and a device that can't be
-        placed ``BacnetLookupError`` on await."""
+        what was read, and ``Readings.stopped`` says so; so does a later
+        request the client's own link fails (a route lost, a send
+        refused). A read raises only when nothing could be read: a bad item
+        TypeError or ValueError when the call is made; on await a device
+        that can't be placed ``BacnetLookupError``, and a link that fails
+        the first request what a single read raises for it (a
+        ``BacnetError``)."""
         ...
 
     def read_object(
@@ -4980,6 +4985,7 @@ class BACnetClient:
 
     def who_is(
         self,
+        *,
         low: Optional[int] = None,
         high: Optional[int] = None,
         scope: Literal["local", "global"] | int | str = "local",
@@ -5009,6 +5015,7 @@ class BACnetClient:
 
     def discover(
         self,
+        *,
         scope: Literal["local", "global"] | int | str = "local",
         low: Optional[int] = None,
         high: Optional[int] = None,
@@ -5035,6 +5042,7 @@ class BACnetClient:
     def who_has_by_id(
         self,
         object_id: ObjectIdentifier,
+        *,
         low: Optional[int] = None,
         high: Optional[int] = None,
         scope: Literal["local", "global"] | int | str = "local",
@@ -5063,6 +5071,7 @@ class BACnetClient:
     def who_has_by_name(
         self,
         name: str,
+        *,
         low: Optional[int] = None,
         high: Optional[int] = None,
         scope: Literal["local", "global"] | int | str = "local",
@@ -5077,6 +5086,7 @@ class BACnetClient:
     def who_has_replies(
         self,
         object: ObjectIdentifier | str,
+        *,
         low: Optional[int] = None,
         high: Optional[int] = None,
         wait: float = 3.0,
@@ -5092,8 +5102,9 @@ class BACnetClient:
         short. The limits and ``scope``
         follow ``who_has_by_id()``'s rules (#1850, #2596): with the default
         scope an empty list says only that nothing on this network has the
-        object. It holds the started client for the whole wait, so ``stop()``
-        waits up to ``wait`` seconds for it."""
+        object. ``wait`` is 0 to 3600 seconds (``ValueError`` otherwise). It
+        holds the started client for the whole wait, so ``stop()`` waits up
+        to ``wait`` seconds for it."""
         ...
 
     def i_have_events(self) -> Awaitable[IHaveIterator]:
@@ -5103,14 +5114,15 @@ class BACnetClient:
         ...
 
     def discover_routers(
-        self, network: Optional[int] = None, wait: float = 3.0,
+        self, network: Optional[int] = None, *, wait: float = 3.0,
     ) -> Awaitable[list[DiscoveredRouter]]:
         """Broadcast a Who-Is-Router-To-Network for ``network`` (or every
         network) and collect the routers that answer for ``wait`` seconds, one
         per router MAC in the order first heard; for a ``network``, only the
         routers listing it. An empty list when none answer. ``network`` 0 or
-        65535 raises BacnetError (#1850). It holds the started client for
-        the whole wait, so ``stop()`` waits up to ``wait`` seconds for it."""
+        65535 raises BacnetError (#1850). ``wait`` is 0 to 3600 seconds
+        (``ValueError`` otherwise). It holds the started client for the
+        whole wait, so ``stop()`` waits up to ``wait`` seconds for it."""
         ...
 
     def network_reports(self) -> Awaitable[NetworkReportIterator]:

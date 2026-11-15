@@ -98,11 +98,11 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply.device_identifier, ObjectIdentifier(ObjectType.DEVICE, 3301))
         self.assertEqual((reply.object_identifier, reply.object_name), (AI, "Zone Temp"))
         self.assertIsNone(reply.source_network)
-        by_name = await client.who_has_replies("Zone Temp", 3301, 3301, wait=1.5)
+        by_name = await client.who_has_replies("Zone Temp", low=3301, high=3301, wait=1.5)
         self.assertEqual([r.object_identifier for r in by_name], [AI])
         self.assertEqual(await client.who_has_replies("Nothing", wait=0.3), [])
         # Out of range: the device's own I-Have doesn't answer this Who-Has.
-        self.assertEqual(await client.who_has_replies(AI, 1, 2, wait=0.3), [])
+        self.assertEqual(await client.who_has_replies(AI, low=1, high=2, wait=0.3), [])
 
         # The iterator saw every I-Have, the out-of-range answer included.
         first = await asyncio.wait_for(events.__anext__(), 5)

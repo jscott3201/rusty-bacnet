@@ -82,8 +82,8 @@ impl BACnetClient {
     /// `high`, or a limit past 4194303 raises `ValueError` before
     /// anything is sent, as does a scope that is none of those.
     #[pyo3(
-        signature = (object_id, low=None, high=None, scope=None),
-        text_signature = "($self, object_id, low=None, high=None, scope='local')"
+        signature = (object_id, *, low=None, high=None, scope=None),
+        text_signature = "($self, object_id, *, low=None, high=None, scope='local')"
     )]
     fn who_has_by_id<'py>(
         &self,
@@ -109,8 +109,8 @@ impl BACnetClient {
     /// Send a WhoHas to find an object by name, with the same limits and
     /// `scope` rules as `who_has_by_id()`: this network alone by default.
     #[pyo3(
-        signature = (name, low=None, high=None, scope=None),
-        text_signature = "($self, name, low=None, high=None, scope='local')"
+        signature = (name, *, low=None, high=None, scope=None),
+        text_signature = "($self, name, *, low=None, high=None, scope='local')"
     )]
     fn who_has_by_name<'py>(
         &self,

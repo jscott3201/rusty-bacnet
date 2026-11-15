@@ -85,7 +85,8 @@ pub enum RpmFailure {
     /// services-class error. Remembered for the rest of the session.
     Refused,
     /// This answer was too large to send (an abort for segmentation or a
-    /// full buffer): ReadProperty for this request only.
+    /// full buffer), or the request too long for the link or the routed
+    /// path: ReadProperty for this request only.
     TooLarge,
     /// Anything else, a timeout included: the read fails.
     Other,
@@ -111,6 +112,10 @@ pub fn rpm_failure(error: &Error) -> RpmFailure {
         Error::Remote(RemoteError::Abort { reason }) if too_large.contains(reason) => {
             RpmFailure::TooLarge
         }
+        // The request itself was too long, for the link or for a router on
+        // the way (an older router, a small frame): one property at a time
+        // is shorter.
+        Error::SendTooLong { .. } | Error::RoutedPathTooLong { .. } => RpmFailure::TooLarge,
         _ => RpmFailure::Other,
     }
 }
@@ -125,21 +130,39 @@ pub fn unreachable(error: &Error) -> bool {
     timed_out(error) || matches!(error, Error::Transport(_))
 }
 
-/// True when `error` says the request was never sent: the link, or the
-/// client, refused it before any octet left (no route to its network, a
-/// link that can't carry it, a request it can't encode). It would be
-/// refused the same way for every property, so a read fails with it once,
-/// as it does for a device that stopped answering, where a row an answer
-/// didn't decode for stays that row's own (#2610).
-pub(crate) fn unsent(error: &Error) -> bool {
+/// True when `error` is the client's or the link's own failure of a
+/// request, not the device's answer and not a wait for one: nothing a
+/// property caused, so the next request would fail the same way, and a
+/// read fails with it once where it used to become a row of text for
+/// every property (#2610). It covers exactly:
+///
+/// - [`Error::UnknownDevice`]: no route to the address's network. Nothing
+///   was sent.
+/// - [`Error::UnsupportedTransport`] and [`Error::Encode`]: the link can't
+///   carry the request, or it can't be encoded. Nothing was sent.
+/// - [`Error::RoutedPathCapacityExceeded`]: the client has no room for
+///   another routed path. Nothing was sent.
+/// - [`Error::Encoding`], the client's untyped error (#1833 types it). A
+///   link refusing the send comes as this (a router's application given a
+///   station that names no network), and so do a client out of invoke IDs,
+///   a BACnet/SC link that isn't connected, and a response channel closed
+///   under a request, which **had already left**. So this is not "never
+///   sent", and nothing may send again on the strength of it: reads only
+///   stop on it. They are kept in because they have no type to tell them
+///   from the refusal this exists for, and each ends a read for the same
+///   reason: the client, not the property, failed.
+///
+/// A request too long for the link or the routed path
+/// ([`Error::SendTooLong`], [`Error::RoutedPathTooLong`]) is not one: a
+/// smaller request may pass, so those fall back as an answer too large
+/// does ([`rpm_failure`]).
+pub(crate) fn failed_locally(error: &Error) -> bool {
     matches!(
         error,
         Error::Encoding(_)
             | Error::Encode(_)
             | Error::UnknownDevice { .. }
             | Error::UnsupportedTransport { .. }
-            | Error::SendTooLong { .. }
-            | Error::RoutedPathTooLong { .. }
             | Error::RoutedPathCapacityExceeded { .. }
     )
 }
@@ -385,7 +408,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
                 Ok(value) => Ok(value),
                 // A device that stopped answering fails the read once, and
                 // so does a request that was never sent.
-                Err(Halt::Device(error)) if unreachable(&error) || unsent(&error) => {
+                Err(Halt::Device(error)) if unreachable(&error) || failed_locally(&error) => {
                     return Err(Halt::Device(error));
                 }
                 Err(Halt::Device(error)) => Err(PropertyError::from(error)),
@@ -418,7 +441,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
                     _ => None,
                 })
                 .collect(),
-            Err(Halt::Device(error)) if unreachable(&error) || unsent(&error) => {
+            Err(Halt::Device(error)) if unreachable(&error) || failed_locally(&error) => {
                 return Err(Halt::Device(error));
             }
             Err(Halt::Device(error)) => {

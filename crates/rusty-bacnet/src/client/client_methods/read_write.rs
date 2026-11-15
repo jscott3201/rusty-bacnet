@@ -95,8 +95,8 @@ impl BACnetClient {
     /// `ValueError` before anything is sent, as does a scope that is none
     /// of those.
     #[pyo3(
-        signature = (low=None, high=None, scope=None),
-        text_signature = "($self, low=None, high=None, scope='local')"
+        signature = (*, low=None, high=None, scope=None),
+        text_signature = "($self, *, low=None, high=None, scope='local')"
     )]
     fn who_is<'py>(
         &self,
@@ -133,8 +133,8 @@ impl BACnetClient {
     /// the forms, or a `wait` that isn't a number of seconds from 0 to
     /// 3600; `TypeError` for a scope of another type.
     #[pyo3(
-        signature = (scope=None, low=None, high=None, wait=3.0),
-        text_signature = "($self, scope='local', low=None, high=None, wait=3.0)"
+        signature = (*, scope=None, low=None, high=None, wait=3.0),
+        text_signature = "($self, *, scope='local', low=None, high=None, wait=3.0)"
     )]
     fn discover<'py>(
         &self,

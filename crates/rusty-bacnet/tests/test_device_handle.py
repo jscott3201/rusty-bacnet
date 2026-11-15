@@ -465,6 +465,13 @@ class TargetTests(unittest.IsolatedAsyncioTestCase):
                     c.discover(scope=scope)
             with self.assertRaises(TypeError):
                 c.discover(timeout_ms=100)  # type: ignore[call-arg]
+            with self.assertRaises(TypeError):
+                c.discover("global")  # type: ignore[misc]  # keywords only
+            for bad in (-1, 3601, float("nan")):
+                with self.subTest(wait=bad), self.assertRaisesRegex(ValueError, "0 to 3600"):
+                    c.discover_routers(wait=bad)
+                with self.subTest(wait=bad), self.assertRaisesRegex(ValueError, "0 to 3600"):
+                    c.who_has_replies("x", wait=bad)
             self.assertFalse(hasattr(c, "who_is_directed"))
             # A station the link can't reach is refused on await.
             with self.assertRaisesRegex(ValueError, "MS/TP"):

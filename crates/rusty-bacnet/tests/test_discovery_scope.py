@@ -203,7 +203,20 @@ class DiscoverySignatureTests(unittest.TestCase):
                 stub_params = [(arg.arg, inspect.Parameter.empty if i < len(args) - len(method.args.defaults)
                                 else default)
                                for i, (arg, default) in enumerate(zip(args, defaults))]
+                stub_params += [(arg.arg, ast.literal_eval(default)) for arg, default
+                                in zip(method.args.kwonlyargs, method.args.kw_defaults)]
                 self.assertEqual(runtime_params, stub_params)
+                # The range, the wait and the scope go by keyword only: the
+                # calls would otherwise take them in differing positions.
+                keyword_only = {p.name for p in runtime.parameters.values()
+                                if p.kind is inspect.Parameter.KEYWORD_ONLY}
+                self.assertEqual(keyword_only, {"low", "high", "scope", "wait"}
+                                 & set(runtime.parameters))
+                self.assertEqual(keyword_only, {arg.arg for arg in method.args.kwonlyargs})
+        routers = inspect.signature(BACnetClient.discover_routers).parameters
+        self.assertIs(routers["wait"].kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertEqual([arg.arg for arg in self.stub_method("discover_routers").args.kwonlyargs],
+                         ["wait"])
         for name in ("who_is", "discover", "who_has_by_id", "who_has_by_name", "who_has_replies"):
             with self.subTest(method=name):
                 scope = inspect.signature(getattr(BACnetClient, name)).parameters["scope"]

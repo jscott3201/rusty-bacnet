@@ -405,6 +405,109 @@ async fn a_priority_read_the_link_refused_says_why() {
     stop(client, server).await;
 }
 
+/// A link whose sends of a read fail as `fail` says, given the service
+/// and how many reads went before it.
+fn failing(
+    inner: bacnet_transport::loopback::LoopbackTransport,
+    fail: fn(Service, usize) -> Option<Error>,
+) -> TestTransport {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bacnet_transport::test_transport::{SendMode, StartMode};
+    let reads = AtomicUsize::new(0);
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .start(StartMode::Relay(256))
+        .on_send(move |frame| {
+            let read = (!frame.broadcast)
+                .then(|| super::read_many_tests::scripted_request(&frame.npdu))
+                .flatten();
+            let failed = read
+                .and_then(|(service, _, _)| fail(service, reads.fetch_add(1, Ordering::Relaxed)));
+            async move { failed.map_or(Ok(()), Err) }
+        })
+        .build()
+}
+
+fn second_read_unsent(inner: bacnet_transport::loopback::LoopbackTransport) -> TestTransport {
+    failing(inner, |_, before| {
+        (before >= 1).then(|| Error::Encoding("the link refused the send".into()))
+    })
+}
+
+/// A bulk read the link refuses part way keeps what it read: the rows
+/// before the refusal stand, and `stopped` holds the link's error, as for
+/// a device going quiet. Only a read that could read nothing fails.
+#[tokio::test(start_paused = true)]
+async fn a_bulk_read_refused_part_way_keeps_its_rows() {
+    let (client, server) = lab_on(second_read_unsent).await;
+    let device = lab_device(&client).await;
+    // By ReadProperty each, so the two rows are two requests.
+    client.refuse_rpm(&device.address());
+    let read = device.read_many(["ai:1 pv", "ao:1 pv"]).await.unwrap();
+    assert_eq!(read.readings.len(), 1, "{read:?}");
+    assert_eq!(read.readings[0].value.as_ref().unwrap().text, "21.5");
+    let stopped = read.stopped.expect("the second request was refused");
+    assert!(
+        matches!(&stopped, OpsError::Client(Error::Encoding(why)) if why == "the link refused the send"),
+        "{stopped:?}"
+    );
+    assert!(!stopped.unreachable());
+    drop(device);
+    stop(client, server).await;
+}
+
+fn rpm_too_long_for_the_link(
+    inner: bacnet_transport::loopback::LoopbackTransport,
+) -> TestTransport {
+    failing(inner, |service, _| {
+        matches!(service, Service::Rpm).then_some(Error::SendTooLong {
+            length: 600,
+            limit: 501,
+        })
+    })
+}
+
+fn rpm_too_long_for_the_path(
+    inner: bacnet_transport::loopback::LoopbackTransport,
+) -> TestTransport {
+    failing(inner, |service, _| {
+        matches!(service, Service::Rpm).then_some(Error::RoutedPathTooLong { dnet: 7 })
+    })
+}
+
+/// A ReadPropertyMultiple too long for the link, or for a router on the
+/// way (a small frame, an older router), is no failure of the read: it
+/// falls back to ReadProperty each, as an answer too large does, for a
+/// bulk read, an object's read and the priorities.
+#[tokio::test(start_paused = true)]
+async fn a_request_too_long_falls_back_to_read_property() {
+    for link in [rpm_too_long_for_the_link, rpm_too_long_for_the_path] {
+        let (client, server) = lab_on(link).await;
+        let device = lab_device(&client).await;
+        let read = device.read_many(["ai:1 pv", "ao:1 pv"]).await.unwrap();
+        assert!(read.stopped.is_none(), "{read:?}");
+        assert_eq!(read.readings.len(), 2);
+        assert!(read.readings.iter().all(|r| r.value.is_ok()), "{read:?}");
+        assert_eq!(read.via, Some(ReadVia::Rp));
+        let object = device
+            .read_object(
+                oid(ObjectType::ANALOG_OUTPUT, 1),
+                Wanted::List(&[PropertyIdentifier::PRESENT_VALUE]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(object.via, ReadVia::Rp);
+        device.priority_array("ao:1").await.unwrap();
+        // Not remembered as a device without the service.
+        assert!(!client.refused_rpm(&device.address()));
+        drop(device);
+        stop(client, server).await;
+    }
+}
+
 fn rpm_refused(inner: bacnet_transport::loopback::LoopbackTransport) -> TestTransport {
     scripted(inner, |service, _, _| match service {
         Service::Rpm => Script::Reject(RejectReason::UNRECOGNIZED_SERVICE),

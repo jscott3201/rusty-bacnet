@@ -1,4 +1,4 @@
 ---
 section: Fixed
 ---
-- A read whose request was never sent (no route, or a link refusing it) fails once with that error, where each property showed it as text: priority reads, object and bulk reads, the TUI browser, the write desk's read before a write, a watch's first read and polls, and MCP's reads (#2610).
+- A read the client or its link fails before anything was read (no route, a link refusing the send) fails once with that error, where each property showed it as text; after the first rows a bulk read keeps them and ends with it. Seen in the TUI, watches, MCP and the Python reads (#2610).

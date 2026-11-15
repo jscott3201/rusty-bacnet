@@ -305,7 +305,8 @@ class RelinquishTests(Lab):
             for mac in (b"\x00\x04\xd2", b"\x05"):
                 with self.subTest(mac=mac), self.assertRaises(ValueError):
                     await c.device((0, mac))
-            # A bare number is a device instance, never MS/TP station 5.
+            # An MS/TP station is spelled "mstp:5" (a bare "5" is device
+            # instance 5); this B/IP link refuses it, naming the keyword.
             with self.assertRaisesRegex(ValueError, r"MS/TP.*transport='mstp'"):
                 await c.device("mstp:5")
         self.assertEqual(self.relay.requests, [])

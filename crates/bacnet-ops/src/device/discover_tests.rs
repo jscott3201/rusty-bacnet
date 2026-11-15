@@ -187,3 +187,34 @@ async fn an_i_am_from_outside_the_scope_is_no_answer() {
         bus.i_am(3, 1003);
     }
 }
+
+/// The one rule for which answers a scope covers, a Who-Is's and a
+/// Who-Has's alike: a network named by this client's own number takes the
+/// local stations; a local scope takes no routed station, and takes one
+/// reported with the client's own network number, which is local.
+#[test]
+fn a_scope_covers_stations_by_where_they_are() {
+    let local = at(2);
+    let routed = super::DeviceAddress::new(9, &[7]).unwrap();
+    let own_routed = super::DeviceAddress::new(5, &mac(2)).unwrap();
+    for (scope, own, address, covered) in [
+        (Scope::Network(5), Some(5), &local, true),
+        (Scope::Network(5), None, &local, false),
+        (Scope::Network(5), Some(5), &own_routed, true),
+        (Scope::Network(9), Some(5), &routed, true),
+        (Scope::Network(9), Some(5), &local, false),
+        (Scope::Local, Some(5), &routed, false),
+        (Scope::Local, None, &routed, false),
+        (Scope::Local, Some(5), &own_routed, true),
+        (Scope::Local, None, &local, true),
+        (Scope::Directed(local.clone()), Some(5), &own_routed, true),
+        (Scope::Directed(local.clone()), None, &routed, false),
+        (Scope::Global, None, &routed, true),
+    ] {
+        assert_eq!(
+            scope.covers(address, own),
+            covered,
+            "{scope:?} {own:?} {address}"
+        );
+    }
+}

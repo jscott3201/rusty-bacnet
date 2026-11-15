@@ -25,7 +25,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{ReadVia, RpmFailure, rpm_failure, unreachable, unsent};
+use super::{ReadVia, RpmFailure, failed_locally, rpm_failure, unreachable};
 use crate::device::{DeviceAddress, Path};
 use crate::format::{PropertyError, RawRow};
 use crate::limits::RequestLimits;
@@ -66,7 +66,8 @@ pub(crate) struct Batched<K> {
     pub(crate) rows: Vec<(K, Result<Vec<RawRow>, Missing>)>,
     /// The device refused RPM during this read.
     pub(crate) refused_rpm: bool,
-    /// The device stopped answering: the rows after `rows` weren't read.
+    /// The device stopped answering, or the client's own failure ended the
+    /// read after some rows: the rows after `rows` weren't read.
     pub(crate) stopped: Option<Error>,
     /// The last of `rows` was read property by property when the device
     /// stopped answering, so it holds only the properties read before.
@@ -103,10 +104,11 @@ impl<K> Batched<K> {
 /// # Errors
 ///
 /// A routed address the discovery table holds no router for has no path
-/// ([`Error::UnknownDevice`]); nothing is sent. A request the link or the
-/// client refused to send fails the read with that error, whatever was
-/// read before it, as [`Reader::properties`](super::Reader::properties)
-/// fails (#2610): it is no device going quiet, and no row's own error.
+/// ([`Error::UnknownDevice`]); nothing is sent. A request that fails by
+/// the client's or the link's own doing ([`failed_locally`], #2610) before
+/// any row was read fails the read with that error; once rows were read
+/// it ends the read as a device going quiet does, with those rows and the
+/// error in [`Batched::stopped`]. It is never a row's own error.
 pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
@@ -158,8 +160,16 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
                     read.stopped = Some(error);
                     break;
                 }
-                // Never sent: the next would be refused the same way.
-                Err(error) if unsent(&error) => return Err(error),
+                // The client's own failure: the next would fail the same
+                // way. With nothing read the read fails; after that it ends
+                // with what it has, as for a device gone quiet.
+                Err(error) if failed_locally(&error) => {
+                    if read.rows.is_empty() {
+                        return Err(error);
+                    }
+                    read.stopped = Some(error);
+                    break;
+                }
                 Err(error) => match rpm_failure(&error) {
                     RpmFailure::Refused => {
                         tracing::info!(
@@ -198,7 +208,14 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
                     read.stopped = Some(error);
                     break 'batches;
                 }
-                Some(End::Unsent(error)) => return Err(error),
+                Some(End::Failed(error)) => {
+                    if read.rows.is_empty() {
+                        return Err(error);
+                    }
+                    read.partial = some;
+                    read.stopped = Some(error);
+                    break 'batches;
+                }
                 Some(End::Cancelled) => {
                     read.partial = some;
                     read.cancelled = true;
@@ -251,9 +268,9 @@ fn batches<K>(rows: &[BatchRow<K>]) -> impl Iterator<Item = &[BatchRow<K>]> {
 enum End {
     /// The device stopped answering.
     Silent(Error),
-    /// The link, or the client, refused to send the request: nothing left,
-    /// and the next would be refused the same way.
-    Unsent(Error),
+    /// The client's own failure of the request
+    /// ([`failed_locally`]): the next would fail the same way.
+    Failed(Error),
     /// The caller's stop flag went up.
     Cancelled,
 }
@@ -281,7 +298,7 @@ async fn one_by_one<K, T: TransportPort + 'static>(
         let value = match read {
             Ok(ack) => Ok(ack.property_value),
             Err(error) if unreachable(&error) => return (rows, Some(End::Silent(error))),
-            Err(error) if unsent(&error) => return (rows, Some(End::Unsent(error))),
+            Err(error) if failed_locally(&error) => return (rows, Some(End::Failed(error))),
             Err(error) => Err(PropertyError::from(error)),
         };
         rows.push((property, value));

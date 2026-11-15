@@ -109,7 +109,7 @@ of the Rust `bacnet-ops` client that the `bacnet` tool is built on.
 
 | Task | Call |
 |------|------|
-| Find devices | `await client.discover(scope="local", low=None, high=None, wait=3.0)` |
+| Find devices | `await client.discover(scope="local", low=None, high=None, wait=3.0)` (keywords only) |
 | Take a handle | `ahu = await client.device(target)` |
 | Read one property | `await ahu.read("ai:1", "pv")` |
 | Read many | `await ahu.read_many([("ai:1", "pv"), ("ai:2", "pv")])` |
@@ -281,9 +281,12 @@ Failures are data here, not exceptions:
 - A device that stops answering part way ends the read with what was read
   before it, and `Readings.stopped` holds the `BacnetTimeoutError` or
   `BacnetTransportError` a single read would have raised.
-- Only what is decided before a request is sent raises: a bad item
-  (`TypeError` or `ValueError`, ALL, REQUIRED and OPTIONAL included, when
-  the call is made) and a device that can't be placed (`BacnetLookupError`).
+- A later request the client's own link fails (a route lost, a send
+  refused) ends the read the same way, with that error in `stopped`.
+- A read raises only when nothing could be read: a bad item (`TypeError` or
+  `ValueError`, ALL, REQUIRED and OPTIONAL included, when the call is
+  made), a device that can't be placed (`BacnetLookupError`), and a link
+  that fails the first request (what a single read raises for it).
 
 A value's text names its object's units, and its state by the object's
 Active_Text and Inactive_Text or State_Text, when the same call reads them.
@@ -337,7 +340,7 @@ is the typed form.
 |------------|------|-------------|
 | `.readings` | `tuple[Reading, ...]` | In the order asked for; iterating, `len` and an index work on the `Readings` itself |
 | `.via` | `"rpm"`, `"rp"`, `"mixed"` or None | How the values were read |
-| `.stopped` | `BacnetError \| None` | Set when the device stopped answering part way |
+| `.stopped` | `BacnetError \| None` | Set when the read ended part way: the device stopped answering, or the client's link failed a later request |
 | `.get(object, property=None, *, index=None)` | `Reading \| None` | The first reading of that property |
 
 `Reading`, `Readings`, `ObjectList`, `DeviceSummary`, `Written`,
@@ -418,7 +421,8 @@ with writing Relinquish_Default or with a write at 16. `relinquish` and
 `priority_array` (#2561) name the slot and read the slots back.
 
 They are `Device` methods and take the object as an `ObjectIdentifier` or
-text. Neither needs the device in the discovery table when the handle was
+text. The handle comes from `device(target)`: there a bare `"5"` is device
+instance 5, and MS/TP station 5 is `"mstp:5"`. Neither needs the device in the discovery table when the handle was
 made from an address, and nothing is sent to look it up.
 
 #### `relinquish(object, priority) -> PriorityView`
@@ -527,7 +531,7 @@ Each value is a [`Value`](#value). A `PriorityView` is frozen and refuses
 
 ### Finding devices
 
-#### `discover(scope="local", low=None, high=None, wait=3.0) -> list[Discovered]`
+#### `discover(*, scope="local", low=None, high=None, wait=3.0) -> list[Discovered]`
 
 One Who-Is, then the devices that answered it within `wait` seconds, one
 `Discovered` an address. Only this call's answers are listed: a device the
@@ -569,8 +573,9 @@ ask only the instances between them: give both or neither.
 | `BacnetPagingError` | A device broke a paged read's rules. No call pages yet |
 | `RuntimeError` | The client isn't started |
 
-In a `read_many`, a property's failure is its `Reading.error` and a device
-going silent is `Readings.stopped`: neither is raised.
+In a `read_many`, a property's failure is its `Reading.error`, and a device
+going silent or a link failing after the first rows is `Readings.stopped`:
+neither is raised. A read that could read nothing raises.
 
 ---
 
@@ -2309,7 +2314,7 @@ async for notif in notifications:
 
 ### Discovery
 
-#### `who_is(low=None, high=None, scope="local")`
+#### `who_is(*, low=None, high=None, scope="local")`
 
 Broadcast a WhoIs request. By default it goes to this network alone: a
 local broadcast, which reaches the whole BACnet network (across BBMDs, and
@@ -2328,9 +2333,9 @@ its Who-Is names a network, or every one: a local or directed one raises
 
 ```python
 await client.who_is()                    # all devices on this network
-await client.who_is(1000, 2000)          # instance range
+await client.who_is(low=1000, high=2000)  # instance range
 await client.who_is(scope=5)             # the devices on network 5
-await client.who_is(1000, 2000, scope="global")  # every network
+await client.who_is(low=1000, high=2000, scope="global")  # every network
 ```
 
 The limits go together, each from 0 to 4194303 (Clauses 16.9 and 16.10).
@@ -2345,7 +2350,7 @@ A confirmed request goes to one device. A confirmed call such as
 an IPv4 multicast address, raises `BacnetError` before anything is sent
 (#1479).
 
-#### `who_has_by_id(object_id, low=None, high=None, scope="local")`
+#### `who_has_by_id(object_id, *, low=None, high=None, scope="local")`
 
 Find a device hosting a specific object by identifier. The Who-Has goes where
 `scope` says, as for `who_is()` (#2596): this network alone by default, a
@@ -2361,7 +2366,7 @@ await client.who_has_by_id(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1))
 await client.who_has_by_id(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1), scope=5)
 ```
 
-#### `who_has_by_name(name, low=None, high=None, scope="local")`
+#### `who_has_by_name(name, *, low=None, high=None, scope="local")`
 
 Find a device hosting a specific object by name, compared exactly, with the
 same limits and `scope` as `who_has_by_id()`.
@@ -2371,7 +2376,7 @@ await client.who_has_by_name("Zone Temperature")
 await client.who_has_by_name("Zone Temperature", scope="global")
 ```
 
-#### `who_has_replies(object, low=None, high=None, wait=3.0, scope="local") -> list[IHave]`
+#### `who_has_replies(object, *, low=None, high=None, wait=3.0, scope="local") -> list[IHave]`
 
 Send a Who-Has for `object`, an `ObjectIdentifier` or a name as `str`, and
 collect the I-Haves that answer it from that scope for `wait` seconds: one per
@@ -2398,7 +2403,7 @@ replies = await client.who_has_replies("Zone Temperature", scope="global")
 Follow every I-Have the client receives from now on, an answer to its own
 Who-Has or not, as an async iterator of `IHave`.
 
-#### `discover_routers(network=None, wait=3.0) -> list[DiscoveredRouter]`
+#### `discover_routers(network=None, *, wait=3.0) -> list[DiscoveredRouter]`
 
 Broadcast a Who-Is-Router-To-Network for `network`, or every network, and
 collect the routers that answer for `wait` seconds: one frozen
@@ -2503,15 +2508,17 @@ async with BACnetClient(transport="ipv6", port=0, ipv6_device_instance=4321) as 
     name = await client.read_property(vmac, device, PropertyIdentifier.OBJECT_NAME)
 ```
 
-#### `discover(scope="local", low=None, high=None, wait=3.0) -> list[Discovered]`
+#### `discover(*, scope="local", low=None, high=None, wait=3.0) -> list[Discovered]`
 
 Send one Who-Is and return the devices that answered it: see [Finding
 devices](#finding-devices). Before #2561 it took `timeout_ms`, `low_limit`
 and `high_limit` and returned every `DiscoveredDevice` in the table.
 
 Every discovery call spells its parameters the same way (#2561): `low` and
-`high` for the instance range, and `wait`, in seconds, for how long a call
-that collects answers listens. Before, `who_is` and the Who-Has calls took
+`high` for the instance range, and `wait`, from 0 to 3600 seconds
+(`ValueError` otherwise), for how long a call that collects answers
+listens. All of them, and `scope`, are keyword-only, since the calls would
+otherwise take them in differing positions. Before, `who_is` and the Who-Has calls took
 `low_limit` and `high_limit`, and `who_has_replies` and `discover_routers`
 took `timeout_ms`. The other `*_timeout_ms` keywords (`apdu_timeout_ms` and
 the SC and MS/TP ones on the constructors) are per-request or link

@@ -479,7 +479,7 @@ Properties:
 
 - `readings: tuple[Reading, ...]`: The readings, in the order asked for; after `stopped`, those read before the device stopped answering.
 - `via: Optional[Literal["rpm", "rp", "mixed"]]`: How the values were read: `"rpm"` (ReadPropertyMultiple), `"rp"` (ReadProperty each) or `"mixed"`; None when nothing was read.
-- `stopped: Optional[BacnetError]`: Set when the device stopped answering after the read began: the `BacnetTimeoutError` or `BacnetTransportError` a single read would have raised, never raised here. The properties after `readings` weren't read. Always None for `read_object`.
+- `stopped: Optional[BacnetError]`: Set when the read ended after it began: the device stopped answering (the `BacnetTimeoutError` or `BacnetTransportError` a single read would have raised), or the client's own link failed a later request (a `BacnetError`). Never raised here. The properties after `readings` weren't read. Always None for `read_object`.
 
 ### Readings.get
 
@@ -749,10 +749,13 @@ state by the object's texts, when the same call reads them.
 A property the device refuses, or one of an object it doesn't
 have, never raises: its `Reading.error` is set and the rest
 stand. A device that stops answering part way ends the read with
-what was read, and `Readings.stopped` says so. Only what is
-decided before a request is sent raises: a bad item TypeError or
-ValueError when the call is made, and a device that can't be
-placed `BacnetLookupError` on await.
+what was read, and `Readings.stopped` says so; so does a later
+request the client's own link fails (a route lost, a send
+refused). A read raises only when nothing could be read: a bad item
+TypeError or ValueError when the call is made; on await a device
+that can't be placed `BacnetLookupError`, and a link that fails
+the first request what a single read raises for it (a
+`BacnetError`).
 
 ### Device.read_object
 

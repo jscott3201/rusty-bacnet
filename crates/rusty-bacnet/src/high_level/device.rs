@@ -242,11 +242,13 @@ impl PyDevice {
     /// A property the device refuses, or one of an object it doesn't have,
     /// never raises: its `Reading.error` is set and the rest stand. A
     /// device that stops answering part way ends the read with what was
-    /// read, and `Readings.stopped` says so. What is decided before a
-    /// request is sent raises: a bad item TypeError or ValueError (ALL,
-    /// REQUIRED and OPTIONAL among them: `read_object` reads those) before
-    /// the Future is made, and a device that can't be placed
-    /// BacnetLookupError on await.
+    /// read, and `Readings.stopped` says so; so does a later request the
+    /// client's own link fails (a route lost, a send refused). A read
+    /// raises only when nothing could be read: a bad item TypeError or
+    /// ValueError (ALL, REQUIRED and OPTIONAL among them: `read_object`
+    /// reads those) before the Future is made; on await a device that
+    /// can't be placed BacnetLookupError, and a link that fails the first
+    /// request what a single read raises for it.
     fn read_many<'py>(
         &self,
         py: Python<'py>,

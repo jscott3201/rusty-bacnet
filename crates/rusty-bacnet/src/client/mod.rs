@@ -187,7 +187,10 @@ impl ScopeArg {
     }
 }
 
-/// The `wait` keyword of `discover()`: seconds, from 0 to an hour.
+/// The `wait` keyword of `discover()`, `who_has_replies()` and
+/// `discover_routers()`: how long the call listens for answers, in
+/// seconds from 0 to 3600 (an hour). Anything else, NaN included, raises
+/// `ValueError` when the call is made.
 fn discover_wait(seconds: f64) -> PyResult<std::time::Duration> {
     if !(0.0..=3600.0).contains(&seconds) {
         return Err(PyValueError::new_err(format!(

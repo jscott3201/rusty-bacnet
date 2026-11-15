@@ -466,6 +466,7 @@ Returns `[{"request_index": int, "device_instance": int, "error": BacnetError | 
 ```python
 def who_is(
     self,
+    *,
     low: Optional[int] = None,
     high: Optional[int] = None,
     scope: Literal["local", "global"] | int | str = "local",
@@ -498,6 +499,7 @@ past 4194303 raises `ValueError` before anything is sent.
 ```python
 def discover(
     self,
+    *,
     scope: Literal["local", "global"] | int | str = "local",
     low: Optional[int] = None,
     high: Optional[int] = None,
@@ -527,6 +529,7 @@ anything is sent, as does a `wait` outside 0 to 3600 seconds.
 def who_has_by_id(
     self,
     object_id: ObjectIdentifier,
+    *,
     low: Optional[int] = None,
     high: Optional[int] = None,
     scope: Literal["local", "global"] | int | str = "local",
@@ -558,6 +561,7 @@ past 4194303 raises `ValueError` before anything is sent.
 def who_has_by_name(
     self,
     name: str,
+    *,
     low: Optional[int] = None,
     high: Optional[int] = None,
     scope: Literal["local", "global"] | int | str = "local",
@@ -575,6 +579,7 @@ network by its number.
 def who_has_replies(
     self,
     object: ObjectIdentifier | str,
+    *,
     low: Optional[int] = None,
     high: Optional[int] = None,
     wait: float = 3.0,
@@ -592,8 +597,9 @@ at 4096 answers, so a list of exactly that many may have been cut
 short. The limits and `scope`
 follow `who_has_by_id()`'s rules (#1850, #2596): with the default
 scope an empty list says only that nothing on this network has the
-object. It holds the started client for the whole wait, so `stop()`
-waits up to `wait` seconds for it.
+object. `wait` is 0 to 3600 seconds (`ValueError` otherwise). It
+holds the started client for the whole wait, so `stop()` waits up
+to `wait` seconds for it.
 
 ### BACnetClient.i_have_events
 
@@ -611,6 +617,7 @@ stop.
 def discover_routers(
     self,
     network: Optional[int] = None,
+    *,
     wait: float = 3.0,
 ) -> Awaitable[list[DiscoveredRouter]]
 ```
@@ -619,8 +626,9 @@ Broadcast a Who-Is-Router-To-Network for `network` (or every
 network) and collect the routers that answer for `wait` seconds, one
 per router MAC in the order first heard; for a `network`, only the
 routers listing it. An empty list when none answer. `network` 0 or
-65535 raises BacnetError (#1850). It holds the started client for
-the whole wait, so `stop()` waits up to `wait` seconds for it.
+65535 raises BacnetError (#1850). `wait` is 0 to 3600 seconds
+(`ValueError` otherwise). It holds the started client for the
+whole wait, so `stop()` waits up to `wait` seconds for it.
 
 ### BACnetClient.network_reports
 

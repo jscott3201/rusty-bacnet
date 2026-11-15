@@ -31,8 +31,8 @@ impl BACnetClient {
     /// whole wait, so `stop()` (or leaving `async with`) waits up to
     /// `wait` seconds for it.
     #[pyo3(
-        signature = (object, low=None, high=None, wait=3.0, scope=None),
-        text_signature = "($self, object, low=None, high=None, wait=3.0, scope='local')"
+        signature = (object, *, low=None, high=None, wait=3.0, scope=None),
+        text_signature = "($self, object, *, low=None, high=None, wait=3.0, scope='local')"
     )]
     fn who_has_replies<'py>(
         &self,
@@ -77,7 +77,7 @@ impl BACnetClient {
     /// list. `network` 0 and 65535 raise `BacnetError`. It holds the
     /// started client for the whole wait, so `stop()` (or leaving
     /// `async with`) waits up to `wait` seconds for it.
-    #[pyo3(signature = (network=None, wait=3.0))]
+    #[pyo3(signature = (network=None, *, wait=3.0))]
     fn discover_routers<'py>(
         &self,
         py: Python<'py>,

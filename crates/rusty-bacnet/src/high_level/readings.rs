@@ -213,9 +213,11 @@ impl PyReadings {
         self.via.map(via_label)
     }
 
-    /// Set when the device stopped answering after the read began: the
-    /// BacnetTimeoutError or BacnetTransportError a single read would have
-    /// raised, unraised. The properties after `readings` weren't read.
+    /// Set when the read ended after it began: the device stopped
+    /// answering (the BacnetTimeoutError or BacnetTransportError a single
+    /// read would have raised), or the client's own link failed a later
+    /// request (a BacnetError). Unraised. The properties after `readings`
+    /// weren't read.
     #[getter]
     fn stopped(&self, py: Python<'_>) -> Option<Py<PyAny>> {
         self.stopped.as_ref().map(|error| error.clone_ref(py))

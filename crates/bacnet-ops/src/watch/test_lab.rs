@@ -48,6 +48,10 @@ pub(super) fn routed_at() -> crate::DeviceAddress {
 pub(super) const RPM: u8 = 14;
 pub(super) const RP: u8 = 12;
 pub(super) const SUBSCRIBE_COV: u8 = 5;
+/// SubscribeCOVProperty.
+pub(super) const SUBSCRIBE_COV_PROPERTY: u8 = 28;
+/// ReadProperty.
+pub(super) const READ_PROPERTY: u8 = 12;
 
 /// How the client's link misbehaves.
 #[derive(Default)]
@@ -58,6 +62,9 @@ pub(super) struct Quirks {
     /// and the send fails, as a router's application refuses a station
     /// that names no network.
     pub(super) unsent_reads: AtomicBool,
+    /// The link refuses to send a SubscribeCOV or SubscribeCOVProperty, the
+    /// same way: a link reconnecting as a watch starts.
+    pub(super) unsent_cov: AtomicBool,
     /// Every RPM is rejected as an unknown service.
     pub(super) refuse_rpm: AtomicBool,
     /// Every RPM fails with an OBJECT-class error, as a device failing a
@@ -67,8 +74,8 @@ pub(super) struct Quirks {
     pub(super) abort_rpm: AtomicU8,
     /// The next SubscribeCOV requests vanish, retries included.
     pub(super) swallow_cov: AtomicU8,
-    /// Every SubscribeCOV is rejected as an unknown service, as by a device
-    /// without COV.
+    /// Every SubscribeCOV and SubscribeCOVProperty is rejected as an unknown
+    /// service, as by a device without COV.
     pub(super) refuse_cov: AtomicBool,
     /// The next SubscribeCOV requests are refused for a full subscription
     /// table.
@@ -120,11 +127,15 @@ pub(super) fn link(
     let send_quirks = Arc::clone(&quirks);
     builder
         .on_send(move |frame| {
+            let reads = send_quirks.unsent_reads.load(Ordering::Relaxed);
+            let cov = send_quirks.unsent_cov.load(Ordering::Relaxed);
             let read = !frame.broadcast
-                && send_quirks.unsent_reads.load(Ordering::Relaxed)
                 && decode_npdu(frame.npdu.clone()).is_ok_and(|decoded| {
                     let apdu = &decoded.payload;
-                    apdu.len() >= 4 && apdu[0] >> 4 == 0 && [12, RPM].contains(&apdu[3])
+                    let confirmed = apdu.len() >= 4 && apdu[0] >> 4 == 0;
+                    confirmed
+                        && ((reads && [READ_PROPERTY, RPM].contains(&apdu[3]))
+                            || (cov && [SUBSCRIBE_COV, SUBSCRIBE_COV_PROPERTY].contains(&apdu[3])))
                 });
             async move {
                 match read {
@@ -267,8 +278,9 @@ fn forwards(
             );
             return false;
         }
-        // 28 is SubscribeCOVProperty: a device without COV refuses both.
-        if [SUBSCRIBE_COV, 28].contains(&service) && quirks.refuse_cov.load(Ordering::Relaxed) {
+        if [SUBSCRIBE_COV, SUBSCRIBE_COV_PROPERTY].contains(&service)
+            && quirks.refuse_cov.load(Ordering::Relaxed)
+        {
             let reason = RejectReason::UNRECOGNIZED_SERVICE.to_raw();
             answer(handle, vec![0x60, invoke, reason]);
             return false;
