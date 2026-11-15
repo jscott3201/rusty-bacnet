@@ -150,10 +150,20 @@ far = await client.device("2:1234")            # instance 1234 on network 2
 | `"2:1234"` | Device instance 1234 on network 2 | Follows |
 | A `Discovered` or `DiscoveredDevice` | That row's address | Pinned, knowing its instance |
 
-A target is never read as the `address` the typed calls take, and an
-`address` is never read as a target: a bare `"5"` is device instance 5 here
-and MS/TP station 5 there. Parameters named `address` keep the forms of
-[Address Format](#address-format).
+> **A target is not an `address`.** The typed calls' `address` parameters
+> keep the forms of [Address Format](#address-format), and `address` always
+> means an address there. Most address spellings are targets too and mean
+> the same: `"ip:port"`, six hex octets, the `bip6:` forms and `"mstp:N"`.
+> Two differ:
+>
+> - **a bare `"5"` is device instance 5, not MS/TP station 5.** Write
+>   `"mstp:5"` for the station;
+> - colon-separated hex of another length than six octets, which `address`
+>   takes as a MAC, is no address here: `"00:04:d2"` is refused with
+>   `ValueError`, and two decimal parts such as `"10:20"` are **instance 20
+>   on network 10**, not a two-octet MAC. Use `"bip6:0x0004D2"`,
+>   `"mstp:5"`, `"10:0x14"` for a routed station, or a `(network, mac)`
+>   pair.
 
 - **A pinned handle** is made at once. Nothing is sent for a station on the
   client's own network; a routed station the client knows no router for
@@ -306,8 +316,9 @@ request: `.instance`, `.name`, `.readings` (a `Readings`) and
 | `.raw` | `bytes` | The application-tagged octets as the device sent them, or as a write sends them |
 
 A `Value` is a value class. Two are equal when they hold the same octets,
-text and data for the same property of the same object type, equal values
-hash alike, and a `Value` supports `copy`, `deepcopy` and `pickle`: it keeps
+text and data, whatever they are a value of (a priority slot and a
+Present_Value holding the same REAL are equal), equal values hash alike,
+comparing with another type gives `NotImplemented`, and a `Value` supports `copy`, `deepcopy` and `pickle`: it keeps
 nothing of the client or device it came from, so it can go in a set, a
 cache or another process. There are no `as_float`-style accessors: `.value`
 is the typed form.
@@ -406,20 +417,11 @@ writing NULL to Present_Value at the same priority, which is easy to confuse
 with writing Relinquish_Default or with a write at 16. `relinquish` and
 `priority_array` (#2561) name the slot and read the slots back.
 
-On a `Device` they take the object as an `ObjectIdentifier` or text:
-`await ahu.relinquish("ao:1", priority=8)` and `await
-ahu.priority_array("ao:1")`. `BACnetClient` has the same two calls by
-address, shown below, for a caller that has an address and typed
-identifiers in hand: there `address` is always an address in the forms of
-[Address Format](#address-format), a station on the client's own network,
-never a device instance or a target, and the object is an
-`ObjectIdentifier`. Neither needs the device in the discovery table, and
-nothing is sent to look it up. A client on `transport="router"` has no
-network of its own, so the calls by address refuse every address there with
-`ValueError` on await, sending nothing: name the device with its network
-through `device()` instead. Both forms raise the same errors.
+They are `Device` methods and take the object as an `ObjectIdentifier` or
+text. Neither needs the device in the discovery table when the handle was
+made from an address, and nothing is sent to look it up.
 
-#### `relinquish(address, object_id, priority) -> PriorityView`
+#### `relinquish(object, priority) -> PriorityView`
 
 Writes NULL to the object's Present_Value at `priority`, so the next slot
 down, or Relinquish_Default, takes over; then reads the object's
@@ -430,17 +432,15 @@ three properties when the device refuses ReadPropertyMultiple.
 ```python
 from rusty_bacnet import BacnetReadBackError, BacnetWriteDeniedError
 
-damper = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
-after = await client.relinquish("192.168.1.100:47808", damper, 8)
+ahu = await client.device("192.168.1.100")
+after = await ahu.relinquish("ao:1", 8)  # or ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
 print(after.in_control, after.present_value.text)  # who took over: 12 "50", or None and the default
 ```
 
 - `priority` is required: an int from 1 to 16. A bool, a float or another
-  type raises `TypeError` and another int `ValueError`, as does address text
-  the parser refuses, before the Future is made.
-- With nothing sent, on await: `ValueError` for an address the client's link
-  can't carry (a 3-octet VMAC on B/IP, a MAC length no local network uses,
-  any address on `transport="router"`) and for an object type with no
+  type raises `TypeError` and another int `ValueError`, before the Future
+  is made.
+- With nothing sent, on await: `ValueError` for an object type with no
   Priority_Array (an input, or a Channel, which passes each command on to
   its members); `BacnetWriteDeniedError` for a priority the client's
   `write_policy` refuses (1, 2, 5 and 6 by default).
@@ -448,7 +448,7 @@ print(after.in_control, after.present_value.text)  # who took over: 12 "50", or 
   `BacnetRejectError` or `BacnetAbortError`, and no answer
   `BacnetTimeoutError`; the write may or may not have been applied then. A
   device that never answers raises `BacnetTimeoutError` from both calls,
-  where `read_property` and `write_property` raise `BacnetAbortError` with
+  where the typed `read_property` and `write_property` raise `BacnetAbortError` with
   reason 10 (`AbortReason.TSM_TIMEOUT`).
 - A relinquish the device acknowledged whose read after it failed raises
   `BacnetReadBackError`: the slot is empty, so don't send it again. Its
@@ -460,7 +460,7 @@ print(after.in_control, after.present_value.text)  # who took over: 12 "50", or 
   a write to a property that isn't commandable, which changed nothing. Its
   `written` holds the NULL.
 
-#### `priority_array(address, object_id) -> PriorityView`
+#### `priority_array(object) -> PriorityView`
 
 Reads the same three properties in one ReadPropertyMultiple, or a
 ReadProperty of each when the device refuses ReadPropertyMultiple. An object
@@ -469,7 +469,7 @@ device that says the object has none `BacnetNoPriorityArrayError` (with
 `written` None).
 
 ```python
-view = await client.priority_array("192.168.1.100:47808", damper)
+view = await ahu.priority_array("ao:1")
 for priority, slot in enumerate(view.slots, start=1):
     if slot is not None:
         print(priority, slot.text)
@@ -492,7 +492,8 @@ from rusty_bacnet import WritePolicy
 
 policy = WritePolicy().allow_priorities([1])
 async with BACnetClient(write_policy=policy) as client:
-    await client.relinquish("192.168.1.100:47808", damper, 1)
+    ahu = await client.device("192.168.1.100")
+    await ahu.relinquish("ao:1", 1)
 ```
 
 | Member | Description |
@@ -558,7 +559,7 @@ ask only the instances between them: give both or neither.
 | Raised | When |
 |--------|------|
 | `TypeError`, `ValueError` | An argument that names nothing: when the call is made for a wrong type or bad text, on await for what needs the started client's link. Nothing was sent |
-| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name. `target` is the name |
+| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name. `target` is the name, and `instance` the instance it holds (None for an address) |
 | `BacnetAmbiguousDeviceError` | A `BacnetLookupError`: two or more addresses claim the instance. `candidates` are targets |
 | `BacnetWriteDeniedError` | The write policy refuses the priority. Nothing was sent |
 | `BacnetProtocolError`, `BacnetRejectError`, `BacnetAbortError` | The device's own Error, Reject or Abort |
@@ -2308,7 +2309,7 @@ async for notif in notifications:
 
 ### Discovery
 
-#### `who_is(low_limit=None, high_limit=None, scope="local")`
+#### `who_is(low=None, high=None, scope="local")`
 
 Broadcast a WhoIs request. By default it goes to this network alone: a
 local broadcast, which reaches the whole BACnet network (across BBMDs, and
@@ -2333,8 +2334,8 @@ await client.who_is(1000, 2000, scope="global")  # every network
 ```
 
 The limits go together, each from 0 to 4194303 (Clauses 16.9 and 16.10).
-Every discovery call that takes `low_limit` and `high_limit` raises
-`ValueError` when only one is given, when `low_limit` is above `high_limit`,
+Every discovery call that takes `low` and `high` raises
+`ValueError` when only one is given, when `low` is above `high`,
 or when a limit is past 4194303, before anything is sent (#1483); a single
 limit used to go out as a request for every device.
 
@@ -2344,7 +2345,7 @@ A confirmed request goes to one device. A confirmed call such as
 an IPv4 multicast address, raises `BacnetError` before anything is sent
 (#1479).
 
-#### `who_has_by_id(object_id, low_limit=None, high_limit=None, scope="local")`
+#### `who_has_by_id(object_id, low=None, high=None, scope="local")`
 
 Find a device hosting a specific object by identifier. The Who-Has goes where
 `scope` says, as for `who_is()` (#2596): this network alone by default, a
@@ -2360,7 +2361,7 @@ await client.who_has_by_id(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1))
 await client.who_has_by_id(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1), scope=5)
 ```
 
-#### `who_has_by_name(name, low_limit=None, high_limit=None, scope="local")`
+#### `who_has_by_name(name, low=None, high=None, scope="local")`
 
 Find a device hosting a specific object by name, compared exactly, with the
 same limits and `scope` as `who_has_by_id()`.
@@ -2370,10 +2371,10 @@ await client.who_has_by_name("Zone Temperature")
 await client.who_has_by_name("Zone Temperature", scope="global")
 ```
 
-#### `who_has_replies(object, low_limit=None, high_limit=None, timeout_ms=3000, scope="local") -> list[IHave]`
+#### `who_has_replies(object, low=None, high=None, wait=3.0, scope="local") -> list[IHave]`
 
 Send a Who-Has for `object`, an `ObjectIdentifier` or a name as `str`, and
-collect the I-Haves that answer it from that scope for `timeout_ms`: one per
+collect the I-Haves that answer it from that scope for `wait` seconds: one per
 device, object and station (so two devices sharing an instance both come
 back, and a station's copy through a router on this client's own network is
 its local answer), in arrival order, and an empty list when none answer. An
@@ -2386,7 +2387,7 @@ Each frozen `IHave` has `device_identifier`, `object_identifier`,
 router passed it on.
 
 ```python
-for reply in await client.who_has_replies("Zone Temperature", timeout_ms=1000):
+for reply in await client.who_has_replies("Zone Temperature", wait=1.0):
     print(reply.device_identifier, reply.object_identifier)
 # Nothing here: ask every network.
 replies = await client.who_has_replies("Zone Temperature", scope="global")
@@ -2397,10 +2398,10 @@ replies = await client.who_has_replies("Zone Temperature", scope="global")
 Follow every I-Have the client receives from now on, an answer to its own
 Who-Has or not, as an async iterator of `IHave`.
 
-#### `discover_routers(network=None, timeout_ms=3000) -> list[DiscoveredRouter]`
+#### `discover_routers(network=None, wait=3.0) -> list[DiscoveredRouter]`
 
 Broadcast a Who-Is-Router-To-Network for `network`, or every network, and
-collect the routers that answer for `timeout_ms`: one frozen
+collect the routers that answer for `wait` seconds: one frozen
 `DiscoveredRouter` per router, with its `mac` (the next hop) and the
 `networks` it listed, ascending. For a `network`, only the routers listing
 it are kept. No answer is an empty list; `network` 0 or 65535 raises
@@ -2423,7 +2424,7 @@ first on the next call, reads complete one at a time, and each iterator
 belongs to one event loop. Iteration ends once the client stops.
 
 `who_has_replies()` and `discover_routers()` hold the started client for
-their whole `timeout_ms`, so `stop()`, or leaving `async with`, waits for them
+their whole `wait`, so `stop()`, or leaving `async with`, waits for them
 to finish.
 
 #### `discovered_devices() -> list[DiscoveredDevice]`
@@ -2507,6 +2508,14 @@ async with BACnetClient(transport="ipv6", port=0, ipv6_device_instance=4321) as 
 Send one Who-Is and return the devices that answered it: see [Finding
 devices](#finding-devices). Before #2561 it took `timeout_ms`, `low_limit`
 and `high_limit` and returned every `DiscoveredDevice` in the table.
+
+Every discovery call spells its parameters the same way (#2561): `low` and
+`high` for the instance range, and `wait`, in seconds, for how long a call
+that collects answers listens. Before, `who_is` and the Who-Has calls took
+`low_limit` and `high_limit`, and `who_has_replies` and `discover_routers`
+took `timeout_ms`. The other `*_timeout_ms` keywords (`apdu_timeout_ms` and
+the SC and MS/TP ones on the constructors) are per-request or link
+timeouts, a different thing, and keep their names.
 
 A Who-Is to one station by unicast, which `who_is_directed(address)` sent
 before #2561, is `who_is(scope=address)`, or `discover(scope=address)` to
@@ -6479,7 +6488,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetLogNotAdvancingError` | A paged log read can't advance: the device answered from before the record asked for, or with none its counts say it holds. `requested` and `returned` (`None` when it sent none) name the sequence numbers |
 | `BacnetBvlcNakError` | A BBMD refused a management request (`read_bdt` and its siblings) with a BVLC-Result NAK; `result_code` holds its code |
 | `BacnetBvlcUnexpectedResponseError` | A management request was answered by a BVLC message it doesn't take; `expected` and `got` hold the function codes |
-| `BacnetLookupError` | No device could be placed for the name a call gave: no address claims the instance and none answered a Who-Is for it, or no router is known for a routed address's network. Also a `LookupError`. `target` is the name as given, `instance` None and `candidates` empty. The typed `_from_device` calls raise it for an instance the table doesn't hold |
+| `BacnetLookupError` | No device could be placed for the name a call gave: no address claims the instance and none answered a Who-Is for it, or no router is known for a routed address's network. Also a `LookupError`. `target` is the name as given, `instance` the instance it holds (None for an address) and `candidates` empty. The typed `_from_device` calls raise it for an instance the table doesn't hold |
 | `BacnetPagingError` | A device broke a rule of a paged read (it named an object twice, or said more remain with no new object); `service` and `object_id` say where. No call pages yet |
 | `BacnetAmbiguousDeviceError` | A `BacnetLookupError`. A call named a device by instance and two or more addresses claim it; nothing was sent. `instance` is the instance and `candidates` lists each claimant as `(network, mac)`, network 0 the local one |
 | `BacnetWriteDeniedError` | The client's `write_policy` refuses the priority a `Device.write` or a `relinquish` names; nothing was sent. `priority`, `relinquish`, `object_id`, `property_id` and `array_index` say what it named (see [the write policy](#the-write-policy)) |

@@ -388,11 +388,18 @@ async fn a_priority_read_the_link_refused_says_why() {
     };
     assert_eq!(written.priority, Some(p(9)));
     assert!(refused(source), "{source:?}");
-    // An object's read fails the same way, once, with no rows of text.
+    // An object's read fails the same way, once, with no rows of text,
+    // and so does a bulk read, by ReadPropertyMultiple and, once the device
+    // is known to refuse that, by ReadProperty each: the two agree.
     let error = device
         .read_object(oid(ObjectType::ANALOG_OUTPUT, 1), Wanted::All)
         .await
         .unwrap_err();
+    assert!(refused(&error), "{error:?}");
+    let error = device.read_many(["ao:1 pv", "ai:1 pv"]).await.unwrap_err();
+    assert!(refused(&error), "{error:?}");
+    client.refuse_rpm(&device.address());
+    let error = device.read_many(["ao:1 pv", "ai:1 pv"]).await.unwrap_err();
     assert!(refused(&error), "{error:?}");
     drop(device);
     stop(client, server).await;

@@ -5,13 +5,10 @@
 //!
 //! Each started `BACnetClient` builds one [`OpsClient`] over its low-level
 //! client ([`client`]): the two share the client, its discovery table, and
-//! one set of request limits the 223 export uses too. A call makes a
-//! handle for its device from that client, then runs one of the functions
-//! here on the handle. They take the handle, not an address, so the two
-//! ways of naming a device run the same code: an address, as the client's
-//! own `relinquish` and `priority_array` take one, and a Python `Device`
-//! ([`PyDevice`]), made by `BACnetClient.device` from a target in the
-//! grammar, whose methods are the rest of the high-level calls.
+//! one set of request limits the 223 export uses too. Every call goes
+//! through a Python `Device` ([`PyDevice`]), made by `BACnetClient.device`
+//! from a target in the grammar: its methods are the high-level calls,
+//! and there is no second spelling of them on the client.
 
 mod device;
 mod discovered;
@@ -26,7 +23,7 @@ use std::sync::Arc;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::limits::RequestLimits;
-use bacnet_ops::{DeviceAddress, Priority, ResolveScope, WritePolicy};
+use bacnet_ops::{Priority, ResolveScope, WritePolicy};
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -36,7 +33,7 @@ use crate::app_transport::AppTransport;
 pub(crate) use device::PyDevice;
 pub(crate) use discovered::PyDiscovered;
 pub(crate) use errors::ops_err;
-pub(crate) use priorities::{PyPriorityView, PyWritePolicy, priority_arg};
+pub(crate) use priorities::{PyPriorityView, PyWritePolicy};
 pub(crate) use specs::target_arg;
 
 /// The high-level client over the binding's transport.
@@ -101,6 +98,19 @@ pub(crate) fn resolve_scope_arg(
     )))
 }
 
+/// A refusal as Python shows it: where the operations core says only
+/// which link reaches an address (it names no front end's option), the
+/// keyword that picks that link here.
+pub(crate) fn link_hint(reason: String) -> String {
+    use bacnet_ops::target::{NEEDS_BIP6, NEEDS_MSTP};
+    let transport = match () {
+        () if reason.ends_with(NEEDS_BIP6) => "ipv6",
+        () if reason.ends_with(NEEDS_MSTP) => "mstp",
+        () => return reason,
+    };
+    format!("{reason} (BACnetClient(transport='{transport}'))")
+}
+
 /// Why a router's application can't reach the station a local address
 /// names (#2071): it has no network of its own. Raised before anything is
 /// sent, where the send itself would fail with the router's refusal.
@@ -147,18 +157,6 @@ pub(crate) async fn device(
         return Err(no_own_network(&address.styled(style)));
     }
     Ok(device)
-}
-
-/// The handle for the station at `mac` on this client's own network, an
-/// address as `read_property` takes one. It is pinned there and made at
-/// once: nothing is sent, and the discovery table needn't hold the device.
-/// A MAC the client's link can't send to raises ValueError, and so does
-/// any on a router's application, which has no network of its own: there
-/// the write would be refused by the router, and the read after it would
-/// come back as rows that name no cause.
-pub(crate) async fn station(client: &OpsClient, mac: &[u8]) -> PyResult<OpsDevice> {
-    let address = DeviceAddress::local(mac).map_err(PyValueError::new_err)?;
-    device(client, &specs::Named::Address(address), false).await
 }
 
 /// [`Device::relinquish`](bacnet_ops::Device::relinquish) of `object` at

@@ -38,7 +38,8 @@ fn levels(priorities: impl Iterator<Item = Priority>) -> Vec<u8> {
     priorities.map(Priority::get).collect()
 }
 
-/// Which command priorities a `BACnetClient`'s `relinquish` may use, given
+/// Which command priorities a `BACnetClient`'s handles may write and
+/// relinquish at, given
 /// with its `write_policy=` keyword. `WritePolicy()` refuses 1 and 2 (life
 /// safety), 5 (critical equipment) and 6 (minimum on and off times);
 /// `allow_priorities` gives a policy that allows some of them as well. The
@@ -157,7 +158,7 @@ impl std::fmt::Debug for Tuple<'_> {
 
 /// An object's commands as read: its Priority_Array's sixteen slots, the
 /// slot in control, Relinquish_Default and Present_Value
-/// (`priority_array` and `relinquish`, on a `Device` or a `BACnetClient`).
+/// (`Device.priority_array` and `Device.relinquish`).
 /// Each value is a `Value`; values name no units. Refuses `copy` and
 /// `pickle`.
 #[pyclass(name = "PriorityView", module = "rusty_bacnet", frozen)]

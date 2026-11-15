@@ -174,24 +174,12 @@ pub fn to_py_err(err: Error) -> PyErr {
                 .iter()
                 .map(|address| (address.network_number, address.mac_address.to_vec()))
                 .collect();
-            lookup_error(
-                err.to_string(),
-                Lookup {
-                    target: Some(instance.to_string()),
-                    instance: Some(instance),
-                    candidates,
-                },
-            )
+            lookup_error(err.to_string(), Lookup::ambiguous(instance, candidates))
         }
         // No row for the device a request named (#2561).
-        Error::UnknownDevice { ref device } => lookup_error(
-            err.to_string(),
-            Lookup {
-                target: Some(device.clone()),
-                instance: None,
-                candidates: Vec::new(),
-            },
-        ),
+        Error::UnknownDevice { ref device } => {
+            lookup_error(err.to_string(), Lookup::unknown(device.clone()))
+        }
         _ => BacnetError::new_err(err.to_string()),
     }
 }

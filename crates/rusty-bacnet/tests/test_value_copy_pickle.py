@@ -196,9 +196,15 @@ class ValueCopyPickleTests(unittest.TestCase):
                                                                  PropertyValue.real(72.5)))
         self.assertEqual(value.__reduce__()[1],
                          (1, 85, None, bytes.fromhex("4442910000"), "72.5", "72.5"))
-        # The same octets as another property's value are another value.
-        self.assertNotEqual(value, rebuild(1, 104, None, bytes.fromhex("4442910000"),
-                                           "72.5", "72.5"))
+        # The same octets, text and data as another property's value are
+        # an equal value, though its pickle says which it was.
+        other = rebuild(1, 104, None, bytes.fromhex("4442910000"), "72.5", "72.5")
+        self.assertEqual(value, other)
+        self.assertEqual(hash(value), hash(other))
+        self.assertNotEqual(value.__reduce__()[1], other.__reduce__()[1])
+        self.assertNotEqual(value, rebuild(1, 85, None, bytes.fromhex("4442910000"),
+                                           "72.5 °C", "72.5"))
+        self.assertIs(value.__eq__("72.5"), NotImplemented)
         with self.assertRaisesRegex(ValueError, "not JSON"):
             rebuild(1, 85, None, b"\x00", "null", "{")
         for wrong in (bytearray(b"\x00"), "00", [0]):

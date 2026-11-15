@@ -14,8 +14,8 @@ use crate::types::{PyPropertyValue, decode_read_value};
 /// `raw`, the octets on the wire.
 ///
 /// A value class: two are equal when they hold the same octets, text and
-/// data for the same property of the same object type, they hash alike,
-/// and one copies and pickles, rebuilt from those parts. It holds nothing
+/// data, they hash alike, and one copies and pickles, rebuilt from those
+/// parts and the property it is a value of. It holds nothing
 /// of the client or the device it came from.
 #[pyclass(name = "Value", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyValue {
@@ -80,18 +80,6 @@ impl PyValue {
     pub(crate) fn text(&self) -> &str {
         &self.text
     }
-
-    /// What equality compares, and a pickle holds.
-    fn parts(&self) -> (u32, u32, Option<u32>, &[u8], &str, &serde_json::Value) {
-        (
-            self.object_type.to_raw(),
-            self.property.to_raw(),
-            self.index,
-            &self.raw,
-            &self.text,
-            &self.data,
-        )
-    }
 }
 
 #[pymethods]
@@ -135,10 +123,22 @@ impl PyValue {
         Ok(format!("Value({text})"))
     }
 
-    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
-        other
-            .cast::<Self>()
-            .is_ok_and(|other| other.get().parts() == self.parts())
+    /// Equal to another `Value` with the same octets, text and data, as
+    /// the Rust `Value` compares; what it is a value of isn't compared.
+    /// NotImplemented for anything else, so Python tries the other side.
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> Py<PyAny> {
+        match other.cast::<Self>() {
+            Ok(other) => {
+                let other = other.get();
+                let equal =
+                    (&self.raw, &self.text, &self.data) == (&other.raw, &other.text, &other.data);
+                pyo3::types::PyBool::new(py, equal)
+                    .to_owned()
+                    .into_any()
+                    .unbind()
+            }
+            Err(_) => py.NotImplemented(),
+        }
     }
 
     fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {

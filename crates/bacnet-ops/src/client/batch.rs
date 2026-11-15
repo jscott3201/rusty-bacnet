@@ -25,7 +25,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{ReadVia, RpmFailure, rpm_failure, unreachable};
+use super::{ReadVia, RpmFailure, rpm_failure, unreachable, unsent};
 use crate::device::{DeviceAddress, Path};
 use crate::format::{PropertyError, RawRow};
 use crate::limits::RequestLimits;
@@ -103,7 +103,10 @@ impl<K> Batched<K> {
 /// # Errors
 ///
 /// A routed address the discovery table holds no router for has no path
-/// ([`Error::UnknownDevice`]); nothing is sent.
+/// ([`Error::UnknownDevice`]); nothing is sent. A request the link or the
+/// client refused to send fails the read with that error, whatever was
+/// read before it, as [`Reader::properties`](super::Reader::properties)
+/// fails (#2610): it is no device going quiet, and no row's own error.
 pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
@@ -155,6 +158,8 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
                     read.stopped = Some(error);
                     break;
                 }
+                // Never sent: the next would be refused the same way.
+                Err(error) if unsent(&error) => return Err(error),
                 Err(error) => match rpm_failure(&error) {
                     RpmFailure::Refused => {
                         tracing::info!(
@@ -193,6 +198,7 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
                     read.stopped = Some(error);
                     break 'batches;
                 }
+                Some(End::Unsent(error)) => return Err(error),
                 Some(End::Cancelled) => {
                     read.partial = some;
                     read.cancelled = true;
@@ -245,6 +251,9 @@ fn batches<K>(rows: &[BatchRow<K>]) -> impl Iterator<Item = &[BatchRow<K>]> {
 enum End {
     /// The device stopped answering.
     Silent(Error),
+    /// The link, or the client, refused to send the request: nothing left,
+    /// and the next would be refused the same way.
+    Unsent(Error),
     /// The caller's stop flag went up.
     Cancelled,
 }
@@ -272,6 +281,7 @@ async fn one_by_one<K, T: TransportPort + 'static>(
         let value = match read {
             Ok(ack) => Ok(ack.property_value),
             Err(error) if unreachable(&error) => return (rows, Some(End::Silent(error))),
+            Err(error) if unsent(&error) => return (rows, Some(End::Unsent(error))),
             Err(error) => Err(PropertyError::from(error)),
         };
         rows.push((property, value));

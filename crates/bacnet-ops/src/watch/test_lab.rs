@@ -267,7 +267,8 @@ fn forwards(
             );
             return false;
         }
-        if service == SUBSCRIBE_COV && quirks.refuse_cov.load(Ordering::Relaxed) {
+        // 28 is SubscribeCOVProperty: a device without COV refuses both.
+        if [SUBSCRIBE_COV, 28].contains(&service) && quirks.refuse_cov.load(Ordering::Relaxed) {
             let reason = RejectReason::UNRECOGNIZED_SERVICE.to_raw();
             answer(handle, vec![0x60, invoke, reason]);
             return false;

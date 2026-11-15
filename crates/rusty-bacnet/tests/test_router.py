@@ -188,11 +188,11 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
                                   foreign_device=rb.ForeignDevice(p.address,ttl=60))
             await client.__aenter__();self.addAsyncCleanup(self.cleanup, client.stop)
             await accepted_registration(client);clients.append(client)
-        [all_routes]=await clients[0].discover_routers(timeout_ms=1500)
+        [all_routes]=await clients[0].discover_routers(wait=1.5)
         self.assertEqual((all_routes.mac,all_routes.networks),(ports[0].mac,[5,7]))
-        [specific]=await clients[0].discover_routers(7,timeout_ms=1500)
+        [specific]=await clients[0].discover_routers(7,wait=1.5)
         self.assertIn(7,specific.networks)
-        self.assertEqual(await clients[0].discover_routers(9,timeout_ms=500),[])
+        self.assertEqual(await clients[0].discover_routers(9,wait=0.5),[])
         # Each target has a real server with an independently configured value.
         # Device source_network proves the cache does not collapse into a direct
         # loopback read; requests and responses must traverse the router.

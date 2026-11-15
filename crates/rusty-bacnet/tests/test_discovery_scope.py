@@ -122,7 +122,7 @@ class WhoHasScopeTests(ForeignClient):
     def who_has_calls(self, **scope):
         client = self.client
         return (("who_has_by_id", lambda: client.who_has_by_id(AV1, **scope)),
-                ("who_has_replies", lambda: client.who_has_replies(AV1, timeout_ms=0, **scope)))
+                ("who_has_replies", lambda: client.who_has_replies(AV1, wait=0, **scope)))
 
     async def test_no_scope_is_a_local_broadcast(self):
         for name, call in self.who_has_calls() + self.who_has_calls(scope="local"):

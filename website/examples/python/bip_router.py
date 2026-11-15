@@ -50,7 +50,7 @@ async def main() -> int:
                     foreign_device=ForeignDevice(near.address, ttl=60)) as client:
                 await registered(server, client)
                 # Who-Is-Router-To-Network: which router reaches network 5?
-                routers = await client.discover_routers(FAR, timeout_ms=2000)
+                routers = await client.discover_routers(FAR, wait=2.0)
                 if [found.mac for found in routers] != [near.mac]:
                     raise RuntimeError(f"expected this router, heard {routers}")
                 print(f"Router to network {FAR} found, "

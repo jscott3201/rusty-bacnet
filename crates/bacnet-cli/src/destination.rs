@@ -79,7 +79,7 @@ pub async fn resolve<T: TransportPort + 'static>(
         Target::Bip6(peer) => Destination::local(
             &bip6_vmac(client.transport(), peer)
                 .await
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| with_link_flag(e.to_string()))?,
         ),
         Target::Instance(instance) => match client
             .get_device(instance)
@@ -130,7 +130,7 @@ pub async fn resolve_mac<T: TransportPort + 'static>(
         Target::Mac(mac) => Ok(mac),
         Target::Bip6(peer) => bip6_vmac(client.transport(), peer)
             .await
-            .map_err(|e| e.to_string()),
+            .map_err(|e| with_link_flag(e.to_string())),
         Target::Instance(instance) => match client
             .get_device(instance)
             .await

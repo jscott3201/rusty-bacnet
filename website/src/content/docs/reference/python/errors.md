@@ -182,8 +182,8 @@ instance the table doesn't hold.
 Attributes:
 target: The device as it was named: an instance (`"1234"`,
 `"2:1234"`) or an address (`"2:0x05"`).
-instance: None here; the instance for a
-`BacnetAmbiguousDeviceError`.
+instance: The instance named (`1234` for `"1234"` or
+`"2:1234"`); None when the device was named by an address.
 candidates: An empty list here.
 
 Attributes:

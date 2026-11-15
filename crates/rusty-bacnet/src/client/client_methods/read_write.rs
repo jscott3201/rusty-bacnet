@@ -91,21 +91,21 @@ impl BACnetClient {
     /// is asked by unicast (#2561).
     ///
     /// Give both limits or neither, each from 0 to 4194303; one alone,
-    /// `low_limit` above `high_limit`, or a limit past 4194303 raises
+    /// `low` above `high`, or a limit past 4194303 raises
     /// `ValueError` before anything is sent, as does a scope that is none
     /// of those.
     #[pyo3(
-        signature = (low_limit=None, high_limit=None, scope=None),
-        text_signature = "($self, low_limit=None, high_limit=None, scope='local')"
+        signature = (low=None, high=None, scope=None),
+        text_signature = "($self, low=None, high=None, scope='local')"
     )]
     fn who_is<'py>(
         &self,
         py: Python<'py>,
-        low_limit: Option<u32>,
-        high_limit: Option<u32>,
+        low: Option<u32>,
+        high: Option<u32>,
         scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let range = device_range(low_limit, high_limit)?;
+        let range = device_range(low, high)?;
         let scope = discovery_scope(scope.as_ref(), &self.transport_type, "Who-Is")?;
         let inner = self.inner.clone();
         let future = async move {

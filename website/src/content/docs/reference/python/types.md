@@ -438,8 +438,9 @@ One value a high-level call read or sent (#2561): typed (`value`),
 as text (`text`), as plain data (`data`) and as octets (`raw`).
 
 A value class: two are equal when they hold the same octets, text and
-data for the same property of the same object type, equal values hash
-alike, and one copies and pickles. It keeps nothing of the client or
+data (what they are a value of isn't compared), equal values hash
+alike, comparing with anything else gives NotImplemented, and one
+copies and pickles. It keeps nothing of the client or
 the device it came from. `value` is the typed Python form, so there
 are no `as_float`-style accessors: `reading.value.value` is the
 float, int, str or other value itself.
@@ -592,8 +593,7 @@ Properties:
 
 An object's commands as read: its Priority\_Array's sixteen slots,
 the slot in control, Relinquish\_Default and Present\_Value
-(`priority_array` and `relinquish`, on a `Device` or a
-`BACnetClient`, #2561). Refuses `copy` and `pickle`; its values
+(`Device.priority_array` and `Device.relinquish`, #2561). Refuses `copy` and `pickle`; its values
 copy and pickle.
 
 Properties:
@@ -842,9 +842,23 @@ def relinquish(
 ```
 
 Release a command: NULL written to `object`'s Present\_Value at
-`priority` (required, 1 to 16), then the object's priorities as
-read just after. It raises what `BACnetClient.relinquish`
-raises.
+`priority`, so the next slot down, or Relinquish\_Default, takes
+over; then the object's priorities as read just after. One
+WriteProperty, then one ReadPropertyMultiple, or a ReadProperty of
+each of the three properties when the device refuses that.
+
+`priority` is required and is an int from 1 to 16: a bool, a
+float or anything else raises `TypeError`, and another int
+`ValueError`, when the call is made. On await, with nothing sent:
+an object type with no Priority\_Array (an input, or a Channel)
+raises `ValueError`, and a priority the client's `write_policy`
+refuses (1, 2, 5 and 6 by default) `BacnetWriteDeniedError`. Then
+the device's refusal of the write raises the usual protocol, reject
+or abort error, and no answer `BacnetTimeoutError`. A relinquish
+the device acknowledged whose read after it failed raises
+`BacnetReadBackError`, and one whose read says the object has no
+Priority\_Array `BacnetNoPriorityArrayError`; both say what was
+written (`written`), which needs no second send.
 
 ### Device.priority_array
 
@@ -853,8 +867,11 @@ def priority_array(self, object: ObjectIdentifier | str) -> Awaitable[PriorityVi
 ```
 
 Read `object`'s commands: its Priority\_Array,
-Relinquish\_Default and Present\_Value in one request. It raises what
-`BACnetClient.priority_array` raises.
+Relinquish\_Default and Present\_Value in one ReadPropertyMultiple (a
+ReadProperty of each when the device refuses that). An object type
+with no Priority\_Array raises `ValueError` on await with nothing
+sent; a device that says the object has none
+`BacnetNoPriorityArrayError`; no answer `BacnetTimeoutError`.
 
 ### Device.objects
 

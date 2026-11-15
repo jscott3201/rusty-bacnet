@@ -75,9 +75,9 @@ const PYTHON_METHOD_SUFFIXES: &[&str] = &[
 /// count for none. Some send a service another method already names
 /// (`discover` and `who_is`, `unsubscribe_cov` and `subscribe_cov`,
 /// `read_log_page` and `read_range`, `export_223_experimental` and the
-/// ReadProperty and ReadPropertyMultiple readers, `relinquish` and
-/// `priority_array` and WriteProperty and ReadPropertyMultiple, and `device`,
-/// whose `Device` handle's calls send those three, #2561); the rest send
+/// ReadProperty and ReadPropertyMultiple readers, and `device`, whose
+/// `Device` handle's calls send those two and WriteProperty, #2561); the
+/// rest send
 /// none: lifecycle, accessors (`write_policy`, `resolve_scope`), event
 /// streams, and BVLL or network-layer messages. Generation
 /// fails on a method that is neither here nor named after a service, and on
@@ -91,8 +91,6 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "unsubscribe_cov",
     "read_log_page",
     "export_223_experimental",
-    "relinquish",
-    "priority_array",
     "write_policy",
     "device",
     "resolve_scope",

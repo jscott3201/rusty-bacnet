@@ -67,7 +67,7 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
         return BacnetTimeoutError::new_err(message);
     }
     match error {
-        OpsError::Parse { reason, .. } => PyValueError::new_err(reason),
+        OpsError::Parse { reason, .. } => PyValueError::new_err(super::link_hint(reason)),
         OpsError::Unreachable { source, .. } | OpsError::Client(source) => to_py_err(source),
         OpsError::Refused {
             error: RemoteError::Error { class, code },
@@ -84,15 +84,15 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
             candidates,
         } => lookup_error(
             message,
-            Lookup {
-                target: Some(instance.to_string()),
-                instance: Some(instance),
-                candidates: candidates
+            Lookup::ambiguous(
+                instance,
+                candidates
                     .iter()
                     .map(|address| (address.network(), address.mac().to_vec()))
                     .collect(),
-            },
+            ),
         ),
+        OpsError::ObjectList { source, .. } => object_list(message, *source, style),
         OpsError::UnknownDevice { target, asked } => lookup_error(
             match asked {
                 // Ops' own text names the Rust call that widens the scope.
@@ -103,11 +103,7 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
                 ),
                 _ => message,
             },
-            Lookup {
-                target: Some(target),
-                instance: None,
-                candidates: Vec::new(),
-            },
+            Lookup::unknown(target),
         ),
         OpsError::Paging(fault) => paging(message, fault),
         // The hub's own limit, or no runtime: nothing was watched, and the
@@ -147,12 +143,29 @@ pub(super) fn unasked(instance: u32) -> PyErr {
              the target ('5:{instance}' for network 5), or give BACnetClient \
              resolve_scope='global' or a network number"
         ),
-        Lookup {
-            target: Some(instance.to_string()),
-            instance: None,
-            candidates: Vec::new(),
-        },
+        Lookup::unknown(instance.to_string()),
     )
+}
+
+/// An [`OpsError::ObjectList`]: the exception its `source` raises, of the
+/// same class and with its attributes, saying which element of the
+/// Object_List failed. An element's read that timed out is a
+/// BacnetTimeoutError before this is reached.
+fn object_list(message: String, source: OpsError, style: AddressStyle) -> PyErr {
+    let cause = ops_err(source, style);
+    let fallback = message.clone();
+    crate::py_async::attach(|py| {
+        let class = cause.get_type(py);
+        let raised = class.call1((message,))?;
+        if let (Ok(from), Ok(to)) = (
+            cause.value(py).getattr("__dict__"),
+            raised.getattr("__dict__"),
+        ) {
+            to.call_method1("update", (from,))?;
+        }
+        Ok(PyErr::from_value(raised))
+    })
+    .unwrap_or_else(|_| BacnetError::new_err(fallback))
 }
 
 /// BacnetPagingError for `fault`, with the paged service and, for a

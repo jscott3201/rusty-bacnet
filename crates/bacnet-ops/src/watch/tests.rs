@@ -539,7 +539,7 @@ async fn a_first_read_never_sent_fails_both_kinds_of_watch_alike() {
         let snapshot = lease.snapshot();
         assert_eq!(snapshot.state, Phase::Failed, "{:?}", lease.point());
         let note = snapshot.note.as_deref().unwrap_or_default();
-        assert!(note.contains("COV refused"), "{note}");
+        assert!(note.contains("the link refused the send"), "{note}");
         assert!(snapshot.rows.is_empty(), "{:?}", snapshot.rows);
     }
     drop(leases);

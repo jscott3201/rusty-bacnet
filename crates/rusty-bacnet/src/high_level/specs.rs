@@ -78,7 +78,16 @@ fn plain_int<'py>(value: &Bound<'py, PyAny>) -> Option<Bound<'py, PyInt>> {
 pub(crate) fn target_arg(target: &Bound<'_, PyAny>) -> PyResult<Named> {
     if let Ok(text) = target.cast::<PyString>() {
         let text = text.to_str()?.trim();
-        bacnet_ops::target::parse_target(text).map_err(PyValueError::new_err)?;
+        use bacnet_ops::target::{Target, parse_target};
+        let named = parse_target(text).map_err(PyValueError::new_err)?;
+        // The wildcard instance and past it name no device, as text or int.
+        if let Target::Instance(instance) | Target::Routed { instance, .. } = named
+            && instance > MAX_INSTANCE
+        {
+            return Err(PyValueError::new_err(format!(
+                "a device instance is 0 to {MAX_INSTANCE}, not {instance}"
+            )));
+        }
         return Ok(Named::Text(text.to_owned()));
     }
     if let Some(instance) = plain_int(target) {

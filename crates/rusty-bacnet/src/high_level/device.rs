@@ -379,9 +379,22 @@ impl PyDevice {
 
     /// Release a command: NULL written to `object`'s Present_Value at
     /// `priority`, then the object's priorities as read just after, as a
-    /// `PriorityView`. `object` is an `ObjectIdentifier` or text
-    /// (`"ao:1"`); `priority` is required, an int from 1 to 16. It raises
-    /// what `BACnetClient.relinquish` raises.
+    /// `PriorityView`: one WriteProperty, then one ReadPropertyMultiple
+    /// (a ReadProperty of each of the three properties when the device
+    /// refuses that). `object` is an `ObjectIdentifier` or text
+    /// (`"ao:1"`); `priority` is required, an int from 1 to 16: a bool, a
+    /// float or anything else raises TypeError and another int ValueError,
+    /// before the Future is made.
+    ///
+    /// On await, with nothing sent: an object type with no Priority_Array
+    /// raises ValueError, and a priority the client's `write_policy`
+    /// refuses (1, 2, 5 and 6 unless allowed) BacnetWriteDeniedError. Then
+    /// the device's refusal of the write raises the usual protocol, reject
+    /// or abort error, and no answer BacnetTimeoutError. A relinquish the
+    /// device acknowledged whose read after it failed raises
+    /// BacnetReadBackError, and one whose read says the object has no
+    /// Priority_Array BacnetNoPriorityArrayError; both say what was
+    /// written (`written`), which needs no second send.
     #[pyo3(signature = (object, priority))]
     fn relinquish<'py>(
         &self,
@@ -398,8 +411,10 @@ impl PyDevice {
 
     /// Read `object`'s commands: its Priority_Array, Relinquish_Default
     /// and Present_Value in one request, as a `PriorityView`. `object` is
-    /// an `ObjectIdentifier` or text (`"ao:1"`). It raises what
-    /// `BACnetClient.priority_array` raises.
+    /// an `ObjectIdentifier` or text (`"ao:1"`). An object type with no
+    /// Priority_Array raises ValueError on await with nothing sent; a
+    /// device that says the object has none BacnetNoPriorityArrayError;
+    /// no answer BacnetTimeoutError.
     #[pyo3(signature = (object))]
     fn priority_array<'py>(
         &self,

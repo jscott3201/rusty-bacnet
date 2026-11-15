@@ -434,6 +434,23 @@ class TargetTests(unittest.IsolatedAsyncioTestCase):
             pinned = await c.device(row)
             self.assertEqual(pinned.instance, row.object_identifier.instance)
 
+    async def test_an_i_am_from_outside_the_scope_is_not_listed(self) -> None:
+        async with client() as c:
+            # Two directed discoveries at once: each lists its own station,
+            # though the client hears both I-Ams during both waits.
+            first, second = await asyncio.gather(
+                c.discover(scope=self.a, wait=0.5), c.discover(scope=self.b, wait=0.5))
+            self.assertEqual([row.instance for row in first], [3001])
+            self.assertEqual([row.instance for row in second], [3002])
+            # A remote network's discovery lists no local device that
+            # answers another Who-Is meanwhile, and a local one lists it.
+            remote, local, _ = await asyncio.gather(
+                c.discover(scope=7, wait=0.5), c.discover(wait=0.5),
+                c.who_is(scope=self.a))
+            self.assertEqual(remote, [])
+            self.assertEqual([row.instance for row in local], [3001])
+            self.assertEqual(len(await c.discovered_devices()), 2)
+
     async def test_discover_arguments(self) -> None:
         async with client() as c:
             for keywords in ({"low": 5}, {"high": 5}, {"low": 9, "high": 1},
@@ -477,6 +494,11 @@ class TargetTests(unittest.IsolatedAsyncioTestCase):
                     c.device(bad)
             with self.assertRaises(ValueError):
                 c.device("not a target")
+            # The wildcard instance and past it, as text too, at once.
+            for bad in ("4194303", "4194304", "2:4194303"):
+                with self.subTest(target=bad), self.assertRaisesRegex(ValueError, "4194302"):
+                    c.device(bad)
+            self.assertEqual((await c.device("3001")).instance, 3001)
         # No address claims 3999, and no device hears the one Who-Is for it.
         async with client(apdu_timeout_ms=300) as c:
             with self.assertRaises(BacnetLookupError) as caught:
@@ -485,7 +507,8 @@ class TargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(error, LookupError)
         self.assertIsInstance(error, BacnetError)
         self.assertNotIsInstance(error, BacnetAmbiguousDeviceError)
-        self.assertEqual((error.target, error.instance, error.candidates), ("3999", None, []))
+        # The instance named, though no address claims it.
+        self.assertEqual((error.target, error.instance, error.candidates), ("3999", 3999, []))
         self.assertIn("resolve_scope", str(error))
         self.assertNotIn("with_resolve_scope", str(error))
 
@@ -770,10 +793,20 @@ class CopyPickleTests(Lab):
                 self.assertEqual(
                     (copied.text, copied.data, copied.raw, copied.value, repr(copied)),
                     (value.text, value.data, value.raw, value.value, repr(value)))
-            # Equal by what they hold, whichever call read them.
+            # Equal by what they hold (octets, text and data), whichever
+            # call read them and whatever they are a value of: the slot at
+            # priority 8 and Present_Value hold the same REAL.
             self.assertEqual(await dev.read("ao:1", "units"), read[1].value)
+            slot, present = await dev.read("ao:1", "priority-array[8]"), await dev.read("ao:1")
+            self.assertEqual((slot.raw, slot.text), (present.raw, present.text))
+            self.assertEqual(slot, present)
+            self.assertEqual(hash(slot), hash(present))
+            # A pickle still knows which it was.
+            self.assertNotEqual(slot.__reduce__()[1], present.__reduce__()[1])
             self.assertNotEqual(value, read[1].value)
+            self.assertNotEqual(value, present)  # "72.5 °C" is other text
             self.assertNotEqual(value, 72.5)
+            self.assertIs(value.__eq__(72.5), NotImplemented)
             self.assertEqual(len({value, copies[0], read[1].value}), 2)
             for result in (read, read[0], read[2], written, preview, view, objects, summary,
                            found, dev):

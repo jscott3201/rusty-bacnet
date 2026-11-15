@@ -180,7 +180,7 @@ impl ScopeArg {
         let refusal = "a directed scope names a station's address";
         let mac = bacnet_ops::target::address_mac(client.transport(), &station, refusal)
             .await
-            .map_err(PyValueError::new_err)?;
+            .map_err(|reason| PyValueError::new_err(crate::high_level::link_hint(reason)))?;
         DeviceAddress::local(&mac)
             .map(Scope::Directed)
             .map_err(PyValueError::new_err)

@@ -15,9 +15,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::errors::BacnetNoPriorityArrayError;
+use super::ops_err;
 use super::priorities::PyWritePolicy;
+use super::priorities::priority_arg;
 use super::value::{PyValue, data_to_py};
-use super::{ops_err, priority_arg};
 use crate::errors::{
     BacnetAbortError, BacnetError, BacnetProtocolError, BacnetRejectError, BacnetTimeoutError,
     ambiguous_error_type, lookup_error_type,
@@ -283,11 +284,20 @@ fn lookup_errors_are_one_tree() {
             let value = error.value(py);
             let target: String = value.getattr("target").unwrap().extract().unwrap();
             assert_eq!(target, "2:1234");
-            assert!(value.getattr("instance").unwrap().is_none());
+            // The instance the name holds, though no address claims it.
+            let instance: u32 = value.getattr("instance").unwrap().extract().unwrap();
+            assert_eq!(instance, 1234);
             let candidates: Vec<(u16, Vec<u8>)> =
                 value.getattr("candidates").unwrap().extract().unwrap();
             assert!(candidates.is_empty());
         }
+        // An address names no instance.
+        let by_address = ops_err_bip(OpsError::UnknownDevice {
+            target: "9:0x05".into(),
+            asked: None,
+        });
+        assert!(by_address.value(py).get_type().is(lookup));
+        assert!(by_address.value(py).getattr("instance").unwrap().is_none());
         let asked = ops_err_bip(OpsError::UnknownDevice {
             target: "1234".into(),
             asked: Some(bacnet_ops::ResolveScope::Local),
@@ -361,10 +371,51 @@ fn every_variant_is_mapped() {
         let full = ops_err_bip(OpsError::Watch(WatchError::Full { max: 4096 }));
         assert!(full.is_instance_of::<PyRuntimeError>(py), "{full}");
         assert!(full.to_string().contains("4096"), "{full}");
+        // An Object_List element's failure raises what the element's own
+        // error raises, saying which element: a refusal with its class and
+        // code, a lost link as the transport error, a timeout as one.
+        let element = |source: OpsError| {
+            ops_err_bip(OpsError::ObjectList {
+                index: 7,
+                total: 40,
+                source: Box::new(source),
+            })
+        };
+        let refused = element(OpsError::Refused {
+            device: station(),
+            error: RemoteError::Error {
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::READ_ACCESS_DENIED,
+            },
+            detail: None,
+        });
+        assert!(
+            refused.is_instance_of::<BacnetProtocolError>(py),
+            "{refused}"
+        );
+        assert!(refused.to_string().contains("element 7 of 40"), "{refused}");
+        let code: u16 = refused
+            .value(py)
+            .getattr("error_code")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(code, ErrorCode::READ_ACCESS_DENIED.to_raw());
+        let silent = element(OpsError::Unreachable {
+            device: station(),
+            source: Error::Timeout(std::time::Duration::from_secs(1)),
+        });
+        assert!(silent.is_instance_of::<BacnetTimeoutError>(py), "{silent}");
+        let link = element(OpsError::Unreachable {
+            device: station(),
+            source: Error::Transport(std::io::Error::other("closed")),
+        });
+        assert!(link.is_instance_of::<PyOSError>(py), "{link}");
+        assert!(link.to_string().contains("element 7 of 40"), "{link}");
         // The variants the other tests cover: Parse, UnknownDevice,
         // Ambiguous, Unreachable, Refused, Client, Denied (over the wire),
-        // ReadBack (over the wire) and NoPriorityArray. With Paging and
-        // Watch that is all eleven.
+        // ReadBack (over the wire) and NoPriorityArray. With Paging, Watch
+        // and ObjectList that is all twelve.
     });
 }
 
@@ -396,8 +447,21 @@ fn a_value_is_its_parts() {
         assert!(fifty.eq(&same).unwrap());
         assert_eq!(fifty.hash().unwrap(), same.hash().unwrap());
         assert!(!fifty.eq(&other).unwrap());
-        assert!(!fifty.eq(&elsewhere).unwrap());
+        // What it is a value of isn't compared, as Rust's `Value` doesn't:
+        // the same octets, text and data are the same value.
+        assert!(fifty.eq(&elsewhere).unwrap());
+        assert_eq!(fifty.hash().unwrap(), elsewhere.hash().unwrap());
         assert!(!fifty.eq(50.0f64).unwrap());
+        let not_implemented = fifty.call_method1("__eq__", (50.0f64,)).unwrap();
+        assert!(not_implemented.is(py.NotImplemented()));
+        // The pickle still says what it is a value of, which decodes it.
+        let (_, parts) = elsewhere
+            .call_method0("__reduce__")
+            .unwrap()
+            .extract::<(Bound<'_, PyAny>, Bound<'_, pyo3::types::PyTuple>)>()
+            .unwrap();
+        let property: u32 = parts.get_item(1).unwrap().extract().unwrap();
+        assert_eq!(property, PropertyIdentifier::RELINQUISH_DEFAULT.to_raw());
         let (rebuild, args) = fifty
             .call_method0("__reduce__")
             .unwrap()
@@ -451,5 +515,27 @@ fn a_value_is_its_parts() {
             .extract()
             .unwrap();
         assert_eq!(tag, "application_data");
+    });
+}
+
+/// The operations core's link refusals name no keyword; the binding adds
+/// its own, and leaves every other refusal as it came.
+#[test]
+fn a_link_refusal_names_the_transport_keyword() {
+    use bacnet_ops::target::{NEEDS_BIP6, NEEDS_MSTP};
+    Python::initialize();
+    Python::attach(|py| {
+        for (needs, transport) in [(NEEDS_BIP6, "ipv6"), (NEEDS_MSTP, "mstp")] {
+            let error = ops_err_bip(OpsError::Parse {
+                what: "target",
+                input: "x".into(),
+                reason: format!("'x' is an address: {needs}"),
+            });
+            assert!(error.is_instance_of::<PyValueError>(py));
+            let text = error.value(py).to_string();
+            let hint = format!("(BACnetClient(transport='{transport}'))");
+            assert!(text.ends_with(&hint), "{text}");
+        }
+        assert_eq!(super::link_hint("plain".into()), "plain");
     });
 }

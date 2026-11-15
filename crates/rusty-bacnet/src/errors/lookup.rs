@@ -72,24 +72,55 @@ pub(crate) fn ambiguous_error_type(py: Python<'_>) -> PyResult<&Py<PyType>> {
 pub(crate) struct Lookup {
     /// The device as it was named, when the error says.
     pub(crate) target: Option<String>,
-    /// The instance two or more addresses claim; `None` for a device no
-    /// address claims.
+    /// The instance named: the one two or more addresses claim, or the
+    /// one no address claims; `None` when the device was named by an
+    /// address.
     pub(crate) instance: Option<u32>,
+    /// Two or more addresses claim the instance.
+    pub(crate) ambiguous: bool,
     /// Every address claiming the instance, as (network, MAC), network 0
     /// for this one: a `BACnetClient.device()` target each. Empty for a
     /// device no address claims.
     pub(crate) candidates: Vec<(u16, Vec<u8>)>,
 }
 
-/// `BacnetAmbiguousDeviceError` when `lookup` names an instance with
-/// candidates, else `BacnetLookupError`. Falls back to a plain
+impl Lookup {
+    /// No device could be placed for `target`, as the call named it: its
+    /// instance when the name is one (`1234`, `2:1234`).
+    pub(crate) fn unknown(target: String) -> Self {
+        use bacnet_ops::target::{Target, parse_target};
+        let instance = match parse_target(&target) {
+            Ok(Target::Instance(instance) | Target::Routed { instance, .. }) => Some(instance),
+            _ => None,
+        };
+        Self {
+            target: Some(target),
+            instance,
+            ambiguous: false,
+            candidates: Vec::new(),
+        }
+    }
+
+    /// `candidates` all claim `instance`.
+    pub(crate) fn ambiguous(instance: u32, candidates: Vec<(u16, Vec<u8>)>) -> Self {
+        Self {
+            target: Some(instance.to_string()),
+            instance: Some(instance),
+            ambiguous: true,
+            candidates,
+        }
+    }
+}
+
+/// `BacnetAmbiguousDeviceError` when `lookup` is ambiguous, else
+/// `BacnetLookupError`. Falls back to a plain
 /// `BacnetError` when Python is finalizing.
 pub(crate) fn lookup_error(message: String, lookup: Lookup) -> PyErr {
     let fallback = message.clone();
     crate::py_async::attach(|py| {
-        let class = match lookup.instance {
-            Some(_) => ambiguous_error_type(py)?,
-            None => lookup_error_type(py)?,
+        let class = match lookup.ambiguous {
+            true => ambiguous_error_type(py)?,
+            false => lookup_error_type(py)?,
         };
         let error = class.bind(py).call1((message,))?;
         error.setattr("target", lookup.target)?;
