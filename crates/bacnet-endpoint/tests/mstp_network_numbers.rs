@@ -29,8 +29,11 @@ async fn controls(role: Role, mode: MstpExecutionMode) {
     peer.control(NODE, &[1, 0x80, 0x13, 0, 99, 1]).await;
     peer.control(BROADCAST, &[1, 0x80, 0x12]).await;
     peer.control(BROADCAST, &[1, 0x80, 0x13, 0, 77, 0]).await;
+    // A broadcast question's answer waits (Clause 6.4.19, #2597); the
+    // question to the node alone is answered at once, and its broadcast
+    // settles the waiting one. Any second answer would carry 77 into the
+    // exact replies below.
     peer.control(BROADCAST, &[1, 0x80, 0x12]).await;
-    peer.number(77).await;
     peer.control(NODE, &[1, 0x80, 0x12]).await;
     peer.number(77).await;
     for (number, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {

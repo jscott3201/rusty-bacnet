@@ -27,6 +27,9 @@ bacnet-time = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
+# The random wait before a node's Network-Number-Is answer (#2597); the
+# transports draw from it already.
+getrandom = { workspace = true }
 
 [dev-dependencies]
 bacnet-transport = { workspace = true, features = ["test-support"] }

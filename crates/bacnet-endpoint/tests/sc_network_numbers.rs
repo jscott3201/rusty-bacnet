@@ -138,9 +138,11 @@ async fn real_tls(server: bool) {
     peer.send(NODE, &[1, 0x80, 0x13, 3, 0xe7, 1]).await;
     peer.send(NODE, &[1, 0x80, 0x12]).await;
     peer.send(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, 77, 0]).await;
+    // A broadcast question's answer waits (Clause 6.4.19, #2597). The
+    // clause also allows a question to the node alone, which is answered
+    // at once, and that broadcast settles the waiting one. Any second
+    // answer would carry 77 into the exact replies below.
     peer.send(BROADCAST_VMAC, &[1, 0x80, 0x12]).await;
-    peer.number(77).await;
-    // Clause 6.4.19 explicitly permits local unicast What-Is-Network-Number.
     peer.send(NODE, &[1, 0x80, 0x12]).await;
     peer.number(77).await;
     // Learned values update until configured evidence takes precedence.
