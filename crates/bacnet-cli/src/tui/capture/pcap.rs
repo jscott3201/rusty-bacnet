@@ -118,7 +118,7 @@ fn destination_mac(ip: Ipv4Addr, frame: &CaptureFrame) -> [u8; 6] {
         return [0x01, 0x00, 0x5E, b & 0x7F, c, d];
     }
     let sent_broadcast =
-        frame.summary.link == "original-broadcast-npdu" && frame.direction != Direction::In;
+        frame.summary.link_message == "original-broadcast-npdu" && frame.direction != Direction::In;
     if ip.is_broadcast() || sent_broadcast {
         return [0xFF; 6];
     }

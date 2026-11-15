@@ -7,8 +7,8 @@
 //!   and the client half of a write (#2068);
 //! - [`class`]: what each command does to a device (read, write or device
 //!   management), the table the front ends' safety levels share;
-//! - [`decode`]: frames, NPDUs and APDUs decoded into summaries and
-//!   field trees, with no traffic;
+//! - [`decode`]: detailed field trees with source octet ranges; shared
+//!   header summaries are in [`bacnet_ops::decode`];
 //! - [`bbmd`]: B/IP broadcast management tables as plain data, their reads
 //!   through the client, the survey that follows them and the consistency
 //!   check over them.

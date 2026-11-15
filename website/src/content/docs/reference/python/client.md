@@ -1865,9 +1865,9 @@ def __anext__(self) -> Awaitable[ScEvent]
 
 One frame the owner's transport sent or received, frozen at capture.
 
-The octets are raw: no decoded summary or forwarding provenance yet.
-`local_address` and `peer` use one form per link (see "Raw frame
-observation" in docs/python-api.md).
+The octets are raw; `decode_frame(frame.octets, frame.link)` gives the
+decoded header summary. `local_address` and `peer` use one form per
+link (see "Raw frame observation" in docs/python-api.md).
 
 Properties:
 
@@ -1879,6 +1879,38 @@ Properties:
 - `peer: str`: The other end on the link: the datagram's source or destination on B/IP (`"ip:port"`) and B/IPv6 (`"[ip]:port"`, the form `resolve_vmac` takes), the hub connection on SC (`"primary"` or `"failover"`, as `ScEvent.hub`), the station in decimal on MS/TP (`"255"` for a broadcast). The next hop, not a forwarded frame's original source.
 - `octets: bytes`: The frame as the link carries it, malformed received datagrams included.
 - `missed_before: int`: Frames this subscription missed just before this one: dropped by its full queue (which keeps the oldest frames and drops the newest), or lost on the way to Python together with the gap such a frame carried. A frame redelivered after a cancelled read keeps its value. Summed over the frames received, plus any lost after the last one, it is `FrameIterator.missed`.
+
+## FrameSummary
+
+Frozen offline header summary. Missing fields are None.
+
+parse\_error reports header decoding failures, while problem also reports
+valid protocol refusals. Service parameters are not exhaustively validated.
+original\_source is the originating address a BBMD wrote into a B/IP
+Forwarded-NPDU, or a B/IPv6 Forwarded-NPDU or Forwarded-Address-Resolution;
+Frame.peer is the actual transport peer. Neither field proves the sender's
+identity or its path. Summaries compare and hash by value. A summary holds
+its fields only, never the frame's octets: copy and pickle carry those
+fields and nothing else.
+
+Properties:
+
+- `link_message: str`: BVLC function or MS/TP frame type, such as original-unicast-npdu. Not the data link; that is Frame.link.
+- `broadcast: bool`
+- `link_source: str | None`
+- `link_destination: str | None`
+- `original_source: str | None`
+- `snet: int | None`
+- `dnet: int | None`
+- `routed_source: str | None`
+- `routed_destination: str | None`
+- `network_message: str | None`
+- `pdu: str | None`
+- `invoke_id: int | None`
+- `service: str | None`
+- `problem: str | None`
+- `parse_error: str | None`
+- `device: int | None`
 
 ## FrameIterator
 
