@@ -7064,7 +7064,7 @@ class BACnetServer:
         Peers can write Action (DIRECT until written).
 
         Controlled_Variable_Reference and Manipulated_Variable_Reference read
-        as ``application_data`` holding the context-tagged reference; while
+        as a ``tagged`` value holding the context-tagged reference; while
         unset they name instance 4194303 (an Analog Input and an Analog Output
         respectively), and writing a reference to that instance unsets them.
         A null written to any Loop reference succeeds and changes nothing.
@@ -7228,8 +7228,9 @@ class BACnetServer:
     ) -> None:
         """Add a Lighting Output object.
 
-        Its Lighting_Command reads and writes as ``application_data`` holding
-        the context-tagged BACnetLightingCommand, operation NONE
+        Its Lighting_Command reads as a ``tagged`` value, and writes as
+        ``application_data``, holding the context-tagged BACnetLightingCommand,
+        operation NONE
         (``b"\\x09\\x00"``) until written. An ``octet_string`` or any other
         datatype is refused with INVALID_DATA_TYPE, and a command its operation
         can't take with VALUE_OUT_OF_RANGE. The object carries each command
@@ -7913,7 +7914,7 @@ class BACnetServer:
     def add_pulse_converter(self, instance: int, name: str, units: EngineeringUnits | int = 62) -> None:
         """Add a Pulse Converter (Clause 12.23) to the server (before starting).
 
-        Input_Reference reads as ``application_data`` holding the
+        Input_Reference reads as a ``tagged`` value holding the
         context-tagged reference; while unset it reads as Accumulator
         4194303's Present_Value, and writing a reference to instance 4194303
         unsets it. A null written to it succeeds and changes nothing.

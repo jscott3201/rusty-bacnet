@@ -890,6 +890,8 @@ PropertyValue.date(2026, 3, 21, 6)    # full year, month, day, day_of_week (1=Mo
 PropertyValue.time(14, 30, 0, 0)      # hour, minute, second, hundredths
 PropertyValue.bit_string(0, b"\xff")  # unused_bits, data
 PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(2)])
+PropertyValue.application_data(b"\x09\x02")   # encoded octets, sent as they are
+PropertyValue.tagged(b"\x09\x02")             # the same octets, read as their tags
 ```
 
 Lists nest at most 32 deep, the decoder's nesting limit: a deeper
@@ -923,6 +925,7 @@ v.value   # 72.5 (native Python float)
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
 | `"application_data"` | `bytes`: the encoded value, octet for octet |
+| `"tagged"` | `list` of [`TagNode`](#unknown-and-proprietary-values): a value with no typed form, read as its tags |
 | `"destination"`, `"port_permission"` and the other element tags of [typed constructed values](#typed-constructed-values) | the element in its typed form |
 
 ### Bit strings and enum names
@@ -1025,18 +1028,19 @@ is an error.
   element, and a read of a single value that element, each tagged with its
   production. A value that doesn't decode as those elements, to the last
   octet, falls through to the rules below.
-- **Other context-tagged content** comes back as `application_data` whose
-  `.value` holds the octets as served. Constructed values with no typed form,
-  any not in [the table below](#typed-constructed-values), take this form, as
-  local reads of them always have. Element
+- **Other context-tagged content** comes back `tagged` (#2618): `.value` is
+  the tree of its tags, a list of [`TagNode`](#unknown-and-proprietary-values),
+  and `.octets` are the octets as served. Constructed values with no typed
+  form, any not in [the table below](#typed-constructed-values), and every
+  vendor property that holds a context tag take this form. Element
   boundaries of a constructed list aren't marked in the octets, so the
-  binding doesn't split one: decode the octets with the datatype's layout,
-  or read single array elements with `array_index`. Writing the value back
-  sends the same octets.
+  binding doesn't split one into elements: the tree shows its fields in
+  wire order. Writing the value back sends the same octets.
 - **Content `PropertyValue` can't hold**, such as a CharacterString in UCS-4,
   DBCS or JIS X 0208, UTF-8 that doesn't decode, an ENUMERATED wider than 32
-  bits or a reserved application tag, makes the whole value `application_data`
-  in the same way.
+  bits or a reserved application tag, anywhere in the value, makes the whole
+  value `application_data` whose `.value` holds the octets as served, and so
+  does a tree of more than 10,000 elements.
 - **A whole array or list** (no `array_index`) of application-tagged elements
   is a `list` at every length, zero and one included. Whether a property is
   an array or a list on an object type comes from the stack's classification
@@ -1063,7 +1067,7 @@ shaped by the same rules: a single application value is bare
 (`Port_Filter[2]` is a `port_permission`), an element of several application
 fields is a `list`, an element of a typed array is that element
 (`Event_Time_Stamps[1]` is a `timestamp`), and any other context-tagged
-element is `application_data`.
+element is `tagged`.
 
 ```python
 objects = await client.read_property(address, device, PropertyIdentifier.OBJECT_LIST)
@@ -1074,6 +1078,62 @@ recipients.value  # [{"recipient": {"kind": "device", ...}, "process_identifier"
 port = await client.read_property(address, nf, PropertyIdentifier.PORT_FILTER, 2)
 port.tag, port.value  # ("port_permission", (1, False))
 ```
+
+#### Unknown and proprietary values
+
+A value the binding has no typed form for still reads (#2618). A vendor's
+property holds its own datatype, but proprietary datatypes are built from
+the standard application datatypes (Clause 23.4.2), and BACnet's tags can
+be walked without knowing the datatype (Clause 20.2.1.6). So a value with a
+context tag reads as the tree of its tags, `tag == "tagged"`; one with
+application tags only reads as those values, as any other read does.
+
+`.value` of a `tagged` value is a list of `TagNode`, frozen records in wire
+order:
+
+| Field | Type | |
+|-------|------|---|
+| `tag_class` | `"application"` or `"context"` | The tag's class |
+| `tag_number` | `int` | An application tag's datatype (2 Unsigned, 4 REAL, 7 CharacterString and so on; Clause 20.2.1.4), or a context tag's field number, 0 to 254 |
+| `constructed` | `bool` | Whether it is the members between an opening and a closing tag |
+| `value` | `PropertyValue`, `bytes` or `list[TagNode]` | An application primitive's value, as a bare read of it gives it; a context primitive's contents as `bytes`; a constructed element's members |
+| `octets` | `bytes` | The element's octets exactly as read, from its first tag octet through its contents or closing tag |
+
+A context-tagged primitive stays `bytes` because its datatype is the
+property's to say: `[0]` holding `02` may be an Unsigned 2, an ENUMERATED
+or two octets of something else, and only the vendor's documentation tells
+which. Decode it yourself with that layout, for example
+`int.from_bytes(node.value, "big")` for an unsigned field.
+
+```python
+value = await client.read_property(address, ObjectIdentifier(ObjectType.from_raw(130), 1),
+                                   PropertyIdentifier.from_raw(1000))
+value.tag      # "tagged"
+for node in value.value:
+    if node.constructed:
+        print(f"[{node.tag_number}]", [member.value for member in node.value])
+    elif node.tag_class == "context":
+        print(f"[{node.tag_number}]", node.value.hex())   # bytes
+    else:
+        print(node.value.tag, node.value.value)           # a PropertyValue
+value.octets   # every octet as served
+```
+
+Nothing is lost. `.octets` of the value (and of each node) are the octets
+exactly as served, never re-encoded, so a `tagged` value writes back
+unchanged, and `PropertyValue.tagged(octets)` makes the same value from
+saved octets. When the octets don't read as tags the binding can show (an
+application value it has no form for, more than 10,000 elements), the value
+is `application_data` holding them instead; broken framing still raises as
+for any read. Two `tagged` values are equal when their octets are, and they
+are not equal to `application_data` of the same octets: compare `.octets`
+to compare across the two.
+
+The value doesn't say which object, property or vendor it came from: keep
+the object and property you read, and the device's `vendor_id` from
+[`DiscoveredDevice`](#discovereddevice) (or a read of the Device object's
+Vendor_Identifier), since one proprietary property number means different
+things from different vendors (Clause 23.3).
 
 #### Typed constructed values
 
@@ -1165,7 +1225,7 @@ A date in these forms is a `(year, month, day, day_of_week)` tuple as
 [Dates](#dates) gives it: the full year, and 255 in any field left
 unspecified. An Access Rights rule whose specifiers disagree with the
 references it carries, which no typed write makes, has no `AccessRule` form,
-so its array reads as `application_data`.
+so its array reads as a `tagged` value.
 
 An Event_Parameters mapping carries `kind` and the algorithm's members,
 every algorithm of the standard by name (#2090):
@@ -1207,7 +1267,7 @@ names would be.
 
 ## Copying and pickling
 
-`ObjectIdentifier`, `PropertyValue` and `BACnetTimeStamp`, like the
+`ObjectIdentifier`, `PropertyValue`, `TagNode` and `BACnetTimeStamp`, like the
 [enums](#enums), support `copy.copy`, `copy.deepcopy` and `pickle` at every
 protocol, and the copy equals the original (#1500). Every class the module
 exports reports `rusty_bacnet` as its `__module__`.
@@ -1218,7 +1278,9 @@ exports reports `rusty_bacnet` as its `__module__`.
   call. A list rebuilds from its items as `PropertyValue`s, so a `real` item
   stays a `real` where `.value` would give a plain `float`. A typed
   constructed read rebuilds from the octets it was read from, with its
-  element tag, so it still writes back exactly what was read.
+  element tag, so it still writes back exactly what was read, and a
+  `tagged` value through `PropertyValue.tagged` with its octets.
+- A `TagNode` rebuilds from its octets.
 - A `BACnetTimeStamp` rebuilds from its encoded CHOICE, so a timestamp a peer
   sent with a field outside the ranges `date_time` checks (a month of 0, say)
   copies too.
@@ -4951,8 +5013,8 @@ outside 0 to 255 `OverflowError`. Peers can write the Loop's Action (DIRECT
 until written).
 
 The Loop's Controlled_Variable_Reference and Manipulated_Variable_Reference,
-and a Pulse Converter's Input_Reference, read as `application_data` holding
-the context-tagged BACnetObjectPropertyReference. The Loop's
+and a Pulse Converter's Input_Reference, read as a `tagged` value holding
+the context-tagged BACnetObjectPropertyReference (#2618). The Loop's
 Setpoint_Reference reads as the BACnetSetpointReference, the same octets
 inside opening and closing tag 0, or an empty `list` while unset (#1312).
 Peers and `write_property_local` write them in those encodings, so a value
@@ -4963,7 +5025,7 @@ malformed octets with INVALID_DATA_ENCODING.
 An unset reference reads as one to the reserved instance 4194303 (#1417):
 the Present_Value of Analog Input 4194303 for Controlled_Variable_Reference,
 of Analog Output 4194303 for Manipulated_Variable_Reference and of
-Accumulator 4194303 for Input_Reference, so `application_data` holding
+Accumulator 4194303 for Input_Reference, so a `tagged` value holding
 `0c 00 3f ff ff 19 55`, `0c 00 7f ff ff 19 55` and `0c 05 ff ff ff 19 55`.
 Writing any reference to that instance clears the property, and the empty
 value clears Setpoint_Reference. None of the four datatypes has a NULL, so a
@@ -5138,8 +5200,8 @@ names that peer. They read typed, with the tags `"value_source"` and
 `"timestamp"`.
 
 A Lighting Output's `Lighting_Command` is a BACnetLightingCommand (#1263). It
-reads as `application_data` holding the command's context-tagged fields, and
-reads `b"\x09\x00"` (operation NONE) until written. Write it the same way,
+reads as a `tagged` value holding the command's context-tagged fields, and
+reads `b"\x09\x00"` (operation NONE, in `.octets`) until written. Write it the same way,
 through `write_property_local` or a client's `write_property`:
 
 ```python

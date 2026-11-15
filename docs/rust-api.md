@@ -418,6 +418,50 @@ let (value, bytes_consumed) = decode_application_value(&bytes, 0)?;
 assert_eq!(value, PropertyValue::Real(72.5));
 ```
 
+### Values of unknown datatype: the tag tree
+
+`tags::tree` (#2618) reads any well-formed value as its tags, without its
+datatype: a vendor's property, or a standard one the caller has no codec
+for. BACnet's tags can be walked that way (Clause 20.2.1.6); only a context
+tag's meaning needs the production, so a context-tagged primitive keeps its
+octets.
+
+- `TagReader` (no allocator) yields each tag in wire order as a `TagItem`:
+  the header, its offset and depth, and its exact octets and contents.
+  It checks the framing (headers, contents within the input, each closing
+  tag against the innermost opening tag, nothing left open) and nesting up
+  to `MAX_TAG_TREE_DEPTH` (32, the crate's `MAX_CONTEXT_NESTING_DEPTH`).
+  `TagItem::application_value` types an application primitive on request.
+- `decode_tag_tree` (with `alloc`) builds `Vec<TagNode>`, each node
+  borrowing the input: `class`, `number`, `offset`, `octets` (exact, header
+  through contents or closing tag), `contents()`, and a `TagBody`:
+  `Application(ApplicationValueRef)`, `Invalid { contents, error }` for a
+  well-framed application value that doesn't decode, `Context(&[u8])`, or
+  `Constructed(Vec<TagNode>)`. At most `MAX_TAG_TREE_NODES` (10,000)
+  elements.
+- A fault is a `TagTreeError`: `fault` (`TagTreeFault::Header`,
+  `Truncated`, `Unclosed`, `UnmatchedClosing`, `TooDeep`, `TooManyNodes`),
+  `offset`, and `valid_up_to`, the end of the complete top-level elements
+  before it, which read again on their own; keep the rest as octets. It
+  converts to `Error`. Neither layer panics on any input.
+- An application node's owned `PropertyValue` is `decode_application_value`
+  of its `octets`.
+
+```rust
+use bacnet_encoding::primitives::ApplicationValueRef;
+use bacnet_encoding::tags::tree::{TagBody, decode_tag_tree};
+
+// [0] 2, then [1] ( REAL 1.5 ).
+let octets = [0x09, 0x02, 0x1E, 0x44, 0x3F, 0xC0, 0x00, 0x00, 0x1F];
+let tree = decode_tag_tree(&octets)?;
+assert_eq!(tree[0].body, TagBody::Context(&[0x02]));
+assert_eq!(tree[1].children()[0].body, TagBody::Application(ApplicationValueRef::Real(1.5)));
+assert_eq!(tree[1].octets, &octets[2..]);
+```
+
+The `bacnet-ops` formatter and the Python binding show values this way; the
+typed read paths don't use it.
+
 ### Object identifiers
 
 `ObjectIdentifier::new` validates the 10-bit object type (0..=1023) and 22-bit
