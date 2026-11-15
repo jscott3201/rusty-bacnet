@@ -61,3 +61,30 @@ async fn a_layer_stopped_with_another_holder_alive_sends_nothing() {
     // The inbound sender the fresh channel had is gone.
     assert!(handle.inbound().is_none());
 }
+
+/// The dispatch task's future is gone: its watch sender went with it.
+fn dispatch_ended<T: TransportPort>(network: &NetworkLayer<T>) -> bool {
+    let dispatch = network.dispatch.as_ref().expect("a started layer");
+    dispatch.ended.has_changed().is_err()
+}
+
+/// A second stop beside the first returns only once the dispatch task has
+/// ended, as the first does, not as soon as it finds the task aborted.
+#[tokio::test]
+async fn a_second_stop_waits_for_the_dispatch_task_too() {
+    let mut network = NetworkLayer::new(TestTransport::builder().build());
+    let _apdus = network.start_with_admission().await.unwrap();
+    assert!(!dispatch_ended(&network));
+    let (first, second) = tokio::join!(
+        async {
+            network.stop().await.unwrap();
+            dispatch_ended(&network)
+        },
+        async {
+            network.stop().await.unwrap();
+            dispatch_ended(&network)
+        },
+    );
+    assert!(first, "the first stop returned before the task ended");
+    assert!(second, "the second stop returned before the task ended");
+}
