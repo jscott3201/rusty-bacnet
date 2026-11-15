@@ -93,41 +93,62 @@ fn device_range(
 /// `who_has_replies()` the Who-Has (#2596), `service` naming which:
 /// `"local"`, the default, is this network alone, which no router passes
 /// on; `"global"` is every network; a number from 1 to 65534 is that
-/// remote network. Anything else raises before anything is sent:
-/// `ValueError` for another name or number, `TypeError` for another type.
-/// A client on a router's application (`transport`, `"router"`) has no
-/// network of its own, so a local request raises `ValueError` there, saying
-/// which scopes it can use.
+/// remote network; and any other text is one station's address in the
+/// target grammar (`"192.168.1.10"`, `"mstp:5"`), asked by unicast
+/// (#2561, where `who_is_directed` was). Anything else raises before
+/// anything is sent: `ValueError` for another number, or for text that
+/// names a device instance or a routed target and not a station,
+/// `TypeError` for another type. A client on a router's application
+/// (`transport`, `"router"`) has no network of its own, so a local or
+/// directed request raises `ValueError` there, saying which scopes it can
+/// use.
 fn discovery_scope(
     scope: Option<&Bound<'_, PyAny>>,
     transport: &str,
     service: &str,
-) -> PyResult<bacnet_ops::Scope> {
+) -> PyResult<ScopeArg> {
     use bacnet_ops::Scope;
+    use bacnet_ops::target::{Target, parse_target};
     use pyo3::exceptions::PyTypeError;
     use pyo3::types::{PyBool, PyInt, PyString};
-    const EXPECTED: &str = "scope is 'local', 'global' or a network number from 1 to 65534";
-    let local = || match transport {
+    const EXPECTED: &str =
+        "scope is 'local', 'global', a network number from 1 to 65534 or a station's address";
+    let local = |what: &str| match transport {
         "router" => Err(PyValueError::new_err(format!(
-            "a client on transport='router' has no network of its own for a local {service}: \
+            "a client on transport='router' has no network of its own for a {what} {service}: \
              pass scope=<network number> for one of the router's networks, or \
              scope='global' for every network"
         ))),
-        _ => Ok(Scope::Local),
+        _ => Ok(()),
     };
     let Some(scope) = scope.filter(|scope| !scope.is_none()) else {
-        return local();
+        return local("local").map(|()| ScopeArg::Fixed(Scope::Local));
     };
     if let Ok(name) = scope.cast::<PyString>() {
-        return match name.to_str()? {
-            "local" => local(),
-            "global" => Ok(Scope::Global),
-            other => Err(PyValueError::new_err(format!("{EXPECTED}, not '{other}'"))),
+        let text = name.to_str()?.trim();
+        return match text {
+            "local" => local("local").map(|()| ScopeArg::Fixed(Scope::Local)),
+            "global" => Ok(ScopeArg::Fixed(Scope::Global)),
+            // A station by its address. A bare number in text is a device
+            // instance to the grammar, and a scope is a place, not a
+            // device: both it and a routed target are refused.
+            station => match parse_target(station) {
+                Ok(Target::Mac(_) | Target::Bip6(_)) => {
+                    local("directed").map(|()| ScopeArg::Directed(station.to_owned()))
+                }
+                Ok(_) => Err(PyValueError::new_err(format!(
+                    "{EXPECTED}, and '{station}' names a device or a routed target: for a \
+                     remote network pass its number, scope=<network>"
+                ))),
+                Err(_) => Err(PyValueError::new_err(format!(
+                    "{EXPECTED}, not '{station}'"
+                ))),
+            },
         };
     }
     if scope.is_instance_of::<PyInt>() && !scope.is_instance_of::<PyBool>() {
         return match scope.extract::<u16>() {
-            Ok(network @ 1..=65534) => Ok(Scope::Network(network)),
+            Ok(network @ 1..=65534) => Ok(ScopeArg::Fixed(Scope::Network(network))),
             _ => Err(PyValueError::new_err(format!("{EXPECTED}, not {scope}"))),
         };
     }
@@ -135,6 +156,48 @@ fn discovery_scope(
         "{EXPECTED}, not {}",
         scope.get_type().name()?
     )))
+}
+
+/// A `scope` keyword as checked when the call was made: a scope as it is,
+/// or a station's address still to be read for the started client's link.
+enum ScopeArg {
+    /// Local, global or one network.
+    Fixed(bacnet_ops::Scope),
+    /// One station, by its address in the target grammar.
+    Directed(String),
+}
+
+impl ScopeArg {
+    /// The scope on `client`: a station's address read for its link (a
+    /// B/IPv6 socket address asks the node its VMAC). Text the link can't
+    /// reach raises `ValueError`, and nothing is sent.
+    async fn on(self, client: &CoreClient) -> PyResult<bacnet_ops::Scope> {
+        use bacnet_ops::{DeviceAddress, Scope};
+        let station = match self {
+            Self::Fixed(scope) => return Ok(scope),
+            Self::Directed(station) => station,
+        };
+        let refusal = "a directed scope names a station's address";
+        let mac = bacnet_ops::target::address_mac(client.transport(), &station, refusal)
+            .await
+            .map_err(|reason| PyValueError::new_err(crate::high_level::link_hint(reason)))?;
+        DeviceAddress::local(&mac)
+            .map(Scope::Directed)
+            .map_err(PyValueError::new_err)
+    }
+}
+
+/// The `wait` keyword of `discover()`, `who_has_replies()` and
+/// `discover_routers()`: how long the call listens for answers, in
+/// seconds from 0 to 3600 (an hour). Anything else, NaN included, raises
+/// `ValueError` when the call is made.
+fn discover_wait(seconds: f64) -> PyResult<std::time::Duration> {
+    if !(0.0..=3600.0).contains(&seconds) {
+        return Err(PyValueError::new_err(format!(
+            "wait is a number of seconds from 0 to 3600, not {seconds}"
+        )));
+    }
+    Ok(std::time::Duration::from_secs_f64(seconds))
 }
 
 /// A scoped send's error as Python sees it: the link's as the client
@@ -248,6 +311,10 @@ pub struct BACnetClient {
     /// The priorities `relinquish` may use (#2561): 1, 2, 5 and 6 refused
     /// unless `write_policy=` allows them.
     write_policy: bacnet_ops::WritePolicy,
+    /// Where a `device()` handle made from a bare instance asks for it
+    /// (#2561): `None` is this network alone, and on a router's
+    /// application, which has no network of its own, nowhere.
+    resolve_scope: Option<bacnet_ops::ResolveScope>,
 }
 
 mod client_methods {
@@ -267,7 +334,11 @@ mod client_methods {
     mod sc_peer;
     mod vt_audit_time_directed;
 }
+mod handles;
 mod state;
+
+pub(crate) use handles::DeviceTie;
+pub(crate) use state::Held;
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -6,6 +6,7 @@ mod hub_tls_support;
 use std::{panic::AssertUnwindSafe, time::Duration};
 
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
+use bacnet_transport::sc_tls::{ScTlsConfigError, ScTlsInput};
 use futures_util::{FutureExt, StreamExt};
 use hub_tls_support::*;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
@@ -19,7 +20,14 @@ fn typed_config_rejects_empty_ca_before_startup() {
     let error = ScHubTlsConfig::from_der(vec![], vec![fixture.server.cert], fixture.server.key)
         .unwrap_err();
     assert!(
-        matches!(error, bacnet_types::error::Error::Encoding(ref message) if message == "no CA certificates found")
+        matches!(
+            error,
+            ScTlsConfigError::NoCertificate {
+                input: ScTlsInput::CaBundle,
+                ..
+            }
+        ),
+        "{error:?}"
     );
 }
 
@@ -27,62 +35,70 @@ fn typed_config_rejects_empty_ca_before_startup() {
 fn typed_config_validates_all_der_and_key_inputs() {
     let f = Fixture::new();
     let bad = CertificateDer::from(vec![1, 2, 3]);
-    let cases = [
+    let no_chain = |e: &ScTlsConfigError| {
+        matches!(
+            e,
+            ScTlsConfigError::NoCertificate {
+                input: ScTlsInput::CertificateChain,
+                ..
+            }
+        )
+    };
+    let unusable = |input, index| move |e: &ScTlsConfigError| matches!(e, ScTlsConfigError::UnusableCertificate { input: i, index: n, .. } if *i == input && *n == index);
+    type Check = Box<dyn Fn(&ScTlsConfigError) -> bool>;
+    let cases: [(_, _, _, Check); 8] = [
         (
             vec![f.ca.clone()],
             vec![],
             f.server.key.clone_key(),
-            "no server certificates found",
+            Box::new(no_chain),
         ),
         (
             vec![bad.clone()],
             vec![f.server.cert.clone()],
             f.server.key.clone_key(),
-            "failed to add CA cert:",
+            Box::new(unusable(ScTlsInput::CaBundle, 0)),
         ),
         (
             vec![f.ca.clone(), bad.clone()],
             vec![f.server.cert.clone()],
             f.server.key.clone_key(),
-            "failed to add CA cert:",
+            Box::new(unusable(ScTlsInput::CaBundle, 1)),
         ),
         (
             vec![bad.clone(), f.ca.clone()],
             vec![f.server.cert.clone()],
             f.server.key.clone_key(),
-            "failed to add CA cert:",
+            Box::new(unusable(ScTlsInput::CaBundle, 0)),
         ),
         (
             vec![f.ca.clone()],
             vec![bad.clone()],
             f.server.key.clone_key(),
-            "TLS server config error:",
+            Box::new(unusable(ScTlsInput::CertificateChain, 0)),
         ),
         (
             vec![f.ca.clone()],
             vec![f.server.cert.clone(), bad],
             f.server.key.clone_key(),
-            "TLS server config error:",
+            Box::new(unusable(ScTlsInput::CertificateChain, 1)),
         ),
         (
             vec![f.ca.clone()],
             vec![f.server.cert.clone()],
             PrivatePkcs8KeyDer::from(vec![1, 2, 3]).into(),
-            "TLS server config error:",
+            Box::new(|e| matches!(e, ScTlsConfigError::UnusableKey { .. })),
         ),
         (
             vec![f.ca.clone()],
             vec![f.server.cert.clone()],
             f.good.key.clone_key(),
-            "TLS server config error:",
+            Box::new(|e| matches!(e, ScTlsConfigError::KeyMismatch)),
         ),
     ];
-    for (ca, chain, key, expected) in cases {
+    for (ca, chain, key, check) in cases {
         let error = ScHubTlsConfig::from_der(ca, chain, key).unwrap_err();
-        assert!(
-            matches!(error, bacnet_types::error::Error::Encoding(ref message) if message.starts_with(expected)),
-            "{error}"
-        );
+        assert!(check(&error), "{error:?}");
     }
     let config = typed_config(&f);
     assert_eq!(format!("{config:?}"), "ScHubTlsConfig { .. }");

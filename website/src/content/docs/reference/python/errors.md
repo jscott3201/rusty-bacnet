@@ -168,36 +168,80 @@ Attributes:
 - `expected: int`
 - `got: int`
 
+## BacnetLookupError
+
+`class BacnetLookupError(BacnetError, LookupError)`
+
+Raised when no device could be placed for the name a call gave
+(#2561): no address in the discovery table claims the instance and none
+answered a Who-Is for it, or no router is known for a routed address's
+network. Also a `LookupError`. Nothing was sent to the device. The
+typed `_from_device` and `_to_device` calls raise it for an
+instance the table doesn't hold.
+
+Attributes:
+target: The device as it was named: an instance (`"1234"`,
+`"2:1234"`) or an address (`"2:0x05"`).
+instance: The instance named (`1234` for `"1234"` or
+`"2:1234"`); None when the device was named by an address.
+candidates: An empty list here.
+
+Attributes:
+
+- `target: Optional[str]`
+- `instance: Optional[int]`
+- `candidates: list[tuple[int, bytes]]`
+
 ## BacnetAmbiguousDeviceError
 
-`class BacnetAmbiguousDeviceError(BacnetError)`
+`class BacnetAmbiguousDeviceError(BacnetLookupError)`
 
 Raised when a call names a device by its instance and two or more
 addresses in the discovery table claim that instance, so which device is
-meant is unknown (#2560). Nothing was sent. Each claimant keeps its own
-entry in `discovered_devices()` and stays reachable by its address;
-once only one claims the instance, by the purge or a new I-Am, the
-instance works again.
+meant is unknown (#2560). A `BacnetLookupError`. Nothing was sent.
+Each claimant keeps its own entry in `discovered_devices()` and stays
+reachable by its address; once only one claims the instance, by the
+purge or a new I-Am, the instance works again.
 
 Attributes:
+target: The instance, as text.
 instance: The device instance the call named.
 candidates: Every claimant as `(network, mac)`, ordered by network
 and then MAC: network 0 is the local network, where `mac` is
 the device's own; on another network it is the device's MAC
-there.
+there. Each is a `BACnetClient.device()` target.
 
 Attributes:
 
 - `instance: int`
 - `candidates: list[tuple[int, bytes]]`
 
+## BacnetPagingError
+
+`class BacnetPagingError(BacnetError)`
+
+Raised when a device breaks a rule of a paged read, so reading on
+would repeat what was read or never end (#2561): an answer naming an
+object an earlier answer named, or saying more remain with no new
+object to go on after. No call of this release's Python API pages yet;
+the alarm reads to come raise it.
+
+Attributes:
+service: The paged service, such as `"GetEventInformation"`.
+object\_id: The object named again; None when none was.
+
+Attributes:
+
+- `service: str`
+- `object_id: Optional[ObjectIdentifier]`
+
 ## BacnetWriteDeniedError
 
 `class BacnetWriteDeniedError(BacnetError)`
 
 Raised when the client's `write_policy` refuses the priority a
-`relinquish` names (#2561): 1, 2, 5 or 6 by default. Nothing was
-sent. The message says how to allow it:
+`write` or `relinquish` names (#2561): 1, 2, 5 or 6 by default.
+Nothing was sent. The message says how to allow it:
 `BACnetClient(write_policy=WritePolicy().allow_priorities([n]))`.
 
 Attributes:

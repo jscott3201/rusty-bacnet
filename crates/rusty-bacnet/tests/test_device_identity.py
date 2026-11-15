@@ -43,7 +43,7 @@ class DuplicateInstanceTests(unittest.IsolatedAsyncioTestCase):
         async with BACnetClient(interface="127.0.0.1", port=0,
                                 apdu_timeout_ms=2000) as client:
             for address in addresses:
-                await client.who_is_directed(address)
+                await client.who_is(scope=address)
             for _ in range(250):
                 devices = await client.discovered_devices()
                 if len(devices) == 2:

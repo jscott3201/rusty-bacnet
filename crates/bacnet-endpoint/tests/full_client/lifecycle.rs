@@ -1,0 +1,435 @@
+//! Stopping the full client and the session in either order, with a request
+//! open, and the reply paths a frame keeps when it expects a reply.
+use super::*;
+use bacnet_services::common::BACnetPropertyValue;
+use bacnet_services::cov::COVNotificationRequest;
+use bacnet_types::enums::{ConfirmedServiceChoice, PropertyIdentifier};
+use std::sync::Arc;
+use tokio::sync::oneshot;
+use tokio::time::Instant;
+
+/// A read of the peer's AI-1 that gets no answer: the node hears nothing
+/// while the read is open. Returns the task once the request is on the link.
+async fn open_read(
+    lab: &Lab,
+    client: &Arc<BACnetClient<TestTransport>>,
+) -> tokio::task::JoinHandle<Result<(), bacnet_types::error::Error>> {
+    lab.wire.hold(&Wire::mac(NODE));
+    let sent = apdus(&lab.node_sent).len();
+    let reader = Arc::clone(client);
+    let read = tokio::spawn(async move {
+        reader
+            .read_property(
+                &Wire::mac(PEER),
+                ai1(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .await
+            .map(|_| ())
+    });
+    eventually(WAIT, "the read on the link", async || {
+        apdus(&lab.node_sent).len() > sent
+    })
+    .await;
+    read
+}
+
+/// No task of the test's runtime is left but the test's own.
+async fn assert_no_task_left() {
+    eventually(WAIT, "every spawned task ended", async || {
+        tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks()
+            == 0
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_session_stopping_first_fails_open_requests_and_waits_for_the_client_to_go() {
+    for _ in 0..20 {
+        let mut lab = lab(SessionRole::Both).await;
+        let client = Arc::new(lab.session.full_client().unwrap());
+        let read = open_read(&lab, &client).await;
+
+        // The session's stop ends the client's tasks, so the open read
+        // fails now, not at its timeout. The client itself still holds the
+        // link, so the stop says so and leaves the transport running.
+        let asked = Instant::now();
+        let error = lab.session.stop().await.expect_err("the link is held");
+        assert!(error.to_string().contains("full client still holds"));
+        assert!(read.await.unwrap().is_err());
+        assert_eq!(asked.elapsed(), Duration::ZERO);
+        assert_eq!(lab.node_link.stops(), 0);
+        assert!(!lab.session.is_running());
+        assert!(lab.session.full_client().is_err());
+        // From here the client sends nothing: a request, a Who-Is in any
+        // scope and a network message each fail at once, and no frame of
+        // theirs reaches the link, which is still up under the client.
+        let (sent, asked) = (lab.node_sent.len(), Instant::now());
+        let late = client
+            .read_property(
+                &Wire::mac(PEER),
+                ai1(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .await;
+        assert!(late.is_err());
+        assert!(client.who_is(None).await.is_err());
+        assert!(
+            client
+                .who_is_directed(&Wire::mac(PEER), None)
+                .await
+                .is_err()
+        );
+        assert!(client.who_is_network(7, None).await.is_err());
+        assert!(client.who_is_router_to_network(None, None).await.is_err());
+        assert!(client.what_is_network_number(None).await.is_err());
+        assert_eq!(asked.elapsed(), Duration::ZERO);
+        assert_eq!(lab.node_sent.len(), sent, "no frame went out");
+        // The link itself is still the client's to reach.
+        assert_eq!(client.transport().handle().stops(), 0);
+
+        // The client's own stop succeeds and stops nothing of the node's.
+        let mut client = Arc::try_unwrap(client).ok().expect("the only handle");
+        client.stop().await.unwrap();
+        assert_eq!(lab.node_link.stops(), 0);
+        assert!(lab.session.stop().await.is_err(), "still held");
+
+        // With the client gone the same call finishes the stop.
+        drop(client);
+        lab.session.stop().await.unwrap();
+        assert_eq!(lab.node_link.stops(), 1);
+        assert_eq!(lab.session.active_leases(), 0);
+        lab.peer.stop().await.unwrap();
+        drop(lab);
+        assert_no_task_left().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
+    for _ in 0..20 {
+        let lab = lab(SessionRole::Both).await;
+        let client = Arc::new(lab.session.full_client().unwrap());
+        let read = open_read(&lab, &client).await;
+        // While one full client lives, the session makes no second.
+        assert!(lab.session.full_client().is_err());
+
+        // A caller's request borrows the client, so it is given up before
+        // the client can be stopped: its lease goes back to the node's pool.
+        read.abort();
+        assert!(read.await.unwrap_err().is_cancelled());
+        let mut client = Arc::try_unwrap(client).ok().expect("the only handle");
+        client.stop().await.unwrap();
+        assert_eq!(lab.node_link.stops(), 0);
+        drop(client);
+        // The stopped client's tasks were joined by its stop, so the seat
+        // is free as soon as the client is dropped. (A client dropped
+        // without a stop is the next test's.)
+        let at_once = lab.session.full_client().expect("the seat is free");
+        drop(at_once);
+        lab.wire.release(&Wire::mac(NODE));
+        eventually(WAIT, "the stopped client's lease released", async || {
+            lab.session.active_leases() == 0
+        })
+        .await;
+
+        // The session still runs: its narrow client reads, its server role
+        // answers, and it takes a new full client.
+        assert!(lab.session.is_running());
+        let narrow = lab.session.client().unwrap();
+        narrow
+            .read_property(
+                &Wire::mac(PEER),
+                ai1(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .await
+            .unwrap();
+        let other = other_client(&lab.wire).await;
+        other
+            .read_property(
+                &Wire::mac(NODE),
+                oid(ObjectType::DEVICE, NODE_DEVICE),
+                PropertyIdentifier::OBJECT_NAME,
+                None,
+            )
+            .await
+            .unwrap();
+        let again = lab.session.full_client().unwrap();
+        again
+            .read_property(
+                &Wire::mac(PEER),
+                ai1(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .await
+            .unwrap();
+
+        drop((again, other));
+        stop(lab).await;
+        assert_no_task_left().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_client_dropped_without_a_stop_frees_the_seat_at_once() {
+    let lab = lab(SessionRole::Both).await;
+    let peer = Wire::mac(PEER);
+    let mut client = lab.session.full_client().unwrap();
+    for _ in 0..20 {
+        // The drop aborts the client's tasks, which still hold the seat's
+        // queue until the runtime next runs them. The session takes the
+        // next client anyway, with no yield in between, and it works.
+        drop(client);
+        client = lab
+            .session
+            .full_client()
+            .expect("the dropped client's seat is free");
+        client
+            .read_property(&peer, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
+            .await
+            .unwrap();
+    }
+    assert_eq!(lab.session.active_leases(), 0);
+    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+
+    drop(client);
+    stop(lab).await;
+    assert_no_task_left().await;
+}
+
+/// On a link that takes the Number controls, a client would ask for the
+/// network's number when it stores a routed device while the number is
+/// unknown. Once its seat has closed it asks nothing.
+#[tokio::test(start_paused = true)]
+async fn a_client_whose_seat_closed_does_not_ask_for_the_network_number() {
+    let mut lab = lab_with(SessionRole::Both, true).await;
+    let client = lab.session.full_client().unwrap();
+    assert_eq!(client.network_number(), None);
+    let routed = || bacnet_client::discovery::RoutedDeviceConfig {
+        instance: 777,
+        router_mac: Wire::mac(9).to_vec(),
+        remote_network: 5,
+        remote_mac: vec![0x09],
+        max_apdu_length: 480,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
+        max_segments_accepted: None,
+    };
+
+    assert!(
+        lab.session.stop().await.is_err(),
+        "the client holds the link"
+    );
+    let sent = lab.node_sent.len();
+    client.add_routed_device(routed()).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(lab.node_sent.len(), sent, "no frame went out");
+
+    drop(client);
+    lab.session.stop().await.unwrap();
+    lab.peer.stop().await.unwrap();
+
+    // The same call on a running session's client does ask, once: the
+    // check above is not passing for want of a question.
+    let mut lab = lab_with(SessionRole::Both, true).await;
+    let client = lab.session.full_client().unwrap();
+    client.add_routed_device(routed()).await.unwrap();
+    assert_eq!(
+        network_messages(&lab.node_sent),
+        [bacnet_npdu::NetworkMessageType::WHAT_IS_NETWORK_NUMBER]
+    );
+    drop(client);
+    lab.session.stop().await.unwrap();
+    lab.peer.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_the_session_ends_the_client_and_the_last_owner_releases_the_link() {
+    let lab = lab(SessionRole::Both).await;
+    let client = Arc::new(lab.session.full_client().unwrap());
+    let read = open_read(&lab, &client).await;
+    let Lab {
+        session,
+        node_link,
+        mut peer,
+        ..
+    } = lab;
+
+    let asked = Instant::now();
+    drop(session);
+    assert!(read.await.unwrap().is_err());
+    assert_eq!(asked.elapsed(), Duration::ZERO);
+    assert_eq!((node_link.stops(), node_link.aborts()), (0, 0));
+    drop(client);
+    eventually(WAIT, "the transport released", async || {
+        node_link.aborts() == 1
+    })
+    .await;
+    peer.stop().await.unwrap();
+    drop(peer);
+    assert_no_task_left().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_full_client_needs_a_running_session_with_no_source_audit() {
+    let wire = Wire::new();
+    let config = SessionConfig::default();
+    let mut session =
+        EndpointSession::new(wire.port(NODE).build(), SessionRole::Both, config.clone()).unwrap();
+    assert!(session.full_client().is_err(), "before start");
+    session.start().await.unwrap();
+    let client = session.full_client().unwrap();
+    drop(client);
+    session.stop().await.unwrap();
+    assert!(session.full_client().is_err(), "after stop");
+
+    // The full client's requests are not audited, so a session that audits
+    // what it initiates has none.
+    let audited = EndpointSession::new(wire.port(OTHER).build(), SessionRole::ClientOnly, config)
+        .unwrap()
+        .with_source_audit_reporter(oid(ObjectType::AUDIT_REPORTER, 1));
+    let error = audited.full_client().err().expect("refused");
+    assert!(error.to_string().contains("source Audit Reporter"));
+}
+
+/// The session's stop must not wait on the full client's dispatch task: one
+/// stuck in the middle of a turn, here in a send the link never finishes,
+/// is aborted.
+#[tokio::test(start_paused = true)]
+async fn the_sessions_stop_does_not_wait_on_a_client_task_stuck_in_a_turn() {
+    let mut lab = lab(SessionRole::Both).await;
+    let client = lab.session.full_client().unwrap();
+    let peer = Wire::mac(PEER);
+    let mut notifications = client.cov_notifications();
+    client
+        .subscribe_cov(&peer, 9, ai1(), true, Some(600))
+        .await
+        .unwrap();
+    notifications.recv().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // The client's next acknowledgment never leaves the link's send.
+    lab.node_link.block_next_send();
+    lab.peer
+        .set_present_value_local(&ai1(), bacnet_types::primitives::PropertyValue::Real(30.0))
+        .await
+        .unwrap();
+    lab.node_link.wait_blocked().await;
+
+    let asked = Instant::now();
+    let stopped = tokio::time::timeout(WAIT, lab.session.stop())
+        .await
+        .expect("the stop doesn't wait on the stuck task");
+    assert!(stopped.is_err(), "the client still holds the link");
+    assert_eq!(asked.elapsed(), Duration::ZERO);
+    drop(client);
+    lab.node_link.release_sends(1);
+    lab.session.stop().await.unwrap();
+    assert_eq!(lab.node_link.stops(), 1);
+    lab.peer.stop().await.unwrap();
+}
+
+/// A frame from node [`OTHER`] that expects a reply, as MS/TP hands one up,
+/// and where the reply would come back.
+fn expecting_reply(
+    apdu: &Apdu,
+) -> (
+    bacnet_transport::port::ReceivedNpdu,
+    oneshot::Receiver<Bytes>,
+) {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let mut received = wire::frame(&Wire::mac(OTHER), npdu_of(apdu, true), false);
+    received.reply_tx = Some(reply_tx);
+    (received, reply_rx)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_frame_expecting_a_reply_is_answered_on_its_own_path_by_the_role_it_is_for() {
+    let lab = lab(SessionRole::Both).await;
+    let client = lab.session.full_client().unwrap();
+    let mut notifications = client.cov_notifications();
+    let node = Wire::mac(NODE);
+    let to_other = |log: &SendLog| {
+        apdus(log)
+            .into_iter()
+            .filter(|(to, _)| *to == Wire::mac(OTHER))
+            .count()
+    };
+
+    // A confirmed COV notification is the client's: its acknowledgment goes
+    // back as the frame's own reply, and nothing is sent beside it.
+    let mut parameters = BytesMut::new();
+    COVNotificationRequest {
+        subscriber_process_identifier: 4,
+        initiating_device_identifier: oid(ObjectType::DEVICE, 3003),
+        monitored_object_identifier: ai1(),
+        time_remaining: 60,
+        list_of_values: vec![BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            value: vec![0x44, 0x41, 0xa0, 0x00, 0x00],
+            priority: None,
+        }],
+    }
+    .encode(&mut parameters)
+    .unwrap();
+    let notification = confirmed(
+        11,
+        ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+        &parameters,
+    );
+    let (received, reply) = expecting_reply(&notification);
+    lab.wire.deliver(&node, received);
+    let reply = decode_npdu(reply.await.expect("the client's reply")).unwrap();
+    assert!(matches!(
+        decode_apdu(reply.payload).unwrap(),
+        Apdu::SimpleAck(ack) if ack.invoke_id == 11
+    ));
+    assert_eq!(
+        notifications
+            .recv()
+            .await
+            .unwrap()
+            .notification
+            .subscriber_process_identifier,
+        4
+    );
+    assert_eq!(to_other(&lab.node_sent), 0);
+
+    // A read of the node's Device is the server role's: answered as the
+    // frame's reply too.
+    let read = confirmed(
+        12,
+        ConfirmedServiceChoice::READ_PROPERTY,
+        &read_name(oid(ObjectType::DEVICE, NODE_DEVICE)),
+    );
+    let (received, reply) = expecting_reply(&read);
+    lab.wire.deliver(&node, received);
+    let reply = decode_npdu(reply.await.expect("the server role's reply")).unwrap();
+    assert!(matches!(
+        decode_apdu(reply.payload).unwrap(),
+        Apdu::ComplexAck(ack) if ack.invoke_id == 12
+    ));
+    assert_eq!(to_other(&lab.node_sent), 0);
+
+    // With the reply postponed the frame gets no reply, and the server
+    // role's answer goes out as a frame of its own, client or no client.
+    lab.session.server().unwrap().suspend_next_reply().unwrap();
+    let (received, reply) = expecting_reply(&read);
+    lab.wire.deliver(&node, received);
+    assert!(reply.await.is_err(), "postponed: no reply on the frame");
+    eventually(WAIT, "the deferred answer", async || {
+        to_other(&lab.node_sent) == 1
+    })
+    .await;
+    let (_, deferred) = apdus(&lab.node_sent).pop().unwrap();
+    assert!(matches!(deferred, Apdu::ComplexAck(ack) if ack.invoke_id == 12));
+
+    drop(client);
+    stop(lab).await;
+}

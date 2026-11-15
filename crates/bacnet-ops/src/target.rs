@@ -212,6 +212,15 @@ pub fn is_mstp<T: TransportPort>(transport: &T) -> bool {
     transport.data_link() == Some(DataLink::Mstp)
 }
 
+/// Why a link that isn't B/IPv6 refuses a B/IPv6 VMAC. It names no front
+/// end's flag or keyword: the CLI, the MCP server and the Python binding
+/// all show it, and each adds its own hint where it has one.
+pub const NEEDS_BIP6: &str = "only a client on a B/IPv6 link reaches one";
+
+/// Why a link that isn't MS/TP refuses an MS/TP station, as
+/// [`NEEDS_BIP6`] does a VMAC.
+pub const NEEDS_MSTP: &str = "only a client on an MS/TP link reaches one";
+
 /// [`parse_target`] for a command on `transport`. A `bip6:` VMAC names a
 /// B/IPv6 node and `mstp:` an MS/TP station, so any other transport refuses
 /// them here, rather than hand its link a MAC it can't send to; B/IPv6
@@ -223,14 +232,10 @@ pub fn parse_target_on<T: TransportPort + 'static>(
     let bip6 = as_bip6(transport).is_some();
     let mstp = is_mstp(transport);
     if s.starts_with(VMAC_TEXT_PREFIX) && !bip6 {
-        return Err(format!(
-            "'{s}' is a B/IPv6 VMAC: bip6: addresses need the --ipv6 transport"
-        ));
+        return Err(format!("'{s}' is a B/IPv6 VMAC: {NEEDS_BIP6}"));
     }
     if s.starts_with(MSTP_TEXT_PREFIX) && !mstp {
-        return Err(format!(
-            "'{s}' is an MS/TP station: mstp: addresses need the --mstp transport"
-        ));
+        return Err(format!("'{s}' is an MS/TP station: {NEEDS_MSTP}"));
     }
     let target = parse_target(s)?;
     if let Target::Mac(mac) = &target {
@@ -243,7 +248,9 @@ pub fn parse_target_on<T: TransportPort + 'static>(
 /// address stations by, as [`parse_target_on`] refuses one written for it,
 /// with `shown` naming it: B/IPv6 refuses six octets, MS/TP any length but
 /// one, and every other link the one octet of an MS/TP station and the
-/// three of a B/IPv6 VMAC.
+/// three of a B/IPv6 VMAC. `shown` is the address as the caller has it:
+/// the text given, or the MAC's octets when it came as octets, so a
+/// message never quotes a form nobody wrote.
 pub fn check_local_mac<T: TransportPort + 'static>(
     transport: &T,
     mac: &[u8],
@@ -259,10 +266,10 @@ pub fn check_local_mac<T: TransportPort + 'static>(
             "'{shown}' is a {n}-octet MAC; an MS/TP station is addressed by mstp:N"
         )),
         3 if !bip6 => Err(format!(
-            "'{shown}' is a B/IPv6 VMAC: bip6: addresses need the --ipv6 transport"
+            "'{shown}' is a 3-octet MAC, a B/IPv6 VMAC: {NEEDS_BIP6}"
         )),
         1 if !mstp => Err(format!(
-            "'{shown}' is an MS/TP station: mstp: addresses need the --mstp transport"
+            "'{shown}' is a 1-octet MAC, an MS/TP station: {NEEDS_MSTP}"
         )),
         _ => Ok(()),
     }
@@ -289,7 +296,7 @@ pub enum VmacLookup {
 impl std::fmt::Display for VmacLookup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotBip6 { peer } => write!(f, "{peer} is a B/IPv6 address: use it with --ipv6"),
+            Self::NotBip6 { peer } => write!(f, "{peer} is a B/IPv6 address: {NEEDS_BIP6}"),
             Self::NoAnswer { peer, error } => {
                 write!(f, "could not find the VMAC at {peer}: {error}")
             }

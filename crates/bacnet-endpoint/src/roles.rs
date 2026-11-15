@@ -118,9 +118,11 @@ pub enum Commandability {
 /// shutdown"`). `Send + Sync`, so clones may outlive the session borrow and
 /// move across tasks.
 ///
-/// Service scope is unsegmented RP/RR/RPM and direct B/IP WriteProperty.
-/// Explicit destinations preserve data attributes and ingress provenance. When source Audit
-/// reporting is selected, only direct B/IP IPv4 unicast targets are admitted.
+/// Service scope is unsegmented RP/RR/RPM, the paged log read over them, and
+/// direct B/IP WriteProperty. Explicit destinations preserve data attributes
+/// and ingress provenance. When source Audit reporting is selected, an
+/// audited read goes to a direct unicast on the link or to one station
+/// behind a router (#2371).
 /// Audited calls are session-owned before egress: dropping their caller does not
 /// cancel an admitted request or its terminal observation. Other calls retain
 /// caller-owned cancellation. Stop/drop may discard undelivered source records.
@@ -329,10 +331,13 @@ impl ClientRoleHandle {
         .await
     }
 
-    /// Explicit RPM destination and pass-through attributes. Audited operations
-    /// require direct B/IP IPv4 unicast, which includes a routed destination
-    /// naming the session's own network number once it is known (#1403); all
-    /// responses remain unsegmented.
+    /// Explicit RPM destination and pass-through attributes, under the
+    /// one-device rule of
+    /// [`read_property_with_destination`](Self::read_property_with_destination).
+    /// An audited operation goes to a direct unicast or to one station behind
+    /// a router (#2371), a routed destination naming the session's own
+    /// network number once it is known going direct (#1403); all responses
+    /// remain unsegmented.
     pub async fn read_property_multiple_with_destination(
         &self,
         destination: EndpointApduDestination,
@@ -376,44 +381,17 @@ impl ClientRoleHandle {
         property_array_index: Option<u32>,
         range: Option<bacnet_services::read_range::RangeSpec>,
     ) -> Result<bacnet_services::read_range::ReadRangeAck, Error> {
-        self.read_range_with_destination(
-            EndpointApduDestination::Direct {
-                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
-            },
-            Vec::new(),
-            object_identifier,
-            property_identifier,
-            property_array_index,
-            range,
-        )
-        .await
-    }
-
-    /// Explicit destination and pass-through attributes for ReadRange.
-    /// Routed destinations are available when source reporting is not selected
-    /// for the operation, under the same one-device rule as
-    /// [`read_property_with_destination`](Self::read_property_with_destination).
-    /// A routed destination naming the session's own network number, once it
-    /// is known, goes direct and can be audited (#1403). Responses remain
-    /// unsegmented.
-    pub async fn read_range_with_destination(
-        &self,
-        destination: EndpointApduDestination,
-        data_attributes: Vec<DataAttribute>,
-        object_identifier: ObjectIdentifier,
-        property_identifier: PropertyIdentifier,
-        property_array_index: Option<u32>,
-        range: Option<bacnet_services::read_range::RangeSpec>,
-    ) -> Result<bacnet_services::read_range::ReadRangeAck, Error> {
         let request = bacnet_services::read_range::ReadRangeRequest {
             object_identifier,
             property_identifier,
             property_array_index,
             range,
         };
-        self.read_range_checked(
-            destination,
-            data_attributes,
+        self.read_range_with_destination(
+            EndpointApduDestination::Direct {
+                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
+            },
+            Vec::new(),
             request,
             bacnet_services::read_range::ReadRangeValidation::Strict,
         )
@@ -431,7 +409,7 @@ impl ClientRoleHandle {
         request: &bacnet_services::read_range::ReadRangeRequest,
         validation: bacnet_services::read_range::ReadRangeValidation,
     ) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
-        self.read_range_checked(
+        self.read_range_with_destination(
             EndpointApduDestination::Direct {
                 destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
             },
@@ -442,23 +420,14 @@ impl ClientRoleHandle {
         .await
     }
 
-    /// Read one page of `log`'s Log_Buffer from `cursor`, as
-    /// [`bacnet_client::log_reader::read_log_page`] does; each request is
-    /// audited like any other read, and paced by the session's
-    /// [`min_request_interval_ms`](crate::session::SessionConfig::min_request_interval_ms)
-    /// as a paced `BACnetClient`'s are.
-    pub async fn read_log_page(
-        &self,
-        destination_mac: &[u8],
-        log: ObjectIdentifier,
-        cursor: bacnet_client::log_reader::LogCursor,
-        page_size: u16,
-    ) -> Result<bacnet_client::log_reader::LogPage, Error> {
-        bacnet_client::log_reader::read_log_page(self, destination_mac, log, cursor, page_size)
-            .await
-    }
-
-    async fn read_range_checked(
+    /// [`read_range_with`](Self::read_range_with) to an explicit destination,
+    /// with pass-through attributes, under the one-device rule of
+    /// [`read_property_with_destination`](Self::read_property_with_destination).
+    /// A routed destination naming the session's own network number, once
+    /// it is known, goes direct (#1403). An audited read of a station behind
+    /// a router names it by its network and MAC (#2371). Responses remain
+    /// unsegmented.
+    pub async fn read_range_with_destination(
         &self,
         destination: EndpointApduDestination,
         data_attributes: Vec<DataAttribute>,
@@ -481,6 +450,46 @@ impl ClientRoleHandle {
         self.requester
             .read_range_with_destination(destination, data_attributes, request, validation)
             .await
+    }
+
+    /// Read one page of `log`'s Log_Buffer from `cursor`, as
+    /// [`bacnet_client::log_reader::read_log_page`] does; each request is
+    /// audited like any other read, and paced by the session's
+    /// [`min_request_interval_ms`](crate::session::SessionConfig::min_request_interval_ms)
+    /// as a paced `BACnetClient`'s are.
+    pub async fn read_log_page(
+        &self,
+        destination_mac: &[u8],
+        log: ObjectIdentifier,
+        cursor: bacnet_client::log_reader::LogCursor,
+        page_size: u16,
+    ) -> Result<bacnet_client::log_reader::LogPage, Error> {
+        bacnet_client::log_reader::read_log_page(self, destination_mac, log, cursor, page_size)
+            .await
+    }
+
+    /// [`read_log_page`](Self::read_log_page) to an explicit destination,
+    /// with pass-through attributes: every request of the page, the count
+    /// reads included, goes to `destination` as
+    /// [`read_property_with_destination`](Self::read_property_with_destination)
+    /// and [`read_range_with_destination`](Self::read_range_with_destination)
+    /// send it (#2612).
+    pub async fn read_log_page_with_destination(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        log: ObjectIdentifier,
+        cursor: bacnet_client::log_reader::LogCursor,
+        page_size: u16,
+    ) -> Result<bacnet_client::log_reader::LogPage, Error> {
+        let to = Destined {
+            handle: self,
+            destination,
+            data_attributes,
+        };
+        // The reader hands each request the MAC it was given; `Destined`
+        // sends every one to its own destination instead.
+        bacnet_client::log_reader::read_log_page(&to, &[], log, cursor, page_size).await
     }
 
     /// Completes one pre-admitted response (session dispatch only).
@@ -535,6 +544,50 @@ impl bacnet_client::log_reader::LogRequester for ClientRoleHandle {
             bacnet_services::read_range::ReadRangeValidation::Lenient,
         )
         .await
+    }
+}
+
+/// A paged log read's requests to one explicit destination, fixed for the
+/// page: the MAC the reader passes is unused.
+struct Destined<'a> {
+    handle: &'a ClientRoleHandle,
+    destination: EndpointApduDestination,
+    data_attributes: Vec<DataAttribute>,
+}
+
+impl bacnet_client::log_reader::LogRequester for Destined<'_> {
+    async fn read_unsigned(
+        &self,
+        _mac: &[u8],
+        log: ObjectIdentifier,
+        property: PropertyIdentifier,
+    ) -> Result<u64, Error> {
+        let ack = self
+            .handle
+            .read_property_with_destination(
+                self.destination.clone(),
+                self.data_attributes.clone(),
+                log,
+                property,
+                None,
+            )
+            .await?;
+        bacnet_client::log_reader::unsigned_value(&ack.property_value)
+    }
+
+    async fn read_range_lenient(
+        &self,
+        _mac: &[u8],
+        request: &bacnet_services::read_range::ReadRangeRequest,
+    ) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
+        self.handle
+            .read_range_with_destination(
+                self.destination.clone(),
+                self.data_attributes.clone(),
+                request.clone(),
+                bacnet_services::read_range::ReadRangeValidation::Lenient,
+            )
+            .await
     }
 }
 

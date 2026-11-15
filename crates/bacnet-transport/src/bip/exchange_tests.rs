@@ -137,3 +137,115 @@ async fn the_same_request_or_a_second_one_a_success_answers_is_busy() {
     held.pop();
     held.push(begin(at(7), Bvll::ReadBroadcastDistributionTable).unwrap());
 }
+
+/// A table reader taken before start reads through the transport's own
+/// socket while it runs, keeps a NAK's code, is counted in the transport's
+/// snapshot, fails as a read before start does while the transport is
+/// stopped, and reads again after a restart (#2612).
+#[tokio::test]
+async fn a_table_reader_reads_through_the_running_transport() {
+    let (peer, mac) = peer().await;
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let reader = transport.bvlc_table_reader();
+    let not_started = |error: BvlcExchangeError| match error {
+        BvlcExchangeError::Transport(Error::Transport(io)) => {
+            assert_eq!(io.kind(), std::io::ErrorKind::NotConnected);
+        }
+        other => panic!("not the not-started error: {other}"),
+    };
+    not_started(reader.read_bdt(&mac).await.unwrap_err());
+    // One BDT row: 127.0.0.2:47808, mask 255.255.255.255.
+    let row = [127, 0, 0, 2, 0xBA, 0xC0, 255, 255, 255, 255];
+    let mut ack = vec![0x81, 3, 0, 14];
+    ack.extend_from_slice(&row);
+    for round in 1..=2u64 {
+        let _rx = transport.start().await.unwrap();
+        let local = transport.local_mac().to_vec();
+        let answer = async {
+            let (request, source) = received(&peer).await;
+            assert_eq!(request, [0x81, 2, 0, 4]);
+            peer.send_to(&ack, source).await.unwrap();
+            source
+        };
+        let (rows, source) = tokio::join!(reader.read_bdt(&mac), answer);
+        let rows = rows.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].ip, rows[0].port), ([127, 0, 0, 2], 47808));
+        // The request left from the transport's own socket.
+        assert_eq!(source.port(), u16::from_be_bytes([local[4], local[5]]));
+        // A Read-FDT NAK keeps its result code.
+        let answer = async {
+            let (request, source) = received(&peer).await;
+            assert_eq!(request, [0x81, 6, 0, 4]);
+            peer.send_to(&[0x81, 0, 0, 6, 0x00, 0x40], source)
+                .await
+                .unwrap();
+        };
+        let (refused, ()) = tokio::join!(reader.read_fdt(&mac), answer);
+        assert_eq!(
+            refused.unwrap_err().nak().map(|code| code.to_raw()),
+            Some(0x0040)
+        );
+        let snapshot = transport.bvlc_client_snapshot();
+        assert_eq!(snapshot.read_bdt.acknowledgements, round);
+        assert_eq!(snapshot.read_fdt.results, round);
+        transport.stop().await.unwrap();
+        not_started(reader.read_fdt(&mac).await.unwrap_err());
+    }
+}
+
+/// A read given up from elsewhere frees its slot at once, before its future
+/// is dropped, so the same read can go out right after; one given up before
+/// it starts sends nothing (#2612).
+#[tokio::test]
+async fn a_given_up_read_frees_its_slot_at_once() {
+    let (peer, mac) = peer().await;
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _rx = transport.start().await.unwrap();
+    let reader = transport.bvlc_table_reader();
+    let give_up = BvlcGiveUp::default();
+    let given_up = reader.with_give_up(&give_up);
+    let first = given_up.read_bdt(&mac);
+    tokio::pin!(first);
+    tokio::select! {
+        result = &mut first => panic!("the read ended unanswered: {result:?}"),
+        (request, _) = received(&peer) => assert_eq!(request, [0x81, 2, 0, 4]),
+    }
+    give_up.give_up();
+    // The first read's future is still alive; its slot is free anyway.
+    let answer = async {
+        let (request, source) = received(&peer).await;
+        assert_eq!(request, [0x81, 2, 0, 4]);
+        peer.send_to(&[0x81, 3, 0, 4], source).await.unwrap();
+    };
+    let (rows, ()) = tokio::join!(reader.read_bdt(&mac), answer);
+    assert!(rows.unwrap().is_empty());
+    // Given up while it waited: the given-up error, not a stop's.
+    let given_up = |error: BvlcExchangeError| match error {
+        BvlcExchangeError::Transport(Error::Encoding(message)) => {
+            assert!(message.contains("given up"), "{message}");
+        }
+        other => panic!("not the given-up error: {other}"),
+    };
+    given_up(first.await.unwrap_err());
+    // Given up before it starts: the same error, and nothing is sent.
+    let early = BvlcGiveUp::default();
+    early.give_up();
+    given_up(
+        reader
+            .with_give_up(&early)
+            .read_fdt(&mac)
+            .await
+            .unwrap_err(),
+    );
+    let mut packet = [0; 16];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), peer.recv_from(&mut packet))
+            .await
+            .is_err()
+    );
+    let snapshot = transport.bvlc_client_snapshot();
+    assert_eq!(snapshot.read_bdt.sent, 2);
+    assert_eq!(snapshot.read_fdt.sent, 0);
+    transport.stop().await.unwrap();
+}

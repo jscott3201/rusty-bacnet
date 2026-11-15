@@ -80,3 +80,12 @@ pub use watch::{CovSupport, Update, Watch};
 pub use write::{
     IntoWriteValue, Priority, PriorityView, WriteDenied, WritePolicy, WritePreview, Written,
 };
+
+/// The BACnet/SC TLS configuration [`Client::sc`] takes, and the error its
+/// constructors return with the types its variants name, so an application
+/// needs no direct `bacnet-transport` dependency to load the site's PEM files.
+#[cfg(feature = "sc-tls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
+pub use bacnet_transport::sc_tls::{
+    ScCertificateForm, ScKeyForm, ScNodeTlsConfig, ScPemFault, ScTlsConfigError, ScTlsInput,
+};

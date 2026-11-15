@@ -117,6 +117,23 @@ pub(super) fn learned_number(
     let mut table = table.lock();
     let previous = this_network.get();
     this_network.publish(number);
+    fold_to_number(
+        &mut table,
+        previous.is_some(),
+        number.snapshot().0,
+        (device_tx, collision_tx),
+    );
+}
+
+/// Fold `table` to this network's number `number`, which was just learned:
+/// [`learned_number`]'s work on the table. `relearned` says a number was
+/// known before, whose local rows go first.
+pub(super) fn fold_to_number(
+    table: &mut DeviceTable,
+    relearned: bool,
+    number: u16,
+    (device_tx, collision_tx): TableNotices<'_>,
+) {
     let lost = |device| {
         let _ = device_tx.send(DeviceEvent {
             kind: DeviceEventKind::Lost,
@@ -124,12 +141,12 @@ pub(super) fn learned_number(
         });
     };
     let mut contested = Vec::new();
-    if previous.is_some() {
+    if relearned {
         let dropped = table.unlocalize();
         dropped.lost.into_iter().for_each(lost);
         contested = dropped.contested;
     }
-    let (folded, more) = table.localize(number.snapshot().0);
+    let (folded, more) = table.localize(number);
     for Folded {
         routed,
         local,
@@ -159,7 +176,7 @@ pub(super) fn learned_number(
         }
     }
     for instance in contested {
-        let _ = collision_tx.send(DeviceCollisionEvent::of(&table, instance));
+        let _ = collision_tx.send(DeviceCollisionEvent::of(table, instance));
     }
 }
 

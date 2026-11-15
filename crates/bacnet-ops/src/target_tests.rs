@@ -326,7 +326,7 @@ async fn a_bip6_address_needs_the_bip6_transport() {
     let peer = "[::1]:47808".parse().unwrap();
     let error = bip6_vmac(&bip, peer).await.unwrap_err();
     assert!(matches!(error, VmacLookup::NotBip6 { .. }), "{error:?}");
-    assert!(error.to_string().contains("--ipv6"), "{error}");
+    assert!(error.to_string().ends_with(NEEDS_BIP6), "{error}");
     assert!(as_bip6(&bip).is_none());
 }
 
@@ -337,12 +337,14 @@ async fn a_bip6_vmac_needs_the_bip6_transport() {
     let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     for target in ["bip6:1234", "bip6:0x40ABCD"] {
         let error = parse_target_on(&bip, target).err().unwrap();
+        assert!(error.ends_with(NEEDS_BIP6), "{error}");
+        // No front end's flag or keyword: each adds its own hint.
         assert!(
-            error.contains("bip6: addresses need the --ipv6 transport"),
+            !error.contains("--") && !error.contains("transport="),
             "{error}"
         );
         let error = address_mac(&bip, target, "unused").await.unwrap_err();
-        assert!(error.contains("--ipv6"), "{error}");
+        assert!(error.ends_with(NEEDS_BIP6), "{error}");
     }
     // Other forms parse on B/IP as before.
     assert_eq!(
@@ -396,7 +398,10 @@ fn mstp_targets_name_a_station() {
 fn mstp_targets_need_the_mstp_transport() {
     let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let error = parse_target_on(&bip, "mstp:5").unwrap_err();
-    assert!(error.contains("need the --mstp transport"), "{error}");
+    assert!(
+        error.ends_with(NEEDS_MSTP) && !error.contains("--"),
+        "{error}"
+    );
     assert!(!is_mstp(&bip));
 
     let (serial, _peer) = bacnet_transport::mstp::LoopbackSerial::pair();
@@ -468,7 +473,7 @@ async fn the_grammar_sees_through_the_mixed_transport() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("--ipv6")
+            .ends_with(NEEDS_BIP6)
     );
 
     let (serial, _peer) = bacnet_transport::mstp::LoopbackSerial::pair();

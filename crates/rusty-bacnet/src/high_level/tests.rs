@@ -15,12 +15,13 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::errors::BacnetNoPriorityArrayError;
+use super::ops_err;
 use super::priorities::PyWritePolicy;
+use super::priorities::priority_arg;
 use super::value::{PyValue, data_to_py};
-use super::{ops_err, priority_arg};
 use crate::errors::{
-    BacnetAbortError, BacnetAmbiguousDeviceError, BacnetError, BacnetProtocolError,
-    BacnetRejectError, BacnetTimeoutError,
+    BacnetAbortError, BacnetError, BacnetProtocolError, BacnetRejectError, BacnetTimeoutError,
+    ambiguous_error_type, lookup_error_type,
 };
 use bacnet_ops::target::AddressStyle;
 
@@ -210,9 +211,18 @@ fn ops_errors_raise_the_typed_calls_classes() {
             instance: 7,
             candidates: vec![station(), DeviceAddress::new(2, &[5]).unwrap()],
         });
-        assert!(ambiguous.is_instance_of::<BacnetAmbiguousDeviceError>(py));
+        assert!(ambiguous.is_instance(py, ambiguous_error_type(py).unwrap().bind(py)));
         let client = ops_err_bip(OpsError::Client(Error::Encoding("bad".into())));
         assert!(client.value(py).get_type().is(py.get_type::<BacnetError>()));
+
+        // SC TLS material, as the binding's own SC startup reports it.
+        let refused = bacnet_ops::ScNodeTlsConfig::from_pem(b"", b"", b"").unwrap_err();
+        let tls = ops_err_bip(OpsError::from(refused));
+        assert!(tls.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+        assert_eq!(
+            tls.value(py).to_string(),
+            "TLS config error: the CA bundle holds no certificate, so nothing would be trusted"
+        );
     });
 }
 
@@ -252,5 +262,289 @@ fn no_priority_array_is_a_protocol_error_of_its_own() {
             value.getattr("object_id").unwrap().extract().unwrap();
         assert_eq!(named.to_rust(), object);
         assert!(value.to_string().contains("analog-value 3"), "{value}");
+    });
+}
+
+/// A device that can't be placed raises BacnetLookupError, which is also a
+/// LookupError and a BacnetError; two addresses claiming it raise its
+/// subclass, with every candidate as a (network, MAC) pair. The low-level
+/// client's own lookup errors, which the typed calls raise, map the same.
+#[test]
+fn lookup_errors_are_one_tree() {
+    use pyo3::exceptions::PyLookupError;
+    Python::initialize();
+    Python::attach(|py| {
+        let lookup = lookup_error_type(py).unwrap().bind(py);
+        let ambiguous_type = ambiguous_error_type(py).unwrap().bind(py);
+        assert!(ambiguous_type.is_subclass(lookup).unwrap());
+        let unknown = [
+            ops_err_bip(OpsError::UnknownDevice {
+                target: "2:1234".into(),
+                asked: Some(bacnet_ops::ResolveScope::Network(2)),
+            }),
+            crate::errors::to_py_err(Error::UnknownDevice {
+                device: "2:1234".into(),
+            }),
+        ];
+        for error in unknown {
+            assert!(error.value(py).get_type().is(lookup), "{error}");
+            assert!(error.is_instance_of::<PyLookupError>(py));
+            assert!(error.is_instance_of::<BacnetError>(py));
+            let value = error.value(py);
+            let target: String = value.getattr("target").unwrap().extract().unwrap();
+            assert_eq!(target, "2:1234");
+            // The instance the name holds, though no address claims it.
+            let instance: u32 = value.getattr("instance").unwrap().extract().unwrap();
+            assert_eq!(instance, 1234);
+            let candidates: Vec<(u16, Vec<u8>)> =
+                value.getattr("candidates").unwrap().extract().unwrap();
+            assert!(candidates.is_empty());
+        }
+        // An address names no instance.
+        let by_address = ops_err_bip(OpsError::UnknownDevice {
+            target: "9:0x05".into(),
+            asked: None,
+        });
+        assert!(by_address.value(py).get_type().is(lookup));
+        assert!(by_address.value(py).getattr("instance").unwrap().is_none());
+        let asked = ops_err_bip(OpsError::UnknownDevice {
+            target: "1234".into(),
+            asked: Some(bacnet_ops::ResolveScope::Local),
+        });
+        assert!(asked.to_string().contains("this network"), "{asked}");
+
+        let routed = DeviceAddress::new(2, &[5]).unwrap();
+        let claimed = [
+            ops_err_bip(OpsError::Ambiguous {
+                instance: 7,
+                candidates: vec![station(), routed.clone()],
+            }),
+            crate::errors::to_py_err(Error::AmbiguousDevice {
+                instance: 7,
+                candidates: [(&station()).into(), (&routed).into()].into(),
+            }),
+        ];
+        for error in claimed {
+            assert!(error.value(py).get_type().is(ambiguous_type), "{error}");
+            assert!(error.is_instance_of::<PyLookupError>(py));
+            let value = error.value(py);
+            let instance: u32 = value.getattr("instance").unwrap().extract().unwrap();
+            assert_eq!(instance, 7);
+            let candidates: Vec<(u16, Vec<u8>)> =
+                value.getattr("candidates").unwrap().extract().unwrap();
+            assert_eq!(
+                candidates,
+                [(0, station().mac().to_vec()), (2, vec![5])],
+                "{error}"
+            );
+        }
+    });
+}
+
+/// Every `OpsError` variant raises a class chosen for it: none is left to
+/// the fallback for variants added later, which raises a bare BacnetError.
+#[test]
+fn every_variant_is_mapped() {
+    use bacnet_ops::error::PagingFault;
+    use bacnet_ops::watch::WatchError;
+    use pyo3::exceptions::PyRuntimeError;
+
+    use super::errors::BacnetPagingError;
+    Python::initialize();
+    Python::attach(|py| {
+        let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
+        let repeated = ops_err_bip(OpsError::Paging(PagingFault::Repeated {
+            service: "GetEventInformation",
+            object,
+        }));
+        assert!(
+            repeated.is_instance_of::<BacnetPagingError>(py),
+            "{repeated}"
+        );
+        let value = repeated.value(py);
+        let service: String = value.getattr("service").unwrap().extract().unwrap();
+        assert_eq!(service, "GetEventInformation");
+        let named: crate::types::PyObjectIdentifier =
+            value.getattr("object_id").unwrap().extract().unwrap();
+        assert_eq!(named.to_rust(), object);
+        assert!(
+            value.to_string().contains("analog-input:3 again"),
+            "{value}"
+        );
+        let stalled = ops_err_bip(OpsError::Paging(PagingFault::Stalled {
+            service: "GetEventInformation",
+        }));
+        assert!(stalled.is_instance_of::<BacnetPagingError>(py));
+        assert!(stalled.value(py).getattr("object_id").unwrap().is_none());
+
+        let full = ops_err_bip(OpsError::Watch(WatchError::Full { max: 4096 }));
+        assert!(full.is_instance_of::<PyRuntimeError>(py), "{full}");
+        assert!(full.to_string().contains("4096"), "{full}");
+        // An Object_List element's failure raises what the element's own
+        // error raises, saying which element: a refusal with its class and
+        // code, a lost link as the transport error, a timeout as one.
+        let element = |source: OpsError| {
+            ops_err_bip(OpsError::ObjectList {
+                index: 7,
+                total: 40,
+                source: Box::new(source),
+            })
+        };
+        let refused = element(OpsError::Refused {
+            device: station(),
+            error: RemoteError::Error {
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::READ_ACCESS_DENIED,
+            },
+            detail: None,
+        });
+        assert!(
+            refused.is_instance_of::<BacnetProtocolError>(py),
+            "{refused}"
+        );
+        assert!(refused.to_string().contains("element 7 of 40"), "{refused}");
+        let code: u16 = refused
+            .value(py)
+            .getattr("error_code")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(code, ErrorCode::READ_ACCESS_DENIED.to_raw());
+        let silent = element(OpsError::Unreachable {
+            device: station(),
+            source: Error::Timeout(std::time::Duration::from_secs(1)),
+        });
+        assert!(silent.is_instance_of::<BacnetTimeoutError>(py), "{silent}");
+        let link = element(OpsError::Unreachable {
+            device: station(),
+            source: Error::Transport(std::io::Error::other("closed")),
+        });
+        assert!(link.is_instance_of::<PyOSError>(py), "{link}");
+        assert!(link.to_string().contains("element 7 of 40"), "{link}");
+        // The variants the other tests cover: Parse, UnknownDevice,
+        // Ambiguous, Unreachable, Refused, Client, Denied (over the wire),
+        // ReadBack (over the wire) and NoPriorityArray. With Paging, Watch
+        // and ObjectList that is all twelve.
+    });
+}
+
+/// A `Value` rebuilt from the parts its pickle holds is equal to it and
+/// decodes alike, and the parts it compares are the octets, the text, the
+/// data and what it is a value of.
+#[test]
+fn a_value_is_its_parts() {
+    Python::initialize();
+    Python::attach(|py| {
+        let texts = StateTexts::default();
+        let format = ValueFormat::new(ObjectType::ANALOG_OUTPUT, &texts, Floats::Exact);
+        let real = |octets: [u8; 5], property| {
+            let value = bacnet_ops::Value::new(&format, property, None, octets.to_vec(), None);
+            Bound::new(
+                py,
+                PyValue::new(ObjectType::ANALOG_OUTPUT, property, None, &value),
+            )
+            .unwrap()
+        };
+        let pv = PropertyIdentifier::PRESENT_VALUE;
+        let fifty = real([0x44, 0x42, 0x48, 0, 0], pv);
+        let same = real([0x44, 0x42, 0x48, 0, 0], pv);
+        let other = real([0x44, 0x42, 0x49, 0, 0], pv);
+        let elsewhere = real(
+            [0x44, 0x42, 0x48, 0, 0],
+            PropertyIdentifier::RELINQUISH_DEFAULT,
+        );
+        assert!(fifty.eq(&same).unwrap());
+        assert_eq!(fifty.hash().unwrap(), same.hash().unwrap());
+        assert!(!fifty.eq(&other).unwrap());
+        // What it is a value of isn't compared, as Rust's `Value` doesn't:
+        // the same octets, text and data are the same value.
+        assert!(fifty.eq(&elsewhere).unwrap());
+        assert_eq!(fifty.hash().unwrap(), elsewhere.hash().unwrap());
+        assert!(!fifty.eq(50.0f64).unwrap());
+        let not_implemented = fifty.call_method1("__eq__", (50.0f64,)).unwrap();
+        assert!(not_implemented.is(py.NotImplemented()));
+        // The pickle still says what it is a value of, which decodes it.
+        let (_, parts) = elsewhere
+            .call_method0("__reduce__")
+            .unwrap()
+            .extract::<(Bound<'_, PyAny>, Bound<'_, pyo3::types::PyTuple>)>()
+            .unwrap();
+        let property: u32 = parts.get_item(1).unwrap().extract().unwrap();
+        assert_eq!(property, PropertyIdentifier::RELINQUISH_DEFAULT.to_raw());
+        let (rebuild, args) = fifty
+            .call_method0("__reduce__")
+            .unwrap()
+            .extract::<(Bound<'_, PyAny>, Bound<'_, pyo3::types::PyTuple>)>()
+            .unwrap();
+        let rebuilt = rebuild.call1(args).unwrap();
+        assert!(rebuilt.eq(&fifty).unwrap());
+        let raw: Vec<u8> = rebuilt.getattr("raw").unwrap().extract().unwrap();
+        assert_eq!(raw, [0x44, 0x42, 0x48, 0, 0]);
+        let typed: f64 = rebuilt
+            .getattr("value")
+            .unwrap()
+            .getattr("value")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(typed, 50.0);
+        // Data that isn't JSON is refused; octets that don't decode read
+        // back as raw application data, as a read of them would.
+        let class = fifty.get_type();
+        let bad = class.call_method1(
+            "_rebuild",
+            (
+                1u32,
+                85u32,
+                None::<u32>,
+                pyo3::types::PyBytes::new(py, &[0x44]),
+                "x",
+                "{",
+            ),
+        );
+        assert!(bad.unwrap_err().is_instance_of::<PyValueError>(py));
+        let odd = class
+            .call_method1(
+                "_rebuild",
+                (
+                    1u32,
+                    85u32,
+                    None::<u32>,
+                    pyo3::types::PyBytes::new(py, &[0x44]),
+                    "x",
+                    "null",
+                ),
+            )
+            .unwrap();
+        let tag: String = odd
+            .getattr("value")
+            .unwrap()
+            .getattr("tag")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(tag, "application_data");
+    });
+}
+
+/// The operations core's link refusals name no keyword; the binding adds
+/// its own, and leaves every other refusal as it came.
+#[test]
+fn a_link_refusal_names_the_transport_keyword() {
+    use bacnet_ops::target::{NEEDS_BIP6, NEEDS_MSTP};
+    Python::initialize();
+    Python::attach(|py| {
+        for (needs, transport) in [(NEEDS_BIP6, "ipv6"), (NEEDS_MSTP, "mstp")] {
+            let error = ops_err_bip(OpsError::Parse {
+                what: "target",
+                input: "x".into(),
+                reason: format!("'x' is an address: {needs}"),
+            });
+            assert!(error.is_instance_of::<PyValueError>(py));
+            let text = error.value(py).to_string();
+            let hint = format!("(BACnetClient(transport='{transport}'))");
+            assert!(text.ends_with(&hint), "{text}");
+        }
+        assert_eq!(super::link_hint("plain".into()), "plain");
     });
 }

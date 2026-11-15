@@ -326,32 +326,6 @@ impl BACnetClient {
     }
 
     // -----------------------------------------------------------------------
-    // Directed / Network WhoIs
-    // -----------------------------------------------------------------------
-
-    /// Send a Who-Is to a specific device address (unicast), with the same
-    /// limits rule as `who_is()`.
-    #[pyo3(signature = (address, low_limit=None, high_limit=None))]
-    fn who_is_directed<'py>(
-        &self,
-        py: Python<'py>,
-        address: String,
-        low_limit: Option<u32>,
-        high_limit: Option<u32>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let range = device_range(low_limit, high_limit)?;
-        let inner = self.inner.clone();
-        let peers = PeerAddresses::for_transport(&self.transport_type);
-        let future = async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            c.who_is_directed(&mac, range).await.map_err(to_py_err)?;
-            Ok(())
-        };
-        crate::py_async::future_into_py(py, crate::unit_result(future))
-    }
-
-    // -----------------------------------------------------------------------
     // Auto-routing (_from_device) variants
     // -----------------------------------------------------------------------
 

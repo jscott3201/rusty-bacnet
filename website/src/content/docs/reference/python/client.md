@@ -22,8 +22,9 @@ BACnet/SC (`"sc"`), and BACnet MS/TP (`"mstp"`) transports, and a
 For SC, sc\_ca\_cert, sc\_client\_cert, and sc\_client\_key must be nonempty
 paths; omission, None, or empty strings raise ValueError at construction.
 Their None defaults preserve non-SC use and positional layout only.
-Async entry loads the explicit site CA and operational cert/key; invalid
-TLS configuration raises RuntimeError before dialing. No system-root or
+Async entry loads the explicit site CA and operational cert/key, each file
+read up to 1 MiB; invalid TLS configuration, a larger file included, raises
+RuntimeError before dialing. No system-root or
 unauthenticated-client fallback is available.
 
 SC also requires keyword-only sc\_device\_uuid: exactly 16 bytes, not all zero,
@@ -70,7 +71,8 @@ VMAC), or an MS/TP station. `"[ip]:port"` raises ValueError: use
 
 Properties:
 
-- `write_policy: WritePolicy`: The priorities `relinquish` may use, as `write_policy=` set them.
+- `write_policy: WritePolicy`: The priorities `Device.write` and `relinquish` may use, as `write_policy=` set them.
+- `resolve_scope: Literal["local", "global"] | int | None`: Where a `device()` handle made from a bare instance asks for it, as `resolve_scope=` set it; None on `transport="router"` given none, which asks nowhere.
 
 ### BACnetClient.frames
 
@@ -126,15 +128,27 @@ def __init__(
     sc_control_rate_limit: tuple[int, int] | None = None,
     router: Optional[BACnetRouter] = None,
     write_policy: Optional[WritePolicy] = None,
+    resolve_scope: Literal["local", "global"] | int | None = None,
 ) -> None
 ```
 
 `write_policy` (default None, which is `WritePolicy()`): the
-priorities `relinquish` may use. The default refuses 1, 2, 5 and 6
-with `BacnetWriteDeniedError`, sending nothing;
-`WritePolicy().allow_priorities([...])` allows some of them too
-(#2561). `write_property` and the other typed calls don't look at
-it. Anything but a `WritePolicy` raises TypeError.
+priorities `Device.write` and `relinquish` may use. The default
+refuses 1, 2, 5 and 6 with `BacnetWriteDeniedError`, sending
+nothing; `WritePolicy().allow_priorities([...])` allows some of
+them too (#2561). `write_property` and the other typed calls
+don't look at it. Anything but a `WritePolicy` raises TypeError.
+
+`resolve_scope` (default None, which is `"local"`): where a
+`device()` handle made from a bare instance (`1234`) sends its
+one Who-Is when no address claims the instance (#2561): this
+network alone, `"global"` for every network, or a network number
+from 1 to 65534. A target that names its network (`"5:1234"`)
+asks there whatever this says. On `transport="router"`, which has
+no network of its own, `"local"` raises ValueError and None asks
+nowhere: a bare instance the client hasn't heard from raises
+`BacnetLookupError`. Another name or number raises ValueError,
+another type TypeError.
 
 `transport="router"` with `router` (a `BACnetRouter` built
 with `application="client"` or `"client_and_server"`): run the
@@ -299,73 +313,54 @@ Priority is None or 1..16. Invalid u8 priorities raise ValueError
 synchronously; integers outside u8 raise OverflowError. The client's
 `write_policy` doesn't apply: this is the low-level write.
 
-### BACnetClient.relinquish
+### BACnetClient.device
 
 ```python
-def relinquish(
+def device(
     self,
-    address: str,
-    object_id: ObjectIdentifier,
-    priority: int,
-) -> Awaitable[PriorityView]
+    target: str | int | Discovered | DiscoveredDevice | tuple[int, bytes],
+) -> Awaitable[Device]
 ```
 
-Release a command: NULL written to the object's Present\_Value at
-`priority`, so the next slot down, or Relinquish\_Default, takes
-over. Then the object's priorities as read just after: one
-WriteProperty, then one ReadPropertyMultiple, or a ReadProperty of
-each of the three properties when the device refuses that.
+A handle on one device, whose methods are the high-level calls:
+`read`, `read_many`, `read_object`, `write`,
+`preview_write`, `relinquish`, `priority_array`, `objects`
+and `summary` (#2561).
 
-`address` is a station on this client's own network, in the forms
-`read_property` takes; it is always an address, never a device
-instance or a target, here and in every later call. Nothing is
-looked up first: the device needn't be in the discovery table.
+`target` names the device in the target grammar, not in the
+`address` forms the typed calls take. Most addresses read the
+same in both: `"ip:port"`, six hex octets, the `bip6:` forms and
+`"mstp:N"`. Two don't. \*\*A bare `"5"` is device instance 5 here,
+not MS/TP station 5: write `"mstp:5"`.\*\* And colon-separated hex
+of another length than six octets, which `address` takes as a
+MAC, is no address here: it is refused (ValueError), or, for two
+decimal parts such as `"10:20"`, read as instance 20 on network
+10. The forms:
 
-`priority` is required, an int from 1 to 16: a relinquish names
-the slot it releases, and is never a write of Relinquish\_Default.
-Before the Future is made, a bool, a float or another type raises
-TypeError and another int ValueError, as does address text the
-parser refuses. Raised on await, with nothing sent: ValueError for
-an address the client's link can't carry (a 3-octet VMAC on B/IP,
-say, or any address on `transport="router"`, whose application has
-no network of its own) and for an object type with no Priority\_Array
-(an input, or a Channel, which passes commands on to its members);
-`BacnetWriteDeniedError` for a priority the client's
-`write_policy` refuses (1, 2, 5 and 6 by default). Then the
-device's refusal of the write raises `BacnetProtocolError`,
-`BacnetRejectError` or `BacnetAbortError`. A device that never
-answers raises `BacnetTimeoutError`, where `write_property` and
-`read_property` raise `BacnetAbortError` with reason 10
-(TSM\_TIMEOUT); the write may or may not have been applied. A
-relinquish the device acknowledged whose read after it failed raises
-`BacnetReadBackError`, and one whose read says the object has no
-Priority\_Array raises `BacnetNoPriorityArrayError`: both hold the
-acknowledged write as `written`, and it needs no second send.
+- an address pins the handle there and sends nothing for a station
+on this network: `"192.168.1.10"` or `"192.168.1.10:47808"`,
+`"mstp:5"`, `"bip6:0x0004D2"`, an SC VMAC as six hex octets,
+a routed station as `"2:0x05"` (network 2, MAC 05), or a
+`(network, mac)` pair such as a lookup error's candidate. A
+routed station the client knows no router for asks its network
+first;
+- an instance, `1234` (an int or text) or `"2:1234"` on network
+2, gives a handle that follows the instance: the one address
+claiming it, or the one that answers a Who-Is for it, sent where
+`resolve_scope` says for a bare instance (this network alone by
+default) and to the network named otherwise, waiting up to 3
+seconds;
+- a `discover()` row or a `DiscoveredDevice` pins the handle to
+its address, knowing its instance.
 
-### BACnetClient.priority_array
-
-```python
-def priority_array(
-    self,
-    address: str,
-    object_id: ObjectIdentifier,
-) -> Awaitable[PriorityView]
-```
-
-Read an object's commands: its Priority\_Array, Relinquish\_Default
-and Present\_Value in one ReadPropertyMultiple (a ReadProperty of
-each when the device refuses that), as a `PriorityView`.
-
-`address` is as `relinquish` takes it: always an address, never
-a device instance or a target. Address text the parser refuses
-raises ValueError before the Future is made. An address the
-client's link can't carry (any on `transport="router"`), or an
-object type with no Priority\_Array, raises ValueError on await, with
-nothing sent. A device that says the object has none raises
-`BacnetNoPriorityArrayError`, its other refusals the usual
-protocol errors. A device that never answers raises
-`BacnetTimeoutError`, where `read_property` raises
-`BacnetAbortError` with reason 10 (TSM\_TIMEOUT).
+A wrong type raises TypeError and text the grammar refuses
+ValueError, when the call is made. On await: an address the
+client's link can't reach raises ValueError, as does a local
+address on `transport="router"`; an instance no address claims
+and none answered for, or a routed address with no router known,
+`BacnetLookupError`; an instance two or more addresses claim
+`BacnetAmbiguousDeviceError`, whose `candidates` are each a
+target.
 
 ### BACnetClient.read_property_multiple
 
@@ -480,9 +475,10 @@ Returns `[{"request_index": int, "device_instance": int, "error": BacnetError | 
 ```python
 def who_is(
     self,
-    low_limit: Optional[int] = None,
-    high_limit: Optional[int] = None,
-    scope: Literal["local", "global"] | int = "local",
+    *,
+    low: Optional[int] = None,
+    high: Optional[int] = None,
+    scope: Literal["local", "global"] | int | str = "local",
 ) -> Awaitable[None]
 ```
 
@@ -493,13 +489,18 @@ use `discovered_devices()` to retrieve them.
 default, is this network alone, which no router passes on;
 `"global"` is every network, which on a large routed site every
 device answers; a number from 1 to 65534 is that remote network,
-through its router. Another name or number raises `ValueError`,
-and another type `TypeError`, before anything is sent. A client on
-`transport="router"` has no network of its own, so its Who-Is
-names one, or every one: a local one raises `ValueError` saying so.
+through its router; and any other text is one station's address in
+the forms `device()` takes (`"192.168.1.10"`, `"mstp:5"`),
+asked by unicast (#2561, where `who_is_directed` was). Another
+number, or text that names a device instance or a routed target,
+raises `ValueError`, and another type `TypeError`, before
+anything is sent; a station the client's link can't reach raises
+`ValueError` on await. A client on `transport="router"` has no
+network of its own, so its Who-Is names a network, or every one: a
+local or directed one raises `ValueError` saying so.
 
-Give `low_limit` and `high_limit` together or not at all, each from
-0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit
+Give `low` and `high` together or not at all, each from
+0 to 4194303: one alone, `low` above `high`, or a limit
 past 4194303 raises `ValueError` before anything is sent.
 
 ### BACnetClient.discover
@@ -507,22 +508,29 @@ past 4194303 raises `ValueError` before anything is sent.
 ```python
 def discover(
     self,
-    timeout_ms: int = 3000,
-    low_limit: Optional[int] = None,
-    high_limit: Optional[int] = None,
-    scope: Literal["local", "global"] | int = "local",
-) -> Awaitable[list[DiscoveredDevice]]
+    *,
+    scope: Literal["local", "global"] | int | str = "local",
+    low: Optional[int] = None,
+    high: Optional[int] = None,
+    wait: float = 3.0,
+) -> Awaitable[list[Discovered]]
 ```
 
-Convenience: send WhoIs, wait `timeout_ms`, return discovered devices.
+Find devices: one Who-Is, then the devices that answered it
+within `wait` seconds, one `Discovered` an address (#2561).
+Only this call's answers: a device the client heard earlier that
+stays quiet now isn't listed (`discovered_devices()` is the whole
+table). Each row is a `device()` target, and its `duplicate`
+says when another address claims the same instance.
 
 The Who-Is goes where `scope` says, as for `who_is()`: this
-network alone unless it names every network (`"global"`) or one
-remote network by its number.
+network alone unless it names every network (`"global"`), one
+remote network by its number, or one station by its address.
 
-Give `low_limit` and `high_limit` together or not at all, each from
-0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit
-past 4194303 raises `ValueError` before anything is sent.
+Give `low` and `high` together or not at all, each from 0 to
+4194303, to ask only those instances: one alone, `low` above
+`high`, or a limit past 4194303 raises `ValueError` before
+anything is sent, as does a `wait` outside 0 to 3600 seconds.
 
 ### BACnetClient.who_has_by_id
 
@@ -530,9 +538,10 @@ past 4194303 raises `ValueError` before anything is sent.
 def who_has_by_id(
     self,
     object_id: ObjectIdentifier,
-    low_limit: Optional[int] = None,
-    high_limit: Optional[int] = None,
-    scope: Literal["local", "global"] | int = "local",
+    *,
+    low: Optional[int] = None,
+    high: Optional[int] = None,
+    scope: Literal["local", "global"] | int | str = "local",
 ) -> Awaitable[None]
 ```
 
@@ -543,14 +552,16 @@ Send a Who-Has by object identifier. Answers come through
 `"local"`, the default, is this network alone, which no router
 passes on; `"global"` is every network, where every device that
 hears it searches its objects; a number from 1 to 65534 is that
-remote network, through its router. Another name or number raises
-`ValueError`, and another type `TypeError`, before anything is
-sent. A client on `transport="router"` has no network of its own,
-so its Who-Has names one, or every one: a local one raises
+remote network, through its router; any other text is one station's
+address, asked by unicast (#2561). Another number, or text that
+names a device instance or a routed target, raises `ValueError`,
+and another type `TypeError`, before anything is sent. A client on
+`transport="router"` has no network of its own, so its Who-Has
+names a network, or every one: a local or directed one raises
 `ValueError` saying so.
 
-Give `low_limit` and `high_limit` together or not at all, each from
-0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit
+Give `low` and `high` together or not at all, each from
+0 to 4194303: one alone, `low` above `high`, or a limit
 past 4194303 raises `ValueError` before anything is sent.
 
 ### BACnetClient.who_has_by_name
@@ -559,9 +570,10 @@ past 4194303 raises `ValueError` before anything is sent.
 def who_has_by_name(
     self,
     name: str,
-    low_limit: Optional[int] = None,
-    high_limit: Optional[int] = None,
-    scope: Literal["local", "global"] | int = "local",
+    *,
+    low: Optional[int] = None,
+    high: Optional[int] = None,
+    scope: Literal["local", "global"] | int | str = "local",
 ) -> Awaitable[None]
 ```
 
@@ -576,16 +588,17 @@ network by its number.
 def who_has_replies(
     self,
     object: ObjectIdentifier | str,
-    low_limit: Optional[int] = None,
-    high_limit: Optional[int] = None,
-    timeout_ms: int = 3000,
-    scope: Literal["local", "global"] | int = "local",
+    *,
+    low: Optional[int] = None,
+    high: Optional[int] = None,
+    wait: float = 3.0,
+    scope: Literal["local", "global"] | int | str = "local",
 ) -> Awaitable[list[IHave]]
 ```
 
 Send a Who-Has for `object` (an identifier, or a name) and
 collect the I-Haves that answer it from that scope for
-`timeout_ms`: one per device, object and station (a station's copy
+`wait` seconds: one per device, object and station (a station's copy
 through a router on this client's own network is its local answer),
 in arrival order; an empty list when none answer. An I-Have heard
 from elsewhere during the wait is not an answer, and collection stops
@@ -593,8 +606,9 @@ at 4096 answers, so a list of exactly that many may have been cut
 short. The limits and `scope`
 follow `who_has_by_id()`'s rules (#1850, #2596): with the default
 scope an empty list says only that nothing on this network has the
-object. It holds the started client for the whole wait, so `stop()`
-waits up to `timeout_ms` for it.
+object. `wait` is 0 to 3600 seconds (`ValueError` otherwise). It
+holds the started client for the whole wait, so `stop()` waits up
+to `wait` seconds for it.
 
 ### BACnetClient.i_have_events
 
@@ -612,16 +626,18 @@ stop.
 def discover_routers(
     self,
     network: Optional[int] = None,
-    timeout_ms: int = 3000,
+    *,
+    wait: float = 3.0,
 ) -> Awaitable[list[DiscoveredRouter]]
 ```
 
 Broadcast a Who-Is-Router-To-Network for `network` (or every
-network) and collect the routers that answer for `timeout_ms`, one
+network) and collect the routers that answer for `wait` seconds, one
 per router MAC in the order first heard; for a `network`, only the
 routers listing it. An empty list when none answer. `network` 0 or
-65535 raises BacnetError (#1850). It holds the started client for
-the whole wait, so `stop()` waits up to `timeout_ms` for it.
+65535 raises BacnetError (#1850). `wait` is 0 to 3600 seconds
+(`ValueError` otherwise). It holds the started client for the
+whole wait, so `stop()` waits up to `wait` seconds for it.
 
 ### BACnetClient.network_reports
 
@@ -698,23 +714,6 @@ Broadcast a Who-Am-I request announcing this device's identity.
 The three arguments should match the sender's Device object properties
 (`vendor_id` is 0-65535). Raises `ValueError` if a string cannot be
 encoded, or `OverflowError` for a `vendor_id` that doesn't fit.
-
-### BACnetClient.who_is_directed
-
-```python
-def who_is_directed(
-    self,
-    address: str,
-    low_limit: Optional[int] = None,
-    high_limit: Optional[int] = None,
-) -> Awaitable[None]
-```
-
-Send a Who-Is to a specific device address (unicast).
-
-Give `low_limit` and `high_limit` together or not at all, each from
-0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit
-past 4194303 raises `ValueError` before anything is sent.
 
 ### BACnetClient.time_synchronization
 

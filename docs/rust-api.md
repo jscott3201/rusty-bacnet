@@ -1617,7 +1617,8 @@ intentional exclusion from normal test runs are documented in
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 
-let tls_config = ScNodeTlsConfig::from_der(ca_certs, node_cert_chain, node_key)?;
+// The site CA bundle, this node's chain (leaf first) and its private key, as PEM files.
+let tls_config = ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")?;
 let ws = TlsWebSocket::connect("wss://hub:1234", tls_config).await?;
 let transport = ScTransport::new(ws, vmac)
     .with_device_uuid(device_uuid) // caller's already-provisioned, durable [u8; 16]
@@ -2071,9 +2072,9 @@ distinct real same-CA leaves, native registration/relay and joined shutdown.
 ```rust
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 
-// Owned, already loaded DER: Vec<CertificateDer<'static>> for both lists,
-// and PrivateKeyDer<'static> for hub_key. File loading belongs to the caller.
-let tls = ScHubTlsConfig::from_der(ca_certs, hub_cert_chain, hub_key)?;
+// The site CA bundle, the hub's chain (leaf first) and its key, as PEM files;
+// from_pem takes PEM already in memory, and from_der owned DER.
+let tls = ScHubTlsConfig::from_pem_files("site-ca.pem", "hub.pem", "hub.key")?;
 let mut hub = ScHub::start_with_tls_config(
     listen_addr, tls, hub_vmac, hub_uuid, ScHubHandshakeTimeouts::default(),
 ).await?;
@@ -2214,16 +2215,19 @@ config owns fresh counters.
 
 With `sc-tls`, every public hub startup requires `ScHubTlsConfig`:
 explicit nonempty CA trust anchors, mandatory WebPKI client verification, and
-TLS 1.3-only local policy. Its fallible `from_der` constructor performs no file or
-network I/O. Empty CA/chain, malformed DER (including a bad entry in an otherwise
-valid list), unusable keys, and certificate/key mismatch return `Error::Encoding`
-before startup can bind. The hub chain is leaf first. Configuration is private;
+TLS 1.3-only local policy. Its fallible constructors take PEM files
+(`from_pem_files`), PEM in memory (`from_pem`) or owned DER (`from_der`); only
+`from_pem_files` reads files, and none uses the network. Empty CA/chain, malformed
+PEM or DER (including a bad entry in an otherwise valid list), a key file without
+exactly one usable key, and certificate/key mismatch return a typed
+`ScTlsConfigError` before startup can bind; see
+[PEM loading and its errors](#sc-tls-material-from-pem). The hub chain is leaf first. Configuration is private;
 clones share the same policy, with no mutable/raw accessor or unchecked conversion.
 The constructor uses the built-in aws-lc provider, not a caller-installed provider.
 
 **Rust source-breaking migration:** the second parameter of `start`,
 `start_with_uuid`, and `start_with_uuid_and_timeouts` is now `ScHubTlsConfig`, not
-`TlsAcceptor`. Construct it with `from_der`; raw hub injection, including custom
+`TlsAcceptor`. Construct it with `from_pem_files`, `from_pem` or `from_der`; raw hub injection, including custom
 verifiers/providers, TLS-version selection and arbitrary configuration knobs, is
 retired with no public unchecked escape.
 
@@ -2280,11 +2284,11 @@ mTLS targets remain, with current results in [Benchmarks](../Benchmarks.md#4-tra
 `ScClientBuilder::tls_config(config)`, and `ScServerBuilder::tls_config(config)`
 now require `bacnet_transport::sc_tls::ScNodeTlsConfig`, not
 `Arc<rustls::ClientConfig>`. Names, argument order, return types, identity defaults,
-and lifecycle behavior are unchanged. Load owned DER at your application boundary:
+and lifecycle behavior are unchanged. Build it from the site's PEM files:
 
 ```rust
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
-let tls = ScNodeTlsConfig::from_der(ca_certs, node_cert_chain, node_private_key)?;
+let tls = ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")?;
 let ws = TlsWebSocket::connect(hub_url, tls.clone()).await?;
 // Or pass tls to BACnetClient::sc_builder().tls_config(tls), or
 // BACnetServer::sc_builder().tls_config(tls), then finish that builder.
@@ -2310,6 +2314,96 @@ other WebSocket implementations are outside this built-in driver guarantee.
 Python constructors, CLI flags, file-I/O/error phases, and Docker provisioning stay
 compatible; their existing node policy is consolidated internally. The local raw
 configuration gap is closed, not the full Annex AB profile or issue #513.
+
+#### SC TLS material from PEM
+
+`ScNodeTlsConfig` and `ScHubTlsConfig` each take the site's material three ways,
+with the same arguments in the same order (CA bundle, chain, key) and one error,
+`bacnet_transport::sc_tls::ScTlsConfigError` (#2600):
+
+| Constructor | Takes |
+|---|---|
+| `from_pem_files(ca_bundle, cert_chain, private_key)` | three paths (`impl AsRef<Path>`), each read once, up to `MAX_PEM_FILE_BYTES` (1 MiB) |
+| `from_pem(ca_bundle, cert_chain, private_key)` | PEM text as `&[u8]` |
+| `from_der(ca_certs, cert_chain, key)` | owned `CertificateDer` lists and a `PrivateKeyDer` |
+
+From PEM, the CA bundle and chain take every `CERTIFICATE` section in order; the key
+input must hold exactly one unencrypted PKCS#8 (`PRIVATE KEY`), SEC1
+(`EC PRIVATE KEY`) or PKCS#1 (`RSA PRIVATE KEY`) key, in PEM that is well formed
+throughout. Text outside the sections (such as openssl's "Bag Attributes") is
+ignored, CRLF line ends are taken, and sections of other kinds are skipped: a key
+or an `X509 CRL` in the CA bundle or chain (no revocation list is applied), and
+certificates or `EC PARAMETERS` beside the key. The chain may carry intermediates
+after the leaf. Keys load through the fixed aws-lc provider: ECDSA on P-256, P-384
+and P-521, RSA, and Ed25519 (PKCS#8 only). `bacnet sc-check` and the CLI's pre-dial
+lint decode the key by the same rule.
+
+The CA bundle is checked first, certificate by certificate as it is decoded, and
+`from_pem_files` reads the identity files only after the whole bundle passed. The
+chain and key are both decoded before either is checked as DER, so a file that
+can't be read or decoded is reported before a certificate or key that decodes but
+can't be used.
+
+```rust
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError};
+
+match ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key") {
+    Ok(tls) => { /* BACnetClient::sc_builder().tls_config(tls) ... */ }
+    Err(ScTlsConfigError::Read { input, path, source, .. }) => {
+        eprintln!("can't read the {input} file {}: {source}", path.display());
+    }
+    Err(ScTlsConfigError::KeyMismatch) => eprintln!("node.key is not node.pem's key"),
+    Err(other) => eprintln!("{:?}: {other}", other.input()),
+}
+```
+
+| `ScTlsConfigError` | When |
+|---|---|
+| `Read { input, path, source }` | a file can't be read (missing, a directory, no permission) |
+| `TooLarge { input, path, limit }` | a file is larger than `MAX_PEM_FILE_BYTES`; reading stops at the limit, so a stream that never ends stops there and is refused too (the read can still block, as when opening a FIFO no writer has opened) |
+| `MalformedPem { input, fault }` | not well-formed PEM; `ScPemFault` says how (no `END` line, a bad `BEGIN` line, a body that isn't base64, a section too large) |
+| `NoCertificate { input }` | the CA bundle (an empty bundle: nothing would be trusted) or the chain holds no certificate |
+| `UnsupportedCertificate { input, form }` | its only certificates are OpenSSL `TRUSTED CERTIFICATE` (`ScCertificateForm::Trusted`) or PKCS#7 (`Pkcs7`) sections |
+| `UnusableCertificate { input, index, source }` | certificate `index` of the CA bundle or chain decoded but rustls can't use it |
+| `NoPrivateKey` | the key input holds no PKCS#8, SEC1 or PKCS#1 key |
+| `MultiplePrivateKeys { count }` | it holds more than one |
+| `UnsupportedKey { form }` | the key is in a form the stack can't read: `ScKeyForm::Encrypted` (an `ENCRYPTED PRIVATE KEY`, or OpenSSL's older key with a `Proc-Type: 4,ENCRYPTED` header; decrypt it with `openssl pkcs8 -topk8 -nocrypt`), `OpenSsh` (convert it to PKCS#8), or `Other` (such as DSA) |
+| `UnusableKey { source }` | the key decoded but the provider can't load it: an algorithm or curve it lacks, or malformed DER |
+| `KeyMismatch` | the key is not the chain leaf's |
+| `Tls { source }` | rustls refused the assembled configuration for another reason |
+
+`ScTlsConfigError::input()` names the input at fault (`ScTlsInput::CaBundle`,
+`CertificateChain` or `PrivateKey`). No variant carries key bytes or the key file's
+text, in `Debug` or `Display`, and a path's control characters are escaped in the
+text; the key and its PEM text are not zeroized, as with DER.
+`From<ScTlsConfigError>` is implemented for `bacnet_types::error::Error` (as
+`Error::Encoding` with the text) and, with `sc-tls`, for `bacnet_ops::OpsError` (as
+the typed `OpsError::Tls`), so `?` works in functions returning either.
+`bacnet_ops` re-exports `ScNodeTlsConfig`, `ScTlsConfigError` and the types its
+variants name, so an application on `bacnet_ops` alone loads the files:
+
+```rust
+use bacnet_ops::{Client, OpsError, ScNodeTlsConfig};
+
+async fn connect() -> Result<Client, OpsError> {
+    // A file that can't be used fails here as OpsError::Tls, naming it.
+    let tls = ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")?;
+    Client::sc("wss://hub.example.com/bacnet", tls)
+        .vmac([0x02, 0, 0, 0, 0, 0x01])
+        .device_uuid([0x42; 16])
+        .connect()
+        .await
+}
+```
+
+**Rust source-breaking migration:** `from_der` on both configurations returns
+`ScTlsConfigError` instead of `Error::Encoding(String)`: match its variants instead
+of the text, or convert it with `?`/`Error::from`. The `bacnet_transport::sc_tls::pem`
+module is no longer public: load PEM with the constructors above, or decode DER with
+`rustls::pki_types::pem::PemObject` (`CertificateDer::pem_slice_iter`,
+`PrivateKeyDer::from_pem_slice`). A key file must hold exactly one key, in PEM well
+formed throughout, for `bacnet sc-check` and the inspection API too
+(`ScInputErrorKind::MultiplePrivateKeys`, `UnsupportedPrivateKey`).
 
 ### MS/TP (Serial RS-485)
 
@@ -11890,12 +11984,15 @@ over B/IP without naming a transport type (`.interface(ip)`, `.port(..)`,
 `Client::mstp(port, mac)` with `serial` (`.baud(..)`, `.max_master(..)`,
 `.max_info_frames(..)`): each forwards to the low-level builder and gives a
 `Client` over `AnyTransport`, the type's default, and `connect()` fails with
-`OpsError`.
+`OpsError`. For SC, `tls` is `bacnet_ops::ScNodeTlsConfig::from_pem_files(ca,
+cert, key)?`, whose refusal is `OpsError::Tls(ScTlsConfigError)` (see
+[SC TLS material from PEM](#sc-tls-material-from-pem)).
 `Client::over(low)` wraps a `BACnetClient<T>` already built, and
 `Client::new(client, limits)` an `Arc<BACnetClient<T>>` and an
 `Arc<RequestLimits>` (`RequestLimits::new(per_second)`, 0 for no cap); a
 client is cheap to clone. `client.discover(Discover::local().range(1000..=2000))`
-sends one Who-Is and returns one `Discovered` per address that answered
+sends one Who-Is and returns one `Discovered` per address the scope asked
+covers (an I-Am heard from elsewhere during the wait is no answer) that answered
 within its wait (3 s unless `.wait(..)` says otherwise). With no scope named
 (`Discover::default()`) the Who-Is is a local broadcast, which no router
 passes on; `Discover::network(n)`, `Discover::global()` and
@@ -12013,8 +12110,8 @@ readings, via, stopped }` holds one `Reading { object, property, index,
 value: Result<Value, PropertyError> }` a property, in the order asked for. A
 property the device refuses, one of an object it doesn't have, an element
 past an array's end and an object its answer leaves out are errors in their
-own rows. `stopped` is set only when the device stopped answering part way
-(`unreachable()`); `readings` then keeps what was read before it, an
+own rows. `stopped` is set when the device stopped answering part way
+(`unreachable()`), or the client or its link failed a later request; `readings` then keeps what was read before it, an
 object's properties read before it included. `via` is `ReadVia::Mixed` when
 some objects went by RPM and others by ReadProperty (a batch failed whole, a
 single object too large for one answer, or RPM refused part way through).
@@ -12029,7 +12126,17 @@ object's properties (all of them, or a list) in one RPM, or by ReadProperty
 or when it failed this RPM as a whole, as `read_many` does. `ObjectRead {
 object, readings, via }` has a property the device refused as an error in
 its own row. A device that stops answering fails the read, keeping
-nothing.
+nothing. A request the client or its link fails itself (no route to the
+device's network, a link that refuses the send, a request that can't be
+encoded) fails the read once with that error in `OpsError::Client`, never
+as rows of error text; the same holds for `describe_device`,
+`priority_array`, a watch's first read and the raw `Reader::properties`
+(#2610). `read_many` and a watch's poll fail that way only while nothing
+was read: after the first rows they keep them and end with the error in
+`stopped`. A request too long for the link or the routed path
+(`Error::SendTooLong`, `Error::RoutedPathTooLong`) is no such failure: it
+falls back to ReadProperty, as an answer too large does. A subscription
+the client fails to send is asked again, and is no refusal by the device.
 
 Every call fails with `OpsError` (`#[non_exhaustive]`): `Parse { what,
 input, reason }` for text that names nothing this client can address,
@@ -12069,6 +12176,8 @@ request jobs: `Reader`, `Halt`, `RpmFailure`, `rpm_failure`, `rpm_rows`,
 | `Error::Encoding` for a directed Who-Is or `station_mac` text that names no station, and `Error::OutOfRange` for a refused target | `OpsError::Parse` |
 | `Error::Encoding` for an Object_List claiming more than `MAX_OBJECTS` elements | `Error::Range` with both numbers, inside `OpsError::Client` from a `Device` read |
 | `Error::Encoding` for a GetEventInformation answer naming an object twice | `OpsError::Paging(PagingFault::Repeated { .. })` |
+| `target::parse_target_on`, `check_local_mac` and `VmacLookup::NotBip6` refusing a link's address with text naming the CLI's `--ipv6` or `--mstp` | neutral text ending in `target::NEEDS_BIP6` or `target::NEEDS_MSTP`; each front end adds its own hint (the CLI its flag, Python its `transport=` keyword) (#2561) |
+| `Reader::properties` and the batch reader keeping a request the client or link failed as a row (`PropertyError::Other`) | `Err(Halt::Device(error))` from `Reader::properties`; from `Device::read_many` the read's error when nothing was read, else `Readings::stopped` (#2610) |
 
 ### Watching points
 
@@ -12219,7 +12328,9 @@ a checked 1 to 16 (`Priority::new(8)?`, `"8".parse()`, constants such as
   NULL at that slot, then reads Priority_Array, Relinquish_Default and
   Present_Value back in one RPM: two requests. A relinquish acknowledged
   whose read back failed is `OpsError::ReadBack`, whose `written` says it
-  took effect; `unreachable()` is false for it, so nothing retries it. A
+  took effect; `unreachable()` is false for it, so nothing retries it. Its
+  `source` is the read back's own error, a link's refusal to send
+  included (#2610). A
   read back saying the object has no Priority_Array (a value object built
   without one) is `OpsError::NoPriorityArray`: the device took the NULL as
   a write to a property that isn't commandable, which changes nothing.
@@ -12629,17 +12740,17 @@ open/partial; closed #517 identity acceptance and lifetime exclusions remain val
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 
-// Start the hub with already loaded site CA, hub chain, and matching key DER.
-let hub_tls = ScHubTlsConfig::from_der(ca_certs, hub_cert_chain, hub_key)?;
+// Start the hub with the site CA, the hub chain, and its matching key, as PEM files.
+let hub_tls = ScHubTlsConfig::from_pem_files("site-ca.pem", "hub.pem", "hub.key")?;
 let mut hub = ScHub::start_with_tls_config(
     listen_addr, hub_tls, [0xFF, 0, 0, 0, 0, 1], hub_uuid,
     ScHubHandshakeTimeouts::default(),
 ).await?;
 let hub_addr = hub.local_addr().expect("started hub has a bound address");
 
-// Build the node policy from separately loaded site trust and operational DER.
-let tls_config = bacnet_transport::sc_tls::ScNodeTlsConfig::from_der(
-    node_ca_certs, node_cert_chain, node_key,
+// Build the node policy from the site trust and this node's operational PEM files.
+let tls_config = bacnet_transport::sc_tls::ScNodeTlsConfig::from_pem_files(
+    "site-ca.pem", "node.pem", "node.key",
 )?;
 // Use a persistent nonzero client_uuid, distinct from hub_uuid and every other peer.
 let mut client = BACnetClient::sc_builder()
@@ -13002,7 +13113,12 @@ validation succeeds. ClientOnly creates no
 responder and retains its services vector as a local declaration.
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 registration) stay on `BipTransport` and on `BACnetClient` over B/IP (see
-[Transport access and BBMD helpers](#transport-access-and-bbmd-helpers));
+[Transport access and BBMD helpers](#transport-access-and-bbmd-helpers)),
+and a session `BipEndpointBuilder` built reads a BBMD's tables through its
+own socket with `EndpointSession::bvlc_tables()` (#2612): a
+`BvlcTableReader`, which `BipTransport::bvlc_table_reader()` hands out
+before a transport goes to an owner, sends the transport's `read_bdt` and
+`read_fdt` and fails as they do;
 `BipEndpointBuilder::mode` sets the B/IP mode as on the
 standalone builders (see [B/IP modes on the builders](#bip-modes-on-the-builders)),
 and `EndpointSession::foreign_registration()` reports a foreign device's
@@ -13011,6 +13127,46 @@ B/IPv6 has no endpoint builder: compose `EndpointSession::new` over a
 `Bip6Transport` (see [Registered B/IPv6 Network Port](#registered-bipv6-network-port)).
 Ethernet has no endpoint builder: keep the standalone path there. Do not expect
 identical administration across data links.
+
+### Full client on an endpoint
+
+`EndpointSession::full_client()` returns a full `BACnetClient` on the
+session's one transport, beside its server role and its narrow client role
+(#2617). It has every call a client with its own transport has: discovery in
+every scope, segmented reads, files, COV, router discovery, and the link's own
+calls and frame tap through `transport()`. It shares the session's pool of
+invoke IDs, and `bacnet_ops::Client::over` takes it as it is.
+`full_client_with(options)` sets the client's startup options.
+
+```rust
+use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
+
+let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
+session.start().await?;
+let client = session.full_client()?;
+client.who_is(None).await?;
+drop(client); // before the session stops
+session.stop().await?;
+```
+
+- One full client at a time; another is refused until the first is dropped.
+- A session with a source Audit Reporter refuses a full client, whose
+  requests would not be audited.
+- Beside a server role the client answers only the COV notifications of its
+  own subscriptions. The narrow server role answers a
+  ConfirmedEventNotification with a Reject (unrecognized service) while the
+  client still publishes it; the full server will acknowledge it when it
+  takes a seat. A session with no server role leaves the client to answer as
+  a standalone client does.
+- The session has the one owner of the local network number: the client asks
+  What-Is-Network-Number on first need and never answers one.
+- Stopping: drop the client first. A `stop()` while it lives closes the
+  session's roles, ends the client's tasks, fails its open requests, and
+  returns an error naming the client; call `stop()` again once the client is
+  dropped. From the first `stop()` the client sends nothing more: requests
+  and unconfirmed sends fail at once. Only a call made directly on
+  `client.transport()`, such as a BVLC query, still reaches the link until
+  the client is dropped.
 
 ### Endpoint shutdown and the object database
 
@@ -13434,11 +13590,19 @@ operation. Error-only Device results establish none; conflicting successful
 Device IDs retain Address attribution without rejecting the otherwise valid ACK.
 This is operation-local knowledge, with no discovery cache.
 
-The initiating role supports `read_property`, `read_range`, `read_property_multiple`
-and direct B/IP `write_property`, plus explicit
-endpoint destinations. ReadRange returns a correlated `ReadRangeAck` with raw
+The initiating role supports `read_property`, `read_range`, `read_property_multiple`,
+`read_log_page` and direct B/IP `write_property`, plus explicit
+endpoint destinations: `read_property_with_destination`,
+`read_property_multiple_with_destination`, `read_range_with_destination` and
+`read_log_page_with_destination` take an `EndpointApduDestination`, such as
+`Routed { destination_network, destination_mac, router_mac }` for a station
+behind a router, or `RoutedViaLocalBroadcast { destination_network,
+destination_mac }` to reach it by one local broadcast when its router isn't
+known (#2612). A `Routed` destination whose `router_mac` is a broadcast or
+group address on the link is refused before a transaction is registered. ReadRange returns a correlated `ReadRangeAck` with raw
 item bytes; empty and multiple-item ACKs each produce one value-free source READ
-record. `read_range_with` takes a `ReadRangeValidation`: a lenient read keeps
+record. `read_range_with` and `read_range_with_destination` take a
+`ReadRangeRequest` and a `ReadRangeValidation`: a lenient read keeps
 a page that breaks a rule and is audited as a success. Request encoding validates before output/transaction admission: ALL,
 REQUIRED, OPTIONAL, array index zero, zero/non-INTEGER16 counts, and nonconcrete
 ByTime components are rejected. Zero position/sequence references are valid and

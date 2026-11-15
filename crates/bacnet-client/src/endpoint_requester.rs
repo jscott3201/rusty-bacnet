@@ -401,6 +401,19 @@ impl EndpointRequester {
                     .into(),
             ));
         }
+        // So is a routed one whose next hop reaches a group of nodes: a
+        // routed request goes to its router by unicast, and the form that
+        // reaches a network by local broadcast names no router (#2612).
+        if let EndpointApduDestination::Routed { router_mac, .. } = &destination
+            && self.inner.egress.is_group_destination(router_mac)
+        {
+            return Err(Error::Encoding(
+                "endpoint requester cannot send a routed confirmed request through a broadcast \
+                 or group router address: name no router to reach the network by local \
+                 broadcast"
+                    .into(),
+            ));
+        }
         Ok(destination)
     }
 

@@ -270,6 +270,11 @@ impl ClientRecord {
         *self.node_slot() = Arc::downgrade(node);
     }
 
+    /// The running node, or `None` while the transport is stopped.
+    pub(super) fn node(&self) -> Option<Arc<NodeHandle>> {
+        self.node_slot().upgrade()
+    }
+
     /// The transport stopped: clear the last-attempt status.
     pub(super) fn stop(&self) {
         *self.node_slot() = Weak::new();
@@ -289,8 +294,7 @@ impl ClientRecord {
     /// taken, since the node takes this record's under its own.
     pub(super) fn live_snapshot(&self) -> BvlcClientSnapshot {
         let mut snapshot = self.snapshot();
-        let node = self.node_slot().upgrade();
-        if let Some(node) = node {
+        if let Some(node) = self.node() {
             node.fill_registration(&mut snapshot.foreign_registration);
         }
         snapshot

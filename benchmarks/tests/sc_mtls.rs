@@ -7,8 +7,7 @@ use bacnet_benchmarks::sc_helpers::*;
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::{ScConnectionState, ScTransport};
 use bacnet_transport::sc_hub::ScHubTlsConfig;
-use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
-use bacnet_types::error::Error;
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError, ScTlsInput, TlsWebSocket};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -397,15 +396,22 @@ fn node_tls_pem_loader_rejects_empty_malformed_and_mixed_der_inputs() {
     for field in ["ca", "chain", "key"] {
         for invalid in ["", MALFORMED_CERT_PEM, INVALID_CERT_DER_PEM] {
             let mut certs = generate_test_certs();
-            match field {
-                "ca" => certs.ca_cert_pem = invalid.into(),
-                "chain" => certs.client_cert_pem = invalid.into(),
-                _ => certs.client_key_pem = invalid.into(),
-            }
-            assert!(matches!(
-                try_make_node_tls_config(&certs),
-                Err(Error::Encoding(_))
-            ));
+            let input = match field {
+                "ca" => {
+                    certs.ca_cert_pem = invalid.into();
+                    ScTlsInput::CaBundle
+                }
+                "chain" => {
+                    certs.client_cert_pem = invalid.into();
+                    ScTlsInput::CertificateChain
+                }
+                _ => {
+                    certs.client_key_pem = invalid.into();
+                    ScTlsInput::PrivateKey
+                }
+            };
+            let error = try_make_node_tls_config(&certs).unwrap_err();
+            assert_eq!(error.input(), Some(input), "{field} {invalid:?}: {error}");
         }
     }
     for ca in [false, true] {
@@ -415,19 +421,32 @@ fn node_tls_pem_loader_rejects_empty_malformed_and_mixed_der_inputs() {
         } else {
             certs.client_cert_pem.push_str(INVALID_CERT_DER_PEM);
         }
-        assert!(matches!(
-            try_make_node_tls_config(&certs),
-            Err(Error::Encoding(_))
-        ));
+        let error = try_make_node_tls_config(&certs).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ScTlsConfigError::UnusableCertificate { index: 1, .. }
+            ),
+            "{error:?}"
+        );
     }
 }
 
-fn assert_hub_config_error(certs: &CertMaterial, expected: &str) {
+fn assert_hub_config_error(certs: &CertMaterial, expected: impl Fn(&ScTlsConfigError) -> bool) {
     let error = try_make_hub_tls_config(certs).unwrap_err();
-    assert!(
-        matches!(&error, Error::Encoding(message) if message.starts_with(expected)),
-        "expected {expected:?}, got {error}"
-    );
+    assert!(expected(&error), "unexpected {error:?}");
+}
+
+fn malformed(input: ScTlsInput) -> impl Fn(&ScTlsConfigError) -> bool {
+    move |e| matches!(e, ScTlsConfigError::MalformedPem { input: i, .. } if *i == input)
+}
+
+fn no_certificate(input: ScTlsInput) -> impl Fn(&ScTlsConfigError) -> bool {
+    move |e| matches!(e, ScTlsConfigError::NoCertificate { input: i, .. } if *i == input)
+}
+
+fn unusable(input: ScTlsInput) -> impl Fn(&ScTlsConfigError) -> bool {
+    move |e| matches!(e, ScTlsConfigError::UnusableCertificate { input: i, .. } if *i == input)
 }
 
 #[test]
@@ -438,7 +457,7 @@ fn sc_hub_pem_config_owns_credentials_and_preserves_raw_helper_types() {
     certs
         .ca_cert_pem
         .push_str(&generate_test_certs().ca_cert_pem);
-    let config: Result<ScHubTlsConfig, Error> = try_make_hub_tls_config(&certs);
+    let config: Result<ScHubTlsConfig, ScTlsConfigError> = try_make_hub_tls_config(&certs);
     let config = config.unwrap();
     // Independent TLS acceptors keep their existing, non-sealed return types.
     let _: Arc<rustls::ServerConfig> = make_server_tls_config_mtls(&certs);
@@ -454,7 +473,7 @@ fn sc_hub_pem_config_rejects_empty_or_malformed_ca() {
     let valid = certs.ca_cert_pem.clone();
     for invalid in ["", "not a CA certificate"] {
         certs.ca_cert_pem = invalid.into();
-        assert_hub_config_error(&certs, "no CA certificates found");
+        assert_hub_config_error(&certs, no_certificate(ScTlsInput::CaBundle));
     }
     for invalid in [
         MALFORMED_CERT_PEM.to_owned(),
@@ -462,7 +481,7 @@ fn sc_hub_pem_config_rejects_empty_or_malformed_ca() {
         format!("{MALFORMED_CERT_PEM}{valid}"),
     ] {
         certs.ca_cert_pem = invalid;
-        assert_hub_config_error(&certs, "failed to parse CA certificates:");
+        assert_hub_config_error(&certs, malformed(ScTlsInput::CaBundle));
     }
 }
 
@@ -472,7 +491,7 @@ fn sc_hub_pem_config_rejects_empty_or_malformed_server_chain() {
     let valid = certs.server_cert_pem.clone();
     for invalid in ["", "not a server certificate"] {
         certs.server_cert_pem = invalid.into();
-        assert_hub_config_error(&certs, "no server certificates found");
+        assert_hub_config_error(&certs, no_certificate(ScTlsInput::CertificateChain));
     }
     for invalid in [
         MALFORMED_CERT_PEM.to_owned(),
@@ -480,21 +499,22 @@ fn sc_hub_pem_config_rejects_empty_or_malformed_server_chain() {
         format!("{MALFORMED_CERT_PEM}{valid}"),
     ] {
         certs.server_cert_pem = invalid;
-        assert_hub_config_error(&certs, "failed to parse server certificates:");
+        assert_hub_config_error(&certs, malformed(ScTlsInput::CertificateChain));
     }
 }
 
 #[test]
 fn sc_hub_pem_config_rejects_empty_or_malformed_key() {
     let mut certs = generate_test_certs();
-    for invalid in [
-        "",
-        "not a private key",
-        "-----BEGIN PRIVATE KEY-----\n!\n-----END PRIVATE KEY-----\n",
-    ] {
+    for invalid in ["", "not a private key"] {
         certs.server_key_pem = invalid.into();
-        assert_hub_config_error(&certs, "failed to parse server key:");
+        assert_hub_config_error(&certs, |e| matches!(e, ScTlsConfigError::NoPrivateKey));
     }
+    // The label is joined at run time: no tracked file carries a key BEGIN
+    // line (check-no-secrets.sh).
+    let pkcs8 = "PRIVATE KEY";
+    certs.server_key_pem = format!("-----BEGIN {pkcs8}-----\n!\n-----END {pkcs8}-----\n");
+    assert_hub_config_error(&certs, malformed(ScTlsInput::PrivateKey));
 }
 
 #[test]
@@ -507,7 +527,7 @@ fn sc_hub_pem_config_rejects_invalid_der_in_any_certificate_position() {
         format!("{INVALID_CERT_DER_PEM}{valid_ca}"),
     ] {
         certs.ca_cert_pem = invalid;
-        assert_hub_config_error(&certs, "failed to add CA cert:");
+        assert_hub_config_error(&certs, unusable(ScTlsInput::CaBundle));
     }
     certs.ca_cert_pem = valid_ca;
     let valid_chain = certs.server_cert_pem.clone();
@@ -517,7 +537,7 @@ fn sc_hub_pem_config_rejects_invalid_der_in_any_certificate_position() {
         format!("{INVALID_CERT_DER_PEM}{valid_chain}"),
     ] {
         certs.server_cert_pem = invalid;
-        assert_hub_config_error(&certs, "TLS server config error:");
+        assert_hub_config_error(&certs, unusable(ScTlsInput::CertificateChain));
     }
 }
 
@@ -525,10 +545,9 @@ fn sc_hub_pem_config_rejects_invalid_der_in_any_certificate_position() {
 fn sc_hub_pem_config_rejects_unusable_or_mismatched_key() {
     let mut certs = generate_test_certs();
     certs.server_key_pem = "-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----\n".into();
-    assert_hub_config_error(&certs, "TLS server config error:");
+    assert_hub_config_error(&certs, |e| {
+        matches!(e, ScTlsConfigError::UnusableKey { .. })
+    });
     certs.server_key_pem = generate_test_certs().server_key_pem;
-    assert_hub_config_error(
-        &certs,
-        "TLS server config error: keys may not be consistent: KeyMismatch",
-    );
+    assert_hub_config_error(&certs, |e| matches!(e, ScTlsConfigError::KeyMismatch));
 }

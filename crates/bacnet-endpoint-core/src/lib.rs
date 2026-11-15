@@ -5,3 +5,4 @@
 pub mod coordinator;
 /// Single-owner network ingress and bounded APDU classification.
 pub mod endpoint_ingress;
+pub mod seat;

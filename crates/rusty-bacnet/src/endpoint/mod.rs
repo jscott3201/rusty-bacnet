@@ -19,6 +19,7 @@ mod mstp;
 mod roles;
 mod sc;
 mod source_audit;
+mod table_reads;
 
 pub(crate) use bip::PyBipEndpoint;
 pub(crate) use mstp::PyMstpEndpoint;
@@ -32,5 +33,7 @@ pub fn register(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()
     m.add_class::<PyMstpEndpoint>()?;
     m.add_class::<PyEndpointClient>()?;
     m.add_class::<PyEndpointServer>()?;
+    // A general target type; the endpoint client is its first user (#2612).
+    m.add_class::<crate::types::PyRoutedTarget>()?;
     Ok(())
 }

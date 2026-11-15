@@ -17,8 +17,7 @@ use tokio_tungstenite::tungstenite::handshake::client::Response;
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_frame::Vmac;
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
-use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
-use bacnet_types::error::Error;
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError, TlsWebSocket};
 
 /// Generated certificate material for testing.
 pub struct CertMaterial {
@@ -237,29 +236,25 @@ pub fn try_make_server_tls_config_mtls(
     Ok(Arc::new(config))
 }
 
-/// Parse in-memory PEM into owned DER and build validated SC hub TLS policy.
+/// Build validated SC hub TLS policy from in-memory PEM.
 ///
 /// Returns configuration errors without binding or performing file/network I/O.
 /// Unlike the raw peer helper, validates every certificate in the hub chain.
-pub fn try_make_hub_tls_config(certs: &CertMaterial) -> Result<ScHubTlsConfig, Error> {
-    let cert_chain = bacnet_transport::sc_tls::pem::certificates(certs.server_cert_pem.as_bytes())
-        .map_err(|e| Error::Encoding(format!("failed to parse server certificates: {e}")))?;
-    let key = bacnet_transport::sc_tls::pem::private_key(certs.server_key_pem.as_bytes())
-        .map_err(|e| Error::Encoding(format!("failed to parse server key: {e}")))?;
-    let ca_certs = bacnet_transport::sc_tls::pem::certificates(certs.ca_cert_pem.as_bytes())
-        .map_err(|e| Error::Encoding(format!("failed to parse CA certificates: {e}")))?;
-    ScHubTlsConfig::from_der(ca_certs, cert_chain, key)
+pub fn try_make_hub_tls_config(certs: &CertMaterial) -> Result<ScHubTlsConfig, ScTlsConfigError> {
+    ScHubTlsConfig::from_pem(
+        certs.ca_cert_pem.as_bytes(),
+        certs.server_cert_pem.as_bytes(),
+        certs.server_key_pem.as_bytes(),
+    )
 }
 
 /// Build the strict local node policy from in-memory PEM, without file/network I/O.
-pub fn try_make_node_tls_config(certs: &CertMaterial) -> Result<ScNodeTlsConfig, Error> {
-    let chain = bacnet_transport::sc_tls::pem::certificates(certs.client_cert_pem.as_bytes())
-        .map_err(|e| Error::Encoding(format!("failed to parse client certificates: {e}")))?;
-    let key = bacnet_transport::sc_tls::pem::private_key(certs.client_key_pem.as_bytes())
-        .map_err(|e| Error::Encoding(format!("failed to parse client key: {e}")))?;
-    let ca = bacnet_transport::sc_tls::pem::certificates(certs.ca_cert_pem.as_bytes())
-        .map_err(|e| Error::Encoding(format!("failed to parse CA certificates: {e}")))?;
-    ScNodeTlsConfig::from_der(ca, chain, key)
+pub fn try_make_node_tls_config(certs: &CertMaterial) -> Result<ScNodeTlsConfig, ScTlsConfigError> {
+    ScNodeTlsConfig::from_pem(
+        certs.ca_cert_pem.as_bytes(),
+        certs.client_cert_pem.as_bytes(),
+        certs.client_key_pem.as_bytes(),
+    )
 }
 
 /// Build a raw rustls ClientConfig with client credentials for independent peers.

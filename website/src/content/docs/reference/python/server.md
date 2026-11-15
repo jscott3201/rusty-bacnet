@@ -18,8 +18,9 @@ BACnet server that hosts objects and responds to client requests.
 For SC, sc\_ca\_cert, sc\_client\_cert, and sc\_client\_key must be nonempty
 paths; omission, None, or empty strings raise ValueError at construction.
 Their None defaults preserve non-SC use and positional layout only.
-start() loads the explicit site CA and operational cert/key before dialing
-or draining registrations. Local TLS configuration errors raise RuntimeError;
+start() loads the explicit site CA and operational cert/key, each file read
+up to 1 MiB, before dialing or draining registrations. Local TLS
+configuration errors, a larger file included, raise RuntimeError;
 repair the files and retry on the same server. Later startup failures do not
 have a general registration rollback guarantee.
 
@@ -2887,8 +2888,8 @@ async with ScHub(..., device_uuid=provisioned_hub_uuid) as hub:
 `ca_cert` must name trusted issuer CA PEM certificates for mutual TLS.
 Omitted, None, or empty values raise ValueError at construction. The None
 default retains the existing positional layout only; there is no insecure
-mode. Invalid/unreadable credentials raise BacnetError from start(), before
-binding. Connections require TLS 1.3 and a valid trusted client certificate.
+mode. Invalid/unreadable credentials, or a file over 1 MiB, raise BacnetError
+from start(), before binding. Connections require TLS 1.3 and a valid trusted client certificate.
 
 `device_uuid` is required, keyword-only and copied from bytes/bytearray into
 owned storage. Missing/None, wrong length or all-zero UUID raises ValueError

@@ -215,7 +215,7 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                 # The Who-Is goes to the BBMD, which hands it to its own
                 # device; the I-Am comes back forwarded.
                 async def discovered():
-                    await client.who_is(3101, 3101)
+                    await client.who_is(low=3101, high=3101)
                     await asyncio.sleep(0.2)
                     return await client.get_device(3101)
                 device = await eventually(discovered)

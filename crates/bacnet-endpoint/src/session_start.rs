@@ -157,6 +157,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             // resolves; its Reporter's health follows at once (#1461).
             let source = source_recipient.as_ref().map(Arc::downgrade);
             let database = self.database.as_ref().map(Arc::downgrade);
+            // A full client on the seat runs no owner of its own: it folds
+            // its table when this one has published (#2617).
+            let seat_number = receivers.seat_number.clone();
             tokio::spawn(async move {
                 let _registration_lease = registration_lease;
                 use bacnet_server::network_number::NumberTurn;
@@ -180,6 +183,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     }
                     let before = egress.local_network_number().get();
                     let reply = owner.handle(control).await;
+                    if egress.local_network_number().get() != before {
+                        seat_number.published();
+                    }
                     let source = source.as_ref().and_then(std::sync::Weak::upgrade);
                     // Held across the lock wait below, so it goes off the
                     // runtime even when the task is aborted there (#1561).
