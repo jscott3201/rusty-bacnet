@@ -361,29 +361,6 @@ pub(crate) fn build_pending_boxes(
     params.iter().map(PendingObject::build).collect()
 }
 
-/// Session cleanup is awaited by the private lifecycle worker, never its waiter.
-impl<T: bacnet_transport::port::TransportPort + 'static> super::lifecycle::Session
-    for bacnet_endpoint::session::EndpointSession<T>
-{
-    type Error = PyErr;
-
-    async fn start(&mut self) -> PyResult<()> {
-        if let Err(error) = self.start().await {
-            // Start errors before role setup leave no spawned transport workers;
-            // role-setup errors already clean up. Settle Running before dropping.
-            if self.is_running() {
-                let _ = self.stop().await;
-            }
-            return Err(to_py_err(error));
-        }
-        Ok(())
-    }
-
-    async fn stop(&mut self) -> PyResult<()> {
-        self.stop().await.map(|_| ()).map_err(to_py_err)
-    }
-}
-
 pub(crate) fn lifecycle_error(error: super::lifecycle::LifecycleError<PyErr>) -> PyErr {
     match error {
         super::lifecycle::LifecycleError::AlreadyStarted => to_py_err(

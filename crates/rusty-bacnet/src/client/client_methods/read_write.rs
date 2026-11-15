@@ -8,6 +8,8 @@ impl BACnetClient {
     ///
     /// Args:
     ///     address: Target device as "ip:port" (e.g. "192.168.1.100:47808")
+    ///         on the local link, or a `RoutedTarget` for a station behind
+    ///         a router (#2617)
     ///     object_id: Target object identifier
     ///     property_id: Property to read
     ///     array_index: Optional array index (for array properties)
@@ -17,23 +19,50 @@ impl BACnetClient {
     fn read_property<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         object_id: PyObjectIdentifier,
         property_id: PyPropertyIdentifier,
         array_index: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let address = routed::Address::of(address)?;
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
 
         crate::py_async::future_into_py(py, async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            let ack = c
-                .read_property(&mac, oid, pid, array_index)
-                .await
-                .map_err(to_py_err)?;
+            let ack = match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.read_property(&mac, oid, pid, array_index).await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let c = high.low_level();
+                    match target.path(&high).await? {
+                        routed::Path::Local(mac) => {
+                            c.read_property(&mac, oid, pid, array_index).await
+                        }
+                        routed::Path::Via {
+                            router,
+                            network,
+                            station,
+                        } => {
+                            c.read_property_routed(
+                                &router,
+                                network,
+                                &station,
+                                oid,
+                                pid,
+                                array_index,
+                            )
+                            .await
+                        }
+                    }
+                }
+            }
+            .map_err(to_py_err)?;
 
             let value = decode_read_ack(&ack).map_err(to_py_err)?;
 
@@ -44,7 +73,8 @@ impl BACnetClient {
     /// Write a property on a remote BACnet device.
     ///
     /// Args:
-    ///     address: Target device as "ip:port"
+    ///     address: Target device as "ip:port" on the local link, or a
+    ///         `RoutedTarget` for a station behind a router (#2617)
     ///     object_id: Target object identifier
     ///     property_id: Property to write
     ///     value: PropertyValue to write (e.g. `PropertyValue.real(72.5)`)
@@ -54,7 +84,7 @@ impl BACnetClient {
     fn write_property<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         object_id: PyObjectIdentifier,
         property_id: PyPropertyIdentifier,
         value: PyPropertyValue,
@@ -62,6 +92,7 @@ impl BACnetClient {
         array_index: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         validate_write_priority(priority)?;
+        let address = routed::Address::of(address)?;
 
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
@@ -70,15 +101,48 @@ impl BACnetClient {
         let prop_value = value.inner;
 
         let future = async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
             // Encode PropertyValue to application-tagged bytes
             let mut value_buf = BytesMut::new();
             encode_property_value(&mut value_buf, &prop_value).map_err(to_py_err)?;
-
-            c.write_property(&mac, oid, pid, array_index, value_buf.to_vec(), priority)
-                .await
-                .map_err(to_py_err)?;
+            let value = value_buf.to_vec();
+            match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.write_property(&mac, oid, pid, array_index, value, priority)
+                        .await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let c = high.low_level();
+                    match target.path(&high).await? {
+                        routed::Path::Local(mac) => {
+                            c.write_property(&mac, oid, pid, array_index, value, priority)
+                                .await
+                        }
+                        path => {
+                            let request = bacnet_services::write_property::WritePropertyRequest {
+                                object_identifier: oid,
+                                property_identifier: pid,
+                                property_array_index: array_index,
+                                property_value: value,
+                                priority,
+                            };
+                            let mut buf = BytesMut::new();
+                            request.encode(&mut buf).map_err(to_py_err)?;
+                            routed::confirmed(
+                                c,
+                                &path,
+                                ConfirmedServiceChoice::WRITE_PROPERTY,
+                                &buf,
+                            )
+                            .await
+                            .map(drop)
+                        }
+                    }
+                }
+            }
+            .map_err(to_py_err)?;
 
             Ok(())
         };
@@ -172,24 +236,56 @@ impl BACnetClient {
     // -----------------------------------------------------------------------
 
     /// Read multiple properties from multiple objects in a single request.
+    /// `address` is a local address or a `RoutedTarget`, as for
+    /// `read_property` (#2617).
     #[pyo3(signature = (address, specs))]
     fn read_property_multiple<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         specs: Vec<PyReadAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let address = routed::Address::of(address)?;
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let rust_specs = py_to_rpm_specs(specs);
 
         crate::py_async::future_into_py(py, async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            let ack = c
-                .read_property_multiple(&mac, rust_specs)
-                .await
-                .map_err(to_py_err)?;
+            let ack = match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.read_property_multiple(&mac, rust_specs).await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let c = high.low_level();
+                    match target.path(&high).await? {
+                        routed::Path::Local(mac) => {
+                            c.read_property_multiple(&mac, rust_specs).await
+                        }
+                        path => {
+                            use bacnet_services::rpm::{
+                                ReadPropertyMultipleACK, ReadPropertyMultipleRequest,
+                            };
+                            let request = ReadPropertyMultipleRequest {
+                                list_of_read_access_specs: rust_specs,
+                            };
+                            let mut buf = BytesMut::new();
+                            request.encode(&mut buf).map_err(to_py_err)?;
+                            routed::confirmed(
+                                c,
+                                &path,
+                                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                                &buf,
+                            )
+                            .await
+                            .and_then(|answer| ReadPropertyMultipleACK::decode(&answer))
+                        }
+                    }
+                }
+            }
+            .map_err(to_py_err)?;
             crate::py_async::attach(|py| rpm_ack_to_py(py, ack))
         })
     }

@@ -145,6 +145,7 @@ impl BACnetClient {
         let min_request_interval_ms = parse_min_request_interval_ms(min_request_interval_ms)?;
         Ok(Self {
             inner: Arc::new(state::ClientState::default()),
+            seated: false,
             transport_type: transport.to_string(),
             interface: interface.to_string(),
             port,
@@ -191,11 +192,19 @@ impl BACnetClient {
         })
     }
 
-    /// Start the client (called by `async with`).
+    /// Start the client (called by `async with`). A client from
+    /// `endpoint.client()` is already started on the endpoint's link: this
+    /// only enters it, and raises RuntimeError once it is stopped (#2617).
     fn __aenter__<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::logging_bridge::refresh_at_start(py);
         let self_ref = slf.clone().unbind();
         let inner = slf.borrow().inner.clone();
+        if slf.borrow().seated {
+            return crate::py_async::future_into_py(py, async move {
+                drop(started(&inner).await?);
+                Ok(self_ref)
+            });
+        }
         let transport_type = slf.borrow().transport_type.clone();
         let interface_str = slf.borrow().interface.clone();
         let port = slf.borrow().port;
@@ -381,6 +390,8 @@ impl BACnetClient {
     ///
     /// Cancelling this Future leaves shutdown running. A later stop joins that
     /// same task. Draining depends on request completion or cancellation.
+    /// On a client from `endpoint.client()` this ends the client role alone:
+    /// the endpoint keeps its link and its server role (#2617).
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_async::future_into_py(py, crate::unit_result(state::close(self.inner.clone())))
     }

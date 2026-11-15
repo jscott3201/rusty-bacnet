@@ -58,7 +58,7 @@ impl Started {
 
 /// One binding owner, including an independently owned shutdown task.
 #[derive(Default)]
-pub(super) struct ClientState {
+pub(crate) struct ClientState {
     pub(super) frames: crate::frames::FrameSubscriptions,
     client: RwLock<Option<Started>>,
     closing: AtomicBool,
@@ -81,6 +81,62 @@ pub(super) struct ClientState {
     /// `Device`'s drop removes its entry without waiting.
     handles: std::sync::Mutex<HashMap<HandleId, OpsDevice>>,
     next_handle: AtomicU64,
+    /// A client on an endpoint's link (#2617), which its endpoint starts
+    /// and which can't be started again once stopped.
+    seated: bool,
+}
+
+/// Where a client on an endpoint's link stands, for the endpoint deciding
+/// whether `endpoint.client()` hands it out again (#2617).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Liveness {
+    /// Started: calls go through.
+    Started,
+    /// A stop is admitted or running: the Rust client may still hold the
+    /// endpoint's seat.
+    Stopping,
+    /// Stopped: the Rust client, and with it the seat, is gone.
+    Stopped,
+}
+
+impl ClientState {
+    /// The state of a client on an endpoint's link (#2617), empty until
+    /// [`Self::seat`] puts the endpoint's full client in it.
+    pub(super) fn seated() -> Self {
+        Self {
+            seated: true,
+            ..Self::default()
+        }
+    }
+
+    /// Start this seated state on `core`, the endpoint session's full
+    /// client, with the high-level client over it that the standalone one
+    /// has: the default write policy, and a bare instance asked for on this
+    /// network alone. Called once, before the Python object is handed out,
+    /// so the slot is never contended; `false` if it was already filled.
+    pub(crate) fn seat(&self, core: CoreClient) -> bool {
+        match self.client.try_write() {
+            Ok(mut slot) if slot.is_none() => {
+                *slot = Some(Started::new(core, bacnet_ops::WritePolicy::default(), None));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Where this client stands; see [`Liveness`]. Sends nothing and waits
+    /// for nothing.
+    pub(crate) fn liveness(&self) -> Liveness {
+        if self.closing.load(Ordering::Acquire) {
+            return Liveness::Stopping;
+        }
+        match self.client.try_read() {
+            Ok(slot) if slot.is_some() => Liveness::Started,
+            Ok(_) => Liveness::Stopped,
+            // A writer holds or awaits the slot: a stop has begun.
+            Err(_) => Liveness::Stopping,
+        }
+    }
 }
 
 /// What names one Python `Device`'s handle among its client's.
@@ -180,7 +236,6 @@ impl ClientState {
 fn closing() -> pyo3::PyErr {
     PyRuntimeError::new_err("client closing — await stop() before starting new work")
 }
-
 /// Take `guard`, a lock on the client slot, unless close is admitted first
 /// or meanwhile. A pending entry holds the slot exclusively until it
 /// finishes, and close waits for it; an operation queued behind it still
@@ -211,7 +266,14 @@ async fn admitted<G>(inner: &ClientInner, guard: impl Future<Output = G>) -> PyR
     }
 }
 
-fn not_started() -> pyo3::PyErr {
+fn not_started(inner: &ClientInner) -> pyo3::PyErr {
+    if inner.seated {
+        // Its endpoint started it; once stopped it is done (#2617).
+        return PyRuntimeError::new_err(
+            "this client ran on an endpoint and is stopped, or its endpoint is: ask the \
+             running endpoint for another with 'await endpoint.client()'",
+        );
+    }
     PyRuntimeError::new_err("client not started — use 'async with'")
 }
 
@@ -219,7 +281,7 @@ fn not_started() -> pyo3::PyErr {
 pub(super) async fn started(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_, CoreClient>> {
     let guard = admitted(inner, inner.client.read()).await?;
     RwLockReadGuard::try_map(guard, |slot| slot.as_ref().map(|started| &*started.core))
-        .map_err(|_| not_started())
+        .map_err(|_| not_started(inner))
 }
 
 /// [`started`] for a call through the high-level client: the same lease,
@@ -228,7 +290,7 @@ pub(super) async fn started(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_,
 pub(crate) async fn high_level(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_, OpsClient>> {
     let guard = admitted(inner, inner.client.read()).await?;
     RwLockReadGuard::try_map(guard, |slot| slot.as_ref().and_then(|s| s.high.as_ref()))
-        .map_err(|_| not_started())
+        .map_err(|_| not_started(inner))
 }
 
 /// Keep entry exclusive through preparation and publication. A dropped startup
@@ -246,7 +308,9 @@ pub(super) async fn starting(
 /// Close admission, drain read leases, then join native teardown. The retained
 /// task survives cancellation of its Python waiter, including while core stop
 /// temporarily owns lower-layer joins. A later close joins that same task.
-pub(super) async fn close(inner: ClientInner) -> PyResult<()> {
+/// An endpoint ends the client on its link this way too (#2617): dropping
+/// the Rust client frees the endpoint's seat.
+pub(crate) async fn close(inner: ClientInner) -> PyResult<()> {
     let mut shutdown = inner.shutdown.lock().await;
     if shutdown.is_none() {
         // No await separates admission closure from storing the task. A waiter
