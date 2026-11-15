@@ -54,7 +54,7 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
     async def test_tables_read_as_the_standalone_client_reads_them(self):
         address = await self.bbmd(bdt=[("127.0.0.2:47808", "255.255.255.0")],
                                   accept_foreign_devices=True, management_acl=["127.0.0.1"])
-        async with rb.BACnetClient(interface="127.0.0.1", port=0) as client:
+        async with rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1") as client:
             rows = await asyncio.wait_for(self.endpoint.read_bdt(address), 10)
             self.assertIn(("127.0.0.2:47808", "255.255.255.0"), rows)
             self.assertEqual(rows, await client.read_bdt(address))
@@ -67,7 +67,7 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_nak_keeps_its_code_apart_from_silence(self):
         # A node that is no BBMD refuses the table reads.
-        plain = rb.BACnetServer(BBMD, interface="127.0.0.1", port=0)
+        plain = rb.BACnetServer(BBMD, interface="127.0.0.1", port=0, broadcast_address="127.0.0.1")
         await asyncio.wait_for(plain.start(), 10)
         self.addAsyncCleanup(finish, plain.stop)
         with self.assertRaises(rb.BacnetBvlcNakError) as caught:
@@ -107,7 +107,7 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
                 while not held:
                     await asyncio.sleep(0.01)
             device = rb.ObjectIdentifier(O.DEVICE, ENDPOINT)
-            async with rb.BACnetClient(interface="127.0.0.1", port=0) as second:
+            async with rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1") as second:
                 names = [second.read_property(self.local, device, P.OBJECT_NAME)
                          for _ in range(10)]
                 rows, entries, *names = await asyncio.wait_for(asyncio.gather(
@@ -199,7 +199,8 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
             for bad in ("not an address", "0.0.0.0:47808", "127.0.0.1:0", "255.255.255.255"):
                 with self.subTest(method=name, address=bad), self.assertRaises(ValueError):
                     method(bad)
-        unstarted = rb.BipEndpoint(ENDPOINT, interface="127.0.0.1", port=0)
+        unstarted = rb.BipEndpoint(ENDPOINT, interface="127.0.0.1", port=0,
+                                broadcast_address="127.0.0.1")
         await self.endpoint.close()
         for owner in (unstarted, self.endpoint):
             for name in ("read_bdt", "read_fdt"):

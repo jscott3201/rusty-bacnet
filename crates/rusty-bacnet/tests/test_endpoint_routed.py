@@ -429,7 +429,7 @@ class EndpointRoutedRouterTests(unittest.IsolatedAsyncioTestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
             for _ in range(NOTIFICATIONS):
                 peer.sendto(FRAME, (ip, int(number)))
-        async with rb.BACnetClient(interface="127.0.0.1", port=0) as client:
+        async with rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1") as client:
             async with asyncio.timeout(5):
                 while (await client.read_range(self.far_address, LOG, P.LOG_BUFFER)
                        )["item_count"] < NOTIFICATIONS:
@@ -511,7 +511,8 @@ class EndpointRoutedRouterTests(unittest.IsolatedAsyncioTestCase):
     async def test_routed_reads_are_audited_naming_the_station(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        sink = rb.BACnetServer(SINK, interface="127.0.0.1", port=0)
+        sink = rb.BACnetServer(SINK, interface="127.0.0.1", port=0,
+                              broadcast_address="127.0.0.1")
         sink.add_audit_log(1, "sink", str(Path(directory.name) / "audit"), buffer_size=32)
         sink.configure_audit_notification_sink(1, policy="allow_all")
         await asyncio.wait_for(sink.start(), 10)
@@ -534,7 +535,7 @@ class EndpointRoutedRouterTests(unittest.IsolatedAsyncioTestCase):
                  "query_parameters": {"kind": "by_source", "successful_actions_only": 0,
                                       "source_device_identifier": rb.ObjectIdentifier(O.DEVICE, NEAR)},
                  "requested_count": 32}
-        async with endpoint, rb.BACnetClient(interface="127.0.0.1", port=0) as client:
+        async with endpoint, rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1") as client:
             await accepted_registration(endpoint)
             role = await endpoint.client()
             await role.read_property(self.target, AI_1, P.PRESENT_VALUE)
