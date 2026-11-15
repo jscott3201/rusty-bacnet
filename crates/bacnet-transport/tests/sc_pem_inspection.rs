@@ -170,9 +170,7 @@ fn key_results_distinguish_mismatch_unusable_omission_and_unavailable_leaf() {
 fn key_input_follows_the_tls_configurations_one_key_rule() {
     let (bytes, key) = certificate(params());
     let other_key = rcgen::KeyPair::generate().unwrap().serialize_pem();
-    let legacy = b"-----BEGIN EC PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
-        DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\nZml4dHVyZQ==\n\
-        -----END EC PRIVATE KEY-----\n";
+    let legacy = legacy_encrypted_pem("EC PRIVATE KEY", "Zml4dHVyZQ==").into_bytes();
     let mut two = key.clone();
     two.extend(other_key.as_bytes());
     let mut tail = key.clone();

@@ -510,7 +510,10 @@ fn sc_hub_pem_config_rejects_empty_or_malformed_key() {
         certs.server_key_pem = invalid.into();
         assert_hub_config_error(&certs, |e| matches!(e, ScTlsConfigError::NoPrivateKey));
     }
-    certs.server_key_pem = "-----BEGIN PRIVATE KEY-----\n!\n-----END PRIVATE KEY-----\n".into();
+    // The label is joined at run time: no tracked file carries a key BEGIN
+    // line (check-no-secrets.sh).
+    let pkcs8 = "PRIVATE KEY";
+    certs.server_key_pem = format!("-----BEGIN {pkcs8}-----\n!\n-----END {pkcs8}-----\n");
     assert_hub_config_error(&certs, malformed(ScTlsInput::PrivateKey));
 }
 

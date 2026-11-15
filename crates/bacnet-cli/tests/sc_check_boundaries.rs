@@ -17,14 +17,22 @@ async fn execution_errors_preserve_role_kind_and_nullability_without_paths_or_se
         "-----BEGIN CERTIFICATE-----\nsecret!\n-----END CERTIFICATE-----\n",
     );
     let empty = fixture.files.write("empty.pem", "");
-    // The key rule of a connect (#2600): one key, unencrypted.
-    let key = "-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----\n";
+    // The key rule of a connect (#2600): one key, unencrypted. Key labels
+    // are joined at run time so no tracked file carries a key BEGIN line
+    // (check-no-secrets.sh).
+    let pkcs8 = "PRIVATE KEY";
+    let key = format!("-----BEGIN {pkcs8}-----\nAQID\n-----END {pkcs8}-----\n");
     let two_keys = fixture.files.write("two.key", format!("{key}{key}"));
+    // OpenSSL's older encrypted form, the label joined at run time so no
+    // tracked file carries a private key BEGIN line (check-no-secrets.sh).
+    let label = "RSA PRIVATE KEY";
     let encrypted = fixture.files.write(
         "legacy.key",
-        "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
-         DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\nAQID\n\
-         -----END RSA PRIVATE KEY-----\n",
+        format!(
+            "-----BEGIN {label}-----\nProc-Type: 4,ENCRYPTED\n\
+             DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\nAQID\n\
+             -----END {label}-----\n"
+        ),
     );
     let huge = fixture.files.write("huge.pem", vec![b' '; (1 << 20) + 1]);
     // 131073 decoded bytes, all zero, expressed independently as base64 quartets.

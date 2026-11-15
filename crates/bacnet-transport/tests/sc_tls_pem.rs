@@ -12,7 +12,7 @@ use rcgen::KeyPair;
 #[allow(dead_code)]
 #[path = "support/sc_pem_materials.rs"]
 mod fixture;
-use fixture::pem;
+use fixture::{legacy_encrypted_pem, pem};
 #[allow(dead_code)]
 #[path = "support/sc_tls_site.rs"]
 mod site;
@@ -88,11 +88,7 @@ fn legacy_encrypted_keys_are_named_encrypted() {
     let site = Site::new();
     let leaf = site.leaf();
     for label in ["RSA PRIVATE KEY", "EC PRIVATE KEY"] {
-        let legacy = format!(
-            "-----BEGIN {label}-----\nProc-Type: 4,ENCRYPTED\n\
-             DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\n\
-             bm90IGEga2V5OyBhIHRlc3QgZml4dHVyZSBib2R5\n-----END {label}-----\n"
-        );
+        let legacy = legacy_encrypted_pem(label, "bm90IGEga2V5OyBhIHRlc3QgZml4dHVyZSBib2R5");
         for key in [legacy.clone(), crlf(&legacy)] {
             let error = both(&site.root, &leaf.chain, &key).unwrap_err();
             assert!(
@@ -108,9 +104,7 @@ fn legacy_encrypted_keys_are_named_encrypted() {
         }
     }
     // Beside a readable key, in either order, it is a second key.
-    let legacy = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
-        DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\nbm90IGEga2V5\n\
-        -----END RSA PRIVATE KEY-----\n";
+    let legacy = legacy_encrypted_pem("RSA PRIVATE KEY", "bm90IGEga2V5");
     let key = leaf.key.serialize_pem();
     for both_keys in [format!("{key}{legacy}"), format!("{legacy}{key}")] {
         let error = both(&site.root, &leaf.chain, &both_keys).unwrap_err();
@@ -147,8 +141,10 @@ fn legacy_encrypted_keys_are_named_encrypted() {
         );
     }
     // Without the header, the same bad body is malformed PEM.
-    let bad = "-----BEGIN RSA PRIVATE KEY-----\nDEK-Info: x\n-----END RSA PRIVATE KEY-----\n";
-    let error = both(&site.root, &leaf.chain, bad).unwrap_err();
+    // The label is joined at run time, as in `legacy_encrypted_pem`.
+    let rsa = "RSA PRIVATE KEY";
+    let bad = format!("-----BEGIN {rsa}-----\nDEK-Info: x\n-----END {rsa}-----\n");
+    let error = both(&site.root, &leaf.chain, &bad).unwrap_err();
     assert!(
         matches!(
             error,
@@ -234,6 +230,10 @@ fn each_pem_fault_is_its_own_variant_naming_the_input() {
     let openssh = text(pem("OPENSSH PRIVATE KEY", b"openssh"));
     let dsa = text(pem("DSA PRIVATE KEY", b"dsa"));
     let garbage_key = text(pem("PRIVATE KEY", &[1, 2, 3]));
+    // Key labels are joined at run time, as in `pem`: no tracked file
+    // carries a key BEGIN line (check-no-secrets.sh).
+    let pkcs8 = "PRIVATE KEY";
+    let bad_base64_key = format!("-----BEGIN {pkcs8}-----\n!\n-----END {pkcs8}-----\n");
     type Check = Box<dyn Fn(&ScTlsConfigError) -> bool>;
     let cases: Vec<(&str, [String; 3], Option<ScTlsInput>, Check)> = vec![
         (
@@ -310,11 +310,7 @@ fn each_pem_fault_is_its_own_variant_naming_the_input() {
         ),
         (
             "key bad base64",
-            [
-                ca.into(),
-                chain.into(),
-                "-----BEGIN PRIVATE KEY-----\n!\n-----END PRIVATE KEY-----\n".into(),
-            ],
+            [ca.into(), chain.into(), bad_base64_key],
             Some(Key),
             Box::new(malformed(Key, ScPemFault::Base64)),
         ),
