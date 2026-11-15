@@ -121,7 +121,8 @@ impl ScHubTlsConfig {
     /// Build the policy from PEM text: a CA bundle, the hub's chain (leaf
     /// first), and exactly one unencrypted PKCS#8, SEC1 or PKCS#1 private
     /// key, decoded as [`ScNodeTlsConfig::from_pem`] decodes them, then
-    /// checked as [`Self::from_der`] checks.
+    /// checked as [`Self::from_der`] checks. Keys and `X509 CRL` sections in
+    /// the CA bundle or chain are skipped, so no revocation list applies.
     ///
     /// [`ScNodeTlsConfig::from_pem`]: crate::sc_tls::ScNodeTlsConfig::from_pem
     pub fn from_pem(
@@ -134,7 +135,8 @@ impl ScHubTlsConfig {
 
     /// Read three PEM files and build the policy as [`Self::from_pem`]
     /// does. The CA bundle is read and checked before the identity files
-    /// are read; each file is read once, here.
+    /// are read; each file is read once, here, up to
+    /// [`MAX_PEM_FILE_BYTES`](crate::sc_tls::MAX_PEM_FILE_BYTES).
     pub fn from_pem_files(
         ca_bundle: impl AsRef<Path>,
         cert_chain: impl AsRef<Path>,

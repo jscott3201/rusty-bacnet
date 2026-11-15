@@ -253,7 +253,7 @@ impl Bip6Connect {
 mod sc {
     use bacnet_client::client::ScClientBuilder;
     use bacnet_transport::sc::ScReconnectConfig;
-    use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError};
+    use bacnet_transport::sc_tls::ScNodeTlsConfig;
 
     use super::*;
 
@@ -264,10 +264,11 @@ mod sc {
         /// [`ScNodeTlsConfig::from_pem_files`], from PEM in memory with
         /// `from_pem`, or from DER with `from_der`. It needs its VMAC and
         /// device UUID too ([`ScConnect::vmac`], [`ScConnect::device_uuid`]).
+        /// TLS material the configuration refuses reaches an [`OpsError`]
+        /// by `?` as [`OpsError::Tls`], naming the file at fault.
         ///
         /// ```no_run
-        /// use bacnet_ops::Client;
-        /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
+        /// use bacnet_ops::{Client, ScNodeTlsConfig};
         /// # async fn example() -> Result<(), bacnet_ops::OpsError> {
         /// let tls = ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")?;
         /// let client = Client::sc("wss://hub.example.com/bacnet", tls)
@@ -283,16 +284,6 @@ mod sc {
                 builder: BACnetClient::sc_builder().hub_url(hub_url).tls_config(tls),
                 kept: Kept::default(),
             }
-        }
-    }
-
-    impl From<ScTlsConfigError> for OpsError {
-        /// TLS material the SC configuration refused, as
-        /// [`OpsError::Client`] with its text, so `?` on
-        /// [`ScNodeTlsConfig::from_pem_files`] reaches an `OpsError`. The
-        /// constructor's own [`ScTlsConfigError`] says which input failed.
-        fn from(error: ScTlsConfigError) -> Self {
-            Self::Client(error.into())
         }
     }
 

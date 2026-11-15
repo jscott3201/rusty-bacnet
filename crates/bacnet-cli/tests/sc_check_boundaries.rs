@@ -17,6 +17,15 @@ async fn execution_errors_preserve_role_kind_and_nullability_without_paths_or_se
         "-----BEGIN CERTIFICATE-----\nsecret!\n-----END CERTIFICATE-----\n",
     );
     let empty = fixture.files.write("empty.pem", "");
+    // The key rule of a connect (#2600): one key, unencrypted.
+    let key = "-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----\n";
+    let two_keys = fixture.files.write("two.key", format!("{key}{key}"));
+    let encrypted = fixture.files.write(
+        "legacy.key",
+        "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+         DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\nAQID\n\
+         -----END RSA PRIVATE KEY-----\n",
+    );
     let huge = fixture.files.write("huge.pem", vec![b' '; (1 << 20) + 1]);
     // 131073 decoded bytes, all zero, expressed independently as base64 quartets.
     let large_cert = fixture.files.write(
@@ -43,6 +52,22 @@ async fn execution_errors_preserve_role_kind_and_nullability_without_paths_or_se
             "private_key",
             "input",
             Some("missing_private_key"),
+            None,
+        ),
+        (
+            "--sc-key",
+            &two_keys,
+            "private_key",
+            "input",
+            Some("multiple_private_keys"),
+            None,
+        ),
+        (
+            "--sc-key",
+            &encrypted,
+            "private_key",
+            "input",
+            Some("unsupported_private_key"),
             None,
         ),
         (

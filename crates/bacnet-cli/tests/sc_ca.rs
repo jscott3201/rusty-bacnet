@@ -87,8 +87,10 @@ async fn invalid_local_files_never_reach_live_listener() {
             path.display()
         );
     }
-    // The pre-dial credential lint (#968) explains what the TLS
-    // configuration would otherwise refuse with a terser error.
+    // A file that can't be decoded is refused by the TLS configuration,
+    // led by its flag (#2600); a certificate or key that decodes but can't
+    // be used is left to the pre-dial credential lint (#968), which explains
+    // it better.
     for (name, contents, diagnostic) in [
         (
             "operational é.pem",

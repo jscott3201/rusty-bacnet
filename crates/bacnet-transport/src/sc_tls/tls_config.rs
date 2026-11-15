@@ -89,9 +89,17 @@ impl ScNodeTlsConfig {
 
     /// Build the policy from PEM text: a CA bundle, this node's chain (leaf
     /// first), and exactly one unencrypted PKCS#8, SEC1 or PKCS#1 private
-    /// key. Text outside the PEM sections is ignored, CRLF line ends are
-    /// taken, and sections of other kinds are skipped (the key may share a
-    /// file with certificates). Then checked as [`Self::from_der`] checks.
+    /// key, in PEM that is well formed throughout. Then checked as
+    /// [`Self::from_der`] checks.
+    ///
+    /// Text outside the PEM sections is ignored and CRLF line ends are
+    /// taken. The CA bundle and chain take `CERTIFICATE` sections and skip
+    /// every other kind: a key beside them is skipped, and so is an
+    /// `X509 CRL`, so a bundle's revocation lists are not applied (no
+    /// revocation checking is done). An input whose only certificates are
+    /// OpenSSL `TRUSTED CERTIFICATE` or PKCS#7 sections is refused as
+    /// [`ScTlsConfigError::UnsupportedCertificate`]. The key input skips
+    /// certificates and EC parameters, so a key may share a file with them.
     pub fn from_pem(
         ca_bundle: &[u8],
         cert_chain: &[u8],
@@ -102,8 +110,9 @@ impl ScNodeTlsConfig {
 
     /// Read three PEM files and build the policy as [`Self::from_pem`]
     /// does. The CA bundle is read and checked before the identity files
-    /// are read. The files are read once, here: a later change to them
-    /// takes a new configuration.
+    /// are read. Each file is read once, here, up to
+    /// [`MAX_PEM_FILE_BYTES`](super::MAX_PEM_FILE_BYTES); a later change to
+    /// them takes a new configuration.
     ///
     /// ```no_run
     /// use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError};

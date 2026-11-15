@@ -163,6 +163,51 @@ fn key_results_distinguish_mismatch_unusable_omission_and_unavailable_leaf() {
     );
 }
 
+/// The inspection decodes the key by the TLS configurations' rule (#2600):
+/// two keys, an encrypted key in either form, and a malformed section after
+/// a good key are refused, as a connect refuses them.
+#[test]
+fn key_input_follows_the_tls_configurations_one_key_rule() {
+    let (bytes, key) = certificate(params());
+    let other_key = rcgen::KeyPair::generate().unwrap().serialize_pem();
+    let legacy = b"-----BEGIN EC PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+        DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\nZml4dHVyZQ==\n\
+        -----END EC PRIVATE KEY-----\n";
+    let mut two = key.clone();
+    two.extend(other_key.as_bytes());
+    let mut tail = key.clone();
+    tail.extend(b"-----BEGIN SECRET invalid\n");
+    for (name, input, expected) in [
+        ("two keys", two, ScInputErrorKind::MultiplePrivateKeys),
+        (
+            "encrypted PKCS#8",
+            pem("ENCRYPTED PRIVATE KEY", b"sealed"),
+            ScInputErrorKind::UnsupportedPrivateKey,
+        ),
+        (
+            "legacy encrypted",
+            legacy.to_vec(),
+            ScInputErrorKind::UnsupportedPrivateKey,
+        ),
+        ("malformed tail", tail, ScInputErrorKind::MalformedPem),
+        (
+            "no key",
+            pem("CERTIFICATE", b"abc"),
+            ScInputErrorKind::MissingPrivateKey,
+        ),
+    ] {
+        let error = inspect_sc_pem(&bytes, None, Some(&input), Some(NOW)).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ScInspectionError::Input { role: ScInputRole::PrivateKey, kind, .. }
+                    if kind == expected
+            ),
+            "{name}: {error:?}"
+        );
+    }
+}
+
 #[test]
 fn malformed_and_duplicate_extensions_are_never_absent_or_silently_valid() {
     use ScFindingArea::{ExtendedKeyUsage, KeyUsage, San};

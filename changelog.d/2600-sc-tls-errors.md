@@ -1,4 +1,4 @@
 ---
 section: Changed
 ---
-- **Breaking (Rust API):** `ScNodeTlsConfig::from_der` and `ScHubTlsConfig::from_der` return `ScTlsConfigError` instead of `Error::Encoding`, and `bacnet_transport::sc_tls::pem` is no longer public; an SC key file must hold exactly one private key (#2600).
+- **Breaking (Rust API):** `from_der` on both SC TLS configurations returns `ScTlsConfigError`, not `Error::Encoding`, and `sc_tls::pem` is private. A key file must hold exactly one key in PEM well formed throughout, for connects and `bacnet sc-check` alike (#2600).

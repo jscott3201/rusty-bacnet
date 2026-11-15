@@ -2147,8 +2147,11 @@ unusable CA PEM, and invalid or mismatched local cert/key before DNS/TCP dialing
 The files load through `ScNodeTlsConfig::from_pem_files` (#2600), and each
 refusal starts with the flag of the file at fault (`--sc-ca: the CA bundle holds
 no certificate, so nothing would be trusted`, `--sc-key: no PKCS#8, SEC1 or
-PKCS#1 private key found`). The key file must hold exactly one unencrypted
-PKCS#8, SEC1 or PKCS#1 key; an encrypted or OpenSSH key is named as such.
+PKCS#1 private key found`). Each file is read up to 1 MiB. The key file must
+hold exactly one unencrypted PKCS#8, SEC1 or PKCS#1 key, in PEM that is well
+formed throughout; an encrypted key (`ENCRYPTED PRIVATE KEY`, or OpenSSL's
+older `Proc-Type: 4,ENCRYPTED` form) and an OpenSSH key are named as such, and
+`bacnet sc-check` decodes the key by the same rule.
 Failures retain nonzero exit status and stderr diagnostics, not a successful JSON
 result. SC tracing (including connection-close warnings) also goes to stderr so
 it cannot corrupt JSON stdout. Before any DNS or TCP, the credential lint of

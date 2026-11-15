@@ -137,7 +137,8 @@ fn the_sc_builder_takes_its_settings() {
 #[cfg(feature = "sc-tls")]
 #[test]
 fn sc_tls_material_errors_convert_for_the_sc_builder() {
-    use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    use crate::{ScNodeTlsConfig, ScTlsConfigError, ScTlsInput};
+    use std::error::Error as _;
     fn load(dir: &std::path::Path) -> Result<ScNodeTlsConfig, OpsError> {
         Ok(ScNodeTlsConfig::from_pem_files(
             dir.join("site-ca.pem"),
@@ -146,13 +147,34 @@ fn sc_tls_material_errors_convert_for_the_sc_builder() {
         )?)
     }
     let error = load(std::path::Path::new("/no-such-bacnet-dir")).unwrap_err();
-    assert!(matches!(error, OpsError::Client(_)), "{error:?}");
+    let OpsError::Tls(tls) = &error else {
+        panic!("expected OpsError::Tls, got {error:?}");
+    };
+    assert!(
+        matches!(
+            tls,
+            ScTlsConfigError::Read {
+                input: ScTlsInput::CaBundle,
+                ..
+            }
+        ),
+        "{tls:?}"
+    );
+    // The text is the configuration's, and the chain goes on to its cause
+    // (the operating system's error), as for the client's errors.
+    assert_eq!(error.to_string(), tls.to_string());
     assert!(
         error
             .to_string()
             .contains("CA bundle file /no-such-bacnet-dir"),
         "{error}"
     );
+    assert_eq!(
+        error.source().map(ToString::to_string),
+        tls.source().map(ToString::to_string)
+    );
+    assert!(!error.unreachable() && !error.timed_out());
+    assert!(error.remote().is_none() && error.written().is_none());
 }
 
 /// The MS/TP builder checks its settings before it opens the port, then

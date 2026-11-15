@@ -9,7 +9,7 @@
 //! (an empty chain, no key or two keys are decoding faults) before either is
 //! checked as DER.
 
-use std::{path::Path, sync::Arc};
+use std::{fs::File, io::Read, path::Path, sync::Arc};
 
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::pem::{PemObject, SectionKind};
@@ -18,7 +18,13 @@ use rustls::pki_types::{
 };
 use rustls::{InconsistentKeys, RootCertStore};
 
-use super::config_error::{ScKeyForm, ScPemFault, ScTlsConfigError, ScTlsInput};
+use super::config_error::{ScCertificateForm, ScKeyForm, ScPemFault, ScTlsConfigError, ScTlsInput};
+
+/// The largest file the `from_pem_files` constructors read, in bytes:
+/// 1 MiB, several times a public CA bundle of every root. Reading stops at
+/// the limit, so a device or pipe that never ends is refused rather than
+/// read forever.
+pub const MAX_PEM_FILE_BYTES: usize = 1024 * 1024;
 
 /// Material every check passed: explicit trust, a leaf-first chain rustls
 /// can use, the leaf's own key, and the fixed provider to build with.
@@ -133,12 +139,27 @@ pub(crate) fn verifier_refused(error: rustls::client::VerifierBuilderError) -> S
     }
 }
 
+/// The file at `path`, read up to [`MAX_PEM_FILE_BYTES`] and one byte more.
 fn read(path: &Path, input: ScTlsInput) -> Result<Vec<u8>, ScTlsConfigError> {
-    std::fs::read(path).map_err(|source| ScTlsConfigError::Read {
+    let failed = |source| ScTlsConfigError::Read {
         input,
         path: path.to_path_buf(),
         source,
-    })
+    };
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(failed)?
+        .take(MAX_PEM_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    if bytes.len() > MAX_PEM_FILE_BYTES {
+        return Err(ScTlsConfigError::TooLarge {
+            input,
+            path: path.to_path_buf(),
+            limit: MAX_PEM_FILE_BYTES,
+        });
+    }
+    Ok(bytes)
 }
 
 fn malformed(input: ScTlsInput, error: &rustls::pki_types::pem::Error) -> ScTlsConfigError {
@@ -172,6 +193,20 @@ fn nonempty(roots: RootCertStore) -> Result<RootCertStore, ScTlsConfigError> {
     Ok(roots)
 }
 
+/// Why `input`'s PEM held no certificate: only certificates in a container
+/// this stack doesn't read, or none at all.
+fn no_certificate(pem: &[u8], input: ScTlsInput) -> ScTlsConfigError {
+    let form = labels(pem).find_map(|label| match label {
+        b"TRUSTED CERTIFICATE" => Some(ScCertificateForm::Trusted),
+        b"PKCS7" | b"CMS" => Some(ScCertificateForm::Pkcs7),
+        _ => None,
+    });
+    match form {
+        Some(form) => ScTlsConfigError::UnsupportedCertificate { input, form },
+        None => ScTlsConfigError::NoCertificate { input },
+    }
+}
+
 /// The bundle's certificates as trust anchors, each checked as it is
 /// decoded: a later block is not decoded before an earlier one passed.
 fn trust_pem(pem: &[u8]) -> Result<RootCertStore, ScTlsConfigError> {
@@ -180,7 +215,10 @@ fn trust_pem(pem: &[u8]) -> Result<RootCertStore, ScTlsConfigError> {
         let cert = cert.map_err(|error| malformed(ScTlsInput::CaBundle, &error))?;
         trust(&mut roots, index, cert)?;
     }
-    nonempty(roots)
+    if roots.is_empty() {
+        return Err(no_certificate(pem, ScTlsInput::CaBundle));
+    }
+    Ok(roots)
 }
 
 /// The chain's certificates, in order and at least one; sections of other
@@ -190,21 +228,34 @@ fn certificates(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>, ScTlsConfigE
         .collect::<Result<_, _>>()
         .map_err(|error| malformed(ScTlsInput::CertificateChain, &error))?;
     if chain.is_empty() {
-        return Err(ScTlsConfigError::NoCertificate {
-            input: ScTlsInput::CertificateChain,
-        });
+        return Err(no_certificate(pem, ScTlsInput::CertificateChain));
     }
     Ok(chain)
 }
 
-/// The one private key in `pem`. Every section is decoded, so a second key
-/// or a malformed section anywhere is refused; certificates beside the key
-/// are skipped.
-fn single_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>, ScTlsConfigError> {
+/// The one private key in `pem`, the rule both the TLS configurations and
+/// the offline inspection apply. Every section is decoded, so a second key
+/// or a malformed section anywhere is refused; certificates and parameters
+/// beside the key are skipped.
+pub(crate) fn single_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>, ScTlsConfigError> {
     let mut first = None;
     let mut readable = 0usize;
     for section in <(SectionKind, Vec<u8>)>::pem_slice_iter(pem) {
-        let (kind, der) = section.map_err(|error| malformed(ScTlsInput::PrivateKey, &error))?;
+        let (kind, der) = section.map_err(|error| {
+            // OpenSSL's older encrypted keys keep the SEC1 or PKCS#1 label
+            // and put RFC 1421 headers before the body, which then isn't
+            // base64.
+            let fault = ScPemFault::of(&error);
+            if fault == ScPemFault::Base64 && legacy_encrypted(pem) {
+                return ScTlsConfigError::UnsupportedKey {
+                    form: ScKeyForm::Encrypted,
+                };
+            }
+            ScTlsConfigError::MalformedPem {
+                input: ScTlsInput::PrivateKey,
+                fault,
+            }
+        })?;
         let key = match kind {
             SectionKind::PrivateKey => PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der)),
             SectionKind::EcPrivateKey => PrivateKeyDer::Sec1(PrivateSec1KeyDer::from(der)),
@@ -226,20 +277,36 @@ fn single_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>, ScTlsConfigError> {
 }
 
 /// The private key sections the PEM parser skips, by the label of their
-/// `BEGIN` line. Reads labels only, never a section's body.
+/// `BEGIN` line.
 fn unreadable_keys(pem: &[u8]) -> impl Iterator<Item = ScKeyForm> + '_ {
+    labels(pem).filter_map(|label| match label {
+        b"PRIVATE KEY" | b"EC PRIVATE KEY" | b"RSA PRIVATE KEY" => None,
+        b"ENCRYPTED PRIVATE KEY" => Some(ScKeyForm::Encrypted),
+        b"OPENSSH PRIVATE KEY" => Some(ScKeyForm::OpenSsh),
+        _ if label.ends_with(b"PRIVATE KEY") => Some(ScKeyForm::Other),
+        _ => None,
+    })
+}
+
+/// Whether a `Proc-Type` header marks a section encrypted (RFC 1421).
+fn legacy_encrypted(pem: &[u8]) -> bool {
+    lines(pem).any(|line| {
+        line.strip_prefix(b"Proc-Type:")
+            .is_some_and(|value| value.windows(9).any(|w| w == b"ENCRYPTED"))
+    })
+}
+
+/// The labels of the `BEGIN` lines, as the PEM parser reads them. These
+/// scans read `BEGIN` and header lines only, never a section's body, and
+/// keep nothing of what they read.
+fn labels(pem: &[u8]) -> impl Iterator<Item = &[u8]> {
+    lines(pem).filter_map(|line| {
+        line.strip_prefix(b"-----BEGIN ")?
+            .trim_ascii_end()
+            .strip_suffix(b"-----")
+    })
+}
+
+fn lines(pem: &[u8]) -> impl Iterator<Item = &[u8]> {
     pem.split(|byte| matches!(byte, b'\n' | b'\r'))
-        .filter_map(|line| {
-            let label = line
-                .strip_prefix(b"-----BEGIN ")?
-                .trim_ascii_end()
-                .strip_suffix(b"-----")?;
-            match label {
-                b"PRIVATE KEY" | b"EC PRIVATE KEY" | b"RSA PRIVATE KEY" => None,
-                b"ENCRYPTED PRIVATE KEY" => Some(ScKeyForm::Encrypted),
-                b"OPENSSH PRIVATE KEY" => Some(ScKeyForm::OpenSsh),
-                _ if label.ends_with(b"PRIVATE KEY") => Some(ScKeyForm::Other),
-                _ => None,
-            }
-        })
 }

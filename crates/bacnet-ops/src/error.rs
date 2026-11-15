@@ -15,7 +15,9 @@
 //! [`WritePolicy`](crate::WritePolicy) refuses is [`OpsError::Denied`],
 //! with nothing sent; a relinquish that went through but whose read after
 //! it failed is [`OpsError::ReadBack`]; and an object the device says has
-//! no Priority_Array is [`OpsError::NoPriorityArray`].
+//! no Priority_Array is [`OpsError::NoPriorityArray`]. With `sc-tls`, TLS
+//! material a BACnet/SC configuration refused is `OpsError::Tls`, so `?` on
+//! `ScNodeTlsConfig::from_pem_files` keeps its typed error (#2600).
 //! [`OpsError::written`] says whether a write went through first.
 
 use std::fmt;
@@ -115,6 +117,14 @@ pub enum OpsError {
     /// as it may ([`MAX_WATCHED`](crate::watch::MAX_WATCHED)). Nothing was
     /// watched.
     Watch(WatchError),
+    /// TLS material a BACnet/SC configuration refused, as its constructor
+    /// reported it: a file that can't be read, PEM that doesn't decode, a
+    /// key that isn't the chain leaf's, and the like;
+    /// [`ScTlsConfigError::input`](crate::ScTlsConfigError::input) names
+    /// the file at fault. Nothing was sent. With `sc-tls`.
+    #[cfg(feature = "sc-tls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
+    Tls(crate::ScTlsConfigError),
     /// Any other failure the low-level client reported, as it reported it:
     /// an answer that doesn't decode, a request too long for the path, and
     /// the like.
@@ -339,6 +349,8 @@ impl fmt::Display for OpsError {
             } => write!(f, "{error}, {detail}"),
             Self::Paging(fault) => write!(f, "{fault}"),
             Self::Watch(error) => write!(f, "{error}"),
+            #[cfg(feature = "sc-tls")]
+            Self::Tls(error) => write!(f, "{error}"),
             Self::Client(error) => write!(f, "{error}"),
             Self::Denied(denied) => write!(f, "{denied}"),
             Self::ReadBack { written, source } => {
@@ -378,15 +390,27 @@ impl fmt::Display for OpsError {
 }
 
 impl std::error::Error for OpsError {
-    /// The low-level error's own source, not that error: the text above is
-    /// already its text, so a front end that prints the chain shows each
-    /// cause once.
+    /// The low-level (or TLS configuration) error's own source, not that
+    /// error: the text above is already its text, so a front end that prints
+    /// the chain shows each cause once. Match `OpsError::Tls` (with
+    /// `sc-tls`) for the typed TLS error itself.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Unreachable { source: error, .. } | Self::Client(error) => error.source(),
+            #[cfg(feature = "sc-tls")]
+            Self::Tls(error) => error.source(),
             Self::ReadBack { source, .. } => source.source(),
             _ => None,
         }
+    }
+}
+
+#[cfg(feature = "sc-tls")]
+impl From<crate::ScTlsConfigError> for OpsError {
+    /// As [`OpsError::Tls`], so `?` on an SC TLS constructor reaches an
+    /// `OpsError` with its typed error.
+    fn from(error: crate::ScTlsConfigError) -> Self {
+        Self::Tls(error)
     }
 }
 

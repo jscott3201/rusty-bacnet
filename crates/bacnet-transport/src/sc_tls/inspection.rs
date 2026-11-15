@@ -11,10 +11,13 @@
 //! Each of SAN/KU/EKU retains at most 16 values of 256 ASCII-escaped bytes;
 //! metadata fields retain at most 1024 bytes each. Truncation is explicit.
 //! The TLS configurations' PEM constructors, such as
-//! [`super::ScNodeTlsConfig::from_pem_files`], take their input without these limits.
+//! [`super::ScNodeTlsConfig::from_pem_files`], take their input without these
+//! limits; both decode a private key by the same rule: exactly one
+//! unencrypted PKCS#8, SEC1 or PKCS#1 key, in PEM that is well formed
+//! throughout.
 
 use rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer},
+    pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
     sign::CertifiedKey,
 };
 use std::{
@@ -25,7 +28,7 @@ use std::{
 };
 use x509_parser::{nom::Parser, prelude::*};
 
-use super::{peer_info, pem};
+use super::{ScTlsConfigError, material, peer_info};
 #[path = "inspection_types.rs"]
 mod types;
 pub use types::*;
@@ -41,7 +44,8 @@ pub const MAX_CERTIFICATE_BYTES: usize = 128 * 1024;
 
 /// Inspect PEM bytes. Identity is required; supplied empty optional inputs are
 /// errors. `None` time samples the clock once. The first identity certificate is
-/// the key-comparison leaf. Private-key decoding preserves first-key semantics.
+/// the key-comparison leaf. The private key input must hold exactly one key,
+/// decoded as the TLS configurations decode it.
 pub fn inspect_sc_pem(
     identity: &[u8],
     peer_trust: Option<&[u8]>,
@@ -77,11 +81,17 @@ pub fn inspect_sc_pem(
     let key_consistency = match private_key {
         None => ScKeyConsistency::NotAssessed,
         Some(bytes) => {
-            let key = pem::private_key(bytes).map_err(|error| {
-                let kind = if matches!(error, rustls::pki_types::pem::Error::NoItemsFound) {
-                    ScInputErrorKind::MissingPrivateKey
-                } else {
-                    ScInputErrorKind::MalformedPem
+            // The TLS configurations' rule, so a check and a connect agree.
+            let key = material::single_key(bytes).map_err(|error| {
+                let kind = match error {
+                    ScTlsConfigError::NoPrivateKey => ScInputErrorKind::MissingPrivateKey,
+                    ScTlsConfigError::MultiplePrivateKeys { .. } => {
+                        ScInputErrorKind::MultiplePrivateKeys
+                    }
+                    ScTlsConfigError::UnsupportedKey { .. } => {
+                        ScInputErrorKind::UnsupportedPrivateKey
+                    }
+                    _ => ScInputErrorKind::MalformedPem,
                 };
                 input(ScInputRole::PrivateKey, None, kind)
             })?;
@@ -192,7 +202,7 @@ fn decode_certificates(
     now: i64,
 ) -> Result<Vec<CertificateDer<'static>>, ScInspectionError> {
     let mut certs = Vec::new();
-    for (index, cert) in pem::certificate_iter(bytes).enumerate() {
+    for (index, cert) in CertificateDer::pem_slice_iter(bytes).enumerate() {
         if entries.len() >= MAX_CERTIFICATES {
             return Err(input(
                 role,

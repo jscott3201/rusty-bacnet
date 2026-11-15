@@ -75,11 +75,16 @@ impl ScPemFault {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScKeyForm {
-    /// An encrypted PKCS#8 key. Decrypt it to an unencrypted PKCS#8 file
-    /// first, such as with `openssl pkcs8 -in key.pem -out plain.pem`.
+    /// An encrypted key: an encrypted PKCS#8 key (`ENCRYPTED PRIVATE KEY`),
+    /// or OpenSSL's older encrypted SEC1 or PKCS#1 key, whose section starts
+    /// with a `Proc-Type: 4,ENCRYPTED` header. Decrypt it to unencrypted
+    /// PKCS#8 first: `openssl pkcs8 -topk8 -nocrypt -in key.pem -out
+    /// plain.pem` reads both forms and asks for the passphrase.
     Encrypted,
-    /// An OpenSSH key. Convert it to PKCS#8 first, such as with
-    /// `ssh-keygen -p -m PKCS8 -f key`.
+    /// An OpenSSH key (`OPENSSH PRIVATE KEY`). Convert it to unencrypted
+    /// PKCS#8 PEM first: `ssh-keygen -p -m PKCS8 -f key` rewrites an RSA or
+    /// ECDSA key in place; OpenSSH can't write an Ed25519 key as PKCS#8, so
+    /// such a key needs another tool or a new key.
     OpenSsh,
     /// Another key form, such as a DSA key.
     Other,
@@ -88,9 +93,42 @@ pub enum ScKeyForm {
 impl fmt::Display for ScKeyForm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Encrypted => "an encrypted PKCS#8 key; decrypt it to unencrypted PKCS#8 first",
-            Self::OpenSsh => "an OpenSSH key; convert it to PKCS#8 first",
+            Self::Encrypted => {
+                "encrypted; decrypt it to unencrypted PKCS#8 first \
+                 (openssl pkcs8 -topk8 -nocrypt -in <key> -out <plain key>)"
+            }
+            Self::OpenSsh => "an OpenSSH key; convert it to unencrypted PKCS#8 PEM first",
             Self::Other => "a key form other than PKCS#8, SEC1 or PKCS#1",
+        })
+    }
+}
+
+/// A certificate container this stack can't read as a CA bundle or chain.
+/// The form it reads is plain `CERTIFICATE` sections.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScCertificateForm {
+    /// OpenSSL's `TRUSTED CERTIFICATE`, a certificate with trust settings
+    /// appended. `openssl x509 -in ca.pem -out plain.pem` writes the plain
+    /// certificate.
+    Trusted,
+    /// A PKCS#7 or CMS bundle (`PKCS7`, `CMS`).
+    /// `openssl pkcs7 -print_certs -in bundle.p7b -out certs.pem` lists its
+    /// certificates as plain PEM.
+    Pkcs7,
+}
+
+impl fmt::Display for ScCertificateForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Trusted => {
+                "OpenSSL TRUSTED CERTIFICATE sections; write them as plain certificates \
+                 (openssl x509 -in <file> -out <plain file>)"
+            }
+            Self::Pkcs7 => {
+                "a PKCS#7 bundle; list its certificates as plain PEM \
+                 (openssl pkcs7 -print_certs -in <file> -out <plain file>)"
+            }
         })
     }
 }
@@ -116,6 +154,18 @@ pub enum ScTlsConfigError {
         /// The operating system's error.
         source: io::Error,
     },
+    /// A file is larger than [`MAX_PEM_FILE_BYTES`](super::MAX_PEM_FILE_BYTES).
+    /// Reading stopped at the limit, so a device or a pipe that never ends
+    /// is refused this way too.
+    #[non_exhaustive]
+    TooLarge {
+        /// The input the file holds.
+        input: ScTlsInput,
+        /// The file, as given.
+        path: PathBuf,
+        /// The limit, in bytes.
+        limit: usize,
+    },
     /// An input is not well-formed PEM.
     #[non_exhaustive]
     MalformedPem {
@@ -130,6 +180,15 @@ pub enum ScTlsConfigError {
     NoCertificate {
         /// The input at fault.
         input: ScTlsInput,
+    },
+    /// The CA bundle or the certificate chain holds no plain certificate,
+    /// only certificates in a container this stack doesn't read.
+    #[non_exhaustive]
+    UnsupportedCertificate {
+        /// The input at fault.
+        input: ScTlsInput,
+        /// The container they are in.
+        form: ScCertificateForm,
     },
     /// A certificate decoded but rustls can't use it, as a trust anchor
     /// for the CA bundle or as an end-entity or intermediate certificate for
@@ -182,8 +241,10 @@ impl ScTlsConfigError {
     pub fn input(&self) -> Option<ScTlsInput> {
         match self {
             Self::Read { input, .. }
+            | Self::TooLarge { input, .. }
             | Self::MalformedPem { input, .. }
             | Self::NoCertificate { input }
+            | Self::UnsupportedCertificate { input, .. }
             | Self::UnusableCertificate { input, .. } => Some(*input),
             Self::NoPrivateKey
             | Self::MultiplePrivateKeys { .. }
@@ -202,10 +263,11 @@ impl fmt::Display for ScTlsConfigError {
                 input,
                 path,
                 source,
-            } => write!(
+            } => write!(f, "can't read the {input} file {}: {source}", Shown(path)),
+            Self::TooLarge { input, path, limit } => write!(
                 f,
-                "can't read the {input} file {}: {source}",
-                path.display()
+                "the {input} file {} is larger than {limit} bytes",
+                Shown(path)
             ),
             Self::MalformedPem { input, fault } => {
                 write!(f, "the {input} is not valid PEM: {fault}")
@@ -214,6 +276,9 @@ impl fmt::Display for ScTlsConfigError {
                 input: ScTlsInput::CaBundle,
             } => f.write_str("the CA bundle holds no certificate, so nothing would be trusted"),
             Self::NoCertificate { input } => write!(f, "the {input} holds no certificate"),
+            Self::UnsupportedCertificate { input, form } => {
+                write!(f, "the {input} holds no plain certificate, only {form}")
+            }
             Self::UnusableCertificate {
                 input,
                 index,
@@ -238,6 +303,24 @@ impl fmt::Display for ScTlsConfigError {
             }
             Self::Tls { source } => write!(f, "TLS configuration refused: {source}"),
         }
+    }
+}
+
+/// A path as text, with control characters escaped: a file name can't move
+/// the cursor or start a new line in a message.
+struct Shown<'a>(&'a std::path::Path);
+
+impl fmt::Display for Shown<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use fmt::Write;
+        for c in self.0.display().to_string().chars() {
+            if c.is_control() {
+                write!(f, "{}", c.escape_default())?;
+            } else {
+                f.write_char(c)?;
+            }
+        }
+        Ok(())
     }
 }
 

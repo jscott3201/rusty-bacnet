@@ -11,7 +11,8 @@ use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_hub::{ScHub, ScHubTlsConfig};
 use bacnet_transport::sc_tls::{
-    ScKeyForm, ScNodeTlsConfig, ScPemFault, ScTlsConfigError, ScTlsInput, TlsWebSocket,
+    MAX_PEM_FILE_BYTES, ScCertificateForm, ScKeyForm, ScNodeTlsConfig, ScPemFault,
+    ScTlsConfigError, ScTlsInput, TlsWebSocket,
 };
 use rcgen::{CertificateParams, Issuer, KeyPair};
 
@@ -155,16 +156,25 @@ fn pem_constructors_read_pkcs8_sec1_and_pkcs1_keys_with_an_intermediate() {
         "EC PRIVATE KEY",
         &unwrap_pkcs8(&ec.key.serialize_der()),
     ));
+    // ECParameters naming prime256v1 (OID 1.2.840.10045.3.1.7).
+    const EC_P256_PARAMETERS: [u8; 10] =
+        [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
     let pkcs1 = text(pem(
         "RSA PRIVATE KEY",
         &unwrap_pkcs8(&rsa.key.serialize_der()),
     ));
     for (form, leaf, key) in [
         ("PKCS#8 P-256", &ec, ec.key.serialize_pem()),
-        ("SEC1 P-256", &ec, sec1),
+        ("SEC1 P-256", &ec, sec1.clone()),
         ("PKCS#8 RSA", &rsa, rsa.key.serialize_pem()),
         ("PKCS#1 RSA", &rsa, pkcs1),
         ("PKCS#8 Ed25519", &ed, ed.key.serialize_pem()),
+        // openssl ecparam -genkey writes the curve before the key.
+        (
+            "EC PARAMETERS then SEC1",
+            &ec,
+            format!("{}{sec1}", text(pem("EC PARAMETERS", &EC_P256_PARAMETERS))),
+        ),
     ] {
         both(&site.root, &leaf.chain, &key).unwrap_or_else(|e| panic!("{form}: {e}"));
     }
@@ -188,6 +198,91 @@ fn pem_text_around_sections_crlf_and_other_sections_are_taken() {
     // A bundle of several CAs, the one that issued last.
     let other = Site::new();
     both(&format!("{}{}", other.root, site.root), &leaf.chain, &key).unwrap();
+    // A revocation list and a key in the bundle or chain are skipped.
+    let crl = text(pem("X509 CRL", b"not applied"));
+    both(
+        &format!("{crl}{}{key}", site.root),
+        &format!("{}{key}", leaf.chain),
+        &key,
+    )
+    .unwrap();
+}
+
+/// OpenSSL's older encrypted keys keep the SEC1 or PKCS#1 label with
+/// `Proc-Type`/`DEK-Info` headers: an encrypted key, not malformed PEM.
+/// Made-up bodies; no key material.
+#[test]
+fn legacy_encrypted_keys_are_named_encrypted() {
+    let site = Site::new();
+    let leaf = site.leaf();
+    for label in ["RSA PRIVATE KEY", "EC PRIVATE KEY"] {
+        let legacy = format!(
+            "-----BEGIN {label}-----\nProc-Type: 4,ENCRYPTED\n\
+             DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\n\
+             bm90IGEga2V5OyBhIHRlc3QgZml4dHVyZSBib2R5\n-----END {label}-----\n"
+        );
+        for key in [legacy.clone(), crlf(&legacy)] {
+            let error = both(&site.root, &leaf.chain, &key).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    ScTlsConfigError::UnsupportedKey {
+                        form: ScKeyForm::Encrypted,
+                        ..
+                    }
+                ),
+                "{label}: {error:?}"
+            );
+        }
+    }
+    // Without the header, the same bad body is malformed PEM.
+    let bad = "-----BEGIN RSA PRIVATE KEY-----\nDEK-Info: x\n-----END RSA PRIVATE KEY-----\n";
+    let error = both(&site.root, &leaf.chain, bad).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ScTlsConfigError::MalformedPem {
+                fault: ScPemFault::Base64,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// A bundle or chain whose only certificates are in a container the stack
+/// doesn't read says which container.
+#[test]
+fn trusted_certificate_and_pkcs7_only_inputs_name_their_form() {
+    let site = Site::new();
+    let leaf = site.leaf();
+    let key = leaf.key.serialize_pem();
+    let trusted = text(pem("TRUSTED CERTIFICATE", b"cert and trust"));
+    let pkcs7 = text(pem("PKCS7", b"signed data"));
+    for (ca, chain, input, form) in [
+        (
+            trusted.as_str(),
+            leaf.chain.as_str(),
+            ScTlsInput::CaBundle,
+            ScCertificateForm::Trusted,
+        ),
+        (
+            site.root.as_str(),
+            pkcs7.as_str(),
+            ScTlsInput::CertificateChain,
+            ScCertificateForm::Pkcs7,
+        ),
+    ] {
+        let error = both(ca, chain, &key).unwrap_err();
+        assert!(
+            matches!(&error, ScTlsConfigError::UnsupportedCertificate { input: i, form: f, .. }
+                if *i == input && *f == form),
+            "{error:?}"
+        );
+        assert_eq!(error.input(), Some(input));
+    }
+    // Beside a plain certificate they are skipped.
+    both(&format!("{trusted}{}", site.root), &leaf.chain, &key).unwrap();
 }
 
 /// What each kind of bad input is refused with, through `from_pem`; the
@@ -500,6 +595,69 @@ fn files_are_read_ca_first_and_an_unreadable_one_names_its_path() {
         ),
         "{error:?}"
     );
+}
+
+/// A file is read up to the limit: one at it loads, one a byte over is
+/// refused naming it, and an endless device ends at the limit.
+#[test]
+fn files_are_read_up_to_the_limit() {
+    let site = Site::new();
+    let leaf = site.leaf();
+    let dir = Dir::new("limit");
+    let chain = dir.write("node.pem", &leaf.chain);
+    let key = dir.write("node.key", &leaf.key.serialize_pem());
+    let mut padded = site.root.clone();
+    padded.push_str(&" ".repeat(MAX_PEM_FILE_BYTES - padded.len()));
+    let at_limit = dir.write("at-limit.pem", &padded);
+    ScNodeTlsConfig::from_pem_files(&at_limit, &chain, &key).unwrap();
+    padded.push(' ');
+    let over = dir.write("over.pem", &padded);
+    let too_large = |error: ScTlsConfigError, input: ScTlsInput, path: &Path| {
+        assert!(
+            matches!(&error, ScTlsConfigError::TooLarge { input: i, path: p, limit, .. }
+                if *i == input && p == path && *limit == MAX_PEM_FILE_BYTES),
+            "{error:?}"
+        );
+        assert!(
+            error.to_string().contains("larger than 1048576 bytes"),
+            "{error}"
+        );
+    };
+    too_large(
+        ScNodeTlsConfig::from_pem_files(&over, &chain, &key).unwrap_err(),
+        ScTlsInput::CaBundle,
+        &over,
+    );
+    let ca = dir.write("ca.pem", &site.root);
+    too_large(
+        ScHubTlsConfig::from_pem_files(&ca, &chain, &over).unwrap_err(),
+        ScTlsInput::PrivateKey,
+        &over,
+    );
+    #[cfg(unix)]
+    {
+        let zero = Path::new("/dev/zero");
+        too_large(
+            ScNodeTlsConfig::from_pem_files(&ca, zero, &key).unwrap_err(),
+            ScTlsInput::CertificateChain,
+            zero,
+        );
+    }
+}
+
+/// A file name's control characters are escaped in the message.
+#[test]
+fn read_errors_escape_control_characters_in_paths() {
+    let dir = Dir::new("escape");
+    let odd = dir.0.join("site\nca\u{1b}[2J.pem");
+    let error = ScNodeTlsConfig::from_pem_files(&odd, &odd, &odd).unwrap_err();
+    let shown = error.to_string();
+    assert!(matches!(error, ScTlsConfigError::Read { .. }), "{error:?}");
+    assert!(
+        !shown.contains('\n') && !shown.contains('\u{1b}'),
+        "{shown:?}"
+    );
+    assert!(shown.contains("site\\nca\\u{1b}[2J.pem"), "{shown}");
 }
 
 /// No error and no configuration shows key material: neither the key's
