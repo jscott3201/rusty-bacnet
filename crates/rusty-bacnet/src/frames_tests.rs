@@ -149,3 +149,117 @@ fn tap_record(tap: &bacnet_transport::tap::FrameTap, direction: TapDirection, oc
         octets,
     );
 }
+
+/// Take the next fresh frame from `iterator` as `__anext__` does, with its
+/// delivery hook, which the caller settles, puts back or drops.
+async fn fresh(iterator: &PyFrameIterator) -> (PyFrame, Arc<dyn crate::py_async::PutBack>) {
+    let (next, hook) = iterator.subscription.stream.next();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(1), next)
+        .await
+        .expect("a frame is queued");
+    let Some(crate::event_stream::Next::Fresh(frame)) = next else {
+        panic!("expected a fresh frame");
+    };
+    (iterator.converter().frame(frame), hook)
+}
+
+/// A full one-frame queue: frame 0 queued, then 1 and 2 lost behind it.
+/// Returns the tap, the owner (whose drop would end the subscription) and
+/// the iterator, frame 0 already read.
+async fn after_a_gap_of_two() -> (
+    bacnet_transport::tap::FrameTap,
+    FrameSubscriptions,
+    PyFrameIterator,
+) {
+    let tap = bacnet_transport::tap::FrameTap::new();
+    let owner = FrameSubscriptions::default();
+    let iterator = owner.subscribe(
+        tap.subscribe_with_capacity(1),
+        "local".into(),
+        Clock::fixed(),
+    );
+    for octet in 0..3 {
+        tap_record(&tap, TapDirection::Inbound, &[octet]);
+    }
+    let (first, hook) = fresh(&iterator).await;
+    assert_eq!((&first.frame.bytes[..], first.missed_before), (&[0][..], 0));
+    hook.settled();
+    assert_eq!(iterator.missed(), 2, "the trailing gap");
+    (tap, owner, iterator)
+}
+
+/// A read whose future was cancelled puts its frame back; the next read
+/// returns that same frame, gap and all, ahead of a newer one.
+#[tokio::test(start_paused = true)]
+async fn a_put_back_frame_comes_back_with_its_gap() {
+    use crate::py_async::Via;
+
+    Python::initialize();
+    let (tap, _owner, iterator) = after_a_gap_of_two().await;
+    tap_record(&tap, TapDirection::Inbound, &[3]);
+    let (frame, hook) = fresh(&iterator).await;
+    assert_eq!((&frame.frame.bytes[..], frame.missed_before), (&[3][..], 2));
+    Python::attach(|py| {
+        let object = Py::new(py, frame).unwrap().into_any();
+        hook.put_back(py, object, Via::OnLoop);
+    });
+    hook.settled();
+    tap_record(&tap, TapDirection::Inbound, &[4]);
+    let (next, hook) = iterator.subscription.stream.next();
+    let again = tokio::time::timeout(std::time::Duration::from_secs(1), next)
+        .await
+        .expect("the put-back frame is ready");
+    let Some(crate::event_stream::Next::Again(object)) = again else {
+        panic!("expected the put-back frame first");
+    };
+    Python::attach(|py| {
+        let bound = object.bind(py).cast::<PyFrame>().unwrap().clone();
+        let frame = bound.get();
+        assert_eq!((&frame.frame.bytes[..], frame.missed_before), (&[3][..], 2));
+    });
+    hook.settled();
+    let (newer, hook) = fresh(&iterator).await;
+    assert_eq!((&newer.frame.bytes[..], newer.missed_before), (&[4][..], 0));
+    hook.settled();
+    assert_eq!(iterator.missed(), 2);
+}
+
+/// A frame dropped on its way to Python, as when its loop closed, counts
+/// in `FrameIterator.missed`, and the next frame reports it, with the gap
+/// it carried, so the gaps received add up to the total.
+#[tokio::test(start_paused = true)]
+async fn a_frame_lost_on_its_way_carries_into_the_next_gap() {
+    let (tap, _owner, iterator) = after_a_gap_of_two().await;
+    tap_record(&tap, TapDirection::Inbound, &[3]);
+    let (lost, hook) = fresh(&iterator).await;
+    assert_eq!(lost.missed_before, 2);
+    // Neither delivered nor put back: the delivery drops armed.
+    drop((lost, hook));
+    assert_eq!(iterator.missed(), 3, "two overflowed, one lost on its way");
+    tap_record(&tap, TapDirection::Inbound, &[4]);
+    let (next, hook) = fresh(&iterator).await;
+    assert_eq!((&next.frame.bytes[..], next.missed_before), (&[4][..], 3));
+    hook.settled();
+    // Frames received reported 0 and 3; nothing was lost after the last.
+    assert_eq!(iterator.missed(), 3);
+}
+
+/// `Frame.monotonic` converts the capture instant by its exact offset from
+/// the clock pair, earlier instants included, and never reads backwards.
+#[test]
+fn capture_instants_convert_by_their_offset_from_the_pair() {
+    let anchor = Instant::now();
+    let clock = Clock {
+        instant: anchor,
+        python_ns: 5_000_000_000,
+    };
+    let later = anchor + std::time::Duration::from_micros(1_500);
+    assert_eq!(clock.seconds(anchor), 5.0);
+    assert_eq!(clock.seconds(later), 5.0015);
+    if let Some(earlier) = anchor.checked_sub(std::time::Duration::from_millis(250)) {
+        assert_eq!(clock.seconds(earlier), 4.75);
+    }
+    assert_eq!(posix_seconds(SystemTime::UNIX_EPOCH), 0.0);
+    let before = SystemTime::UNIX_EPOCH - std::time::Duration::from_millis(500);
+    assert_eq!(posix_seconds(before), -0.5);
+}
