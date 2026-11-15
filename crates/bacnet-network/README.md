@@ -83,7 +83,9 @@ response, a completed BACnet transaction or forwarding between networks.
 - `network_number`, `router_table`, `response_route` and `priority_channel`
   provide the associated state, captured reply routes and queue primitives.
 
-This crate declares no optional features. Select an optional transport through
+This crate's one feature, `test-support`, is a hook for tests (fixed waits
+before a Network-Number-Is answer) and not for production builds. Select an
+optional transport through
 a direct `bacnet-transport` dependency; Cargo unifies that crate's features.
 Neither crate has a `no_std` or allocation-free hosted configuration. Physical
 transport access, TLS configuration and hardware qualification are separate

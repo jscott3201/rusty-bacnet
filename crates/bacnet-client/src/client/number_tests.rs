@@ -13,6 +13,7 @@ async fn client_number_learns_and_answers_through_network_intake() {
     client.stop().await.unwrap();
 }
 
+mod answering;
 mod asking;
 mod folding;
 mod lifecycle;
@@ -35,10 +36,10 @@ async fn client_number_fifo_unknown_precedence_and_invalid_recovery() {
         (80, 1, 80),
     ] {
         inject(&inbound, &number(n, flag), true).await;
-        for group in [false, true] {
-            inject(&inbound, QUERY, group).await;
-            reply(&mut outbound, expected).await;
-        }
+        // Asked of the client alone, so the answer comes at once; one to
+        // a broadcast question waits (#2597, `answering`).
+        inject(&inbound, QUERY, false).await;
+        reply(&mut outbound, expected).await;
     }
     for bytes in [
         number(0, 1),
@@ -63,7 +64,7 @@ async fn client_number_fifo_unknown_precedence_and_invalid_recovery() {
     {
         inject(&inbound, &bytes, true).await;
         inject(&inbound, &number(81 + i as u16, 1), true).await;
-        inject(&inbound, QUERY, true).await;
+        inject(&inbound, QUERY, false).await;
         reply(&mut outbound, 81 + i as u16).await;
     }
     client.stop().await.unwrap();

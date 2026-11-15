@@ -229,7 +229,10 @@ async fn network_number_full_server_answers_configured_local_what_is() {
 async fn network_number_endpoint_answers_configured_local_what_is() {
     port_retry::rerun_on_lost_port(async || {
         let mut fixture = Fixture::start(false, true, 17).await;
-        fixture.send(0x04, &[1, 0x80, 0x12]).await;
+        // Asked of the node alone, so the answer comes at once; the wait
+        // before one to a broadcast question is on paused time in
+        // `local_network_tests::answering` (#2597).
+        fixture.send(0x0a, &[1, 0x80, 0x12]).await;
         fixture.response(17, 1).await;
         fixture.stop().await;
         assert_eq!(
@@ -395,7 +398,7 @@ async fn network_number_real_owners_learn_precedence_and_refuse_invalid_controls
 async fn network_number_real_owners_configured_and_unregistered_are_isolated() {
     for full in [true, false] {
         let mut configured = Fixture::start(full, true, 17).await;
-        configured.send(0x04, &[1, 0x80, 0x12]).await;
+        configured.send(0x0a, &[1, 0x80, 0x12]).await;
         configured.response(17, 1).await;
         for flag in [0, 1] {
             configured.announce(99, flag).await;

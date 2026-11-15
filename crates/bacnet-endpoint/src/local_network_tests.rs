@@ -28,6 +28,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::time::{Duration, timeout};
 
+#[path = "local_network_answer_tests.rs"]
+mod answering;
 #[path = "local_network_source_tests.rs"]
 mod source;
 

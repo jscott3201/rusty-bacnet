@@ -16,7 +16,10 @@ fn parse(bytes: &[u8], group: bool) -> Option<NumberControl> {
 #[test]
 fn number_control_independent_wire_vectors_and_reply_flags() {
     for group in [false, true] {
-        assert_eq!(parse(&[1, 0x80, 0x12], group), Some(NumberControl::WhatIs));
+        assert_eq!(
+            parse(&[1, 0x80, 0x12], group),
+            Some(NumberControl::WhatIs { broadcast: group })
+        );
     }
     assert_eq!(
         parse(&[1, 0x80, 0x13, 0, 77, 1], true),
