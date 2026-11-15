@@ -6671,8 +6671,7 @@ Rust when the transport hands the frame over, not when Python reads it:
 `direction` is `"inbound"` or `"outbound"`. `link` is the link as the
 `transport=` argument spells it, `"bip"`, `"ipv6"`, `"sc"` or `"mstp"`, and
 `"other"` for a link no Python owner runs. `local_address` (this node, as the
-subscription began) and `peer` (the other end) use one form per link, the one
-the rest of this API writes there:
+subscription began) and `peer` (the other end) use one form per link:
 
 | `link` | `local_address` | `peer` |
 |---|---|---|

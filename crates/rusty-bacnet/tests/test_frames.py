@@ -9,6 +9,7 @@ unit tests in ``src/frames_tests.rs``.
 import asyncio
 import gc
 import socket
+import sys
 import time
 import unittest
 
@@ -51,6 +52,9 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
         # before Python 3.13 (Frame.monotonic's docs), nanoseconds elsewhere.
         # The margin covers the float conversion and the anchor's midpoint.
         slack = time.get_clock_info("monotonic").resolution + 0.001
+        if sys.platform == "win32" and sys.version_info < (3, 13):
+            # The reported resolution need not be the tick actually in use.
+            slack = 0.05
         wall_slack = time.get_clock_info("time").resolution + 0.001
         for frame in frames:
             self.assertGreaterEqual(frame.monotonic, before[0] - slack)
@@ -238,8 +242,11 @@ class Bip6FrameTests(unittest.IsolatedAsyncioTestCase):
                 observed = [await asyncio.wait_for(anext(frames), 10) for _ in range(4)]
         finally:
             await server.stop()
-        self.assertEqual([frame.direction for frame in observed],
-                         ["outbound", "inbound", "outbound", "inbound"])
+        # A resolution answered after its one-second resend adds an outbound
+        # frame, so the exact sequence is not asserted.
+        directions = [frame.direction for frame in observed]
+        self.assertEqual(directions[0], "outbound")
+        self.assertEqual(set(directions), {"outbound", "inbound"})
         for frame in observed:
             self.assertEqual(frame.link, "ipv6")
             self.assertEqual(frame.local_address, f"[::1]:{client_port}")
