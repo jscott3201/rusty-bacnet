@@ -25,6 +25,7 @@ from rusty_bacnet import (
     BACnetServer,
     BACnetTimeStamp,
     BitString,
+    FrameSummary,
     Multicast,
     ObjectIdentifier,
     ObjectType,
@@ -33,6 +34,7 @@ from rusty_bacnet import (
     RoutedTarget,
     Value,
     WritePolicy,
+    decode_frame,
 )
 
 P = PropertyIdentifier
@@ -100,6 +102,22 @@ def samples() -> dict[type, list[Any]]:
             BitString(0, b""),
             BitString(3, b"\xa0"),
             BitString(4, b"\x40", PropertyIdentifier.STATUS_FLAGS),
+        ],
+        # Copied by its fields (#2614): a request, a NAK, a malformed
+        # frame, a B/IPv6 broadcast, an MS/TP token, and every field set
+        # at the edge of its range.
+        FrameSummary: [
+            FrameSummary._rebuild(  # type: ignore[attr-defined]
+                "forwarded-npdu", True, "bip6:0xFFFFFF", "bip6:0x000000",
+                "[2001:db8::1]:65535", 65535, 65535, "65535:0xFF", "65535:*",
+                "i-am-router-to-network", "Abort", 255, "read-property",
+                "abort other", "malformed: APDU decode error: x", 4194303,
+            ),
+            decode_frame(bytes.fromhex("810a001101000005010c0c02000312194b"), "bip"),
+            decode_frame(bytes.fromhex("810000060030"), "bip"),
+            decode_frame(b"\x81", "bip"),
+            decode_frame(bytes.fromhex("8202000b00010201001008"), "ipv6"),
+            decode_frame(bytes.fromhex("55ff000201000073"), "mstp"),
         ],
         Multicast: [
             Multicast("239.255.66.1"),

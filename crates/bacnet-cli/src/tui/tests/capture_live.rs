@@ -178,7 +178,10 @@ async fn the_session_tap_reaches_the_screen_through_the_coordinator() {
         assert_eq!(echo.udp.map(|(source, _)| source), Some(own), "{echo:?}");
     }
     let first = frames[at];
-    assert!(first.summary.link.contains("broadcast"), "{first:?}");
+    assert!(
+        first.summary.link_message.contains("broadcast"),
+        "{first:?}"
+    );
 
     net.press(KeyCode::Char('x')).await;
     net.pump_until("down", |app| app.link == crate::tui::app::Link::Down)
@@ -210,7 +213,7 @@ async fn the_monitor_feeds_the_capture_and_still_writes_nothing() {
     );
     let links: std::collections::BTreeSet<String> = (1..capture.ring.next())
         .filter_map(|n| capture.ring.get(n))
-        .map(|f| f.summary.link.clone())
+        .map(|f| f.summary.link_message.clone())
         .collect();
     for link in [
         "token",
@@ -222,9 +225,21 @@ async fn the_monitor_feeds_the_capture_and_still_writes_nothing() {
     assert_eq!(capture.lost, 0);
     let token = (1..capture.ring.next())
         .filter_map(|n| capture.ring.get(n))
-        .find(|f| f.summary.link == "token")
+        .find(|f| f.summary.link_message == "token")
         .unwrap();
     assert_eq!(&token.bytes[..2], &[0x55, 0xFF], "from the preamble");
     assert_eq!(token.direction, Direction::Wire);
+    assert_eq!(token.summary.parse_error, None);
+    // The damaged broadcasts are frames the decoder refused: a parse
+    // failure, as the summary of the same octets would report it.
+    let refused: Vec<_> = (1..capture.ring.next())
+        .filter_map(|n| capture.ring.get(n))
+        .filter(|f| f.summary.link_message == "line-error")
+        .collect();
+    assert!(!refused.is_empty(), "{links:?}");
+    for frame in refused {
+        assert!(frame.summary.parse_error.is_some(), "{frame:?}");
+        assert_eq!(frame.summary.parse_error, frame.summary.problem);
+    }
     assert_eq!(run.quit().await, b"", "the monitor wrote to the line");
 }

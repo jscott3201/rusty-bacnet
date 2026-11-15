@@ -6776,9 +6776,83 @@ redelivery, as on the existing event iterators; explicit close ends that wait.
 
 Router application clients (`transport="router"`) have no link of their own and
 raise `ValueError`. `BACnetServer`, `ScEndpoint` and `MstpEndpoint` have no
-`frames()` yet; Rust-decoded summaries, parse failures and forwarding/router
-provenance are follow-up work for #2614. Observation opens no socket and
-changes no port sharing (see [Interfaces are addresses](#interfaces-are-addresses)).
+`frames()` yet; [`decode_frame`](#decoded-frame-summaries-and-trap-transcripts)
+gives a frame's decoded summary, parse failure and forwarding/router
+provenance. Observation opens no socket and changes no port sharing (see
+[Interfaces are addresses](#interfaces-are-addresses)).
+
+### Decoded frame summaries and trap transcripts
+
+`decode_frame(octets, link)` decodes link, NPDU and APDU headers through
+the stack's Rust decoder. It sends no traffic and returns a frozen
+`FrameSummary`, including for malformed input. `link` has no default; pass
+the observed link directly:
+
+```python
+from rusty_bacnet import decode_frame
+
+async def transcript(endpoint):
+    frames = await endpoint.frames(capacity=256)
+    try:
+        async for frame in frames:
+            summary = decode_frame(frame.octets, link=frame.link)
+            print({
+                "monotonic": frame.monotonic,
+                "timestamp": frame.timestamp,
+                "direction": frame.direction,
+                "link": frame.link,
+                "peer": frame.peer,
+                "link_message": summary.link_message,
+                "original_source": summary.original_source,
+                "routed_source": summary.routed_source,
+                "service": summary.service,
+                "invoke_id": summary.invoke_id,
+                "problem": summary.problem,
+                "parse_error": summary.parse_error,
+                "missed_before": frame.missed_before,
+                "octets": frame.octets.hex(),
+            })
+    finally:
+        await frames.aclose()
+```
+
+Run `transcript(endpoint)` as an asyncio task beside the endpoint's client
+reads. The virtual device keeps answering on that same socket. Cancel and await
+the task to finish its `finally` block before closing the endpoint.
+The runnable [frame transcript example](../examples/python/frame_transcript.py)
+accepts a local bind address and an optional peer to read on that socket.
+
+The summary exposes `link_message` (the BVLC function or MS/TP frame type,
+such as `original-unicast-npdu`; the data link itself is `Frame.link`),
+`broadcast`, `link_source`, `link_destination`, `original_source`, `snet`, `dnet`,
+`routed_source`, `routed_destination`, `network_message`, `pdu`, `invoke_id`,
+`service`, `problem`, `parse_error` and `device` (an I-Am device instance).
+Fields not available in the decoded headers are `None`. A valid protocol
+Error, Reject, Abort or NAK sets `problem` without setting `parse_error`.
+Header decoding failures set `parse_error` and also remain visible in `problem`;
+their text is diagnostic, not a stable error code. This is a header summary,
+not exhaustive validation or decoding of every service payload.
+
+`original_source` is the originating node's address that a BBMD wrote into a
+message it forwarded: an IPv4 `address:port` in a B/IP Forwarded-NPDU, an
+IPv6 `[address]:port` in a B/IPv6 Forwarded-NPDU or
+Forwarded-Address-Resolution, whose `link_source` is the originating VMAC.
+`Frame.peer` remains the actual UDP peer observed by the socket. The
+summary's routed addresses come from
+SNET/SADR and DNET/DADR. No field invents an intermediate router path or
+authenticates an encoded source.
+
+`link` takes the `Frame.link` tokens exactly: `"bip"`, `"ipv6"`, `"sc"` and
+`"mstp"`. `"other"`, a link the decoder doesn't read, and any other text
+(a display name such as `"BACnet/IP"`, or `"bip6"`) raise `ValueError`. Octets
+decoded as the wrong link, B/IP octets as BACnet/SC say, come back with a
+`parse_error` rather than as another link's message. Summaries compare and
+hash by value, so they can key a dictionary or fill a set. A summary holds its
+fields only, never the frame's octets: `copy` and `pickle` carry those fields
+and nothing else, so a password in the frame stays out of a pickled
+transcript of summaries. The input
+octets and `Frame.octets` remain unredacted, including any service parameters
+they contain; this API does not apply the CLI capture's password masking.
 
 ## Endpoint (one transport, both roles)
 

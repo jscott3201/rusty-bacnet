@@ -21,6 +21,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 bacnet-types = { workspace = true, features = ["std", "qudt"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
+bacnet-npdu.workspace = true
 bacnet-services = { workspace = true, features = ["std"] }
 bacnet-transport = { workspace = true, features = ["ipv6"] }
 bacnet-client = { workspace = true, features = ["ipv6"] }
@@ -49,8 +50,8 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 sc-tls = ["bacnet-transport/sc-tls", "bacnet-client/sc-tls"]
 # MS/TP over a serial port: the `Client::mstp` connect builder.
 serial = ["bacnet-transport/serial"]
-# The 223 export's structural check (`export::s223::testing`), for the MCP
-# tool's tests. Not a stable API.
+# The 223 export's structural check and shared decode frame builders,
+# for front-end tests. Not a stable API.
 test-support = []
 
 [lints]

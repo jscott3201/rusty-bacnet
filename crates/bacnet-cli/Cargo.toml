@@ -71,7 +71,9 @@ unicode-segmentation = { version = "1.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-# The decode tests' frame builders (`bacnet_tool::decode::testing`).
+# The decode tests' frame builders (`bacnet_ops::decode::testing`).
+bacnet-ops = { workspace = true, features = ["test-support"] }
+# Existing filesystem fault-injection hooks used by safety tests.
 bacnet-tool = { workspace = true, features = ["test-support"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true

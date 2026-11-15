@@ -574,6 +574,7 @@ dependencies = [
  "bacnet-client",
  "bacnet-encoding",
  "bacnet-network",
+ "bacnet-npdu",
  "bacnet-objects",
  "bacnet-server",
  "bacnet-services",

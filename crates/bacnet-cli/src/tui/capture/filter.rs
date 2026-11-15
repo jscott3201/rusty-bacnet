@@ -142,7 +142,7 @@ fn row_text(frame: &CaptureFrame) -> String {
         frame.framing.label(),
         frame.source,
         frame.destination,
-        summary.link,
+        summary.link_message,
         frame.direction.label()
     );
     if let Some(via) = &frame.via {

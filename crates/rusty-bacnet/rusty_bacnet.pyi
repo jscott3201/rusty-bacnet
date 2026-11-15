@@ -4605,9 +4605,9 @@ class ScEventIterator:
 class Frame:
     """One frame the owner's transport sent or received, frozen at capture.
 
-    The octets are raw: no decoded summary or forwarding provenance yet.
-    ``local_address`` and ``peer`` use one form per link (see "Raw frame
-    observation" in docs/python-api.md)."""
+    The octets are raw; ``decode_frame(frame.octets, frame.link)`` gives the
+    decoded header summary. ``local_address`` and ``peer`` use one form per
+    link (see "Raw frame observation" in docs/python-api.md)."""
     @property
     def monotonic(self) -> float:
         """Capture time in seconds on the clock and origin of
@@ -4674,6 +4674,69 @@ class Frame:
     def __repr__(self) -> str:
         """Direction, link, peer and length; never the octets."""
         ...
+
+class FrameSummary:
+    """Frozen offline header summary. Missing fields are None.
+
+    parse_error reports header decoding failures, while problem also reports
+    valid protocol refusals. Service parameters are not exhaustively validated.
+    original_source is the originating address a BBMD wrote into a B/IP
+    Forwarded-NPDU, or a B/IPv6 Forwarded-NPDU or Forwarded-Address-Resolution;
+    Frame.peer is the actual transport peer. Neither field proves the sender's
+    identity or its path. Summaries compare and hash by value. A summary holds
+    its fields only, never the frame's octets: copy and pickle carry those
+    fields and nothing else.
+    """
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+    @property
+    def link_message(self) -> str:
+        """BVLC function or MS/TP frame type, such as original-unicast-npdu.
+
+        Not the data link; that is Frame.link."""
+        ...
+    @property
+    def broadcast(self) -> bool: ...
+    @property
+    def link_source(self) -> str | None: ...
+    @property
+    def link_destination(self) -> str | None: ...
+    @property
+    def original_source(self) -> str | None: ...
+    @property
+    def snet(self) -> int | None: ...
+    @property
+    def dnet(self) -> int | None: ...
+    @property
+    def routed_source(self) -> str | None: ...
+    @property
+    def routed_destination(self) -> str | None: ...
+    @property
+    def network_message(self) -> str | None: ...
+    @property
+    def pdu(self) -> str | None: ...
+    @property
+    def invoke_id(self) -> int | None: ...
+    @property
+    def service(self) -> str | None: ...
+    @property
+    def problem(self) -> str | None: ...
+    @property
+    def parse_error(self) -> str | None: ...
+    @property
+    def device(self) -> int | None: ...
+
+def decode_frame(octets: bytes, link: Literal["bip", "ipv6", "sc", "mstp"]) -> FrameSummary:
+    """Decode link/NPDU/APDU headers with Rust, without sending traffic.
+
+    link is required, by position or keyword: pass frame.link. It takes the
+    Frame.link tokens exactly; "other" (a link the decoder doesn't read) and
+    any other text raise ValueError. Malformed octets, or octets of another
+    link, return a partial summary with parse_error. Raw input is not
+    redacted, and service payloads are not fully validated.
+    """
+    ...
 
 class FrameIterator:
     """Bounded raw-frame subscription. A full queue drops new arrivals.

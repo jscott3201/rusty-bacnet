@@ -137,7 +137,7 @@ fn cells(number: u64, frame: &CaptureFrame, width: Width) -> Vec<String> {
         frame.source.clone(),
         frame.destination.clone(),
         frame.via.clone().unwrap_or_default(),
-        link_short(&summary.link).to_string(),
+        link_short(&summary.link_message).to_string(),
         pdu_text(frame),
         invoke.clone(),
     ];
@@ -156,7 +156,7 @@ fn cells(number: u64, frame: &CaptureFrame, width: Width) -> Vec<String> {
             parts.push(format!("#{invoke}"));
         }
         parts.push(match pdu.is_empty() {
-            true => link_short(&summary.link).to_string(),
+            true => link_short(&summary.link_message).to_string(),
             false => pdu,
         });
         parts.extend([service, problem]);

@@ -20,8 +20,8 @@ use crate::tui::capture::pcap::{
 use crate::tui::capture::{CaptureEvent, CaptureFrame, Direction, ExportJob, Framing};
 use crate::tui::worker::session::SessionOptions;
 use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, coordinator};
-use bacnet_tool::decode::frame::summarize_frame;
-use bacnet_tool::decode::testing;
+use bacnet_ops::decode::frame::summarize_frame;
+use bacnet_ops::decode::testing;
 
 fn u32_at(file: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(file[at..at + 4].try_into().unwrap())
@@ -286,17 +286,17 @@ fn tshark_reads_the_exports_without_malformed_packets() {
     let cases = [
         (
             bip_file(&bip, false).unwrap(),
-            "eth:",
+            First::Exactly("eth:"),
             &["bvlc", "bacnet", "bacapp"][..],
         ),
         (
             bip_file(&bip, true).unwrap(),
-            "ip:",
+            First::Ipv4,
             &["bvlc", "bacnet", "bacapp"][..],
         ),
         (
             mstp_file(&mstp_frames()).unwrap(),
-            "mstp",
+            First::Exactly("mstp"),
             &["mstp", "bacnet", "bacapp"][..],
         ),
     ];
@@ -304,7 +304,7 @@ fn tshark_reads_the_exports_without_malformed_packets() {
         let path = dir.path().join(format!("{i}.pcap"));
         std::fs::write(&path, file).unwrap();
         let fields = tshark(&path, &["-T", "fields", "-e", "frame.protocols"]);
-        assert!(fields.lines().all(|l| l.starts_with(first)), "{fields}");
+        assert!(fields.lines().all(|line| first.leads(line)), "{fields}");
         for protocol in *protocols {
             assert!(fields.contains(protocol), "{protocol} in {fields}");
         }
@@ -314,6 +314,40 @@ fn tshark_reads_the_exports_without_malformed_packets() {
         );
         assert!(malformed.trim().is_empty(), "malformed: {malformed}");
     }
+}
+
+/// What a tshark `frame.protocols` line of an export starts with.
+#[derive(Debug, Clone, Copy)]
+enum First {
+    /// This protocol, with nothing before it.
+    Exactly(&'static str),
+    /// IPv4 (`LINKTYPE_IPV4`), which some tshark versions list behind a
+    /// `raw:` wrapper. Only this link type may have one.
+    Ipv4,
+}
+
+impl First {
+    fn leads(self, line: &str) -> bool {
+        match self {
+            Self::Exactly(first) => line.starts_with(first),
+            Self::Ipv4 => line.strip_prefix("raw:").unwrap_or(line).starts_with("ip:"),
+        }
+    }
+}
+
+/// The `raw:` wrapper is accepted in front of IPv4 alone: an Ethernet or
+/// MS/TP export that tshark reads behind one is not the link type written.
+#[test]
+fn only_the_ipv4_export_may_lead_with_a_raw_wrapper() {
+    assert!(First::Ipv4.leads("ip:udp:bvlc:bacnet:bacapp"));
+    assert!(First::Ipv4.leads("raw:ip:udp:bvlc:bacnet:bacapp"));
+    assert!(!First::Ipv4.leads("raw:eth:ethertype:ip"));
+    let eth = First::Exactly("eth:");
+    assert!(eth.leads("eth:ethertype:ip:udp:bvlc"));
+    assert!(!eth.leads("raw:eth:ethertype:ip:udp:bvlc"));
+    let mstp = First::Exactly("mstp");
+    assert!(mstp.leads("mstp:bacnet:bacapp"));
+    assert!(!mstp.leads("raw:mstp:bacnet:bacapp"));
 }
 
 fn tshark(path: &Path, args: &[&str]) -> String {
