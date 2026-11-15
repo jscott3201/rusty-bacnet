@@ -92,6 +92,7 @@ pub use cov::{
     COV_CONFIRMED_IN_FLIGHT, COV_CONFIRMED_TIMEOUT_MAX_MS, COV_OUTBOX_MAX_ENTRIES,
     COV_OUTBOX_MAX_OCTETS,
 };
+mod frame_observation;
 mod local_writes;
 #[path = "registered_port.rs"]
 mod registered_port;
@@ -342,6 +343,7 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     pub(crate) bip_status: Option<bacnet_transport::bip::BvlcClientStatus>,
     /// The B/IP transport's BBMD table reads, when the B/IP builder built it.
     pub(crate) bip_tables: Option<bacnet_transport::bip::BvlcTableReader>,
+    pub(crate) frame_tap: Option<bacnet_transport::tap::FrameTap>,
     /// The MS/TP transport's counters, when the MS/TP builder built it.
     pub(crate) mstp_diagnostics: Option<bacnet_transport::mstp::MstpDiagnostics>,
     /// The SC transport's events and link status, when the SC builder built it.
@@ -444,6 +446,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             egress: None,
             bip_status: None,
             bip_tables: None,
+            frame_tap: None,
             mstp_diagnostics: None,
             sc_link: None,
             cov: cov::CovRole::default(),
