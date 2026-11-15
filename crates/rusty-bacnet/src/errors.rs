@@ -54,7 +54,7 @@ const KIND_ERRNO_NAMES: [(std::io::ErrorKind, &str); 15] = [
 /// The `BacnetProtocolError` attributes a structured Clause 21 error body
 /// fills in. Each is `None` unless the body carried it, including on the
 /// class itself.
-const DETAIL_ATTRIBUTES: [&str; 7] = [
+pub(crate) const DETAIL_ATTRIBUTES: [&str; 7] = [
     "first_failed_element_number",
     "first_failed_write_attempt",
     "first_failed_subscription",
@@ -302,7 +302,7 @@ fn transport_error_type(py: Python<'_>) -> PyResult<&Py<PyType>> {
 /// Set `name` on `error` to `value`'s IntEnum member, which compares equal
 /// to the wire integer (#915, #1816); the plain integer if the member can't
 /// be made.
-fn set_enum_attr<T: PyIntEnum>(error: &Bound<'_, PyAny>, name: &str, value: T) {
+pub(crate) fn set_enum_attr<T: PyIntEnum>(error: &Bound<'_, PyAny>, name: &str, value: T) {
     let _ = match int_enums::to_py(error.py(), value) {
         Ok(member) => error.setattr(name, member),
         Err(_) => error.setattr(name, value.raw()),

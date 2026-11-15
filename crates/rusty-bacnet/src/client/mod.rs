@@ -223,6 +223,9 @@ pub struct BACnetClient {
     router: Option<crate::router::application::RouterApplication>,
     /// Least time between confirmed requests to one destination (#1535).
     min_request_interval_ms: u64,
+    /// The priorities `relinquish` may use (#2561): 1, 2, 5 and 6 refused
+    /// unless `write_policy=` allows them.
+    write_policy: bacnet_ops::WritePolicy,
 }
 
 mod client_methods {
@@ -236,6 +239,7 @@ mod client_methods {
     mod lifecycle;
     mod log_read;
     mod object_device_alarm;
+    mod priorities;
     mod read_write;
     mod sc_peer;
     mod vt_audit_time_directed;
