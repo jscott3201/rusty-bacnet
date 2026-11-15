@@ -2,10 +2,11 @@
 //! a [`Scope`], this network alone unless the request names another, and
 //! the I-Haves that answer it ([`FoundObject`]).
 
+use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, ReceivedIHave};
+use bacnet_client::client::{BACnetClient, ReceivedIHave, collect_answers};
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -13,7 +14,6 @@ use bacnet_types::enums::UnconfirmedServiceChoice;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
-use tokio::sync::broadcast::{self, error::RecvError};
 
 use super::Client;
 use super::discover::{Ask, Scope, instances};
@@ -159,41 +159,31 @@ impl Scope {
     }
 }
 
-/// Collect from `rx` until `deadline` the I-Haves that answer a Who-Has
-/// for `object` in `range` ([`ReceivedIHave::answers`]): one per device,
-/// object and source, in the order they came. A receiver that falls
-/// behind loses the oldest, and collection goes on.
-async fn collect(
-    rx: &mut broadcast::Receiver<ReceivedIHave>,
-    deadline: tokio::time::Instant,
-    object: &WhoHasObject,
-    range: Option<DeviceInstanceRange>,
-) -> Vec<ReceivedIHave> {
-    let mut replies: Vec<ReceivedIHave> = Vec::new();
-    loop {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Ok(reply)) => {
-                let seen = replies.iter().any(|kept| {
-                    kept.i_have.device_identifier == reply.i_have.device_identifier
-                        && kept.i_have.object_identifier == reply.i_have.object_identifier
-                        && kept.source_mac == reply.source_mac
-                        && kept.source_network == reply.source_network
-                });
-                if !seen && reply.answers(object, range) {
-                    replies.push(reply);
-                }
-            }
-            Ok(Err(RecvError::Lagged(missed))) => {
-                tracing::warn!(missed, "Who-Has collector fell behind; I-Haves were lost");
-            }
-            Ok(Err(RecvError::Closed)) | Err(_) => return replies,
+impl Scope {
+    /// Whether `reply` came from where this scope's Who-Has went (#2596),
+    /// `own` being the client's network number once known: every answer
+    /// for a global one; for a local one, an answer from this network (no
+    /// SNET, or SNET `own`); for a remote network, an answer from it (SNET
+    /// that network, or none when it is `own`); for a directed one, an
+    /// answer from that station. An I-Have from elsewhere during the wait,
+    /// unasked or another's answer, is no answer to this search.
+    fn answered_by(&self, reply: &ReceivedIHave, own: Option<u16>) -> bool {
+        let from = reply.source_network.as_ref().map(|routed| routed.network);
+        match self {
+            Self::Global => true,
+            Self::Local => from.is_none() || from == own,
+            Self::Network(network) => from.map_or(own == Some(*network), |n| n == *network),
+            Self::Directed(station) => source(reply, own) == Some(station.clone().localized(own)),
         }
     }
 }
 
 /// Send one Who-Has for `object` in `range` to `scope` over `client`, once
-/// [`station`] has checked the scope, then collect the I-Haves that answer
-/// it for `wait`: the low-level half of [`Client::find`] and
+/// [`station`] has checked the scope, then collect for `wait` the I-Haves
+/// that answer it from that scope ([`Scope::answered_by`]): one per device,
+/// object and station, at most
+/// [`MAX_I_HAVE_REPLIES`](bacnet_client::client::MAX_I_HAVE_REPLIES) ([`collect_answers`]).
+/// The low-level half of [`Client::find`] and
 /// [`raw::who_has_replies`](crate::raw::who_has_replies).
 pub(crate) async fn replies<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
@@ -207,7 +197,21 @@ pub(crate) async fn replies<T: TransportPort + 'static>(
     let mut rx = client.i_have_events();
     scope.send_who_has(client, station, object, range).await?;
     let deadline = tokio::time::Instant::now() + wait;
-    Ok(collect(&mut rx, deadline, object, range).await)
+    // A station's routed copy is its local answer once the client knows
+    // its own network's number (#2572): one answer, so it counts once
+    // against the cap.
+    let mut stations = HashSet::new();
+    let keep = |reply: &ReceivedIHave| {
+        let own = client.network_number();
+        let station = source(reply, own);
+        let key = (
+            reply.i_have.device_identifier,
+            reply.i_have.object_identifier,
+            station,
+        );
+        scope.answered_by(reply, own) && stations.insert(key)
+    };
+    Ok(collect_answers(&mut rx, deadline, object, range, keep).await)
 }
 
 /// Check `scope` for a Who-Has before anything is sent: the station's MAC
@@ -221,11 +225,16 @@ pub(crate) fn station<T: TransportPort + 'static>(
 
 impl<T: TransportPort + 'static> Client<T> {
     /// Send the one Who-Has `request` describes, under the rate cap, and
-    /// collect for its wait the objects that answer: one [`FoundObject`]
-    /// per device address and object, in the order the I-Haves came. With
-    /// no scope named the Who-Has is a local broadcast, which no router
+    /// collect for its wait the objects that answer from the scope asked:
+    /// one [`FoundObject`] per device address and object, in the order the
+    /// I-Haves came. An I-Have from elsewhere during the wait is no answer.
+    /// With no scope named the Who-Has is a local broadcast, which no router
     /// passes on, so a device behind a router doesn't hear it: an empty
     /// list says only that nothing on the scope asked has the object.
+    /// Collection stops at
+    /// [`MAX_I_HAVE_REPLIES`](bacnet_client::client::MAX_I_HAVE_REPLIES)
+    /// answers, so a list that long was cut short: ask a narrower scope or
+    /// range.
     ///
     /// ```no_run
     /// use bacnet_ops::{Client, Find, Scope};
@@ -268,23 +277,17 @@ impl<T: TransportPort + 'static> Client<T> {
             crate::limits::refund();
         }
         let own = client.network_number();
-        let mut found: Vec<FoundObject> = Vec::new();
-        for reply in heard.map_err(OpsError::from)? {
-            let Some(address) = source(&reply, own) else {
-                continue;
-            };
-            let object = FoundObject {
-                device: reply.i_have.device_identifier.instance_number(),
-                object: reply.i_have.object_identifier,
-                name: reply.i_have.object_name,
-                address,
-            };
-            // A routed answer and a local one may name the same station
-            // once the network's number is known.
-            if !found.contains(&object) {
-                found.push(object);
-            }
-        }
-        Ok(found)
+        Ok(heard
+            .map_err(OpsError::from)?
+            .into_iter()
+            .filter_map(|reply| {
+                Some(FoundObject {
+                    address: source(&reply, own)?,
+                    device: reply.i_have.device_identifier.instance_number(),
+                    object: reply.i_have.object_identifier,
+                    name: reply.i_have.object_name,
+                })
+            })
+            .collect())
     }
 }

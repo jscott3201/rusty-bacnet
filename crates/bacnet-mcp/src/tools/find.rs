@@ -36,8 +36,9 @@ pub(super) const SPEC: Spec = Spec {
                   range. Paged: call again with next_cursor. A device whose list couldn't be \
                   read whole is listed under incomplete, and one that failed under skipped. \
                   It sends no Who-Has: it searches the devices bacnet_discover found, which by \
-                  default asks this network alone, so a search that matches nothing carries a \
-                  note saying how to reach devices behind routers. Read-only.",
+                  default asks this network alone, so the last page of a search that matched \
+                  nothing carries a note saying how to reach devices behind routers. \
+                  Read-only.",
     input,
     output,
     idempotent: true,
@@ -126,8 +127,8 @@ fn output() -> Value {
         },
         "note": {
             "type": "string",
-            "description": "When nothing matched: the search covered only the devices \
-                            discovered so far, and how to discover further",
+            "description": "On the last page of a search that matched nothing: it covered \
+                            only the devices discovered so far, and how to discover further",
         },
         "skipped": {
             "type": "array",
@@ -247,16 +248,25 @@ impl Query {
     }
 }
 
+/// The position's bit that says an earlier page matched something, so the
+/// last page knows whether the whole search found nothing (#2596).
+const MATCHED: u64 = 1 << 31;
+
+/// The position's bits for the index: a device lists far fewer objects.
+const INDEX: u64 = MATCHED - 1;
+
 /// Where a page resumes: a device instance and an index into its
-/// candidates, packed into the cursor's position.
-fn pack(device: u32, index: usize) -> u64 {
-    (u64::from(device) << 32) | u64::try_from(index).unwrap_or(u64::from(u32::MAX))
+/// candidates, and whether any page so far matched, packed into the
+/// cursor's position, which the cursor seals as it is.
+fn pack(device: u32, index: usize, matched: bool) -> u64 {
+    let index = u64::try_from(index).unwrap_or(INDEX).min(INDEX);
+    (u64::from(device) << 32) | index | if matched { MATCHED } else { 0 }
 }
 
-fn unpack(position: u64) -> (u32, usize) {
+fn unpack(position: u64) -> (u32, usize, bool) {
     let device = u32::try_from(position >> 32).unwrap_or(u32::MAX);
-    let index = usize::try_from(position & u64::from(u32::MAX)).unwrap_or(usize::MAX);
-    (device, index)
+    let index = usize::try_from(position & INDEX).unwrap_or(usize::MAX);
+    (device, index, position & MATCHED != 0)
 }
 
 /// The cached names of `object` on `device`, if fresh and holding what
@@ -377,7 +387,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
 ) -> Result<Value, ToolError> {
     let query = Query::parse(&args)?;
     let range = args.range.as_deref().map(parse_range).transpose()?;
-    let (from_device, from_index) = unpack(start(ctx, NAME, args.cursor.as_deref(), raw)?);
+    let (from_device, from_index, matched) = unpack(start(ctx, NAME, args.cursor.as_deref(), raw)?);
     let client = ctx.client()?;
     let mut devices = client.devices().await;
     devices.retain(|found| {
@@ -433,8 +443,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
             break;
         }
     }
-    // The whole search, not one page of it, found nothing.
-    let nothing = args.cursor.is_none() && page.matches.is_empty() && page.resume.is_none();
+    // Whether the whole search, not this page alone, has matched; on its
+    // last page, nothing so is the note's case.
+    let matched = matched || !page.matches.is_empty();
+    let nothing = !matched && page.resume.is_none();
     let mut body = json!({
         "matches": page.matches,
         "devices": total,
@@ -442,7 +454,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
         "incomplete": page.incomplete,
         "skipped": page.skipped,
         "truncated": page.resume.is_some(),
-        "next_cursor": page.resume.map(|(device, index)| next(ctx, NAME, raw, pack(device, index))),
+        "next_cursor": page
+            .resume
+            .map(|(device, index)| next(ctx, NAME, raw, pack(device, index, matched))),
         "limits": ctx.limits(Some(page_size(ctx))),
     });
     if nothing {

@@ -198,3 +198,86 @@ async fn the_low_level_sends_take_the_same_default() {
     assert!(who_has_frames(&sent).is_empty());
     stop(vec![lab]).await;
 }
+
+/// The instance of the device at station `n` in the scope tests.
+fn device_at(n: u8) -> u32 {
+    3000 + u32::from(n)
+}
+
+/// An I-Have for "A" from a station, routed (SNET, SADR) or not.
+type Heard = (u8, Option<(u16, [u8; 1])>);
+
+/// What `client` finds of the object named "A" within `scope` while
+/// `bus` hears `heard`, sent as the search listens.
+async fn found_within(
+    client: &crate::Client<bacnet_transport::test_transport::TestTransport>,
+    bus: &Bus,
+    scope: Scope,
+    heard: &[Heard],
+) -> Vec<(u32, super::DeviceAddress)> {
+    let search = Find::name("A")
+        .within(scope)
+        .wait(Duration::from_millis(500));
+    let (found, ()) = tokio::join!(client.find(search), async {
+        super::test_bus::settle().await;
+        for (n, routed) in heard {
+            let routed = routed.as_ref().map(|(network, sadr)| (*network, &sadr[..]));
+            bus.i_have(*n, routed, device_at(*n), "A");
+        }
+    });
+    let mut found: Vec<_> = found
+        .unwrap()
+        .into_iter()
+        .map(|f| (f.device, f.address))
+        .collect();
+    found.sort();
+    found
+}
+
+/// Only an answer from the station a directed search asked is a result
+/// (#2596): station 3's I-Have, heard during a directed search of station 2,
+/// unasked or another's answer, is not listed.
+#[tokio::test(start_paused = true)]
+async fn a_directed_search_lists_only_its_station() {
+    let bus = Bus::new();
+    let (client, _sent) = client(&bus).await;
+    let found = found_within(
+        &client,
+        &bus,
+        Scope::Directed(at(2)),
+        &[(3, None), (2, None)],
+    )
+    .await;
+    assert_eq!(found, [(device_at(2), at(2))]);
+}
+
+/// A local search lists the answers from this network alone: an I-Have a
+/// router passed on from network 5 during it is not a result.
+#[tokio::test(start_paused = true)]
+async fn a_local_search_lists_only_this_network() {
+    let bus = Bus::new();
+    let (client, _sent) = client(&bus).await;
+    let found = found_within(
+        &client,
+        &bus,
+        Scope::Local,
+        &[(9, Some((5, [7]))), (2, None)],
+    )
+    .await;
+    assert_eq!(found, [(device_at(2), at(2))]);
+}
+
+/// A search of network 5 lists the answers from network 5 alone: not a
+/// local station's I-Have, and not one a router passed on from network 6.
+#[tokio::test(start_paused = true)]
+async fn a_network_search_lists_only_that_network() {
+    let bus = Bus::new();
+    let (client, _sent) = client(&bus).await;
+    let heard = [(2, None), (9, Some((6, [8]))), (9, Some((5, [7])))];
+    let found = found_within(&client, &bus, Scope::Network(5), &heard).await;
+    let station = super::DeviceAddress::new(5, &[7]).unwrap();
+    assert_eq!(found, [(device_at(9), station)]);
+    // Every network takes them all.
+    let found = found_within(&client, &bus, Scope::Global, &heard).await;
+    assert_eq!(found.len(), 3, "{found:?}");
+}

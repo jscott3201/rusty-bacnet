@@ -11898,7 +11898,10 @@ passes on; `Discover::network(n)`, `Discover::global()` and
 on a low-level client, with no rate cap. `client.find(Find::name("Zone Temp"))`
 (or `Find::object(id)`) sends one Who-Has under the same rate cap and returns
 one `FoundObject` (device instance, object, name and the `DeviceAddress` it
-answered from) per device address and object that answered within its wait
+answered from) per device address and object that answered from the scope
+asked within its wait (an I-Have from elsewhere during it is no answer; at
+most `bacnet_client::client::MAX_I_HAVE_REPLIES`, 4,096, where collection
+stops)
 (3 s, `FIND_WAIT`, unless `.wait(..)` says otherwise; `.range(low..=high)`
 asks fewer devices). Its Who-Has is a local broadcast too unless
 `.within(scope)` names another `Scope` (#2596): every device that hears a
@@ -11907,7 +11910,10 @@ that nothing on this network has it. `bacnet_ops::raw::who_has(&low_level,
 &scope, &object, range)` sends one on a low-level client and
 `raw::who_has_replies(.., wait)` also collects the `ReceivedIHave`s, with no
 rate cap. `BACnetClient::who_has` and `who_has_replies` stay global
-broadcasts by name: the front ends send through the scope.
+broadcasts by name: the front ends send through the scope. Every collector
+keeps one answer per device, object and source address, at most
+`MAX_I_HAVE_REPLIES`; `bacnet_client::client::collect_answers` is that
+collector, for a caller that sends its own Who-Has.
 `client.device(target).await?` gives a `Device` handle: from an address
 (`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there (an
 address on the client's own network, once `BACnetClient::network_number`

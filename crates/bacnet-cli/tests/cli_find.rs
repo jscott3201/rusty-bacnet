@@ -81,9 +81,12 @@ const LOCAL_MISS: &str = "only this network was asked";
 async fn find_prints_the_device_and_object_that_answer() {
     let mut server = bbmd().await;
     let (found, said) = find(&server, "Supply Air Temp", false, &[]).await;
+    let mac = server.local_mac();
+    let address = format!("127.0.0.1:{}", u16::from_be_bytes([mac[4], mac[5]]));
     assert_eq!(
         found,
-        json!([{ "device": INSTANCE, "object": "ANALOG_INPUT:7", "name": "Supply Air Temp" }])
+        json!([{ "device": INSTANCE, "object": "ANALOG_INPUT:7", "name": "Supply Air Temp",
+                 "address": address }])
     );
     assert!(!said.contains(LOCAL_MISS), "{said}");
     server.stop().await.unwrap();

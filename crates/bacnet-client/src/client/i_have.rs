@@ -1,16 +1,35 @@
 //! I-Have delivery (Clause 16.9, #960): every decoded I-Have goes to the
 //! subscribers of [`BACnetClient::i_have_events`], and
-//! [`BACnetClient::who_has_replies`] collects the answers to one Who-Has.
+//! [`BACnetClient::who_has_replies`] collects the answers to one Who-Has
+//! ([`collect_answers`]).
+
+use std::collections::HashSet;
 
 use super::*;
 use bacnet_services::who_has::{IHaveRequest, WhoHasObject};
 use bacnet_services::who_is::DeviceInstanceRange;
+use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast::error::RecvError;
 
 /// I-Have broadcast channel capacity. A subscriber this far behind loses
 /// the oldest and is told how many with `RecvError::Lagged`; the dispatch
 /// task never waits for a subscriber.
 pub const I_HAVE_CHANNEL_CAPACITY: usize = 256;
+
+/// The most answers one Who-Has collects ([`collect_answers`]). Collection
+/// stops there, before its wait is over, and logs a warning, so a list
+/// this long was cut short. Each answer holds an object name, and a Who-Has
+/// to every network of a large site can draw one from every device.
+pub const MAX_I_HAVE_REPLIES: usize = 4096;
+
+/// What makes two answers the same one: the device, the object, and the
+/// source (the link peer, and SNET/SADR when a router passed it on).
+type AnswerKey = (
+    ObjectIdentifier,
+    ObjectIdentifier,
+    MacAddr,
+    Option<NpduAddress>,
+);
 
 /// An I-Have this client received.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +104,49 @@ pub(super) async fn collect_until<T: Clone>(
     }
 }
 
+/// Receive from `rx` until `deadline` the I-Haves that answer a Who-Has
+/// for `object` in `range` ([`ReceivedIHave::answers`]) and that `keep`
+/// takes: one per device, object and source, so two devices sharing an
+/// instance both come back, in the order they came, and at most
+/// [`MAX_I_HAVE_REPLIES`]. `keep` sees each answer not kept already, once.
+/// A receiver that falls behind loses the oldest, which is logged, and
+/// collection goes on.
+pub async fn collect_answers(
+    rx: &mut broadcast::Receiver<ReceivedIHave>,
+    deadline: tokio::time::Instant,
+    object: &WhoHasObject,
+    range: Option<DeviceInstanceRange>,
+    mut keep: impl FnMut(&ReceivedIHave) -> bool,
+) -> Vec<ReceivedIHave> {
+    let mut seen: HashSet<AnswerKey> = HashSet::new();
+    let mut replies: Vec<ReceivedIHave> = Vec::new();
+    while replies.len() < MAX_I_HAVE_REPLIES {
+        let reply = match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Ok(reply)) => reply,
+            Ok(Err(RecvError::Lagged(missed))) => {
+                warn!(missed, "I-Have collector fell behind; answers were lost");
+                continue;
+            }
+            Ok(Err(RecvError::Closed)) | Err(_) => return replies,
+        };
+        let key = (
+            reply.i_have.device_identifier,
+            reply.i_have.object_identifier,
+            reply.source_mac.clone(),
+            reply.source_network.clone(),
+        );
+        if reply.answers(object, range) && !seen.contains(&key) && keep(&reply) {
+            seen.insert(key);
+            replies.push(reply);
+        }
+    }
+    warn!(
+        cap = MAX_I_HAVE_REPLIES,
+        "Who-Has answers reached the cap; the rest were not collected"
+    );
+    replies
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Get a receiver for every I-Have this client receives, an answer to
     /// its own Who-Has or not (a device may send one at any time). Each call
@@ -95,9 +157,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Send a Who-Has as [`Self::who_has`] does, then collect the I-Haves
-    /// that answer it ([`ReceivedIHave::answers`]) for `wait`, one per
-    /// device and object, in the order they arrived. No answer is an empty
-    /// list, not an error.
+    /// that answer it for `wait` ([`collect_answers`]): one per device,
+    /// object and source address, in the order they arrived, at most
+    /// [`MAX_I_HAVE_REPLIES`]. No answer is an empty list, not an error.
     pub async fn who_has_replies(
         &self,
         object: WhoHasObject,
@@ -108,18 +170,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut rx = self.i_have_events();
         self.who_has(object.clone(), range).await?;
         let deadline = tokio::time::Instant::now() + wait;
-        let mut replies: Vec<ReceivedIHave> = Vec::new();
-        collect_until(&mut rx, deadline, "I-Have", |reply| {
-            let seen = replies.iter().any(|kept| {
-                kept.i_have.device_identifier == reply.i_have.device_identifier
-                    && kept.i_have.object_identifier == reply.i_have.object_identifier
-            });
-            if !seen && reply.answers(&object, range) {
-                replies.push(reply);
-            }
-        })
-        .await;
-        Ok(replies)
+        Ok(collect_answers(&mut rx, deadline, &object, range, |_| true).await)
     }
 }
 

@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- **Breaking (CLI):** `bacnet find` sends its Who-Has on this network alone
-  unless the new `--dnet`, `--global` or `--target` says where else, and a
-  miss there notes on stderr how to widen it; the TUI's `:find` takes
-  `--dnet N` and `--global` (#2596).
+- **Breaking (CLI):** `bacnet find` and the TUI's `:find` ask this network
+  alone by default; `find` takes `--dnet`, `--global` and `--target`, `:find`
+  takes `--dnet N` and `--global`, a local miss notes how to widen it, and
+  each row now carries the address it answered from (#2596).

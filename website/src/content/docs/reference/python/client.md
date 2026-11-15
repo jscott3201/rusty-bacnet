@@ -494,12 +494,15 @@ def who_has_replies(
 ```
 
 Send a Who-Has for `object` (an identifier, or a name) and
-collect the I-Haves that answer it for `timeout_ms`: one per device,
-object and source address, in arrival order; an empty list when none
-answer. The limits and `scope` follow `who_has_by_id()`'s rules
-(#1850, #2596): with the default scope an empty list says only that
-nothing on this network has the object. It holds the started client
-for the whole wait, so `stop()` waits up to `timeout_ms` for it.
+collect the I-Haves that answer it from that scope for
+`timeout_ms`: one per device, object and source address, in arrival
+order; an empty list when none answer. An I-Have heard from elsewhere
+during the wait is not an answer, and collection stops at 4096
+answers, so a list that long was cut short. The limits and `scope`
+follow `who_has_by_id()`'s rules (#1850, #2596): with the default
+scope an empty list says only that nothing on this network has the
+object. It holds the started client for the whole wait, so `stop()`
+waits up to `timeout_ms` for it.
 
 ### BACnetClient.i_have_events
 

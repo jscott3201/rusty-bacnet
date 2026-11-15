@@ -142,6 +142,32 @@ async fn the_default_search_stays_on_this_network() {
     lab.stop().await;
 }
 
+/// Once the client knows its network's number, a station's I-Have heard
+/// both locally and as a router's copy from that network (SNET 1, SADR the
+/// station) is one answer at the local station, not two (#2596).
+#[tokio::test(start_paused = true)]
+async fn a_routed_copy_of_a_local_answer_is_one_answer() {
+    let lab = Routed::new(|near| near.numbered_port(1)).await;
+    let low = lab.client.low_level();
+    low.what_is_network_number(None).await.unwrap();
+    for _ in 0..50 {
+        if low.network_number().is_some() {
+            break;
+        }
+        settle().await;
+    }
+    assert_eq!(low.network_number(), Some(1), "the router said");
+    let search = Find::name("near").wait(Duration::from_millis(500));
+    let (found, ()) = tokio::join!(lab.client.find(search), async {
+        settle().await;
+        lab.near.i_have(2, None, 2002, "near");
+        lab.near.i_have(254, Some((1, &mac(2))), 2002, "near");
+    });
+    let found: Vec<_> = found.unwrap().into_iter().map(|f| f.address).collect();
+    assert_eq!(found, [DeviceAddress::local(&mac(2)).unwrap()]);
+    lab.stop().await;
+}
+
 /// Handles following one instance on two networks stay apart: making the
 /// second moves nothing, and each reads its own network's device (the
 /// reviewer's probe A).

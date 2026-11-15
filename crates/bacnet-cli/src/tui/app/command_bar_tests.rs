@@ -439,3 +439,19 @@ fn hints_follow_what_is_typed() {
     assert!(names("zz").is_empty());
     assert!(names("zz 1").is_empty());
 }
+
+/// Each `find` form says where its Who-Has goes, and a passive session,
+/// which sends none, says the scoped forms are not for it (#2596).
+#[test]
+fn each_find_form_says_where_it_asks() {
+    let find = command("find").unwrap();
+    let said = |form: &str, passive| find.description(form, passive);
+    assert_eq!(said("find NAME", false), find.what);
+    assert!(said("find --dnet N NAME", false).contains("remote network N"));
+    assert!(said("find --global NAME", false).contains("every network"));
+    assert!(said("find NAME", true).contains("observed"));
+    for form in ["find --dnet N NAME", "find --global NAME"] {
+        assert!(!said(form, false).contains("alone"), "{form}");
+        assert!(said(form, true).contains("passive"), "{form}");
+    }
+}

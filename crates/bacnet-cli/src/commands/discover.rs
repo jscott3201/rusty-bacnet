@@ -1,6 +1,6 @@
 //! Discovery commands: WhoIs and WhoHas.
 
-use bacnet_client::client::{BACnetClient, ReceivedIHave};
+use bacnet_client::client::{BACnetClient, MAX_I_HAVE_REPLIES, ReceivedIHave};
 use bacnet_ops::target::{self, AddressStyle};
 use bacnet_ops::{DeviceAddress, Scope};
 use bacnet_services::who_has::WhoHasObject;
@@ -74,17 +74,43 @@ pub struct FoundObject {
     pub object: String,
     /// The object's name.
     pub name: String,
+    /// Where the I-Have came from on this link, as `discover` writes an
+    /// address: the device, or the router that passed it on (#2596).
+    pub address: String,
+    /// The device's network, when a router passed the I-Have on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<u16>,
+    /// The device's routed station, in the target syntax the CLI reads
+    /// back (`2:0x05`), when a router passed the I-Have on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub station: Option<String>,
 }
 
-impl From<&ReceivedIHave> for FoundObject {
-    fn from(reply: &ReceivedIHave) -> Self {
+impl FoundObject {
+    /// What `reply` reports, its source written in `style`, as
+    /// [`device_info`] writes a discovered device's.
+    fn of(reply: &ReceivedIHave, style: AddressStyle) -> Self {
         let object = reply.i_have.object_identifier;
+        let routed = reply.source_network.as_ref();
         Self {
             device: reply.i_have.device_identifier.instance_number(),
             object: format!("{}:{}", object.object_type(), object.instance_number()),
             name: reply.i_have.object_name.clone(),
+            address: style.format(&reply.source_mac),
+            network: routed.map(|routed| routed.network),
+            station: routed
+                .and_then(|routed| target::routed_station(routed.network, &routed.mac_address)),
         }
     }
+}
+
+/// What `find` says on stderr when it stopped collecting at the cap: the
+/// list is cut short.
+pub(crate) fn full_note() -> String {
+    format!(
+        "Note: stopped at {MAX_I_HAVE_REPLIES} answers, so more devices may have the object: \
+         ask one network with --dnet, or one station with --target."
+    )
 }
 
 /// What `find` says on stderr when a search of this network alone found
@@ -99,10 +125,12 @@ pub(crate) fn miss_note(scope: &Scope, found: &[FoundObject]) -> Option<&'static
 }
 
 /// Send a Who-Has for `name` to `scope` and print the objects the I-Haves
-/// that answer it within `wait_secs` report: a JSON array of `{device,
-/// object, name}`, empty when nothing answered. When nothing answered a
+/// that answer it from that scope within `wait_secs` report: a JSON array
+/// of `{device, object, name, address}` (with `network` and `station` for
+/// a routed answer), empty when nothing answered. When nothing answered a
 /// search of this network alone, stderr says so and how to widen it, in
-/// either format: the JSON on stdout stays data.
+/// either format, and so it does when collection stopped at the cap: the
+/// JSON on stdout stays data.
 pub async fn find_by_name<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     name: &str,
@@ -119,10 +147,14 @@ pub async fn find_by_name<T: TransportPort + 'static>(
         std::time::Duration::from_secs(wait_secs),
     )
     .await?;
-    let found: Vec<FoundObject> = replies.iter().map(FoundObject::from).collect();
+    let style = AddressStyle::of(client.transport());
+    let found: Vec<FoundObject> = replies.iter().map(|r| FoundObject::of(r, style)).collect();
     print_found(&found, format);
     if let Some(note) = miss_note(scope, &found) {
         eprintln!("{note}");
+    }
+    if found.len() >= MAX_I_HAVE_REPLIES {
+        eprintln!("{}", full_note());
     }
     Ok(())
 }
@@ -131,14 +163,30 @@ fn print_found(found: &[FoundObject], format: OutputFormat) {
     match format {
         OutputFormat::Table if found.is_empty() => println!("No objects found."),
         OutputFormat::Table => {
+            // As `discover`'s table: with any routed answer, the link
+            // address is the router's, and the station column says where
+            // the device is.
+            let routed = found.iter().any(|f| f.network.is_some());
             let mut table = comfy_table::Table::new();
-            table.set_header(vec!["Device", "Object", "Name"]);
+            let mut header = vec!["Device", "Object", "Name"];
+            header.extend(match routed {
+                true => &["Router", "DNET", "Station"][..],
+                false => &["Address"],
+            });
+            table.set_header(header);
             for f in found {
-                table.add_row(vec![
+                let mut row = vec![
                     f.device.to_string(),
                     f.object.clone(),
                     output::screen(&f.name),
-                ]);
+                    f.address.clone(),
+                ];
+                if routed {
+                    let dash = || "-".to_string();
+                    row.push(f.network.map_or_else(dash, |n| n.to_string()));
+                    row.push(f.station.clone().unwrap_or_else(dash));
+                }
+                table.add_row(row);
             }
             println!("{table}");
         }
@@ -303,6 +351,9 @@ mod tests {
             device: 1,
             object: "ANALOG_INPUT:1".into(),
             name: "Zone Temp".into(),
+            address: "10.0.0.9:47808".into(),
+            network: None,
+            station: None,
         }];
         assert_eq!(miss_note(&Scope::Local, &[]), Some(LOCAL_MISS));
         assert!(LOCAL_MISS.contains("--dnet") && LOCAL_MISS.contains("--global"));
@@ -311,5 +362,44 @@ mod tests {
             assert_eq!(miss_note(&scope, &[]), None, "{scope:?}");
         }
         assert_eq!(miss_note(&Scope::Local, &hit), None);
+    }
+
+    /// A row carries where its I-Have came from as `discover` writes a
+    /// device (#2596): the station's address, or for a routed answer the
+    /// router's, with the network and the routed station.
+    #[test]
+    fn a_found_row_carries_its_address() {
+        use bacnet_encoding::npdu::NpduAddress;
+        use bacnet_services::who_has::IHaveRequest;
+        use bacnet_types::MacAddr;
+        use bacnet_types::enums::ObjectType;
+        use bacnet_types::primitives::ObjectIdentifier;
+
+        let id = |kind, instance| ObjectIdentifier::new(kind, instance).unwrap();
+        let reply = |routed: Option<NpduAddress>| ReceivedIHave {
+            i_have: IHaveRequest {
+                device_identifier: id(ObjectType::DEVICE, 7),
+                object_identifier: id(ObjectType::ANALOG_INPUT, 1),
+                object_name: "Zone Temp".into(),
+            },
+            source_mac: MacAddr::from_slice(&[10, 0, 0, 9, 0xBA, 0xC0]),
+            source_network: routed,
+        };
+        let local = FoundObject::of(&reply(None), AddressStyle::Bip);
+        assert_eq!(
+            serde_json::to_value(&local).unwrap(),
+            serde_json::json!({ "device": 7, "object": "ANALOG_INPUT:1",
+                                "name": "Zone Temp", "address": "10.0.0.9:47808" })
+        );
+        let routed = reply(Some(NpduAddress {
+            network: 2,
+            mac_address: MacAddr::from_slice(&[5]),
+        }));
+        let routed = FoundObject::of(&routed, AddressStyle::Bip);
+        assert_eq!(routed.address, "10.0.0.9:47808", "the router");
+        assert_eq!(
+            (routed.network, routed.station.as_deref()),
+            (Some(2), Some("2:0x05"))
+        );
     }
 }

@@ -131,7 +131,7 @@ pub(crate) fn sections(app: &App) -> Vec<Section> {
                 syntax.usage.iter().map(|form| {
                     (
                         form.to_string(),
-                        syntax.description(app.safety.passive).to_string(),
+                        syntax.description(form, app.safety.passive).to_string(),
                     )
                 })
             })

@@ -1266,18 +1266,24 @@ network; give at most one, and `--dnet` refuses 0 and 65535 as `discover`
 does. Every device that hears a Who-Has searches its objects for the name, so
 on a large routed site ask the network that holds the object.
 
-`find` prints every I-Have that answers within the wait, one row per device
-and object. With `--json` it prints an array, empty when nothing answered:
+`find` prints every I-Have that answers within the wait from the scope it
+asked, one row per device, object and source address: an I-Have heard from
+elsewhere during the wait is not an answer. Each row says where the answer came
+from as `discover` writes a device: the station's address, or for a device
+behind a router the router's address, with the network (`DNET`) and the routed
+station (`2:0x05`). With `--json` it prints an array, empty when nothing
+answered; `network` and `station` appear only for a routed answer:
 
 ```json
-[{ "device": 1234, "object": "ANALOG_INPUT:7", "name": "Zone Temp" }]
+[{ "device": 1234, "object": "ANALOG_INPUT:7", "name": "Zone Temp", "address": "192.168.1.20:47808" }]
 ```
 
 When a search of this network alone finds nothing, `find` adds a note on
 stderr, in either output format, that only this network was asked and that
 `--dnet` or `--global` asks further: a miss there doesn't mean the site has no
 such object. The JSON on stdout stays the array, and the exit status is 0, as
-for a `discover` that finds nothing.
+for a `discover` that finds nothing. `find` stops collecting at 4,096 answers
+and says so on stderr: the list is then cut short.
 
 **Find flags:**
 

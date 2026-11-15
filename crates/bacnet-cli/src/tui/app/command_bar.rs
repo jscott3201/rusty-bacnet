@@ -72,12 +72,18 @@ pub(crate) struct Syntax {
 }
 
 impl Syntax {
-    /// The command description for the session policy.
-    pub(crate) fn description(&self, passive: bool) -> &'static str {
-        if passive && self.name == "find" {
-            "Search local observed object names; alone, close the list"
-        } else {
-            self.what
+    /// What `form`, one of the command's forms, does under the session
+    /// policy: `find`'s scoped forms send further than this network, and
+    /// a passive session's `find` searches what it overheard.
+    pub(crate) fn description(&self, form: &str, passive: bool) -> &'static str {
+        match (self.name, form) {
+            ("find", "find NAME") if passive => {
+                "Search local observed object names; alone, close the list"
+            }
+            ("find", _) if passive => "Not in a passive session, which sends no Who-Has",
+            ("find", "find --dnet N NAME") => "Who-Has by object name on remote network N",
+            ("find", "find --global NAME") => "Who-Has by object name on every network",
+            _ => self.what,
         }
     }
 }

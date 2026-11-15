@@ -1865,10 +1865,13 @@ await client.who_has_by_name("Zone Temperature", scope="global")
 #### `who_has_replies(object, low_limit=None, high_limit=None, timeout_ms=3000, scope="local") -> list[IHave]`
 
 Send a Who-Has for `object`, an `ObjectIdentifier` or a name as `str`, and
-collect the I-Haves that answer it for `timeout_ms`: one per device, object
-and source address, in arrival order, and an empty list when none answer.
-The limits and `scope` follow `who_has_by_id()`'s rules: with the default
-scope an empty list says only that nothing on this network has the object.
+collect the I-Haves that answer it from that scope for `timeout_ms`: one per
+device, object and source address (so two devices sharing an instance both
+come back), in arrival order, and an empty list when none answer. An I-Have
+heard from elsewhere during the wait is not an answer. Collection stops at
+4,096 answers, so a list that long was cut short. The limits and `scope`
+follow `who_has_by_id()`'s rules: with the default scope an empty list says
+only that nothing on this network has the object.
 Each frozen `IHave` has `device_identifier`, `object_identifier`,
 `object_name`, `source_mac`, and `source_network`/`source_address` when a
 router passed it on.
