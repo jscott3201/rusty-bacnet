@@ -30,8 +30,8 @@ impl<'a> ScConfig<'a> {
             return Err("--sc-device-uuid must be nonzero and unique on this SC network".into());
         }
         let material = Credentials::load(ca, cert, key, ["--sc-ca", "--sc-cert", "--sc-key"])?;
-        let tls = ScNodeTlsConfig::from_der(material.ca, material.chain, material.key)
-            .map_err(|e| format!("--sc-ca/--sc-cert/--sc-key: SC TLS configuration: {e}"))?;
+        let tls = ScNodeTlsConfig::from_pem(&material.ca, &material.chain, &material.key)
+            .map_err(|e| material.refused(e))?;
         Ok(Self {
             url,
             vmac,

@@ -26,6 +26,8 @@ vocabulary! {
         InputTooLarge => "input_too_large", CertificateTooLarge => "certificate_too_large",
         TooManyCertificates => "too_many_certificates", EmptyCertificates => "empty_certificates",
         MalformedPem => "malformed_pem", MissingPrivateKey => "missing_private_key",
+        MultiplePrivateKeys => "multiple_private_keys",
+        UnsupportedPrivateKey => "unsupported_private_key",
         ClockOutOfRange => "clock_out_of_range"
     }
 }

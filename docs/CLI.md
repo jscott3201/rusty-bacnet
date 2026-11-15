@@ -68,9 +68,9 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `--sc-failover-url <URL>` | | SC failover hub, used when the primary can't be reached or its reconnects run out; turns on `--sc-reconnect` |
 | `--sc-reconnect` | off (a profile: on) | Redial a lost SC hub with backoff: 10 s doubling to 10 min, 10 attempts |
 | `--sc-connect-timeout <MS>` | 10000 | Bound on each SC hub dial and handshake, 1 to 600000 ms |
-| `--sc-ca <FILE>` | required for SC | Trusted site CA certificate(s) in PEM; no system-root fallback |
-| `--sc-cert <FILE>` | | SC TLS certificate PEM |
-| `--sc-key <FILE>` | | SC TLS private key PEM |
+| `--sc-ca <FILE>` | required for SC | Trusted site CA certificate(s) in PEM; no system-root fallback; read up to 1 MiB |
+| `--sc-cert <FILE>` | | SC TLS certificate PEM (read up to 1 MiB) |
+| `--sc-key <FILE>` | | SC TLS private key PEM: one unencrypted key (read up to 1 MiB) |
 | `--sc-vmac <HEX>` | | SC local VMAC as 12 hex digits or separated bytes |
 | `--sc-device-uuid <UUID>` | | SC device UUID as 32 hex digits or hyphenated text |
 | `--mstp <PORT>` | | Join an MS/TP trunk as a master station on this serial port; needs `--mstp-mac` and the `serial` feature. See [MS/TP](#mstp) |
@@ -2331,6 +2331,14 @@ quote paths containing spaces in a shell. TLS 1.3-only remains local policy.
 
 SC construction rejects missing/empty CA paths, unreadable/empty/malformed or
 unusable CA PEM, and invalid or mismatched local cert/key before DNS/TCP dialing.
+The files load through `ScNodeTlsConfig::from_pem_files` (#2600), and each
+refusal starts with the flag of the file at fault (`--sc-ca: the CA bundle holds
+no certificate, so nothing would be trusted`, `--sc-key: no PKCS#8, SEC1 or
+PKCS#1 private key found`). Each file is read up to 1 MiB. The key file must
+hold exactly one unencrypted PKCS#8, SEC1 or PKCS#1 key, in PEM that is well
+formed throughout; an encrypted key (`ENCRYPTED PRIVATE KEY`, or OpenSSL's
+older `Proc-Type: 4,ENCRYPTED` form) and an OpenSSH key are named as such, and
+`bacnet sc-check` decodes the key by the same rule.
 Failures retain nonzero exit status and stderr diagnostics, not a successful JSON
 result. SC tracing (including connection-close warnings) also goes to stderr so
 it cannot corrupt JSON stdout. Before any DNS or TCP, the credential lint of

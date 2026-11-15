@@ -1,15 +1,19 @@
 //! Required, immutable TLS policy for native hubs.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, path::Path, sync::Arc};
 
-use bacnet_types::error::Error;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
+
+use crate::sc_tls::ScTlsConfigError;
+use crate::sc_tls::material::{Material, refused, verifier_refused};
 
 /// Validated hub credentials with explicit trust, mandatory client authentication,
 /// and TLS 1.3-only local policy. Available with the `sc-tls` feature.
 ///
-/// Construct from already loaded, owned DER; no filesystem or network I/O occurs.
+/// Construct from the site's PEM files ([`Self::from_pem_files`]), from PEM in
+/// memory ([`Self::from_pem`]), or from owned DER ([`Self::from_der`]); only
+/// `from_pem_files` touches the filesystem, and none the network.
 /// Only the supplied CA certificates become rustls trust anchors. The constructor
 /// checks certificate syntax and the hub's matching certificate/key, not local
 /// certificate dates, issuer relationships, revocation, or BACnet identity policy.
@@ -99,48 +103,69 @@ pub struct ScHubTlsConfig {
 }
 
 impl ScHubTlsConfig {
-    /// Build the constrained policy before a hub can bind.
-    ///
-    /// `ca_certs` must be nonempty and every entry must be a usable rustls trust
-    /// anchor. `cert_chain` must be nonempty, leaf first, with well-formed DER and
-    /// a matching usable `key`. Errors retain configuration-stage context in
-    /// [`Error::Encoding`]. No ambient/system trust is loaded.
+    /// Build the constrained policy before a hub can bind, from owned DER:
+    /// the site CA certificates to trust, the hub's leaf-first chain, and
+    /// the leaf's private key. Both lists must be nonempty and every
+    /// certificate usable, and the key must load and belong to the leaf;
+    /// [`ScTlsConfigError`] names the input that fails and why. No
+    /// ambient/system trust is loaded. [`Self::from_pem`] and
+    /// [`Self::from_pem_files`] take PEM.
     pub fn from_der(
         ca_certs: Vec<CertificateDer<'static>>,
         cert_chain: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
-    ) -> Result<Self, Error> {
-        if cert_chain.is_empty() {
-            return Err(Error::Encoding("no server certificates found".into()));
-        }
-        if ca_certs.is_empty() {
-            return Err(Error::Encoding("no CA certificates found".into()));
-        }
-        let mut roots = rustls::RootCertStore::empty();
-        for cert in ca_certs {
-            roots
-                .add(cert)
-                .map_err(|e| Error::Encoding(format!("failed to add CA cert: {e}")))?;
-        }
-        for cert in &cert_chain {
-            rustls::server::ParsedCertificate::try_from(cert)
-                .map_err(|e| Error::Encoding(format!("TLS server config error: {e}")))?;
-        }
-        // Fix the existing aws-lc provider rather than accepting a process-wide
-        // custom key provider that might not establish certificate/key matching.
-        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-        let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
-            Arc::new(roots),
-            provider.clone(),
-        )
-        .build()
-        .map_err(|e| Error::Encoding(format!("failed to build client verifier: {e}")))?;
+    ) -> Result<Self, ScTlsConfigError> {
+        Self::build(Material::from_der(ca_certs, cert_chain, key)?)
+    }
+
+    /// Build the policy from PEM text: a CA bundle, the hub's chain (leaf
+    /// first), and exactly one unencrypted PKCS#8, SEC1 or PKCS#1 private
+    /// key, decoded as [`ScNodeTlsConfig::from_pem`] decodes them, then
+    /// checked as [`Self::from_der`] checks. Keys and `X509 CRL` sections in
+    /// the CA bundle or chain are skipped, so no revocation list applies.
+    ///
+    /// [`ScNodeTlsConfig::from_pem`]: crate::sc_tls::ScNodeTlsConfig::from_pem
+    pub fn from_pem(
+        ca_bundle: &[u8],
+        cert_chain: &[u8],
+        private_key: &[u8],
+    ) -> Result<Self, ScTlsConfigError> {
+        Self::build(Material::from_pem(ca_bundle, cert_chain, private_key)?)
+    }
+
+    /// Read three PEM files and build the policy as [`Self::from_pem`]
+    /// does. The CA bundle is read and checked before the identity files
+    /// are read; each file is read once, here, up to
+    /// [`MAX_PEM_FILE_BYTES`](crate::sc_tls::MAX_PEM_FILE_BYTES).
+    pub fn from_pem_files(
+        ca_bundle: impl AsRef<Path>,
+        cert_chain: impl AsRef<Path>,
+        private_key: impl AsRef<Path>,
+    ) -> Result<Self, ScTlsConfigError> {
+        Self::build(Material::from_pem_files(
+            ca_bundle.as_ref(),
+            cert_chain.as_ref(),
+            private_key.as_ref(),
+        )?)
+    }
+
+    fn build(material: Material) -> Result<Self, ScTlsConfigError> {
+        let Material {
+            roots,
+            chain,
+            key,
+            provider,
+        } = material;
+        let verifier =
+            rustls::server::WebPkiClientVerifier::builder_with_provider(roots, provider.clone())
+                .build()
+                .map_err(verifier_refused)?;
         let config = rustls::ServerConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|e| Error::Encoding(format!("TLS server config error: {e}")))?
+            .map_err(refused)?
             .with_client_cert_verifier(verifier)
-            .with_single_cert(cert_chain, key)
-            .map_err(|e| Error::Encoding(format!("TLS server config error: {e}")))?;
+            .with_single_cert(chain, key)
+            .map_err(refused)?;
         Ok(Self {
             inner: Arc::new(config),
             certificate_bindings: None,
