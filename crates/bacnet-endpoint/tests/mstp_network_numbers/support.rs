@@ -298,6 +298,19 @@ impl Peer {
     }
     pub async fn number(&mut self, number: u16) {
         let frame = self.data().await;
+        Self::assert_number(&frame, number);
+    }
+    /// The node's Network-Number-Is for `number`, awaited for up to
+    /// `limit` of paused time: the answer to a broadcast question, which
+    /// the node holds for a wait longer than `bounded` allows (#2597).
+    pub async fn number_within(&mut self, number: u16, limit: Duration) {
+        let link = self.link.clone();
+        match tokio::time::timeout(limit, self.next_data()).await {
+            Ok(frame) => Self::assert_number(&frame, number),
+            Err(_) => panic!("no Network-Number-Is in {limit:?}; {}", link.report()),
+        }
+    }
+    fn assert_number(frame: &MstpFrame, number: u16) {
         assert_eq!(frame.frame_type, FrameType::BACNET_DATA_NOT_EXPECTING_REPLY);
         assert_eq!(frame.destination, BROADCAST);
         assert_eq!(
@@ -312,28 +325,29 @@ impl Peer {
     /// be an unexpected frame there (Clause 9.5.6.8) and cost the token.
     pub async fn data(&mut self) -> MstpFrame {
         let link = self.link.clone();
-        link.bounded(async {
-            self.frame(FrameType::TOKEN, NODE, &[]).await.unwrap();
-            loop {
-                let frame = self.writes.recv().await.expect("serial owner disappeared");
-                assert_eq!(frame.source, NODE);
-                match frame.frame_type {
-                    FrameType::BACNET_DATA_NOT_EXPECTING_REPLY
-                    | FrameType::BACNET_DATA_EXPECTING_REPLY => return frame,
-                    FrameType::POLL_FOR_MASTER if frame.destination == PEER => {
-                        self.frame(FrameType::REPLY_TO_POLL_FOR_MASTER, NODE, &[])
-                            .await
-                            .unwrap();
-                    }
-                    FrameType::TOKEN if frame.destination == PEER => {
-                        self.frame(FrameType::TOKEN, NODE, &[]).await.unwrap();
-                    }
-                    FrameType::POLL_FOR_MASTER | FrameType::REPLY_POSTPONED => {}
-                    other => panic!("unexpected frame {other:?}"),
+        link.bounded(self.next_data()).await
+    }
+    /// [`Self::data`] without its hang backstop.
+    async fn next_data(&mut self) -> MstpFrame {
+        self.frame(FrameType::TOKEN, NODE, &[]).await.unwrap();
+        loop {
+            let frame = self.writes.recv().await.expect("serial owner disappeared");
+            assert_eq!(frame.source, NODE);
+            match frame.frame_type {
+                FrameType::BACNET_DATA_NOT_EXPECTING_REPLY
+                | FrameType::BACNET_DATA_EXPECTING_REPLY => return frame,
+                FrameType::POLL_FOR_MASTER if frame.destination == PEER => {
+                    self.frame(FrameType::REPLY_TO_POLL_FOR_MASTER, NODE, &[])
+                        .await
+                        .unwrap();
                 }
+                FrameType::TOKEN if frame.destination == PEER => {
+                    self.frame(FrameType::TOKEN, NODE, &[]).await.unwrap();
+                }
+                FrameType::POLL_FOR_MASTER | FrameType::REPLY_POSTPONED => {}
+                other => panic!("unexpected frame {other:?}"),
             }
-        })
-        .await
+        }
     }
     /// Wait until the node passes the token to the peer, answering its
     /// polls on the way: a master sends a request only while it holds the

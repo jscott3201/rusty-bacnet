@@ -9,8 +9,13 @@ use std::sync::atomic::{AtomicU16, Ordering};
 /// A validated local control, independent of transport and configured authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumberControl {
-    /// A local query received by unicast or logical broadcast.
-    WhatIs,
+    /// A local query.
+    WhatIs {
+        /// Whether it came as a logical broadcast, which lets a node that
+        /// is not a router hold its answer ([`DelayedAnswer`]); one sent to
+        /// the node alone is answered at once (Clause 6.4.19).
+        broadcast: bool,
+    },
     /// A valid logical-broadcast announcement.
     NumberIs {
         /// Peer-reported number, in 1..=65534.
@@ -34,7 +39,9 @@ impl NumberControl {
             Some(t)
                 if t == NetworkMessageType::WHAT_IS_NETWORK_NUMBER && npdu.payload.is_empty() =>
             {
-                Some(Self::WhatIs)
+                Some(Self::WhatIs {
+                    broadcast: link_layer_group,
+                })
             }
             Some(t) if t == NetworkMessageType::NETWORK_NUMBER_IS && link_layer_group => {
                 // The router core's view, the one reader of this payload
@@ -103,6 +110,11 @@ impl LocalNetworkNumber {
         }
     }
 }
+
+mod answer;
+#[cfg(any(test, feature = "test-support"))]
+pub use answer::queue_answer_waits;
+pub use answer::{ANSWER_DELAY_MAX, ANSWER_DELAY_MIN, DelayedAnswer};
 
 #[cfg(test)]
 mod tests;

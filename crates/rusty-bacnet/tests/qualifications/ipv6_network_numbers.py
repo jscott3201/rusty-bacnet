@@ -87,25 +87,27 @@ async def run():
         await fence()  # Same unicast path admitted before switching to group.
         send(QUERY, True)
         send(nni(77, 0), True)
-        send(QUERY, True)
-        await expect(77)
-        send(QUERY, False)  # Valid local unicast query must reply by multicast.
+        # Every exact reply is asked for by unicast, which is answered at
+        # once, by multicast. A broadcast question's answer waits up to ten
+        # seconds (Clause 6.4.19, #2597), past the observer's timeout; the
+        # Rust tests cover that wait on paused time.
+        send(QUERY, False)
         await expect(77)
         for value, flag, expected in [(78, 1, 78), (79, 0, 78), (80, 1, 80)]:
             send(nni(value, flag), True)
-            send(QUERY, True)
+            send(QUERY, False)
             await expect(expected)
         for invalid in [b"\x01\x80\x13\x00\xc8",
                         b"\x01\x88\x00\x04\x01\x09\x13\x00\xc8\x01"]:
             send(invalid, True)
-            send(QUERY, True)
+            send(QUERY, False)
             await expect(80)
         for i, invalid in enumerate([QUERY + b"\x00",
                                     b"\x01\x88\x00\x04\x01\x09\x12"]):
             send(invalid, False)
             await fence()
             send(nni(81 + i, 1), True)
-            send(QUERY, True)
+            send(QUERY, False)
             await expect(81 + i)
     finally:
         await server.stop()
