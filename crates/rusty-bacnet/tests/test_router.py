@@ -188,20 +188,21 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
                                   foreign_device=rb.ForeignDevice(p.address,ttl=60))
             await client.__aenter__();self.addAsyncCleanup(self.cleanup, client.stop)
             await accepted_registration(client);clients.append(client)
-        [all_routes]=await clients[0].discover_routers(timeout_ms=1500)
+        [all_routes]=await clients[0].discover_routers(wait=1.5)
         self.assertEqual((all_routes.mac,all_routes.networks),(ports[0].mac,[5,7]))
-        [specific]=await clients[0].discover_routers(7,timeout_ms=1500)
+        [specific]=await clients[0].discover_routers(7,wait=1.5)
         self.assertIn(7,specific.networks)
-        self.assertEqual(await clients[0].discover_routers(9,timeout_ms=500),[])
+        self.assertEqual(await clients[0].discover_routers(9,wait=0.5),[])
         # Each target has a real server with an independently configured value.
         # Device source_network proves the cache does not collapse into a direct
         # loopback read; requests and responses must traverse the router.
         for ingress,target_index in ((0,1),(0,2),(1,0),(2,1)):
             target=(1,5,7)[target_index];client=clients[ingress]
-            discovered=await client.discover(timeout_ms=1500,low_limit=185800+target,high_limit=185800+target,scope="global")
-            found=[d for d in discovered if d.object_identifier.instance==185800+target]
+            discovered=await client.discover(wait=1.5,low=185800+target,high=185800+target,scope="global")
+            found=[d for d in discovered if d.instance==185800+target]
             self.assertEqual(len(found),1)
-            self.assertEqual(found[0].source_network,target)
+            self.assertEqual(found[0].network,target)
+            self.assertEqual(found[0].entry.source_network,target)
             value=await asyncio.wait_for(client.read_property_from_device(185800+target,oid,rb.PropertyIdentifier.PRESENT_VALUE),10)
             self.assertAlmostEqual(value.value,10.25+target)
         await router.close()

@@ -30,6 +30,7 @@ from rusty_bacnet import (
     ObjectType,
     PropertyIdentifier,
     PropertyValue,
+    Value,
     WritePolicy,
 )
 
@@ -110,6 +111,17 @@ def samples() -> dict[type, list[Any]]:
             WritePolicy().allow_priorities([5]),
             WritePolicy().allow_priorities(WritePolicy.GUARDED),
         ],
+        # A value a high-level call read (#2561), built as its pickle
+        # builds it: REAL 72.5 as an analog Present_Value, text with a
+        # unit, a state with its name, and octets no property decodes.
+        Value: [
+            Value._rebuild(1, 85, None, bytes.fromhex("4442910000"), "72.5", "72.5"),
+            Value._rebuild(1, 85, None, bytes.fromhex("4442910000"), "72.5 °C", "72.5"),
+            Value._rebuild(4, 85, None, b"\x91\x01", "active",
+                           '{"value": 1, "name": "active"}'),
+            Value._rebuild(1, 87, 8, b"\x00", "null", "null"),
+            Value._rebuild(1023, 5000, None, b"\x0e\x21\x01\x0f", "?", "[1]"),
+        ],
         BACnetTimeStamp: [
             BACnetTimeStamp.sequence_number(0),
             BACnetTimeStamp.sequence_number(65_535),
@@ -176,6 +188,30 @@ class ValueCopyPickleTests(unittest.TestCase):
                             BACnetTimeStamp.sequence_number(7)]}
         self.assertEqual(copy.deepcopy(state), state)
         self.assertEqual(pickle.loads(pickle.dumps(state)), state)
+
+    def test_a_value_rebuilds_from_its_parts_only(self) -> None:
+        rebuild: Any = Value._rebuild  # type: ignore[attr-defined]
+        value = rebuild(1, 85, None, bytes.fromhex("4442910000"), "72.5", "72.5")
+        self.assertEqual((value.text, value.data, value.value), ("72.5", 72.5,
+                                                                 PropertyValue.real(72.5)))
+        self.assertEqual(value.__reduce__()[1],
+                         (1, 85, None, bytes.fromhex("4442910000"), "72.5", "72.5"))
+        # The same octets, text and data as another property's value are
+        # an equal value, though its pickle says which it was.
+        other = rebuild(1, 104, None, bytes.fromhex("4442910000"), "72.5", "72.5")
+        self.assertEqual(value, other)
+        self.assertEqual(hash(value), hash(other))
+        self.assertNotEqual(value.__reduce__()[1], other.__reduce__()[1])
+        self.assertNotEqual(value, rebuild(1, 85, None, bytes.fromhex("4442910000"),
+                                           "72.5 °C", "72.5"))
+        self.assertIs(value.__eq__("72.5"), NotImplemented)
+        with self.assertRaisesRegex(ValueError, "not JSON"):
+            rebuild(1, 85, None, b"\x00", "null", "{")
+        for wrong in (bytearray(b"\x00"), "00", [0]):
+            with self.subTest(wrong=type(wrong).__name__), self.assertRaises(TypeError):
+                rebuild(1, 85, None, wrong, "null", "null")
+        with self.assertRaises(TypeError):
+            Value()  # type: ignore[call-arg]
 
     def test_the_rebuild_paths_refuse_what_no_pickle_holds(self) -> None:
         from_octets: Any = BACnetTimeStamp._from_octets  # type: ignore[attr-defined]
@@ -354,7 +390,7 @@ class OtherClassTests(unittest.IsolatedAsyncioTestCase):
             self.assert_refused(notifications)
             await client.subscribe_cov(address, 1, AI_1, confirmed=False, lifetime=60)
             self.assert_refused(await asyncio.wait_for(notifications.__anext__(), 3))
-            await client.who_is_directed(address)
+            await client.who_is(scope=address)
             for _ in range(100):
                 devices = await client.discovered_devices()
                 if devices:

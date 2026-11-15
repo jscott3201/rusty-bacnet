@@ -19,18 +19,18 @@ def calls(client, address="127.0.0.1:47808"):
     """Each discovery call, taking the limits as keyword arguments."""
     return {
         "who_is": lambda **limits: client.who_is(**limits),
-        "discover": lambda **limits: client.discover(timeout_ms=0, **limits),
+        "discover": lambda **limits: client.discover(wait=0, **limits),
         "who_has_by_id": lambda **limits: client.who_has_by_id(OID, **limits),
         "who_has_by_name": lambda **limits: client.who_has_by_name("AV-1", **limits),
-        "who_is_directed": lambda **limits: client.who_is_directed(address, **limits),
+        "who_is directed": lambda **limits: client.who_is(scope=address, **limits),
     }
 
 
 REFUSED = [
-    ({"low_limit": 10}, "low limit 10 was given without a high limit"),
-    ({"high_limit": 20}, "high limit 20 was given without a low limit"),
-    ({"low_limit": 20, "high_limit": 10}, "low limit 20 is above its high limit 10"),
-    ({"low_limit": 0, "high_limit": 4194304}, "high limit 4194304 is above the highest instance, 4194303"),
+    ({"low": 10}, "low limit 10 was given without a high limit"),
+    ({"high": 20}, "high limit 20 was given without a low limit"),
+    ({"low": 20, "high": 10}, "low limit 20 is above its high limit 10"),
+    ({"low": 0, "high": 4194304}, "high limit 4194304 is above the highest instance, 4194303"),
 ]
 
 
@@ -52,23 +52,23 @@ class DeviceRangeTests(unittest.IsolatedAsyncioTestCase):
             async with BACnetClient(interface="127.0.0.1", port=0) as client:
                 for limits, _ in REFUSED:
                     with self.assertRaises(ValueError):
-                        client.who_is_directed(address, **limits)
+                        client.who_is(scope=address, **limits)
                 with self.assertRaises(TimeoutError):
                     await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 0.1)
 
-                await client.who_is_directed(address, low_limit=10, high_limit=20)
+                await client.who_is(scope=address, low=10, high=20)
                 frame, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 3)
                 # Who-Is with [0] low limit 10 and [1] high limit 20.
                 self.assertTrue(
                     frame.endswith(bytes([0x10, 0x08, 0x09, 0x0A, 0x19, 0x14])), frame.hex()
                 )
 
-                await client.who_is_directed(address)
+                await client.who_is(scope=address)
                 frame, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 3)
                 self.assertTrue(frame.endswith(bytes([0x10, 0x08])), frame.hex())
 
                 # The highest instance is a limit like any other.
-                await client.who_is_directed(address, low_limit=4194303, high_limit=4194303)
+                await client.who_is(scope=address, low=4194303, high=4194303)
                 frame, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 3)
                 self.assertTrue(
                     frame.endswith(bytes([0x0B, 0x3F, 0xFF, 0xFF, 0x1B, 0x3F, 0xFF, 0xFF])),

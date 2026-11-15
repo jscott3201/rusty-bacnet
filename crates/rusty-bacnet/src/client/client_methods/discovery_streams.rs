@@ -24,32 +24,33 @@ fn who_has_object(object: &Bound<'_, PyAny>) -> PyResult<WhoHasObject> {
 impl BACnetClient {
     /// Send a Who-Has for `object` (an `ObjectIdentifier`, or a name as
     /// `str`) and collect the I-Haves that answer it from that scope for
-    /// `timeout_ms`: one per device, object and station, in the order they
+    /// `wait` seconds: one per device, object and station, in the order they
     /// came, at most 4096. No answer is an empty
     /// list. The limits and `scope` follow `who_has_by_id()`'s rules: this
     /// network alone by default (#2596). It holds the started client for the
     /// whole wait, so `stop()` (or leaving `async with`) waits up to
-    /// `timeout_ms` for it.
+    /// `wait` seconds for it.
     #[pyo3(
-        signature = (object, low_limit=None, high_limit=None, timeout_ms=3000, scope=None),
-        text_signature = "($self, object, low_limit=None, high_limit=None, timeout_ms=3000, scope='local')"
+        signature = (object, *, low=None, high=None, wait=3.0, scope=None),
+        text_signature = "($self, object, *, low=None, high=None, wait=3.0, scope='local')"
     )]
     fn who_has_replies<'py>(
         &self,
         py: Python<'py>,
         object: Bound<'py, PyAny>,
-        low_limit: Option<u32>,
-        high_limit: Option<u32>,
-        timeout_ms: u64,
+        low: Option<u32>,
+        high: Option<u32>,
+        wait: f64,
         scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let object = who_has_object(&object)?;
-        let range = device_range(low_limit, high_limit)?;
+        let range = device_range(low, high)?;
+        let wait = discover_wait(wait)?;
         let scope = discovery_scope(scope.as_ref(), &self.transport_type, "Who-Has")?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
-            let wait = std::time::Duration::from_millis(timeout_ms);
+            let scope = scope.on(&c).await?;
             let replies = bacnet_ops::raw::who_has_replies(&c, &scope, &object, range, wait)
                 .await
                 .map_err(scoped_error)?;
@@ -70,24 +71,25 @@ impl BACnetClient {
     }
 
     /// Broadcast a Who-Is-Router-To-Network for `network` (or every
-    /// network) and collect the routers that answer for `timeout_ms`: one
+    /// network) and collect the routers that answer for `wait` seconds: one
     /// `DiscoveredRouter` per router MAC, in the order first heard. For a
     /// `network`, only the routers that list it. No answer is an empty
     /// list. `network` 0 and 65535 raise `BacnetError`. It holds the
     /// started client for the whole wait, so `stop()` (or leaving
-    /// `async with`) waits up to `timeout_ms` for it.
-    #[pyo3(signature = (network=None, timeout_ms=3000))]
+    /// `async with`) waits up to `wait` seconds for it.
+    #[pyo3(signature = (network=None, *, wait=3.0))]
     fn discover_routers<'py>(
         &self,
         py: Python<'py>,
         network: Option<u16>,
-        timeout_ms: u64,
+        wait: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let wait = discover_wait(wait)?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let routers = started(&inner)
                 .await?
-                .discover_routers(network, std::time::Duration::from_millis(timeout_ms))
+                .discover_routers(network, wait)
                 .await
                 .map_err(to_py_err)?;
             Ok(routers

@@ -30,7 +30,7 @@ use super::shared::Shared;
 use super::support::{CovSupport, fills_table, refuses_service};
 use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
-use crate::client::{device_error, unreachable};
+use crate::client::{device_error, failed_locally, unreachable};
 use crate::device::{DeviceAddress, Path};
 use crate::format::{PropertyError, RawRow};
 
@@ -150,8 +150,12 @@ pub(super) async fn start<T: TransportPort + 'static>(
                 client.cov_observed(address, &point.watched, true);
                 CovSupport::Accepted
             }
-            // Not the device's last word: it is asked again.
-            Err(error) if unreachable(error) || fills_table(error) => known,
+            // Not the device's last word: it is asked again. A request
+            // the client itself failed (a link reconnecting, say) is no
+            // word of the device's at all.
+            Err(error) if unreachable(error) || failed_locally(error) || fills_table(error) => {
+                known
+            }
             Err(error) => {
                 if refuses_service(error) {
                     client.cov_observed(address, &point.watched, false);
@@ -197,7 +201,9 @@ async fn read<T: TransportPort + 'static>(
             .map_err(device_error)
         {
             Ok(data) => Ok(vec![(property, Ok(data))]),
-            Err(error) if unreachable(&error) => Err(error),
+            // A request never sent fails the first read as it does for a
+            // whole object's (`Reader::properties`, #2610), not as a row.
+            Err(error) if unreachable(&error) || failed_locally(&error) => Err(error),
             Err(error) => Ok(vec![(property, Err(PropertyError::from(error)))]),
         };
     }

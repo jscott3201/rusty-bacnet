@@ -24,8 +24,11 @@ pub enum Phase {
     Starting,
     /// Subscribed, or the last poll answered.
     Live,
-    /// The device answered the last read with an error for the whole
-    /// object (see [`Snapshot::note`]).
+    /// The last read failed as a whole without the device going quiet:
+    /// it answered with an error for the whole object, or the request was
+    /// never sent (the link refused it, or no route was left), whether the
+    /// watch reads one property or several (#2610). See
+    /// [`Snapshot::note`], which holds the error's text.
     Failed,
     /// The device didn't answer the last request.
     Unreachable,

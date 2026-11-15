@@ -11991,7 +11991,8 @@ cert, key)?`, whose refusal is `OpsError::Tls(ScTlsConfigError)` (see
 `Client::new(client, limits)` an `Arc<BACnetClient<T>>` and an
 `Arc<RequestLimits>` (`RequestLimits::new(per_second)`, 0 for no cap); a
 client is cheap to clone. `client.discover(Discover::local().range(1000..=2000))`
-sends one Who-Is and returns one `Discovered` per address that answered
+sends one Who-Is and returns one `Discovered` per address the scope asked
+covers (an I-Am heard from elsewhere during the wait is no answer) that answered
 within its wait (3 s unless `.wait(..)` says otherwise). With no scope named
 (`Discover::default()`) the Who-Is is a local broadcast, which no router
 passes on; `Discover::network(n)`, `Discover::global()` and
@@ -12109,8 +12110,8 @@ readings, via, stopped }` holds one `Reading { object, property, index,
 value: Result<Value, PropertyError> }` a property, in the order asked for. A
 property the device refuses, one of an object it doesn't have, an element
 past an array's end and an object its answer leaves out are errors in their
-own rows. `stopped` is set only when the device stopped answering part way
-(`unreachable()`); `readings` then keeps what was read before it, an
+own rows. `stopped` is set when the device stopped answering part way
+(`unreachable()`), or the client or its link failed a later request; `readings` then keeps what was read before it, an
 object's properties read before it included. `via` is `ReadVia::Mixed` when
 some objects went by RPM and others by ReadProperty (a batch failed whole, a
 single object too large for one answer, or RPM refused part way through).
@@ -12125,7 +12126,17 @@ object's properties (all of them, or a list) in one RPM, or by ReadProperty
 or when it failed this RPM as a whole, as `read_many` does. `ObjectRead {
 object, readings, via }` has a property the device refused as an error in
 its own row. A device that stops answering fails the read, keeping
-nothing.
+nothing. A request the client or its link fails itself (no route to the
+device's network, a link that refuses the send, a request that can't be
+encoded) fails the read once with that error in `OpsError::Client`, never
+as rows of error text; the same holds for `describe_device`,
+`priority_array`, a watch's first read and the raw `Reader::properties`
+(#2610). `read_many` and a watch's poll fail that way only while nothing
+was read: after the first rows they keep them and end with the error in
+`stopped`. A request too long for the link or the routed path
+(`Error::SendTooLong`, `Error::RoutedPathTooLong`) is no such failure: it
+falls back to ReadProperty, as an answer too large does. A subscription
+the client fails to send is asked again, and is no refusal by the device.
 
 Every call fails with `OpsError` (`#[non_exhaustive]`): `Parse { what,
 input, reason }` for text that names nothing this client can address,
@@ -12165,6 +12176,8 @@ request jobs: `Reader`, `Halt`, `RpmFailure`, `rpm_failure`, `rpm_rows`,
 | `Error::Encoding` for a directed Who-Is or `station_mac` text that names no station, and `Error::OutOfRange` for a refused target | `OpsError::Parse` |
 | `Error::Encoding` for an Object_List claiming more than `MAX_OBJECTS` elements | `Error::Range` with both numbers, inside `OpsError::Client` from a `Device` read |
 | `Error::Encoding` for a GetEventInformation answer naming an object twice | `OpsError::Paging(PagingFault::Repeated { .. })` |
+| `target::parse_target_on`, `check_local_mac` and `VmacLookup::NotBip6` refusing a link's address with text naming the CLI's `--ipv6` or `--mstp` | neutral text ending in `target::NEEDS_BIP6` or `target::NEEDS_MSTP`; each front end adds its own hint (the CLI its flag, Python its `transport=` keyword) (#2561) |
+| `Reader::properties` and the batch reader keeping a request the client or link failed as a row (`PropertyError::Other`) | `Err(Halt::Device(error))` from `Reader::properties`; from `Device::read_many` the read's error when nothing was read, else `Readings::stopped` (#2610) |
 
 ### Watching points
 
@@ -12315,7 +12328,9 @@ a checked 1 to 16 (`Priority::new(8)?`, `"8".parse()`, constants such as
   NULL at that slot, then reads Priority_Array, Relinquish_Default and
   Present_Value back in one RPM: two requests. A relinquish acknowledged
   whose read back failed is `OpsError::ReadBack`, whose `written` says it
-  took effect; `unreachable()` is false for it, so nothing retries it. A
+  took effect; `unreachable()` is false for it, so nothing retries it. Its
+  `source` is the read back's own error, a link's refusal to send
+  included (#2610). A
   read back saying the object has no Priority_Array (a value object built
   without one) is `OpsError::NoPriorityArray`: the device took the NULL as
   a write to a property that isn't commandable, which changes nothing.

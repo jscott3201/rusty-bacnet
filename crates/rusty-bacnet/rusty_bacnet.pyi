@@ -2739,8 +2739,16 @@ class Object223Experimental:
 
 
 class Value:
-    """One value a high-level call read or sent, in three forms (#2561).
-    Refuses ``copy`` and ``pickle``."""
+    """One value a high-level call read or sent (#2561): typed (``value``),
+    as text (``text``), as plain data (``data``) and as octets (``raw``).
+
+    A value class: two are equal when they hold the same octets, text and
+    data (what they are a value of isn't compared), equal values hash
+    alike, comparing with anything else gives NotImplemented, and one
+    copies and pickles. It keeps nothing of the client or
+    the device it came from. ``value`` is the typed Python form, so there
+    are no ``as_float``-style accessors: ``reading.value.value`` is the
+    float, int, str or other value itself."""
 
     @property
     def value(self) -> PropertyValue:
@@ -2753,7 +2761,9 @@ class Value:
     def text(self) -> str:
         """The value as text, as the ``bacnet`` tool writes it: every digit
         of a number, a state or enumeration by its name (``"active"``),
-        ``"null"`` for NULL. No units."""
+        ``"null"`` for NULL. A ``read_many`` that reads the object's units
+        or state texts in the same call names them (``"21.5 °C"``,
+        ``"2 (Heat)"``); a single ``read`` names neither."""
         ...
 
     @property
@@ -2765,8 +2775,212 @@ class Value:
         time."""
         ...
 
+    @property
+    def raw(self) -> bytes:
+        """The value's octets as the device sent them, or as a write sends
+        them: application-tagged."""
+        ...
+
     def __str__(self) -> str:
         """``text``."""
+        ...
+
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
+class Reading:
+    """One property as a bulk read read it (#2561): ``value``, or ``error``
+    when the device gave none. Exactly one of the two is None. Refuses
+    ``copy`` and ``pickle``; its ``value`` copies and pickles."""
+
+    @property
+    def object_id(self) -> ObjectIdentifier:
+        """The object read."""
+        ...
+
+    @property
+    def property_id(self) -> PropertyIdentifier:
+        """The property read."""
+        ...
+
+    @property
+    def array_index(self) -> Optional[int]:
+        """The array element read, None for the whole property."""
+        ...
+
+    @property
+    def value(self) -> Optional[Value]:
+        """The value; None when the device gave none (see ``error``)."""
+        ...
+
+    @property
+    def error(self) -> Optional[BacnetError]:
+        """Why the device gave no value, as the exception a typed read of
+        the property would raise, never raised here: a
+        ``BacnetProtocolError`` with ``error_class`` and ``error_code`` for
+        an unknown property or object, a reject or abort error, or a
+        ``BacnetError`` for an answer that left the property out. None when
+        the device gave a value."""
+        ...
+
+    @property
+    def text(self) -> Optional[str]:
+        """The value's text; None when the device gave no value."""
+        ...
+
+    @property
+    def ok(self) -> bool:
+        """True when the device gave a value."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class Readings:
+    """What ``Device.read_many`` or ``Device.read_object`` read (#2561): a
+    ``Reading`` each property, in the order asked for, and whether the
+    device stopped answering part way. Iterating it gives the readings;
+    ``len`` and an index work too. Refuses ``copy`` and ``pickle``."""
+
+    @property
+    def readings(self) -> tuple[Reading, ...]:
+        """The readings, in the order asked for; after ``stopped``, those
+        read before the device stopped answering."""
+        ...
+
+    @property
+    def via(self) -> Optional[Literal["rpm", "rp", "mixed"]]:
+        """How the values were read: ``"rpm"`` (ReadPropertyMultiple),
+        ``"rp"`` (ReadProperty each) or ``"mixed"``; None when nothing was
+        read."""
+        ...
+
+    @property
+    def stopped(self) -> Optional[BacnetError]:
+        """Set when the read ended after it began: the device stopped
+        answering (the ``BacnetTimeoutError`` or ``BacnetTransportError`` a
+        single read would have raised), or the client's own link failed a
+        later request (a ``BacnetError``). Never raised here. The
+        properties after ``readings`` weren't read. Always None for
+        ``read_object``."""
+        ...
+
+    def get(
+        self,
+        object: ObjectIdentifier | str,
+        property: PropertyIdentifier | str | None = None,
+        *,
+        index: Optional[int] = None,
+    ) -> Optional[Reading]:
+        """The first reading of ``property`` of ``object`` (its
+        Present_Value when ``property`` is left out), in the forms
+        ``Device.read`` takes; None when the read holds none."""
+        ...
+
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[Reading]: ...
+    def __getitem__(self, index: int) -> Reading: ...
+    def __repr__(self) -> str: ...
+
+
+class ObjectList:
+    """A device's Object_List as read (``Device.objects``, #2561).
+    Iterating it gives the ``ObjectIdentifier``s; ``len``, an index and
+    ``in`` (an ``ObjectIdentifier`` or text such as ``"ai:1"``) work too.
+    Refuses ``copy`` and ``pickle``."""
+
+    @property
+    def objects(self) -> tuple[ObjectIdentifier, ...]:
+        """The objects, in the device's order."""
+        ...
+
+    @property
+    def indexed(self) -> bool:
+        """True when the list was read an element at a time, because the
+        device couldn't send it in one answer."""
+        ...
+
+    @property
+    def stopped(self) -> Optional[str]:
+        """Why an element-by-element read ended early, as text; None when
+        the whole list was read. ``objects`` then holds the elements before
+        it."""
+        ...
+
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[ObjectIdentifier]: ...
+    def __getitem__(self, index: int) -> ObjectIdentifier: ...
+    def __contains__(self, object: ObjectIdentifier | str) -> bool: ...
+    def __repr__(self) -> str: ...
+
+
+class DeviceSummary:
+    """A device's summary (``Device.summary``, #2561): its instance, and
+    the Device object's identifying properties (name, vendor, model,
+    firmware, protocol revision, what it supports). Refuses ``copy`` and
+    ``pickle``."""
+
+    @property
+    def instance(self) -> int:
+        """The device instance."""
+        ...
+
+    @property
+    def name(self) -> Optional[str]:
+        """The device's Object_Name with control characters removed, for
+        display; None when the device gave none. Text the device supplied."""
+        ...
+
+    @property
+    def readings(self) -> Readings:
+        """The properties read: one the device refused has its ``error``
+        set."""
+        ...
+
+    def value(self, property: PropertyIdentifier | str) -> Optional[Value]:
+        """The ``Value`` of ``property`` of the Device object
+        (``"vendor-name"``, ``PropertyIdentifier.MODEL_NAME``); None when
+        the summary doesn't read it or the device gave none."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class Discovered:
+    """One device that answered a ``BACnetClient.discover()`` (#2561). A
+    ``BACnetClient.device()`` target, which pins the handle to ``address``.
+    Refuses ``copy`` and ``pickle``."""
+
+    @property
+    def address(self) -> str:
+        """Where the device answers, as text ``device()`` reads back:
+        ``"192.168.1.10:47808"``, ``"mstp:5"``, ``"bip6:0x0004D2"``, an SC
+        VMAC in hex, or a routed station as ``"2:0x05"``."""
+        ...
+
+    @property
+    def network(self) -> int:
+        """The network it is on: 0 for this client's own, else the number
+        of the remote network a router passed its answer on from."""
+        ...
+
+    @property
+    def instance(self) -> int:
+        """Its Device instance."""
+        ...
+
+    @property
+    def duplicate(self) -> bool:
+        """True when another address claims the same instance: name this
+        one by its address, or by this row, never by the instance."""
+        ...
+
+    @property
+    def entry(self) -> DiscoveredDevice:
+        """Its row in the discovery table: the largest APDU it takes, its
+        segmentation support and its vendor."""
         ...
 
     def __repr__(self) -> str: ...
@@ -2775,8 +2989,8 @@ class Value:
 class PriorityView:
     """An object's commands as read: its Priority_Array's sixteen slots,
     the slot in control, Relinquish_Default and Present_Value
-    (``BACnetClient.priority_array`` and ``relinquish``, #2561). Refuses
-    ``copy`` and ``pickle``."""
+    (``Device.priority_array`` and ``Device.relinquish``, #2561). Refuses ``copy`` and ``pickle``; its values
+    copy and pickle."""
 
     @property
     def object_id(self) -> ObjectIdentifier:
@@ -2816,16 +3030,17 @@ class PriorityView:
 
 
 class Written:
-    """A write the device acknowledged, as it was sent (#2561): a
-    ``BacnetReadBackError``'s and a ``BacnetNoPriorityArrayError``'s
-    ``written``. Refuses ``copy`` and ``pickle``."""
+    """A write the device acknowledged, as it was sent (#2561): what
+    ``Device.write`` returns, and a ``BacnetReadBackError``'s and a
+    ``BacnetNoPriorityArrayError``'s ``written``. Refuses ``copy`` and
+    ``pickle``."""
 
     @property
     def address(self) -> str:
         """The device's address the write went to: ``"ip:port"``,
         ``"mstp:N"``, a B/IPv6 VMAC (``"bip6:0x0004D2"``), or on BACnet/SC
-        its VMAC in hex (``"02:00:00:00:00:04"``), the forms ``address``
-        takes."""
+        its VMAC in hex (``"02:00:00:00:00:04"``), or a routed station as
+        ``"2:0x05"``: text ``BACnetClient.device`` reads back."""
         ...
 
     @property
@@ -2850,7 +3065,343 @@ class Written:
 
     @property
     def priority(self) -> Optional[int]:
-        """The priority sent, None when none was."""
+        """The priority sent: the one asked for, or 16 for a property the
+        standard makes commandable when none was. None when none was sent:
+        a property that isn't commandable, or one that may be, written
+        without one (the device then takes it at 16 if it is)."""
+        ...
+
+    @property
+    def commandable(self) -> Literal["always", "optional", "never"]:
+        """Whether the property takes priorities, as its object type and
+        identifier say with nothing read: ``"always"`` (an output's
+        Present_Value), ``"optional"`` (a value object's, commandable only
+        when the object has a Priority_Array) or ``"never"``."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class WritePreview:
+    """What ``Device.write`` of the same arguments would do, read first and
+    sent nowhere (``Device.preview_write``, #2561). Refuses ``copy`` and
+    ``pickle``."""
+
+    @property
+    def address(self) -> str:
+        """Where the read went, and the write would go, as
+        ``Device.address`` writes it."""
+        ...
+
+    @property
+    def object_id(self) -> ObjectIdentifier:
+        """The object it would write."""
+        ...
+
+    @property
+    def property_id(self) -> PropertyIdentifier:
+        """The property it would write."""
+        ...
+
+    @property
+    def array_index(self) -> Optional[int]:
+        """The array index it would write, None for the whole property."""
+        ...
+
+    @property
+    def value(self) -> Value:
+        """The value as it would be sent."""
+        ...
+
+    @property
+    def priority(self) -> Optional[int]:
+        """The slot it would take: the priority asked for, or 16, on a
+        property the read found commandable; None on one it found isn't."""
+        ...
+
+    @property
+    def occupancy(self) -> Literal["empty", "held", "not-commandable", "unknown"]:
+        """Who holds that slot now: ``"empty"``, ``"held"`` (the write
+        replaces a command, without telling whoever sent it),
+        ``"not-commandable"``, or ``"unknown"`` when the device wouldn't
+        give its slots."""
+        ...
+
+    @property
+    def before(self) -> Optional[Value]:
+        """What the write replaces: the slot's command when one holds it,
+        or the property's value for one that isn't commandable. None for an
+        empty slot, or when the device refused the read."""
+        ...
+
+    @property
+    def effect(self) -> Literal["changes", "unchanged", "not-present-value", "unknown"]:
+        """What the write does to Present_Value: ``"changes"`` (see
+        ``changes_from`` and ``changes_to``), ``"unchanged"`` (a stronger
+        slot keeps control when ``held_by`` names one),
+        ``"not-present-value"`` for a write to another property, or
+        ``"unknown"``."""
+        ...
+
+    @property
+    def changes_from(self) -> Optional[str]:
+        """Present_Value's text now, when ``effect`` is ``"changes"``."""
+        ...
+
+    @property
+    def changes_to(self) -> Optional[str]:
+        """Present_Value's text after the write, when ``effect`` is
+        ``"changes"``."""
+        ...
+
+    @property
+    def held_by(self) -> Optional[int]:
+        """The stronger priority that keeps control, when ``effect`` is
+        ``"unchanged"`` because of one."""
+        ...
+
+    @property
+    def priorities(self) -> Optional[PriorityView]:
+        """The object's commands as read, for a commandable property."""
+        ...
+
+    @property
+    def denied(self) -> Optional[BacnetWriteDeniedError]:
+        """The ``BacnetWriteDeniedError`` that ``Device.write`` would
+        raise, never raised here, when the client's write policy refuses
+        the priority; else None."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class Device:
+    """One device, as a ``BACnetClient`` reaches it: what ``await
+    client.device(target)`` returns (#2561). Its methods are the high-level
+    calls.
+
+    Made from an address (``"192.168.1.10"``, ``"mstp:5"``, ``"2:0x05"``, a
+    ``discover()`` row) it is pinned there. Made from an instance (``1234``,
+    ``"2:1234"``) it follows the instance: when the device stops answering
+    at its address and one other address claims the instance, the handle
+    moves there. Its calls go to the device one at a time.
+
+    An object is an ``ObjectIdentifier`` or text (``"ai:1"``,
+    ``"analog-input:1"``); a property a ``PropertyIdentifier`` or text
+    (``"pv"``, ``"present-value"``, ``"priority-array[8]"``). A wrong type
+    raises TypeError and text the grammar refuses ValueError, when the call
+    is made.
+
+    A handle belongs to its client and keeps nothing of it between calls,
+    so a ``Device`` left alive never holds a ``stop()`` back. After the
+    client's ``stop()`` a call raises RuntimeError, as any call on a stopped
+    client does, and ``address`` and ``instance`` say what was last known.
+    After the client starts again, the next call makes the handle again
+    from what it was named by, and it works as before: an address at once,
+    an instance by looking it up afresh, which raises ``BacnetLookupError``
+    until the client has heard from the device again. Refuses ``copy`` and
+    ``pickle``."""
+
+    @property
+    def address(self) -> str:
+        """Where the device answers now, as text ``BACnetClient.device``
+        reads back: a pinned handle's address, or where a following handle
+        last reached its instance."""
+        ...
+
+    @property
+    def instance(self) -> Optional[int]:
+        """The device instance, when known: from discovery, the instance
+        the handle follows, or an earlier ``summary()`` or
+        ``resolve_instance()``. None for a handle made from an address
+        nothing has named yet."""
+        ...
+
+    @property
+    def follows(self) -> bool:
+        """True when the handle follows its instance, False when it is
+        pinned to its address."""
+        ...
+
+    def cov_support(self) -> Literal["unknown", "not-offered", "offered", "accepted", "refused"]:
+        """What is known of the device's COV support, with nothing sent:
+        ``"not-offered"`` or ``"offered"`` from the services ``summary()``
+        read, ``"accepted"`` or ``"refused"`` from a subscription a watch
+        made, else ``"unknown"``, as it is while the client is stopped."""
+        ...
+
+    def read(
+        self,
+        object: ObjectIdentifier | str,
+        property: PropertyIdentifier | str | None = None,
+        *,
+        index: Optional[int] = None,
+    ) -> Awaitable[Value]:
+        """Read one property: one ReadProperty.
+
+        ``property`` is Present_Value when left out, and ``index`` an array
+        element (0 is an array's size). With no ``property``, ``object``
+        may be both as text: ``"ai:1 pv"``. The text of the value names no
+        units and no state: ``read_many`` with the object's units or state
+        texts in the same call names them.
+
+        On await, the device's refusal raises ``BacnetProtocolError``,
+        ``BacnetRejectError`` or ``BacnetAbortError``; no answer
+        ``BacnetTimeoutError`` (where ``read_property`` raises
+        ``BacnetAbortError``, reason 10); a following handle whose device
+        can't be placed any more ``BacnetLookupError``. ALL, REQUIRED and
+        OPTIONAL raise ValueError: ``read_object`` reads those."""
+        ...
+
+    def read_many(
+        self,
+        properties: Iterable[
+            str
+            | ObjectIdentifier
+            | tuple[ObjectIdentifier | str, PropertyIdentifier | str]
+            | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]
+        ],
+    ) -> Awaitable[Readings]:
+        """Read many properties of any of the device's objects, in batches
+        of ReadPropertyMultiple (up to 16 objects and 32 properties each;
+        ReadProperty each once the device has refused that), in the order
+        asked for.
+
+        Each item is text (``"ai:1 pv"``, ``"ai:1"``), an
+        ``ObjectIdentifier`` (its Present_Value), or an ``(object,
+        property)`` or ``(object, property, index)`` tuple of the forms
+        ``read`` takes. A value's text names its object's units, and its
+        state by the object's texts, when the same call reads them.
+
+        A property the device refuses, or one of an object it doesn't
+        have, never raises: its ``Reading.error`` is set and the rest
+        stand. A device that stops answering part way ends the read with
+        what was read, and ``Readings.stopped`` says so; so does a later
+        request the client's own link fails (a route lost, a send
+        refused). A read raises only when nothing could be read: a bad item
+        TypeError or ValueError when the call is made; on await a device
+        that can't be placed ``BacnetLookupError``, and a link that fails
+        the first request what a single read raises for it (a
+        ``BacnetError``)."""
+        ...
+
+    def read_object(
+        self,
+        object: ObjectIdentifier | str,
+        properties: Optional[Iterable[PropertyIdentifier | str]] = None,
+    ) -> Awaitable[Readings]:
+        """Read one object's properties in one ReadPropertyMultiple (or by
+        ReadProperty each once the device has refused that): every property
+        when ``properties`` is left out, else those listed, whole
+        properties only. A property the device refused has its
+        ``Reading.error`` set. A device that stops answering raises
+        ``BacnetTimeoutError`` and keeps nothing, since an object's rows go
+        together: ``stopped`` is always None."""
+        ...
+
+    def write(
+        self,
+        object: ObjectIdentifier | str,
+        property: PropertyIdentifier | str,
+        value: str | int | float | PropertyValue,
+        *,
+        priority: Optional[int] = None,
+        index: Optional[int] = None,
+    ) -> Awaitable[Written]:
+        """Write one property: one WriteProperty, acknowledged.
+
+        ``value`` is text in the value grammar, read for the property's
+        datatype (``"72.5"``, ``"active"``, ``'"a string"'`` in quotes,
+        ``"72.5@8"`` with a priority), an int or a float (read as its
+        text; a bool raises TypeError), or a typed ``PropertyValue``, sent
+        as it is. The priority is ``priority``, or the one the text names,
+        or both when they agree. A property the standard makes commandable
+        (an output's Present_Value) goes at the priority given, or at 16;
+        one that may be (a value object's) at the priority given, or with
+        none; any other with none. ``Written.priority`` says what went.
+
+        Raised with nothing sent: TypeError or ValueError when the call is
+        made, for a wrong type, bad text or a priority outside 1 to 16; on
+        await ValueError for a value the property's datatype refuses, two
+        different priorities, a priority on a property that isn't
+        commandable, NULL to a commandable Present_Value (use
+        ``relinquish``) and any write to Priority_Array; and
+        ``BacnetWriteDeniedError`` for a priority the client's
+        ``write_policy`` refuses (1, 2, 5 and 6 unless allowed). Then the
+        device's refusal raises the usual protocol, reject or abort error,
+        and no answer ``BacnetTimeoutError``: the write may or may not have
+        been applied, and is never sent again."""
+        ...
+
+    def preview_write(
+        self,
+        object: ObjectIdentifier | str,
+        property: PropertyIdentifier | str,
+        value: str | int | float | PropertyValue,
+        *,
+        priority: Optional[int] = None,
+        index: Optional[int] = None,
+    ) -> Awaitable[WritePreview]:
+        """What ``write`` of the same arguments would do, read first and
+        sent nowhere: the slot it takes and who holds it, whether a
+        stronger slot keeps Present_Value where it is, and what
+        Present_Value becomes. One request. It raises what ``write`` raises
+        before sending, except for the write policy, which
+        ``WritePreview.denied`` reports instead."""
+        ...
+
+    def relinquish(self, object: ObjectIdentifier | str, priority: int) -> Awaitable[PriorityView]:
+        """Release a command: NULL written to ``object``'s Present_Value at
+        ``priority``, so the next slot down, or Relinquish_Default, takes
+        over; then the object's priorities as read just after. One
+        WriteProperty, then one ReadPropertyMultiple, or a ReadProperty of
+        each of the three properties when the device refuses that.
+
+        ``priority`` is required and is an int from 1 to 16: a bool, a
+        float or anything else raises ``TypeError``, and another int
+        ``ValueError``, when the call is made. On await, with nothing sent:
+        an object type with no Priority_Array (an input, or a Channel)
+        raises ``ValueError``, and a priority the client's ``write_policy``
+        refuses (1, 2, 5 and 6 by default) ``BacnetWriteDeniedError``. Then
+        the device's refusal of the write raises the usual protocol, reject
+        or abort error, and no answer ``BacnetTimeoutError``. A relinquish
+        the device acknowledged whose read after it failed raises
+        ``BacnetReadBackError``, and one whose read says the object has no
+        Priority_Array ``BacnetNoPriorityArrayError``; both say what was
+        written (``written``), which needs no second send."""
+        ...
+
+    def priority_array(self, object: ObjectIdentifier | str) -> Awaitable[PriorityView]:
+        """Read ``object``'s commands: its Priority_Array,
+        Relinquish_Default and Present_Value in one ReadPropertyMultiple (a
+        ReadProperty of each when the device refuses that). An object type
+        with no Priority_Array raises ``ValueError`` on await with nothing
+        sent; a device that says the object has none
+        ``BacnetNoPriorityArrayError``; no answer ``BacnetTimeoutError``."""
+        ...
+
+    def objects(self) -> Awaitable[ObjectList]:
+        """The device's Object_List: whole, or an element at a time when
+        the device can't send it in one answer."""
+        ...
+
+    def summary(self) -> Awaitable[DeviceSummary]:
+        """The device's summary: its name, vendor, model, firmware,
+        protocol revision and what it supports, in one request. A handle
+        that doesn't know its instance reads that first."""
+        ...
+
+    def resolve_instance(self) -> Awaitable[int]:
+        """The device instance: as known (``instance``), or from one read
+        of the Device object by the wildcard instance, remembered
+        afterwards."""
+        ...
+
+    def moved_to(self) -> Awaitable[Optional[str]]:
+        """For a pinned handle whose instance is known: the one other
+        address its instance is heard at now, while its own has gone quiet,
+        as text ``BACnetClient.device`` reads back; else None. Always None
+        for a following handle, which moves itself. Sends nothing."""
         ...
 
     def __repr__(self) -> str: ...
@@ -3202,28 +3753,62 @@ class BacnetBvlcUnexpectedResponseError(BacnetError):
     expected: int
     got: int
 
-class BacnetAmbiguousDeviceError(BacnetError):
-    """Raised when a call names a device by its instance and two or more
-    addresses in the discovery table claim that instance, so which device is
-    meant is unknown (#2560). Nothing was sent. Each claimant keeps its own
-    entry in ``discovered_devices()`` and stays reachable by its address;
-    once only one claims the instance, by the purge or a new I-Am, the
-    instance works again.
+class BacnetLookupError(BacnetError, LookupError):
+    """Raised when no device could be placed for the name a call gave
+    (#2561): no address in the discovery table claims the instance and none
+    answered a Who-Is for it, or no router is known for a routed address's
+    network. Also a ``LookupError``. Nothing was sent to the device. The
+    typed ``_from_device`` and ``_to_device`` calls raise it for an
+    instance the table doesn't hold.
 
     Attributes:
+        target: The device as it was named: an instance (``"1234"``,
+            ``"2:1234"``) or an address (``"2:0x05"``).
+        instance: The instance named (``1234`` for ``"1234"`` or
+            ``"2:1234"``); None when the device was named by an address.
+        candidates: An empty list here.
+    """
+    target: Optional[str]
+    instance: Optional[int]
+    candidates: list[tuple[int, bytes]]
+
+class BacnetAmbiguousDeviceError(BacnetLookupError):
+    """Raised when a call names a device by its instance and two or more
+    addresses in the discovery table claim that instance, so which device is
+    meant is unknown (#2560). A ``BacnetLookupError``. Nothing was sent.
+    Each claimant keeps its own entry in ``discovered_devices()`` and stays
+    reachable by its address; once only one claims the instance, by the
+    purge or a new I-Am, the instance works again.
+
+    Attributes:
+        target: The instance, as text.
         instance: The device instance the call named.
         candidates: Every claimant as ``(network, mac)``, ordered by network
             and then MAC: network 0 is the local network, where ``mac`` is
             the device's own; on another network it is the device's MAC
-            there.
+            there. Each is a ``BACnetClient.device()`` target.
     """
     instance: int
     candidates: list[tuple[int, bytes]]
 
+class BacnetPagingError(BacnetError):
+    """Raised when a device breaks a rule of a paged read, so reading on
+    would repeat what was read or never end (#2561): an answer naming an
+    object an earlier answer named, or saying more remain with no new
+    object to go on after. No call of this release's Python API pages yet;
+    the alarm reads to come raise it.
+
+    Attributes:
+        service: The paged service, such as ``"GetEventInformation"``.
+        object_id: The object named again; None when none was.
+    """
+    service: str
+    object_id: Optional[ObjectIdentifier]
+
 class BacnetWriteDeniedError(BacnetError):
     """Raised when the client's ``write_policy`` refuses the priority a
-    ``relinquish`` names (#2561): 1, 2, 5 or 6 by default. Nothing was
-    sent. The message says how to allow it:
+    ``write`` or ``relinquish`` names (#2561): 1, 2, 5 or 6 by default.
+    Nothing was sent. The message says how to allow it:
     ``BACnetClient(write_policy=WritePolicy().allow_priorities([n]))``.
 
     Attributes:
@@ -4050,13 +4635,25 @@ class BACnetClient:
         sc_control_rate_limit: tuple[int, int] | None = None,
         router: Optional[BACnetRouter] = None,
         write_policy: Optional[WritePolicy] = None,
+        resolve_scope: Literal["local", "global"] | int | None = None,
     ) -> None:
         """``write_policy`` (default None, which is ``WritePolicy()``): the
-        priorities ``relinquish`` may use. The default refuses 1, 2, 5 and 6
-        with ``BacnetWriteDeniedError``, sending nothing;
-        ``WritePolicy().allow_priorities([...])`` allows some of them too
-        (#2561). ``write_property`` and the other typed calls don't look at
-        it. Anything but a ``WritePolicy`` raises TypeError.
+        priorities ``Device.write`` and ``relinquish`` may use. The default
+        refuses 1, 2, 5 and 6 with ``BacnetWriteDeniedError``, sending
+        nothing; ``WritePolicy().allow_priorities([...])`` allows some of
+        them too (#2561). ``write_property`` and the other typed calls
+        don't look at it. Anything but a ``WritePolicy`` raises TypeError.
+
+        ``resolve_scope`` (default None, which is ``"local"``): where a
+        ``device()`` handle made from a bare instance (``1234``) sends its
+        one Who-Is when no address claims the instance (#2561): this
+        network alone, ``"global"`` for every network, or a network number
+        from 1 to 65534. A target that names its network (``"5:1234"``)
+        asks there whatever this says. On ``transport="router"``, which has
+        no network of its own, ``"local"`` raises ValueError and None asks
+        nowhere: a bare instance the client hasn't heard from raises
+        ``BacnetLookupError``. Another name or number raises ValueError,
+        another type TypeError.
 
         ``transport="router"`` with ``router`` (a ``BACnetRouter`` built
         with ``application="client"`` or ``"client_and_server"``): run the
@@ -4213,67 +4810,62 @@ class BACnetClient:
 
     # --- Priorities (#2561) ---
 
-    def relinquish(
-        self, address: str, object_id: ObjectIdentifier, priority: int
-    ) -> Awaitable[PriorityView]:
-        """Release a command: NULL written to the object's Present_Value at
-        ``priority``, so the next slot down, or Relinquish_Default, takes
-        over. Then the object's priorities as read just after: one
-        WriteProperty, then one ReadPropertyMultiple, or a ReadProperty of
-        each of the three properties when the device refuses that.
-
-        ``address`` is a station on this client's own network, in the forms
-        ``read_property`` takes; it is always an address, never a device
-        instance or a target, here and in every later call. Nothing is
-        looked up first: the device needn't be in the discovery table.
-
-        ``priority`` is required, an int from 1 to 16: a relinquish names
-        the slot it releases, and is never a write of Relinquish_Default.
-        Before the Future is made, a bool, a float or another type raises
-        TypeError and another int ValueError, as does address text the
-        parser refuses. Raised on await, with nothing sent: ValueError for
-        an address the client's link can't carry (a 3-octet VMAC on B/IP,
-        say, or any address on ``transport="router"``, whose application has
-        no network of its own) and for an object type with no Priority_Array
-        (an input, or a Channel, which passes commands on to its members);
-        ``BacnetWriteDeniedError`` for a priority the client's
-        ``write_policy`` refuses (1, 2, 5 and 6 by default). Then the
-        device's refusal of the write raises ``BacnetProtocolError``,
-        ``BacnetRejectError`` or ``BacnetAbortError``. A device that never
-        answers raises ``BacnetTimeoutError``, where ``write_property`` and
-        ``read_property`` raise ``BacnetAbortError`` with reason 10
-        (TSM_TIMEOUT); the write may or may not have been applied. A
-        relinquish the device acknowledged whose read after it failed raises
-        ``BacnetReadBackError``, and one whose read says the object has no
-        Priority_Array raises ``BacnetNoPriorityArrayError``: both hold the
-        acknowledged write as ``written``, and it needs no second send.
-        """
-        ...
-
-    def priority_array(
-        self, address: str, object_id: ObjectIdentifier
-    ) -> Awaitable[PriorityView]:
-        """Read an object's commands: its Priority_Array, Relinquish_Default
-        and Present_Value in one ReadPropertyMultiple (a ReadProperty of
-        each when the device refuses that), as a ``PriorityView``.
-
-        ``address`` is as ``relinquish`` takes it: always an address, never
-        a device instance or a target. Address text the parser refuses
-        raises ValueError before the Future is made. An address the
-        client's link can't carry (any on ``transport="router"``), or an
-        object type with no Priority_Array, raises ValueError on await, with
-        nothing sent. A device that says the object has none raises
-        ``BacnetNoPriorityArrayError``, its other refusals the usual
-        protocol errors. A device that never answers raises
-        ``BacnetTimeoutError``, where ``read_property`` raises
-        ``BacnetAbortError`` with reason 10 (TSM_TIMEOUT).
-        """
+    @property
+    def write_policy(self) -> WritePolicy:
+        """The priorities ``Device.write`` and ``relinquish`` may use, as
+        ``write_policy=`` set them."""
         ...
 
     @property
-    def write_policy(self) -> WritePolicy:
-        """The priorities ``relinquish`` may use, as ``write_policy=`` set
-        them."""
+    def resolve_scope(self) -> Literal["local", "global"] | int | None:
+        """Where a ``device()`` handle made from a bare instance asks for
+        it, as ``resolve_scope=`` set it; None on ``transport="router"``
+        given none, which asks nowhere."""
+        ...
+
+    def device(
+        self,
+        target: str | int | Discovered | DiscoveredDevice | tuple[int, bytes],
+    ) -> Awaitable[Device]:
+        """A handle on one device, whose methods are the high-level calls:
+        ``read``, ``read_many``, ``read_object``, ``write``,
+        ``preview_write``, ``relinquish``, ``priority_array``, ``objects``
+        and ``summary`` (#2561).
+
+        ``target`` names the device in the target grammar, not in the
+        ``address`` forms the typed calls take. Most addresses read the
+        same in both: ``"ip:port"``, six hex octets, the ``bip6:`` forms and
+        ``"mstp:N"``. Two don't. **A bare ``"5"`` is device instance 5 here,
+        not MS/TP station 5: write ``"mstp:5"``.** And colon-separated hex
+        of another length than six octets, which ``address`` takes as a
+        MAC, is no address here: it is refused (ValueError), or, for two
+        decimal parts such as ``"10:20"``, read as instance 20 on network
+        10. The forms:
+
+        - an address pins the handle there and sends nothing for a station
+          on this network: ``"192.168.1.10"`` or ``"192.168.1.10:47808"``,
+          ``"mstp:5"``, ``"bip6:0x0004D2"``, an SC VMAC as six hex octets,
+          a routed station as ``"2:0x05"`` (network 2, MAC 05), or a
+          ``(network, mac)`` pair such as a lookup error's candidate. A
+          routed station the client knows no router for asks its network
+          first;
+        - an instance, ``1234`` (an int or text) or ``"2:1234"`` on network
+          2, gives a handle that follows the instance: the one address
+          claiming it, or the one that answers a Who-Is for it, sent where
+          ``resolve_scope`` says for a bare instance (this network alone by
+          default) and to the network named otherwise, waiting up to 3
+          seconds;
+        - a ``discover()`` row or a ``DiscoveredDevice`` pins the handle to
+          its address, knowing its instance.
+
+        A wrong type raises TypeError and text the grammar refuses
+        ValueError, when the call is made. On await: an address the
+        client's link can't reach raises ValueError, as does a local
+        address on ``transport="router"``; an instance no address claims
+        and none answered for, or a routed address with no router known,
+        ``BacnetLookupError``; an instance two or more addresses claim
+        ``BacnetAmbiguousDeviceError``, whose ``candidates`` are each a
+        target."""
         ...
 
     def read_property_multiple(
@@ -4393,9 +4985,10 @@ class BACnetClient:
 
     def who_is(
         self,
-        low_limit: Optional[int] = None,
-        high_limit: Optional[int] = None,
-        scope: Literal["local", "global"] | int = "local",
+        *,
+        low: Optional[int] = None,
+        high: Optional[int] = None,
+        scope: Literal["local", "global"] | int | str = "local",
     ) -> Awaitable[None]:
         """Broadcast a Who-Is request. Responses are collected asynchronously;
         use ``discovered_devices()`` to retrieve them.
@@ -4404,42 +4997,55 @@ class BACnetClient:
         default, is this network alone, which no router passes on;
         ``"global"`` is every network, which on a large routed site every
         device answers; a number from 1 to 65534 is that remote network,
-        through its router. Another name or number raises ``ValueError``,
-        and another type ``TypeError``, before anything is sent. A client on
-        ``transport="router"`` has no network of its own, so its Who-Is
-        names one, or every one: a local one raises ``ValueError`` saying so.
+        through its router; and any other text is one station's address in
+        the forms ``device()`` takes (``"192.168.1.10"``, ``"mstp:5"``),
+        asked by unicast (#2561, where ``who_is_directed`` was). Another
+        number, or text that names a device instance or a routed target,
+        raises ``ValueError``, and another type ``TypeError``, before
+        anything is sent; a station the client's link can't reach raises
+        ``ValueError`` on await. A client on ``transport="router"`` has no
+        network of its own, so its Who-Is names a network, or every one: a
+        local or directed one raises ``ValueError`` saying so.
 
-        Give ``low_limit`` and ``high_limit`` together or not at all, each from
-        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
+        Give ``low`` and ``high`` together or not at all, each from
+        0 to 4194303: one alone, ``low`` above ``high``, or a limit
         past 4194303 raises ``ValueError`` before anything is sent.
         """
         ...
 
     def discover(
         self,
-        timeout_ms: int = 3000,
-        low_limit: Optional[int] = None,
-        high_limit: Optional[int] = None,
-        scope: Literal["local", "global"] | int = "local",
-    ) -> Awaitable[list[DiscoveredDevice]]:
-        """Convenience: send WhoIs, wait ``timeout_ms``, return discovered devices.
+        *,
+        scope: Literal["local", "global"] | int | str = "local",
+        low: Optional[int] = None,
+        high: Optional[int] = None,
+        wait: float = 3.0,
+    ) -> Awaitable[list[Discovered]]:
+        """Find devices: one Who-Is, then the devices that answered it
+        within ``wait`` seconds, one ``Discovered`` an address (#2561).
+        Only this call's answers: a device the client heard earlier that
+        stays quiet now isn't listed (``discovered_devices()`` is the whole
+        table). Each row is a ``device()`` target, and its ``duplicate``
+        says when another address claims the same instance.
 
         The Who-Is goes where ``scope`` says, as for ``who_is()``: this
-        network alone unless it names every network (``"global"``) or one
-        remote network by its number.
+        network alone unless it names every network (``"global"``), one
+        remote network by its number, or one station by its address.
 
-        Give ``low_limit`` and ``high_limit`` together or not at all, each from
-        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
-        past 4194303 raises ``ValueError`` before anything is sent.
+        Give ``low`` and ``high`` together or not at all, each from 0 to
+        4194303, to ask only those instances: one alone, ``low`` above
+        ``high``, or a limit past 4194303 raises ``ValueError`` before
+        anything is sent, as does a ``wait`` outside 0 to 3600 seconds.
         """
         ...
 
     def who_has_by_id(
         self,
         object_id: ObjectIdentifier,
-        low_limit: Optional[int] = None,
-        high_limit: Optional[int] = None,
-        scope: Literal["local", "global"] | int = "local",
+        *,
+        low: Optional[int] = None,
+        high: Optional[int] = None,
+        scope: Literal["local", "global"] | int | str = "local",
     ) -> Awaitable[None]:
         """Send a Who-Has by object identifier. Answers come through
         ``i_have_events()``.
@@ -4448,14 +5054,16 @@ class BACnetClient:
         ``"local"``, the default, is this network alone, which no router
         passes on; ``"global"`` is every network, where every device that
         hears it searches its objects; a number from 1 to 65534 is that
-        remote network, through its router. Another name or number raises
-        ``ValueError``, and another type ``TypeError``, before anything is
-        sent. A client on ``transport="router"`` has no network of its own,
-        so its Who-Has names one, or every one: a local one raises
+        remote network, through its router; any other text is one station's
+        address, asked by unicast (#2561). Another number, or text that
+        names a device instance or a routed target, raises ``ValueError``,
+        and another type ``TypeError``, before anything is sent. A client on
+        ``transport="router"`` has no network of its own, so its Who-Has
+        names a network, or every one: a local or directed one raises
         ``ValueError`` saying so.
 
-        Give ``low_limit`` and ``high_limit`` together or not at all, each from
-        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
+        Give ``low`` and ``high`` together or not at all, each from
+        0 to 4194303: one alone, ``low`` above ``high``, or a limit
         past 4194303 raises ``ValueError`` before anything is sent.
         """
         ...
@@ -4463,9 +5071,10 @@ class BACnetClient:
     def who_has_by_name(
         self,
         name: str,
-        low_limit: Optional[int] = None,
-        high_limit: Optional[int] = None,
-        scope: Literal["local", "global"] | int = "local",
+        *,
+        low: Optional[int] = None,
+        high: Optional[int] = None,
+        scope: Literal["local", "global"] | int | str = "local",
     ) -> Awaitable[None]:
         """Send a Who-Has by object name, compared exactly. The limits and
         ``scope`` follow ``who_has_by_id()``'s rules: this network alone
@@ -4477,14 +5086,15 @@ class BACnetClient:
     def who_has_replies(
         self,
         object: ObjectIdentifier | str,
-        low_limit: Optional[int] = None,
-        high_limit: Optional[int] = None,
-        timeout_ms: int = 3000,
-        scope: Literal["local", "global"] | int = "local",
+        *,
+        low: Optional[int] = None,
+        high: Optional[int] = None,
+        wait: float = 3.0,
+        scope: Literal["local", "global"] | int | str = "local",
     ) -> Awaitable[list[IHave]]:
         """Send a Who-Has for ``object`` (an identifier, or a name) and
         collect the I-Haves that answer it from that scope for
-        ``timeout_ms``: one per device, object and station (a station's copy
+        ``wait`` seconds: one per device, object and station (a station's copy
         through a router on this client's own network is its local answer),
         in arrival order; an empty list when none answer. An I-Have heard
         from elsewhere during the wait is not an answer, and collection stops
@@ -4492,8 +5102,9 @@ class BACnetClient:
         short. The limits and ``scope``
         follow ``who_has_by_id()``'s rules (#1850, #2596): with the default
         scope an empty list says only that nothing on this network has the
-        object. It holds the started client for the whole wait, so ``stop()``
-        waits up to ``timeout_ms`` for it."""
+        object. ``wait`` is 0 to 3600 seconds (``ValueError`` otherwise). It
+        holds the started client for the whole wait, so ``stop()`` waits up
+        to ``wait`` seconds for it."""
         ...
 
     def i_have_events(self) -> Awaitable[IHaveIterator]:
@@ -4503,14 +5114,15 @@ class BACnetClient:
         ...
 
     def discover_routers(
-        self, network: Optional[int] = None, timeout_ms: int = 3000,
+        self, network: Optional[int] = None, *, wait: float = 3.0,
     ) -> Awaitable[list[DiscoveredRouter]]:
         """Broadcast a Who-Is-Router-To-Network for ``network`` (or every
-        network) and collect the routers that answer for ``timeout_ms``, one
+        network) and collect the routers that answer for ``wait`` seconds, one
         per router MAC in the order first heard; for a ``network``, only the
         routers listing it. An empty list when none answer. ``network`` 0 or
-        65535 raises BacnetError (#1850). It holds the started client for
-        the whole wait, so ``stop()`` waits up to ``timeout_ms`` for it."""
+        65535 raises BacnetError (#1850). ``wait`` is 0 to 3600 seconds
+        (``ValueError`` otherwise). It holds the started client for the
+        whole wait, so ``stop()`` waits up to ``wait`` seconds for it."""
         ...
 
     def network_reports(self) -> Awaitable[NetworkReportIterator]:
@@ -4564,20 +5176,6 @@ class BACnetClient:
         The three arguments should match the sender's Device object properties
         (``vendor_id`` is 0-65535). Raises ``ValueError`` if a string cannot be
         encoded, or ``OverflowError`` for a ``vendor_id`` that doesn't fit.
-        """
-        ...
-
-    def who_is_directed(
-        self,
-        address: str,
-        low_limit: Optional[int] = None,
-        high_limit: Optional[int] = None,
-    ) -> Awaitable[None]:
-        """Send a Who-Is to a specific device address (unicast).
-
-        Give ``low_limit`` and ``high_limit`` together or not at all, each from
-        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
-        past 4194303 raises ``ValueError`` before anything is sent.
         """
         ...
 

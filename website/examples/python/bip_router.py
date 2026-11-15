@@ -50,7 +50,7 @@ async def main() -> int:
                     foreign_device=ForeignDevice(near.address, ttl=60)) as client:
                 await registered(server, client)
                 # Who-Is-Router-To-Network: which router reaches network 5?
-                routers = await client.discover_routers(FAR, timeout_ms=2000)
+                routers = await client.discover_routers(FAR, wait=2.0)
                 if [found.mac for found in routers] != [near.mac]:
                     raise RuntimeError(f"expected this router, heard {routers}")
                 print(f"Router to network {FAR} found, "
@@ -58,14 +58,10 @@ async def main() -> int:
                 # A Who-Is to network 5 crosses the router (a local one,
                 # the default, stays on this network); the I-Am names the
                 # device's network.
-                devices = await client.discover(timeout_ms=2000,
-                                                low_limit=DEVICE_INSTANCE,
-                                                high_limit=DEVICE_INSTANCE,
-                                                scope=FAR)
-                [device] = [found for found in devices
-                            if found.object_identifier.instance == DEVICE_INSTANCE]
-                print(f"Device {DEVICE_INSTANCE} found on network "
-                      f"{device.source_network}")
+                [device] = await client.discover(scope=FAR, low=DEVICE_INSTANCE,
+                                                 high=DEVICE_INSTANCE, wait=2.0)
+                print(f"Device {device.instance} found on network "
+                      f"{device.network}")
                 # Reads by instance go through the router that answered.
                 value = await client.read_property_from_device(
                     DEVICE_INSTANCE, ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
