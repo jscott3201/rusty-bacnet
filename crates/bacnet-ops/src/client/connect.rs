@@ -260,8 +260,24 @@ mod sc {
     impl Client {
         /// A BACnet/SC client of the hub at `hub_url`
         /// (`wss://hub.example.com/bacnet`), with `tls` as its TLS
-        /// identity and trust. It needs its VMAC and device UUID too
-        /// ([`ScConnect::vmac`], [`ScConnect::device_uuid`]).
+        /// identity and trust: from the site's PEM files with
+        /// [`ScNodeTlsConfig::from_pem_files`], from PEM in memory with
+        /// `from_pem`, or from DER with `from_der`. It needs its VMAC and
+        /// device UUID too ([`ScConnect::vmac`], [`ScConnect::device_uuid`]).
+        /// TLS material the configuration refuses reaches an [`OpsError`]
+        /// by `?` as [`OpsError::Tls`], naming the file at fault.
+        ///
+        /// ```no_run
+        /// use bacnet_ops::{Client, ScNodeTlsConfig};
+        /// # async fn example() -> Result<(), bacnet_ops::OpsError> {
+        /// let tls = ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")?;
+        /// let client = Client::sc("wss://hub.example.com/bacnet", tls)
+        ///     .vmac([0x02, 0, 0, 0, 0, 0x01])
+        ///     .device_uuid([0x42; 16])
+        ///     .connect()
+        ///     .await?;
+        /// # let _ = client; Ok(()) }
+        /// ```
         #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
         pub fn sc(hub_url: &str, tls: ScNodeTlsConfig) -> ScConnect {
             ScConnect {

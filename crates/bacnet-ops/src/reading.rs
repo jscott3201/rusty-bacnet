@@ -219,9 +219,11 @@ pub struct Readings {
     /// ReadPropertyMultiple and some by ReadProperty; `None` when nothing
     /// was read.
     pub via: Option<ReadVia>,
-    /// The device stopped answering after the read began, so the
-    /// properties after `readings` weren't read: always
-    /// [`OpsError::unreachable`]. `readings` keeps what was read before it,
+    /// The read ended after it began, so the properties after `readings`
+    /// weren't read: the device stopped answering
+    /// ([`OpsError::unreachable`]), or the client or the link failed a
+    /// later request itself ([`OpsError::Client`]: a route lost, a link
+    /// refusing the send). `readings` keeps what was read before it,
     /// possibly nothing, an object's properties read before it included.
     pub stopped: Option<OpsError>,
 }

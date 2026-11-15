@@ -73,11 +73,11 @@ from rusty_bacnet import BACnetClient, ForeignDevice
 async def main():
     bbmd = ForeignDevice("192.168.1.10:47808", ttl=600, renewal=20)
     async with BACnetClient(port=0, foreign_device=bbmd) as client:
-        devices = await client.discover(timeout_ms=3000)
+        devices = await client.discover(wait=3.0)
         status = await client.foreign_registration()
         print(status["last_outcome"], status["lease_remaining"])
         for device in devices:
-            print(device.object_identifier.instance)
+            print(device.address, device.instance)
 
 
 asyncio.run(main())

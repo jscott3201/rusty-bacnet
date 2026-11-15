@@ -46,6 +46,7 @@ mod object_profile;
 mod property_reference;
 mod property_value;
 mod read_value;
+mod routed_target;
 mod rpm_wpm;
 mod schedule;
 mod shed_level;
@@ -78,6 +79,7 @@ pub(crate) use property_reference::{
 };
 pub use property_value::PyPropertyValue;
 pub(crate) use read_value::{decode_read_ack, decode_read_value};
+pub(crate) use routed_target::PyRoutedTarget;
 pub(crate) use rpm_wpm::{
     PyDeviceWrite, PyPropertyWrite, PyReadAccessSpec, PyWriteAccessSpec, py_to_rpm_specs,
     py_to_wpm_specs, rpm_ack_to_py,

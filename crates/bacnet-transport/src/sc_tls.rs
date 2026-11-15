@@ -4,9 +4,12 @@
 //! with `rustls` TLS.  This is the production WebSocket driver used by
 //! [`crate::sc::ScTransport`] when connecting to a real BACnet/SC hub.
 
+mod config_error;
+pub use config_error::{ScCertificateForm, ScKeyForm, ScPemFault, ScTlsConfigError, ScTlsInput};
 pub mod inspection;
+pub(crate) mod material;
+pub use material::MAX_PEM_FILE_BYTES;
 mod peer_info;
-pub mod pem;
 pub use peer_info::{ScCertificateMetadata, ScHandshakeKind, ScPeerCertificate, ScTlsPeerInfo};
 mod subject_alt_name;
 pub use subject_alt_name::ScSubjectAltName;

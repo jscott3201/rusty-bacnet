@@ -59,9 +59,11 @@ satisfied. Extensions other than SAN/KU/EKU are not interpreted.
 
 `key_consistency` is `match` only after an explicit SPKI comparison through the
 fixed AWS-LC Rustls provider. Other outcomes are `mismatch`, `unusable`, `unknown`
-and `not_assessed`. Recognized unencrypted PKCS#1, SEC1 and PKCS#8 keys use the
-first-key semantics of existing loaders; the tail after the first recognized key
-is not inspected. Encrypted-key decryption is unsupported. A malformed identity
+and `not_assessed`. The key input is decoded as the TLS configurations decode it
+(#2600): exactly one unencrypted PKCS#1, SEC1 or PKCS#8 key, in PEM that is well
+formed throughout. Two keys are the input error `multiple_private_keys`, an
+encrypted or OpenSSH key `unsupported_private_key`, and a malformed section
+anywhere in the file `malformed_pem`; encrypted-key decryption is unsupported. A malformed identity
 leaf can make comparison unknown. None of these outcomes, nor a `direct`
 issuer, establishes that remote peers trust that issuer, remote acceptance or
 BACnet/SC admission.

@@ -78,8 +78,10 @@ impl PriorityView {
     /// [`OpsError::NoPriorityArray`] when the device says the object has
     /// no Priority_Array; its other refusals of Priority_Array or
     /// Present_Value as [`OpsError::Refused`]; and a Priority_Array that
-    /// isn't sixteen values, or an answer that left one out, as
-    /// [`OpsError::Client`].
+    /// isn't sixteen values, an answer that left one out, or one whose
+    /// value didn't decode, as [`OpsError::Client`]. A request that failed
+    /// never reaches here as a row: the read fails with its own error
+    /// first (#2610).
     pub(crate) fn from_rows(
         object: ObjectIdentifier,
         rows: &[RawRow],
@@ -156,6 +158,8 @@ fn row<'r>(
             error: *error,
             detail: None,
         }),
+        // The answer arrived and couldn't be read: a request that was
+        // never sent, or never answered, fails the read before any row.
         Some((_, Err(PropertyError::Other(_)))) => Err(OpsError::Client(Error::decoding(
             0,
             "a property of the priority read did not decode",

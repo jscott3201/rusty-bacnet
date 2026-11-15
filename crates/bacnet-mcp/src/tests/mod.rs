@@ -134,6 +134,7 @@ pub(crate) fn recording(
     received: Arc<Mutex<Vec<Instant>>>,
     indexed_only: bool,
     mute_after: Arc<Mutex<Option<usize>>>,
+    refuse: Arc<std::sync::atomic::AtomicBool>,
 ) -> (TestTransport, TestTransportHandle) {
     // Number controls on, so a Network-Number-Is a test injects teaches
     // the client its network's number; the client sends none unasked.
@@ -159,7 +160,16 @@ pub(crate) fn recording(
             log.lock()
                 .unwrap()
                 .push((Instant::now(), frame.mac.to_vec()));
-            async { Ok(()) }
+            // A link that refuses to send: nothing leaves (#2610).
+            let refused = !frame.broadcast && refuse.load(std::sync::atomic::Ordering::Relaxed);
+            async move {
+                match refused {
+                    true => Err(bacnet_types::error::Error::Encoding(
+                        "the link refused the send".into(),
+                    )),
+                    false => Ok(()),
+                }
+            }
         })
         .intercept(move |frame| {
             let muted = !frame.broadcast && {
@@ -244,6 +254,7 @@ pub(crate) struct Lab {
     forwarding: Vec<JoinHandle<()>>,
     serving: JoinHandle<()>,
     mute: Arc<Mutex<Option<usize>>>,
+    refuse: Arc<std::sync::atomic::AtomicBool>,
     /// The client's request limits, to hold a device's gate from a test.
     pub(crate) limits: Arc<bacnet_ops::limits::RequestLimits>,
     /// A handle on the server, for calling its handler directly.
@@ -335,6 +346,7 @@ impl Lab {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let received = Arc::new(Mutex::new(Vec::new()));
         let mute = Arc::new(Mutex::new(None));
+        let refuse = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (recording, inbox) = recording(
             client_port,
             links.clone(),
@@ -342,6 +354,7 @@ impl Lab {
             Arc::clone(&received),
             indexed_only,
             Arc::clone(&mute),
+            Arc::clone(&refuse),
         );
         let config = ClientConfig {
             apdu_timeout_ms: 1_000,
@@ -405,6 +418,7 @@ impl Lab {
             forwarding,
             serving,
             mute,
+            refuse,
             limits,
             mcp,
             shutdown: Some(shutdown),
@@ -416,6 +430,13 @@ impl Lab {
     pub(crate) fn go_silent_after(&self, more: usize) {
         let sent = self.sent.lock().unwrap().len();
         *self.mute.lock().unwrap() = Some(sent + more);
+    }
+
+    /// From now on the client's link refuses to send any unicast: each
+    /// request fails at once, unsent.
+    pub(crate) fn refuse_sends(&self) {
+        self.refuse
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Add an analog input to the lab device, as a site change would.

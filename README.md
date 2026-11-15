@@ -81,19 +81,16 @@ if __name__ == "__main__":
 ```python
 # read_value.py: read Analog Input 1's present value
 import asyncio
-from rusty_bacnet import BACnetClient, ObjectIdentifier, ObjectType, PropertyIdentifier
+from rusty_bacnet import BACnetClient
 
 
 async def main():
     async with BACnetClient(
         interface="127.0.0.1", port=0, broadcast_address="127.0.0.1"
     ) as client:
-        value = await client.read_property(
-            "127.0.0.1:47808",
-            ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
-            PropertyIdentifier.PRESENT_VALUE,
-        )
-        print(value.value)  # 22.5
+        device = await client.device("127.0.0.1:47808")
+        value = await device.read("ai:1")  # an object alone is its present value
+        print(value.text)  # 22.5
 
 
 asyncio.run(main())

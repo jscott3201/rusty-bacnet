@@ -109,7 +109,9 @@ def inspect_sc_pem(
 
 Inspect bounded PEM bytes synchronously. Time is a signed 64-bit integer second.
 
-ValueError: malformed/empty/oversized supplied PEM. TypeError: wrong input type,
+ValueError: malformed/empty/oversized supplied PEM, a private key input holding
+more than one key, or a key in a form a connect can't use (encrypted, OpenSSH),
+as SC startup refuses them. TypeError: wrong input type,
 including bool time. OverflowError: time outside the signed 64-bit range.
 DER defects and key/date observations are returned in the report.
 

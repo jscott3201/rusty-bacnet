@@ -371,3 +371,97 @@ impl EndpointEgress {
         .await
     }
 }
+
+/// Send one admitted APDU on the layer, by its destination.
+pub(super) async fn send_network_service_apdu<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    apdu: &[u8],
+    destination: &EndpointApduDestination,
+    expecting_reply: bool,
+    priority: NetworkPriority,
+    data_attributes: &[DataAttribute],
+) -> Result<(), Error> {
+    validate_effective_group_apdu(apdu, destination, |mac| {
+        network.transport().is_group_destination(mac)
+    })?;
+    match destination {
+        EndpointApduDestination::Direct { destination_mac } => {
+            network
+                .send_apdu_with_data_attributes(
+                    apdu,
+                    destination_mac,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::Routed {
+            destination_network,
+            destination_mac,
+            router_mac,
+        } => {
+            network
+                .send_apdu_routed_with_data_attributes(
+                    apdu,
+                    RoutedTarget {
+                        network: *destination_network,
+                        mac: destination_mac,
+                        router_mac,
+                    },
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac,
+        } => {
+            network
+                .send_apdu_routed_via_local_broadcast_with_data_attributes(
+                    apdu,
+                    *destination_network,
+                    destination_mac,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::LocalBroadcast => {
+            network
+                .broadcast_apdu_with_data_attributes(
+                    apdu,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::RemoteBroadcast {
+            destination_network,
+        } => {
+            network
+                .broadcast_to_network_with_data_attributes(
+                    apdu,
+                    *destination_network,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::GlobalBroadcast => {
+            network
+                .broadcast_global_apdu_with_data_attributes(
+                    apdu,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+    }
+}

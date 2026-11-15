@@ -40,7 +40,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # SC-TLS optional deps
 tokio-rustls = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
-rustls-pki-types = { version = "1", optional = true }
 time = { version = "0.3.54", features = ["formatting"], optional = true }
 
 # Only for the TUI: the platform config directory that holds its profiles,
@@ -119,7 +118,6 @@ sc-tls = [
     "bacnet-ops/sc-tls",
     "dep:tokio-rustls",
     "dep:rustls",
-    "dep:rustls-pki-types",
     "dep:time",
 ]
 pcap = ["dep:pcap", "dep:ctrlc", "dep:libc"]

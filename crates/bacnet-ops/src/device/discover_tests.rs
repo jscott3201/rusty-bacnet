@@ -151,3 +151,127 @@ async fn the_low_level_send_takes_the_same_default() {
     );
     assert!(who_is_frames(&sent).is_empty());
 }
+
+/// Only the scope asked answers a discovery: an I-Am heard during the wait
+/// from somewhere the Who-Is didn't go (a local device announcing itself,
+/// or answering another caller) is in the table but not in the result. A
+/// discovery of a remote network lists no local device, a directed one
+/// only its station, and a local or global one the local device.
+#[tokio::test(start_paused = true)]
+async fn an_i_am_from_outside_the_scope_is_no_answer() {
+    let bus = Bus::new();
+    let (client, _sent) = client(&bus).await;
+    let wait = Duration::from_secs(1);
+    let heard = |found: Vec<super::Discovered>| -> Vec<u32> {
+        found.iter().map(|found| found.instance).collect()
+    };
+    for (request, expected) in [
+        (Discover::network(7), vec![]),
+        (Discover::directed(at(2)), vec![1002]),
+        (Discover::directed(at(3)), vec![1003]),
+        (Discover::local(), vec![1002, 1003]),
+        (Discover::global(), vec![1002, 1003]),
+    ] {
+        let (found, ()) = tokio::join!(
+            client.discover(request.clone().wait(wait)),
+            announce_twice(&bus)
+        );
+        assert_eq!(heard(found.unwrap()), expected, "{request:?}");
+    }
+    // Both stay in the table, whichever discovery heard them.
+    assert_eq!(client.devices().await.len(), 2);
+
+    async fn announce_twice(bus: &std::sync::Arc<Bus>) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        bus.i_am(2, 1002);
+        bus.i_am(3, 1003);
+    }
+}
+
+/// The one rule for which answers a scope covers, a Who-Is's and a
+/// Who-Has's alike: a network named by this client's own number takes the
+/// local stations; a local scope takes no routed station, and takes one
+/// reported with the client's own network number, which is local.
+#[test]
+fn a_scope_covers_stations_by_where_they_are() {
+    let local = at(2);
+    let routed = super::DeviceAddress::new(9, &[7]).unwrap();
+    let own_routed = super::DeviceAddress::new(5, &mac(2)).unwrap();
+    for (scope, own, address, covered) in [
+        (Scope::Network(5), Some(5), &local, true),
+        (Scope::Network(5), None, &local, false),
+        (Scope::Network(5), Some(5), &own_routed, true),
+        (Scope::Network(9), Some(5), &routed, true),
+        (Scope::Network(9), Some(5), &local, false),
+        (Scope::Local, Some(5), &routed, false),
+        (Scope::Local, None, &routed, false),
+        (Scope::Local, Some(5), &own_routed, true),
+        (Scope::Local, None, &local, true),
+        (Scope::Directed(local.clone()), Some(5), &own_routed, true),
+        (Scope::Directed(local.clone()), None, &routed, false),
+        (Scope::Global, None, &routed, true),
+    ] {
+        assert_eq!(
+            scope.covers(address, own),
+            covered,
+            "{scope:?} {own:?} {address}"
+        );
+    }
+}
+
+/// A local broadcast the operating system refuses ("No route to host", as
+/// from a loopback interface with the limited broadcast address) says where
+/// it was going, the client's broadcast address, and keeps the system's
+/// error with its code and kind beneath it. A link with no such address
+/// reports the error as it came.
+#[tokio::test(start_paused = true)]
+async fn a_refused_local_broadcast_names_its_destination() {
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    use bacnet_transport::test_transport::TestTransport;
+    use bacnet_types::error::Error;
+
+    use super::test_bus::client_on;
+    // EHOSTUNREACH on macOS, where CI met it.
+    let no_route = || async { Err(Error::Transport(std::io::Error::from_raw_os_error(65))) };
+    let bip = TestTransport::builder()
+        .local_mac(&mac(1))
+        .on_send(move |frame| {
+            let refused = frame.broadcast;
+            async move { if refused { no_route().await } else { Ok(()) } }
+        })
+        .on_bip_broadcast_endpoint(|| Some(SocketAddrV4::new(Ipv4Addr::BROADCAST, 47808)))
+        .build();
+    let (client, _) = client_on(bip).await;
+    let quick = Discover::local().wait(Duration::ZERO);
+    for refused in [
+        client.discover(quick.clone()).await.unwrap_err(),
+        client.device(4000).await.map(drop).unwrap_err(),
+        client
+            .find(crate::Find::name("Zone").wait(Duration::ZERO))
+            .await
+            .map(drop)
+            .unwrap_err(),
+    ] {
+        let text = refused.to_string();
+        assert!(text.contains("255.255.255.255:47808"), "{text}");
+        assert!(text.contains("broadcast address"), "{text}");
+        let OpsError::Client(Error::Transport(io)) = &refused else {
+            panic!("{refused:?}");
+        };
+        let inner = io.get_ref().and_then(|wrapped| wrapped.source());
+        let system = inner.and_then(|source| source.downcast_ref::<std::io::Error>());
+        assert_eq!(system.and_then(std::io::Error::raw_os_error), Some(65));
+        assert_eq!(Some(io.kind()), system.map(std::io::Error::kind));
+    }
+    let plain = TestTransport::builder()
+        .local_mac(&mac(1))
+        .on_send(move |_| no_route())
+        .build();
+    let (client, _) = client_on(plain).await;
+    let refused = client.discover(quick).await.unwrap_err();
+    assert!(
+        !refused.to_string().contains("broadcast address"),
+        "{refused}"
+    );
+}

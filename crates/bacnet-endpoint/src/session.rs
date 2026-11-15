@@ -77,6 +77,8 @@ use tokio::task::JoinHandle;
 #[path = "source_profile.rs"]
 mod source_profile;
 pub(crate) use source_profile::{RoutedBindings, check_link_bindings};
+#[path = "session_seat.rs"]
+mod seat;
 #[path = "source_reporter.rs"]
 pub(crate) mod source_reporter;
 #[path = "session_start.rs"]
@@ -339,6 +341,8 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
     /// The B/IP transport's own exchanges, when the B/IP builder built it.
     pub(crate) bip_status: Option<bacnet_transport::bip::BvlcClientStatus>,
+    /// The B/IP transport's BBMD table reads, when the B/IP builder built it.
+    pub(crate) bip_tables: Option<bacnet_transport::bip::BvlcTableReader>,
     pub(crate) frame_tap: Option<bacnet_transport::tap::FrameTap>,
     /// The MS/TP transport's counters, when the MS/TP builder built it.
     pub(crate) mstp_diagnostics: Option<bacnet_transport::mstp::MstpDiagnostics>,
@@ -441,6 +445,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             reinit_password: None,
             egress: None,
             bip_status: None,
+            bip_tables: None,
             frame_tap: None,
             mstp_diagnostics: None,
             sc_link: None,
@@ -622,7 +627,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// shutdown and fail closed.
     ///
     /// With an attached database, waits for its lock and for queued durable save
-    /// attempts, including corrections for abandoned staged writes. Release any
+    /// attempts, including corrections for abandoned staged writes. With a
+    /// [`full_client`](Self::full_client) still alive the link cannot be
+    /// stopped: the call fails, and one made after that client is dropped
+    /// finishes. Release any
     /// application-held database guard so shutdown can progress. A stalled backend
     /// keeps this call pending; completion does not certify backend success or
     /// power-loss durability. The database remains attached after termination.
@@ -672,9 +680,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if !self.ingress_stopped {
             if let Some(ingress) = self.ingress.as_mut()
                 && let Err(error) = ingress.stop().await
-                && self.stop_exit.as_ref().is_some_and(Result::is_ok)
             {
-                self.stop_exit = Some(Err(error));
+                // A full client still holds the link (#2617). Everything
+                // above is done and stays done; the session stays stopping,
+                // and a stop after that client is dropped finishes here.
+                if ingress.link_held() {
+                    return Err(error);
+                }
+                if self.stop_exit.as_ref().is_some_and(Result::is_ok) {
+                    self.stop_exit = Some(Err(error));
+                }
             }
             self.ingress_stopped = true;
         }
@@ -808,6 +823,21 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ) -> Option<bacnet_transport::bip::ForeignRegistrationSnapshot> {
         let status = self.bip_status.as_ref()?;
         Some(status.snapshot().foreign_registration)
+    }
+
+    /// Reads a BBMD's two tables, its BDT and its FDT, through this
+    /// session's own B/IP socket (#2612), as
+    /// [`BipTransport::read_bdt`](bacnet_transport::bip::BipTransport::read_bdt)
+    /// and [`read_fdt`](bacnet_transport::bip::BipTransport::read_fdt) do,
+    /// beside the roles' traffic. A read fails as one before start does
+    /// while the session is stopped. It is there for a session
+    /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder) built, and
+    /// `None` for any other: take a
+    /// [`BipTransport::bvlc_table_reader`](bacnet_transport::bip::BipTransport::bvlc_table_reader)
+    /// before handing a transport to [`Self::new`]. It only reads; the
+    /// table writes stay on the transport.
+    pub fn bvlc_tables(&self) -> Option<bacnet_transport::bip::BvlcTableReader> {
+        self.bip_tables.clone()
     }
 
     /// The MS/TP transport's counters (#958): a handle to the same

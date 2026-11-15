@@ -157,6 +157,29 @@ async fn the_own_network_number_names_the_local_network() {
     lab.stop().await;
 }
 
+/// A request the link never sent fails the tool call with the link's own
+/// error, where a read once came back as rows of error text (#2610):
+/// `bacnet_describe_device` and `bacnet_read` both say why, and send no
+/// further request for the same refusal.
+#[tokio::test(start_paused = true)]
+async fn a_request_never_sent_fails_the_call_with_its_error() {
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.agent.initialize().await;
+    lab.refuse_sends();
+    let device = json!({ "device": LAB.to_string() });
+    let read = json!({ "device": LAB.to_string(), "reads": [{ "object": "ai:1" }] });
+    for (tool, arguments) in [("bacnet_describe_device", device), ("bacnet_read", read)] {
+        let before = lab.sends().len();
+        let result = lab.agent.call(tool, arguments).await;
+        assert_eq!(result["isError"], json!(true), "{tool}: {result}");
+        let text = result.to_string();
+        assert!(text.contains("the link refused the send"), "{tool}: {text}");
+        let tried = lab.sends().len() - before;
+        assert!(tried <= 2, "{tool}: {tried} sends for one refusal");
+    }
+    lab.stop().await;
+}
+
 /// Two networks hold one instance (#2560): the lab device on this one, and
 /// a station on network 2001 behind it that announces the same instance.
 /// The server knows them as two devices; the instance alone names neither,
