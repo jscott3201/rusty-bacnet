@@ -42,8 +42,10 @@ pub(super) struct Started {
     /// Where the device is; `None` when no route to its address is known,
     /// and then nothing was sent.
     pub(super) target: Option<CovTarget>,
-    /// The instance the device at the address claims, as the discovery
-    /// table or a read by the wildcard instance says, if either does.
+    /// The instance the discovery table, or a read by the wildcard
+    /// instance, names at the address once the start is answered, if
+    /// either does: not what it named when the start began, which a
+    /// device taking the address meanwhile can change.
     pub(super) instance: Option<u32>,
     /// The first read, unless no route is known.
     pub(super) first: Option<Result<Vec<RawRow>, Error>>,
@@ -159,6 +161,8 @@ pub(super) async fn start<T: TransportPort + 'static>(
         };
         (Outcome::Asked(outcome), cov)
     };
+    // What the table names at the address now, once the start is answered.
+    let instance = client.instance_at(address).await;
     Started {
         target: Some(target),
         instance,

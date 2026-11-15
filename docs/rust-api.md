@@ -12023,9 +12023,12 @@ An `Update` (`#[non_exhaustive]`) carries:
 
 - `point`;
 - `state`, one `watch::State`: `Starting`, `Subscribed`, `Polled { why }`,
-  `Unreachable { why }` or `Gone { why }`, where `why` is a `watch::Why`
-  (`Refused`, `NoAnswer`, `Full`, `Lapsed`, `Missing` for a remote address
-  with no router known, or `Moved { to }`);
+  `Unreachable { why }` or `Gone { why }`, where `why` is a `watch::Why`:
+  `Refused` (the device said no; not asked again), `NoAnswer` (the first
+  read or the subscription had no answer), `Full` (its subscription table
+  was full) and `Lapsed` (a renewal failed), each asked again after a
+  backoff, `Missing` for a remote address with no router known, or
+  `Moved { to }`;
 - `value` (a `Value`, an object watch's Present_Value, named by the units
   and state texts the first read had) and `error`: `value` alone is
   current; both together, a value read earlier while the latest read
@@ -12062,14 +12065,14 @@ drop it to stop.
 
 A device that stops answering (a poll or a first read fails; a point whose
 renewal failed goes to the next poll) is looked for. Its points are given
-up (`State::Gone { why: Why::Moved { to } }`) only when the move is
-certain: no row at the address claims the instance any more (it is gone,
-or names another) and one other address does, or a following handle moved
-by its own rule (one Who-Is at most every `QUIET`), for the hub's request
-or one of its own. Announcement times alone, which `Device::moved_to`
-reports, never give a point up: a duplicate starting up while the device
-misses a request looks the same, so the point stays `Unreachable`, polled
-after its backoff. A given-up point is sent nothing more, though the old
+up (`State::Gone { why: Why::Moved { to } }`) only on positive evidence:
+the row at the address names another instance now and one other address
+claims this one, or a following handle moved by its own rule (one Who-Is
+at most every `QUIET`), for the hub's request or one of its own. A row
+merely gone from the discovery table (aged out of a quiet device) is no
+move, nor are the announcement times `Device::moved_to` reports: a
+duplicate starting up while the device misses a request looks the same,
+so the point stays `Unreachable`, polled after its backoff. A given-up point is sent nothing more, though the old
 address may still notify it until its subscription lapses. The move
 doesn't stick: a point started at the address later starts as any other,
 and the given-up points start again once the address announces itself for
@@ -12093,7 +12096,7 @@ hub (the TUI's watch list and the MCP server, which keep a history, serve
 several sessions and pick their settings): `Hub::new(client, options)`
 with `WatchOptions`, `Reads`, `Backoff`, `Fallback`, `MissingDevice` and
 `Lifetime`; `Hub::watch(point)` for a `Lease` with its `Snapshot` (the
-hub's own `hub::State` and `hub::Source`), its change signal (`Changes`)
+hub's own `hub::Phase` and `hub::Source`), its change signal (`Changes`)
 and `samples()` (`Samples`, `Sample`); `peek`, `seq`, `stats`
 (`HubStats`) and `shutdown`; `renewal_margin`, `first` and the poll and
 row constants.
@@ -12102,7 +12105,7 @@ row constants.
 |---|---|
 | `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
 | `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
-| `watch::{State, Source}` (the snapshot's) | `watch::hub::{State, Source}`; `watch::State` is the update's one state with its reason |
+| `watch::{State, Source}` (the snapshot's) | `watch::hub::{Phase, Source}`; `watch::State` is the update's one state with its reason |
 | a point whose instance two addresses claim failing its start as ambiguous | two points, one an address |
 | `Why::Missing`: the instance not in the discovery table | `Why::Missing`: a remote address the table holds no router for; a local address is never missing |
 | a point following its instance to wherever the table placed it at each start and poll | the point stays at its address; a certain move gives it up with `Why::Moved { to }` |

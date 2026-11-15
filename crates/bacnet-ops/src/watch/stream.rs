@@ -23,7 +23,9 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
 use futures_core::Stream;
 
-use super::hub::{self, Hub, Inner, Lease, MissingDevice, Reads, Snapshot, Source, WatchOptions};
+use super::hub::{
+    self, Hub, Inner, Lease, MissingDevice, PROCESS_RANGES, Reads, Snapshot, Source, WatchOptions,
+};
 use super::sample::Via;
 use super::support::CovSupport;
 use super::{Point, WatchError, Why};
@@ -61,23 +63,34 @@ pub enum State {
     /// Subscribed: values come as COV notifications, the subscription
     /// renewed before each lifetime ends.
     Subscribed,
-    /// Polled, with the device's other polled points, every 10 s at most:
-    /// `why` the point isn't subscribed. One whose device didn't answer
-    /// (`Why::NoAnswer`, `Why::Lapsed`) or whose table was full
-    /// (`Why::Full`) is subscribed again after a backoff.
+    /// Polled, with the device's other polled points, every 10 s at most,
+    /// because of `why`:
+    ///
+    /// - [`Why::Refused`]: the device said no (or refused the service for
+    ///   an earlier point); not asked again.
+    /// - [`Why::NoAnswer`]: the first read or the subscription had no
+    ///   answer; subscribed again after a backoff.
+    /// - [`Why::Full`]: the device's subscription table was full;
+    ///   subscribed again after a backoff.
+    /// - [`Why::Lapsed`]: a renewal failed; subscribed again after a
+    ///   backoff.
     Polled {
         /// Why it isn't subscribed.
         why: Why,
     },
     /// The device didn't answer the last request: polled again after a
     /// backoff that grows to a minute, then as [`Polled`](Self::Polled)
-    /// once it answers. `why` the point isn't subscribed.
+    /// once it answers. `why` it isn't subscribed: any of the reasons a
+    /// polled point carries, or [`Why::Missing`] while no route to a
+    /// remote address is known.
     Unreachable {
         /// Why it isn't subscribed.
         why: Why,
     },
     /// Given up: nothing more is sent for it. [`Why::Moved`]: the device
-    /// answers at another address now, so watch the point there.
+    /// answers at another address now, so watch the point there; the
+    /// point starts again if its old address answers for the instance
+    /// again.
     Gone {
         /// Why it was given up.
         why: Why,
@@ -89,11 +102,11 @@ impl State {
     fn of(snapshot: &Snapshot) -> Self {
         let why = snapshot.why.clone();
         match (snapshot.state, snapshot.source, why) {
-            (hub::State::Starting, ..) => Self::Starting,
-            (hub::State::Gone | hub::State::Stopped, _, why) => Self::Gone {
+            (hub::Phase::Starting, ..) => Self::Starting,
+            (hub::Phase::Gone | hub::Phase::Stopped, _, why) => Self::Gone {
                 why: why.unwrap_or(Why::Missing),
             },
-            (hub::State::Unreachable, _, Some(why)) => Self::Unreachable { why },
+            (hub::Phase::Unreachable, _, Some(why)) => Self::Unreachable { why },
             (_, Some(Source::Cov), _) => Self::Subscribed,
             (_, _, Some(why)) => Self::Polled { why },
             // The hub gives every polled or unreachable point its reason
@@ -409,6 +422,19 @@ impl<T: TransportPort + 'static> Client<T> {
             });
         }
         Ok(Watch { leases, mailbox })
+    }
+
+    /// The range of subscriber process identifiers for another hub made on
+    /// this client: the next one, never the client's own hub's, which it
+    /// keeps for the client's life however the ranges wrap.
+    pub(crate) fn hub_range(&self) -> u32 {
+        let pinned = lock(&self.shared.hub).range;
+        loop {
+            let range = self.next_hub();
+            if pinned.is_none_or(|pinned| pinned % PROCESS_RANGES != range % PROCESS_RANGES) {
+                return range;
+            }
+        }
     }
 
     /// This client's own hub: the one its watches share while any holds a

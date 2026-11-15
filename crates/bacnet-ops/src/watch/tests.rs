@@ -9,7 +9,7 @@ use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::hub::State;
+use super::hub::Phase;
 use super::hub::*;
 use super::shared::Registry;
 use super::test_lab::{LAB, Lab, ai, lab_at, object, oid, routed_at, settle};
@@ -46,7 +46,7 @@ async fn two_leases_share_one_subscription_until_the_last_goes() {
     assert_eq!(entry.monitored_property_reference.object_identifier, ai(1));
     let snapshot = first.snapshot();
     assert_eq!(snapshot.source, Some(Source::Cov));
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     assert_eq!(present_value(&snapshot), Some(10.0));
     assert_eq!(lab.hub.stats().points, 1);
     drop(first);
@@ -159,7 +159,7 @@ async fn a_silent_device_is_reported() {
     lab.quirks.muted.store(true, Ordering::Relaxed);
     tokio::time::sleep(Duration::from_secs(245)).await;
     let snapshot = lease.snapshot();
-    assert_eq!(snapshot.state, State::Unreachable, "{snapshot:?}");
+    assert_eq!(snapshot.state, Phase::Unreachable, "{snapshot:?}");
     assert_eq!(snapshot.source, Some(Source::Poll));
     // The poll that followed failed too: its error is the note, while the
     // reason the point is polled stays the renewal's.
@@ -175,7 +175,7 @@ async fn a_silent_device_is_reported() {
     tokio::time::sleep(Duration::from_secs(320)).await;
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.source, Some(Source::Cov), "{snapshot:?}");
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     lab.stop().await;
 }
 
@@ -253,7 +253,7 @@ async fn shutdown_cancels_every_subscription() {
     assert_eq!(lab.table().await.len(), 2);
     assert!(lab.hub.shutdown(Duration::from_secs(30)).await);
     assert!(lab.table().await.is_empty());
-    assert_eq!(a.snapshot().state, State::Stopped);
+    assert_eq!(a.snapshot().state, Phase::Stopped);
     assert_eq!(lab.hub.watch(object(ai(3))).unwrap_err(), WatchError::Shut);
     drop((a, b));
     lab.stop().await;
@@ -464,7 +464,7 @@ async fn a_route_that_appears_later_is_used() {
     let lease = lab.hub.watch(point).unwrap();
     settle().await;
     let snapshot = lease.snapshot();
-    assert_eq!(snapshot.state, State::Unreachable);
+    assert_eq!(snapshot.state, Phase::Unreachable);
     assert_eq!(snapshot.why, Some(Why::Missing));
     assert!(snapshot.note.as_deref().unwrap().contains("no route"));
     assert!(lab.services().is_empty(), "{:?}", lab.services());

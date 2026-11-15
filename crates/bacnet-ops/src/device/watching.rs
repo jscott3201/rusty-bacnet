@@ -73,13 +73,14 @@ impl<T: TransportPort + 'static> Client<T> {
     /// after a timeout: it may send one Who-Is for the instance (at most
     /// one every [`QUIET`](crate::device::QUIET) for the handles following
     /// it), and it moves, telling [`Client::events`]. Otherwise by the
-    /// discovery table alone, sending nothing: only when no row at `from`
-    /// claims the instance any more (it is gone, or names another) and one
-    /// other address claims it. Announcement times alone, which
-    /// [`Device::moved_to`] reports, never give a watch up: a duplicate
-    /// starting up and one missed request look the same. `None` while the
-    /// device may still be at `from`, or two other addresses claim the
-    /// instance.
+    /// discovery table alone, sending nothing, and only on positive
+    /// evidence: the row at `from` names another instance now, and one
+    /// other address claims this one. A row merely gone (aged out of a
+    /// quiet device, which a duplicate claimant elsewhere outlives) is no
+    /// move, nor are the announcement times [`Device::moved_to`] reports:
+    /// a duplicate starting up and one missed request look the same.
+    /// `None` while the device may still be at `from`, or two other
+    /// addresses claim the instance.
     pub(crate) async fn relocated(
         &self,
         instance: u32,
@@ -103,8 +104,12 @@ impl<T: TransportPort + 'static> Client<T> {
             };
         }
         match self.elsewhere(instance, None, from).await {
-            Elsewhere::Moved(to) => Some(to),
-            Elsewhere::Nowhere | Elsewhere::Shared { .. } | Elsewhere::Contested(_) => None,
+            // `Moved` with a row at `from`: that row names another instance.
+            Elsewhere::Moved(to) if from.row(self.low_level()).await.is_some() => Some(to),
+            Elsewhere::Moved(_)
+            | Elsewhere::Nowhere
+            | Elsewhere::Shared { .. }
+            | Elsewhere::Contested(_) => None,
         }
     }
 }

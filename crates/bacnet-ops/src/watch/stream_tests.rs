@@ -311,3 +311,72 @@ async fn points_come_from_the_property_grammar() {
     drop(device);
     lab.stop().await;
 }
+
+/// The client's hub, made again in its one range, gives its first point
+/// the identifier an earlier hub's subscription still holds on the device
+/// (its cancel went unanswered). That old subscription's notifications,
+/// about another object, never land on the new point.
+#[tokio::test(start_paused = true)]
+async fn a_reused_identifier_takes_no_late_notification() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    let device = lab_device(&lab).await;
+    let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
+    until(&mut watch, |u| u.state == State::Subscribed).await;
+    lab.quirks
+        .muted
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    drop(watch);
+    tokio::time::sleep(Duration::from_secs(40)).await;
+    assert!(!own_hub(&lab), "the hub went");
+    lab.quirks
+        .muted
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    let old = lab.table().await;
+    assert_eq!(old.len(), 1, "the old subscription stays: {old:?}");
+    let mut again = lab.client.watch([device.point("ai:2").unwrap()]).unwrap();
+    until(&mut again, |u| u.state == State::Subscribed).await;
+    let table = lab.table().await;
+    let processes: Vec<u32> = table
+        .iter()
+        .map(|s| s.recipient.process_identifier)
+        .collect();
+    assert_eq!(
+        processes[0], processes[1],
+        "one identifier, two objects: {table:?}"
+    );
+    latest(&mut again).await;
+    lab.server
+        .set_present_value_local(&ai(1), PropertyValue::Real(77.0))
+        .await
+        .unwrap();
+    settle().await;
+    while let Some(update) = ready(&mut again) {
+        assert_ne!(
+            number(&update),
+            Some(77.0),
+            "ai:1's value on ai:2: {update:?}"
+        );
+    }
+    drop((again, device));
+    settle().await;
+    lab.stop().await;
+}
+
+/// Another hub made on the client never takes the client hub's range,
+/// however many are made and however the ranges wrap.
+#[tokio::test(start_paused = true)]
+async fn other_hubs_skip_the_client_hubs_range() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    let device = lab_device(&lab).await;
+    let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
+    until(&mut watch, |u| u.state == State::Subscribed).await;
+    let ranges = super::hub::PROCESS_RANGES;
+    let taken: Vec<u32> = (0..2 * ranges).map(|_| lab.client.hub_range()).collect();
+    assert!(
+        taken.iter().all(|range| range % ranges != 1),
+        "the client hub took range 1"
+    );
+    drop((watch, device));
+    settle().await;
+    lab.stop().await;
+}

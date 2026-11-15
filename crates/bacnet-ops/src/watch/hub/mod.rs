@@ -50,7 +50,7 @@ use bacnet_types::enums::PropertyIdentifier;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-pub use self::snapshot::{Snapshot, Source, State};
+pub use self::snapshot::{Phase, Snapshot, Source};
 pub use super::options::{
     Backoff, Fallback, MAX_ROWS, MAX_SAMPLES, MIN_POLL, MissingDevice, POLL_FLOOR, Reads,
     WatchOptions,
@@ -95,7 +95,7 @@ const PROCESS_SPAN: u32 = 0x1_0000;
 
 /// How many ranges a client hands out before it starts again from the
 /// first: more hubs than this alive on one client at once could share one.
-const PROCESS_RANGES: u32 = 256;
+pub(in crate::watch) const PROCESS_RANGES: u32 = 256;
 
 /// The first identifier of the range of a client's `index`-th hub.
 fn process_base(index: u32) -> u32 {
@@ -283,7 +283,7 @@ impl<T: TransportPort + 'static> Hub<T> {
     /// A hub over `client`, under checked `options`. It starts its
     /// notification receiver, so it must be made inside a Tokio runtime.
     pub fn new(client: Client<T>, options: WatchOptions) -> Result<Self, String> {
-        let range = client.next_hub();
+        let range = client.hub_range();
         Self::in_range(client, options, range)
     }
 

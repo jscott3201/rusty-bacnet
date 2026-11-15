@@ -15,7 +15,7 @@ use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::State;
-use super::stream_tests::{latest, next, number, until};
+use super::stream_tests::{latest, next, number, ready, until};
 use super::*;
 use crate::Device;
 use crate::device::test_bus::{Bus, N, at, client, client_on, mac, requests, server, settle, stop};
@@ -333,4 +333,98 @@ async fn one_station_named_two_ways_is_one_point() {
     settle().await;
     stop(servers).await;
     router.stop().await.unwrap();
+}
+
+/// Two devices sharing an instance, both watched: station 2 goes quiet for
+/// twenty minutes while station 3 keeps answering, and station 2's row
+/// ages out of the discovery table. A row merely gone is no move: station
+/// 2's point is never given up as moved to station 3, and goes on once
+/// station 2 answers again, though it doesn't announce itself.
+#[tokio::test(start_paused = true)]
+async fn a_quiet_duplicate_aged_out_is_no_move() {
+    let bus = Bus::new();
+    let servers = vec![
+        server(bus.port(2), N, "two").await,
+        server(bus.port(3), N, "three").await,
+    ];
+    let (client, _sent) = client(&bus).await;
+    bus.i_am(2, N);
+    bus.i_am(3, N);
+    settle().await;
+    let two = client.device(at(2)).await.unwrap();
+    let three = client.device(at(3)).await.unwrap();
+    let points = [two.point("ai:1").unwrap(), three.point("ai:1").unwrap()];
+    let mut watch = client.watch(points.clone()).unwrap();
+    let mut subscribed = std::collections::HashSet::new();
+    while subscribed.len() < 2 {
+        let update = until(&mut watch, |u| u.state == State::Subscribed).await;
+        subscribed.insert(update.point);
+    }
+    latest(&mut watch).await;
+    bus.silence(2);
+    for _ in 0..120 {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        while let Some(update) = ready(&mut watch) {
+            assert!(!matches!(update.state, State::Gone { .. }), "{update:?}");
+        }
+    }
+    assert!(
+        client.low_level().get_device_at(0, &mac(2)).await.is_none(),
+        "station 2's row aged out"
+    );
+    bus.unsilence(2);
+    let back = until(&mut watch, |u| {
+        assert!(!matches!(u.state, State::Gone { .. }), "{u:?}");
+        u.point == points[0] && u.state == State::Subscribed
+    })
+    .await;
+    assert_eq!(back.point.device, at(2));
+    drop((watch, two, three));
+    settle().await;
+    stop(servers).await;
+}
+
+/// A given-up point's address announces the instance again just as its
+/// last watch is dropped, in every interleaving a few yields give: nothing
+/// stays subscribed on the device, and the hub ends.
+#[tokio::test(start_paused = true)]
+async fn a_revival_racing_the_last_drop_leaves_nothing() {
+    for yields in 0..24u32 {
+        let Moved {
+            bus,
+            servers,
+            client,
+            device,
+            watch,
+        } = Moved::new().await;
+        assert_eq!(servers[0].cov_counters().subscriptions_active, 0, "lapsed");
+        if yields % 2 == 1 {
+            drop(watch);
+            for _ in 0..yields / 2 {
+                tokio::task::yield_now().await;
+            }
+            bus.i_am(2, N);
+        } else {
+            bus.i_am(2, N);
+            for _ in 0..yields / 2 {
+                tokio::task::yield_now().await;
+            }
+            drop(watch);
+        }
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        settle().await;
+        assert_eq!(
+            servers[0].cov_counters().subscriptions_active,
+            0,
+            "yields {yields}: a subscription nobody holds"
+        );
+        assert!(
+            client.shared.hub.lock().unwrap().hub.upgrade().is_none(),
+            "yields {yields}: the hub ended"
+        );
+        drop(device);
+        settle().await;
+        stop(servers).await;
+    }
 }

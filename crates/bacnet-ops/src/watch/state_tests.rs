@@ -305,3 +305,110 @@ async fn dropping_the_watches_of_a_silent_device_is_prompt() {
 
 const PRESENT: bacnet_types::enums::PropertyIdentifier =
     bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE;
+
+/// Tell the hub that a handle following `instance` moved it from the lab
+/// device's address.
+fn moved_away(lab: &Lab, instance: u32) {
+    let to = crate::DeviceAddress::local(&[9]).unwrap();
+    let from = lab_at();
+    let moved = ClientEvent::Moved { instance, from, to };
+    lab.client.shared.events.send(moved).unwrap();
+}
+
+/// A start in flight when its device's points are given up, answered after
+/// the table came to name another instance at the address, brings the
+/// given-up point back no more than any other start would: the table must
+/// name the point's instance there when the start is answered.
+#[tokio::test(start_paused = true)]
+async fn a_start_from_before_the_move_does_not_revive() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    let device = lab_device(&lab).await;
+    let mut first = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
+    until(&mut first, |u| u.state == State::Subscribed).await;
+    latest(&mut first).await;
+    lab.quirks.slow_rpm_ack.store(true, Ordering::Relaxed);
+    let from = Instant::now();
+    let mut late = lab.client.watch([device.point("ai:2").unwrap()]).unwrap();
+    while lab.sent(RPM, from) == 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Another device at the address now, and the point's device elsewhere.
+    lab.client
+        .low_level()
+        .add_device(LAB + 1, &[2])
+        .await
+        .unwrap();
+    moved_away(&lab, LAB);
+    until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
+    lab.quirks.slow_rpm_ack.store(false, Ordering::Relaxed);
+    until(&mut late, |u| u.state == State::Subscribed).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let after = latest(&mut first).await;
+    assert!(after.is_none(), "revived by a stale start: {after:?}");
+    drop((first, late, device));
+    settle().await;
+    lab.stop().await;
+}
+
+/// A move told while the hub doesn't know the device's instance (no row
+/// names it) gives the points up for the instance the move names, so they
+/// still come back once the address answers for it.
+#[tokio::test(start_paused = true)]
+async fn a_move_told_before_the_instance_is_known_can_be_undone() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    let device = lab_device(&lab).await;
+    lab.client.low_level().clear_devices().await;
+    let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
+    until(&mut watch, |u| u.state == State::Subscribed).await;
+    moved_away(&lab, LAB);
+    until(&mut watch, |u| matches!(u.state, State::Gone { .. })).await;
+    // The table names the instance at the address again, and a start
+    // there is answered.
+    lab.client.low_level().add_device(LAB, &[2]).await.unwrap();
+    let mut late = lab.client.watch([device.point("ai:2").unwrap()]).unwrap();
+    until(&mut late, |u| u.state == State::Subscribed).await;
+    until(&mut watch, |u| u.state == State::Subscribed).await;
+    drop((watch, late, device));
+    settle().await;
+    lab.stop().await;
+}
+
+/// Two give-ups at one address under two instances: each point comes back
+/// only when the address answers for its own instance.
+#[tokio::test(start_paused = true)]
+async fn each_moved_point_comes_back_for_its_own_instance() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    let device = lab_device(&lab).await;
+    let mut first = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
+    until(&mut first, |u| u.state == State::Subscribed).await;
+    moved_away(&lab, LAB);
+    until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
+    // Another device's instance named at the address: a point started
+    // there now is that device's, and it moves away too.
+    let other = LAB + 1;
+    lab.client
+        .low_level()
+        .add_device(other, &[2])
+        .await
+        .unwrap();
+    let mut second = lab.client.watch([device.point("ai:2").unwrap()]).unwrap();
+    until(&mut second, |u| u.state == State::Subscribed).await;
+    assert!(
+        latest(&mut first).await.is_none(),
+        "not the first's instance"
+    );
+    moved_away(&lab, other);
+    until(&mut second, |u| matches!(u.state, State::Gone { .. })).await;
+    // The address answers for the other instance: only its point is back.
+    let mut third = lab.client.watch([device.point("ai:3").unwrap()]).unwrap();
+    until(&mut third, |u| u.state == State::Subscribed).await;
+    until(&mut second, |u| u.state == State::Subscribed).await;
+    let after = latest(&mut first).await;
+    assert!(
+        after.is_none(),
+        "the first's instance wasn't answered: {after:?}"
+    );
+    drop((first, second, third, device));
+    settle().await;
+    lab.stop().await;
+}

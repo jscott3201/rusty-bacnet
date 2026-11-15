@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use bacnet_ops::parse::{parse_object_specifier, parse_property};
-use bacnet_ops::watch::hub::State;
+use bacnet_ops::watch::hub::Phase;
 use bacnet_ops::watch::{Point, Watched};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -149,9 +149,9 @@ struct PointArg {
 }
 
 /// A point the call watches: as its resource names it, as the hub keys it,
-/// and whether another address claims its instance, so the URI names
-/// neither.
-type Watching = (PointUri, Point, bool);
+/// its device's address as the discovery results write it, and whether
+/// its URI names neither of two devices claiming its instance.
+type Watching = (PointUri, Point, String, bool);
 
 /// What a point argument asks for, parsed: nothing is sent for a bad one.
 fn watched(arg: &PointArg) -> Result<(ObjectIdentifier, Watched), ToolError> {
@@ -176,7 +176,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
     args: Args,
     raw: &Map<String, Value>,
 ) -> Result<Value, ToolError> {
-    ctx.client()?;
+    let client = ctx.client()?;
     let Some(hub) = ctx.hub.as_ref() else {
         return Err(ToolError::refused("passive", "the server is passive"));
     };
@@ -207,10 +207,21 @@ pub(super) async fn run<T: TransportPort + 'static>(
                     object,
                     watched,
                 };
-                let contested = ctx.claims(device.instance, None).await.len() > 1;
+                // The resource read's own check: the URI can't be read back
+                // while two addresses claim the instance.
+                let contested = matches!(
+                    ctx.reach_check(device.instance),
+                    Err(ToolError::Refused {
+                        reason: "ambiguous-device",
+                        ..
+                    })
+                );
+                let entry = &device.entry;
+                let routed = entry.source_network.zip(entry.source_address.as_deref());
+                let (address, _) = client.address_style().locate(&entry.mac_address, routed);
                 let point = uri.at(device.address);
                 match ctx.subs.tool_watch(ctx, point.clone()) {
-                    Ok(()) => Ok((uri, point, contested)),
+                    Ok(()) => Ok((uri, point, address, contested)),
                     Err(SHUTTING_DOWN) => {
                         let error =
                             ToolError::refused(SHUTTING_DOWN, "the server is shutting down");
@@ -238,9 +249,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
     // them, within the budget.
     let deadline = (Instant::now() + FIRST_READ).min(call.deadline);
     while Instant::now() < deadline
-        && rows.iter().flatten().any(|(_, point, _)| {
+        && rows.iter().flatten().any(|(_, point, ..)| {
             hub.peek(point).is_some_and(|snapshot| {
-                snapshot.source.is_none() && matches!(snapshot.state, State::Starting | State::Live)
+                snapshot.source.is_none() && matches!(snapshot.state, Phase::Starting | Phase::Live)
             })
         })
     {
@@ -252,8 +263,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let points: Vec<Value> = rows
         .into_iter()
         .map(|row| match row {
-            Ok((uri, point, contested)) => {
-                let address = point.device.to_string();
+            Ok((uri, point, address, contested)) => {
                 let Some(snapshot) = hub.peek(&point) else {
                     return json!({ "uri": of_point(&uri), "address": address,
                         "error": { "error": "failed", "message": "the watch ended" } });

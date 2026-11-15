@@ -143,7 +143,8 @@ fn source_of(snapshot: &Snapshot, lifetime: u32) -> Option<Source> {
             Why::NoAnswer(error) => format!("no answer: {error}"),
             Why::Full(error) => format!("COV table full: {error}"),
             Why::Lapsed(Some(error)) => format!("renewal failed: {error}"),
-            _ => "renewal stopped".to_string(),
+            Why::Lapsed(None) => "renewal stopped".to_string(),
+            other => format!("polled: {other:?}"),
         })),
         _ => None,
     }
@@ -278,7 +279,7 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
                 // handed on by now: one not among the samples was lost.
                 row.writer.release(polled, &mut taken);
             }
-            row.started = snapshot.state != hub::State::Starting;
+            row.started = snapshot.state != hub::Phase::Starting;
             for Details { name, units } in taken.details {
                 self.outbox.push_back(WatchEvent::Details {
                     row: id,
@@ -311,7 +312,7 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
                     }
                     Source::Starting => {}
                 }
-                if snapshot.state == hub::State::Gone {
+                if snapshot.state == hub::Phase::Gone {
                     // Nothing watches it any more.
                     gone.push(id);
                 }

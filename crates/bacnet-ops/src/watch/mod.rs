@@ -35,14 +35,15 @@
 //! When the device behind a point stops answering (a poll or a first read
 //! fails; a point whose renewal failed goes to the next poll), the
 //! scheduler asks where its instance went, and gives the device's points
-//! up as moved ([`Why::Moved`]) only when that is certain: no row at the
-//! address claims the instance any more (it is gone, or names another)
-//! and one other address does, or a following handle moved there by its
-//! own rule (re-resolving after a timeout, at most one Who-Is every
+//! up as moved ([`Why::Moved`]) only on positive evidence: the row at the
+//! address names another instance now and one other address claims this
+//! one, or a following handle moved there by its own rule (re-resolving
+//! after a timeout, at most one Who-Is every
 //! [`QUIET`](crate::device::QUIET)), for the hub's request or one of its
-//! own. Announcement times alone never give a point up: a duplicate
-//! starting up while the device misses a request looks the same, and the
-//! point stays unreachable, polled after its backoff. A move doesn't
+//! own. A row merely gone from the discovery table (aged out of a quiet
+//! device) is no move, nor are announcement times: a duplicate starting
+//! up while the device misses a request looks the same. The point stays
+//! unreachable, polled after its backoff. A move doesn't
 //! stick: a point started there later starts as any other, and the
 //! given-up points start again once the address announces itself for the
 //! instance, or answers a start while the discovery table names it there.

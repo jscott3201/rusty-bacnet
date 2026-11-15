@@ -17,7 +17,7 @@ use bacnet_types::enums::PropertyIdentifier;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::Instant;
 
-use super::hub::{Snapshot, Source, State};
+use super::hub::{Phase, Snapshot, Source};
 use super::options::MAX_ROWS;
 use super::sample::{Sample, Via};
 use super::stream::Listener;
@@ -54,7 +54,7 @@ pub(super) struct EntryState {
     /// A change waits for the end of the coalescing window.
     pending: bool,
     /// The device's error for the whole object at the last read that
-    /// failed so ([`State::Failed`]), for an update's `error`; `None` once
+    /// failed so ([`Phase::Failed`]), for an update's `error`; `None` once
     /// a read answers, a notification carries the watched property, or a
     /// subscription is taken.
     pub(super) failure: Option<PropertyError>,
@@ -73,7 +73,7 @@ impl EntryState {
     /// Whether the watch has ended, given up or stopped: only a stop, or
     /// a revival by the scheduler ([`Shared::revive`]), leaves it.
     fn ended(&self) -> bool {
-        matches!(self.snapshot.state, State::Gone | State::Stopped)
+        matches!(self.snapshot.state, Phase::Gone | Phase::Stopped)
     }
 }
 
@@ -185,17 +185,17 @@ impl Shared {
 
     /// Change the watch's state and note without a value change; signalled
     /// at once, since the state matters to listeners. A watch that has
-    /// ended stays so: only [`State::Stopped`] follows [`State::Gone`].
+    /// ended stays so: only [`Phase::Stopped`] follows [`Phase::Gone`].
     pub(super) fn set_state(
         &self,
         seq: &AtomicU64,
         source: Option<Source>,
-        state: State,
+        state: Phase,
         note: Option<String>,
     ) {
         let mut entry = self.lock();
         let leaves =
-            entry.ended() && !(entry.snapshot.state == State::Gone && state == State::Stopped);
+            entry.ended() && !(entry.snapshot.state == Phase::Gone && state == Phase::Stopped);
         if leaves {
             return;
         }
@@ -218,7 +218,7 @@ impl Shared {
     pub(super) fn revive(&self, seq: &AtomicU64) {
         let mut entry = self.lock();
         let snapshot = &mut entry.snapshot;
-        snapshot.state = State::Starting;
+        snapshot.state = Phase::Starting;
         snapshot.source = None;
         snapshot.why = None;
         snapshot.note = None;
@@ -268,7 +268,7 @@ impl Shared {
         }
         state.snapshot.updated = Some(Instant::now());
         state.wall = Some(SystemTime::now());
-        state.snapshot.state = State::Live;
+        state.snapshot.state = Phase::Live;
         state.snapshot.via = Some(if poll { Via::Poll } else { Via::First });
         state.failure = None;
         if poll {

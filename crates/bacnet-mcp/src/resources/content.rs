@@ -9,7 +9,7 @@ use bacnet_ops::format::{self, RawRow};
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::charged;
 use bacnet_ops::watch::Watched;
-use bacnet_ops::watch::hub::{Snapshot, Source, State};
+use bacnet_ops::watch::hub::{Phase, Snapshot, Source};
 use bacnet_ops::{DeviceAddress, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
 use serde_json::{Map, Value, json};
@@ -177,17 +177,17 @@ pub(crate) fn point_body<T: TransportPort + 'static>(
     body
 }
 
-pub(crate) fn state_name(state: State) -> &'static str {
+pub(crate) fn state_name(state: Phase) -> &'static str {
     match state {
-        State::Starting => "starting",
-        State::Live => "live",
+        Phase::Starting => "starting",
+        Phase::Live => "live",
         // The hub gives a point up when its device answers at another
         // address now (the note says where), or under
         // `MissingDevice::Fail`, which the server doesn't use: a failed
         // watch either way.
-        State::Failed | State::Gone => "failed",
-        State::Unreachable => "unreachable",
-        State::Stopped => "stopped",
+        Phase::Failed | Phase::Gone => "failed",
+        Phase::Unreachable => "unreachable",
+        Phase::Stopped => "stopped",
     }
 }
 

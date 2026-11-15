@@ -10,7 +10,7 @@ use std::time::Duration;
 use bacnet_types::primitives::PropertyValue;
 use tokio::time::Instant;
 
-use super::hub::State;
+use super::hub::Phase;
 use super::hub::*;
 use super::test_lab::{Lab, RP, RPM, SUBSCRIBE_COV, ai, lab_at, nc, object, routed_at, settle};
 use super::*;
@@ -70,7 +70,7 @@ async fn an_arrival_as_the_scheduler_ends_is_served() {
     let late = late.lock().unwrap().take().expect("the hook ran");
     let snapshot = late.snapshot();
     assert_eq!(snapshot.source, Some(Source::Cov), "{snapshot:?}");
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     assert_eq!(lab.table().await.len(), 1);
     drop(late);
     lab.stop().await;
@@ -89,7 +89,7 @@ async fn a_row_too_large_alone_is_read_property_by_property() {
     assert_eq!(lab.sent(RPM, from), 1);
     assert_eq!(lab.sent(RP, from), POINT_PROPERTIES.len());
     let snapshot = lease.snapshot();
-    assert_eq!((snapshot.polls, snapshot.state), (1, State::Live));
+    assert_eq!((snapshot.polls, snapshot.state), (1, Phase::Live));
     lab.stop().await;
 }
 
@@ -119,7 +119,7 @@ async fn shutdown_waits_for_the_cancel_of_a_point_given_up() {
     // Another request holds the device's gate, so the cancel waits.
     let held = lab.client.limits().turn(&routed_at()).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    assert_eq!(lease.snapshot().state, State::Gone);
+    assert_eq!(lease.snapshot().state, Phase::Gone);
     assert_eq!(lease.snapshot().why, Some(Why::Missing));
     assert_eq!(lab.hub.stats().cancelling, 1);
     let hub = lab.hub.clone();
@@ -189,12 +189,12 @@ async fn a_first_read_folded_late_keeps_the_newer_notification() {
     tokio::time::sleep(Duration::from_millis(10)).await;
     let early = lease.snapshot();
     assert!(early.notifications > 0, "the notification overtook the ack");
-    assert_eq!(early.state, State::Starting, "the first read waits");
+    assert_eq!(early.state, Phase::Starting, "the first read waits");
     assert_eq!(super::tests::present_value(&early), Some(99.0));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let snapshot = lease.snapshot();
     assert_eq!(super::tests::present_value(&snapshot), Some(99.0));
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     drop(lease);
     lab.stop().await;
 }

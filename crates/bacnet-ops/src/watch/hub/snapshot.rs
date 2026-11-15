@@ -1,5 +1,5 @@
 //! A point's [`Snapshot`] as the hub keeps it: its latest rows and how its
-//! watch goes ([`State`], [`Source`], [`Why`]).
+//! watch goes ([`Phase`], [`Source`], [`Why`]).
 
 use tokio::time::Instant;
 
@@ -19,7 +19,7 @@ pub enum Source {
 
 /// How a point's watch is going.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum State {
+pub enum Phase {
     /// Its first read hasn't finished.
     Starting,
     /// Subscribed, or the last poll answered.
@@ -48,7 +48,7 @@ pub struct Snapshot {
     /// How the latest values came; `None` before any.
     pub via: Option<Via>,
     /// How the watch is going.
-    pub state: State,
+    pub state: Phase,
     /// Why the point is polled or not live, as text.
     pub note: Option<String>,
     /// The hub's sequence number at the last change; 0 before any.
@@ -87,7 +87,7 @@ impl Snapshot {
             rows: Vec::new(),
             source: None,
             via: None,
-            state: State::Starting,
+            state: Phase::Starting,
             note: None,
             seq: 0,
             updated: None,

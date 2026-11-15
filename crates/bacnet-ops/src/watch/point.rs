@@ -84,12 +84,13 @@ impl fmt::Display for Point {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Why {
-    /// The device refused the subscription or didn't answer it, with the
-    /// error; or it refused the service itself for another point before,
-    /// so it wasn't asked again
-    /// ([`CovSupport::Refused`](super::CovSupport::Refused)).
+    /// The device refused the subscription, with its error; or it refused
+    /// the service itself for another point before, so it wasn't asked
+    /// again ([`CovSupport::Refused`](super::CovSupport::Refused)). Not
+    /// asked again.
     Refused(String),
-    /// The first read had no answer, so no subscription was asked for.
+    /// The first read or the subscription had no answer, with the error:
+    /// subscribed again after a backoff.
     NoAnswer(String),
     /// The device's subscription table was full, with its error: polled
     /// meanwhile, and asked again after the COV retry's backoff.
@@ -99,9 +100,9 @@ pub enum Why {
     /// No route to the device's address is known: a remote network the
     /// discovery table holds no router for.
     Missing,
-    /// The device's instance answers at `to` now, certainly: no row at
-    /// its old address claims it any more (it is gone, or names another)
-    /// and only `to` does, or a handle following the instance moved there.
+    /// The device's instance answers at `to` now, on positive evidence:
+    /// the row at its old address names another instance and only `to`
+    /// claims this one, or a handle following the instance moved there.
     /// The point is given up ([`State::Gone`](super::State::Gone)); watch
     /// the point at `to` instead. The hub doesn't follow it, but starts the
     /// point again if the old address answers for the instance again.

@@ -63,7 +63,7 @@ impl Backoff {
 /// What a watch does when its device isn't in the discovery table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingDevice {
-    /// Give the point up: [`State::Gone`](super::State::Gone).
+    /// Give the point up: [`Phase::Gone`](super::hub::Phase::Gone).
     Fail,
     /// Report it unreachable and look again after the poll backoff.
     Poll,
