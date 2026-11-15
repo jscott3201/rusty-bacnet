@@ -231,14 +231,24 @@ pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
         crate::network_number::NetworkNumberOwner::new(selected.map(|oid| (Arc::clone(db), oid)))
             .publishing_to(network.local_network_number().clone());
     super::heap_futures::spawn_boxed(move || async move {
-        while let Some(control) = controls.recv().await {
-            let before = network.local_network_number().get();
-            let reply = owner.handle(control).await;
-            if network.local_network_number().get() != before
-                && let Some(audit) = audit.as_ref().and_then(std::sync::Weak::upgrade)
-            {
-                audit.number_changed();
-            }
+        use crate::network_number::NumberTurn;
+        loop {
+            // A control, or the answer a broadcast question left waiting
+            // (#2597).
+            let reply = match owner.next(&mut controls).await {
+                NumberTurn::Closed => break,
+                NumberTurn::Control(control) => {
+                    let before = network.local_network_number().get();
+                    let reply = owner.handle(control).await;
+                    if network.local_network_number().get() != before
+                        && let Some(audit) = audit.as_ref().and_then(std::sync::Weak::upgrade)
+                    {
+                        audit.number_changed();
+                    }
+                    reply
+                }
+                NumberTurn::Answer(answer) => answer,
+            };
             if let Some(npdu) = reply
                 && let Err(error) = network.transport().send_broadcast(&npdu).await
             {

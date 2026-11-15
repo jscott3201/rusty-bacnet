@@ -24,9 +24,9 @@ async fn sc_client_number_hub_direct_wire_and_confirmed_progress() {
         f.peer
             .send(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, 77, 0])
             .await;
-        f.peer.send(BROADCAST_VMAC, &[1, 0x80, 0x12]).await;
-        f.peer.number(77).await;
-        // Clause 6.4.19 explicitly permits local unicast What-Is-Network-Number.
+        // Clause 6.4.19 allows a question to the node alone, and it is
+        // answered at once. A broadcast one's answer waits up to ten seconds
+        // (#2597), which is tested on paused time, not on this wall clock.
         f.peer.send(NODE, &[1, 0x80, 0x12]).await;
         f.peer.number(77).await;
         // Learned values update until configured evidence takes precedence.

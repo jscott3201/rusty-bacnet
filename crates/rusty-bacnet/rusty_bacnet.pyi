@@ -2663,10 +2663,9 @@ class Inventory223Experimental:
 
     @property
     def stopped(self) -> Optional[str]:
-        """Why the reading stopped early, None when it didn't. A request to the
-        device timed out or its link failed, so the objects after that point
-        are missing; or a read of the Object_List element by element failed
-        partway (an error or no answer), and then ``objects`` is empty."""
+        """Why the reading stopped early, None when it didn't: a request to the
+        device timed out or its link failed while its objects were being
+        read, so the objects after that point are missing."""
         ...
 
     def to_turtle(
@@ -4675,8 +4674,9 @@ class BACnetClient:
         self, device_instance: int, *, types: Optional[list[ObjectType]] = None
     ) -> Awaitable[Inventory223Experimental]:
         """Read a device's objects for the experimental Standard 223 export
-        (#2436): its name, its Object_List, then one request per object of
-        the selected types. ``to_turtle()`` on the result writes the Turtle.
+        (#2436): its summary, its Object_List, then the objects of the
+        selected types a few a request. ``to_turtle()`` on the result writes
+        the Turtle.
 
         The device is looked up in the discovery table, as the
         ``_from_device`` methods look it up. ``types`` narrows the objects read
@@ -4684,13 +4684,13 @@ class BACnetClient:
         integer values; all ten by default). Another type or an empty list
         raises ValueError before anything is sent.
 
-        A device that doesn't answer the name read, or a failed read of the
-        whole Object_List, raises the usual error. A device that can't send
-        the list whole is read element by element; an element that fails
-        there ends the reading with ``stopped`` set and no objects. A device
-        that stops answering once the list is in gives an inventory with
-        ``stopped`` set and the objects read before it. ``stop()``, and leaving
-        ``async with``, wait for a running export to finish.
+        A device that doesn't answer the summary read, or a failed read of the
+        Object_List, raises the usual error; so does a device that can't send
+        the list whole, is read element by element, and fails an element; a
+        note on that exception names the element. A device that goes silent
+        while its objects are read gives an inventory with ``stopped`` set and
+        the objects read before it. ``stop()``, and leaving ``async with``,
+        wait for a running export to finish.
         """
         ...
 

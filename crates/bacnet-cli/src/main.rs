@@ -120,9 +120,14 @@ async fn resolve_destination<T: TransportPort + 'static>(
 /// Execute a one-shot CLI command.
 async fn execute_command<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    cmd: &Command,
+    cli: &Cli,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Plain `bacnet` became `tui` while parsing (see `entry`).
+    let cmd = cli.command.as_ref().expect("a command after parsing");
+    // `--format csv` is the inventory's alone; `--json` outranks it, as it
+    // does `--format table`.
+    let csv = !cli.json && cli.format.as_deref() == Some("csv");
     match cmd {
         Command::Tui { .. }
         | Command::Mcp { .. }
@@ -185,6 +190,23 @@ async fn execute_command<T: TransportPort + 'static>(
             .await?;
         }
         Command::Export { format } => commands::export::export_cmd(client, format).await?,
+        Command::Inventory {
+            target,
+            types,
+            values,
+            settings,
+            csv_exact,
+        } => {
+            let args = commands::inventory::InventoryArgs {
+                target,
+                types,
+                values: *values,
+                settings: *settings,
+                csv_exact: *csv_exact,
+                layout: commands::inventory::Layout::of(csv, format),
+            };
+            commands::inventory::inventory_cmd(client, args).await?;
+        }
         Command::Readm { target, specs } => {
             let to = resolve_destination(client, target).await?;
             commands::read::read_multiple_cmd(client, &to, specs, format).await?;
@@ -451,9 +473,7 @@ async fn run<T: TransportPort + 'static>(
     cli: &Cli,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Plain `bacnet` became `tui` while parsing (see `entry`).
-    let cmd = cli.command.as_ref().expect("a command after parsing");
-    execute_command(&client, cmd, format).await?;
+    execute_command(&client, cli, format).await?;
     client.stop().await?;
     Ok(())
 }
@@ -742,7 +762,7 @@ async fn cli_main(cli: Cli) -> CliResult {
             }
         }
         if !execute_bip_command(&client, cmd, cli.ttl, format).await? {
-            execute_command(&client, cmd, format).await?;
+            execute_command(&client, &cli, format).await?;
         }
         client.stop().await?;
     }

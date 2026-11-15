@@ -3,8 +3,8 @@
 
 use bacnet_ops::export::s223::testing::check_structure;
 use bacnet_ops::export::s223::{
-    Access, Analog, Binary, DeviceInfo, Entry, Inventory, MultiState, Point, PointKind,
-    TurtleOptions, to_turtle,
+    Access, Analog, Binary, DeviceInfo, Model, MultiState, Point, PointKind, TurtleOptions,
+    to_turtle,
 };
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -13,7 +13,7 @@ use super::{LITERALS_COMMENT, MAX_TURTLE, PAGE, Page, Position, fingerprint, pag
 
 /// A site controller's points: `n` objects, mostly analog with units and
 /// names and descriptions of ordinary length, some binary and multi-state.
-fn controller(n: u32) -> Inventory {
+fn controller(n: u32) -> Model {
     let kinds = [
         ObjectType::ANALOG_INPUT,
         ObjectType::ANALOG_INPUT,
@@ -40,12 +40,12 @@ fn controller(n: u32) -> Inventory {
             let object = ObjectIdentifier::new(object_type, instance).unwrap();
             let point = Point::new(object, format!("AHU-1 Supply Air Point {instance}"), kind)
                 .with_description("Air handler 1, mechanical room 2");
-            Entry::Point(point)
+            Ok(point)
         })
         .collect();
-    Inventory {
+    Model {
         entries,
-        ..Inventory::new(DeviceInfo::new(1201).with_name("AHU-1 Controller"))
+        ..Model::new(DeviceInfo::new(1201).with_name("AHU-1 Controller"))
     }
 }
 
@@ -70,7 +70,7 @@ pub(crate) fn points(text: &str) -> &str {
 /// `inventory`'s objects in pages as the tool fills them, each page's
 /// Turtle as the tool writes it, and how many objects went back to the
 /// next page (read twice).
-fn paged(inventory: &Inventory, options: &TurtleOptions) -> (Vec<(usize, String)>, usize) {
+fn paged(inventory: &Model, options: &TurtleOptions) -> (Vec<(usize, String)>, usize) {
     let mut pages = Vec::new();
     let mut again = 0;
     let mut at = 0;
@@ -150,7 +150,7 @@ fn an_object_larger_than_a_page_gets_one_of_its_own() {
     let huge = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 11).unwrap();
     let stages = MultiState::new(1000, Access::ReadOnly)
         .with_state_texts((1..=1000).map(|n| format!("Stage {n} of the plant")));
-    inventory.entries[10] = Entry::Point(Point::new(huge, "Plant Stage", stages));
+    inventory.entries[10] = Ok(Point::new(huge, "Plant Stage", stages));
     let options = TurtleOptions::default();
     let (pages, again) = paged(&inventory, &options);
     assert_eq!(again, 1, "read once more, at the head of its own page");
@@ -198,11 +198,9 @@ fn a_position_round_trips() {
 #[test]
 fn a_page_stops_at_its_cap() {
     let mut inventory = controller(60);
-    for entry in &mut inventory.entries {
-        if let Entry::Point(point) = entry {
-            point.name = String::new();
-            point.description = None;
-        }
+    for point in inventory.entries.iter_mut().flatten() {
+        point.name = String::new();
+        point.description = None;
     }
     let options = TurtleOptions::default();
     let mut page = Page::new(DeviceInfo::new(1201), &options);

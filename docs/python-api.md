@@ -2081,8 +2081,10 @@ broadcasting one What-Is-Network-Number on its own link before its first
 unknown (#2572). A client that only reads and writes by address never asks.
 After that question, it asks again when its link comes back (a BACnet/SC
 hub reconnect, a foreign device registering again) while no answer has
-come. A relay heard before the answer is listed as a routed device of its
-own, and the instance is ambiguous (`BacnetAmbiguousDeviceError`) until
+come. A router answers at once; where only nodes that are not routers hold
+the number, the answer can take up to ten seconds (#2597). A relay heard
+before the answer is listed as a routed device of its own, and the instance
+is ambiguous (`BacnetAmbiguousDeviceError`) until
 then; learning the number folds the routed entry into the local one, or
 makes it the local one when there is none or only an `add_device` entry. If
 nothing on the network knows the number, it stays until the purge.
@@ -2242,17 +2244,20 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
   methods look it up. `types=[ObjectType.ANALOG_INPUT, ...]` narrows the
   objects read; another type, or an empty list, raises `ValueError` before
   anything is sent.
-- It costs the device name, its Object_List and one ReadPropertyMultiple
-  per exported object, one at a time; a device that refuses
-  ReadPropertyMultiple is read a property at a time, as the CLI section
-  counts. Present_Value is never read.
-- A device that doesn't answer the name read, or a failed read of the
-  whole Object_List, raises the usual error. A device that can't send the
-  list whole is read element by element; an element that fails there (an
-  error or no answer) ends the reading with `stopped` set (a reason string)
-  and no objects. A device that stops answering once the list is in gives
-  an inventory with `stopped` set and the objects read before it. Either
-  way the Turtle's header says it is incomplete.
+- It costs the device summary, its Object_List and one
+  ReadPropertyMultiple for each batch of exported objects (six to ten
+  objects a request, each request filled to 32 properties), one at a
+  time; a device that refuses ReadPropertyMultiple is read a property at a
+  time, 13 for the summary, as the CLI section counts. Present_Value is
+  never read.
+- A device that doesn't answer the summary read, or a failed read of the
+  Object_List, raises the usual error. A device that can't send the list
+  whole is read element by element, and an element that fails there (an
+  error or no answer) raises too, with a note on the exception naming the
+  element (`Object_List element 3 of 40`): part of a list is no inventory. A device
+  that goes silent while its objects are read gives an inventory with
+  `stopped` set (a reason string naming the first object not read) and the
+  objects read before it, and the Turtle's header says it is incomplete.
 - `stop()`, and leaving `async with`, wait for a running export to finish;
   cancelling the awaitable stops it before its next request.
 - `Inventory223Experimental` has `device_instance`, `device_name`
@@ -2261,9 +2266,10 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
   `name`, `description`, `units` (`EngineeringUnits | None`, analog
   objects and integer values), `number_of_states` and `state_texts`
   (multi-state objects), `commandable` (it has a Priority_Array) and
-  `error` (its read failed, or it couldn't give its Object_Name, the Units
-  of an analog object or an integer value, or a multi-state object's
-  Number_Of_States, named in the error; the Turtle
+  `error` (it couldn't give its Object_Name, the Units of an analog
+  object or an integer value, or a multi-state object's Number_Of_States,
+  named in the error; an object the device refuses altogether reports
+  `object-name: ...`; the Turtle
   skips it, and its other fields are `None` or empty). Device text is kept
   exactly as the device sent it.
 - `to_turtle(base_iri=None, write_priority=None)` takes the base the CLI's
@@ -5382,7 +5388,7 @@ remain outside this registration contract.
 
 ### Local Network Number controls
 
-Three Python owners consume the two local nonrouter controls automatically, one per transport: `BACnetServer`, the endpoint classes and `BACnetClient`. `BACnetServer` and `BACnetClient` own them with `transport="bip"` (NORMAL B/IP), `"ipv6"` (normal multicast or foreign B/IPv6), `"sc"` and `"mstp"`; `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` own them on their links. Python's B/IP owners take `bbmd=` and `foreign_device=` for those two modes, and its B/IPv6 client and server take `foreign_device=` (#1941); the Ethernet paragraph below describes a Rust-only mode. A valid local unicast or broadcast What-Is-Network-Number receives a local-broadcast Network-Number-Is when the owner knows its number (Clauses 6.4.19–6.4.20). There is no proactive startup announcement: the Standard asks that of configured routers, not of every nonrouter node. An explicit registered Network Port with a nonzero configured number reports `CONFIGURED` and never replaces that number from an announcement. Zero starts `UNKNOWN`; an owner without registration also starts unknown, regardless of other declared objects.
+Three Python owners consume the two local nonrouter controls automatically, one per transport: `BACnetServer`, the endpoint classes and `BACnetClient`. `BACnetServer` and `BACnetClient` own them with `transport="bip"` (NORMAL B/IP), `"ipv6"` (normal multicast or foreign B/IPv6), `"sc"` and `"mstp"`; `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` own them on their links. Python's B/IP owners take `bbmd=` and `foreign_device=` for those two modes, and its B/IPv6 client and server take `foreign_device=` (#1941); the Ethernet paragraph below describes a Rust-only mode. An owner that knows its number replies to a valid local What-Is-Network-Number with a Network-Number-Is addressed to the whole local link (Clauses 6.4.19–6.4.20). A question sent to the owner alone is answered at once. One that came as a broadcast is answered after a random wait of half a second to ten seconds, and not at all when another node's Network-Number-Is is heard in that wait with the owner's number, flagged configured if the owner's own answer would be (#2597): none of these owners is a router, and Clause 6.4.19 gives such a node both options, so one question on a segment draws one answer, a router's when there is one, where every node used to send its own. A learned answer does not stand in for a configured owner's, and an answer with another number never does. Questions that arrive during the wait share its one answer, and stopping the owner drops it. There is no proactive startup announcement: the Standard asks that of configured routers, not of every nonrouter node. An explicit registered Network Port with a nonzero configured number reports `CONFIGURED` and never replaces that number from an announcement. Zero starts `UNKNOWN`; an owner without registration also starts unknown, regardless of other declared objects.
 
 A valid local-broadcast announcement with flag zero updates an unknown/learned owner to `LEARNED`. Flag one sets `LEARNED_CONFIGURED` and takes precedence over all subsequent flag-zero announcements. Further flag-one announcements may replace that learned value, including conflicts; an equal value still upgrades its quality. Both learned qualities transmit flag zero in their own responses. Selected-object `Network_Number` and `Network_Number_Quality` reads use the same database-owned state. Configuration remains immutable, so a new registration resets the pair from configured provenance; a new unregistered runtime starts unknown. There is no persistence of learned state across constructing a new runtime. After stop, the object retains the last observed pair until reconstruction or a new registration.
 

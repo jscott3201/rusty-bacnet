@@ -1,11 +1,13 @@
 //! The two local nonrouter controls for an explicitly opted-in single link.
 use bacnet_network::layer::ReceivedNetworkControl;
-use bacnet_network::network_number::{LocalNetworkNumber, NumberControl, number_is_reply};
+use bacnet_network::network_number::{
+    DelayedAnswer, LocalNetworkNumber, NumberControl, number_is_reply,
+};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::network_number::NetworkNumber;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
@@ -27,11 +29,27 @@ enum State {
     Registered(Arc<RwLock<ObjectDatabase>>, ObjectIdentifier),
     Unregistered(NetworkNumber),
 }
+/// What the task that owns the Number controls does next
+/// ([`NetworkNumberOwner::next`]).
+#[doc(hidden)]
+pub enum NumberTurn {
+    /// A control arrived: hand it to [`NetworkNumberOwner::handle`].
+    Control(ReceivedNetworkControl),
+    /// The answer a broadcast question left waiting came due: send it, when
+    /// there is one.
+    Answer(Option<Vec<u8>>),
+    /// The control queue closed: the task ends.
+    Closed,
+}
+
 /// Hidden shared control adapter, not a second configuration or lifecycle API.
 #[doc(hidden)]
 pub struct NetworkNumberOwner {
     state: State,
     published: Option<LocalNetworkNumber>,
+    /// The answer to a broadcast What-Is-Network-Number, held for its
+    /// random wait (#2597).
+    answer: DelayedAnswer,
 }
 impl NetworkNumberOwner {
     /// Explicit registration alone provides configured-number authority.
@@ -43,6 +61,7 @@ impl NetworkNumberOwner {
                 None => State::Unregistered(NetworkNumber::default()),
             },
             published: None,
+            answer: DelayedAnswer::new(),
         }
     }
     /// Copy the state into `slot` after every control, so senders read the
@@ -54,12 +73,17 @@ impl NetworkNumberOwner {
         self.published = Some(slot);
         self
     }
-    /// Validate and process one control, returning a complete local-control NPDU.
-    /// Other network messages retain the owners' existing discard behavior.
+    /// Validate and process one control, returning a complete local-control
+    /// NPDU when an answer goes now: to a What-Is-Network-Number sent to
+    /// this node alone. A broadcast one is answered later, through
+    /// [`Self::next`], unless another node's answer is heard
+    /// first (Clause 6.4.19, [`DelayedAnswer`]). Other network messages
+    /// retain the owners' existing discard behavior.
     #[doc(hidden)]
     pub async fn handle(&mut self, control: ReceivedNetworkControl) -> Option<Vec<u8>> {
-        let announcement = match NumberControl::parse(&control)? {
-            NumberControl::WhatIs => None,
+        let control = NumberControl::parse(&control)?;
+        let announcement = match control {
+            NumberControl::WhatIs { .. } => None,
             NumberControl::NumberIs { number, flag } => Some((number, flag)),
         };
         let publish = |state| {
@@ -86,10 +110,51 @@ impl NetworkNumberOwner {
                 *state
             }
         };
-        if announcement.is_some() {
-            return None;
+        match control {
+            NumberControl::NumberIs { number, flag } => {
+                // After the state took the announcement in, so a number
+                // just adopted from it counts as agreeing.
+                self.answer.heard(state, number, flag);
+                None
+            }
+            NumberControl::WhatIs { broadcast } => self
+                .answer
+                .asked(state, broadcast)
+                .then(|| number_is_reply(state))
+                .flatten()
+                .map(|npdu| npdu.to_vec()),
         }
-        number_is_reply(state).map(|npdu| npdu.to_vec())
+    }
+
+    /// Wait for the owner's next piece of work: a control from `controls`,
+    /// or the answer a broadcast question left waiting. The future that
+    /// loses is dropped before this returns, so the caller's work on the
+    /// turn runs with nothing left queued for the database. A waiting
+    /// answer cut short by a control stays pending and comes due again.
+    #[doc(hidden)]
+    pub async fn next(
+        &mut self,
+        controls: &mut mpsc::Receiver<ReceivedNetworkControl>,
+    ) -> NumberTurn {
+        tokio::select! {
+            control = controls.recv() => control.map_or(NumberTurn::Closed, NumberTurn::Control),
+            answer = self.delayed_answer() => NumberTurn::Answer(answer),
+        }
+    }
+
+    /// Wait for the answer a broadcast What-Is-Network-Number left pending,
+    /// and give it as a complete local-control NPDU, made from the number
+    /// held when it comes due. Never returns while nothing is pending.
+    /// Dropping the wait keeps the answer pending: it is taken only when
+    /// this returns.
+    async fn delayed_answer(&mut self) -> Option<Vec<u8>> {
+        self.answer.due().await;
+        let state = match &mut self.state {
+            State::Registered(db, oid) => db.write().await.network_number_internal(*oid, None),
+            State::Unregistered(state) => Some(*state),
+        };
+        self.answer.taken();
+        number_is_reply(state?).map(|npdu| npdu.to_vec())
     }
 }
 

@@ -9,9 +9,15 @@
 //! more. Clause 6.4.19 lets any node ask with a local broadcast and has it
 //! keep the answer rather than repeat the question, so a known number is
 //! never asked for again.
+//!
+//! The client also answers the question when it holds the number. It is
+//! not a router, so the same clause lets it hold its answer to a broadcast
+//! question for a random wait and skip it when another node answers first
+//! (#2597, [`DelayedAnswer`]); a question sent to the client alone is
+//! answered at once.
 use super::device_events::{self, TableNotices};
 use super::*;
-use bacnet_network::network_number::{NumberControl, number_is_reply};
+use bacnet_network::network_number::{DelayedAnswer, NumberControl, number_is_reply};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_types::network_number::NetworkNumber;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -165,6 +171,16 @@ async fn ask<T: TransportPort + 'static>(network: &NetworkLayer<T>) -> bool {
     }
 }
 
+/// Broadcast the Network-Number-Is that answers a question, when the
+/// number is known. A send that fails is logged: the asker asks again.
+async fn announce<T: TransportPort + 'static>(network: &NetworkLayer<T>, state: NetworkNumber) {
+    if let Some(npdu) = number_is_reply(state)
+        && let Err(error) = network.transport().send_broadcast(&npdu).await
+    {
+        debug!(%error, "Network-Number-Is broadcast failed");
+    }
+}
+
 /// Wait for the link to come back; forever once the transport has no more
 /// returns to report, or never had any.
 async fn link_returned(returns: &mut Option<watch::Receiver<u64>>) {
@@ -194,6 +210,10 @@ pub(super) fn spawn<T: TransportPort + 'static>(
         let (table, asking) = (&discovery.table, &discovery.asking);
         let notices: TableNotices<'_> = (&device_tx, &collision_tx);
         let mut state = NetworkNumber::default();
+        // The answer to a broadcast What-Is-Network-Number, held for its
+        // random wait and dropped when another node answers first
+        // (Clause 6.4.19, #2597). It lives in this task alone.
+        let mut answer = DelayedAnswer::new();
         // Two routers that disagree flip the number on every announcement:
         // the table follows each flip, the log once an interval.
         let changes = WarnThrottle::default();
@@ -211,6 +231,11 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                 }
                 () = link_returned(&mut link_returns) => {
                     asking.again(&network).await;
+                    continue;
+                }
+                () = answer.due() => {
+                    answer.taken();
+                    announce(&network, state).await;
                     continue;
                 }
             };
@@ -232,12 +257,13 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                         let this_network = network.local_network_number();
                         device_events::learned_number(table, this_network, state, notices);
                     }
+                    // After the state took the announcement in, so a
+                    // number just adopted from it counts as agreeing.
+                    answer.heard(state, number, flag);
                 }
-                NumberControl::WhatIs => {
-                    if let Some(npdu) = number_is_reply(state)
-                        && let Err(error) = network.transport().send_broadcast(&npdu).await
-                    {
-                        debug!(%error, "Network-Number-Is broadcast failed");
+                NumberControl::WhatIs { broadcast } => {
+                    if answer.asked(state, broadcast) {
+                        announce(&network, state).await;
                     }
                 }
             }

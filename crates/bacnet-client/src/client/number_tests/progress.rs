@@ -11,7 +11,7 @@ async fn client_number_held_egress_preserves_routed_reject_and_apdu_dispatch() {
     let (client, inbound, mut outbound, gates) = harness(true).await;
     let client = Arc::new(client);
     inject(&inbound, &number(77, 1), true).await;
-    inject(&inbound, QUERY, true).await;
+    inject(&inbound, QUERY, false).await;
     bounded(gates.entered.acquire()).await.unwrap().forget();
     client
         .configure_routed_path_max_npdu(&[2], 100, 1497)

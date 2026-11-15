@@ -1,241 +1,122 @@
-//! Reading what the export needs, one request at a time.
+//! An inventory's records in the export's terms: a
+//! [`Point`] for each object of the [`EXPORTED_TYPES`]
+//! whose record holds what its type requires, and for any other the
+//! reason it has none.
 //!
-//! The Device object's Object_Name (one ReadProperty), its Object_List
-//! (whole, or element by element when it must be), then one property list
-//! for each object of a selected type: by ReadPropertyMultiple, or
-//! ReadProperty each once the device has refused RPM. Every request takes
-//! its turn at the device's gate and the rate cap, as the reader's other
-//! reads do. A device with N exported objects costs N + 2 requests by RPM.
+//! Nothing here reads a device: [`Device::inventory`](crate::Device::inventory)
+//! does, as it reads any inventory, and the export derives from its
+//! [`PointRecord`]s. A record made with
+//! [`inventory_options`](super::inventory_options) holds what the Turtle
+//! uses; one made with [`point_list_options`](super::point_list_options)
+//! holds the rest of a point list too.
 //!
-//! An object whose read fails is kept with its error, and the export skips
-//! it; so is one whose Object_Name, the Units of an analog object or an
-//! Integer Value, or a multi-state object's Number_Of_States can't be read,
-//! the error naming that property. A device that stops answering, or a
-//! caller that cancels, ends the reading once the Object_List is in; what
-//! was read is kept, and [`Inventory::stopped`] says why. Before that,
-//! either is an error. An Object_List read element by element that stops
-//! early ends the reading there: no object is asked for.
+//! An object is skipped when its record lacks its Object_Name, the Units
+//! of an analog object or an Integer Value, or a multi-state object's
+//! Number_Of_States, the reason naming that property and what the device
+//! said of it. An optional setting the record lacks, or whose value isn't
+//! of the property's type, is `None`.
 //!
-//! A device that refuses ReadPropertyMultiple costs one refused request,
-//! then a ReadProperty a property: 2 for a binary input or output, 3 for
-//! an analog input or output or a binary value, 4 for an analog value, an
-//! integer value or a multi-state input or output, and 5 for a multi-state
-//! value.
-//!
-//! [`Detail::Full`] reads the rest of a point list in the same requests:
-//! still N + 2 by RPM, the Device's name and Description going in one
-//! RPM. By ReadProperty it costs one more for the Device's Description and
-//! these per object: 6 for an analog input, 7 for an analog output, 8 for
-//! an analog value or an integer value, 4 for a binary input, 5 for a
-//! binary output, 6 for a binary value, 4 for a multi-state input, 5 for a
-//! multi-state output and 6 for a multi-state value.
-//!
-//! An input reads as [`Access::ReadOnly`] and an output as
+//! An input is [`Access::ReadOnly`] and an output
 //! [`Access::Commandable`]. A value is commandable when it has a
-//! Priority_Array and [`Access::ReadOnly`] otherwise, even when a peer may
-//! write it: a read can't tell a writable value from a read-only one, only
-//! a write could.
-//!
-//! A front end that pages the export (the MCP tool) takes the Object_List
-//! its own way and reads the rest piece by piece, as the inventory does:
-//! [`Device::inventory_device`] and [`Device::inventory_object`].
+//! Priority_Array ([`PointRecord::commandable`]) and [`Access::ReadOnly`]
+//! otherwise, even when a peer may write it: a read can't tell a writable
+//! value from a read-only one, only a write could.
 
-use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType, PropertyIdentifier as P};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier as P};
+use bacnet_types::primitives::PropertyValue;
 
 use super::{
-    Access, Analog, Binary, Detail, DeviceInfo, Entry, Integer, Inventory, InventoryOptions,
-    MultiState, Point, PointKind,
+    Access, Analog, Binary, DeviceInfo, EXPORTED_TYPES, Integer, Inventory, Model, MultiState,
+    Point, PointKind, PointRecord, Skipped,
 };
-use crate::client::{Halt, Reader, Wanted, device_error, unreachable};
-use crate::device::{Device, sent};
 use crate::error::OpsError;
-use crate::format::{RawRow, StateTexts, decode_all};
+use crate::format::{Value, decode_all};
 use crate::label::{kebab, object_label};
 
-impl<T: TransportPort + 'static> Device<T> {
-    /// The device's objects of the types `options` names, as the Standard
-    /// 223 export reads them ([`read_inventory`]). Fails only when the
-    /// device's name or Object_List can't be read. A value without a
-    /// Priority_Array reads as [`Access::ReadOnly`], writable or not.
-    pub async fn inventory(&self, options: &InventoryOptions) -> Result<Inventory, OpsError> {
-        let instance = self.resolve_instance().await?;
-        sent!(self, |at| {
-            let mut reader = self.client().reader(at, Some(instance));
-            let inventory = read_inventory(&mut reader, options).await;
-            self.client().settle(&reader);
-            inventory.map_err(device_error)
-        })
-    }
-
-    /// The Device object as the inventory reads it at `detail`: at
-    /// [`Detail::Export`] one ReadProperty of its Object_Name, at
-    /// [`Detail::Full`] its name and Description by one RPM (or a
-    /// ReadProperty each). The text is exactly as the device sent it, and a
-    /// property it gave none of is `None`. Fails only when the device
-    /// doesn't answer.
-    pub async fn inventory_device(&self, detail: Detail) -> Result<DeviceInfo, OpsError> {
-        let instance = self.resolve_instance().await?;
-        sent!(self, |at| {
-            let mut reader = self.client().reader(at, Some(instance));
-            let read = read_device(&mut reader, detail).await;
-            self.client().settle(&reader);
-            read.map_err(device_error)
-        })
-    }
-
-    /// One object as the inventory reads it at `detail`, with
-    /// the same properties: one ReadPropertyMultiple, or a ReadProperty
-    /// each once the device has refused RPM (remembered, as
-    /// [`Device::read_object`] does). A read the device refuses, or a property
-    /// every object of the type has that it can't give, comes back as
-    /// [`Entry::Failed`], which the export skips; an optional property it
-    /// can't give is `None`. An object of a type the export doesn't read
-    /// (not one of the [`EXPORTED_TYPES`](super::EXPORTED_TYPES)) is
-    /// [`Entry::Failed`] at once, with no request sent. Only a device that
-    /// stops answering is an error.
-    pub async fn inventory_object(
-        &self,
-        object: ObjectIdentifier,
-        detail: Detail,
-    ) -> Result<Entry, OpsError> {
-        sent!(self, |at| {
-            let mut reader = self.client().reader(at, self.instance());
-            let read = read_object(&mut reader, object, detail).await;
-            self.client().settle(&reader);
-            read.map_err(device_error)
-        })
+impl PointRecord {
+    /// The record as a point of a point list
+    /// (`bacnet_types::points::Point`), for an object of one of the ten
+    /// [`EXPORTED_TYPES`]; `None` for any other type, and for a record
+    /// that lacks what every object of its type has: its Object_Name, the
+    /// Units of an analog object or an Integer Value, or a multi-state
+    /// object's Number_Of_States ([`exported`] says which).
+    ///
+    /// The point's optional settings (COV_Increment, range, relinquish
+    /// default) are those the record holds, so `None` unless the inventory
+    /// read [`settings`](crate::inventory::InventoryOptions::settings).
+    pub fn to_point(&self) -> Option<Point> {
+        exported(self).ok()
     }
 }
 
-/// The objects of the types `options` names on `reader`'s device, with
-/// what the export needs of each (see the module docs). A reader that
-/// meets a refusal of RPM leaves `rpm` false, for its owner to remember.
-/// A reader that doesn't know its device's instance reads it first, by the
-/// wildcard instance ([`Reader::instance`]).
-pub async fn read_inventory<T: TransportPort + 'static>(
-    reader: &mut Reader<'_, T>,
-    options: &InventoryOptions,
-) -> Result<Inventory, Halt> {
-    let device = read_device(reader, options.detail).await?;
-    let list = reader.object_list(|_, _| {}).await?;
-    let mut inventory = Inventory::new(device);
-    inventory.stopped = list.stopped.map(|why| format!("Object_List, {why}"));
-    // An element-by-element read that stopped means the device stopped
-    // answering: asking it for each object would only time out again.
-    if inventory.stopped.is_some() {
-        return Ok(inventory);
-    }
-    let wanted = list
-        .objects
-        .into_iter()
-        .filter(|object| options.types.contains(&object.object_type()));
-    for object in wanted {
-        match read_object(reader, object, options.detail).await {
-            Ok(entry) => inventory.entries.push(entry),
-            Err(Halt::Device(error)) => {
-                inventory.stopped = Some(format!("{}: {error}", object_label(object)));
-                break;
-            }
-            // A caller that stops partway keeps what was read.
-            Err(Halt::Cancelled) => {
-                inventory.stopped = Some(format!("cancelled before {}", object_label(object)));
-                break;
-            }
-        }
-    }
-    Ok(inventory)
-}
-
-/// The Device object's name, and at [`Detail::Full`] its Description,
-/// exactly as the device sent them; `None` for one the device answered
-/// with an error or with no string. Only a device that doesn't answer, or
-/// a stop, is an error.
-async fn read_device<T: TransportPort + 'static>(
-    reader: &mut Reader<'_, T>,
-    detail: Detail,
-) -> Result<DeviceInfo, Halt> {
-    let instance = reader.instance().await?;
-    let device = reader.device_object()?;
-    let mut info = DeviceInfo::new(instance);
-    let rows = match detail {
-        // One ReadProperty, as the export has always read it.
-        Detail::Export => match reader.rp(device, P::OBJECT_NAME, None).await {
-            Ok(data) => vec![(P::OBJECT_NAME, Ok(data))],
-            Err(Halt::Device(error)) if !unreachable(&error) => Vec::new(),
-            Err(halt) => return Err(halt),
-        },
-        Detail::Full => {
-            let wanted = [P::OBJECT_NAME, P::DESCRIPTION];
-            match reader.properties(device, Wanted::List(&wanted)).await {
-                Ok((rows, _)) => rows,
-                // An RPM the device answers with an error of its own (not
-                // a refusal of the service, which `properties` reads past
-                // itself) still leaves the name to read as Export does, so
-                // Full never knows less than Export.
-                Err(Halt::Device(error)) if !unreachable(&error) => {
-                    match reader.rp(device, P::OBJECT_NAME, None).await {
-                        Ok(data) => vec![(P::OBJECT_NAME, Ok(data))],
-                        Err(Halt::Device(error)) if !unreachable(&error) => Vec::new(),
-                        Err(halt) => return Err(halt),
-                    }
-                }
-                Err(halt) => return Err(halt),
-            }
-        }
-    };
-    info.name = value(&rows, P::OBJECT_NAME).and_then(text);
-    info.description = value(&rows, P::DESCRIPTION).and_then(text);
-    Ok(info)
-}
-
-/// One object with what the export needs of it at `detail`
-/// ([`properties`]). A read the device refuses is kept as the object's
-/// error; only a device that doesn't answer, or a stop, is an error.
-async fn read_object<T: TransportPort + 'static>(
-    reader: &mut Reader<'_, T>,
-    object: ObjectIdentifier,
-    detail: Detail,
-) -> Result<Entry, Halt> {
+/// `record` as the export's point, or why it has none
+/// ([`PointRecord::to_point`]).
+///
+/// # Errors
+///
+/// [`Skipped`] for an object of a type the export doesn't map (no
+/// property named), and for one whose record lacks a property every
+/// object of its type has, named with the device's error for it.
+pub fn exported(record: &PointRecord) -> Result<Point, Skipped> {
+    let object = record.object;
     let Some((family, role)) = family_of(object.object_type()) else {
-        let error = format!("{} objects aren't exported", kebab(object.object_type()));
-        return Ok(Entry::Failed {
+        return Err(Skipped {
             object,
             property: None,
-            error,
+            error: format!("{} objects aren't exported", kebab(object.object_type())),
         });
     };
-    let properties = properties(family, role, detail);
-    match reader.properties(object, Wanted::List(&properties)).await {
-        Ok((rows, _)) => Ok(entry(object, family, role, &rows)),
-        Err(Halt::Device(error)) if !unreachable(&error) => Ok(Entry::Failed {
-            object,
-            property: None,
-            error: error.to_string(),
-        }),
-        Err(halt) => Err(halt),
-    }
+    point(record, family, role).map_err(|(property, error)| Skipped {
+        object,
+        property: Some(property),
+        error,
+    })
 }
 
-/// `object`'s entry from the rows its read gave.
-fn entry(object: ObjectIdentifier, family: Family, role: Role, rows: &[RawRow]) -> Entry {
-    match point(object, family, role, rows) {
-        Ok(point) => Entry::Point(point),
-        Err((property, error)) => Entry::Failed {
-            object,
-            property: Some(property),
-            error,
-        },
+impl From<&Inventory> for Model {
+    /// The inventory's objects of the [`EXPORTED_TYPES`], each
+    /// [`exported`], in its order; its other objects are left out. The
+    /// Device's name is the summary's, exactly as sent, and its
+    /// Description the Device object's own record's, when the inventory
+    /// read it. An inventory that stopped early says where: the first
+    /// object not read.
+    fn from(inventory: &Inventory) -> Self {
+        let mut device = DeviceInfo::new(inventory.device.device);
+        device.name = inventory
+            .device
+            .value(P::OBJECT_NAME)
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        device.description = inventory
+            .points
+            .iter()
+            .find(|point| point.object.object_type() == ObjectType::DEVICE)
+            .and_then(|point| point.description.clone());
+        let entries = inventory
+            .points
+            .iter()
+            .filter(|point| EXPORTED_TYPES.contains(&point.object.object_type()))
+            .map(exported)
+            .collect();
+        let stopped = inventory.stopped.as_ref().map(|error| {
+            // The low-level client's own words, as the export has always
+            // quoted them.
+            let why = match error {
+                OpsError::Unreachable { source, .. } => source.to_string(),
+                error => error.to_string(),
+            };
+            match inventory.unread.first() {
+                Some(object) => format!("{}: {why}", object_label(*object)),
+                // A hand-built inventory that names no unread object.
+                None => why,
+            }
+        });
+        Self {
+            device,
+            entries,
+            stopped,
+        }
     }
-}
-
-/// `object`'s entry from `rows`, as [`read_object`] makes it at either
-/// detail; for the reader's tests.
-#[cfg(test)]
-pub(super) fn entry_of(object: ObjectIdentifier, rows: &[RawRow]) -> Entry {
-    let (family, role) = family_of(object.object_type()).expect("an exported type");
-    entry(object, family, role, rows)
 }
 
 /// The families the export maps.
@@ -257,7 +138,7 @@ enum Role {
 }
 
 /// The family and role of `object_type`, when it is one of the
-/// [`EXPORTED_TYPES`](super::EXPORTED_TYPES).
+/// [`EXPORTED_TYPES`].
 fn family_of(object_type: ObjectType) -> Option<(Family, Role)> {
     Some(match object_type {
         ObjectType::ANALOG_INPUT => (Family::Analog, Role::Input),
@@ -274,76 +155,42 @@ fn family_of(object_type: ObjectType) -> Option<(Family, Role)> {
     })
 }
 
-/// What one object's read asks for: [`Detail::Export`]'s properties in
-/// the order the export has always asked for them, then
-/// [`Detail::Full`]'s.
-fn properties(family: Family, role: Role, detail: Detail) -> Vec<P> {
-    let mut list = vec![P::OBJECT_NAME, P::DESCRIPTION];
-    match family {
-        Family::Analog | Family::Integer => list.push(P::UNITS),
-        Family::Binary => {}
-        Family::MultiState => list.extend([P::NUMBER_OF_STATES, P::STATE_TEXT]),
-    }
-    // An output always has a Priority_Array; a value may.
-    if role == Role::Value {
-        list.push(P::PRIORITY_ARRAY);
-    }
-    if detail == Detail::Full {
-        match family {
-            Family::Analog | Family::Integer => {
-                list.extend([P::COV_INCREMENT, P::MIN_PRES_VALUE, P::MAX_PRES_VALUE]);
-            }
-            Family::Binary => list.extend([P::ACTIVE_TEXT, P::INACTIVE_TEXT]),
-            Family::MultiState => {}
-        }
-        if role != Role::Input {
-            list.push(P::RELINQUISH_DEFAULT);
-        }
-    }
-    list
-}
-
-/// One object's point from its rows, or why it has none: a property every
-/// object of its type has is missing, named with the reason.
-fn point(
-    object: ObjectIdentifier,
-    family: Family,
-    role: Role,
-    rows: &[RawRow],
-) -> Result<Point, (P, String)> {
-    let name = required(rows, P::OBJECT_NAME, text, "a character string")?;
+/// One object's point from its record, or why it has none: a property
+/// every object of its type has is missing, named with the reason.
+fn point(record: &PointRecord, family: Family, role: Role) -> Result<Point, (P, String)> {
+    let name = required(record, P::OBJECT_NAME, record.name.clone())?;
     let kind = match family {
         Family::Analog => {
-            let units = required(rows, P::UNITS, units, "an engineering unit")?;
-            let mut analog = Analog::new(units, access(role, rows, real));
-            analog.cov_increment = value(rows, P::COV_INCREMENT).and_then(real);
-            analog.min_pres_value = value(rows, P::MIN_PRES_VALUE).and_then(real);
-            analog.max_pres_value = value(rows, P::MAX_PRES_VALUE).and_then(real);
+            let units = required(record, P::UNITS, record.units)?;
+            let mut analog = Analog::new(units, access(role, record, real));
+            analog.cov_increment = setting(&record.cov_increment, real);
+            analog.min_pres_value = setting(&record.min_present_value, real);
+            analog.max_pres_value = setting(&record.max_present_value, real);
             PointKind::Analog(analog)
         }
         Family::Binary => {
-            let mut binary = Binary::new(access(role, rows, binary_pv));
-            binary.active_text = value(rows, P::ACTIVE_TEXT).and_then(text);
-            binary.inactive_text = value(rows, P::INACTIVE_TEXT).and_then(text);
+            let mut binary = Binary::new(access(role, record, binary_pv));
+            binary.active_text = record.state_texts.active.clone();
+            binary.inactive_text = record.state_texts.inactive.clone();
             PointKind::Binary(binary)
         }
         Family::MultiState => {
-            let states = required(rows, P::NUMBER_OF_STATES, unsigned, "an Unsigned")?;
-            let mut multi_state = MultiState::new(states, access(role, rows, unsigned));
-            multi_state.state_texts = StateTexts::from_rows(rows).states;
+            let states = required(record, P::NUMBER_OF_STATES, record.number_of_states)?;
+            let mut multi_state = MultiState::new(states, access(role, record, unsigned));
+            multi_state.state_texts = record.state_texts.states.clone();
             PointKind::MultiState(multi_state)
         }
         Family::Integer => {
-            let units = required(rows, P::UNITS, units, "an engineering unit")?;
-            let mut integer = Integer::new(units, access(role, rows, signed));
-            integer.cov_increment = value(rows, P::COV_INCREMENT).and_then(unsigned64);
-            integer.min_pres_value = value(rows, P::MIN_PRES_VALUE).and_then(signed);
-            integer.max_pres_value = value(rows, P::MAX_PRES_VALUE).and_then(signed);
+            let units = required(record, P::UNITS, record.units)?;
+            let mut integer = Integer::new(units, access(role, record, signed));
+            integer.cov_increment = setting(&record.cov_increment, unsigned64);
+            integer.min_pres_value = setting(&record.min_present_value, signed);
+            integer.max_pres_value = setting(&record.max_present_value, signed);
             PointKind::Integer(integer)
         }
     };
-    let mut point = Point::new(object, name, kind);
-    point.description = value(rows, P::DESCRIPTION).and_then(text);
+    let mut point = Point::new(record.object, name, kind);
+    point.description = record.description.clone();
     Ok(point)
 }
 
@@ -351,45 +198,37 @@ fn point(
 /// read-only, an output commandable, and a value commandable when it has a
 /// Priority_Array. A commandable point's relinquish default is the one
 /// read, when it was.
-fn access<T>(role: Role, rows: &[RawRow], decode: fn(&[u8]) -> Option<T>) -> Access<T> {
+fn access<T>(role: Role, record: &PointRecord, decode: fn(&[u8]) -> Option<T>) -> Access<T> {
     let commandable = match role {
         Role::Input => false,
         Role::Output => true,
-        Role::Value => value(rows, P::PRIORITY_ARRAY).is_some(),
+        Role::Value => record.commandable,
     };
     if commandable {
         Access::Commandable {
-            relinquish_default: value(rows, P::RELINQUISH_DEFAULT).and_then(decode),
+            relinquish_default: setting(&record.relinquish_default, decode),
         }
     } else {
         Access::ReadOnly
     }
 }
 
-/// The raw value of `property` among `rows`, when the device gave one.
-fn value(rows: &[RawRow], property: P) -> Option<&[u8]> {
-    rows.iter()
-        .find(|(p, _)| *p == property)
-        .and_then(|(_, value)| value.as_deref().ok())
+/// An optional setting as its type decodes it; `None` when the record
+/// lacks it or its value is of another type.
+fn setting<T>(value: &Option<Value>, decode: fn(&[u8]) -> Option<T>) -> Option<T> {
+    value.as_ref().and_then(|value| decode(&value.raw))
 }
 
-/// `property`, decoded, or why it can't be: the device's error for it, or
-/// a value that isn't `what`. The reason names the property.
-fn required<T>(
-    rows: &[RawRow],
-    property: P,
-    decode: fn(&[u8]) -> Option<T>,
-    what: &str,
-) -> Result<T, (P, String)> {
-    let why = match rows.iter().find(|(p, _)| *p == property) {
-        None => "not read".to_string(),
-        Some((_, Err(error))) => error.to_string(),
-        Some((_, Ok(data))) => match decode(data) {
-            Some(decoded) => return Ok(decoded),
-            None => format!("not {what}"),
-        },
+/// `field`, which every object of the type has, or why the record lacks
+/// it: the problem its read had, the reason naming the property.
+fn required<T>(record: &PointRecord, property: P, field: Option<T>) -> Result<T, (P, String)> {
+    let Some(field) = field else {
+        let why = record
+            .problem(property)
+            .map_or_else(|| "not read".to_string(), ToString::to_string);
+        return Err((property, format!("{}: {why}", kebab(property))));
     };
-    Err((property, format!("{}: {why}", kebab(property))))
+    Ok(field)
 }
 
 /// The one value in `data`, when it decodes as exactly one.
@@ -397,14 +236,6 @@ fn single(data: &[u8]) -> Option<PropertyValue> {
     match <[PropertyValue; 1]>::try_from(decode_all(data)?) {
         Ok([value]) => Some(value),
         Err(_) => None,
-    }
-}
-
-/// A value that is one character string, exactly as the device sent it.
-fn text(data: &[u8]) -> Option<String> {
-    match single(data)? {
-        PropertyValue::CharacterString(text) => Some(text),
-        _ => None,
     }
 }
 
@@ -435,13 +266,6 @@ fn unsigned64(data: &[u8]) -> Option<u64> {
 fn signed(data: &[u8]) -> Option<i32> {
     match single(data)? {
         PropertyValue::Signed(value) => Some(value),
-        _ => None,
-    }
-}
-
-fn units(data: &[u8]) -> Option<EngineeringUnits> {
-    match single(data)? {
-        PropertyValue::Enumerated(raw) => Some(EngineeringUnits::from_raw(raw)),
         _ => None,
     }
 }

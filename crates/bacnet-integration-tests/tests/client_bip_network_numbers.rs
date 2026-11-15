@@ -60,6 +60,14 @@ async fn stop(mut client: Client, local: SocketAddrV4) -> std::io::Result<()> {
     std::net::UdpSocket::bind(local).map(drop)
 }
 
+/// Ask `target` for its number by unicast, which it answers at once. The
+/// answer to a broadcast question waits up to ten seconds (Clause 6.4.19,
+/// #2597), on paused time in the client's own tests, so the exact replies
+/// here are all asked for this way.
+async fn ask(socket: &UdpSocket, target: SocketAddrV4) {
+    send(socket, target, &frame(10, QUERY)).await;
+}
+
 #[tokio::test]
 async fn client_number_bbmd_wire_admission_and_release() {
     rerun_on_lost_port(async || {
@@ -87,28 +95,28 @@ async fn client_number_bbmd_wire_admission_and_release() {
         );
         // UNKNOWN and a unicast NNI cannot create an own response before the fence.
         send(&peer, local, &frame(10, &number(999, 1))).await;
-        send(&peer, local, &frame(10, QUERY)).await;
+        ask(&peer, local).await;
         send(&peer, group, &frame(11, &number(77, 0))).await;
-        send(&peer, local, &frame(10, QUERY)).await;
+        ask(&peer, local).await;
         own_number(&captured, local, 11, 77).await;
 
         forward(&denied, local, &number(200, 1)).await;
         fence(&denied, local).await; // receive loop only, not Number completion
-        send(&peer, local, &frame(10, QUERY)).await;
+        ask(&peer, local).await;
         own_number(&captured, local, 11, 77).await;
         send(&fd, local, &frame(9, &number(200, 1))).await;
         assert_eq!(receive(&fd).await, (frame(0, &[0, 0x60]), local));
-        send(&peer, local, &frame(10, QUERY)).await;
+        ask(&peer, local).await;
         own_number(&captured, local, 11, 77).await;
 
         // Same IP with a different port is an admitted BDT peer, not a self echo.
         forward(&bdt, local, &number(78, 1)).await;
-        forward(&bdt, local, QUERY).await;
+        ask(&peer, local).await;
         own_number(&captured, local, 11, 78).await;
         send(&fd, local, &frame(5, &60u16.to_be_bytes())).await;
         assert_eq!(receive(&fd).await, (frame(0, &[0, 0]), local));
         send(&fd, local, &frame(9, &number(79, 1))).await;
-        send(&fd, local, &frame(9, QUERY)).await;
+        ask(&peer, local).await;
         own_number(&captured, local, 11, 79).await;
 
         for invalid in [
@@ -118,13 +126,13 @@ async fn client_number_bbmd_wire_admission_and_release() {
             vec![1, 0x88, 0, 4, 1, 9, 0x13, 0, 200, 1],
         ] {
             send(&peer, group, &frame(11, &invalid)).await;
-            send(&peer, local, &frame(10, QUERY)).await;
+            ask(&peer, local).await;
             own_number(&captured, local, 11, 79).await;
         }
         // An incorrectly accepted malformed query would emit old 79 before new 81.
         send(&peer, group, &frame(11, &[1, 0x80, 0x12, 0])).await;
         send(&peer, group, &frame(11, &number(81, 1))).await;
-        send(&peer, local, &frame(10, QUERY)).await;
+        ask(&peer, local).await;
         own_number(&captured, local, 11, 81).await;
         drop(captured);
         stop(client, local).await
@@ -146,22 +154,22 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
         let (client, local) = client(transport).await.unwrap(); // port 0: nothing to lose
         assert_eq!(receive(&bbmd).await, (frame(5, &[0, 60]), local));
         send(&bbmd, local, &frame(0, &[0, 0])).await;
-        send(&alternate, local, &frame(10, QUERY)).await;
+        ask(&alternate, local).await;
         send(&alternate, local, &frame(10, &number(999, 1))).await;
-        send(&alternate, local, &frame(10, QUERY)).await;
+        ask(&alternate, local).await;
         fence(&alternate, local).await;
         forward(&bbmd, local, &number(77, 0)).await;
-        send(&bbmd, local, &frame(10, QUERY)).await;
+        ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 77).await;
         // A foreign device takes a Forwarded-NPDU only from its BBMD by unicast
         // (#1622): another sender's announcement teaches nothing, and its query
-        // draws no reply, so the BBMD's query is answered with 77.
+        // draws no reply, so the next query is answered with 77.
         forward(&alternate, local, &number(78, 1)).await;
         forward(&alternate, local, QUERY).await;
-        forward(&bbmd, local, QUERY).await;
+        ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 77).await;
         forward(&bbmd, local, &number(78, 1)).await;
-        forward(&bbmd, local, QUERY).await;
+        ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 78).await;
         for invalid in [
             number(79, 0),
@@ -170,12 +178,12 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
             vec![1, 0x88, 0, 4, 1, 9, 0x13, 0, 200, 1],
         ] {
             forward(&bbmd, local, &invalid).await;
-            forward(&bbmd, local, QUERY).await;
+            ask(&bbmd, local).await;
             own_number(&bbmd, local, 9, 78).await;
         }
         forward(&bbmd, local, &[1, 0x80, 0x12, 0]).await;
         forward(&bbmd, local, &number(79, 1)).await;
-        forward(&bbmd, local, QUERY).await;
+        ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 79).await;
         send(&bbmd, local, &frame(0, &[0, 0x30])).await;
         send(&bbmd, local, &frame(0, &[0, 0x60])).await;
@@ -186,11 +194,11 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
         tokio::time::advance(std::time::Duration::from_secs(31)).await;
         tokio::time::resume();
         assert_eq!(receive(&bbmd).await, (frame(5, &[0, 60]), local));
-        forward(&bbmd, local, QUERY).await;
+        ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 79).await;
         send(&bbmd, local, &frame(0, &[0, 0])).await;
         forward(&bbmd, local, &number(80, 1)).await;
-        forward(&bbmd, local, QUERY).await;
+        ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 80).await;
 
         // Exercise the client's requester while Number replies remain live. There is
@@ -219,7 +227,7 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
             assert_eq!(&npdu[..3], &[1, 4, 2]); // segmented-response capability
             assert_eq!(npdu[5], 12);
             assert_eq!(&npdu[6..], &[0x0c, 0, 0, 0, 1, 0x19, 85]);
-            forward(&bbmd, local, QUERY).await;
+            ask(&bbmd, local).await;
             own_number(&bbmd, local, 9, 80).await;
             let ack = [
                 1, 0, 0x30, npdu[4], 12, 0x0c, 0, 0, 0, 1, 0x19, 85, 0x3e, 0x44, 0x42, 0x28, 0, 0,
@@ -232,7 +240,7 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
             );
         }
         forward(&bbmd, local, &number(81, 1)).await;
-        forward(&bbmd, local, QUERY).await;
+        ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 81).await;
         stop(client, local).await
     })

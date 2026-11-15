@@ -94,7 +94,7 @@ These options go before or after the command. Each command also takes `-h` or `-
 - `--mstp-max-info-frames <N>`: Frames this station sends per token (Max\_Info\_Frames), 1 to 255. Default: `1`. Needs the `serial` feature.
 - `--mstp-rt-priority <N>`: Run this station's MS/TP token handling under SCHED\_FIFO at this priority, 1 to 99 (Linux only). Needs CAP\_SYS\_NICE or an RLIMIT\_RTPRIO of at least N; joining fails if it can't be applied. Needs the `serial` feature.
 - `--mstp-cpus <CPUS>`: Pin this station's MS/TP token handling to these CPUs, such as 2 or 2,3 (Linux only); joining fails if the process may not use them. Needs the `serial` feature.
-- `--format <FORMAT>`: Output format (table, json).
+- `--format <FORMAT>`: Output format (table, json; csv too for inventory).
 - `--json`: JSON output shorthand.
 - `-v, --verbose`: Verbosity (-v, -vv, -vvv). Repeat it for more.
 - `--no-tui`: With no command, print the usage instead of opening the terminal UI (as does BACNET\_NO\_TUI set to anything but "" or "0").
@@ -116,6 +116,7 @@ These options go before or after the command. Each command also takes `-h` or `-
 | [`read`](#bacnet-read) | `rp` | Read a property. |
 | [`export`](#bacnet-export) | — | Export a device's objects in another model's terms (experimental). |
 | [`export 223-experimental`](#bacnet-export-223-experimental) | — | EXPERIMENTAL: the device's analog, binary and multi-state objects and integer values as a proposed ASHRAE Standard 223 point list, in Turtle. |
+| [`inventory`](#bacnet-inventory) | — | List a device's objects as point records: each one's name, units, state texts and whether it takes commands. |
 | [`readm`](#bacnet-readm) | `rpm` | Read multiple properties. |
 | [`write`](#bacnet-write) | `wp` | Write a property. |
 | [`writem`](#bacnet-writem) | `wpm` | Write multiple properties (WritePropertyMultiple). |
@@ -308,7 +309,7 @@ Usage: bacnet export [OPTIONS] <COMMAND>
 
 EXPERIMENTAL: the device's analog, binary and multi-state objects and integer values as a proposed ASHRAE Standard 223 point list, in Turtle.
 
-One 223 property per object, each with a BACnet external reference (device, object, name, property), QUDT units where they map, and the states of multi-state objects. A point list only: no equipment, connections or sensors. The 223 draft and this output can change between releases. Reads the device name, its object list, then one request per exported object; a target given by address costs one more, a read of its Device object to learn the instance. Stdout carries only the Turtle; a summary goes to stderr. --format and --json don't apply.
+One 223 property per object, each with a BACnet external reference (device, object, name, property), QUDT units where they map, and the states of multi-state objects. A point list only: no equipment, connections or sensors. The 223 draft and this output can change between releases. Reads the device summary, its object list, then the exported objects a few a request; a target given by address costs one more, a read of its Device object to learn the instance. Stdout carries only the Turtle; a summary goes to stderr. --format and --json don't apply.
 
 ```text
 Usage: bacnet export 223-experimental [OPTIONS] <TARGET>
@@ -324,6 +325,27 @@ Options:
 - `--types <TYPES>`: Object types to export, comma-separated (default: ai, ao, av, bi, bo, bv, msi, mso, msv and integer-value).
 - `--write-priority <N>`: Command priority (1-16) to name in each commandable point's reference.
 - `-o, --output <FILE>`: Write the Turtle to this new file instead of stdout; an existing file is refused.
+
+### bacnet inventory
+
+List a device's objects as point records: each one's name, units, state texts and whether it takes commands.
+
+Reads the device summary, its object list, then the objects in batches by ReadPropertyMultiple, a few objects a request. --format csv prints one row an object, --format json (or --json) the whole inventory with typed values; stdout carries only that, and a summary goes to stderr. If the device stops answering partway, what was read is still printed and the exit status is 1.
+
+```text
+Usage: bacnet inventory [OPTIONS] <TARGET>
+```
+
+Arguments:
+
+- `<TARGET>`: Target device (address, instance, or routed dnet:instance). Required.
+
+Options:
+
+- `--types <TYPES>`: Object types to read, comma-separated (ai,ao,msv, ...); default: every object, of any type.
+- `--values`: Also read each object's Present\_Value and Status\_Flags.
+- `--settings`: Also read each object's COV\_Increment, Min\_Pres\_Value, Max\_Pres\_Value and Relinquish\_Default, where it has them.
+- `--csv-exact`: With --format csv: write device text exactly. Without it, a name, description, state text or string value that starts with =, +, -, @, a tab or a carriage return gets an apostrophe before it, so a spreadsheet doesn't run it as a formula.
 
 ### bacnet readm
 

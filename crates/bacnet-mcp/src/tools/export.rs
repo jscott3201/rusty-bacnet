@@ -6,8 +6,8 @@
 //! A page takes the device's Object_List from `bacnet_list_objects`' cache
 //! (read whole, or element by element and resumed across calls), reads the
 //! device's name, then reads the objects of the selected types one at a
-//! time from the cursor's place
-//! ([`Device::inventory_object`](bacnet_ops::Device::inventory_object)).
+//! time from the cursor's place, each as the inventory's point record
+//! ([`Device::point_record`](bacnet_ops::Device::point_record)).
 //! Its Turtle stays under [`MAX_TURTLE`] bytes: it ends before an object
 //! likely to pass that, and an object that passes it anyway goes back to
 //! the next page, to be read again there; a point too large for any page
@@ -23,12 +23,14 @@ use std::collections::BTreeMap;
 use sha2::{Digest, Sha256};
 
 use bacnet_ops::export::s223::{
-    Counts, DEFAULT_BASE_IRI, Detail, DeviceInfo, Entry, Inventory, InventoryOptions,
-    TurtleOptions, WritePriority, write_turtle,
+    Counts, DEFAULT_BASE_IRI, DeviceInfo, Model, Point, Skipped, TurtleOptions, exported,
+    inventory_options, write_turtle,
 };
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::parse::parse_object_type;
+use bacnet_ops::{InventoryOptions, Priority};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -183,23 +185,23 @@ impl Args {
     fn options(&self) -> Result<(InventoryOptions, TurtleOptions), ToolError> {
         let priority = self
             .write_priority
-            .map(WritePriority::new)
+            .map(Priority::new)
             .transpose()
-            .map_err(|e| ToolError::invalid("write_priority", e))?;
+            .map_err(|e| ToolError::invalid("write_priority", e.to_string()))?;
         let base = self.base_iri.as_deref().unwrap_or(DEFAULT_BASE_IRI);
         let turtle =
             TurtleOptions::new(base, priority).map_err(|e| ToolError::invalid("base_iri", e))?;
-        let options = match &self.types {
-            None => InventoryOptions::default(),
-            Some(names) => {
-                let types = names
+        let types = match &self.types {
+            None => None,
+            Some(names) => Some(
+                names
                     .iter()
                     .map(|name| parse_object_type(name))
                     .collect::<Result<_, _>>()
-                    .map_err(|e| ToolError::invalid("types", e))?;
-                InventoryOptions::new(types).map_err(|e| ToolError::invalid("types", e))?
-            }
+                    .map_err(|e| ToolError::invalid("types", e))?,
+            ),
         };
+        let options = inventory_options(types).map_err(|e| ToolError::invalid("types", e))?;
         Ok((options, turtle))
     }
 }
@@ -221,7 +223,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let mut body = json!({
         "device": instance,
         "base_iri": turtle_options.base_iri(),
-        "write_priority": turtle_options.write_priority().map(WritePriority::get),
+        "write_priority": turtle_options.write_priority().map(Priority::get),
         "start": first,
         "oversized": false,
         "list": listing.progress(),
@@ -248,7 +250,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         .objects
         .iter()
         .copied()
-        .filter(|object| options.types.contains(&object.object_type()))
+        .filter(|object| options.reads(object.object_type()))
         .collect();
     let list = fingerprint(&matching);
     if position.list.is_some_and(|cut| cut != list) || (first > 0 && first >= matching.len()) {
@@ -260,11 +262,20 @@ pub(super) async fn run<T: TransportPort + 'static>(
              without a cursor"
         )));
     }
-    let device_info = device
+    // The Device's name, exactly as sent: one ReadProperty a page. A device
+    // that refuses it has no name; one that doesn't answer fails the page.
+    let own = ObjectIdentifier::new(ObjectType::DEVICE, instance)
+        .map_err(|e| ToolError::Failed(e.to_string()))?;
+    let mut device_info = DeviceInfo::new(instance);
+    match device
         .handle
-        .inventory_device(Detail::Export)
+        .read((own, PropertyIdentifier::OBJECT_NAME))
         .await
-        .map_err(|e| ToolError::device(instance, &e))?;
+    {
+        Ok(name) => device_info.name = name.as_str().map(str::to_string),
+        Err(error) if error.unreachable() => return Err(ToolError::device(instance, &error)),
+        Err(_) => {}
+    }
     let name = device_info.name.as_deref().map_or(Value::Null, |name| {
         let source = format!("device {instance} device:{instance} object-name");
         envelope(name, source, ctx.policy.caps.text)
@@ -278,9 +289,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
             resume = Some(at);
             break;
         }
-        match device.handle.inventory_object(object, Detail::Export).await {
-            Ok(entry) => {
-                if !page.push(entry) {
+        match device.handle.point_record(object, &options).await {
+            Ok(record) => {
+                if !page.push(exported(&record)) {
                     // Past the cap with others: it heads the next page.
                     resume = Some(at);
                     break;
@@ -349,7 +360,7 @@ fn summary(page: &Page<'_>, counts: &Counts, name: &Value) -> Value {
 
 /// A page as it is read: its objects, and its Turtle's size so far.
 pub(super) struct Page<'a> {
-    pub(super) inventory: Inventory,
+    pub(super) inventory: Model,
     options: &'a TurtleOptions,
     /// The export's Turtle for the objects so far, in bytes.
     size: usize,
@@ -360,7 +371,7 @@ pub(super) struct Page<'a> {
 impl<'a> Page<'a> {
     pub(super) fn new(device: DeviceInfo, options: &'a TurtleOptions) -> Self {
         let mut page = Self {
-            inventory: Inventory::new(device),
+            inventory: Model::new(device),
             options,
             size: 0,
             largest: 0,
@@ -380,7 +391,7 @@ impl<'a> Page<'a> {
     /// Add `entry`, unless it takes a page of others past
     /// [`MAX_TURTLE`] with the comment lines: then it is left out, for
     /// the next page, and this says so. A page's first is always taken.
-    pub(super) fn push(&mut self, entry: Entry) -> bool {
+    pub(super) fn push(&mut self, entry: Result<Point, Skipped>) -> bool {
         self.inventory.entries.push(entry);
         let size = self.render().0.len();
         if self.inventory.entries.len() > 1 && size + NOTE_ROOM > MAX_TURTLE {
