@@ -15,6 +15,7 @@ use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::session::{EndpointSession, SessionRole};
 use bacnet_transport::bip::{BipMode, BipTransport};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::data_link::DataLink;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -513,8 +514,9 @@ impl PyBipEndpoint {
     }
 
     /// Subscribe to raw frames on the endpoint's existing socket, including
-    /// malformed received datagrams. Full queues drop new frames and count
-    /// them in `missed`. Close ends every subscription, waking pending reads.
+    /// malformed received datagrams. A full queue drops new frames; the next
+    /// frame queued reports the gap in `Frame.missed_before`. Close ends
+    /// every subscription, waking pending reads.
     #[pyo3(signature = (capacity=1024))]
     fn frames<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
         let capacity = crate::frames::capacity(capacity)?;
@@ -531,8 +533,11 @@ impl PyBipEndpoint {
                 .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
             let address = session
                 .bip_local_address()
+                .and_then(|socket| {
+                    crate::frames::local_address(DataLink::Bip, &[], Some(socket.into()))
+                })
                 .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
-            Ok(frames.subscribe(receiver, address.to_string(), clock))
+            Ok(frames.subscribe(receiver, address, clock))
         })
     }
 

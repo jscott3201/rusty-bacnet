@@ -1,12 +1,22 @@
-"""Raw transport observation beside both endpoint roles, without another stack socket."""
+"""Raw transport observation beside both endpoint roles, without another stack socket.
+
+Each link writes ``local_address`` and ``peer`` in one form: socket addresses
+on B/IP and B/IPv6, the VMAC and the hub connection on SC. MS/TP has no
+in-memory wire reachable from Python (a serial port needs a real device, or a
+pseudo-terminal that only Linux accepts), so its forms are covered by the Rust
+unit tests in ``src/frames_tests.rs``.
+"""
 import asyncio
 import gc
 import socket
 import time
 import unittest
 
-from rusty_bacnet import BACnetClient, BipEndpoint, Frame, FrameIterator
+from port_retry import rerun_on_lost_port
+from rusty_bacnet import BACnetClient, BACnetServer, BipEndpoint, Frame, FrameIterator
 from rusty_bacnet import ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue
+from sc_client_fixture import ClientScFixture
+from test_bip6_vmac import free_udp6_port, ipv6_loopback
 
 
 class FrameTests(unittest.IsolatedAsyncioTestCase):
@@ -34,8 +44,9 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.get_running_loop().sock_sendto(peer, payload, (host, int(port)))
 
     def assert_captured_between(self, frames, before, after):
-        """Each frame's times fall between readings of Python's own clocks
-        taken before the traffic and after its last frame arrived."""
+        """One subscription's frames: each one's times fall between readings
+        of Python's own clocks taken before the traffic and after its last
+        frame arrived, and its monotonic times never decrease."""
         # One step of time.monotonic(): GetTickCount64's 10-16 ms on Windows
         # before Python 3.13 (Frame.monotonic's docs), nanoseconds elsewhere.
         # The margin covers the float conversion and the anchor's midpoint.
@@ -70,10 +81,11 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
         after = time.monotonic(), time.time()
         self.assertEqual({frame.direction for frame in observed}, {"inbound", "outbound"})
         self.assertEqual(sorted(frame.octets for frame in observed), sorted(frame.octets for frame in others))
-        self.assert_captured_between(observed + others, before, after)
+        self.assert_captured_between(observed, before, after)
+        self.assert_captured_between(others, before, after)
         for frame in observed:
             self.assertIsInstance(frame, Frame)
-            self.assertEqual(frame.link, "BACnet/IP")
+            self.assertEqual(frame.link, "bip")
             self.assertEqual(frame.local_address, await endpoint.local_address())
             self.assertEqual(frame.peer, await remote.local_address())
             self.assertEqual(frame.missed_before, 0)
@@ -168,6 +180,7 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_standalone_client_stop_closes_iterator(self):
         endpoint = await self.endpoint()
+        served = await endpoint.frames()
         async with BACnetClient(interface="127.0.0.1", port=0) as client:
             frames = await client.frames()
             oid = ObjectIdentifier(ObjectType.DEVICE, 710)
@@ -175,6 +188,13 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
             outgoing, incoming = await self.next(frames), await self.next(frames)
             self.assertEqual((outgoing.direction, incoming.direction), ("outbound", "inbound"))
             self.assertLessEqual(outgoing.monotonic, incoming.monotonic)
+            # The endpoint saw the request come from the client's own socket.
+            request = await self.next(served)
+            self.assertEqual(request.direction, "inbound")
+            for frame in (outgoing, incoming):
+                self.assertEqual(frame.link, "bip")
+                self.assertEqual(frame.local_address, request.peer)
+                self.assertEqual(frame.peer, await endpoint.local_address())
             pending = asyncio.ensure_future(anext(frames))
         with self.assertRaises(StopAsyncIteration):
             await asyncio.wait_for(pending, 10)
@@ -190,6 +210,57 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
                     owner.frames(capacity=capacity)
             with self.assertRaises(RuntimeError):
                 await owner.frames()
+
+
+@unittest.skipUnless(ipv6_loopback(), "this host has no IPv6 loopback")
+class Bip6FrameTests(unittest.IsolatedAsyncioTestCase):
+    async def test_both_addresses_are_udp_socket_addresses(self):
+        """Not VMACs: the tap's peer is the datagram's source or destination."""
+        await rerun_on_lost_port(self.observe)
+
+    async def observe(self):
+        server_port = free_udp6_port()
+        client_port = free_udp6_port()
+        while client_port == server_port:
+            client_port = free_udp6_port()
+        server = BACnetServer(1234, device_name="B/IPv6 frames", transport="ipv6",
+                              ipv6_interface="::1", port=server_port)
+        await asyncio.wait_for(server.start(), 10)
+        try:
+            async with BACnetClient(transport="ipv6", ipv6_interface="::1", port=client_port,
+                                    ipv6_device_instance=4321) as client:
+                frames = await client.frames()
+                vmac = await asyncio.wait_for(client.resolve_vmac(f"[::1]:{server_port}"), 10)
+                value = await asyncio.wait_for(client.read_property(
+                    vmac, ObjectIdentifier(ObjectType.DEVICE, 1234), PropertyIdentifier.OBJECT_NAME), 10)
+                self.assertEqual(value.value, "B/IPv6 frames")
+                # Virtual-Address-Resolution and its ACK, then the read and its ACK.
+                observed = [await asyncio.wait_for(anext(frames), 10) for _ in range(4)]
+        finally:
+            await server.stop()
+        self.assertEqual([frame.direction for frame in observed],
+                         ["outbound", "inbound", "outbound", "inbound"])
+        for frame in observed:
+            self.assertEqual(frame.link, "ipv6")
+            self.assertEqual(frame.local_address, f"[::1]:{client_port}")
+            self.assertEqual(frame.peer, f"[::1]:{server_port}")
+
+
+class ScFrameTests(ClientScFixture):
+    async def test_the_vmac_and_the_hub_connection(self):
+        hub, _ = await self.serving_hub()
+        client = self.client(await hub.url())
+        await asyncio.wait_for(client.__aenter__(), 5)
+        frames = await client.frames()
+        await self.read_value(client)
+        observed = [await asyncio.wait_for(anext(frames), 10) for _ in range(2)]
+        await frames.aclose()
+        self.assertEqual({frame.direction for frame in observed}, {"outbound", "inbound"})
+        for frame in observed:
+            self.assertEqual(frame.link, "sc")
+            # The client's VMAC, as ScEndpoint.local_address writes one.
+            self.assertEqual(frame.local_address, "02:00:00:00:00:02")
+            self.assertEqual(frame.peer, "primary")
 
 
 if __name__ == "__main__":

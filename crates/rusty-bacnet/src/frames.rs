@@ -1,9 +1,11 @@
 //! Bounded raw-frame observation, sharing the event bridge's cancellation delivery.
 
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Instant, SystemTime};
 
 use bacnet_transport::tap::{FrameTapReceiver, TapDirection, TapPeer, TappedFrame};
+use bacnet_types::data_link::DataLink;
 use pyo3::exceptions::{PyStopAsyncIteration, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -97,7 +99,7 @@ fn posix_seconds(at: SystemTime) -> f64 {
 #[pyclass(name = "Frame", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyFrame {
     frame: TappedFrame,
-    local_address: String,
+    local_address: Arc<str>,
     missed_before: u64,
     monotonic: f64,
 }
@@ -128,36 +130,41 @@ impl PyFrame {
         }
     }
 
-    /// The link's display name, such as `"BACnet/IP"` or `"MS/TP"`.
+    /// The link's `transport=` token (see [`link_token`]).
     #[getter]
     fn link(&self) -> &'static str {
-        self.frame.link.name()
+        link_token(self.frame.link)
     }
 
-    /// The observing node's link address when the subscription was created.
+    /// This node's address on the link, as the subscription began, in the
+    /// form [`peer`](Self::peer) uses (see [`local_address`]).
     #[getter]
     fn local_address(&self) -> &str {
         &self.local_address
     }
 
-    /// UDP source/destination, SC hub name, MS/TP station or Ethernet MAC.
-    /// This is the link peer, not the original source in a forwarded frame.
+    /// The other end on the link (see [`peer_text`]): the next hop, not a
+    /// forwarded frame's original source.
     #[getter]
     fn peer(&self) -> String {
-        match self.frame.peer {
-            TapPeer::Udp(address) => address.to_string(),
-            TapPeer::ScHub(bacnet_transport::sc::ScActiveHub::Primary) => "primary".into(),
-            TapPeer::ScHub(bacnet_transport::sc::ScActiveHub::Failover) => "failover".into(),
-            TapPeer::Mstp(station) => station.to_string(),
-            TapPeer::Ethernet(mac) => hex_address(&mac),
-            _ => "other".into(),
-        }
+        peer_text(self.frame.peer)
     }
 
     /// Raw link-layer octets, including malformed received datagrams.
     #[getter]
     fn octets<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.frame.bytes)
+    }
+
+    /// Short: never the octets, which may be long.
+    fn __repr__(&self) -> String {
+        format!(
+            "Frame(direction='{}', link='{}', peer='{}', length={})",
+            self.direction(),
+            self.link(),
+            self.peer(),
+            self.frame.bytes.len()
+        )
     }
 
     /// Frames this subscription missed just before this one: dropped by its
@@ -169,11 +176,63 @@ impl PyFrame {
     }
 }
 
-pub(crate) fn hex_address(mac: &[u8]) -> String {
+/// A MAC in lowercase colon hex, as SC addresses are written.
+fn hex_address(mac: &[u8]) -> String {
     mac.iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<Vec<_>>()
         .join(":")
+}
+
+/// `link` as the `transport=` argument of `BACnetClient`, `BACnetServer`
+/// and the endpoints spells it: `"bip"`, `"ipv6"`, `"sc"` or `"mstp"`. A
+/// link no Python owner runs (Ethernet, the in-process loopback, or one
+/// added later) is `"other"`.
+pub(crate) fn link_token(link: DataLink) -> &'static str {
+    match link {
+        DataLink::Bip => "bip",
+        DataLink::Bip6 => "ipv6",
+        DataLink::Sc => "sc",
+        DataLink::Mstp => "mstp",
+        _ => "other",
+    }
+}
+
+/// A frame's peer, written as the Python API writes that link's addresses:
+/// the UDP socket address on B/IP (`"ip:port"`) and on B/IPv6
+/// (`"[ip]:port"`, the form `resolve_vmac` takes, not a VMAC); on SC the
+/// hub connection the message went over, `"primary"` or `"failover"` as
+/// `ScEvent.hub` names it (the VMACs are in the BVLC-SC header); the MS/TP
+/// station in decimal; an Ethernet MAC in colon hex.
+fn peer_text(peer: TapPeer) -> String {
+    match peer {
+        TapPeer::Udp(address) => address.to_string(),
+        TapPeer::ScHub(hub) => crate::sc_events::hub_name(hub).into(),
+        TapPeer::Mstp(station) => station.to_string(),
+        TapPeer::Ethernet(mac) => hex_address(&mac),
+        _ => "other".into(),
+    }
+}
+
+/// This node's own address on `link`, in the form [`peer_text`] writes the
+/// link's peers: the bound UDP socket address on B/IP and B/IPv6
+/// (`socket`), the MS/TP station in decimal, and on SC (its VMAC) or any
+/// other link the MAC in colon hex. `None` when the transport has none.
+pub(crate) fn local_address(
+    link: DataLink,
+    mac: &[u8],
+    socket: Option<SocketAddr>,
+) -> Option<Arc<str>> {
+    let text = match link {
+        DataLink::Bip | DataLink::Bip6 => socket?.to_string(),
+        DataLink::Mstp => match mac {
+            [station] => station.to_string(),
+            _ => return None,
+        },
+        _ if mac.is_empty() => return None,
+        _ => hex_address(mac),
+    };
+    Some(text.into())
 }
 
 struct SourceState {
@@ -283,7 +342,7 @@ impl FrameSubscriptions {
     pub(crate) fn subscribe(
         &self,
         receiver: FrameTapReceiver,
-        local_address: String,
+        local_address: Arc<str>,
         clock: Clock,
     ) -> PyFrameIterator {
         let source = FrameSource(Arc::new(SourceState {
@@ -326,7 +385,7 @@ impl Drop for FrameSubscriptions {
 #[pyclass(name = "FrameIterator", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyFrameIterator {
     subscription: Arc<Subscription>,
-    local_address: String,
+    local_address: Arc<str>,
     clock: Clock,
 }
 
@@ -336,7 +395,7 @@ pub(crate) struct PyFrameIterator {
 struct Converter {
     source: FrameSource,
     lost: Lost,
-    local_address: String,
+    local_address: Arc<str>,
     clock: Clock,
 }
 
@@ -417,52 +476,5 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::future::Future;
-    use std::task::{Context, Waker};
-
-    #[tokio::test(start_paused = true)]
-    async fn owner_close_releases_receiver_and_wakes_pending_read() {
-        let tap = bacnet_transport::tap::FrameTap::new();
-        let owner = FrameSubscriptions::default();
-        let iterator = owner.subscribe(tap.subscribe(), "local".into(), Clock::fixed());
-        let (pending, _hook) = iterator.subscription.stream.next();
-        tokio::pin!(pending);
-        assert!(
-            pending
-                .as_mut()
-                .poll(&mut Context::from_waker(Waker::noop()))
-                .is_pending()
-        );
-        assert_eq!(tap.counters().subscribers, 1);
-        owner.close();
-        assert_eq!(tap.counters().subscribers, 0);
-        assert!(pending.await.is_none());
-        let fresh = owner.subscribe(tap.subscribe(), "new generation".into(), Clock::fixed());
-        assert!(iterator.subscription.stream.next().0.await.is_none());
-        assert_eq!(tap.counters().subscribers, 1);
-        drop(fresh);
-        assert_eq!(tap.counters().subscribers, 0);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn cancelling_native_wait_keeps_subscription_until_iterator_drop() {
-        let tap = bacnet_transport::tap::FrameTap::new();
-        let owner = FrameSubscriptions::default();
-        let iterator = owner.subscribe(tap.subscribe(), "local".into(), Clock::fixed());
-        {
-            let (pending, _hook) = iterator.subscription.stream.next();
-            tokio::pin!(pending);
-            assert!(
-                pending
-                    .as_mut()
-                    .poll(&mut Context::from_waker(Waker::noop()))
-                    .is_pending()
-            );
-        }
-        assert_eq!(tap.counters().subscribers, 1);
-        drop(iterator);
-        assert_eq!(tap.counters().subscribers, 0);
-    }
-}
+#[path = "frames_tests.rs"]
+mod tests;

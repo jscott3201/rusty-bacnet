@@ -260,6 +260,20 @@ impl FrameTap {
         }
     }
 
+    /// Hand a frame to the receivers as a transport would: for tests in
+    /// other crates (feature `test-support`), which can't build a
+    /// [`TappedFrame`] or reach a transport's own calls.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn record_for_test(
+        &self,
+        direction: TapDirection,
+        link: DataLink,
+        peer: TapPeer,
+        bytes: &[u8],
+    ) {
+        self.record(direction, link, || peer, bytes);
+    }
+
     #[cold]
     #[inline(never)]
     fn publish(&self, direction: TapDirection, link: DataLink, peer: TapPeer, bytes: &[u8]) {
