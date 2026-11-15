@@ -93,7 +93,9 @@ fn an_invalid_apdu_keeps_decoded_routing_metadata() {
 
 proptest::proptest! {
     #[test]
-    fn arbitrary_frame_octets_do_not_panic(octets in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512)) {
+    fn arbitrary_frame_octets_do_not_panic(
+        octets in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512),
+    ) {
         for framing in [Framing::Bip, Framing::Bip6, Framing::Sc, Framing::Mstp] {
             let summary = summarize_frame(framing, &octets);
             if summary.parse_error.is_some() {
@@ -120,4 +122,72 @@ fn malformed_sc_result_is_not_mistaken_for_a_valid_acknowledgment() {
     let summary = summarize_frame(Framing::Sc, &wire);
     assert!(summary.parse_error.is_some());
     assert_eq!(summary.parse_error, summary.problem);
+}
+
+/// An NPDU to wrap: a random control octet and tail, or a local NPDU whose
+/// tail is a random APDU, so cases reach both the NPDU and APDU decoders.
+fn npdu_tail() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
+    use proptest::prelude::*;
+    let octets = || proptest::collection::vec(any::<u8>(), 0..700);
+    prop_oneof![
+        (any::<u8>(), octets()).prop_map(|(control, tail)| [vec![0x01, control], tail].concat()),
+        (any::<bool>(), octets()).prop_map(|(reply, apdu)| [
+            vec![0x01, u8::from(reply) << 2],
+            apdu
+        ]
+        .concat()),
+    ]
+}
+
+proptest::proptest! {
+    /// Valid B/IP, B/IPv6, BACnet/SC and MS/TP headers (standard, or
+    /// extended past 501 octets) around a random NPDU: no panic, the link
+    /// header always reads, and a parse failure comes from the NPDU or APDU.
+    #[test]
+    fn random_npdus_behind_valid_link_headers_decode_without_panic(
+        npdu in npdu_tail(),
+        broadcast in proptest::prelude::any::<bool>(),
+    ) {
+        use bacnet_transport::mstp::codec::FrameType;
+        let mstp_type = match (npdu.len() > 501, broadcast) {
+            (false, false) => FrameType::BACNET_DATA_EXPECTING_REPLY,
+            (false, true) => FrameType::BACNET_DATA_NOT_EXPECTING_REPLY,
+            (true, false) => FrameType::BACNET_EXTENDED_DATA_EXPECTING_REPLY,
+            (true, true) => FrameType::BACNET_EXTENDED_DATA_NOT_EXPECTING_REPLY,
+        };
+        let frames = [
+            (Framing::Bip, bip(&npdu, broadcast)),
+            (Framing::Bip6, bip6_broadcast(&npdu)),
+            (Framing::Sc, sc_npdu(&npdu, broadcast.then_some([0xFF; 6]))),
+            (Framing::Mstp, mstp(mstp_type, if broadcast { 255 } else { 5 }, 1, &npdu)),
+        ];
+        for (framing, frame) in frames {
+            let summary = summarize_frame(framing, &frame);
+            proptest::prop_assert_ne!(
+                summary.link_message.as_str(),
+                "malformed",
+                "{:?}",
+                framing
+            );
+            if let Some(error) = &summary.parse_error {
+                proptest::prop_assert!(
+                    error.contains("NPDU decode error") || error.contains("APDU decode error"),
+                    "{:?}: {}",
+                    framing,
+                    error
+                );
+                proptest::prop_assert_eq!(&summary.problem, &summary.parse_error);
+            } else {
+                // The decoders reached the APDU, or there was none to reach.
+                let empty = decode_npdu(Bytes::from(npdu.clone()))
+                    .is_ok_and(|npdu| npdu.payload.is_empty());
+                proptest::prop_assert!(
+                    summary.pdu.is_some() || summary.network_message.is_some() || empty,
+                    "{:?}: {:?}",
+                    framing,
+                    summary
+                );
+            }
+        }
+    }
 }
