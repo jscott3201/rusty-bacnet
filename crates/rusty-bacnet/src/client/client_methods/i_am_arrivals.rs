@@ -8,9 +8,10 @@ impl BACnetClient {
     /// receives (B/IP, B/IPv6, SC or MS/TP), repeats and duplicate
     /// instances kept, read from a bounded frame-tap queue of `capacity`
     /// frames of every kind. A full queue drops new frames; the next record
-    /// reports the gap in `IAmArrival.missed_before`. Stop ends existing
-    /// iterators; a restart needs a new subscription. Router application
-    /// clients have no link of their own and are refused.
+    /// reports the gap in `IAmArrival.missed_before`. A client sends no
+    /// I-Am, so nothing from its own address is left out. Stop ends
+    /// existing iterators; a restart needs a new subscription. Router
+    /// application clients have no link of their own and are refused.
     #[pyo3(signature = (capacity=1024))]
     fn i_am_arrivals<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
         let capacity = crate::frames::capacity(capacity)?;
@@ -27,7 +28,7 @@ impl BACnetClient {
             Ok(crate::i_am_arrivals::subscribe(
                 &inner.frames,
                 tap.subscribe_with_capacity(capacity),
-                crate::frames::link_socket(transport),
+                None,
                 clock,
             ))
         })

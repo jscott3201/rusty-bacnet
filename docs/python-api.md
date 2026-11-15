@@ -6949,11 +6949,12 @@ the device:
 arrivals = await client.i_am_arrivals()
 await client.who_is(scope="192.168.1.10")
 arrival = await anext(arrivals)
-print(arrival.device_identifier.instance, arrival.device_address,
+print(arrival.object_identifier.instance, arrival.device_address,
       arrival.monotonic, arrival.forwarding_bbmd, arrival.next_hop_router)
 ```
 
-Each record holds the I-Am as the device sent it (`device_identifier`,
+Each record holds the I-Am as the device sent it (`object_identifier`, as on
+`DiscoveredDevice`,
 `max_apdu_length`, `segmentation_supported`, `vendor_id`: another object type,
 a max APDU below 50, vendor 0 and a segmentation value outside the enumeration
 are kept), `monotonic` and `timestamp` as `Frame` takes them, `link`, and who
@@ -6970,24 +6971,39 @@ sent it:
 calls' `address` takes on that link. `original_source` is the origin's
 `"ip:port"` or `"[ip]:port"` a Forwarded-NPDU carries. When a router relayed the
 I-Am from another network, `source_network` and `source_address` are its SNET
-and SADR (Clause 6.2.2), and `link_source` is the router, the next hop back
-(Clause 6.5.4). `broadcast` is a link or network broadcast. Three accessors say
-it in the scanner's terms:
+and SADR (Clause 6.2.2), and `link_source` is the router that put them there
+(Clause 6.5.4): the next hop back, which a node may take as that network's
+router (Clause 6.5.3). `broadcast` is a link broadcast, or a network one (a DNET
+of 65535 or an empty DADR) however the link carried it. Three accessors say it
+in the scanner's terms:
 
 - `device_address`: the device as `device()` takes it, `link_source` for one
   on this link, `"5:0x07"` for one behind a router;
 - `next_hop_router`: `link_source` when routed, else None;
 - `forwarding_bbmd`: `link_sender` when `forwarded`, else None.
 
+For a device on this link, `device_address` is also what the calls that take
+an `address` (`read_property` and the rest) take. Those calls don't take
+`"5:0x07"`: for a routed record pass
+`RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`
+where `RoutedTarget` is accepted, or name the device to `device()`.
+
 Records compare, hash, copy and pickle by their fields.
 
-What is not a record: a frame this node sends, and its own I-Am come back to
-it (a broadcast to its own address, or one a BBMD returns), which the stack
-drops by its origin; a BACnet/SC hub never returns a broadcast to its sender,
-and the MS/TP port takes its own echo out. An I-Am whose parameters don't
-decode, or an SC one naming no originating VMAC, counts in
-`IAmArrivalIterator.malformed`. A frame whose headers don't decode is not known
-to be an I-Am and counts nowhere; `frames()` shows it. An I-Am is never
+What is not a record: a frame this node sends; and, on a `BipEndpoint`, its
+own I-Am come back to it, one from its own address naming its own device
+instance (its broadcast returned, or sent back by a BBMD), which is counted in
+`IAmArrivalIterator.own_echoes` and is no loss in `missed_before`. Any other
+I-Am from its own address is a record: another device there is a conflict to
+see, and behind NAT another site may reuse a private address in the origin a
+BBMD forwards (Annex J.7.5). A `BACnetClient` sends no I-Am, so it leaves
+nothing out and `own_echoes` stays 0. A BACnet/SC hub never returns a broadcast
+to its sender, and the MS/TP port takes its own echo out. An I-Am whose
+parameters don't decode, or an SC one naming no originating VMAC, counts in
+`IAmArrivalIterator.malformed`; to see who sent it and why it failed, read the
+same traffic with `frames()` and `decode_frame`. A frame whose headers don't
+decode is not known to be an I-Am and counts nowhere; `frames()` shows it. An
+I-Am is never
 confirmed or segmented (Clauses 20.1.3, 21). On MS/TP the station hears the
 whole bus, so an I-Am one station unicasts to another is a record too, with
 `broadcast` false.
@@ -7004,7 +7020,9 @@ Two limits:
   prove the discovery table took the I-Am (a Forwarded-NPDU a foreign device
   refuses from an untrusted BBMD is a record);
 - with a subscriber the transport copies every frame once, as for `frames()`;
-  the decode runs where the records are read, never on the transport's path.
+  the decode runs where the records are read, never on the transport's path,
+  and a read yields after 32 frames that are no record, so a burst of other
+  traffic doesn't hold it. `missed` is read with the GIL released.
 
 ## Endpoint (one transport, both roles)
 

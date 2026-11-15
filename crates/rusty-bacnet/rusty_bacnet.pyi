@@ -4866,9 +4866,10 @@ class IAmArrival:
         """The link, as ``Frame.link``."""
         ...
     @property
-    def device_identifier(self) -> ObjectIdentifier:
-        """The I-Am's device identifier, of the type it was sent with;
-        ``.instance`` is the device instance."""
+    def object_identifier(self) -> ObjectIdentifier:
+        """The I-Am's device identifier, of the type it was sent with, as
+        ``DiscoveredDevice.object_identifier``; ``.instance`` is the device
+        instance."""
         ...
     @property
     def max_apdu_length(self) -> int:
@@ -4896,7 +4897,8 @@ class IAmArrival:
         Forwarded-NPDU carries, else the sender, on B/IP; the source VMAC on
         B/IPv6 (the original source's when forwarded); the originating VMAC
         on SC; the source station on MS/TP. The router when
-        ``source_network`` is set."""
+        ``source_network`` is set: the next hop back, which a node may take
+        as that network's router (Clauses 6.5.3, 6.5.4)."""
         ...
     @property
     def original_source(self) -> Optional[str]:
@@ -4926,7 +4928,10 @@ class IAmArrival:
     def device_address(self) -> Optional[str]:
         """The device's address as ``BACnetClient.device()`` takes it:
         ``link_source`` for a device on this link, ``"5:0x07"`` for one a
-        router relayed. None when those name no one station."""
+        router relayed. None when those name no one station. The calls that
+        take an ``address`` take ``"5:0x07"`` from no one: for a routed
+        record, pass ``RoutedTarget(rec.source_network, rec.source_address,
+        router=rec.next_hop_router)`` where ``RoutedTarget`` is accepted."""
         ...
     @property
     def next_hop_router(self) -> Optional[str]:
@@ -4943,7 +4948,8 @@ class IAmArrival:
         """Frames of any kind this subscription lost just before this
         record, as ``Frame.missed_before``: the tap cannot tell which of
         them held an I-Am. Summed over the records received, plus any lost
-        after the last one, it is ``IAmArrivalIterator.missed``."""
+        after the last one, it is ``IAmArrivalIterator.missed``. An own echo
+        left out is no loss and adds nothing."""
         ...
 
 class IAmArrivalIterator:
@@ -4968,8 +4974,17 @@ class IAmArrivalIterator:
     def malformed(self) -> int:
         """Inbound I-Am frames read so far that made no record: parameters
         that don't decode, or an SC message naming no originating VMAC.
-        A frame whose headers don't decode is not counted: it is not known
-        to hold an I-Am. Readable after close."""
+        ``frames()`` and ``decode_frame`` show who sent one and why it
+        failed. A frame whose headers don't decode is not counted: it is not
+        known to hold an I-Am. Readable after close."""
+        ...
+    @property
+    def own_echoes(self) -> int:
+        """The owner's own I-Ams come back to it, read so far and left out:
+        on a ``BipEndpoint``, those from its own address naming its own
+        device instance, whether its broadcast returned or a BBMD sent it
+        back. Always 0 on a ``BACnetClient``, which sends no I-Am and leaves
+        nothing out. Readable after close."""
         ...
 
 class BACnetClient:
@@ -5624,9 +5639,11 @@ class BACnetClient:
         """Follow every I-Am this client's own transport receives from now
         on (B/IP, B/IPv6, SC or MS/TP), one ``IAmArrival`` each (#2612),
         from a tap queue of ``capacity`` frames of every kind (1 to 65536,
-        else ValueError). This client's own I-Am come back to it is left
-        out. RuntimeError before start and after stop; a router application
-        client raises ValueError. Stop ends the iterator."""
+        else ValueError). A client sends no I-Am, so nothing is left out:
+        an I-Am from its own address (another node using it, or one a NAT
+        site reuses) is a record. RuntimeError before start and after stop;
+        a router application client raises ValueError. Stop ends the
+        iterator."""
         ...
 
     def discovered_devices(self) -> Awaitable[list[DiscoveredDevice]]:
@@ -9763,9 +9780,11 @@ class BipEndpoint:
 
     def i_am_arrivals(self, capacity: int = 1024) -> Awaitable[IAmArrivalIterator]:
         """Follow every I-Am the endpoint's socket receives from now on, as
-        ``BACnetClient.i_am_arrivals`` does (#2612); the endpoint's own I-Am
-        come back to it is left out. RuntimeError before start and after
-        close. Close ends the iterator."""
+        ``BACnetClient.i_am_arrivals`` does (#2612). The endpoint's own I-Am
+        come back to it, from its own address and naming its own device
+        instance, is left out and counted in ``own_echoes``; another
+        instance from that address is a record. RuntimeError before start
+        and after close. Close ends the iterator."""
         ...
 
     def read_bdt(self, address: str) -> Awaitable[list[tuple[str, str]]]:

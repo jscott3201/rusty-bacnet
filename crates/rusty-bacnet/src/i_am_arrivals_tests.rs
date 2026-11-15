@@ -214,29 +214,36 @@ async fn a_record_lost_on_its_way_carries_into_the_next_gap() {
     let (first, hook) = fresh(&iterator).await;
     assert_eq!(first.missed_before, 0);
     hook.settled();
-    assert_eq!(iterator.missed(), 2);
+    assert_eq!(iterator.subscription.missed(), 2);
     inbound(&tap, &frame);
     let (lost, hook) = fresh(&iterator).await;
     assert_eq!(lost.missed_before, 2);
     drop((lost, hook));
-    assert_eq!(iterator.missed(), 3, "two overflowed, one lost on its way");
+    assert_eq!(
+        iterator.subscription.missed(),
+        3,
+        "two overflowed, one lost on its way"
+    );
     inbound(&tap, &frame);
     let (next, hook) = fresh(&iterator).await;
     assert_eq!(next.missed_before, 3);
     hook.settled();
-    assert_eq!(iterator.missed(), 3);
+    assert_eq!(iterator.subscription.missed(), 3);
 }
 
 /// The owner's close ends its arrival iterators as it ends its frame
 /// iterators: the tap subscription goes and a pending read ends; the
-/// malformed count stays readable.
+/// malformed and own-echo counts stay readable.
 #[tokio::test(start_paused = true)]
 async fn the_owners_close_ends_arrival_iterators_too() {
     let tap = FrameTap::new();
     let owner = FrameSubscriptions::default();
-    let iterator = subscribe(&owner, tap.subscribe(), None, Clock::fixed());
+    let own = Some((DEVICE.parse().unwrap(), 1));
+    let iterator = subscribe(&owner, tap.subscribe(), own, Clock::fixed());
     let frames = owner.subscribe(tap.subscribe(), "local".into(), Clock::fixed());
     inbound(&tap, &bip(&npdu(&[0x10, 0x00, 0xC4], None), None));
+    // This owner's own I-Am come back to it.
+    inbound(&tap, &bip(&npdu(&i_am(1), None), None));
     let (pending, _hook) = iterator.subscription.stream_next();
     tokio::pin!(pending);
     assert!(
@@ -245,11 +252,11 @@ async fn the_owners_close_ends_arrival_iterators_too() {
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_pending()
     );
-    assert_eq!(iterator.malformed(), 1);
+    assert_eq!((iterator.malformed(), iterator.own_echoes()), (1, 1));
     assert_eq!(tap.counters().subscribers, 2);
     owner.close();
     assert_eq!(tap.counters().subscribers, 0);
     assert!(pending.await.is_none());
-    assert_eq!(iterator.malformed(), 1);
+    assert_eq!((iterator.malformed(), iterator.own_echoes()), (1, 1));
     drop(frames);
 }

@@ -378,19 +378,120 @@ fn a_full_queue_counts_the_frames_lost_before_the_next_record() {
     assert_eq!(arrivals.missed(), 2);
 }
 
+/// A client names no address of its own: an I-Am from its address, of any
+/// instance, direct or returned by a BBMD, is a record.
 #[test]
-fn this_nodes_own_i_am_come_back_is_left_out() {
-    let (tap, arrivals) = stream(16);
-    let mut arrivals = arrivals.with_own_address(DEVICE);
+fn a_client_leaves_nothing_out() {
+    let (tap, mut arrivals) = stream(16);
+    inbound(&tap, DEVICE, &bip(&npdu(&i_am(1), false), true));
+    inbound(&tap, BBMD, &forwarded(DEVICE, &npdu(&i_am(1), false)));
+    assert_eq!(std::iter::from_fn(|| arrivals.try_recv()).count(), 2);
+    assert_eq!(arrivals.own_echoes(), 0);
+}
+
+/// An endpoint's own I-Am come back, direct or returned by a BBMD, is left
+/// out and counted, and is no loss: the frame lost behind the echoes is
+/// the next record's whole gap.
+#[test]
+fn an_endpoints_own_i_am_come_back_is_left_out_and_counted() {
+    let (tap, arrivals) = stream(2);
+    let mut arrivals = arrivals.with_own(DEVICE, 1);
     let own = bip(&npdu(&i_am(1), false), true);
     inbound(&tap, DEVICE, &own);
-    // Come back through a BBMD.
     inbound(&tap, BBMD, &forwarded(DEVICE, &npdu(&i_am(1), false)));
+    inbound(&tap, ROUTER, &own); // Lost: the queue holds two.
+    assert!(arrivals.try_recv().is_none());
+    assert_eq!(arrivals.own_echoes(), 2);
     inbound(&tap, ROUTER, &own);
     let record = arrivals.try_recv().expect("another node's");
+    assert_eq!(
+        (record.link_sender, record.missed_before),
+        (TapPeer::Udp(ROUTER), 1)
+    );
+    assert_eq!((arrivals.own_echoes(), arrivals.missed()), (2, 1));
+}
+
+/// Another device at this node's own address is a conflict to see, not an
+/// echo: another instance, or this instance in another object type.
+#[test]
+fn another_device_at_this_nodes_own_address_is_a_record() {
+    let (tap, arrivals) = stream(16);
+    let mut arrivals = arrivals.with_own(DEVICE, 1);
+    inbound(&tap, DEVICE, &bip(&npdu(&i_am(2), false), true));
+    let record = arrivals.try_recv().expect("a conflict");
+    assert_eq!(record.i_am.object_identifier.instance_number(), 2);
+    assert_eq!(record.link_source, mac_of(DEVICE));
+    let analog = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let not_a_device = i_am_with(analog, 1476, Segmentation::NO_SEGMENTATION, 5);
+    inbound(&tap, DEVICE, &bip(&npdu(&not_a_device, false), true));
+    assert!(arrivals.try_recv().is_some());
+    assert_eq!(arrivals.own_echoes(), 0);
+}
+
+/// Behind NAT another site may reuse this node's private address (Annex
+/// J.7.5): a forwarded origin equal to it, of another instance, is that
+/// site's device.
+#[test]
+fn a_nat_site_reusing_this_nodes_address_is_a_record() {
+    let (tap, arrivals) = stream(16);
+    let mut arrivals = arrivals.with_own(DEVICE, 1);
+    inbound(&tap, BBMD, &forwarded(DEVICE, &npdu(&i_am(5005), false)));
+    let record = arrivals.try_recv().expect("the other site's device");
+    assert!(record.forwarded);
+    assert_eq!(record.original_source, Some(DEVICE));
+    assert_eq!(arrivals.own_echoes(), 0);
+}
+
+/// A routed I-Am sent to every network (DNET 65535) by unicast is a
+/// broadcast by its network header alone.
+#[test]
+fn a_global_broadcast_sent_by_unicast_is_a_broadcast() {
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu};
+    let routed = routed_npdu(&i_am(77), false, Some((5, &[7])));
+    let mut global = decode_npdu(bytes::Bytes::from(routed)).unwrap();
+    global.destination = Some(NpduAddress {
+        network: u16::MAX,
+        mac_address: MacAddr::new(),
+    });
+    let mut data = BytesMut::new();
+    encode_npdu(&mut data, &global).unwrap();
+    let record = arrival(DataLink::Bip, TapPeer::Udp(ROUTER), &bip(&data, false));
+    assert!(record.broadcast);
+    let local = arrival(
+        DataLink::Bip,
+        TapPeer::Udp(ROUTER),
+        &bip(&npdu(&i_am(77), false), false),
+    );
+    assert!(!local.broadcast);
+}
+
+struct Woken(std::sync::atomic::AtomicBool);
+
+impl std::task::Wake for Woken {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A read passes over at most a batch of frames that are no record, then
+/// wakes itself and yields; the next poll goes on.
+#[test]
+fn a_read_yields_after_a_batch_of_other_frames() {
+    let (tap, mut arrivals) = stream(SKIP_BATCH * 2);
+    let other = bip(&npdu(&rp_request(1), true), false);
+    for _ in 0..SKIP_BATCH + 1 {
+        inbound(&tap, DEVICE, &other);
+    }
+    inbound(&tap, ROUTER, &bip(&npdu(&i_am(9), false), true));
+    let woken = std::sync::Arc::new(Woken(Default::default()));
+    let waker = std::task::Waker::from(woken.clone());
+    let mut cx = Context::from_waker(&waker);
+    assert!(arrivals.poll_recv(&mut cx).is_pending());
+    assert!(woken.0.load(std::sync::atomic::Ordering::SeqCst));
+    let Poll::Ready(Some(record)) = arrivals.poll_recv(&mut cx) else {
+        panic!("the record after the batch");
+    };
     assert_eq!(record.link_sender, TapPeer::Udp(ROUTER));
-    assert!(arrivals.try_recv().is_none());
-    assert_eq!(arrivals.malformed(), 0);
 }
 
 #[tokio::test]

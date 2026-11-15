@@ -542,14 +542,16 @@ impl PyBipEndpoint {
     }
 
     /// Subscribe to a record of every I-Am the endpoint's socket receives,
-    /// as `BACnetClient.i_am_arrivals` does; its own I-Am come back is left
-    /// out. Close ends every subscription, waking pending reads.
+    /// as `BACnetClient.i_am_arrivals` does, leaving out and counting its
+    /// own I-Am come back to it: from its own address, of its own device
+    /// instance. Close ends every subscription, waking pending reads.
     #[pyo3(signature = (capacity=1024))]
     fn i_am_arrivals<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
         let capacity = crate::frames::capacity(capacity)?;
         let clock = crate::frames::Clock::get(py)?;
         let lifecycle = self.lifecycle.clone();
         let frames = self.frames.clone();
+        let instance = self.config.identity.instance();
         crate::py_async::future_into_py(py, async move {
             let guard = lifecycle.session.lock().await;
             let not_started = || PyRuntimeError::new_err("endpoint not started");
@@ -559,7 +561,7 @@ impl PyBipEndpoint {
             Ok(crate::i_am_arrivals::subscribe(
                 &frames,
                 receiver,
-                Some(own.into()),
+                Some((own.into(), instance)),
                 clock,
             ))
         })

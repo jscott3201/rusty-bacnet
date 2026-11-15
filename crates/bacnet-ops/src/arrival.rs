@@ -28,7 +28,8 @@
 //! frame's source MAC. When a router relayed the I-Am from another network,
 //! the NPDU names the device by SNET and SADR (Clause 6.2.2), in
 //! [`source_network`](IAmArrival::source_network), and `link_source` is the
-//! router: the next hop back (Clause 6.5.4).
+//! router, which put them there (Clause 6.5.4): the next hop back, which a
+//! node may learn as that network's router from such an I-Am (Clause 6.5.3).
 //!
 //! # What is a record
 //!
@@ -37,16 +38,25 @@
 //! Unconfirmed-Request has no segmentation fields (Clauses 20.1.3, 21), so
 //! no I-Am comes segmented or confirmed.
 //!
-//! - A frame this node sends is no record. Nor is this node's own I-Am
-//!   come back to it on B/IP or B/IPv6, an echo the stack drops by its
-//!   origin, once [`IAmArrivals::with_own_address`] names that address. A
-//!   BACnet/SC hub never returns a broadcast to its sender (Annex AB.5.3.3)
-//!   and the MS/TP port takes its own echo out before the tap.
+//! - A frame this node sends is no record.
+//! - For a node that sends I-Ams (an endpoint, which has a device instance),
+//!   [`IAmArrivals::with_own`] leaves out its own I-Am come back to it on
+//!   B/IP or B/IPv6: one whose origin is its own address and whose device
+//!   is its own instance, sent back by the broadcast itself or returned by
+//!   a BBMD. Each is counted in [`IAmArrivals::own_echoes`]. Any other I-Am
+//!   from its own address is a record: another device on that address is a
+//!   conflict to see, and behind NAT another site may reuse this node's
+//!   private address in the origin a BBMD forwards (Annex J.7.5). A client
+//!   that sends no I-Am names nothing, and leaves nothing out. A BACnet/SC
+//!   hub never returns a broadcast to its sender (Annex AB.5.3.3) and the
+//!   MS/TP port takes its own echo out before the tap.
 //! - An I-Am whose parameters don't decode, or one on BACnet/SC whose
 //!   message names no originating VMAC, is counted in
-//!   [`IAmArrivals::malformed`] and is no record. Odd but decodable values
-//!   are kept as sent: any object type, a max APDU below 50 octets, vendor
-//!   0 or 65535, a segmentation value outside the enumeration.
+//!   [`IAmArrivals::malformed`] and is no record: the tap's frames, read
+//!   with [`IAmArrival::from_frame`] or the frame decoder, say who sent it
+//!   and why it failed. Odd but decodable values are kept as sent: any
+//!   object type, a max APDU below 50 octets, vendor 0 or 65535, a
+//!   segmentation value outside the enumeration.
 //! - A frame whose link, network or application header fails to decode is
 //!   not known to hold an I-Am, so it is neither: the tap's frames and the
 //!   frame decoder show it.
@@ -68,7 +78,11 @@
 //! - The tap's queue is bounded. When it is full the newest frames are
 //!   dropped and counted, of every kind, since the tap cannot tell which held
 //!   an I-Am: [`IAmArrivals::missed`], and each record's
-//!   [`missed_before`](IAmArrival::missed_before).
+//!   [`missed_before`](IAmArrival::missed_before). A left-out echo is no
+//!   loss: it adds nothing to them, and frames lost ahead of it go to the
+//!   next record's count.
+//! - A read decodes at most [`SKIP_BATCH`] frames that are no record before
+//!   it yields, so a burst of other traffic doesn't hold the reading task.
 
 use std::net::SocketAddr;
 use std::task::{Context, Poll};
@@ -80,6 +94,7 @@ use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_transport::tap::{FrameTapReceiver, TapDirection, TapPeer, TappedFrame};
 use bacnet_types::MacAddr;
 use bacnet_types::data_link::DataLink;
+use bacnet_types::enums::ObjectType;
 use bytes::Bytes;
 
 use crate::decode::decode_npdu_layer;
@@ -181,6 +196,10 @@ impl IAmArrival {
             return Ok(None);
         };
         let i_am = i_am.map_err(MalformedIAm)?;
+        // A BACnet/SC message names its source in its originating VMAC, so
+        // one without names none. Only the hub connection is tapped today:
+        // a direct connection's messages carry no VMACs (the peer is the
+        // connection), so tapping those needs this rule revisited.
         let link_source = match (link.source_mac, frame.peer) {
             (Some(mac), _) => mac,
             (None, TapPeer::Udp(SocketAddr::V4(sender))) => {
@@ -240,24 +259,34 @@ impl IAmArrival {
         self.forwarded.then_some(self.link_sender)
     }
 
-    /// Whether the I-Am started at `own`: the origin a forwarded frame
-    /// carries, else the UDP sender, as the stack's own-echo rule judges it.
-    fn comes_from(&self, own: SocketAddr) -> bool {
-        match (self.original_source, self.link_sender) {
+    /// Whether this is the I-Am of device `instance` started at `own`: its
+    /// origin is the one a forwarded frame carries, else the UDP sender, as
+    /// the stack's own-echo rule judges it.
+    fn is_echo_of(&self, own: SocketAddr, instance: u32) -> bool {
+        let device = self.i_am.object_identifier;
+        let from_own = match (self.original_source, self.link_sender) {
             (Some(origin), _) | (None, TapPeer::Udp(origin)) => same_socket(origin, own),
             _ => false,
-        }
+        };
+        from_own
+            && device.object_type() == ObjectType::DEVICE
+            && device.instance_number() == instance
     }
 }
+
+/// Frames that are no record a read decodes before it yields.
+pub const SKIP_BATCH: usize = 32;
 
 /// The I-Am arrivals on one frame-tap subscription. Dropping it
 /// unsubscribes.
 pub struct IAmArrivals {
     receiver: FrameTapReceiver,
-    own: Option<SocketAddr>,
+    /// This node's own address and device instance, when it sends I-Ams.
+    own: Option<(SocketAddr, u32)>,
     /// Frames lost ahead of the frames read since the last record.
     gap: u64,
     malformed: u64,
+    own_echoes: u64,
 }
 
 impl std::fmt::Debug for IAmArrivals {
@@ -265,6 +294,7 @@ impl std::fmt::Debug for IAmArrivals {
         f.debug_struct("IAmArrivals")
             .field("missed", &self.missed())
             .field("malformed", &self.malformed)
+            .field("own_echoes", &self.own_echoes)
             .finish()
     }
 }
@@ -278,23 +308,28 @@ impl IAmArrivals {
             own: None,
             gap: 0,
             malformed: 0,
+            own_echoes: 0,
         }
     }
 
-    /// Leave out this node's own I-Am come back to it: one whose origin is
-    /// `own`, the transport's B/IP or B/IPv6 socket address.
-    pub fn with_own_address(self, own: SocketAddr) -> Self {
+    /// For a node that sends I-Ams: leave out, and count in
+    /// [`Self::own_echoes`], its own I-Am come back to it, one whose origin
+    /// is `address`, the transport's B/IP or B/IPv6 socket address, and
+    /// whose device is `instance`, this node's. Without it nothing is left
+    /// out, as suits a client, which sends no I-Am.
+    pub fn with_own(self, address: SocketAddr, instance: u32) -> Self {
         Self {
-            own: Some(own),
+            own: Some((address, instance)),
             ..self
         }
     }
 
     /// Poll for the next record. Frames that are no record are read and
-    /// passed over in the same poll; cancellation before readiness loses
-    /// no record.
+    /// passed over, up to [`SKIP_BATCH`] of them, after which the poll
+    /// wakes itself and yields; cancellation before readiness loses no
+    /// record.
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<IAmArrival>> {
-        loop {
+        for _ in 0..SKIP_BATCH {
             match self.receiver.poll_recv(cx) {
                 Poll::Ready(Some(frame)) => {
                     if let Some(arrival) = self.take(&frame) {
@@ -305,6 +340,8 @@ impl IAmArrivals {
                 Poll::Pending => return Poll::Pending,
             }
         }
+        cx.waker().wake_by_ref();
+        Poll::Pending
     }
 
     /// The next record, waiting for one; `None` once the transport that
@@ -335,14 +372,29 @@ impl IAmArrivals {
         self.malformed
     }
 
+    /// This node's own I-Ams come back to it and left out (see
+    /// [`Self::with_own`]).
+    pub fn own_echoes(&self) -> u64 {
+        self.own_echoes
+    }
+
     fn take(&mut self, frame: &TappedFrame) -> Option<IAmArrival> {
         self.gap = self.gap.saturating_add(frame.missed_before);
         match IAmArrival::from_frame(frame) {
-            Ok(Some(mut arrival)) if !self.own.is_some_and(|own| arrival.comes_from(own)) => {
+            Ok(Some(arrival))
+                if self
+                    .own
+                    .is_some_and(|(address, instance)| arrival.is_echo_of(address, instance)) =>
+            {
+                // No loss: the gap ahead of it waits for the next record.
+                self.own_echoes = self.own_echoes.saturating_add(1);
+                None
+            }
+            Ok(Some(mut arrival)) => {
                 arrival.missed_before = std::mem::take(&mut self.gap);
                 Some(arrival)
             }
-            Ok(_) => None,
+            Ok(None) => None,
             Err(_) => {
                 self.malformed = self.malformed.saturating_add(1);
                 None

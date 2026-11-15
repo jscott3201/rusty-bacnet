@@ -562,8 +562,9 @@ impl PyFrameIterator {
     /// the oldest frames) or lost on the way to Python, including any lost
     /// after the last frame read. The count remains readable after close.
     #[getter]
-    fn missed(&self) -> u64 {
-        self.subscription.missed()
+    fn missed(&self, py: Python<'_>) -> u64 {
+        // The GIL is released: a read in progress holds the receiver.
+        py.detach(|| self.subscription.missed())
     }
 
     /// Stop observation, discard queued frames and wake pending reads.

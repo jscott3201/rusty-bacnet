@@ -185,7 +185,7 @@ async fn after_a_gap_of_two() -> (
     let (first, hook) = fresh(&iterator).await;
     assert_eq!((&first.frame.bytes[..], first.missed_before), (&[0][..], 0));
     hook.settled();
-    assert_eq!(iterator.missed(), 2, "the trailing gap");
+    assert_eq!(iterator.subscription.missed(), 2, "the trailing gap");
     (tap, owner, iterator)
 }
 
@@ -222,7 +222,7 @@ async fn a_put_back_frame_comes_back_with_its_gap() {
     let (newer, hook) = fresh(&iterator).await;
     assert_eq!((&newer.frame.bytes[..], newer.missed_before), (&[4][..], 0));
     hook.settled();
-    assert_eq!(iterator.missed(), 2);
+    assert_eq!(iterator.subscription.missed(), 2);
 }
 
 /// A frame dropped on its way to Python, as when its loop closed, counts
@@ -236,13 +236,17 @@ async fn a_frame_lost_on_its_way_carries_into_the_next_gap() {
     assert_eq!(lost.missed_before, 2);
     // Neither delivered nor put back: the delivery drops armed.
     drop((lost, hook));
-    assert_eq!(iterator.missed(), 3, "two overflowed, one lost on its way");
+    assert_eq!(
+        iterator.subscription.missed(),
+        3,
+        "two overflowed, one lost on its way"
+    );
     tap_record(&tap, TapDirection::Inbound, &[4]);
     let (next, hook) = fresh(&iterator).await;
     assert_eq!((&next.frame.bytes[..], next.missed_before), (&[4][..], 3));
     hook.settled();
     // Frames received reported 0 and 3; nothing was lost after the last.
-    assert_eq!(iterator.missed(), 3);
+    assert_eq!(iterator.subscription.missed(), 3);
 }
 
 /// `Frame.monotonic` converts the capture instant by its exact offset from

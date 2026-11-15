@@ -109,7 +109,7 @@ class IAmArrivalTests(Arrivals):
         self.assertEqual([r.link_sender for r in seen], [one.address, two.address, one.address])
         for record in seen:
             self.assertIsInstance(record, rb.IAmArrival)
-            self.assertEqual(record.device_identifier,
+            self.assertEqual(record.object_identifier,
                              rb.ObjectIdentifier(rb.ObjectType.DEVICE, 4242))
             self.assertEqual((record.max_apdu_length, record.vendor_id), (1476, 260))
             self.assertEqual(record.segmentation_supported, rb.Segmentation.NO_SEGMENTATION)
@@ -155,6 +155,18 @@ class IAmArrivalTests(Arrivals):
         self.assertTrue(record.broadcast)
         self.assertIsNone(record.next_hop_router)
 
+    async def test_a_client_leaves_nothing_out(self):
+        # A client sends no I-Am, so even one from its own address, as a
+        # BBMD would return a node's own broadcast, is another node's.
+        client = await self.client()
+        own = await self.address_of(client)
+        arrivals = await client.i_am_arrivals()
+        bbmd = self.peer()
+        bbmd.send(bvll(FORWARDED, mac(own) + local(i_am(77))), self.to(own))
+        record = await self.next(arrivals)
+        self.assertEqual((record.object_identifier.instance, record.link_source), (77, own))
+        self.assertEqual(arrivals.own_echoes, 0)
+
     async def test_malformed_i_ams_are_counted_and_odd_ones_kept(self):
         client = await self.client()
         target = self.to(await self.address_of(client))
@@ -169,7 +181,7 @@ class IAmArrivalTests(Arrivals):
         device.send(bvll(ORIGINAL_BROADCAST, local(odd)), target)
         record = await self.next(arrivals)
         self.assertEqual(arrivals.malformed, 2)
-        self.assertEqual(record.device_identifier,
+        self.assertEqual(record.object_identifier,
                          rb.ObjectIdentifier(rb.ObjectType.ANALOG_INPUT, 9))
         self.assertEqual((record.max_apdu_length, record.vendor_id), (49, 0))
         self.assertEqual(record.segmentation_supported.to_raw(), 9)
@@ -216,7 +228,7 @@ class IAmArrivalTests(Arrivals):
                          ("outbound", server.address, 750))
         server.send(bvll(ORIGINAL_UNICAST, local(i_am(751))), self.to(own))
         record = await self.next(arrivals)
-        self.assertEqual(record.device_identifier.instance, 751)
+        self.assertEqual(record.object_identifier.instance, 751)
 
     async def test_this_nodes_own_i_am_come_back_is_left_out(self):
         endpoint = await self.endpoint(720, broadcast_address="127.0.0.1")
@@ -238,9 +250,18 @@ class IAmArrivalTests(Arrivals):
         peer.send(bvll(FORWARDED, mac(own) + local(i_am(720))), self.to(own))
         peer.send(bvll(ORIGINAL_BROADCAST, local(i_am(721))), self.to(own))
         record = await self.next(arrivals)
-        self.assertEqual((record.device_identifier.instance, record.link_sender),
+        self.assertEqual((record.object_identifier.instance, record.link_sender),
                          (721, peer.address))
-        self.assertEqual(arrivals.malformed, 0)
+        # Both echoes, the direct one and the one the BBMD returned.
+        self.assertEqual((arrivals.own_echoes, arrivals.malformed, arrivals.missed), (2, 0, 0))
+        self.assertEqual(record.missed_before, 0, "an echo is no loss")
+        # Behind NAT another site may reuse this address (Annex J.7.5): a
+        # forwarded origin equal to it, of another instance, is a record.
+        peer.send(bvll(FORWARDED, mac(own) + local(i_am(9999))), self.to(own))
+        record = await self.next(arrivals)
+        self.assertEqual((record.object_identifier.instance, record.link_source), (9999, own))
+        self.assertTrue(record.forwarded)
+        self.assertEqual(arrivals.own_echoes, 2)
 
     async def test_an_endpoint_sees_arrivals_on_the_socket_its_roles_share(self):
         endpoint = await self.endpoint(730)
@@ -255,7 +276,7 @@ class IAmArrivalTests(Arrivals):
                                            rb.PropertyIdentifier.OBJECT_IDENTIFIER)
         self.assertEqual(value, rb.PropertyValue.object_identifier(oid))
         record = await self.next(arrivals)
-        self.assertEqual((record.device_identifier.instance, record.link_sender),
+        self.assertEqual((record.object_identifier.instance, record.link_sender),
                          (4242, device.address))
         self.assertTrue(record.broadcast)
         pending = asyncio.ensure_future(anext(arrivals))
@@ -274,7 +295,7 @@ class IAmArrivalTests(Arrivals):
             await pending
         device = self.peer(answering(3))
         await client.who_is(scope=device.address)
-        self.assertEqual((await self.next(arrivals)).device_identifier.instance, 3)
+        self.assertEqual((await self.next(arrivals)).object_identifier.instance, 3)
         waiting = [asyncio.ensure_future(anext(arrivals)) for _ in range(3)]
         await arrivals.aclose()
         await arrivals.aclose()
@@ -349,7 +370,7 @@ class RoutedArrivalTests(Arrivals):
         globally = b"\x01\x20\xff\xff\x00\xff" + i_am(5005)
         device.send(bvll(DISTRIBUTE_BROADCAST, globally), network_5)
         record = await self.next(arrivals)
-        while record.device_identifier.instance != 5005:
+        while record.object_identifier.instance != 5005:
             record = await self.next(arrivals)
         router = self.ports[0].address
         self.assertEqual(record.source_network, 5)
@@ -360,6 +381,11 @@ class RoutedArrivalTests(Arrivals):
         self.assertFalse(record.forwarded, "the router's own broadcast, not a relay's")
         self.assertIsNone(record.forwarding_bbmd)
         self.assertTrue(record.broadcast)
+        # The calls that take an address take the device as a RoutedTarget
+        # built from the record, where RoutedTarget is accepted.
+        target = rb.RoutedTarget(record.source_network, record.source_address,
+                                 router=record.next_hop_router)
+        self.assertEqual(target, rb.RoutedTarget(5, mac(device.address), router=router))
 
 
 @unittest.skipUnless(ipv6_loopback(), "this host has no IPv6 loopback")
@@ -385,7 +411,7 @@ class Bip6ArrivalTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
         self.assertEqual(record.link, "ipv6")
-        self.assertEqual(record.device_identifier.instance, 1234)
+        self.assertEqual(record.object_identifier.instance, 1234)
         self.assertEqual(record.link_sender, f"[::1]:{server_port}")
         self.assertEqual(record.link_source, vmac)
         self.assertEqual(record.device_address, vmac)
@@ -402,7 +428,7 @@ class ScArrivalTests(ClientScFixture):
         record = await asyncio.wait_for(anext(arrivals), 10)
         await arrivals.aclose()
         self.assertEqual(record.link, "sc")
-        self.assertEqual(record.device_identifier.instance, 3000)
+        self.assertEqual(record.object_identifier.instance, 3000)
         self.assertEqual(record.link_sender, "primary")
         self.assertEqual(record.link_source, "02:00:00:00:00:04")
         self.assertEqual(record.device_address, "02:00:00:00:00:04")

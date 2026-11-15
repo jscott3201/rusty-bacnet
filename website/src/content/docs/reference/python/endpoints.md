@@ -377,9 +377,11 @@ def i_am_arrivals(self, capacity: int = 1024) -> Awaitable[IAmArrivalIterator]
 ```
 
 Follow every I-Am the endpoint's socket receives from now on, as
-`BACnetClient.i_am_arrivals` does (#2612); the endpoint's own I-Am
-come back to it is left out. RuntimeError before start and after
-close. Close ends the iterator.
+`BACnetClient.i_am_arrivals` does (#2612). The endpoint's own I-Am
+come back to it, from its own address and naming its own device
+instance, is left out and counted in `own_echoes`; another
+instance from that address is a record. RuntimeError before start
+and after close. Close ends the iterator.
 
 ### BipEndpoint.read_bdt
 

@@ -21,11 +21,18 @@ use crate::frames::{
 };
 use crate::types::{PyObjectIdentifier, PySegmentation};
 
-/// The arrivals on one subscription, with the malformed count where the
-/// iterator still reads it once the subscription is closed.
+/// The counts the iterator reads without the stream's lock, still there
+/// once the subscription is closed.
+#[derive(Default)]
+struct Counts {
+    malformed: AtomicU64,
+    own_echoes: AtomicU64,
+}
+
+/// The arrivals on one subscription, publishing their counts.
 pub(crate) struct ArrivalStream {
     arrivals: IAmArrivals,
-    malformed: Arc<AtomicU64>,
+    counts: Arc<Counts>,
 }
 
 impl TapStream for ArrivalStream {
@@ -33,8 +40,13 @@ impl TapStream for ArrivalStream {
 
     fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<IAmArrival>> {
         let polled = self.arrivals.poll_recv(cx);
-        self.malformed
+        let counts = &self.counts;
+        counts
+            .malformed
             .store(self.arrivals.malformed(), Ordering::Relaxed);
+        counts
+            .own_echoes
+            .store(self.arrivals.own_echoes(), Ordering::Relaxed);
         polled
     }
 
@@ -69,7 +81,7 @@ pub(crate) struct PyIAmArrival {
     monotonic: Seconds,
     timestamp: Seconds,
     link: String,
-    device_identifier: ObjectIdentifier,
+    object_identifier: ObjectIdentifier,
     max_apdu_length: u32,
     segmentation: u8,
     vendor_id: u16,
@@ -93,7 +105,7 @@ impl PyIAmArrival {
             monotonic: Seconds(clock.seconds(arrival.monotonic_timestamp)),
             timestamp: Seconds(posix_seconds(arrival.timestamp)),
             link: link_token(arrival.link).into(),
-            device_identifier: arrival.i_am.object_identifier,
+            object_identifier: arrival.i_am.object_identifier,
             max_apdu_length: arrival.i_am.max_apdu_length,
             segmentation: arrival.i_am.segmentation_supported.to_raw(),
             vendor_id: arrival.i_am.vendor_id,
@@ -132,8 +144,8 @@ impl PyIAmArrival {
     }
     /// The I-Am's device identifier, of whatever type it was sent with.
     #[getter]
-    fn device_identifier(&self) -> PyObjectIdentifier {
-        PyObjectIdentifier::from_rust(self.device_identifier)
+    fn object_identifier(&self) -> PyObjectIdentifier {
+        PyObjectIdentifier::from_rust(self.object_identifier)
     }
     /// Max APDU length accepted, as sent.
     #[getter]
@@ -218,7 +230,7 @@ impl PyIAmArrival {
             .map_or_else(|| "None".to_string(), |address| format!("'{address}'"));
         format!(
             "IAmArrival(instance={}, device_address={address}, link_sender='{}')",
-            self.device_identifier.instance_number(),
+            self.object_identifier.instance_number(),
             self.link_sender
         )
     }
@@ -234,7 +246,7 @@ impl PyIAmArrival {
             r.monotonic.0.into_pyobject(py)?.into_any(),
             r.timestamp.0.into_pyobject(py)?.into_any(),
             r.link.clone().into_pyobject(py)?.into_any(),
-            r.device_identifier().into_pyobject(py)?.into_any(),
+            r.object_identifier().into_pyobject(py)?.into_any(),
             r.max_apdu_length.into_pyobject(py)?.into_any(),
             r.segmentation_supported().into_pyobject(py)?.into_any(),
             r.vendor_id.into_pyobject(py)?.into_any(),
@@ -264,7 +276,7 @@ impl PyIAmArrival {
         monotonic: f64,
         timestamp: f64,
         link: String,
-        device_identifier: PyObjectIdentifier,
+        object_identifier: PyObjectIdentifier,
         max_apdu_length: u32,
         segmentation_supported: PySegmentation,
         vendor_id: u16,
@@ -282,7 +294,7 @@ impl PyIAmArrival {
             monotonic: Seconds(monotonic),
             timestamp: Seconds(timestamp),
             link,
-            device_identifier: device_identifier.to_rust(),
+            object_identifier: object_identifier.to_rust(),
             max_apdu_length,
             segmentation: segmentation_supported.to_rust().to_raw(),
             vendor_id,
@@ -303,30 +315,31 @@ impl PyIAmArrival {
 #[pyclass(name = "IAmArrivalIterator", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyIAmArrivalIterator {
     subscription: Arc<Subscription<ArrivalStream>>,
-    malformed: Arc<AtomicU64>,
+    counts: Arc<Counts>,
     clock: Clock,
 }
 
-/// Subscribe `owner` to the I-Ams on `receiver`, leaving out the echo of
-/// this node's own from `own`, its B/IP or B/IPv6 socket.
+/// Subscribe `owner` to the I-Ams on `receiver`. An owner that sends I-Ams
+/// passes `own`, its B/IP or B/IPv6 socket and its device instance, to
+/// leave out and count its own I-Am come back; a client passes `None`.
 pub(crate) fn subscribe(
     owner: &FrameSubscriptions,
     receiver: FrameTapReceiver,
-    own: Option<SocketAddr>,
+    own: Option<(SocketAddr, u32)>,
     clock: Clock,
 ) -> PyIAmArrivalIterator {
     let arrivals = IAmArrivals::new(receiver);
     let arrivals = match own {
-        Some(own) => arrivals.with_own_address(own),
+        Some((address, instance)) => arrivals.with_own(address, instance),
         None => arrivals,
     };
-    let malformed = Arc::new(AtomicU64::new(0));
+    let counts = Arc::new(Counts::default());
     PyIAmArrivalIterator {
         subscription: owner.open(ArrivalStream {
             arrivals,
-            malformed: malformed.clone(),
+            counts: counts.clone(),
         }),
-        malformed,
+        counts,
         clock,
     }
 }
@@ -358,15 +371,22 @@ impl PyIAmArrivalIterator {
     }
 
     /// Frames of any kind lost so far, live, as `FrameIterator.missed`.
+    /// Read with the GIL released: a read in progress holds the stream.
     #[getter]
-    fn missed(&self) -> u64 {
-        self.subscription.missed()
+    fn missed(&self, py: Python<'_>) -> u64 {
+        py.detach(|| self.subscription.missed())
     }
 
     /// Inbound I-Am frames read so far that made no record.
     #[getter]
     fn malformed(&self) -> u64 {
-        self.malformed.load(Ordering::Relaxed)
+        self.counts.malformed.load(Ordering::Relaxed)
+    }
+
+    /// The owner's own I-Ams come back to it, read so far and left out.
+    #[getter]
+    fn own_echoes(&self) -> u64 {
+        self.counts.own_echoes.load(Ordering::Relaxed)
     }
 
     /// Stop observing, as `FrameIterator.aclose`.
