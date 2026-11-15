@@ -51,6 +51,9 @@ class Relay(asyncio.DatagramProtocol):
         self.passing = passing
         self.passed: set[int] = set()
         self.dropped: set[int] = set()
+        # Answer a ReadProperty of the whole Object_List with a Reject, so
+        # the client reads the list element by element.
+        self.reject_whole_list = False
         self.client: tuple[str, int] | None = None
         self.front: asyncio.DatagramTransport | None = None
         self.back: asyncio.DatagramTransport | None = None
@@ -67,6 +70,14 @@ class Relay(asyncio.DatagramProtocol):
                     self.dropped.add(invoke_id)
                     return
                 self.passed.add(invoke_id)
+            # ReadProperty (12) of Object_List (76) with no array index.
+            if self.reject_whole_list and data[9] == 12 and data[-2:] == b"\x19\x4c":
+                assert self.front is not None
+                # A Reject PDU for an unrecognized service (9).
+                reject = bytes([0x01, 0x00, 0x60, invoke_id, 9])
+                frame = b"\x81\x0a" + (len(reject) + 4).to_bytes(2, "big") + reject
+                self.front.sendto(frame, addr)
+                return
         assert self.back is not None
         self.back.sendto(data, self.server)
 
@@ -212,8 +223,9 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         finally:
             close(relay)
         self.assertIsInstance(inventory, Inventory223Experimental)
-        # The device's name, its Object_List, then one RPM an object: N + 2.
-        self.assertEqual(relay.requests, 4 + 2)
+        # The device's summary, its Object_List, then the four objects in
+        # one RPM.
+        self.assertEqual(relay.requests, 1 + 2)
         self.assertEqual(inventory.device_instance, DEVICE)
         self.assertEqual(inventory.device_name, "AHU-1 Controller")
         self.assertIsNone(inventory.stopped)
@@ -303,8 +315,17 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(relay.requests, 1 + 2)
 
     async def test_a_device_that_stops_answering(self) -> None:
-        # The name, the Object_List and the first object pass; then silence.
-        relay = await relay_to(self.address, passing=3)
+        # A device with more objects than one request reads: the lab's four
+        # and twelve more analog inputs.
+        server = lab()
+        for instance in range(10, 22):
+            server.add_analog_input(
+                instance, f"Extra {instance}", units=EngineeringUnits.PERCENT
+            )
+        await server.start()
+        # The summary, the Object_List and the first batch pass; then
+        # silence.
+        relay = await relay_to(await server.local_address(), passing=3)
         try:
             async with BACnetClient(
                 interface="127.0.0.1", port=0, apdu_timeout_ms=300
@@ -313,20 +334,23 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                 inventory = await client.export_223_experimental(DEVICE)
         finally:
             close(relay)
-        self.assertEqual([o.object_identifier for o in inventory.objects], [AI])
+            await server.stop()
+        self.assertEqual(relay.requests, 4)
+        read = [o.object_identifier for o in inventory.objects]
+        self.assertTrue(0 < len(read) < 16, read)
+        self.assertTrue(all(o.error is None for o in inventory.objects))
         self.assertIsNotNone(inventory.stopped)
         assert inventory.stopped is not None
-        self.assertTrue(
-            inventory.stopped.startswith("binary-output 1: "), inventory.stopped
-        )
+        # It names the first object not read, then the client's error.
+        self.assertRegex(inventory.stopped, r"^[a-z-]+ \d+: ")
         turtle = inventory.to_turtle()
         check_structure(turtle)
         self.assertIn("# Incomplete: the reading stopped early", turtle)
 
     async def test_cancelling_stops_the_export(self) -> None:
-        # The fourth request (the binary output) goes unanswered, with a
+        # The third request (the objects' batch) goes unanswered, with a
         # long timeout, so the export is still waiting when it is cancelled.
-        relay = await relay_to(self.address, passing=3)
+        relay = await relay_to(self.address, passing=2)
         try:
             async with BACnetClient(
                 interface="127.0.0.1", port=0, apdu_timeout_ms=10_000
@@ -334,14 +358,14 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                 await client.add_device(DEVICE, relay_address(relay))
                 export = asyncio.ensure_future(client.export_223_experimental(DEVICE))
                 async with asyncio.timeout(10):
-                    while relay.requests < 4:
+                    while relay.requests < 3:
                         await asyncio.sleep(0.01)
                 export.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await export
                 # No new request follows; the client still works.
                 await asyncio.sleep(0.5)
-                self.assertEqual(relay.requests, 4)
+                self.assertEqual(relay.requests, 3)
                 relay.passing = 1_000_000
                 inventory = await client.export_223_experimental(
                     DEVICE, types=[ObjectType.ANALOG_INPUT]
@@ -360,11 +384,33 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(BacnetError):
                     await client.export_223_experimental(DEVICE + 1)
                 await client.add_device(DEVICE, relay_address(relay))
-                # The name passes, the Object_List read times out.
+                # The summary passes, the Object_List read times out.
                 with self.assertRaises(BacnetError):
                     await client.export_223_experimental(DEVICE)
         finally:
             close(relay)
+
+    async def test_a_list_that_fails_part_way_raises(self) -> None:
+        # The summary, the refused whole list, its size and two elements
+        # pass; the third element goes unanswered. Part of a list is no
+        # inventory: the call raises, and no object is asked for.
+        relay = await relay_to(self.address, passing=5)
+        relay.reject_whole_list = True
+        try:
+            async with BACnetClient(
+                interface="127.0.0.1", port=0, apdu_timeout_ms=300
+            ) as client:
+                await client.add_device(DEVICE, relay_address(relay))
+                with self.assertRaises(BacnetError) as raised:
+                    await client.export_223_experimental(DEVICE)
+        finally:
+            close(relay)
+        self.assertEqual(relay.requests, 6)
+        # A note names the element, so it doesn't read as the whole list
+        # failing.
+        notes = getattr(raised.exception, "__notes__", [])
+        self.assertEqual(len(notes), 1, notes)
+        self.assertRegex(notes[0], r"^Object_List element 3 of \d+$")
 
 
 class RefusalTests(unittest.IsolatedAsyncioTestCase):

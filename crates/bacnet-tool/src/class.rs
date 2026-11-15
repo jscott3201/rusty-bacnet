@@ -70,6 +70,7 @@ pub const COMMANDS: &[(&str, Class)] = &[
     ("cov", Read),
     ("register", Read),
     ("export", Read),
+    ("inventory", Read),
     // Nothing reaches a device, or a front end whose own writes are
     // guarded one by one.
     ("mstp-ports", Read),

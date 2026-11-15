@@ -5,13 +5,13 @@
 use std::sync::atomic::AtomicBool;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::DeviceAddress;
 use bacnet_ops::export::s223::{
-    Access, DEFAULT_BASE_IRI, Entry, Inventory, InventoryOptions, Point, PointKind, TurtleOptions,
-    WritePriority, read_inventory, to_turtle,
+    Access, DEFAULT_BASE_IRI, Model, Point, PointKind, Skipped, TurtleOptions, inventory_options,
+    to_turtle,
 };
 use bacnet_ops::limits::RequestLimits;
-use bacnet_ops::raw::{Halt, Reader};
+use bacnet_ops::raw::{InventoryHalt, Reader, read_inventory};
+use bacnet_ops::{DeviceAddress, InventoryOptions, Priority};
 use bacnet_types::enums::EngineeringUnits;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -24,11 +24,8 @@ use crate::types::{IntEnumValue, PyObjectIdentifier, PyObjectType};
 /// The options `types=` gives: every exported type when `None`, refused
 /// with the core's message when one isn't exported or the list is empty.
 pub(crate) fn options(types: Option<Vec<PyObjectType>>) -> PyResult<InventoryOptions> {
-    match types {
-        None => Ok(InventoryOptions::default()),
-        Some(types) => InventoryOptions::new(types.iter().map(PyObjectType::to_rust).collect())
-            .map_err(PyValueError::new_err),
-    }
+    let types = types.map(|types| types.iter().map(PyObjectType::to_rust).collect());
+    inventory_options(types).map_err(PyValueError::new_err)
 }
 
 /// `device`'s inventory over `client`, one request at a time under
@@ -36,9 +33,9 @@ pub(crate) fn options(types: Option<Vec<PyObjectType>>) -> PyResult<InventoryOpt
 /// beyond its own `min_request_interval_ms`), as the CLI reads it, at the
 /// address the discovery table holds for the instance. An instance no
 /// address claims, or two do, raises before anything is sent; a device
-/// that doesn't answer the name read, or a failed read of the whole
-/// Object_List, raises the client's usual error; a failure after that ends
-/// the reading with `stopped` set.
+/// that doesn't answer the summary read, or a failed read of the
+/// Object_List, raises the client's usual error; a device that goes silent
+/// after that ends the reading with `stopped` set.
 pub(crate) async fn read(
     client: &BACnetClient<AppTransport>,
     limits: &RequestLimits,
@@ -63,6 +60,7 @@ pub(crate) async fn read(
         // The objects' Python copies are built once, so indexing
         // `objects` in a loop doesn't copy the list each time.
         Ok(inventory) => crate::py_async::attach(|py| {
+            let inventory = Model::from(&inventory);
             let objects = inventory
                 .entries
                 .iter()
@@ -73,8 +71,19 @@ pub(crate) async fn read(
                 inventory,
             })
         }),
-        Err(Halt::Device(error)) => Err(to_py_err(error)),
-        Err(Halt::Cancelled) => unreachable!("nothing sets the export's stop flag"),
+        Err(InventoryHalt::Device(error)) => Err(to_py_err(error)),
+        // The usual error for the element's failure, with a note saying
+        // which element of the list it was.
+        Err(InventoryHalt::ObjectList(stop)) => {
+            let note = format!("Object_List element {} of {}", stop.index, stop.total);
+            let error = to_py_err(stop.error);
+            crate::py_async::attach(|py| {
+                error.value(py).call_method1("add_note", (note,))?;
+                Ok(())
+            })?;
+            Err(error)
+        }
+        Err(InventoryHalt::Cancelled) => unreachable!("nothing sets the export's stop flag"),
     }
 }
 
@@ -83,7 +92,7 @@ pub(crate) async fn read(
 /// as the device sent it. Refuses `copy` and `pickle`.
 #[pyclass(name = "Inventory223Experimental", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyInventory223 {
-    inventory: Inventory,
+    inventory: Model,
     /// `inventory.entries` as Python objects, built once.
     objects: Py<PyTuple>,
 }
@@ -109,10 +118,9 @@ impl PyInventory223 {
         self.objects.clone_ref(py)
     }
 
-    /// Why the reading stopped early, None when it didn't. A request to the
-    /// device timed out or its link failed, so the objects after that point
-    /// are missing; or a read of the Object_List element by element failed
-    /// partway (an error or no answer), and then `objects` is empty.
+    /// Why the reading stopped early, None when it didn't: a request to the
+    /// device timed out or its link failed while its objects were being
+    /// read, so the objects after that point are missing.
     #[getter]
     fn stopped(&self) -> Option<&str> {
         self.inventory.stopped.as_deref()
@@ -127,9 +135,12 @@ impl PyInventory223 {
     #[pyo3(signature = (base_iri=None, write_priority=None))]
     fn to_turtle(&self, base_iri: Option<&str>, write_priority: Option<u8>) -> PyResult<String> {
         let priority = write_priority
-            .map(WritePriority::new)
-            .transpose()
-            .map_err(PyValueError::new_err)?;
+            .map(|level| {
+                Priority::new(level).map_err(|_| {
+                    PyValueError::new_err(format!("write priority {level} is not 1 to 16"))
+                })
+            })
+            .transpose()?;
         let options = TurtleOptions::new(base_iri.unwrap_or(DEFAULT_BASE_IRI), priority)
             .map_err(PyValueError::new_err)?;
         Ok(to_turtle(&self.inventory, &options))
@@ -158,11 +169,18 @@ impl PyInventory223 {
 /// One object of an `Inventory223Experimental`: a point, or an object
 /// whose read failed, which has only its identifier and `error`.
 #[pyclass(name = "Object223Experimental", module = "rusty_bacnet", frozen)]
-pub(crate) struct PyObject223(Entry);
+pub(crate) struct PyObject223(Result<Point, Skipped>);
 
 impl PyObject223 {
     fn point(&self) -> Option<&Point> {
-        self.0.point()
+        self.0.as_ref().ok()
+    }
+
+    fn object(&self) -> bacnet_types::primitives::ObjectIdentifier {
+        match &self.0 {
+            Ok(point) => point.object,
+            Err(skipped) => skipped.object,
+        }
     }
 }
 
@@ -171,7 +189,7 @@ impl PyObject223 {
     /// The object.
     #[getter]
     fn object_identifier(&self) -> PyObjectIdentifier {
-        PyObjectIdentifier::from_rust(self.0.object())
+        PyObjectIdentifier::from_rust(self.object())
     }
 
     /// Its Object_Name; None when its read failed.
@@ -242,13 +260,13 @@ impl PyObject223 {
     /// Number_Of_States. The Turtle skips such an object.
     #[getter]
     fn error(&self) -> Option<&str> {
-        self.0.error()
+        self.0.as_ref().err().map(|skipped| skipped.error.as_str())
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Object223Experimental({}, name={:?})",
-            self.0.object(),
+            self.object(),
             self.name().unwrap_or("")
         )
     }
@@ -282,11 +300,11 @@ mod tests {
     fn a_failed_object_has_only_its_error() {
         let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 6).unwrap();
         let error = "units: PROPERTY:UNKNOWN_PROPERTY";
-        let failed = PyObject223(Entry::Failed {
+        let failed = PyObject223(Err(Skipped {
             object,
             property: Some(bacnet_types::enums::PropertyIdentifier::UNITS),
             error: error.into(),
-        });
+        }));
         assert_eq!(failed.error(), Some(error));
         assert_eq!((failed.name(), failed.description()), (None, None));
         assert!(failed.units().is_none() && failed.number_of_states().is_none());
@@ -302,7 +320,7 @@ mod tests {
             relinquish_default: None,
         };
         let analog = Analog::new(EngineeringUnits::PERCENT, commanded);
-        let point = PyObject223(Entry::Point(Point::new(damper, "Damper", analog)));
+        let point = PyObject223(Ok(Point::new(damper, "Damper", analog)));
         assert_eq!((point.name(), point.error()), (Some("Damper"), None));
         assert!(
             point
@@ -314,7 +332,7 @@ mod tests {
         // An integer value has Units too, and is commandable by its access.
         let meter = ObjectIdentifier::new(ObjectType::INTEGER_VALUE, 2).unwrap();
         let integer = Integer::new(EngineeringUnits::KILOWATT_HOURS, Access::Writable);
-        let point = PyObject223(Entry::Point(Point::new(meter, "Meter", integer)));
+        let point = PyObject223(Ok(Point::new(meter, "Meter", integer)));
         assert!(
             point
                 .units()
@@ -327,7 +345,7 @@ mod tests {
                 relinquish_default: None,
             },
         );
-        let point = PyObject223(Entry::Point(Point::new(meter, "Meter", commanded)));
+        let point = PyObject223(Ok(Point::new(meter, "Meter", commanded)));
         assert!(point.commandable());
     }
 }

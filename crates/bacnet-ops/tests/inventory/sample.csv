@@ -1,0 +1,12 @@
+device,device_instance,object,name,description,units,state_texts,number_of_states,commandable,relinquish_default,cov_increment,min_present_value,max_present_value,present_value,status_flags,problems
+192.168.1.10:47808,1234,analog-input:1,Zone Temp,"Room 101, east",degrees-fahrenheit,,,false,,,,,72.5 °F,fault,
+192.168.1.10:47808,1234,binary-value:3,"Fan ""A""","line one
+line two",,Off\|Standby|On,,true,inactive (Off|Standby),,,,active (On),,
+192.168.1.10:47808,1234,multi-state-value:2,Mode,,,"Off|Low, slow|High\\er",3,false,,,,,"2 (Low, slow)",,
+192.168.1.10:47808,1234,analog-value:9,'=Setpoint,,,,,false,,0.5,-40,120,,,units: PROPERTY:UNKNOWN_PROPERTY
+192.168.1.10:47808,1234,700:1,Café 🔥,,,,,false,,,,,,,
+192.168.1.10:47808,1234,trend-log:1,,,,,,false,,,,,,,
+192.168.1.10:47808,1234,analog-value:10,'+SUM(A1),'-2+3,degrees-celsius,,,false,,,-40 °C,,-12.5 °C,,
+192.168.1.10:47808,1234,binary-input:4,'@cmd,'	indented,,'=off|on,,false,,,,,,,
+192.168.1.10:47808,1234,characterstring-value:1,Note,,,,,false,,,,,"""=HYPERLINK(""x"")""",,
+192.168.1.10:47808,1234,trend-log:2,' =1+1,,,,,false,,,,,,,

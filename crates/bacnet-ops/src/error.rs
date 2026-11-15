@@ -145,6 +145,18 @@ pub enum OpsError {
         /// The relinquish acknowledged before the read, if one was.
         relinquished: Option<Box<Written>>,
     },
+    /// An Object_List the device couldn't send whole was read element by
+    /// element, and one element's read failed: part of a list is not the
+    /// device, so the call that needed the list fails
+    /// ([`Device::inventory`](crate::Device::inventory)).
+    ObjectList {
+        /// The element whose read failed, from 1.
+        index: u32,
+        /// How many elements the list said it has.
+        total: u32,
+        /// Why that element's read failed.
+        source: Box<OpsError>,
+    },
 }
 
 impl OpsError {
@@ -190,6 +202,7 @@ impl OpsError {
         match self {
             Self::Unreachable { .. } => true,
             Self::Client(error) => is_unreachable(error),
+            Self::ObjectList { source, .. } => source.unreachable(),
             _ => false,
         }
     }
@@ -199,6 +212,7 @@ impl OpsError {
     pub fn timed_out(&self) -> bool {
         match self {
             Self::Unreachable { source: error, .. } | Self::Client(error) => is_timed_out(error),
+            Self::ObjectList { source, .. } => source.timed_out(),
             _ => false,
         }
     }
@@ -208,6 +222,7 @@ impl OpsError {
         match self {
             Self::Refused { error, .. } => Some(*error),
             Self::Client(error) => error.remote(),
+            Self::ObjectList { source, .. } => source.remote(),
             Self::NoPriorityArray { .. } => Some(RemoteError::Error {
                 class: ErrorClass::PROPERTY,
                 code: ErrorCode::UNKNOWN_PROPERTY,
@@ -338,6 +353,11 @@ impl fmt::Display for OpsError {
                 ..
             } => write!(f, "{error}, {detail}"),
             Self::Paging(fault) => write!(f, "{fault}"),
+            Self::ObjectList {
+                index,
+                total,
+                source,
+            } => write!(f, "Object_List element {index} of {total}: {source}"),
             Self::Watch(error) => write!(f, "{error}"),
             Self::Client(error) => write!(f, "{error}"),
             Self::Denied(denied) => write!(f, "{denied}"),
@@ -384,7 +404,7 @@ impl std::error::Error for OpsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Unreachable { source: error, .. } | Self::Client(error) => error.source(),
-            Self::ReadBack { source, .. } => source.source(),
+            Self::ReadBack { source, .. } | Self::ObjectList { source, .. } => source.source(),
             _ => None,
         }
     }

@@ -397,7 +397,7 @@ Properties:
 - `device_instance: int`: The device instance.
 - `device_name: Optional[str]`: The Device object's Object\_Name, exactly as the device sent it; None when it couldn't be read.
 - `objects: tuple[Object223Experimental, ...]`: The objects read, in Object\_List order, as a tuple.
-- `stopped: Optional[str]`: Why the reading stopped early, None when it didn't. A request to the device timed out or its link failed, so the objects after that point are missing; or a read of the Object\_List element by element failed partway (an error or no answer), and then `objects` is empty.
+- `stopped: Optional[str]`: Why the reading stopped early, None when it didn't: a request to the device timed out or its link failed while its objects were being read, so the objects after that point are missing.
 
 ### Inventory223Experimental.to_turtle
 

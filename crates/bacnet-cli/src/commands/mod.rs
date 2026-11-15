@@ -5,6 +5,7 @@ pub mod device;
 pub mod discover;
 pub mod export;
 pub mod file;
+pub mod inventory;
 pub mod read;
 pub mod read_range;
 pub mod read_range_options;

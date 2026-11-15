@@ -1,0 +1,356 @@
+{
+  "address": "192.168.1.10:47808",
+  "device": {
+    "instance": 1234,
+    "name": "AHU-1, \"East\"",
+    "properties": {
+      "object-name": {
+        "value": "\"AHU-1, \"East\"\"",
+        "decoded": "AHU-1, \"East\""
+      },
+      "vendor-name": {
+        "value": "\"Acme\"",
+        "decoded": "Acme"
+      },
+      "vendor-identifier": {
+        "value": "42",
+        "decoded": 42
+      },
+      "model-name": {
+        "error": "PROPERTY:UNKNOWN_PROPERTY"
+      }
+    }
+  },
+  "cov": "offered",
+  "points": [
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "analog-input",
+        "type_number": 0,
+        "instance": 1
+      },
+      "name": "Zone Temp",
+      "description": "Room 101, east",
+      "units": {
+        "value": 64,
+        "name": "degrees-fahrenheit",
+        "symbol": "°F"
+      },
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": {
+        "value": "72.5 °F",
+        "decoded": 72.5
+      },
+      "status_flags": {
+        "value": "fault",
+        "decoded": {
+          "bits": "0100",
+          "names": [
+            "fault"
+          ]
+        }
+      },
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "binary-value",
+        "type_number": 5,
+        "instance": 3
+      },
+      "name": "Fan \"A\"",
+      "description": "line one\nline two",
+      "units": null,
+      "state_texts": {
+        "active": "On",
+        "inactive": "Off|Standby",
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": true,
+      "relinquish_default": {
+        "value": "inactive (Off|Standby)",
+        "decoded": {
+          "value": 0,
+          "name": "inactive"
+        }
+      },
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": {
+        "value": "active (On)",
+        "decoded": {
+          "value": 1,
+          "name": "active"
+        }
+      },
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "multi-state-value",
+        "type_number": 19,
+        "instance": 2
+      },
+      "name": "Mode",
+      "description": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": [
+          "Off",
+          "Low, slow",
+          "High\\er"
+        ]
+      },
+      "number_of_states": 3,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": {
+        "value": "2 (Low, slow)",
+        "decoded": 2
+      },
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "analog-value",
+        "type_number": 2,
+        "instance": 9
+      },
+      "name": "=Setpoint",
+      "description": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": {
+        "value": "0.5",
+        "decoded": 0.5
+      },
+      "min_present_value": {
+        "value": "-40",
+        "decoded": -40.0
+      },
+      "max_present_value": {
+        "value": "120",
+        "decoded": 120.0
+      },
+      "present_value": null,
+      "status_flags": null,
+      "problems": [
+        {
+          "property": "units",
+          "error": "PROPERTY:UNKNOWN_PROPERTY"
+        }
+      ]
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "700",
+        "type_number": 700,
+        "instance": 1
+      },
+      "name": "Café 🔥",
+      "description": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": null,
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "trend-log",
+        "type_number": 20,
+        "instance": 1
+      },
+      "name": null,
+      "description": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": null,
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "analog-value",
+        "type_number": 2,
+        "instance": 10
+      },
+      "name": "+SUM(A1)",
+      "description": "-2+3",
+      "units": {
+        "value": 62,
+        "name": "degrees-celsius",
+        "symbol": "°C"
+      },
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": {
+        "value": "-40 °C",
+        "decoded": -40.0
+      },
+      "max_present_value": null,
+      "present_value": {
+        "value": "-12.5 °C",
+        "decoded": -12.5
+      },
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "binary-input",
+        "type_number": 3,
+        "instance": 4
+      },
+      "name": "@cmd",
+      "description": "\tindented",
+      "units": null,
+      "state_texts": {
+        "active": "on",
+        "inactive": "=off",
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": null,
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "characterstring-value",
+        "type_number": 40,
+        "instance": 1
+      },
+      "name": "Note",
+      "description": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": {
+        "value": "\"=HYPERLINK(\"x\")\"",
+        "decoded": "=HYPERLINK(\"x\")"
+      },
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "trend-log",
+        "type_number": 20,
+        "instance": 2
+      },
+      "name": " =1+1",
+      "description": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": null,
+      "status_flags": null,
+      "problems": []
+    }
+  ],
+  "unread": [
+    {
+      "type": "analog-input",
+      "type_number": 0,
+      "instance": 2
+    }
+  ],
+  "stopped": "request timed out after 6s"
+}
