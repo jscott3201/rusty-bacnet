@@ -1,47 +1,121 @@
 //! Bounded raw-frame observation, sharing the event bridge's cancellation delivery.
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use bacnet_transport::tap::{FrameTapReceiver, TapDirection, TapPeer, TappedFrame};
 use pyo3::exceptions::{PyStopAsyncIteration, PyValueError};
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use tokio::sync::{Notify, broadcast::error::RecvError};
 
 use crate::event_stream::{EventSource, LossyReceiver, Lost};
 
-static EPOCH: OnceLock<Instant> = OnceLock::new();
-
-/// Initialize the common capture-time origin before subscribing.
+/// Check a `frames(capacity=...)` argument.
 pub(crate) fn capacity(capacity: usize) -> PyResult<usize> {
     if !(1..=65_536).contains(&capacity) {
         return Err(PyValueError::new_err(
             "capacity must be between 1 and 65536 frames",
         ));
     }
-    EPOCH.get_or_init(Instant::now);
     Ok(capacity)
 }
 
-/// One transport observation. Its timestamp belongs to capture, not iteration.
+/// A reading of the tap's capture clock (`Instant`) paired with one of
+/// Python's `time.monotonic_ns()`, so a capture instant converts to
+/// `time.monotonic()` seconds by its offset from the pair.
+///
+/// Both read the same OS clock on Linux (`CLOCK_MONOTONIC`), on macOS
+/// (`mach_absolute_time`, which `CLOCK_UPTIME_RAW` is) and on Windows from
+/// Python 3.13 (`QueryPerformanceCounter`), so the pair stays in step. On
+/// Windows, Python 3.11 and 3.12 read `GetTickCount64` instead (see
+/// `Frame.monotonic`'s docs).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Clock {
+    instant: Instant,
+    python_ns: i64,
+}
+
+/// The process's pair, measured once, by the first `frames()` call.
+static CLOCK: OnceLock<Clock> = OnceLock::new();
+
+impl Clock {
+    /// The process's pair, measuring it on the first call. Called from a
+    /// `frames()` method, on the Python thread that called it.
+    pub(crate) fn get(py: Python<'_>) -> PyResult<Self> {
+        if let Some(clock) = CLOCK.get() {
+            return Ok(*clock);
+        }
+        let monotonic_ns = py
+            .import(intern!(py, "time"))?
+            .getattr(intern!(py, "monotonic_ns"))?;
+        let before = Instant::now();
+        let python_ns: i64 = monotonic_ns.call0()?.extract()?;
+        let after = Instant::now();
+        // Python read its clock somewhere between the two instants.
+        let measured = Self {
+            instant: before + (after - before) / 2,
+            python_ns,
+        };
+        Ok(*CLOCK.get_or_init(|| measured))
+    }
+
+    /// A pair for tests that don't run Python: the instant now as zero.
+    #[cfg(test)]
+    pub(crate) fn fixed() -> Self {
+        Self {
+            instant: Instant::now(),
+            python_ns: 0,
+        }
+    }
+
+    /// `at` in `time.monotonic()` seconds. The offset is exact in
+    /// nanoseconds and the conversion to a float never decreases, so later
+    /// instants never read earlier.
+    fn seconds(self, at: Instant) -> f64 {
+        let nanos = |duration: std::time::Duration| {
+            i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX)
+        };
+        let offset = match at.checked_duration_since(self.instant) {
+            Some(after) => nanos(after),
+            None => -nanos(self.instant.duration_since(at)),
+        };
+        i128::from(self.python_ns).saturating_add(offset) as f64 / 1e9
+    }
+}
+
+/// `at` as POSIX seconds, negative before 1970.
+fn posix_seconds(at: SystemTime) -> f64 {
+    match at.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(since) => since.as_secs_f64(),
+        Err(before) => -before.duration().as_secs_f64(),
+    }
+}
+
+/// One transport observation. Its times belong to capture, not iteration.
 #[pyclass(name = "Frame", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyFrame {
     frame: TappedFrame,
     local_address: String,
     missed_before: u64,
+    monotonic: f64,
 }
 
 #[pymethods]
 impl PyFrame {
-    /// Monotonic seconds from this module's first frame subscription.
-    /// Comparable across subscriptions, not to wall time or Python's clock origin.
+    /// Capture time in seconds on `time.monotonic()`'s clock and origin; it
+    /// never decreases within a subscription. On Windows with Python 3.11
+    /// or 3.12 it can sit up to one 10-16 ms step of that clock away.
+    #[getter]
+    fn monotonic(&self) -> f64 {
+        self.monotonic
+    }
+
+    /// Capture time as POSIX seconds, from the wall clock, as `time.time()`.
     #[getter]
     fn timestamp(&self) -> f64 {
-        self.frame
-            .monotonic_timestamp
-            .duration_since(*EPOCH.get().expect("subscription epoch"))
-            .as_secs_f64()
+        posix_seconds(self.frame.timestamp)
     }
 
     /// `"inbound"` or `"outbound"` (`"other"` for a future direction).
@@ -210,6 +284,7 @@ impl FrameSubscriptions {
         &self,
         receiver: FrameTapReceiver,
         local_address: String,
+        clock: Clock,
     ) -> PyFrameIterator {
         let source = FrameSource(Arc::new(SourceState {
             receiver: Mutex::new(Some(receiver)),
@@ -227,6 +302,7 @@ impl FrameSubscriptions {
         PyFrameIterator {
             subscription,
             local_address,
+            clock,
         }
     }
 
@@ -251,6 +327,7 @@ impl Drop for FrameSubscriptions {
 pub(crate) struct PyFrameIterator {
     subscription: Arc<Subscription>,
     local_address: String,
+    clock: Clock,
 }
 
 /// What a read's future needs to turn a tapped frame into a Python
@@ -260,6 +337,7 @@ struct Converter {
     source: FrameSource,
     lost: Lost,
     local_address: String,
+    clock: Clock,
 }
 
 impl Converter {
@@ -269,6 +347,7 @@ impl Converter {
             .0
             .missed_before(frame.missed_before, self.lost.get());
         PyFrame {
+            monotonic: self.clock.seconds(frame.monotonic_timestamp),
             frame,
             local_address: self.local_address.clone(),
             missed_before,
@@ -282,6 +361,7 @@ impl PyFrameIterator {
             source: self.subscription.source.clone(),
             lost: self.subscription.stream.lost(),
             local_address: self.local_address.clone(),
+            clock: self.clock,
         }
     }
 }
@@ -346,7 +426,7 @@ mod tests {
     async fn owner_close_releases_receiver_and_wakes_pending_read() {
         let tap = bacnet_transport::tap::FrameTap::new();
         let owner = FrameSubscriptions::default();
-        let iterator = owner.subscribe(tap.subscribe(), "local".into());
+        let iterator = owner.subscribe(tap.subscribe(), "local".into(), Clock::fixed());
         let (pending, _hook) = iterator.subscription.stream.next();
         tokio::pin!(pending);
         assert!(
@@ -359,7 +439,7 @@ mod tests {
         owner.close();
         assert_eq!(tap.counters().subscribers, 0);
         assert!(pending.await.is_none());
-        let fresh = owner.subscribe(tap.subscribe(), "new generation".into());
+        let fresh = owner.subscribe(tap.subscribe(), "new generation".into(), Clock::fixed());
         assert!(iterator.subscription.stream.next().0.await.is_none());
         assert_eq!(tap.counters().subscribers, 1);
         drop(fresh);
@@ -370,7 +450,7 @@ mod tests {
     async fn cancelling_native_wait_keeps_subscription_until_iterator_drop() {
         let tap = bacnet_transport::tap::FrameTap::new();
         let owner = FrameSubscriptions::default();
-        let iterator = owner.subscribe(tap.subscribe(), "local".into());
+        let iterator = owner.subscribe(tap.subscribe(), "local".into(), Clock::fixed());
         {
             let (pending, _hook) = iterator.subscription.stream.next();
             tokio::pin!(pending);

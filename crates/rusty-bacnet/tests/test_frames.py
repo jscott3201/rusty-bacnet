@@ -2,6 +2,7 @@
 import asyncio
 import gc
 import socket
+import time
 import unittest
 
 from rusty_bacnet import BACnetClient, BipEndpoint, Frame, FrameIterator
@@ -32,6 +33,21 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
         host, port = address.rsplit(":", 1)
         await asyncio.get_running_loop().sock_sendto(peer, payload, (host, int(port)))
 
+    def assert_captured_between(self, frames, before, after):
+        """Each frame's times fall between readings of Python's own clocks
+        taken before the traffic and after its last frame arrived."""
+        # One step of time.monotonic(): GetTickCount64's 10-16 ms on Windows
+        # before Python 3.13 (Frame.monotonic's docs), nanoseconds elsewhere.
+        # The margin covers the float conversion and the anchor's midpoint.
+        slack = time.get_clock_info("monotonic").resolution + 0.001
+        wall_slack = time.get_clock_info("time").resolution + 0.001
+        for frame in frames:
+            self.assertGreaterEqual(frame.monotonic, before[0] - slack)
+            self.assertLessEqual(frame.monotonic, after[0] + slack)
+            self.assertGreaterEqual(frame.timestamp, before[1] - wall_slack)
+            self.assertLessEqual(frame.timestamp, after[1] + wall_slack)
+        self.assertEqual([f.monotonic for f in frames], sorted(f.monotonic for f in frames))
+
     async def test_both_roles_work_on_the_observed_socket(self):
         endpoint = await self.endpoint()
         remote = await self.endpoint(711)
@@ -42,6 +58,7 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
         other = await remote.client()
         oid = ObjectIdentifier(ObjectType.DEVICE, 711)
         own_oid = ObjectIdentifier(ObjectType.DEVICE, 710)
+        before = time.monotonic(), time.time()
         value, own_value = await asyncio.gather(
             client.read_property(await remote.local_address(), oid, PropertyIdentifier.OBJECT_IDENTIFIER),
             other.read_property(await endpoint.local_address(), own_oid, PropertyIdentifier.OBJECT_IDENTIFIER),
@@ -50,17 +67,19 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(own_value, PropertyValue.object_identifier(own_oid))
         observed = [await self.next(frames) for _ in range(4)]
         others = [await self.next(remote_frames) for _ in range(4)]
+        after = time.monotonic(), time.time()
         self.assertEqual({frame.direction for frame in observed}, {"inbound", "outbound"})
         self.assertEqual(sorted(frame.octets for frame in observed), sorted(frame.octets for frame in others))
-        self.assertEqual([f.timestamp for f in observed], sorted(f.timestamp for f in observed))
+        self.assert_captured_between(observed + others, before, after)
         for frame in observed:
             self.assertIsInstance(frame, Frame)
             self.assertEqual(frame.link, "BACnet/IP")
             self.assertEqual(frame.local_address, await endpoint.local_address())
             self.assertEqual(frame.peer, await remote.local_address())
             self.assertEqual(frame.missed_before, 0)
-            with self.assertRaises(AttributeError):
-                frame.timestamp = 0
+            for field in ("monotonic", "timestamp", "missed_before"):
+                with self.assertRaises(AttributeError):
+                    setattr(frame, field, 0)
 
     async def test_malformed_datagrams_and_exact_overflow_count(self):
         endpoint = await self.endpoint()
@@ -155,7 +174,7 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
             await client.read_property(await endpoint.local_address(), oid, PropertyIdentifier.OBJECT_IDENTIFIER)
             outgoing, incoming = await self.next(frames), await self.next(frames)
             self.assertEqual((outgoing.direction, incoming.direction), ("outbound", "inbound"))
-            self.assertLessEqual(outgoing.timestamp, incoming.timestamp)
+            self.assertLessEqual(outgoing.monotonic, incoming.monotonic)
             pending = asyncio.ensure_future(anext(frames))
         with self.assertRaises(StopAsyncIteration):
             await asyncio.wait_for(pending, 10)

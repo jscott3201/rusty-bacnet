@@ -12,6 +12,7 @@ impl BACnetClient {
     #[pyo3(signature = (capacity=1024))]
     fn frames<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
         let capacity = crate::frames::capacity(capacity)?;
+        let clock = crate::frames::Clock::get(py)?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let client = started(&inner).await?;
@@ -30,7 +31,7 @@ impl BACnetClient {
             };
             Ok(inner
                 .frames
-                .subscribe(tap.subscribe_with_capacity(capacity), address))
+                .subscribe(tap.subscribe_with_capacity(capacity), address, clock))
         })
     }
 }

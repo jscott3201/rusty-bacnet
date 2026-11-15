@@ -518,6 +518,7 @@ impl PyBipEndpoint {
     #[pyo3(signature = (capacity=1024))]
     fn frames<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
         let capacity = crate::frames::capacity(capacity)?;
+        let clock = crate::frames::Clock::get(py)?;
         let lifecycle = self.lifecycle.clone();
         let frames = self.frames.clone();
         crate::py_async::future_into_py(py, async move {
@@ -531,7 +532,7 @@ impl PyBipEndpoint {
             let address = session
                 .bip_local_address()
                 .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
-            Ok(frames.subscribe(receiver, address.to_string()))
+            Ok(frames.subscribe(receiver, address.to_string(), clock))
         })
     }
 
