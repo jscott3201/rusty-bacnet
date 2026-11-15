@@ -41,7 +41,7 @@ fn nul_becomes_the_replacement_character() {
         Analog::new(EngineeringUnits::DEGREES_CELSIUS, Access::ReadOnly),
     )
     .with_description("\0");
-    let inventory = Inventory::from(PointList::new(DeviceInfo::new(7), vec![ai]));
+    let inventory = Model::from(PointList::new(DeviceInfo::new(7), vec![ai]));
     let mut text = String::new();
     let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
     // The name goes out twice (label and object-name), the description once.
@@ -58,7 +58,7 @@ fn nul_becomes_the_replacement_character() {
 /// empty model whose header says so.
 #[test]
 fn no_object_of_the_selected_types() {
-    let inventory = Inventory::new(DeviceInfo::new(7));
+    let inventory = Model::new(DeviceInfo::new(7));
     let mut text = String::new();
     let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
     assert_eq!(counts, Counts::default());
@@ -109,10 +109,10 @@ fn identifiers_read_back_as_input() {
 /// `#`, and holds nothing Turtle refuses inside `<...>`.
 #[test]
 fn options_are_checked() {
-    assert!(WritePriority::new(0).is_err());
-    assert!(WritePriority::new(17).is_err());
-    assert_eq!(WritePriority::new(1).unwrap().get(), 1);
-    assert_eq!(WritePriority::new(16).unwrap().get(), 16);
+    assert!(Priority::new(0).is_err());
+    assert!(Priority::new(17).is_err());
+    assert_eq!(Priority::new(1).unwrap().get(), 1);
+    assert_eq!(Priority::new(16).unwrap().get(), 16);
     for good in [
         "http://example.org/bacnet/",
         "urn:x:site#",
@@ -141,24 +141,31 @@ fn options_are_checked() {
         assert!(error.contains(says), "{bad}: {error}");
     }
     assert_eq!(TurtleOptions::default().base_iri(), DEFAULT_BASE_IRI);
-    assert!(InventoryOptions::new(vec![]).is_err());
-    assert!(InventoryOptions::new(vec![ObjectType::TREND_LOG]).is_err());
-    assert_eq!(InventoryOptions::default().types, EXPORTED_TYPES);
+    assert!(inventory_options(Some(vec![])).is_err());
+    assert!(inventory_options(Some(vec![ObjectType::TREND_LOG])).is_err());
+    let all = inventory_options(None).unwrap();
+    assert_eq!(all.types.as_deref(), Some(EXPORTED_TYPES.as_slice()));
     assert!(
         EXPORTED_TYPES.contains(&ObjectType::INTEGER_VALUE),
         "read by default (#2456)"
     );
-    let refused = InventoryOptions::new(vec![ObjectType::POSITIVE_INTEGER_VALUE]).unwrap_err();
+    let refused = inventory_options(Some(vec![ObjectType::POSITIVE_INTEGER_VALUE])).unwrap_err();
     assert!(
         refused.ends_with("multi-state inputs, outputs and values, and integer values"),
         "{refused}"
     );
-    assert_eq!(InventoryOptions::default().detail, Detail::Export);
-    let full = InventoryOptions::new(vec![ObjectType::ANALOG_INPUT])
-        .unwrap()
-        .with_detail(Detail::Full);
-    assert_eq!(full.detail, Detail::Full);
-    assert_eq!(full.types, [ObjectType::ANALOG_INPUT]);
+    // The export reads no values and no settings; a point list reads the
+    // settings, and the Device object for its Description.
+    assert!(!all.values && !all.settings);
+    let one = inventory_options(Some(vec![ObjectType::ANALOG_INPUT])).unwrap();
+    assert_eq!(
+        one.types.as_deref(),
+        Some([ObjectType::ANALOG_INPUT].as_slice())
+    );
+    let full = point_list_options();
+    assert!(full.settings && !full.values);
+    assert!(full.reads(ObjectType::DEVICE) && full.reads(ObjectType::INTEGER_VALUE));
+    assert!(!full.reads(ObjectType::TREND_LOG));
 }
 
 /// The checker itself refuses what it should: an unterminated statement,
@@ -188,11 +195,11 @@ fn counts_and_the_state_cap() {
         "huge",
         MultiState::new(u32::MAX, Access::ReadOnly),
     );
-    let unread = Entry::Failed {
+    let unread = Err(Skipped {
         object: oid(ObjectType::ANALOG_INPUT, 2),
         property: None,
         error: "timeout".into(),
-    };
+    });
     let trend = Point::new(
         oid(ObjectType::TREND_LOG, 1),
         "trend",
@@ -213,14 +220,8 @@ fn counts_and_the_state_cap() {
             },
         ),
     );
-    let mut inventory = Inventory::new(DeviceInfo::new(7));
-    inventory.entries = vec![
-        Entry::Point(huge),
-        unread,
-        Entry::Point(trend),
-        Entry::Point(mapped),
-        Entry::Point(unmapped),
-    ];
+    let mut inventory = Model::new(DeviceInfo::new(7));
+    inventory.entries = vec![Ok(huge), unread, Ok(trend), Ok(mapped), Ok(unmapped)];
     let mut text = String::new();
     let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
     assert_eq!(
@@ -259,10 +260,12 @@ fn counts_and_the_state_cap() {
 /// that couldn't be read; a kind that isn't the type's family.
 #[test]
 fn each_skip_says_why() {
-    let failed = |object_type, instance, property| Entry::Failed {
-        object: oid(object_type, instance),
-        property,
-        error: "PROPERTY:UNKNOWN_PROPERTY\n@prefix evil".into(),
+    let failed = |object_type, instance, property| {
+        Err(Skipped {
+            object: oid(object_type, instance),
+            property,
+            error: "PROPERTY:UNKNOWN_PROPERTY\n@prefix evil".into(),
+        })
     };
     let mismatched = Point::new(
         oid(ObjectType::ANALOG_INPUT, 1),
@@ -279,10 +282,10 @@ fn each_skip_says_why() {
         "fits",
         Binary::new(Access::ReadOnly),
     );
-    let mut inventory = Inventory::new(DeviceInfo::new(7));
+    let mut inventory = Model::new(DeviceInfo::new(7));
     inventory.entries = vec![
-        Entry::Point(mismatched),
-        Entry::Point(trend),
+        Ok(mismatched),
+        Ok(trend),
         failed(ObjectType::TREND_LOG, 2, None),
         failed(ObjectType::ANALOG_VALUE, 3, None),
         failed(
@@ -295,7 +298,7 @@ fn each_skip_says_why() {
             5,
             Some(PropertyIdentifier::OBJECT_NAME),
         ),
-        Entry::Point(fits),
+        Ok(fits),
     ];
     let mut text = String::new();
     let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
@@ -330,22 +333,16 @@ fn an_inventory_and_its_point_list() {
         Binary::new(Access::Writable).with_active_text("Occupied"),
     );
     let list = PointList::new(device.clone(), vec![point.clone()]);
-    let mut inventory = Inventory::from(list.clone());
+    let mut inventory = Model::from(list.clone());
     assert_eq!(inventory.point_list(), list);
-    let failed = Entry::Failed {
+    let failed = Err(Skipped {
         object: oid(ObjectType::ANALOG_INPUT, 2),
         property: Some(PropertyIdentifier::OBJECT_NAME),
         error: "object-name: OBJECT:UNKNOWN_OBJECT".into(),
-    };
-    inventory.entries.insert(0, failed.clone());
+    });
+    inventory.entries.insert(0, failed);
     assert_eq!(inventory.point_list(), list);
     assert_eq!(inventory.points().collect::<Vec<_>>(), [&point]);
-    assert_eq!(failed.object(), oid(ObjectType::ANALOG_INPUT, 2));
-    assert_eq!(failed.error(), Some("object-name: OBJECT:UNKNOWN_OBJECT"));
-    assert_eq!(failed.point(), None);
-    let entry = Entry::Point(point.clone());
-    assert_eq!((entry.object(), entry.error()), (point.object, None));
-    assert_eq!(entry.point(), Some(&point));
     // A Writable value is written as a value that isn't commandable, in
     // Turtle as well formed as a read device's.
     let text = to_turtle(&inventory, &TurtleOptions::default());
@@ -365,7 +362,7 @@ fn an_inventory_and_its_point_list() {
 #[test]
 fn an_integer_value_maps_as_an_analog_value_does() {
     let integer = |instance, name: &str, units, access| {
-        Entry::Point(Point::new(
+        Ok(Point::new(
             oid(ObjectType::INTEGER_VALUE, instance),
             name,
             Integer::new(units, access),
@@ -384,7 +381,7 @@ fn an_integer_value_maps_as_an_analog_value_does() {
         "integer kind",
         Integer::new(EngineeringUnits::PERCENT, Access::ReadOnly),
     );
-    let mut inventory = Inventory::new(DeviceInfo::new(7));
+    let mut inventory = Model::new(DeviceInfo::new(7));
     inventory.entries = vec![
         integer(1, "count", EngineeringUnits::NO_UNITS, commanded),
         integer(
@@ -399,10 +396,10 @@ fn an_integer_value_maps_as_an_analog_value_does() {
             EngineeringUnits::from_raw(300),
             Access::ReadOnly,
         ),
-        Entry::Point(analog_kind),
-        Entry::Point(integer_kind),
+        Ok(analog_kind),
+        Ok(integer_kind),
     ];
-    let options = TurtleOptions::new(DEFAULT_BASE_IRI, Some(WritePriority::new(9).unwrap()));
+    let options = TurtleOptions::new(DEFAULT_BASE_IRI, Some(Priority::new(9).unwrap()));
     let mut text = String::new();
     let counts = write_turtle(&inventory, &options.unwrap(), &mut text).unwrap();
     assert_eq!(

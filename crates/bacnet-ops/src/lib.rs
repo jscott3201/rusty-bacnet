@@ -33,10 +33,14 @@
 //!   what [`Device::write`] and [`Device::relinquish`] send and return
 //!   ([`Written`], [`PriorityView`]), and what
 //!   [`Device::preview_write`] reads ([`WritePreview`]);
+//! - [`inventory`]: a device's objects as [`PointRecord`]s
+//!   ([`Device::inventory`]): each one's name, units, state texts and
+//!   whether it takes commands, with its value when asked, read in batches
+//!   and written as JSON or CSV;
 //! - [`error`](mod@error): [`OpsError`], why a call failed as a whole;
 //! - [`raw`]: the reading layer under them, for front ends that run their
 //!   own request jobs, failing with the low-level client's errors;
-//! - [`export`]: a device's objects in another model's terms, so far an
+//! - [`export`]: an inventory in another model's terms, so far an
 //!   experimental Standard 223 point list in Turtle (#2436);
 //! - [`watch`]: watching points: [`Client::watch`] gives a [`Watch`], a
 //!   stream of each point's [`Update`]s (its latest value, how it came, and
@@ -55,6 +59,7 @@ pub mod device;
 pub mod error;
 pub mod export;
 pub mod format;
+pub mod inventory;
 pub mod label;
 pub mod limits;
 pub mod octets;
@@ -69,6 +74,7 @@ pub use client::{Client, Discover, Find, ResolveScope, Scope};
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};
+pub use inventory::{Inventory, InventoryOptions, PointRecord};
 pub use reading::{IntoObject, IntoProperty, ObjectRead, PropertyRef, Reading, Readings};
 pub use watch::{CovSupport, Update, Watch};
 pub use write::{

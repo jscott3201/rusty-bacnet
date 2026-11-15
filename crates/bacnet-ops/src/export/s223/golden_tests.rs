@@ -24,22 +24,21 @@ fn commanded<T>() -> Access<T> {
     }
 }
 
-fn device(instance: u32, entries: Vec<Entry>) -> Inventory {
-    Inventory {
+fn device(instance: u32, entries: Vec<Result<Point, Skipped>>) -> Model {
+    Model {
         entries,
-        ..Inventory::new(DeviceInfo::new(instance).with_name("AHU-1 Controller"))
+        ..Model::new(DeviceInfo::new(instance).with_name("AHU-1 Controller"))
     }
 }
 
-fn points(points: Vec<Point>) -> Vec<Entry> {
-    points.into_iter().map(Entry::Point).collect()
+fn points(points: Vec<Point>) -> Vec<Result<Point, Skipped>> {
+    points.into_iter().map(Ok).collect()
 }
 
 /// Each golden case: its file, its inventory and its options.
-fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
+fn cases() -> Vec<(&'static str, Model, TurtleOptions)> {
     let plain = TurtleOptions::default();
-    let priority =
-        TurtleOptions::new(DEFAULT_BASE_IRI, Some(WritePriority::new(8).unwrap())).unwrap();
+    let priority = TurtleOptions::new(DEFAULT_BASE_IRI, Some(Priority::new(8).unwrap())).unwrap();
 
     let fahrenheit = EngineeringUnits::DEGREES_FAHRENHEIT;
     let celsius = EngineeringUnits::DEGREES_CELSIUS;
@@ -99,11 +98,11 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
     );
     // An analog object whose Units can't be read has no point: it is
     // skipped where it was.
-    let unread = Entry::Failed {
+    let unread = Err(Skipped {
         object: oid(ObjectType::ANALOG_INPUT, 6),
         property: Some(PropertyIdentifier::UNITS),
         error: "units: PROPERTY:UNKNOWN_PROPERTY".into(),
-    };
+    });
     let proprietary = named(
         ObjectType::ANALOG_INPUT,
         7,
@@ -128,11 +127,11 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
     let mut hostile_device = device(1234, points(vec![hostile, hostile_states]));
     hostile_device.device.name = Some("Bldg \u{2028}\"B\" \\ \u{feff}".into());
 
-    let failed = Entry::Failed {
+    let failed = Err(Skipped {
         object: oid(ObjectType::ANALOG_INPUT, 1),
         property: None,
         error: "PROPERTY:UNKNOWN_PROPERTY\n# not a comment".into(),
-    };
+    });
     // Only a list built by hand can hold a point of a type the export
     // doesn't map.
     let trend = named(
@@ -147,10 +146,7 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
         "Filter Alarm",
         Binary::new(Access::ReadOnly),
     );
-    let mut skipped = device(
-        1234,
-        vec![failed, Entry::Point(trend), Entry::Point(filter)],
-    );
+    let mut skipped = device(1234, vec![failed, Ok(trend), Ok(filter)]);
 
     // An Integer Value maps as an analog value does (#2456): actuatable
     // when commandable, plainly quantifiable when not, with its units.
@@ -197,10 +193,7 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
         ),
         (
             "unmapped-unit.ttl",
-            device(
-                1234,
-                vec![Entry::Point(days), unread, Entry::Point(proprietary)],
-            ),
+            device(1234, vec![Ok(days), unread, Ok(proprietary)]),
             plain.clone(),
         ),
         ("hostile-strings.ttl", hostile_device, plain.clone()),

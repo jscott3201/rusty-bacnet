@@ -1,4 +1,4 @@
-//! An [`Inventory`] as Turtle text.
+//! A [`Model`] as Turtle text.
 //!
 //! Each exported object becomes one 223 property for its Present_Value,
 //! with a BACnet external reference node beside it:
@@ -42,8 +42,8 @@ use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::{
-    Access, EXPORTED_TYPES, Entry, Inventory, MultiState, ONTOLOGY_SOURCE, ONTOLOGY_VERSION, Point,
-    PointKind, TurtleOptions,
+    Access, EXPORTED_TYPES, Model, MultiState, ONTOLOGY_SOURCE, ONTOLOGY_VERSION, Point, PointKind,
+    Skipped, TurtleOptions,
 };
 use crate::format::{is_binary, is_multistate};
 use crate::label::{kebab, object_label};
@@ -82,8 +82,8 @@ pub struct Counts {
     pub replaced: usize,
 }
 
-/// `inventory` as Turtle, the same text [`write_turtle`] writes.
-pub fn to_turtle(inventory: &Inventory, options: &TurtleOptions) -> String {
+/// `inventory`, a model, as Turtle: the same text [`write_turtle`] writes.
+pub fn to_turtle(inventory: &Model, options: &TurtleOptions) -> String {
     let mut out = String::new();
     // Writing to a String can't fail.
     let _ = write_turtle(inventory, options, &mut out);
@@ -92,7 +92,7 @@ pub fn to_turtle(inventory: &Inventory, options: &TurtleOptions) -> String {
 
 /// Write `inventory` as Turtle to `out`, and say what was written.
 pub fn write_turtle(
-    inventory: &Inventory,
+    inventory: &Model,
     options: &TurtleOptions,
     out: &mut impl Write,
 ) -> Result<Counts, fmt::Error> {
@@ -105,7 +105,7 @@ pub fn write_turtle(
         let (object, class) = match exported(entry) {
             Ok(exported) => exported,
             Err(why) => {
-                let label = object_label(entry.object());
+                let label = object_label(object_of(entry));
                 writeln!(body, "# {label}: skipped, {why}.\n")?;
                 continue;
             }
@@ -141,7 +141,7 @@ impl Literals {
 }
 
 /// The counts the header gives, before any point is written.
-fn count(inventory: &Inventory) -> Counts {
+fn count(inventory: &Model) -> Counts {
     let mut counts = Counts::default();
     for entry in &inventory.entries {
         let Ok((object, _)) = exported(entry) else {
@@ -159,7 +159,7 @@ fn count(inventory: &Inventory) -> Counts {
 }
 
 fn header(
-    inventory: &Inventory,
+    inventory: &Model,
     options: &TurtleOptions,
     counts: Counts,
     out: &mut impl Write,
@@ -238,25 +238,33 @@ enum Class {
     Enumerable,
 }
 
+/// The object an entry is about.
+fn object_of(entry: &Result<Point, Skipped>) -> ObjectIdentifier {
+    match entry {
+        Ok(point) => point.object,
+        Err(skipped) => skipped.object,
+    }
+}
+
 /// The point an entry writes and its class, or why the entry is skipped,
 /// in text of ours: never device text, and the same for every device.
-fn exported(entry: &Entry) -> Result<(&Point, Class), String> {
-    if !EXPORTED_TYPES.contains(&entry.object().object_type()) {
+fn exported(entry: &Result<Point, Skipped>) -> Result<(&Point, Class), String> {
+    if !EXPORTED_TYPES.contains(&object_of(entry).object_type()) {
         return Err("its type isn't mapped".into());
     }
     match entry {
-        Entry::Point(point) => match Class::of(point) {
+        Ok(point) => match Class::of(point) {
             Some(class) => Ok((point, class)),
             None => Err("its kind doesn't fit its type".into()),
         },
-        Entry::Failed {
+        Err(Skipped {
             property: Some(property),
             ..
-        } => Err(format!(
+        }) => Err(format!(
             "no readable {}, which its type requires",
             kebab(property)
         )),
-        Entry::Failed { property: None, .. } => Err("its read failed".into()),
+        Err(Skipped { property: None, .. }) => Err("its read failed".into()),
     }
 }
 
@@ -353,7 +361,7 @@ pub(super) fn identifier(object_type: ObjectType, instance: u32) -> String {
 
 fn point(
     lit: &Literals,
-    inventory: &Inventory,
+    inventory: &Model,
     object: &Point,
     class: Class,
     options: &TurtleOptions,

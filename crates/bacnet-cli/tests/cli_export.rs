@@ -5,82 +5,10 @@
 #[allow(dead_code)]
 mod support;
 
-use std::collections::HashSet;
-use std::net::{Ipv4Addr, SocketAddr};
 use std::process::Output;
-use std::sync::{Arc, Mutex};
 
-use bacnet_encoding::apdu::{Apdu, decode_apdu};
-use bacnet_encoding::npdu::decode_npdu;
-use bacnet_server::server::BACnetServer;
-use bacnet_transport::bip::BipTransport;
-use bytes::Bytes;
-use support::lab::{lab_database, lab_identity};
-use tokio::net::UdpSocket;
-use tokio::task::JoinHandle;
-
-/// The lab device, and its address.
-async fn server() -> (BACnetServer<BipTransport>, SocketAddr) {
-    let server = BACnetServer::bip_builder()
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .device(lab_identity(1234))
-        .database(lab_database(1234))
-        .build()
-        .await
-        .unwrap();
-    let mac = server.local_mac();
-    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, u16::from_be_bytes([mac[4], mac[5]])));
-    (server, address)
-}
-
-/// A B/IP relay on loopback in front of `device` that counts the distinct
-/// confirmed requests it sees, and passes on the first `answered` of them
-/// (and their retries), dropping the rest, so the device goes silent after
-/// them. Returns the CLI's target, the count and the relay's task.
-async fn relay(
-    device: SocketAddr,
-    answered: usize,
-) -> (String, Arc<Mutex<HashSet<u8>>>, JoinHandle<()>) {
-    let front = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let back = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let target = front.local_addr().unwrap().to_string();
-    let seen: Arc<Mutex<HashSet<u8>>> = Arc::default();
-    let log = Arc::clone(&seen);
-    let task = tokio::spawn(async move {
-        let mut cli = None;
-        let mut passed = HashSet::new();
-        let (mut up, mut down) = ([0u8; 1500], [0u8; 1500]);
-        loop {
-            tokio::select! {
-                received = front.recv_from(&mut up) => {
-                    let Ok((length, from)) = received else { return };
-                    cli = Some(from);
-                    let frame = &up[..length];
-                    if let Some(npdu) = frame.get(4..).and_then(|n| decode_npdu(Bytes::copy_from_slice(n)).ok())
-                        && let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(npdu.payload)
-                    {
-                        log.lock().unwrap().insert(request.invoke_id);
-                        if !passed.contains(&request.invoke_id) {
-                            if passed.len() == answered {
-                                continue;
-                            }
-                            passed.insert(request.invoke_id);
-                        }
-                    }
-                    let _ = back.send_to(frame, device).await;
-                }
-                received = back.recv_from(&mut down) => {
-                    let Ok((length, _)) = received else { return };
-                    if let Some(cli) = cli {
-                        let _ = front.send_to(&down[..length], cli).await;
-                    }
-                }
-            }
-        }
-    });
-    (target, seen, task)
-}
+use support::lab::large_database;
+use support::relay::{relay, server, serving};
 
 async fn export(args: &[&str]) -> Output {
     export_within("2000", args).await
@@ -113,8 +41,8 @@ fn stdout(output: &Output) -> String {
 
 /// By address: the device's eight analog, binary and multi-state objects
 /// as 223 properties with their references, and nothing else; one request
-/// to learn the instance, then the name, the Object_List and one an
-/// object.
+/// to learn the instance, then the summary, the Object_List and the eight
+/// objects in one batch.
 #[tokio::test]
 async fn exports_the_lab_device_by_address() {
     let (mut server, device) = server().await;
@@ -168,8 +96,8 @@ async fn exports_the_lab_device_by_address() {
     assert!(!text.contains("priority-for-writing"));
     assert_eq!(
         seen.lock().unwrap().len(),
-        8 + 3,
-        "wildcard read, name, list, 8 objects"
+        1 + 3,
+        "wildcard read, summary, list, one batch of 8 objects"
     );
     relay.abort();
     server.stop().await.unwrap();
@@ -209,11 +137,11 @@ async fn options_and_the_output_file() {
             .count(),
         2
     );
-    assert_eq!(seen.lock().unwrap().len(), 2 + 3);
+    assert_eq!(seen.lock().unwrap().len(), 1 + 3);
 
     let again = export(&args).await;
     support::failure(&again, "output file already exists");
-    assert_eq!(seen.lock().unwrap().len(), 2 + 3, "refused before sending");
+    assert_eq!(seen.lock().unwrap().len(), 1 + 3, "refused before sending");
 
     for (bad, says) in [
         (
@@ -235,7 +163,7 @@ async fn options_and_the_output_file() {
         args.extend(bad);
         support::failure(&export(&args).await, says);
     }
-    assert_eq!(seen.lock().unwrap().len(), 2 + 3, "refused before sending");
+    assert_eq!(seen.lock().unwrap().len(), 1 + 3, "refused before sending");
     relay.abort();
     server.stop().await.unwrap();
 }
@@ -244,21 +172,22 @@ async fn options_and_the_output_file() {
 /// written, its header says it is incomplete, and the exit status is 1.
 #[tokio::test]
 async fn an_incomplete_export_exits_1() {
-    let (mut server, device) = server().await;
-    // The wildcard read, the name, the list and the first two objects.
-    let (target, seen, relay) = relay(device, 5).await;
+    // Forty analog values, eight a batch.
+    let (mut server, device) = serving(large_database(1234, 40)).await;
+    // The wildcard read, the summary, the list and the first batch.
+    let (target, seen, relay) = relay(device, 4).await;
     let output = export_within("300", &[&target]).await;
     assert_eq!(output.status.code(), Some(1));
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
-        text.contains("# Incomplete: the reading stopped early ("),
+        text.contains("# Incomplete: the reading stopped early (analog-value 9: "),
         "{text}"
     );
-    assert!(text.contains("# 2 objects exported"), "{text}");
-    assert_eq!(text.matches(" a s223:BACnetExternalReference ;").count(), 2);
+    assert!(text.contains("# 8 objects exported"), "{text}");
+    assert_eq!(text.matches(" a s223:BACnetExternalReference ;").count(), 8);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Wrote 2 points of device 1234 to stdout"),
+        stderr.contains("Wrote 8 points of device 1234 to stdout"),
         "{stderr}"
     );
     assert!(
@@ -267,8 +196,8 @@ async fn an_incomplete_export_exits_1() {
     );
     assert_eq!(
         seen.lock().unwrap().len(),
-        6,
-        "nothing after the silent object"
+        5,
+        "nothing after the silent batch"
     );
     relay.abort();
     server.stop().await.unwrap();
