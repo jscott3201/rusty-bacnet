@@ -72,6 +72,11 @@ impl PyDiscoveredDevice {
 }
 
 impl PyDiscoveredDevice {
+    /// The row, as `BACnetClient.device()` takes it for a target.
+    pub(crate) fn rust(&self) -> &DiscoveredDevice {
+        &self.inner
+    }
+
     pub fn from_rust(dev: DiscoveredDevice) -> Self {
         Self {
             created: dev.last_seen,

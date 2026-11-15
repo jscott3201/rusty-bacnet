@@ -5,6 +5,7 @@
 
 use bacnet_ops::label::object_label;
 use bacnet_ops::target::AddressStyle;
+use bacnet_ops::write::Commandability;
 use bacnet_ops::{Priority, PriorityView, WritePolicy, Written};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -156,8 +157,9 @@ impl std::fmt::Debug for Tuple<'_> {
 
 /// An object's commands as read: its Priority_Array's sixteen slots, the
 /// slot in control, Relinquish_Default and Present_Value
-/// (`BACnetClient.priority_array` and `relinquish`). Each value is a
-/// `Value`; values name no units. Refuses `copy` and `pickle`.
+/// (`priority_array` and `relinquish`, on a `Device` or a `BACnetClient`).
+/// Each value is a `Value`; values name no units. Refuses `copy` and
+/// `pickle`.
 #[pyclass(name = "PriorityView", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyPriorityView {
     object: ObjectIdentifier,
@@ -284,8 +286,9 @@ impl PyPriorityView {
 }
 
 /// A write the device acknowledged, as it was sent: where it went, the
-/// property, the value and the priority. A BacnetReadBackError's and a
-/// BacnetNoPriorityArrayError's `written`. Refuses `copy` and `pickle`.
+/// property, the value and the priority. What `Device.write` returns, and
+/// a BacnetReadBackError's and a BacnetNoPriorityArrayError's `written`.
+/// Refuses `copy` and `pickle`.
 #[pyclass(name = "Written", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyWritten {
     address: String,
@@ -294,6 +297,17 @@ pub(crate) struct PyWritten {
     index: Option<u32>,
     value: Py<PyValue>,
     priority: Option<Priority>,
+    commandable: Commandability,
+}
+
+/// Whether a property takes command priorities, as Python names it.
+pub(crate) fn commandable_label(commandable: Commandability) -> &'static str {
+    match commandable {
+        Commandability::Always => "always",
+        Commandability::Never => "never",
+        // Optional, and whatever a later release adds: only a read tells.
+        _ => "optional",
+    }
 }
 
 impl PyWritten {
@@ -315,6 +329,7 @@ impl PyWritten {
             index: property.index,
             value: Py::new(py, value)?,
             priority: written.priority,
+            commandable: written.commandable,
         })
     }
 }
@@ -355,10 +370,22 @@ impl PyWritten {
         self.value.clone_ref(py)
     }
 
-    /// The priority sent, None when none was.
+    /// The priority sent: the one asked for, or 16 for a property the
+    /// standard makes commandable when none was. None when none was sent:
+    /// a property that isn't commandable, or one that may be, written
+    /// without one (the device then takes it at 16 if it is).
     #[getter]
     fn priority(&self) -> Option<u8> {
         self.priority.map(Priority::get)
+    }
+
+    /// Whether the property takes priorities, as its object type and
+    /// identifier say with nothing read: `"always"` (an output's
+    /// Present_Value), `"optional"` (a value object's, commandable only
+    /// when the object has a Priority_Array) or `"never"`.
+    #[getter]
+    fn commandable(&self) -> &'static str {
+        commandable_label(self.commandable)
     }
 
     fn __repr__(&self) -> String {

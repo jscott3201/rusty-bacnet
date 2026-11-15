@@ -86,8 +86,9 @@ impl BACnetClient {
     }
 
     /// Send a WhoIs broadcast to discover devices: on this network alone
-    /// unless `scope` names every network (`"global"`) or one remote
-    /// network by its number (#2560).
+    /// unless `scope` names every network (`"global"`), one remote
+    /// network by its number (#2560), or one station by its address, which
+    /// is asked by unicast (#2561).
     ///
     /// Give both limits or neither, each from 0 to 4194303; one alone,
     /// `low_limit` above `high_limit`, or a limit past 4194303 raises
@@ -109,39 +110,59 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let future = async move {
             let c = started(&inner).await?;
+            let scope = scope.on(&c).await?;
             send_who_is(&c, &scope, range).await
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Convenience: send WhoIs, wait for `timeout_ms` (default 3000), return discovered devices.
+    /// Find devices: one Who-Is, then the devices that answered it within
+    /// `wait` seconds (3 unless given), as a list of `Discovered`, one an
+    /// address. Only this call's answers: a device the client heard
+    /// earlier and that stays quiet now isn't listed
+    /// (`discovered_devices()` is the whole table).
     ///
-    /// Combines `who_is()` + `asyncio.sleep()` + `discovered_devices()` in one call,
-    /// with the same limits and `scope` rules as `who_is()`: this network
-    /// alone by default.
+    /// `scope` is where the Who-Is goes, as for `who_is()`: this network
+    /// alone by default. `low` and `high` ask only the instances between
+    /// them: give both or neither, each from 0 to 4194303. A row is a
+    /// `device()` target, and its `duplicate` says when another address
+    /// claims the same instance.
+    ///
+    /// Raised before anything is sent: `ValueError` for one limit alone,
+    /// `low` above `high`, a limit past 4194303, a scope that is none of
+    /// the forms, or a `wait` that isn't a number of seconds from 0 to
+    /// 3600; `TypeError` for a scope of another type.
     #[pyo3(
-        signature = (timeout_ms=3000, low_limit=None, high_limit=None, scope=None),
-        text_signature = "($self, timeout_ms=3000, low_limit=None, high_limit=None, scope='local')"
+        signature = (scope=None, low=None, high=None, wait=3.0),
+        text_signature = "($self, scope='local', low=None, high=None, wait=3.0)"
     )]
     fn discover<'py>(
         &self,
         py: Python<'py>,
-        timeout_ms: u64,
-        low_limit: Option<u32>,
-        high_limit: Option<u32>,
         scope: Option<Bound<'py, PyAny>>,
+        low: Option<u32>,
+        high: Option<u32>,
+        wait: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let range = device_range(low_limit, high_limit)?;
+        let range = device_range(low, high)?;
         let scope = discovery_scope(scope.as_ref(), &self.transport_type, "Who-Is")?;
+        let wait = discover_wait(wait)?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let c = started(&inner).await?;
-            send_who_is(&c, &scope, range).await?;
-            tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
-            let devices = c.discovered_devices().await;
-            Ok(devices
+            let high_level = state::high_level(&inner).await?;
+            let scope = scope.on(high_level.low_level()).await?;
+            let style = high_level.address_style();
+            let mut request = bacnet_ops::Discover::from(scope).wait(wait);
+            if let Some(range) = range {
+                request = request.range(range.low()..=range.high());
+            }
+            let found = high_level
+                .discover(request)
+                .await
+                .map_err(|error| crate::high_level::ops_err(error, style))?;
+            Ok(found
                 .into_iter()
-                .map(PyDiscoveredDevice::from_rust)
+                .map(|found| crate::high_level::PyDiscovered::new(found, style))
                 .collect::<Vec<_>>())
         })
     }

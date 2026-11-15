@@ -54,8 +54,8 @@ from rusty_bacnet import BACnetClient, Multicast
 async def main():
     group = Multicast("239.255.66.1", ttl=2)
     async with BACnetClient(interface="192.0.2.20", multicast=group) as client:
-        devices = await client.discover(timeout_ms=3000)
-        print([device.object_identifier.instance for device in devices])
+        devices = await client.discover(wait=3.0)
+        print([device.instance for device in devices])
 
 
 asyncio.run(main())

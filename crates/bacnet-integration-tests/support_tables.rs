@@ -62,7 +62,6 @@ const PYTHON_METHOD_SUFFIXES: &[&str] = &[
     "",
     "_typed",
     "_request",
-    "_directed",
     "_by_id",
     "_by_name",
     "_replies",
@@ -77,9 +76,10 @@ const PYTHON_METHOD_SUFFIXES: &[&str] = &[
 /// (`discover` and `who_is`, `unsubscribe_cov` and `subscribe_cov`,
 /// `read_log_page` and `read_range`, `export_223_experimental` and the
 /// ReadProperty and ReadPropertyMultiple readers, `relinquish` and
-/// `priority_array` and WriteProperty and ReadPropertyMultiple); the rest
-/// send none: lifecycle, accessors (`write_policy`), event streams, and BVLL
-/// or network-layer messages. Generation
+/// `priority_array` and WriteProperty and ReadPropertyMultiple, and `device`,
+/// whose `Device` handle's calls send those three, #2561); the rest send
+/// none: lifecycle, accessors (`write_policy`, `resolve_scope`), event
+/// streams, and BVLL or network-layer messages. Generation
 /// fails on a method that is neither here nor named after a service, and on
 /// an entry here the stub no longer has.
 const PYTHON_OTHER_METHODS: &[&str] = &[
@@ -94,6 +94,8 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "relinquish",
     "priority_array",
     "write_policy",
+    "device",
+    "resolve_scope",
     "i_have_events",
     "cov_notifications",
     "network_reports",

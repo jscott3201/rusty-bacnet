@@ -100,6 +100,7 @@ impl BACnetClient {
 
         let future = async move {
             let c = started(&inner).await?;
+            let scope = scope.on(&c).await?;
             send_who_has(&c, &scope, &object, range).await
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -126,6 +127,7 @@ impl BACnetClient {
 
         let future = async move {
             let c = started(&inner).await?;
+            let scope = scope.on(&c).await?;
             send_who_has(&c, &scope, &object, range).await
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))

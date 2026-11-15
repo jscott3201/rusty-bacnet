@@ -515,15 +515,17 @@ class CancelledTests(Lab):
 
 
 class ReceivedValueTests(Lab):
-    async def test_received_values_refuse_copy_and_pickle(self) -> None:
+    async def test_a_view_refuses_copy_and_pickle_and_its_values_copy(self) -> None:
         async with client() as c:
             view = await c.priority_array(self.address, AO)
-        for received in (view, view.present_value):
-            with self.subTest(kind=type(received).__name__):
-                with self.assertRaises(TypeError):
-                    pickle.dumps(received)
-                with self.assertRaises(TypeError):
-                    copy.copy(received)
+        with self.assertRaises(TypeError):
+            pickle.dumps(view)
+        with self.assertRaises(TypeError):
+            copy.copy(view)
+        # A Value is a value class (part 2): it copies and pickles.
+        value = view.present_value
+        self.assertEqual(copy.copy(value), value)
+        self.assertEqual(pickle.loads(pickle.dumps(value)), value)
         with self.assertRaises(AttributeError):
             view.in_control = 3  # type: ignore[misc]
 
@@ -628,7 +630,7 @@ class StubParityTests(unittest.TestCase):
 
     def test_the_write_policy_keyword_matches_the_stub(self) -> None:
         runtime = runtime_parameters(BACnetClient)
-        self.assertEqual(runtime[-1], ("write_policy", inspect.Parameter.KEYWORD_ONLY))
+        self.assertEqual(runtime[-2], ("write_policy", inspect.Parameter.KEYWORD_ONLY))
         self.assertIsNone(inspect.signature(BACnetClient).parameters["write_policy"].default)
         self.assertEqual(runtime, stub_parameters(stub_method("BACnetClient", "__init__")))
         self.assertEqual(runtime_parameters(WritePolicy), [])
@@ -640,11 +642,11 @@ class StubParityTests(unittest.TestCase):
 
     def test_the_new_names_are_in_the_stub(self) -> None:
         for name, members in (
-            ("Value", {"value", "text", "data"}),
+            ("Value", {"value", "text", "data", "raw"}),
             ("PriorityView", {"object_id", "slots", "in_control", "relinquish_default",
                               "present_value", "slot"}),
             ("Written", {"address", "object_id", "property_id", "array_index", "value",
-                         "priority"}),
+                         "priority", "commandable"}),
             ("WritePolicy", {"allow_priorities", "allows", "refused"}),
         ):
             with self.subTest(cls=name):

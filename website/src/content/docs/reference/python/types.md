@@ -434,21 +434,167 @@ Properties:
 
 ## Value
 
-One value a high-level call read or sent, in three forms (#2561).
-Refuses `copy` and `pickle`.
+One value a high-level call read or sent (#2561): typed (`value`),
+as text (`text`), as plain data (`data`) and as octets (`raw`).
+
+A value class: two are equal when they hold the same octets, text and
+data for the same property of the same object type, equal values hash
+alike, and one copies and pickles. It keeps nothing of the client or
+the device it came from. `value` is the typed Python form, so there
+are no `as_float`-style accessors: `reading.value.value` is the
+float, int, str or other value itself.
 
 Properties:
 
 - `value: PropertyValue`: The value as a `PropertyValue`, shaped as `read_property` of the same property returns it (a Priority\_Array slot as a read of that slot by its index).
-- `text: str`: The value as text, as the `bacnet` tool writes it: every digit of a number, a state or enumeration by its name (`"active"`), `"null"` for NULL. No units.
+- `text: str`: The value as text, as the `bacnet` tool writes it: every digit of a number, a state or enumeration by its name (`"active"`), `"null"` for NULL. A `read_many` that reads the object's units or state texts in the same call names them (`"21.5 °C"`, `"2 (Heat)"`); a single `read` names neither.
 - `data: Any`: The value as plain data, the shape of the `bacnet` tool's JSON: None, a bool, an int, a float (a REAL as the shortest decimal that reads back as it) or a str, or a dict or list of them; an enumeration is `{"value": 1, "name": "active"}`. A new copy each time.
+- `raw: bytes`: The value's octets as the device sent them, or as a write sends them: application-tagged.
+
+## Reading
+
+One property as a bulk read read it (#2561): `value`, or `error`
+when the device gave none. Exactly one of the two is None. Refuses
+`copy` and `pickle`; its `value` copies and pickles.
+
+Properties:
+
+- `object_id: ObjectIdentifier`: The object read.
+- `property_id: PropertyIdentifier`: The property read.
+- `array_index: Optional[int]`: The array element read, None for the whole property.
+- `value: Optional[Value]`: The value; None when the device gave none (see `error`).
+- `error: Optional[BacnetError]`: Why the device gave no value, as the exception a typed read of the property would raise, never raised here: a `BacnetProtocolError` with `error_class` and `error_code` for an unknown property or object, a reject or abort error, or a `BacnetError` for an answer that left the property out. None when the device gave a value.
+- `text: Optional[str]`: The value's text; None when the device gave no value.
+- `ok: bool`: True when the device gave a value.
+
+## Readings
+
+What `Device.read_many` or `Device.read_object` read (#2561): a
+`Reading` each property, in the order asked for, and whether the
+device stopped answering part way. Iterating it gives the readings;
+`len` and an index work too. Refuses `copy` and `pickle`.
+
+Properties:
+
+- `readings: tuple[Reading, ...]`: The readings, in the order asked for; after `stopped`, those read before the device stopped answering.
+- `via: Optional[Literal["rpm", "rp", "mixed"]]`: How the values were read: `"rpm"` (ReadPropertyMultiple), `"rp"` (ReadProperty each) or `"mixed"`; None when nothing was read.
+- `stopped: Optional[BacnetError]`: Set when the device stopped answering after the read began: the `BacnetTimeoutError` or `BacnetTransportError` a single read would have raised, never raised here. The properties after `readings` weren't read. Always None for `read_object`.
+
+### Readings.get
+
+```python
+def get(
+    self,
+    object: ObjectIdentifier | str,
+    property: PropertyIdentifier | str | None = None,
+    *,
+    index: Optional[int] = None,
+) -> Optional[Reading]
+```
+
+The first reading of `property` of `object` (its
+Present\_Value when `property` is left out), in the forms
+`Device.read` takes; None when the read holds none.
+
+### Readings.__len__
+
+```python
+def __len__(self) -> int
+```
+
+### Readings.__iter__
+
+```python
+def __iter__(self) -> Iterator[Reading]
+```
+
+### Readings.__getitem__
+
+```python
+def __getitem__(self, index: int) -> Reading
+```
+
+## ObjectList
+
+A device's Object\_List as read (`Device.objects`, #2561).
+Iterating it gives the `ObjectIdentifier`s; `len`, an index and
+`in` (an `ObjectIdentifier` or text such as `"ai:1"`) work too.
+Refuses `copy` and `pickle`.
+
+Properties:
+
+- `objects: tuple[ObjectIdentifier, ...]`: The objects, in the device's order.
+- `indexed: bool`: True when the list was read an element at a time, because the device couldn't send it in one answer.
+- `stopped: Optional[str]`: Why an element-by-element read ended early, as text; None when the whole list was read. `objects` then holds the elements before it.
+
+### ObjectList.__len__
+
+```python
+def __len__(self) -> int
+```
+
+### ObjectList.__iter__
+
+```python
+def __iter__(self) -> Iterator[ObjectIdentifier]
+```
+
+### ObjectList.__getitem__
+
+```python
+def __getitem__(self, index: int) -> ObjectIdentifier
+```
+
+### ObjectList.__contains__
+
+```python
+def __contains__(self, object: ObjectIdentifier | str) -> bool
+```
+
+## DeviceSummary
+
+A device's summary (`Device.summary`, #2561): its instance, and
+the Device object's identifying properties (name, vendor, model,
+firmware, protocol revision, what it supports). Refuses `copy` and
+`pickle`.
+
+Properties:
+
+- `instance: int`: The device instance.
+- `name: Optional[str]`: The device's Object\_Name with control characters removed, for display; None when the device gave none. Text the device supplied.
+- `readings: Readings`: The properties read: one the device refused has its `error` set.
+
+### DeviceSummary.value
+
+```python
+def value(self, property: PropertyIdentifier | str) -> Optional[Value]
+```
+
+The `Value` of `property` of the Device object
+(`"vendor-name"`, `PropertyIdentifier.MODEL_NAME`); None when
+the summary doesn't read it or the device gave none.
+
+## Discovered
+
+One device that answered a `BACnetClient.discover()` (#2561). A
+`BACnetClient.device()` target, which pins the handle to `address`.
+Refuses `copy` and `pickle`.
+
+Properties:
+
+- `address: str`: Where the device answers, as text `device()` reads back: `"192.168.1.10:47808"`, `"mstp:5"`, `"bip6:0x0004D2"`, an SC VMAC in hex, or a routed station as `"2:0x05"`.
+- `network: int`: The network it is on: 0 for this client's own, else the number of the remote network a router passed its answer on from.
+- `instance: int`: Its Device instance.
+- `duplicate: bool`: True when another address claims the same instance: name this one by its address, or by this row, never by the instance.
+- `entry: DiscoveredDevice`: Its row in the discovery table: the largest APDU it takes, its segmentation support and its vendor.
 
 ## PriorityView
 
 An object's commands as read: its Priority\_Array's sixteen slots,
 the slot in control, Relinquish\_Default and Present\_Value
-(`BACnetClient.priority_array` and `relinquish`, #2561). Refuses
-`copy` and `pickle`.
+(`priority_array` and `relinquish`, on a `Device` or a
+`BACnetClient`, #2561). Refuses `copy` and `pickle`; its values
+copy and pickle.
 
 Properties:
 
@@ -470,18 +616,285 @@ TypeError.
 
 ## Written
 
-A write the device acknowledged, as it was sent (#2561): a
-`BacnetReadBackError`'s and a `BacnetNoPriorityArrayError`'s
-`written`. Refuses `copy` and `pickle`.
+A write the device acknowledged, as it was sent (#2561): what
+`Device.write` returns, and a `BacnetReadBackError`'s and a
+`BacnetNoPriorityArrayError`'s `written`. Refuses `copy` and
+`pickle`.
 
 Properties:
 
-- `address: str`: The device's address the write went to: `"ip:port"`, `"mstp:N"`, a B/IPv6 VMAC (`"bip6:0x0004D2"`), or on BACnet/SC its VMAC in hex (`"02:00:00:00:00:04"`), the forms `address` takes.
+- `address: str`: The device's address the write went to: `"ip:port"`, `"mstp:N"`, a B/IPv6 VMAC (`"bip6:0x0004D2"`), or on BACnet/SC its VMAC in hex (`"02:00:00:00:00:04"`), or a routed station as `"2:0x05"`: text `BACnetClient.device` reads back.
 - `object_id: ObjectIdentifier`: The object written.
 - `property_id: PropertyIdentifier`: The property written.
 - `array_index: Optional[int]`: The array index written, None for the whole property.
 - `value: Value`: The value as sent: NULL for a relinquish.
-- `priority: Optional[int]`: The priority sent, None when none was.
+- `priority: Optional[int]`: The priority sent: the one asked for, or 16 for a property the standard makes commandable when none was. None when none was sent: a property that isn't commandable, or one that may be, written without one (the device then takes it at 16 if it is).
+- `commandable: Literal["always", "optional", "never"]`: Whether the property takes priorities, as its object type and identifier say with nothing read: `"always"` (an output's Present\_Value), `"optional"` (a value object's, commandable only when the object has a Priority\_Array) or `"never"`.
+
+## WritePreview
+
+What `Device.write` of the same arguments would do, read first and
+sent nowhere (`Device.preview_write`, #2561). Refuses `copy` and
+`pickle`.
+
+Properties:
+
+- `address: str`: Where the read went, and the write would go, as `Device.address` writes it.
+- `object_id: ObjectIdentifier`: The object it would write.
+- `property_id: PropertyIdentifier`: The property it would write.
+- `array_index: Optional[int]`: The array index it would write, None for the whole property.
+- `value: Value`: The value as it would be sent.
+- `priority: Optional[int]`: The slot it would take: the priority asked for, or 16, on a property the read found commandable; None on one it found isn't.
+- `occupancy: Literal["empty", "held", "not-commandable", "unknown"]`: Who holds that slot now: `"empty"`, `"held"` (the write replaces a command, without telling whoever sent it), `"not-commandable"`, or `"unknown"` when the device wouldn't give its slots.
+- `before: Optional[Value]`: What the write replaces: the slot's command when one holds it, or the property's value for one that isn't commandable. None for an empty slot, or when the device refused the read.
+- `effect: Literal["changes", "unchanged", "not-present-value", "unknown"]`: What the write does to Present\_Value: `"changes"` (see `changes_from` and `changes_to`), `"unchanged"` (a stronger slot keeps control when `held_by` names one), `"not-present-value"` for a write to another property, or `"unknown"`.
+- `changes_from: Optional[str]`: Present\_Value's text now, when `effect` is `"changes"`.
+- `changes_to: Optional[str]`: Present\_Value's text after the write, when `effect` is `"changes"`.
+- `held_by: Optional[int]`: The stronger priority that keeps control, when `effect` is `"unchanged"` because of one.
+- `priorities: Optional[PriorityView]`: The object's commands as read, for a commandable property.
+- `denied: Optional[BacnetWriteDeniedError]`: The `BacnetWriteDeniedError` that `Device.write` would raise, never raised here, when the client's write policy refuses the priority; else None.
+
+## Device
+
+One device, as a `BACnetClient` reaches it: what `await client.device(target)` returns (#2561). Its methods are the high-level
+calls.
+
+Made from an address (`"192.168.1.10"`, `"mstp:5"`, `"2:0x05"`, a
+`discover()` row) it is pinned there. Made from an instance (`1234`,
+`"2:1234"`) it follows the instance: when the device stops answering
+at its address and one other address claims the instance, the handle
+moves there. Its calls go to the device one at a time.
+
+An object is an `ObjectIdentifier` or text (`"ai:1"`,
+`"analog-input:1"`); a property a `PropertyIdentifier` or text
+(`"pv"`, `"present-value"`, `"priority-array[8]"`). A wrong type
+raises TypeError and text the grammar refuses ValueError, when the call
+is made.
+
+A handle belongs to its client and keeps nothing of it between calls,
+so a `Device` left alive never holds a `stop()` back. After the
+client's `stop()` a call raises RuntimeError, as any call on a stopped
+client does, and `address` and `instance` say what was last known.
+After the client starts again, the next call makes the handle again
+from what it was named by, and it works as before: an address at once,
+an instance by looking it up afresh, which raises `BacnetLookupError`
+until the client has heard from the device again. Refuses `copy` and
+`pickle`.
+
+Properties:
+
+- `address: str`: Where the device answers now, as text `BACnetClient.device` reads back: a pinned handle's address, or where a following handle last reached its instance.
+- `instance: Optional[int]`: The device instance, when known: from discovery, the instance the handle follows, or an earlier `summary()` or `resolve_instance()`. None for a handle made from an address nothing has named yet.
+- `follows: bool`: True when the handle follows its instance, False when it is pinned to its address.
+
+### Device.cov_support
+
+```python
+def cov_support(
+    self,
+) -> Literal["unknown", "not-offered", "offered", "accepted", "refused"]
+```
+
+What is known of the device's COV support, with nothing sent:
+`"not-offered"` or `"offered"` from the services `summary()`
+read, `"accepted"` or `"refused"` from a subscription a watch
+made, else `"unknown"`, as it is while the client is stopped.
+
+### Device.read
+
+```python
+def read(
+    self,
+    object: ObjectIdentifier | str,
+    property: PropertyIdentifier | str | None = None,
+    *,
+    index: Optional[int] = None,
+) -> Awaitable[Value]
+```
+
+Read one property: one ReadProperty.
+
+`property` is Present\_Value when left out, and `index` an array
+element (0 is an array's size). With no `property`, `object`
+may be both as text: `"ai:1 pv"`. The text of the value names no
+units and no state: `read_many` with the object's units or state
+texts in the same call names them.
+
+On await, the device's refusal raises `BacnetProtocolError`,
+`BacnetRejectError` or `BacnetAbortError`; no answer
+`BacnetTimeoutError` (where `read_property` raises
+`BacnetAbortError`, reason 10); a following handle whose device
+can't be placed any more `BacnetLookupError`. ALL, REQUIRED and
+OPTIONAL raise ValueError: `read_object` reads those.
+
+### Device.read_many
+
+```python
+def read_many(
+    self,
+    properties: Iterable[str | ObjectIdentifier | tuple[ObjectIdentifier | str, PropertyIdentifier | str] | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]],
+) -> Awaitable[Readings]
+```
+
+Read many properties of any of the device's objects, in batches
+of ReadPropertyMultiple (up to 16 objects and 32 properties each;
+ReadProperty each once the device has refused that), in the order
+asked for.
+
+Each item is text (`"ai:1 pv"`, `"ai:1"`), an
+`ObjectIdentifier` (its Present\_Value), or an `(object, property)` or `(object, property, index)` tuple of the forms
+`read` takes. A value's text names its object's units, and its
+state by the object's texts, when the same call reads them.
+
+A property the device refuses, or one of an object it doesn't
+have, never raises: its `Reading.error` is set and the rest
+stand. A device that stops answering part way ends the read with
+what was read, and `Readings.stopped` says so. Only what is
+decided before a request is sent raises: a bad item TypeError or
+ValueError when the call is made, and a device that can't be
+placed `BacnetLookupError` on await.
+
+### Device.read_object
+
+```python
+def read_object(
+    self,
+    object: ObjectIdentifier | str,
+    properties: Optional[Iterable[PropertyIdentifier | str]] = None,
+) -> Awaitable[Readings]
+```
+
+Read one object's properties in one ReadPropertyMultiple (or by
+ReadProperty each once the device has refused that): every property
+when `properties` is left out, else those listed, whole
+properties only. A property the device refused has its
+`Reading.error` set. A device that stops answering raises
+`BacnetTimeoutError` and keeps nothing, since an object's rows go
+together: `stopped` is always None.
+
+### Device.write
+
+```python
+def write(
+    self,
+    object: ObjectIdentifier | str,
+    property: PropertyIdentifier | str,
+    value: str | int | float | PropertyValue,
+    *,
+    priority: Optional[int] = None,
+    index: Optional[int] = None,
+) -> Awaitable[Written]
+```
+
+Write one property: one WriteProperty, acknowledged.
+
+`value` is text in the value grammar, read for the property's
+datatype (`"72.5"`, `"active"`, `'"a string"'` in quotes,
+`"72.5@8"` with a priority), an int or a float (read as its
+text; a bool raises TypeError), or a typed `PropertyValue`, sent
+as it is. The priority is `priority`, or the one the text names,
+or both when they agree. A property the standard makes commandable
+(an output's Present\_Value) goes at the priority given, or at 16;
+one that may be (a value object's) at the priority given, or with
+none; any other with none. `Written.priority` says what went.
+
+Raised with nothing sent: TypeError or ValueError when the call is
+made, for a wrong type, bad text or a priority outside 1 to 16; on
+await ValueError for a value the property's datatype refuses, two
+different priorities, a priority on a property that isn't
+commandable, NULL to a commandable Present\_Value (use
+`relinquish`) and any write to Priority\_Array; and
+`BacnetWriteDeniedError` for a priority the client's
+`write_policy` refuses (1, 2, 5 and 6 unless allowed). Then the
+device's refusal raises the usual protocol, reject or abort error,
+and no answer `BacnetTimeoutError`: the write may or may not have
+been applied, and is never sent again.
+
+### Device.preview_write
+
+```python
+def preview_write(
+    self,
+    object: ObjectIdentifier | str,
+    property: PropertyIdentifier | str,
+    value: str | int | float | PropertyValue,
+    *,
+    priority: Optional[int] = None,
+    index: Optional[int] = None,
+) -> Awaitable[WritePreview]
+```
+
+What `write` of the same arguments would do, read first and
+sent nowhere: the slot it takes and who holds it, whether a
+stronger slot keeps Present\_Value where it is, and what
+Present\_Value becomes. One request. It raises what `write` raises
+before sending, except for the write policy, which
+`WritePreview.denied` reports instead.
+
+### Device.relinquish
+
+```python
+def relinquish(
+    self,
+    object: ObjectIdentifier | str,
+    priority: int,
+) -> Awaitable[PriorityView]
+```
+
+Release a command: NULL written to `object`'s Present\_Value at
+`priority` (required, 1 to 16), then the object's priorities as
+read just after. It raises what `BACnetClient.relinquish`
+raises.
+
+### Device.priority_array
+
+```python
+def priority_array(self, object: ObjectIdentifier | str) -> Awaitable[PriorityView]
+```
+
+Read `object`'s commands: its Priority\_Array,
+Relinquish\_Default and Present\_Value in one request. It raises what
+`BACnetClient.priority_array` raises.
+
+### Device.objects
+
+```python
+def objects(self) -> Awaitable[ObjectList]
+```
+
+The device's Object\_List: whole, or an element at a time when
+the device can't send it in one answer.
+
+### Device.summary
+
+```python
+def summary(self) -> Awaitable[DeviceSummary]
+```
+
+The device's summary: its name, vendor, model, firmware,
+protocol revision and what it supports, in one request. A handle
+that doesn't know its instance reads that first.
+
+### Device.resolve_instance
+
+```python
+def resolve_instance(self) -> Awaitable[int]
+```
+
+The device instance: as known (`instance`), or from one read
+of the Device object by the wildcard instance, remembered
+afterwards.
+
+### Device.moved_to
+
+```python
+def moved_to(self) -> Awaitable[Optional[str]]
+```
+
+For a pinned handle whose instance is known: the one other
+address its instance is heard at now, while its own has gone quiet,
+as text `BACnetClient.device` reads back; else None. Always None
+for a following handle, which moves itself. Sends nothing.
 
 ## WritePolicy
 

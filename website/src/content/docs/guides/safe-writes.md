@@ -43,7 +43,7 @@ bacnet read 192.168.1.100 av:1 pv
 
 Relinquishing removes that slot's command. It does **not** promise a return to the previously observed number: another active priority or the relinquish default may now determine the effective value. If the slot was already occupied, clearing it is not a valid restoration of the prior command. Use the site's restoration procedure and retain the needed pre-change state.
 
-From Python, `await client.relinquish(address, object_id, 8)` sends the same NULL at that slot, then reads the priority array back and returns it: the sixteen slots, the one now in control (`in_control`) and the relinquish default. `await client.priority_array(address, object_id)` reads the same before you write. `relinquish` refuses priorities 1, 2, 5 and 6, sending nothing, unless the client was built with a `write_policy` that allows them; see the [Python client reference](/rusty-bacnet/reference/python/client/).
+From Python, take a handle with `device = await client.device("192.168.1.100")`. `await device.write("av:1", "pv", "72.5@8")` sends the write at priority 8 and returns what was sent; `await device.preview_write("av:1", "pv", "72.5@8")` reads what that write would do and sends nothing. `await device.relinquish("av:1", 8)` sends the NULL at that slot, then reads the priority array back and returns it: the sixteen slots, the one now in control (`in_control`) and the relinquish default. `await device.priority_array("av:1")` reads the same before you write. `write` and `relinquish` refuse priorities 1, 2, 5 and 6, sending nothing, unless the client was built with a `write_policy` that allows them; see the [Python client reference](/rusty-bacnet/reference/python/client/).
 
 ## The write guard
 

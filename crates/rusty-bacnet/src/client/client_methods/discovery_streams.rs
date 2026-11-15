@@ -49,6 +49,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
+            let scope = scope.on(&c).await?;
             let wait = std::time::Duration::from_millis(timeout_ms);
             let replies = bacnet_ops::raw::who_has_replies(&c, &scope, &object, range, wait)
                 .await

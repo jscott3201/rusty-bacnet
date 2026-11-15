@@ -43,7 +43,8 @@ impl BACnetClient {
         sc_connect_timeout_ms=None,
         sc_control_rate_limit=None,
         router=None,
-        write_policy=None
+        write_policy=None,
+        resolve_scope=None
     ))]
     fn new(
         interface: &str,
@@ -85,7 +86,10 @@ impl BACnetClient {
         sc_control_rate_limit: Option<(u32, u32)>,
         router: Option<PyRef<'_, crate::router::PyBACnetRouter>>,
         write_policy: Option<PyRef<'_, crate::high_level::PyWritePolicy>>,
+        resolve_scope: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
+        let resolve_scope =
+            crate::high_level::resolve_scope_arg(resolve_scope.as_ref(), transport)?;
         let router = crate::router::application::stack_router(
             transport,
             router,
@@ -183,6 +187,7 @@ impl BACnetClient {
             router,
             min_request_interval_ms,
             write_policy: write_policy.map_or_else(Default::default, |policy| policy.0),
+            resolve_scope,
         })
     }
 
@@ -219,6 +224,7 @@ impl BACnetClient {
         let min_request_interval_ms = slf.borrow().min_request_interval_ms;
         let router = slf.borrow().router.clone();
         let write_policy = slf.borrow().write_policy;
+        let resolve_scope = slf.borrow().resolve_scope;
 
         crate::py_async::future_into_py(py, async move {
             let mut slot = state::starting(&inner).await?;
@@ -355,7 +361,7 @@ impl BACnetClient {
                 }
             }
             .map_err(to_py_err)?;
-            *slot = Some(state::Started::new(c, write_policy));
+            *slot = Some(state::Started::new(c, write_policy, resolve_scope));
             Ok(self_ref)
         })
     }

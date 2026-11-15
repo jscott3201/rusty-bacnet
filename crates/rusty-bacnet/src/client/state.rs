@@ -2,14 +2,15 @@
 
 use super::{ClientInner, CoreClient};
 use crate::errors::to_py_err;
-use crate::high_level::OpsClient;
+use crate::high_level::{OpsClient, OpsDevice};
 use bacnet_transport::sc::ScEvent;
 use bacnet_types::error::Error;
 use pyo3::PyResult;
 use pyo3::exceptions::PyRuntimeError;
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, PoisonError};
 use tokio::sync::{Mutex, Notify, RwLock, RwLockReadGuard, RwLockWriteGuard, broadcast};
 use tokio::task::JoinHandle;
 
@@ -29,10 +30,14 @@ pub(super) struct Started {
 
 impl Started {
     /// `core` and a high-level client over it whose writes go under
-    /// `policy`.
-    pub(super) fn new(core: CoreClient, policy: bacnet_ops::WritePolicy) -> Self {
+    /// `policy`, and whose handles ask for a bare instance in `scope`.
+    pub(super) fn new(
+        core: CoreClient,
+        policy: bacnet_ops::WritePolicy,
+        scope: Option<bacnet_ops::ResolveScope>,
+    ) -> Self {
         let core = Arc::new(core);
-        let high = crate::high_level::client(Arc::clone(&core), policy);
+        let high = crate::high_level::client(Arc::clone(&core), policy, scope);
         Self {
             core,
             high: Some(high),
@@ -65,6 +70,97 @@ pub(super) struct ClientState {
     /// holds the first `Connected` (#1908). The first `connection_events()`
     /// call takes it.
     first_sc_events: crate::sc_events::FirstScEvents,
+    /// The high-level handles of the Python `Device`s made on the started
+    /// client, by [`HandleId`] (#2561). Each holds the high-level client,
+    /// so a stop empties this before it takes the low-level one, and a
+    /// Python `Device` keeps only its id and what it was named by. An entry
+    /// is added only under a read lease and the map emptied only under the
+    /// stop's exclusive hold, so every entry belongs to the client now
+    /// started. A std mutex, held only to look up, add or remove: a
+    /// `Device`'s drop removes its entry without waiting.
+    handles: std::sync::Mutex<HashMap<HandleId, OpsDevice>>,
+    next_handle: AtomicU64,
+}
+
+/// What names one Python `Device`'s handle among its client's.
+pub(crate) type HandleId = u64;
+
+/// A high-level handle held through one call: the handle, then the lease
+/// that keeps the client started, dropped in that order.
+pub(crate) struct Held<'a> {
+    /// The handle. A clone of the client's own, so its place is shared.
+    pub(crate) device: OpsDevice,
+    _lease: RwLockReadGuard<'a, OpsClient>,
+}
+
+impl ClientState {
+    /// An id for a new Python `Device`.
+    pub(crate) fn new_handle(&self) -> HandleId {
+        self.next_handle.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// What `read` makes of the handle `id` names, if the client now
+    /// started has made it. `read` runs under the handles' mutex and gets
+    /// no clone to keep: outside a lease, a clone alive while a stop takes
+    /// the low-level client would fail that stop.
+    pub(crate) fn with_handle<R>(
+        &self,
+        id: HandleId,
+        read: impl FnOnce(&OpsDevice) -> R,
+    ) -> Option<R> {
+        let handles = self.handles.lock().unwrap_or_else(PoisonError::into_inner);
+        handles.get(&id).map(read)
+    }
+
+    /// Forget the handle `id` names: its Python `Device` is gone.
+    pub(crate) fn drop_handle(&self, id: HandleId) {
+        let dropped = {
+            let mut handles = self.handles.lock().unwrap_or_else(PoisonError::into_inner);
+            handles.remove(&id)
+        };
+        drop(dropped);
+    }
+
+    /// Drop every handle, outside the mutex: a stop's first step.
+    fn drop_handles(&self) {
+        let dropped = {
+            let mut handles = self.handles.lock().unwrap_or_else(PoisonError::into_inner);
+            std::mem::take(&mut *handles)
+        };
+        drop(dropped);
+    }
+}
+
+/// The handle `id` names on the client now started, held with a lease for
+/// one call. The first call after a start makes it with `make` (a stop
+/// dropped the one before), and later calls share that one, so a following
+/// handle keeps where its device went from call to call.
+///
+/// # Errors
+///
+/// The lease's (not started, or closing), and `make`'s.
+pub(crate) async fn held<'a, F>(
+    inner: &'a ClientInner,
+    id: HandleId,
+    make: impl FnOnce(OpsClient) -> F,
+) -> PyResult<Held<'a>>
+where
+    F: Future<Output = PyResult<OpsDevice>>,
+{
+    let lease = high_level(inner).await?;
+    // Under the lease a clone is safe: the stop waits for the lease.
+    let device = match inner.with_handle(id, OpsDevice::clone) {
+        Some(device) => device,
+        None => {
+            let made = make(lease.clone()).await?;
+            let mut handles = inner.handles.lock().unwrap_or_else(PoisonError::into_inner);
+            handles.entry(id).or_insert(made).clone()
+        }
+    };
+    Ok(Held {
+        device,
+        _lease: lease,
+    })
 }
 
 impl ClientState {
@@ -128,7 +224,7 @@ pub(super) async fn started(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_,
 /// [`started`] for a call through the high-level client: the same lease,
 /// so a stop waits for the call, and its handles let go of the client with
 /// it.
-pub(super) async fn high_level(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_, OpsClient>> {
+pub(crate) async fn high_level(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_, OpsClient>> {
     let guard = admitted(inner, inner.client.read()).await?;
     RwLockReadGuard::try_map(guard, |slot| slot.as_ref().and_then(|s| s.high.as_ref()))
         .map_err(|_| not_started())
@@ -177,6 +273,8 @@ pub(super) async fn close(inner: ClientInner) -> PyResult<()> {
 /// Keep the native client present until its teardown successfully completes.
 async fn stop_native(state: ClientInner) -> Result<(), Error> {
     let mut client = state.client.write().await;
+    // The handles hold the high-level client: they go first.
+    state.drop_handles();
     if let Some(started) = client.as_mut() {
         started.stop().await?;
     }

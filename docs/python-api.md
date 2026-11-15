@@ -56,29 +56,520 @@ The package includes a `.pyi` type stub file for IDE autocompletion and type che
 
 ```python
 import asyncio
-from rusty_bacnet import (
-    BACnetClient, BACnetServer,
-    ObjectType, ObjectIdentifier, PropertyIdentifier, PropertyValue,
-)
+from rusty_bacnet import BACnetClient
 
 async def main():
-    oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
-
-    # Read a property
     async with BACnetClient() as client:
-        value = await client.read_property(
-            "192.168.1.100:47808", oid, PropertyIdentifier.PRESENT_VALUE
-        )
-        print(f"{value.tag}: {value.value}")  # "real: 72.5"
+        # Who is on this network?
+        for found in await client.discover():
+            print(found.address, found.instance)
 
-        # Write a property
-        await client.write_property(
-            "192.168.1.100:47808", oid, PropertyIdentifier.PRESENT_VALUE,
-            PropertyValue.real(75.0), priority=8
-        )
+        # A handle on one device, by address, instance or discovery row
+        ahu = await client.device("192.168.1.100")
+
+        # Read a property: text, typed value and plain data
+        temp = await ahu.read("ai:1")
+        print(temp.text, temp.value.value)  # "72.5" 72.5
+
+        # Write a property at priority 8
+        await ahu.write("av:1", "pv", "75@8")
 
 asyncio.run(main())
 ```
+
+These are the [high-level calls](#high-level-client). The typed calls under
+them take an address, an `ObjectIdentifier`, a `PropertyIdentifier` and a
+`PropertyValue`, one BACnet service a call:
+
+```python
+from rusty_bacnet import ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue
+
+oid = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+value = await client.read_property("192.168.1.100:47808", oid, PropertyIdentifier.PRESENT_VALUE)
+print(f"{value.tag}: {value.value}")  # "real: 72.5"
+await client.write_property(
+    "192.168.1.100:47808", oid, PropertyIdentifier.PRESENT_VALUE,
+    PropertyValue.real(75.0), priority=8,
+)
+```
+
+---
+
+## High-level client
+
+`BACnetClient` has two layers. The typed calls ([Property Access](#property-access)
+and the sections after it) send one BACnet service each and take an
+address, typed identifiers and a `PropertyValue`. The high-level calls
+(#2561) sit on top of them and are where an application starts: they name
+devices, objects, properties and values by text, queue their requests to
+each device one at a time, fall back from ReadPropertyMultiple to
+ReadProperty for a device that refuses it, check a write before sending it,
+and return values in typed and text form together. They are the Python face
+of the Rust `bacnet-ops` client that the `bacnet` tool is built on.
+
+| Task | Call |
+|------|------|
+| Find devices | `await client.discover(scope="local", low=None, high=None, wait=3.0)` |
+| Take a handle | `ahu = await client.device(target)` |
+| Read one property | `await ahu.read("ai:1", "pv")` |
+| Read many | `await ahu.read_many([("ai:1", "pv"), ("ai:2", "pv")])` |
+| Read an object | `await ahu.read_object("ai:1")` |
+| Write | `await ahu.write("av:1", "pv", "72.5@8")` |
+| Preview a write | `await ahu.preview_write("av:1", "pv", "72.5@8")` |
+| Release a command | `await ahu.relinquish("av:1", priority=8)` |
+| Read the priorities | `await ahu.priority_array("av:1")` |
+| List the objects | `await ahu.objects()` |
+| Describe the device | `await ahu.summary()` |
+
+Everything a device is asked goes through its handle. There is one way to
+spell each call, on the handle; the client itself has no `read(target, ...)`
+or `write(target, ...)`. Every call is a coroutine: there is no blocking
+form.
+
+### Devices and targets
+
+#### `device(target) -> Device`
+
+```python
+ahu = await client.device("192.168.1.10")      # an address: pinned there
+vav = await client.device(1234)                # an instance: follows it
+far = await client.device("2:1234")            # instance 1234 on network 2
+```
+
+`target` names the device in the target grammar the `bacnet` tool takes:
+
+| Target | Names | The handle |
+|--------|-------|------------|
+| `"192.168.1.10"`, `"192.168.1.10:47808"` | A B/IP station (port 47808 when left out) | Pinned |
+| `"mstp:5"` | An MS/TP station | Pinned |
+| `"bip6:0x0004D2"`, `"bip6:1234"`, `"[2001:db8::10]:47808"` | A B/IPv6 node by VMAC, or by its address (the node is asked its VMAC) | Pinned |
+| `"02:00:00:00:00:01"` | A BACnet/SC VMAC, six hex octets | Pinned |
+| `"2:0x05"` | The station with MAC 05 on network 2, through its router | Pinned |
+| `(network, mac)` | The same as a pair: network 0 is this one, `mac` is `bytes` (a lookup error's candidate) | Pinned |
+| `1234` or `"1234"` | Device instance 1234 | Follows |
+| `"2:1234"` | Device instance 1234 on network 2 | Follows |
+| A `Discovered` or `DiscoveredDevice` | That row's address | Pinned, knowing its instance |
+
+A target is never read as the `address` the typed calls take, and an
+`address` is never read as a target: a bare `"5"` is device instance 5 here
+and MS/TP station 5 there. Parameters named `address` keep the forms of
+[Address Format](#address-format).
+
+- **A pinned handle** is made at once. Nothing is sent for a station on the
+  client's own network; a routed station the client knows no router for
+  asks its network with one Who-Is first. It never moves: `await
+  ahu.moved_to()` says where its instance is heard now, once its own
+  address has gone quiet.
+- **A following handle** needs the device's address. One address claiming
+  the instance in the discovery table gives it. None sends one Who-Is for
+  that instance and waits up to 3 seconds: to the network the target names,
+  or for a bare instance to the client's `resolve_scope`, this network
+  alone unless `BACnetClient(resolve_scope="global")` or
+  `resolve_scope=<network>` widens it. Later, when the device stops
+  answering at its address and one other address claims the instance, the
+  handle moves there and the call goes on.
+
+A wrong type raises `TypeError` and text the grammar refuses `ValueError`,
+when the call is made. On await:
+
+- an address the client's link can't reach (an MS/TP station on a B/IP
+  client, say) raises `ValueError`;
+- an instance no address claims and none answered for, or a routed address
+  with no router known, raises `BacnetLookupError`, which is also a
+  `LookupError`;
+- an instance two or more addresses claim raises
+  `BacnetAmbiguousDeviceError`, a `BacnetLookupError`. Each of its
+  `candidates` is a target: `await client.device(error.candidates[0])`.
+
+#### `Device`
+
+| Member | Description |
+|--------|-------------|
+| `.address` | Where the device answers now, as text `device()` reads back |
+| `.instance` | The device instance, or None for an address nothing has named yet (`summary()` and `resolve_instance()` learn it) |
+| `.follows` | True for a handle that follows its instance |
+| `.cov_support()` | `"unknown"`, `"not-offered"`, `"offered"`, `"accepted"` or `"refused"`: what is known of its COV support, with nothing sent |
+| `await .moved_to()` | For a pinned handle: the one other address its instance is heard at now, or None |
+| `await .resolve_instance()` | The instance, read by the wildcard instance when not known |
+
+A handle belongs to its client and keeps nothing of it between calls, so a
+`Device` left alive never holds `stop()` back, and `stop()` waits for a call
+in flight as it does for any other. After `stop()` a call raises
+`RuntimeError`, as any call on a stopped client does, while `.address` and
+`.instance` say what was last known. When the client starts again, the next
+call makes the handle again from what it was named by: an address works at
+once; an instance is looked up afresh, so it raises `BacnetLookupError`
+until the client has heard from the device again. A `Device` refuses `copy`
+and `pickle`.
+
+#### Routed devices and `transport="router"`
+
+A client on a link reaches a device behind a router by naming its network:
+`"2:1234"` or `"2:0x05"`, or a `discover(scope=2)` row. The typed calls by
+`address` reach stations on the client's own network only.
+
+A client on a router's application (`transport="router"`) has no network of
+its own, so every device is on a numbered network:
+
+| On `transport="router"` | Result |
+|-------------------------|--------|
+| `device("5:1234")`, `device("5:0x05")`, a `discover(scope=5)` or `scope="global"` row | Works |
+| `device(1234)` when the client has heard from 1234 | Works |
+| `device(1234)` otherwise | `BacnetLookupError`: there is no network to ask on. `BACnetClient(resolve_scope=5)` or `"global"` gives it one |
+| `device("192.168.1.10")`, any local address | `ValueError` on await, nothing sent |
+| `discover()` with no scope, `scope="local"` or a station's address | `ValueError` |
+| `BACnetClient(resolve_scope="local")` | `ValueError` |
+
+### Reading
+
+An object is an `ObjectIdentifier` or text: `"ai:1"`, `"analog-input:1"`. A
+property is a `PropertyIdentifier` or text: `"pv"`, `"present-value"`,
+`"priority-array[8]"` for one element.
+
+#### `read(object, property=None, *, index=None) -> Value`
+
+One ReadProperty. With no `property` it reads Present_Value, and `object`
+may be the whole of it as text (`"ai:1 pv"`). `index` is an array element;
+0 is the array's size.
+
+```python
+temp = await ahu.read("ai:1")                       # present value
+name = await ahu.read("ai:1", "object-name")
+slot = await ahu.read("ao:1", "priority-array[8]")  # or index=8
+typed = await ahu.read(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+                       PropertyIdentifier.PRESENT_VALUE)
+```
+
+The device's refusal raises `BacnetProtocolError`, `BacnetRejectError` or
+`BacnetAbortError`. No answer raises `BacnetTimeoutError` from every
+high-level call, where the typed `read_property` raises `BacnetAbortError`
+with reason 10 (`AbortReason.TSM_TIMEOUT`).
+
+#### `read_many(properties) -> Readings`
+
+Many properties of any of the device's objects, in batches of
+ReadPropertyMultiple (up to 16 objects and 32 properties a request), or
+ReadProperty each once the device has refused that. Each item is text
+(`"ai:1 pv"`, `"ai:1"`), an `ObjectIdentifier` (its Present_Value), or an
+`(object, property)` or `(object, property, index)` tuple.
+
+```python
+batch = await ahu.read_many([("ai:1", "pv"), ("ai:1", "units"), ("ai:2", "pv"), "bv:3"])
+for reading in batch:
+    if reading.error is None:
+        print(reading.object_id, reading.text)        # "72.5 °F": units read in the same call
+    else:
+        print(reading.object_id, "failed:", reading.error)
+if batch.stopped is not None:
+    print("the device stopped answering:", batch.stopped)
+```
+
+Failures are data here, not exceptions:
+
+- A property the device refuses, or one of an object it doesn't have, has
+  its `Reading.error` set and the other readings stand.
+- A device that stops answering part way ends the read with what was read
+  before it, and `Readings.stopped` holds the `BacnetTimeoutError` or
+  `BacnetTransportError` a single read would have raised.
+- Only what is decided before a request is sent raises: a bad item
+  (`TypeError` or `ValueError`, ALL, REQUIRED and OPTIONAL included, when
+  the call is made) and a device that can't be placed (`BacnetLookupError`).
+
+A value's text names its object's units, and its state by the object's
+Active_Text and Inactive_Text or State_Text, when the same call reads them.
+
+#### `read_object(object, properties=None) -> Readings`
+
+One object's properties in one ReadPropertyMultiple: every property, or
+those listed. A property the device refused has its `error` set. A device
+that stops answering raises `BacnetTimeoutError` and keeps nothing, since an
+object's rows go together.
+
+#### `objects() -> ObjectList` and `summary() -> DeviceSummary`
+
+`objects()` reads the Object_List, whole or an element at a time when the
+device can't send it in one answer. An `ObjectList` iterates as
+`ObjectIdentifier`s and has `len`, an index and `in`; `.indexed` says it
+was read by element and `.stopped` (text) why such a read ended early.
+
+`summary()` reads the Device object's identifying properties in one
+request: `.instance`, `.name`, `.readings` (a `Readings`) and
+`.value(property)`, such as `summary.value("vendor-name")`.
+
+#### `Value`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `.value` | `PropertyValue` | Shaped as `read_property` of the same property returns it (a slot as a read of `PRIORITY_ARRAY` at its index). `.value.value` is the Python float, int, str or other value itself |
+| `.text` | `str` | As the `bacnet` tool writes it: every digit, a state or an enumeration by its name (`"active"`), `"null"`; with units and state texts when the same call read them. `str(value)` is the same |
+| `.data` | plain data | The shape of the tool's JSON: None, a bool, an int, a float (a REAL as the shortest decimal that reads back as it) or a str, or a dict or list of them; an enumeration is `{"value": 1, "name": "active"}`. A new copy each time |
+| `.raw` | `bytes` | The application-tagged octets as the device sent them, or as a write sends them |
+
+A `Value` is a value class. Two are equal when they hold the same octets,
+text and data for the same property of the same object type, equal values
+hash alike, and a `Value` supports `copy`, `deepcopy` and `pickle`: it keeps
+nothing of the client or device it came from, so it can go in a set, a
+cache or another process. There are no `as_float`-style accessors: `.value`
+is the typed form.
+
+#### `Reading` and `Readings`
+
+| `Reading` | Type | Description |
+|-----------|------|-------------|
+| `.object_id`, `.property_id`, `.array_index` | | What was read |
+| `.value` | `Value \| None` | The value; None when the device gave none |
+| `.error` | `BacnetError \| None` | The exception a typed read of the property would raise, never raised: a `BacnetProtocolError` with `error_class` and `error_code` for an unknown property or object, say |
+| `.text` | `str \| None` | The value's text |
+| `.ok` | `bool` | True when the device gave a value |
+
+| `Readings` | Type | Description |
+|------------|------|-------------|
+| `.readings` | `tuple[Reading, ...]` | In the order asked for; iterating, `len` and an index work on the `Readings` itself |
+| `.via` | `"rpm"`, `"rp"`, `"mixed"` or None | How the values were read |
+| `.stopped` | `BacnetError \| None` | Set when the device stopped answering part way |
+| `.get(object, property=None, *, index=None)` | `Reading \| None` | The first reading of that property |
+
+`Reading`, `Readings`, `ObjectList`, `DeviceSummary`, `Written`,
+`WritePreview`, `PriorityView` and `Discovered` are frozen results that
+refuse `copy` and `pickle`; the `Value`s inside them copy and pickle.
+
+### Writing
+
+#### `write(object, property, value, *, priority=None, index=None) -> Written`
+
+One WriteProperty, acknowledged.
+
+```python
+await ahu.write("av:1", "pv", "72.5@8")            # priority 8, in the text
+await ahu.write("av:1", "pv", 72.5, priority=8)    # or as a keyword
+await ahu.write("bv:3", "pv", "active", priority=8)
+await ahu.write("av:1", "description", '"North zone"')
+await ahu.write("av:1", "pv", PropertyValue.real(72.5), priority=8)
+```
+
+`value` is text in the value grammar, read for the property's datatype
+(`"72.5"`, `"active"`, a string in double quotes, `"72.5@8"` with a
+priority), an int or a float (read as its text; a bool raises `TypeError`),
+or a typed `PropertyValue`, sent as it is. The priority is `priority`, or
+the one the text names, or both when they agree.
+
+| The property | Priority sent |
+|--------------|---------------|
+| One the standard makes commandable: Present_Value of an output, a lighting output, an access door, a channel | The one given, or 16 |
+| One that may be commandable: Present_Value of a value object | The one given, or none (the device takes it at 16 if the object has a Priority_Array) |
+| Any other | None; giving one raises `ValueError` |
+
+`Written` says what was sent: `.address`, `.object_id`, `.property_id`,
+`.array_index`, `.value` (a `Value`), `.priority` and `.commandable`
+(`"always"`, `"optional"` or `"never"`, the three rows above).
+
+Raised with nothing sent:
+
+- when the call is made, `TypeError` or `ValueError` for a wrong type, bad
+  text or a priority outside 1 to 16;
+- on await, `ValueError` for a value the property's datatype refuses, two
+  different priorities (`"5@8"` with `priority=9`), a priority on a
+  property that isn't commandable, NULL to a commandable Present_Value (that
+  empties a slot: use `relinquish`), and any write to Priority_Array;
+- on await, `BacnetWriteDeniedError` for a priority [the write
+  policy](#the-write-policy) refuses: 1, 2, 5 and 6 unless allowed.
+
+Then the device's refusal raises the usual protocol, reject or abort error,
+and no answer `BacnetTimeoutError`: the write may or may not have been
+applied, and is never sent again. The typed `write_property` is the
+low-level write: it has no policy and no checks.
+
+#### `preview_write(object, property, value, *, priority=None, index=None) -> WritePreview`
+
+What `write` of the same arguments would do, read first and sent nowhere.
+One request: the object's priorities for a Present_Value that may be
+commandable, or the property itself for any other.
+
+| `WritePreview` | Description |
+|----------------|-------------|
+| `.address`, `.object_id`, `.property_id`, `.array_index`, `.value` | What would be written, and where |
+| `.priority` | The slot it would take; None on a property the read found isn't commandable |
+| `.occupancy` | `"empty"`, `"held"` (the write replaces someone's command), `"not-commandable"` or `"unknown"` |
+| `.before` | The `Value` it replaces, or None |
+| `.effect` | `"changes"`, `"unchanged"`, `"not-present-value"` or `"unknown"`: what it does to Present_Value |
+| `.changes_from`, `.changes_to` | Present_Value's text now and after, for `"changes"` |
+| `.held_by` | The stronger priority that keeps control, for `"unchanged"` |
+| `.priorities` | The `PriorityView` read, for a commandable property |
+| `.denied` | The `BacnetWriteDeniedError` that `write` would raise, never raised; else None |
+
+### Priorities and relinquish
+
+A commandable object keeps a Priority_Array of sixteen slots, and its
+Present_Value follows the lowest-numbered slot that holds a command, or
+Relinquish_Default when none does (Clause 19.2). Releasing a command means
+writing NULL to Present_Value at the same priority, which is easy to confuse
+with writing Relinquish_Default or with a write at 16. `relinquish` and
+`priority_array` (#2561) name the slot and read the slots back.
+
+On a `Device` they take the object as an `ObjectIdentifier` or text:
+`await ahu.relinquish("ao:1", priority=8)` and `await
+ahu.priority_array("ao:1")`. `BACnetClient` has the same two calls by
+address, shown below, for a caller that has an address and typed
+identifiers in hand: there `address` is always an address in the forms of
+[Address Format](#address-format), a station on the client's own network,
+never a device instance or a target, and the object is an
+`ObjectIdentifier`. Neither needs the device in the discovery table, and
+nothing is sent to look it up. A client on `transport="router"` has no
+network of its own, so the calls by address refuse every address there with
+`ValueError` on await, sending nothing: name the device with its network
+through `device()` instead. Both forms raise the same errors.
+
+#### `relinquish(address, object_id, priority) -> PriorityView`
+
+Writes NULL to the object's Present_Value at `priority`, so the next slot
+down, or Relinquish_Default, takes over; then reads the object's
+Priority_Array, Relinquish_Default and Present_Value back. That is one
+WriteProperty and one ReadPropertyMultiple, or a ReadProperty of each of the
+three properties when the device refuses ReadPropertyMultiple.
+
+```python
+from rusty_bacnet import BacnetReadBackError, BacnetWriteDeniedError
+
+damper = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
+after = await client.relinquish("192.168.1.100:47808", damper, 8)
+print(after.in_control, after.present_value.text)  # who took over: 12 "50", or None and the default
+```
+
+- `priority` is required: an int from 1 to 16. A bool, a float or another
+  type raises `TypeError` and another int `ValueError`, as does address text
+  the parser refuses, before the Future is made.
+- With nothing sent, on await: `ValueError` for an address the client's link
+  can't carry (a 3-octet VMAC on B/IP, a MAC length no local network uses,
+  any address on `transport="router"`) and for an object type with no
+  Priority_Array (an input, or a Channel, which passes each command on to
+  its members); `BacnetWriteDeniedError` for a priority the client's
+  `write_policy` refuses (1, 2, 5 and 6 by default).
+- The device refusing the write raises `BacnetProtocolError`,
+  `BacnetRejectError` or `BacnetAbortError`, and no answer
+  `BacnetTimeoutError`; the write may or may not have been applied then. A
+  device that never answers raises `BacnetTimeoutError` from both calls,
+  where `read_property` and `write_property` raise `BacnetAbortError` with
+  reason 10 (`AbortReason.TSM_TIMEOUT`).
+- A relinquish the device acknowledged whose read after it failed raises
+  `BacnetReadBackError`: the slot is empty, so don't send it again. Its
+  `written` is the relinquish as sent and its `__cause__` the read's error.
+  It is not a `BacnetTimeoutError`, so a retry on timeouts leaves it alone.
+- One whose read says the object has no Priority_Array (a value object built
+  without one) raises `BacnetNoPriorityArrayError`, a `BacnetProtocolError`
+  with the device's PROPERTY / UNKNOWN_PROPERTY: the device took the NULL as
+  a write to a property that isn't commandable, which changed nothing. Its
+  `written` holds the NULL.
+
+#### `priority_array(address, object_id) -> PriorityView`
+
+Reads the same three properties in one ReadPropertyMultiple, or a
+ReadProperty of each when the device refuses ReadPropertyMultiple. An object
+type with no Priority_Array raises `ValueError` with nothing sent, and a
+device that says the object has none `BacnetNoPriorityArrayError` (with
+`written` None).
+
+```python
+view = await client.priority_array("192.168.1.100:47808", damper)
+for priority, slot in enumerate(view.slots, start=1):
+    if slot is not None:
+        print(priority, slot.text)
+print("in control:", view.in_control, "default:", view.relinquish_default.text)
+```
+
+#### The write policy
+
+`WritePolicy()` refuses priorities 1 and 2 (life safety, manual and
+automatic), 5 (critical equipment control) and 6, which a binary object's
+minimum on and off time logic writes itself (Clause 19.2.3): the four a
+program should not reach by accident. A refused `write` or `relinquish`
+raises `BacnetWriteDeniedError` and sends nothing; its `priority`, `relinquish`,
+`object_id`, `property_id` and `array_index` say what it named, and its
+message how to allow it. Give the client a policy that allows what it needs
+with `write_policy=`:
+
+```python
+from rusty_bacnet import WritePolicy
+
+policy = WritePolicy().allow_priorities([1])
+async with BACnetClient(write_policy=policy) as client:
+    await client.relinquish("192.168.1.100:47808", damper, 1)
+```
+
+| Member | Description |
+|--------|-------------|
+| `WritePolicy()` | The default, refusing `WritePolicy.GUARDED`, `(1, 2, 5, 6)` |
+| `.allow_priorities(priorities)` | A new policy allowing those (ints from 1 to 16) as well; the same `TypeError` and `ValueError` as `priority` |
+| `.allows(priority)` | Whether a write or relinquish at that priority may go |
+| `.refused` | The priorities refused, a tuple, 1 first |
+
+A policy is frozen, and so is its class (`WritePolicy.GUARDED` can't be
+reassigned). It is equal to another refusing the same priorities, hashable,
+and copies and pickles as that policy. `client.write_policy` reads it back.
+`write_policy=None`, the default, is `WritePolicy()`. `write_property` and
+the other typed calls are the low-level layer and don't look at the policy.
+
+#### `PriorityView`
+
+A `PriorityView` holds an object's commands as read:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `.object_id` | `ObjectIdentifier` | The object read |
+| `.slots` | `tuple[Value \| None, ...]` | The sixteen slots, priority 1 first (`slots[7]` is priority 8); None for an empty slot |
+| `.in_control` | `int \| None` | The lowest-numbered slot holding a command; None when Present_Value follows Relinquish_Default |
+| `.relinquish_default` | `Value \| None` | Relinquish_Default; None when the device gave none |
+| `.present_value` | `Value` | Present_Value |
+| `.slot(priority)` | `Value \| None` | The command at that priority |
+
+Each value is a [`Value`](#value). A `PriorityView` is frozen and refuses
+`copy` and `pickle`; its values copy and pickle.
+
+### Finding devices
+
+#### `discover(scope="local", low=None, high=None, wait=3.0) -> list[Discovered]`
+
+One Who-Is, then the devices that answered it within `wait` seconds, one
+`Discovered` an address. Only this call's answers are listed: a device the
+client heard earlier that stays quiet now is not (`discovered_devices()` is
+the whole table).
+
+```python
+for found in await client.discover():                    # this network
+    print(found.address, found.instance)
+far = await client.discover(scope=5, low=1000, high=1999, wait=5.0)
+one = await client.discover(scope="192.168.1.10")        # one station, by unicast
+ahu = await client.device(far[0])
+```
+
+`scope` is where the Who-Is goes, as for [`who_is`](#discovery): `"local"`,
+`"global"`, a network number, or one station's address. `low` and `high`
+ask only the instances between them: give both or neither.
+
+| `Discovered` | Description |
+|--------------|-------------|
+| `.address` | Where it answers, as text `device()` reads back |
+| `.network` | 0 for this network, else the remote network's number |
+| `.instance` | Its Device instance |
+| `.duplicate` | True when another address claims the same instance: name it by address or by the row |
+| `.entry` | Its [`DiscoveredDevice`](#discovereddevice) row |
+
+### High-level errors
+
+| Raised | When |
+|--------|------|
+| `TypeError`, `ValueError` | An argument that names nothing: when the call is made for a wrong type or bad text, on await for what needs the started client's link. Nothing was sent |
+| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name. `target` is the name |
+| `BacnetAmbiguousDeviceError` | A `BacnetLookupError`: two or more addresses claim the instance. `candidates` are targets |
+| `BacnetWriteDeniedError` | The write policy refuses the priority. Nothing was sent |
+| `BacnetProtocolError`, `BacnetRejectError`, `BacnetAbortError` | The device's own Error, Reject or Abort |
+| `BacnetTimeoutError` | No answer. A write may or may not have been applied |
+| `BacnetTransportError` | The link failed |
+| `BacnetReadBackError`, `BacnetNoPriorityArrayError` | A relinquish the device acknowledged whose read back failed, or found no Priority_Array |
+| `BacnetPagingError` | A device broke a paged read's rules. No call pages yet |
+| `RuntimeError` | The client isn't started |
+
+In a `read_many`, a property's failure is its `Reading.error` and a device
+going silent is `Readings.stopped`: neither is raised.
 
 ---
 
@@ -190,8 +681,8 @@ async with router:
         # The router's application has no network of its own, so its
         # Who-Is names one: here each of the router's two networks.
         for network in (1, 5):
-            for device in await client.discover(timeout_ms=3000, scope=network):
-                print(device.object_identifier.instance, device.source_network)
+            for device in await client.discover(scope=network):
+                print(device.instance, device.network)
         value = await client.read_property_from_device(
             1005, ObjectIdentifier(ObjectType.ANALOG_INPUT, 0),
             PropertyIdentifier.PRESENT_VALUE)
@@ -739,10 +1230,15 @@ pickles across upgrades.
 A `WritePolicy` copies and pickles as `WritePolicy()` and the
 `allow_priorities` call that makes an equal policy (#2561).
 
+A high-level [`Value`](#value) copies and pickles too, from its octets, text
+and data (#2561).
+
 The other classes (`DiscoveredDevice`, `CovNotification`, the high-level
-`Value`, `PriorityView` and `Written`, `ScHubCertificateBinding`, and the
-client, server, endpoint and hub classes) raise `TypeError` when pickled;
-copy the values you need out of them.
+results `Reading`, `Readings`, `PriorityView`, `Written`, `WritePreview`,
+`ObjectList`, `DeviceSummary` and `Discovered`, a `Device` handle,
+`ScHubCertificateBinding`, and the client, server, endpoint and hub
+classes) raise `TypeError` when pickled; copy the values you need out of
+them.
 
 ---
 
@@ -833,7 +1329,8 @@ client = BACnetClient(
     foreign_device=None,         # Keyword-only; B/IP or B/IPv6, a ForeignDevice; not with bbmd
     multicast=None,              # Keyword-only; B/IP, a Multicast: see "B/IP multicast"
     router=None,                 # Keyword-only; a BACnetRouter, with transport="router"
-    write_policy=None,           # Keyword-only; a WritePolicy for relinquish: see "Priorities and relinquish"
+    write_policy=None,           # Keyword-only; a WritePolicy for Device.write and relinquish: see "The write policy"
+    resolve_scope=None,          # Keyword-only; "local" (None), "global" or a network: where device(1234) asks, see "Devices and targets"
     # MS/TP options (serial_port, mstp_*): see "MS/TP serial ports"
     # IPv6 options:
     ipv6_interface=None,         # IPv6 selected local address; None means ::
@@ -1707,146 +2204,6 @@ await client.write_property_multiple("192.168.1.100:47808", [
 
 ---
 
-### Priorities and relinquish
-
-A commandable object keeps a Priority_Array of sixteen slots, and its
-Present_Value follows the lowest-numbered slot that holds a command, or
-Relinquish_Default when none does (Clause 19.2). Releasing a command means
-writing NULL to Present_Value at the same priority, which is easy to confuse
-with writing Relinquish_Default or with a write at 16. `relinquish` and
-`priority_array` (#2561) name the slot and read the slots back, through the
-high-level client the `bacnet` tool's library uses. Both take an `address`
-as `read_property` does and an `ObjectIdentifier`; the device needn't be in
-the discovery table, and nothing is sent to look it up. Here, as everywhere
-in this API, `address` is always an address in the forms of
-[Address Format](#address-format), never a device instance or a target, and
-calls that take targets will name them otherwise.
-
-For now that address is a station on the client's own network: a device
-behind a router can't be named yet. A client on `transport="router"` has no
-network of its own, so both calls refuse every address there with
-`ValueError` on await, sending nothing (`read_property` sends, and the
-router refuses it with `BacnetError`).
-
-#### `relinquish(address, object_id, priority) -> PriorityView`
-
-Writes NULL to the object's Present_Value at `priority`, so the next slot
-down, or Relinquish_Default, takes over; then reads the object's
-Priority_Array, Relinquish_Default and Present_Value back. That is one
-WriteProperty and one ReadPropertyMultiple, or a ReadProperty of each of the
-three properties when the device refuses ReadPropertyMultiple.
-
-```python
-from rusty_bacnet import BacnetReadBackError, BacnetWriteDeniedError
-
-damper = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
-after = await client.relinquish("192.168.1.100:47808", damper, 8)
-print(after.in_control, after.present_value.text)  # who took over: 12 "50", or None and the default
-```
-
-- `priority` is required: an int from 1 to 16. A bool, a float or another
-  type raises `TypeError` and another int `ValueError`, as does address text
-  the parser refuses, before the Future is made.
-- With nothing sent, on await: `ValueError` for an address the client's link
-  can't carry (a 3-octet VMAC on B/IP, a MAC length no local network uses,
-  any address on `transport="router"`) and for an object type with no
-  Priority_Array (an input, or a Channel, which passes each command on to
-  its members); `BacnetWriteDeniedError` for a priority the client's
-  `write_policy` refuses (1, 2, 5 and 6 by default).
-- The device refusing the write raises `BacnetProtocolError`,
-  `BacnetRejectError` or `BacnetAbortError`, and no answer
-  `BacnetTimeoutError`; the write may or may not have been applied then. A
-  device that never answers raises `BacnetTimeoutError` from both calls,
-  where `read_property` and `write_property` raise `BacnetAbortError` with
-  reason 10 (`AbortReason.TSM_TIMEOUT`).
-- A relinquish the device acknowledged whose read after it failed raises
-  `BacnetReadBackError`: the slot is empty, so don't send it again. Its
-  `written` is the relinquish as sent and its `__cause__` the read's error.
-  It is not a `BacnetTimeoutError`, so a retry on timeouts leaves it alone.
-- One whose read says the object has no Priority_Array (a value object built
-  without one) raises `BacnetNoPriorityArrayError`, a `BacnetProtocolError`
-  with the device's PROPERTY / UNKNOWN_PROPERTY: the device took the NULL as
-  a write to a property that isn't commandable, which changed nothing. Its
-  `written` holds the NULL.
-
-#### `priority_array(address, object_id) -> PriorityView`
-
-Reads the same three properties in one ReadPropertyMultiple, or a
-ReadProperty of each when the device refuses ReadPropertyMultiple. An object
-type with no Priority_Array raises `ValueError` with nothing sent, and a
-device that says the object has none `BacnetNoPriorityArrayError` (with
-`written` None).
-
-```python
-view = await client.priority_array("192.168.1.100:47808", damper)
-for priority, slot in enumerate(view.slots, start=1):
-    if slot is not None:
-        print(priority, slot.text)
-print("in control:", view.in_control, "default:", view.relinquish_default.text)
-```
-
-#### The write policy
-
-`WritePolicy()` refuses priorities 1 and 2 (life safety, manual and
-automatic), 5 (critical equipment control) and 6, which a binary object's
-minimum on and off time logic writes itself (Clause 19.2.3): the four a
-program should not reach by accident. A refused `relinquish` raises
-`BacnetWriteDeniedError` and sends nothing; its `priority`, `relinquish`,
-`object_id`, `property_id` and `array_index` say what it named, and its
-message how to allow it. Give the client a policy that allows what it needs
-with `write_policy=`:
-
-```python
-from rusty_bacnet import WritePolicy
-
-policy = WritePolicy().allow_priorities([1])
-async with BACnetClient(write_policy=policy) as client:
-    await client.relinquish("192.168.1.100:47808", damper, 1)
-```
-
-| Member | Description |
-|--------|-------------|
-| `WritePolicy()` | The default, refusing `WritePolicy.GUARDED`, `(1, 2, 5, 6)` |
-| `.allow_priorities(priorities)` | A new policy allowing those (ints from 1 to 16) as well; the same `TypeError` and `ValueError` as `priority` |
-| `.allows(priority)` | Whether a relinquish at that priority may go |
-| `.refused` | The priorities refused, a tuple, 1 first |
-
-A policy is frozen, and so is its class (`WritePolicy.GUARDED` can't be
-reassigned). It is equal to another refusing the same priorities, hashable,
-and copies and pickles as that policy. `client.write_policy` reads it back.
-`write_policy=None`, the default, is `WritePolicy()`. `write_property` and
-the other typed calls are the low-level layer and don't look at the policy.
-
-#### `PriorityView`, `Value` and `Written`
-
-A `PriorityView` holds an object's commands as read:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `.object_id` | `ObjectIdentifier` | The object read |
-| `.slots` | `tuple[Value \| None, ...]` | The sixteen slots, priority 1 first (`slots[7]` is priority 8); None for an empty slot |
-| `.in_control` | `int \| None` | The lowest-numbered slot holding a command; None when Present_Value follows Relinquish_Default |
-| `.relinquish_default` | `Value \| None` | Relinquish_Default; None when the device gave none |
-| `.present_value` | `Value` | Present_Value |
-| `.slot(priority)` | `Value \| None` | The command at that priority |
-
-A `Value` is one value in three forms:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `.value` | `PropertyValue` | Shaped as `read_property` of the same property returns it (a slot as a read of `PRIORITY_ARRAY` at its index) |
-| `.text` | `str` | As the `bacnet` tool writes it: every digit, a state or an enumeration by its name (`"active"`), `"null"`; no units. `str(value)` is the same |
-| `.data` | plain data | The shape of the tool's JSON: None, a bool, an int, a float (a REAL as the shortest decimal that reads back as it) or a str, or a dict or list of them; an enumeration is `{"value": 1, "name": "active"}`. A new copy each time |
-
-A `Written` is a write the device acknowledged, as sent: `.address` (where
-it went, in the forms `address` takes: `"ip:port"`, `"mstp:N"`, a B/IPv6
-VMAC, or an SC VMAC in hex such as `"02:00:00:00:00:04"`), `.object_id`,
-`.property_id`, `.array_index`, `.value` (a `Value`, NULL for a relinquish)
-and `.priority`. `PriorityView`, `Value` and `Written` are received values:
-frozen, and they refuse `copy` and `pickle`.
-
----
-
 ### COV Subscriptions
 
 The full server's network Device reads use its actual execution profile:
@@ -1958,11 +2315,15 @@ local broadcast, which reaches the whole BACnet network (across BBMDs, and
 to foreign devices) but which no router passes on (#2560). `scope="global"`
 sends it to every network, and a network number from 1 to 65534 to that
 remote network through its router. On a large routed site every device
-answers a global Who-Is, so give it a range, or name the network. Another
-name or number raises `ValueError`, and another type `TypeError`, before
-anything is sent. A client on a router's application
-(`transport="router"`) has no network of its own, so its Who-Is names one,
-or every one: a local one raises `ValueError` saying so.
+answers a global Who-Is, so give it a range, or name the network. Any other
+text is one station's address, in the forms `device()` takes
+(`"192.168.1.10"`, `"mstp:5"`), asked by unicast (#2561). Another number, or
+text that names a device instance or a routed target, raises `ValueError`,
+and another type `TypeError`, before anything is sent; a station the
+client's link can't reach raises `ValueError` on await. A client on a
+router's application (`transport="router"`) has no network of its own, so
+its Who-Is names a network, or every one: a local or directed one raises
+`ValueError` saying so. The Who-Has calls take the same scopes.
 
 ```python
 await client.who_is()                    # all devices on this network
@@ -2139,24 +2500,18 @@ async with BACnetClient(transport="ipv6", port=0, ipv6_device_instance=4321) as 
     name = await client.read_property(vmac, device, PropertyIdentifier.OBJECT_NAME)
 ```
 
-#### `discover(timeout_ms=3000, low_limit=None, high_limit=None, scope="local") -> list[DiscoveredDevice]`
+#### `discover(scope="local", low=None, high=None, wait=3.0) -> list[Discovered]`
 
-Convenience method: send WhoIs, wait, return devices. `scope` is
-`who_is()`'s: this network alone unless it says `"global"` or names a
-network.
+Send one Who-Is and return the devices that answered it: see [Finding
+devices](#finding-devices). Before #2561 it took `timeout_ms`, `low_limit`
+and `high_limit` and returned every `DiscoveredDevice` in the table.
 
-```python
-devices = await client.discover(timeout_ms=5000)
-for dev in devices:
-    print(f"Device {dev.object_identifier.instance}")
-```
-
-#### `who_is_directed(address, low_limit=None, high_limit=None)`
-
-Send a Who-Is to a specific device address (unicast).
+A Who-Is to one station by unicast, which `who_is_directed(address)` sent
+before #2561, is `who_is(scope=address)`, or `discover(scope=address)` to
+wait for the answer:
 
 ```python
-await client.who_is_directed("192.168.1.100:47808")
+await client.who_is(scope="192.168.1.100:47808")
 ```
 
 #### `add_device(device_instance, address)`
@@ -6118,8 +6473,10 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetLogNotAdvancingError` | A paged log read can't advance: the device answered from before the record asked for, or with none its counts say it holds. `requested` and `returned` (`None` when it sent none) name the sequence numbers |
 | `BacnetBvlcNakError` | A BBMD refused a management request (`read_bdt` and its siblings) with a BVLC-Result NAK; `result_code` holds its code |
 | `BacnetBvlcUnexpectedResponseError` | A management request was answered by a BVLC message it doesn't take; `expected` and `got` hold the function codes |
-| `BacnetAmbiguousDeviceError` | A call named a device by instance and two or more addresses claim it; nothing was sent. `instance` is the instance and `candidates` lists each claimant as `(network, mac)`, network 0 the local one |
-| `BacnetWriteDeniedError` | The client's `write_policy` refuses the priority a `relinquish` names; nothing was sent. `priority`, `relinquish`, `object_id`, `property_id` and `array_index` say what it named (see [the write policy](#the-write-policy)) |
+| `BacnetLookupError` | No device could be placed for the name a call gave: no address claims the instance and none answered a Who-Is for it, or no router is known for a routed address's network. Also a `LookupError`. `target` is the name as given, `instance` None and `candidates` empty. The typed `_from_device` calls raise it for an instance the table doesn't hold |
+| `BacnetPagingError` | A device broke a rule of a paged read (it named an object twice, or said more remain with no new object); `service` and `object_id` say where. No call pages yet |
+| `BacnetAmbiguousDeviceError` | A `BacnetLookupError`. A call named a device by instance and two or more addresses claim it; nothing was sent. `instance` is the instance and `candidates` lists each claimant as `(network, mac)`, network 0 the local one |
+| `BacnetWriteDeniedError` | The client's `write_policy` refuses the priority a `Device.write` or a `relinquish` names; nothing was sent. `priority`, `relinquish`, `object_id`, `property_id` and `array_index` say what it named (see [the write policy](#the-write-policy)) |
 | `BacnetReadBackError` | The device acknowledged a `relinquish`, which took effect, but the read after it failed; `written` is the relinquish and `__cause__` the read's error. Not a `BacnetTimeoutError` |
 | `BacnetNoPriorityArrayError` | A `BacnetProtocolError` (PROPERTY / UNKNOWN_PROPERTY): the device says the object has no Priority_Array. `object_id` is the object, and `written` the NULL a `relinquish` sent first (None from `priority_array`) |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |

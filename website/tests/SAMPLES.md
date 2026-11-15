@@ -129,7 +129,7 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | start/local-lab.mdx:85 | powershell | `.\.venv\Scripts\python.exe loopback_lab.py --serve --seco...` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
 | start/local-lab.mdx:117 | python | `<Code code={labSource} lang="python" title="loopback_lab....` | run or compiled by another CI test |  |
 | start/python.md:14 | python | `from __future__ import annotations` | run or compiled by another CI test |  |
-| start/python.md:65 | sh | `python first_read.py 192.168.1.100:47808 --instance 1` | run or compiled by another CI test |  |
+| start/python.md:59 | sh | `python first_read.py 192.168.1.100:47808 --instance 1` | run or compiled by another CI test |  |
 | start/rust.md:10 | sh | `cargo new first-read` | not checked (class F) | installs or builds software |
 | start/rust.md:17 | toml | `[dependencies]` | run or compiled by another CI test |  |
 | start/rust.md:31 | rust | `use std::net::{Ipv4Addr, SocketAddrV4};` | run or compiled by another CI test |  |
