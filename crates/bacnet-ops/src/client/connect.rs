@@ -22,6 +22,7 @@ use bacnet_transport::port::TransportPort;
 use super::{Client, ResolveScope};
 use crate::error::OpsError;
 use crate::limits::RequestLimits;
+use crate::write::WritePolicy;
 
 /// `duration` in whole milliseconds, as the low-level builders take it.
 fn millis(duration: Duration) -> u64 {
@@ -29,10 +30,12 @@ fn millis(duration: Duration) -> u64 {
 }
 
 /// What every connect builder keeps besides the low-level builder: the
-/// request limits and where a handle by instance asks for its device.
+/// request limits, where a handle by instance asks for its device, and the
+/// priorities its writes may use.
 struct Kept {
     limits: RequestLimits,
     resolve_scope: ResolveScope,
+    write_policy: WritePolicy,
 }
 
 impl Default for Kept {
@@ -40,6 +43,7 @@ impl Default for Kept {
         Self {
             limits: RequestLimits::new(0),
             resolve_scope: ResolveScope::default(),
+            write_policy: WritePolicy::default(),
         }
     }
 }
@@ -47,7 +51,9 @@ impl Default for Kept {
 impl Kept {
     /// A client that wraps `low`, with these settings.
     fn wrap<T: TransportPort + 'static>(self, low: BACnetClient<T>) -> Client<T> {
-        Client::new(Arc::new(low), Arc::new(self.limits)).with_resolve_scope(self.resolve_scope)
+        Client::new(Arc::new(low), Arc::new(self.limits))
+            .with_resolve_scope(self.resolve_scope)
+            .with_write_policy(self.write_policy)
     }
 }
 
@@ -88,6 +94,15 @@ macro_rules! common_settings {
             #[must_use]
             pub fn resolve_scope(mut self, scope: ResolveScope) -> Self {
                 self.kept.resolve_scope = scope;
+                self
+            }
+
+            /// The priorities the client's writes and relinquishes may
+            /// use: [`WritePolicy::default`], which refuses 1, 2, 5 and 6,
+            /// unless set (see [`Client::with_write_policy`]).
+            #[must_use]
+            pub fn write_policy(mut self, policy: WritePolicy) -> Self {
+                self.kept.write_policy = policy;
                 self
             }
         }

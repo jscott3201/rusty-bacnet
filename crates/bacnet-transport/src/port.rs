@@ -779,6 +779,39 @@ pub trait TransportPort: Send + Sync {
         None
     }
 
+    /// How many times the link has come back after it was lost while the
+    /// transport runs, for a transport that can tell, or `None`, the
+    /// default, for one that can't.
+    ///
+    /// The receiver's value is a count that rises by one each time the link
+    /// is back; a change is all a stack needs to read from it. Anything the
+    /// stack broadcast while the link was down may have gone nowhere, so it
+    /// may send it again: `bacnet_client`'s `BACnetClient`, once it has
+    /// asked for the local network's number, asks again then if no answer
+    /// has taught it yet (#2572).
+    ///
+    /// BACnet/SC counts each hub connection its recovery makes after the
+    /// connection it had was lost, to the same hub or the failover hub; a
+    /// move back to the primary hub while the failover hub still serves is
+    /// no return. B/IP reports one in every mode, counted across restarts;
+    /// it moves, for a foreign device, with each registration the BBMD
+    /// takes after an attempt was refused or unanswered or the lease
+    /// lapsed, and with the next success, a renewal included, after the
+    /// BBMD refused a broadcast with a Distribute-Broadcast-To-Network NAK;
+    /// a start's first attempt succeeding is no return, since the
+    /// broadcasts made before it were held for it. A B/IPv6 foreign device counts each registration the
+    /// BBMD takes after a broadcast went to it unproven: before any
+    /// success, after a refusal, while a registration had gone unanswered
+    /// for 3 s, or refused by that NAK (B/IPv6 holds none, so a start's
+    /// first registration can count). MS/TP, Ethernet and B/IPv6 outside
+    /// foreign mode keep the default: an MS/TP node rejoining the token
+    /// ring is not reported.
+    ///
+    /// Wrappers must delegate.
+    fn link_returns(&self) -> Option<watch::Receiver<u64>> {
+        None
+    }
+
     /// Whether `mac` is this data link's broadcast address.
     ///
     /// A destination can spell a broadcast two ways: the network-layer form

@@ -68,11 +68,7 @@ impl FromStr for PropertyRef {
     /// Present_Value.
     fn from_str(text: &str) -> Result<Self, OpsError> {
         let mut parts = text.split_whitespace();
-        let object_text = parts.next().unwrap_or_default();
-        let (object_type, instance) = parse_object_specifier(object_text)
-            .map_err(|reason| OpsError::parse("object", text, reason))?;
-        let object = ObjectIdentifier::new(object_type, instance)
-            .map_err(|error| OpsError::parse("object", text, error.to_string()))?;
+        let object = object(parts.next().unwrap_or_default(), text)?;
         let (property, index) = match (parts.next(), parts.next()) {
             (None, _) => (PropertyIdentifier::PRESENT_VALUE, None),
             (Some(property), None) => parse_property(property)
@@ -90,6 +86,51 @@ impl FromStr for PropertyRef {
             property,
             index,
         })
+    }
+}
+
+/// The object `word` names, in the grammar of [`parse_object_specifier`];
+/// an error quotes `text`, the whole of what was given.
+fn object(word: &str, text: &str) -> Result<ObjectIdentifier, OpsError> {
+    let (object_type, instance) =
+        parse_object_specifier(word).map_err(|reason| OpsError::parse("object", text, reason))?;
+    ObjectIdentifier::new(object_type, instance)
+        .map_err(|error| OpsError::parse("object", text, error.to_string()))
+}
+
+/// What names an object: an [`ObjectIdentifier`], or its text in the
+/// grammar of [`parse_object_specifier`] (`"av:1"`, `"analog-value,1"`).
+pub trait IntoObject {
+    /// The object named.
+    ///
+    /// # Errors
+    ///
+    /// [`OpsError::Parse`] (`what` is `"object"`) for text that doesn't
+    /// name one.
+    fn into_object(self) -> Result<ObjectIdentifier, OpsError>;
+}
+
+impl IntoObject for ObjectIdentifier {
+    fn into_object(self) -> Result<ObjectIdentifier, OpsError> {
+        Ok(self)
+    }
+}
+
+impl IntoObject for &str {
+    fn into_object(self) -> Result<ObjectIdentifier, OpsError> {
+        object(self.trim(), self)
+    }
+}
+
+impl IntoObject for &String {
+    fn into_object(self) -> Result<ObjectIdentifier, OpsError> {
+        self.as_str().into_object()
+    }
+}
+
+impl IntoObject for String {
+    fn into_object(self) -> Result<ObjectIdentifier, OpsError> {
+        self.as_str().into_object()
     }
 }
 

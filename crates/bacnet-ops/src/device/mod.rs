@@ -83,6 +83,7 @@ mod follow;
 mod reads;
 mod resolve;
 mod route;
+mod writes;
 
 use std::time::Duration;
 

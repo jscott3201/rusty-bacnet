@@ -2,9 +2,9 @@
 //! card, an object's properties, its health badges and its priority pane,
 //! each value written by the shared formatter ([`bacnet_ops::format`]).
 
+use bacnet_ops::Priority;
 use bacnet_ops::client::ReadVia;
 use bacnet_ops::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all, object_name, units};
-use bacnet_ops::label::PRIORITIES;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ResolvedBits, resolve_bits};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
@@ -107,7 +107,7 @@ fn priority(rows: &[RawRow], format: &ValueFormat<'_>) -> Option<PriorityView> {
         .iter()
         .find(|(p, _)| *p == PropertyIdentifier::PRIORITY_ARRAY)?;
     let values = decode_all(data.as_ref().ok()?)?;
-    if values.len() != PRIORITIES {
+    if values.len() != Priority::COUNT {
         return None;
     }
     let mut view = PriorityView::default();

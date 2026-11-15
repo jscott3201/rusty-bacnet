@@ -13,8 +13,9 @@
 //! labels padded to the longest among the objects listed, and leaves the
 //! names out when fewer than [`MIN_NAME`] columns are left for them.
 
+use bacnet_ops::Priority;
 use bacnet_ops::client::ReadVia;
-use bacnet_ops::label::{PRIORITIES, kebab, object_label, priority_label};
+use bacnet_ops::label::{kebab, object_label};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -34,7 +35,7 @@ use crate::tui::point::{ObjectView, PriorityView};
 const LEFT_WIDTH: u16 = 46;
 /// Height of the priority pane: every slot, Relinquish_Default and
 /// Present_Value, and the border.
-const PRIORITY_HEIGHT: u16 = PRIORITIES as u16 + 4;
+const PRIORITY_HEIGHT: u16 = Priority::COUNT as u16 + 4;
 /// Narrowest priority pane beside the properties.
 const PRIORITY_WIDTH: u16 = 38;
 /// Columns a priority row uses before its value: marker, slot and label.
@@ -482,16 +483,14 @@ fn priority_pane(
         None => " Priority array: relinquished ".to_string(),
     };
     let block = pane_block(title, focused, theme);
-    let mut lines: Vec<Line> = priority
-        .slots
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            let slot = index + 1;
+    let mut lines: Vec<Line> = Priority::all()
+        .zip(priority.slots.iter())
+        .map(|(level, value)| {
+            let slot = usize::from(level.get());
             let marker = if winner == Some(slot) { ">" } else { " " };
             let text = format!(
                 "{marker}{slot:>2} {:<22} {}",
-                priority_label(slot),
+                level.purpose(),
                 value.as_deref().unwrap_or("-")
             );
             if winner == Some(slot) {

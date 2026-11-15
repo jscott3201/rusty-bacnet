@@ -64,6 +64,7 @@ use crate::device::{ClientEvent, DeviceAddress, Follows};
 use crate::format::Value;
 use crate::limits::RequestLimits;
 use crate::reading::Reading;
+use crate::write::WritePolicy;
 
 #[cfg(doc)]
 use crate::device::Device;
@@ -136,7 +137,9 @@ impl DeviceSummary {
 /// clone: clones share everything but how a handle made from an instance
 /// looks for its device: how long it waits for an I-Am
 /// ([`with_resolve_wait`](Self::with_resolve_wait)) and where its Who-Is
-/// goes ([`with_resolve_scope`](Self::with_resolve_scope)).
+/// goes ([`with_resolve_scope`](Self::with_resolve_scope)); and the
+/// priorities its handles may write at
+/// ([`with_write_policy`](Self::with_write_policy)).
 ///
 /// The transport type defaults to [`AnyTransport`], which the connect
 /// builders ([`bip`](Client::bip) and the others) make, so an application
@@ -149,6 +152,8 @@ pub struct Client<T: TransportPort + 'static = AnyTransport> {
     /// Where such a handle's Who-Is goes when its target names no
     /// network. This clone's and its handles'.
     resolve_scope: ResolveScope,
+    /// The priorities this clone's handles may write and relinquish at.
+    write_policy: WritePolicy,
 }
 
 /// What a [`Client`]'s clones share. Each std mutex is held only to look up
@@ -184,6 +189,7 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
             shared: Arc::clone(&self.shared),
             resolve_wait: self.resolve_wait,
             resolve_scope: self.resolve_scope,
+            write_policy: self.write_policy,
         }
     }
 }
@@ -211,6 +217,7 @@ impl<T: TransportPort + 'static> Client<T> {
             }),
             resolve_wait: Some(RESOLVE_WAIT),
             resolve_scope: ResolveScope::default(),
+            write_policy: WritePolicy::default(),
         }
     }
 
@@ -292,6 +299,32 @@ impl<T: TransportPort + 'static> Client<T> {
         self.resolve_scope
     }
 
+    /// A clone of this client whose handles write and relinquish under
+    /// `policy` ([`WritePolicy::default`] for [`new`](Self::new)'s, which
+    /// refuses priorities 1, 2, 5 and 6). The setting is the clone's alone,
+    /// and its clones' and handles': the other clones keep theirs.
+    ///
+    /// ```
+    /// # use bacnet_ops::{Client, Priority, WritePolicy};
+    /// # use bacnet_transport::port::TransportPort;
+    /// # fn life_safety<T: TransportPort + 'static>(client: &Client<T>) -> Client<T> {
+    /// let policy = WritePolicy::default().allow_priorities([Priority::MANUAL_LIFE_SAFETY]);
+    /// client.with_write_policy(policy)
+    /// # }
+    /// ```
+    pub fn with_write_policy(&self, policy: WritePolicy) -> Self {
+        Self {
+            write_policy: policy,
+            ..self.clone()
+        }
+    }
+
+    /// The priorities this clone's handles may write at; see
+    /// [`with_write_policy`](Self::with_write_policy).
+    pub fn write_policy(&self) -> WritePolicy {
+        self.write_policy
+    }
+
     /// A receiver of this client's own events: a handle that follows an
     /// instance moving to another address. Lossy under load, like every
     /// client channel.
@@ -348,3 +381,6 @@ mod read_many_tests;
 
 #[cfg(test)]
 mod read_many_more_tests;
+
+#[cfg(test)]
+mod write_tests;

@@ -177,7 +177,10 @@ impl NodeState {
                 }
                 Action::ReleaseHeld => self.release.extend(self.held.drain(..)),
                 Action::DiscardHeld => self.held.clear(),
-                Action::Registration(event) => self.log_registration(event),
+                Action::Registration(event) => {
+                    record.returns.event(&event);
+                    self.log_registration(event);
+                }
                 Action::ReleasePrevious {
                     exchange,
                     to,
@@ -190,6 +193,9 @@ impl NodeState {
             }
         }
         let counters = self.node.take_counters();
+        if counters.renewal_hints > 0 {
+            record.returns.broadcast_dropped();
+        }
         if !self.stopped {
             record.absorb(&counters);
         }
@@ -453,6 +459,12 @@ impl NodeHandle {
 
     fn lock(&self) -> MutexGuard<'_, NodeState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The link's returns, which the client record keeps (#2572).
+    #[cfg(test)]
+    pub(super) fn link_returns(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.record.returns.subscribe()
     }
 
     /// Call into the node now, under the lock, then drain what it asks for

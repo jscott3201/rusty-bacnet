@@ -463,7 +463,7 @@ pub(crate) enum Command {
         value: String,
         /// Priority (1-16).
         #[arg(long)]
-        priority: Option<u8>,
+        priority: Option<bacnet_ops::Priority>,
     },
 
     /// Write multiple properties (WritePropertyMultiple).

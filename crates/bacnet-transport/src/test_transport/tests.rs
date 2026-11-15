@@ -430,6 +430,26 @@ async fn limits_follow_settings_hooks_and_handle() {
     assert_eq!(transport.max_npdu(), NpduLimits::both(71));
 }
 
+/// The link's returns are the test's to publish, its own receiver or else
+/// the inner transport's; with neither, the transport reports none.
+#[tokio::test]
+async fn link_returns_are_the_tests_or_the_inner_transports() {
+    assert!(TestTransport::new().link_returns().is_none());
+
+    let (back, returns) = watch::channel(0u64);
+    let transport = TestTransport::builder().link_returns(returns).build();
+    let mut seen = transport.link_returns().unwrap();
+    back.send_modify(|count| *count += 1);
+    seen.changed().await.unwrap();
+    assert_eq!(*seen.borrow(), 1);
+
+    let (_inner_back, inner_returns) = watch::channel(5u64);
+    let outer = TestTransport::builder()
+        .inner(TestTransport::builder().link_returns(inner_returns).build())
+        .build();
+    assert_eq!(*outer.link_returns().unwrap().borrow(), 5);
+}
+
 #[tokio::test]
 async fn lifecycle_counters_and_started_report() {
     let seen = Arc::new(Mutex::new(Vec::new()));

@@ -35,6 +35,9 @@ pub(super) struct HubLimits {
     apdu: AtomicU16,
     /// The NPDU limit, both ways, for a router to follow.
     npdu: watch::Sender<NpduLimits>,
+    /// How many hub connections recovery has made after losing one: the
+    /// link's returns (`TransportPort::link_returns`, #2572).
+    returns: watch::Sender<u64>,
 }
 
 impl HubLimits {
@@ -44,6 +47,7 @@ impl HubLimits {
         Self {
             apdu: AtomicU16::new(DEFAULT_MAX_APDU_LENGTH),
             npdu: watch::Sender::new(NpduLimits::default()),
+            returns: watch::Sender::new(0),
         }
     }
 
@@ -84,6 +88,17 @@ impl HubLimits {
     /// A receiver of the NPDU limit's changes.
     pub(super) fn npdu_changes(&self) -> watch::Receiver<NpduLimits> {
         self.npdu.subscribe()
+    }
+
+    /// Recovery connected to a hub again after the connection was lost.
+    pub(super) fn returned(&self) {
+        self.returns
+            .send_modify(|count| *count = count.wrapping_add(1));
+    }
+
+    /// A receiver of the link's returns.
+    pub(super) fn returns(&self) -> watch::Receiver<u64> {
+        self.returns.subscribe()
     }
 }
 

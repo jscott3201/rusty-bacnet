@@ -810,9 +810,9 @@ fn write_spec(
     let priority = match form.get("Priority") {
         "" if relinquish => return Err("Priority: the slot to relinquish, 1-16.".into()),
         "" => None,
-        text => match text.parse::<u8>() {
-            Ok(p) if (1..=16).contains(&p) => Some(p),
-            _ => {
+        text => match text.parse::<bacnet_ops::Priority>() {
+            Ok(p) => Some(p.get()),
+            Err(_) => {
                 return Err(
                     "Priority: 1-16, or blank for a property that isn't commandable.".into(),
                 );

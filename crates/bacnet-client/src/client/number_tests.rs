@@ -13,6 +13,8 @@ async fn client_number_learns_and_answers_through_network_intake() {
     client.stop().await.unwrap();
 }
 
+mod asking;
+mod folding;
 mod lifecycle;
 mod local_routes;
 mod progress;

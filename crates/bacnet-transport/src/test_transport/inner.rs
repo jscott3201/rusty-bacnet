@@ -44,6 +44,7 @@ pub(super) trait InnerPort: Send + Sync {
     fn egress_limit(&self) -> u16;
     fn max_npdu(&self) -> NpduLimits;
     fn max_npdu_changes(&self) -> Option<watch::Receiver<NpduLimits>>;
+    fn link_returns(&self) -> Option<watch::Receiver<u64>>;
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool;
     fn is_group_destination(&self, mac: &[u8]) -> bool;
     fn group_destinations(&self) -> GroupDestinations;
@@ -105,6 +106,9 @@ impl<T: TransportPort + 'static> InnerPort for T {
     }
     fn max_npdu_changes(&self) -> Option<watch::Receiver<NpduLimits>> {
         TransportPort::max_npdu_changes(self)
+    }
+    fn link_returns(&self) -> Option<watch::Receiver<u64>> {
+        TransportPort::link_returns(self)
     }
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         TransportPort::is_broadcast_mac(self, mac)

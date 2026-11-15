@@ -26,6 +26,8 @@ pub use typed::{parse_value_for, parse_value_for_with_priority};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use crate::write::Priority;
+
 #[cfg(test)]
 mod datetime_tests;
 #[cfg(test)]
@@ -333,7 +335,7 @@ pub fn parse_value(s: &str) -> Result<PropertyValue, String> {
 
 /// A value's text and its optional `@priority` suffix, the `@` after a
 /// quoted string's closing quote when the value is one.
-fn split_priority(s: &str) -> Result<(&str, Option<u8>), String> {
+fn split_priority(s: &str) -> Result<(&str, Option<Priority>), String> {
     let s = s.trim();
 
     // Find the last '@' that separates value from priority.
@@ -353,20 +355,16 @@ fn split_priority(s: &str) -> Result<(&str, Option<u8>), String> {
     let Some(pos) = at_pos else {
         return Ok((s, None));
     };
-    let priority_str = &s[pos + 1..];
-    let priority = priority_str
-        .parse::<u8>()
-        .map_err(|_| format!("invalid priority: '{priority_str}'"))?;
-    if !(1..=16).contains(&priority) {
-        return Err(format!("priority must be 1-16, got {priority}"));
-    }
+    let priority = s[pos + 1..]
+        .parse::<Priority>()
+        .map_err(|refused| refused.to_string())?;
     Ok((&s[..pos], Some(priority)))
 }
 
 /// Parse a value with optional `@priority` suffix.
 ///
 /// Examples: `72.5@8` → (Real(72.5), Some(8)), `null@16` → (Null, Some(16)), `42` → (Unsigned(42), None)
-pub fn parse_value_with_priority(s: &str) -> Result<(PropertyValue, Option<u8>), String> {
+pub fn parse_value_with_priority(s: &str) -> Result<(PropertyValue, Option<Priority>), String> {
     let (value, priority) = split_priority(s)?;
     Ok((parse_value(value)?, priority))
 }
@@ -541,11 +539,11 @@ mod tests {
     fn parse_value_with_priority_works() {
         let (val, pri) = parse_value_with_priority("72.5@8").unwrap();
         assert!(matches!(val, PropertyValue::Real(_)));
-        assert_eq!(pri, Some(8));
+        assert_eq!(pri, Some(Priority::MANUAL_OPERATOR));
 
         let (val, pri) = parse_value_with_priority("null@16").unwrap();
         assert!(matches!(val, PropertyValue::Null));
-        assert_eq!(pri, Some(16));
+        assert_eq!(pri, Some(Priority::LOWEST));
 
         let (val, pri) = parse_value_with_priority("42").unwrap();
         assert!(matches!(val, PropertyValue::Unsigned(42)));
@@ -554,8 +552,16 @@ mod tests {
 
     #[test]
     fn parse_value_with_priority_invalid() {
-        assert!(parse_value_with_priority("42@0").is_err()); // priority 0 invalid
-        assert!(parse_value_with_priority("42@17").is_err()); // priority 17 invalid
+        // Priorities 0 and 17 are out of range; the text is Priority's.
+        assert_eq!(
+            parse_value_with_priority("42@0").unwrap_err(),
+            "priority must be 1-16, got 0"
+        );
+        assert!(parse_value_with_priority("42@17").is_err());
+        assert_eq!(
+            parse_value_with_priority("42@x").unwrap_err(),
+            "invalid priority: 'x'"
+        );
     }
 
     #[test]
@@ -626,6 +632,6 @@ mod tests {
             PropertyValue::CharacterString(s) => assert_eq!(s, ""),
             other => panic!("expected CharacterString, got {other:?}"),
         }
-        assert_eq!(pri, Some(8));
+        assert_eq!(pri, Some(Priority::MANUAL_OPERATOR));
     }
 }

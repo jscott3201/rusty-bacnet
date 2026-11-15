@@ -61,7 +61,7 @@ impl Device {
     }
 
     /// `peer` sends a BVLC-Result with `code`.
-    async fn says(&self, peer: ([u8; 4], u16), code: u16) {
+    pub(super) async fn says(&self, peer: ([u8; 4], u16), code: u16) {
         let result = BvllMessage {
             function: BvlcFunction::BVLC_RESULT,
             payload: bytes::Bytes::copy_from_slice(&code.to_be_bytes()),

@@ -394,3 +394,46 @@ async fn a_failed_renewal_puts_the_one_before_back() {
     target.result(a, SUCCESS);
     assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
 }
+
+/// The link's returns (#2572): a broadcast is unproven, so the BBMD's next
+/// success brings the link back, when a registration it was sent behind has
+/// gone unanswered for the answer timeout though the answer before was a
+/// success, and when the BBMD refuses a broadcast with the
+/// Distribute-Broadcast-To-Network NAK. A broadcast while the entry is held
+/// and answered is proven.
+#[tokio::test(start_paused = true)]
+async fn a_success_after_a_silent_renewal_or_a_refused_broadcast_is_a_return() {
+    let a = bbmd(1);
+    let target = ForeignTarget::at(a);
+    let returns = target.link_returns();
+    activate(&target);
+    target.result(a, SUCCESS);
+    target.broadcast_sent();
+    renew(&target);
+    target.result(a, SUCCESS);
+    assert_eq!(*returns.borrow(), 0, "every broadcast proven");
+
+    renew(&target);
+    advance(answer::ANSWER_TIMEOUT).await;
+    target.broadcast_sent();
+    target.result(a, SUCCESS);
+    assert_eq!(
+        *returns.borrow(),
+        1,
+        "sent while the renewal went unanswered"
+    );
+
+    target.broadcast_sent();
+    target.result(a, Bvlc6ResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK);
+    // The same NAK from another BBMD says nothing of this one.
+    target.result(
+        bbmd(2),
+        Bvlc6ResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK,
+    );
+    renew(&target);
+    target.result(a, SUCCESS);
+    assert_eq!(*returns.borrow(), 2, "the BBMD refused a broadcast");
+    renew(&target);
+    target.result(a, SUCCESS);
+    assert_eq!(*returns.borrow(), 2);
+}

@@ -482,17 +482,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 vendor = i_am.vendor_id,
                                 "Received IAm"
                             );
-                            let this_network = network.local_network_number().get();
-                            device_events::heard_i_am(
-                                device_table,
+                            let routed_while_unknown = device_events::heard_i_am(
+                                &device_table.table,
                                 device_events::IAmSource {
                                     mac: source_mac,
                                     network: source_network,
-                                    this_network,
+                                    this_network: network.local_network_number(),
                                 },
                                 &i_am,
                                 (device_tx, device_collision_tx),
                             );
+                            // A routed row stored while the number is
+                            // unknown may be a local device's twin: ask
+                            // (#2572), through the Number owner.
+                            if routed_while_unknown {
+                                device_table.asking.want();
+                            }
                         }
                         Err(e) => {
                             warn_throttled!(decode_warning, error = %e, "Failed to decode IAm");

@@ -17,6 +17,7 @@ use super::numeric::{Number, coerce, finite, numeric};
 use super::{json, parse_value, split_priority};
 use crate::format::{holds_state, is_binary, is_date_time_value, is_multistate};
 use crate::label::kebab;
+use crate::write::Priority;
 
 /// Names listed in full when a typed name is wrong; a longer list gives
 /// the nearest few.
@@ -545,7 +546,7 @@ pub fn parse_value_for_with_priority(
     property: PropertyIdentifier,
     index: Option<u32>,
     text: &str,
-) -> Result<(PropertyValue, Option<u8>), String> {
+) -> Result<(PropertyValue, Option<Priority>), String> {
     let (value, priority) = split_priority(text)?;
     Ok((
         parse_value_for(object_type, property, index, value)?,
