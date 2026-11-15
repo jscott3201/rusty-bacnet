@@ -83,6 +83,7 @@ mod follow;
 mod reads;
 mod resolve;
 mod route;
+mod watching;
 mod writes;
 
 use std::time::Duration;
@@ -353,7 +354,7 @@ mod resolve_scope_tests;
 mod routed_tests;
 
 #[cfg(test)]
-mod test_bus;
+pub(crate) mod test_bus;
 
 #[cfg(test)]
 #[path = "tests.rs"]

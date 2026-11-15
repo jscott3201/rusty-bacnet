@@ -311,7 +311,12 @@ The cursor holds the hub's sequence number. A point stays watched while
 calls ask for it and goes 10 minutes after the last (the cursor's
 lifetime), cancelling its subscription. It counts against the same
 per-principal cap; a point past it, or a device out of reach, is an error
-row while the others are returned.
+row while the others are returned. Each row gives the device's `address`
+as `bacnet_discover` writes it, since a point is watched at an address:
+two devices sharing an instance, each named by its address, are two rows
+with one `device`. Such a row's `uri` names the device by its instance,
+which names neither, and the row says so with `uri_ambiguous: true`;
+follow it with `bacnet_watch` by its address.
 
 ## BBMD tables
 

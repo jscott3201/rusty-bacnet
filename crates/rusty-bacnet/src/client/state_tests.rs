@@ -9,7 +9,7 @@ use tokio::time::timeout;
 async fn running_client() -> ClientInner {
     pyo3::Python::initialize();
     let state = Arc::new(ClientState::default());
-    *state.client.write().await = Some(
+    *state.client.write().await = Some(Started::new(
         bacnet_client::client::BACnetClient::bip_builder()
             .interface(Ipv4Addr::LOCALHOST)
             .broadcast_address(Ipv4Addr::LOCALHOST)
@@ -17,7 +17,8 @@ async fn running_client() -> ClientInner {
             .build_into()
             .await
             .unwrap(),
-    );
+        bacnet_ops::WritePolicy::default(),
+    ));
     state
 }
 
@@ -84,6 +85,26 @@ async fn failed_shutdown_keeps_client_closed_to_operations_until_retry() {
         .unwrap();
     assert!(state.client.read().await.is_none());
     assert!(!state.closing.load(Ordering::Acquire));
+}
+
+/// A call through the high-level client holds the same lease as any other,
+/// and its handle lets go of the low-level client when it ends, so the stop
+/// that follows owns the client and stops it (#2561).
+#[tokio::test]
+async fn a_stop_after_a_high_level_call_owns_the_client() {
+    let state = running_client().await;
+    {
+        let high = high_level(&state).await.unwrap();
+        let station = bacnet_ops::DeviceAddress::local(&[127, 0, 0, 1, 0xBA, 0xC0]).unwrap();
+        let device = high.device(station).await.unwrap();
+        assert!(!device.follows());
+    }
+    timeout(Duration::from_secs(3), close(Arc::clone(&state)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(state.client.read().await.is_none());
+    assert!(high_level(&state).await.is_err());
 }
 
 /// Poll `future` once, so a lock acquisition in it joins the lock's queue.

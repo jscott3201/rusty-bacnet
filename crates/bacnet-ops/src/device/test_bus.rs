@@ -35,10 +35,10 @@ use crate::error::OpsError;
 use crate::limits::RequestLimits;
 
 /// The instance the tests' devices share.
-pub(super) const N: u32 = 1001;
+pub(crate) const N: u32 = 1001;
 
 /// A client that times out in one second, with no retries.
-pub(super) fn config() -> ClientConfig {
+pub(crate) fn config() -> ClientConfig {
     ClientConfig {
         apdu_timeout_ms: 1_000,
         apdu_retries: 0,
@@ -47,7 +47,7 @@ pub(super) fn config() -> ClientConfig {
 }
 
 /// A client on `port`, and its sends.
-pub(super) async fn client_on(port: TestTransport) -> (Client<TestTransport>, SendLog) {
+pub(crate) async fn client_on(port: TestTransport) -> (Client<TestTransport>, SendLog) {
     let sent = port.sent();
     let low = BACnetClient::start(config(), port).await.unwrap();
     let client = Client::new(Arc::new(low), Arc::new(RequestLimits::new(0)));
@@ -55,12 +55,12 @@ pub(super) async fn client_on(port: TestTransport) -> (Client<TestTransport>, Se
 }
 
 /// A client at station 1 of `bus`, and its sends.
-pub(super) async fn client(bus: &Arc<Bus>) -> (Client<TestTransport>, SendLog) {
+pub(crate) async fn client(bus: &Arc<Bus>) -> (Client<TestTransport>, SendLog) {
     client_on(bus.port(1)).await
 }
 
 /// The analog input's name, as `device` reads it.
-pub(super) async fn name_of(device: &Device<TestTransport>) -> Result<String, OpsError> {
+pub(crate) async fn name_of(device: &Device<TestTransport>) -> Result<String, OpsError> {
     let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let value = device.read((ai, PropertyIdentifier::OBJECT_NAME)).await?;
     match value.as_str() {
@@ -70,23 +70,23 @@ pub(super) async fn name_of(device: &Device<TestTransport>) -> Result<String, Op
 }
 
 /// Let the link's frames land.
-pub(super) async fn settle() {
+pub(crate) async fn settle() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
-pub(super) async fn stop(servers: Vec<BACnetServer<TestTransport>>) {
+pub(crate) async fn stop(servers: Vec<BACnetServer<TestTransport>>) {
     for mut server in servers {
         server.stop().await.unwrap();
     }
 }
 
 /// The MAC of station `n` on the bus.
-pub(super) fn mac(n: u8) -> [u8; 6] {
+pub(crate) fn mac(n: u8) -> [u8; 6] {
     [10, 0, 0, n, 0xBA, 0xC0]
 }
 
 /// Station `n`'s address.
-pub(super) fn at(n: u8) -> DeviceAddress {
+pub(crate) fn at(n: u8) -> DeviceAddress {
     DeviceAddress::local(&mac(n)).unwrap()
 }
 
@@ -98,25 +98,25 @@ struct Port {
 
 /// The link.
 #[derive(Default)]
-pub(super) struct Bus {
+pub(crate) struct Bus {
     ports: Mutex<Vec<Port>>,
     /// Stations a unicast to fails at the sender.
     broken: Mutex<HashSet<u8>>,
 }
 
 impl Bus {
-    pub(super) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
     /// A port at station `n`.
-    pub(super) fn port(self: &Arc<Self>, n: u8) -> TestTransport {
+    pub(crate) fn port(self: &Arc<Self>, n: u8) -> TestTransport {
         self.port_with(n, |builder| builder)
     }
 
     /// A port at station `n` that takes the network number controls, so a
     /// client on it learns its network's number from a router.
-    pub(super) fn numbered_port(self: &Arc<Self>, n: u8) -> TestTransport {
+    pub(crate) fn numbered_port(self: &Arc<Self>, n: u8) -> TestTransport {
         self.port_with(n, TestTransportBuilder::number_controls)
     }
 
@@ -156,12 +156,12 @@ impl Bus {
     }
 
     /// Station `n` hears nothing from now on, as a device gone away.
-    pub(super) fn silence(&self, n: u8) {
+    pub(crate) fn silence(&self, n: u8) {
         self.set_silent(n, true);
     }
 
     /// Station `n` hears again.
-    pub(super) fn unsilence(&self, n: u8) {
+    pub(crate) fn unsilence(&self, n: u8) {
         self.set_silent(n, false);
     }
 
@@ -175,12 +175,12 @@ impl Bus {
 
     /// Unicasts to station `n` fail at the sender from now on, as a local
     /// link failure: nothing reaches the station.
-    pub(super) fn break_link(&self, n: u8) {
+    pub(crate) fn break_link(&self, n: u8) {
         self.broken.lock().unwrap().insert(n);
     }
 
     /// Broadcast an I-Am for `instance` from station `n`.
-    pub(super) fn i_am(&self, n: u8, instance: u32) {
+    pub(crate) fn i_am(&self, n: u8, instance: u32) {
         let mut service = BytesMut::new();
         IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
@@ -222,7 +222,7 @@ impl Bus {
 }
 
 /// A device `instance` with one analog input named `name`, on `port`.
-pub(super) async fn server(
+pub(crate) async fn server(
     port: TestTransport,
     instance: u32,
     name: &str,
@@ -241,7 +241,7 @@ pub(super) async fn server(
 }
 
 /// Who-Is requests in `log`.
-pub(super) fn who_is(log: &SendLog) -> usize {
+pub(crate) fn who_is(log: &SendLog) -> usize {
     log.broadcasts()
         .iter()
         .filter(|frame| {
@@ -252,7 +252,7 @@ pub(super) fn who_is(log: &SendLog) -> usize {
 }
 
 /// Confirmed requests of `service` in `log`, to `to`.
-pub(super) fn requests(log: &SendLog, service: ConfirmedServiceChoice, to: u8) -> usize {
+pub(crate) fn requests(log: &SendLog, service: ConfirmedServiceChoice, to: u8) -> usize {
     log.unicasts()
         .iter()
         .filter(|frame| frame.mac.as_slice() == mac(to))

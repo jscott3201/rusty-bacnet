@@ -31,22 +31,23 @@ pub(crate) fn options(types: Option<Vec<PyObjectType>>) -> PyResult<InventoryOpt
     }
 }
 
-/// `device`'s inventory over `client`, one request at a time with no rate
-/// cap beyond the client's own `min_request_interval_ms`, as the CLI reads
-/// it, at the address the discovery table holds for the instance. An
-/// instance no address claims, or two do, raises before anything is sent;
-/// a device that doesn't answer the name read, or a failed read of the
-/// whole Object_List, raises the client's usual error; a failure after
-/// that ends the reading with `stopped` set.
+/// `device`'s inventory over `client`, one request at a time under
+/// `limits` (the client's, which its priority calls share: no rate cap
+/// beyond its own `min_request_interval_ms`), as the CLI reads it, at the
+/// address the discovery table holds for the instance. An instance no
+/// address claims, or two do, raises before anything is sent; a device
+/// that doesn't answer the name read, or a failed read of the whole
+/// Object_List, raises the client's usual error; a failure after that ends
+/// the reading with `stopped` set.
 pub(crate) async fn read(
     client: &BACnetClient<AppTransport>,
+    limits: &RequestLimits,
     device: u32,
     options: &InventoryOptions,
 ) -> PyResult<PyInventory223> {
     let at = DeviceAddress::claiming(client, device)
         .await
         .map_err(to_py_err)?;
-    let limits = RequestLimits::new(0);
     // Nothing sets the flag: a Python caller cancels by cancelling the task,
     // which drops this future.
     let never = AtomicBool::new(false);
@@ -54,7 +55,7 @@ pub(crate) async fn read(
         client,
         device: at,
         instance: Some(device),
-        rate: &limits,
+        rate: limits,
         cancel: &never,
         rpm: true,
     };

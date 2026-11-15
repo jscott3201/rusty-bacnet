@@ -76,7 +76,7 @@ async fn initial_subscribe_timeout_recovers(property: &str, service: u8, remove:
     let mut site = lab_site(server, options(300, 10, 0)).await;
     command(&mut site, &format!("watch 100 ai:2{property}")).await;
     settle(&mut site).await;
-    assert!(matches!(&sources(&site)[0], Source::Polled(reason) if reason.contains("COV refused")));
+    assert!(matches!(&sources(&site)[0], Source::Polled(reason) if reason.contains("no answer")));
     site.pump_until(|app| app.watch.rows()[0].value.is_some())
         .await;
     assert!(

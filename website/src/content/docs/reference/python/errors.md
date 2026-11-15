@@ -191,6 +191,69 @@ Attributes:
 - `instance: int`
 - `candidates: list[tuple[int, bytes]]`
 
+## BacnetWriteDeniedError
+
+`class BacnetWriteDeniedError(BacnetError)`
+
+Raised when the client's `write_policy` refuses the priority a
+`relinquish` names (#2561): 1, 2, 5 or 6 by default. Nothing was
+sent. The message says how to allow it:
+`BACnetClient(write_policy=WritePolicy().allow_priorities([n]))`.
+
+Attributes:
+priority: The priority refused, 1 to 16.
+relinquish: True for a relinquish.
+object\_id: The object named.
+property\_id: The property named (Present\_Value for a relinquish).
+array\_index: The array index named, None for the whole property.
+
+Attributes:
+
+- `priority: int`
+- `relinquish: bool`
+- `object_id: ObjectIdentifier`
+- `property_id: PropertyIdentifier`
+- `array_index: Optional[int]`
+
+## BacnetReadBackError
+
+`class BacnetReadBackError(BacnetError)`
+
+Raised when the device acknowledged a `relinquish`, so it took
+effect, but the read of the object's priorities after it failed
+(#2561). Don't send it again: read them with `priority_array` once the
+device answers. `__cause__` is why the read failed, such as a
+`BacnetTimeoutError`; this class is not one, so a retry on timeouts
+leaves it alone.
+
+Attributes:
+written: The relinquish as the device acknowledged it.
+
+Attributes:
+
+- `written: Written`
+
+## BacnetNoPriorityArrayError
+
+`class BacnetNoPriorityArrayError(BacnetProtocolError)`
+
+Raised when the device says the object has no Priority\_Array, so its
+Present\_Value isn't commandable: a value object built without one
+(#2561). `error_class` and `error_code` are the device's PROPERTY
+and UNKNOWN\_PROPERTY. After a `relinquish`, the device took the NULL
+first as a write to a property that isn't commandable, which changes
+nothing, and `written` holds it.
+
+Attributes:
+object\_id: The object.
+written: The relinquish acknowledged before the read; None for
+`priority_array`, which writes nothing.
+
+Attributes:
+
+- `object_id: ObjectIdentifier`
+- `written: Optional[Written]`
+
 ## BacnetTransportError
 
 `class BacnetTransportError(BacnetError, OSError)`

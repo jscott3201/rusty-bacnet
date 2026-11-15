@@ -432,6 +432,113 @@ Properties:
 - `commandable: bool`: Whether it has a Priority\_Array: always for an output, and for a value when the device gave one. The Turtle makes such a point actuatable.
 - `error: Optional[str]`: Why its read failed, None when it didn't: the device's error, which names the property when the object lacked its Object\_Name, the Units of an analog object or an integer value, or a multi-state object's Number\_Of\_States. The Turtle skips such an object.
 
+## Value
+
+One value a high-level call read or sent, in three forms (#2561).
+Refuses `copy` and `pickle`.
+
+Properties:
+
+- `value: PropertyValue`: The value as a `PropertyValue`, shaped as `read_property` of the same property returns it (a Priority\_Array slot as a read of that slot by its index).
+- `text: str`: The value as text, as the `bacnet` tool writes it: every digit of a number, a state or enumeration by its name (`"active"`), `"null"` for NULL. No units.
+- `data: Any`: The value as plain data, the shape of the `bacnet` tool's JSON: None, a bool, an int, a float (a REAL as the shortest decimal that reads back as it) or a str, or a dict or list of them; an enumeration is `{"value": 1, "name": "active"}`. A new copy each time.
+
+## PriorityView
+
+An object's commands as read: its Priority\_Array's sixteen slots,
+the slot in control, Relinquish\_Default and Present\_Value
+(`BACnetClient.priority_array` and `relinquish`, #2561). Refuses
+`copy` and `pickle`.
+
+Properties:
+
+- `object_id: ObjectIdentifier`: The object read.
+- `slots: tuple[Optional[Value], ...]`: The sixteen slots, priority 1 first (`slots[7]` is priority 8): each a `Value`, or None for an empty slot.
+- `in_control: Optional[int]`: The slot in control: the lowest-numbered priority holding a command. None when every slot is empty, so Present\_Value follows Relinquish\_Default.
+- `relinquish_default: Optional[Value]`: Relinquish\_Default; None when the device gave none.
+- `present_value: Value`: Present\_Value.
+
+### PriorityView.slot
+
+```python
+def slot(self, priority: int) -> Optional[Value]
+```
+
+The command at `priority` (an int from 1 to 16), None when its
+slot is empty. Another int raises ValueError, a bool or a non-int
+TypeError.
+
+## Written
+
+A write the device acknowledged, as it was sent (#2561): a
+`BacnetReadBackError`'s and a `BacnetNoPriorityArrayError`'s
+`written`. Refuses `copy` and `pickle`.
+
+Properties:
+
+- `address: str`: The device's address the write went to: `"ip:port"`, `"mstp:N"`, a B/IPv6 VMAC (`"bip6:0x0004D2"`), or on BACnet/SC its VMAC in hex (`"02:00:00:00:00:04"`), the forms `address` takes.
+- `object_id: ObjectIdentifier`: The object written.
+- `property_id: PropertyIdentifier`: The property written.
+- `array_index: Optional[int]`: The array index written, None for the whole property.
+- `value: Value`: The value as sent: NULL for a relinquish.
+- `priority: Optional[int]`: The priority sent, None when none was.
+
+## WritePolicy
+
+Which command priorities a `BACnetClient`'s `relinquish` may use,
+given with its `write_policy=` keyword (#2561).
+
+`WritePolicy()` refuses 1 and 2 (life safety, Table 19-1), 5
+(critical equipment) and 6 (minimum on and off times, Clause 19.2.3):
+the four a program should not reach by accident. `allow_priorities`
+gives a policy that allows some of them as well. The check costs no
+traffic: a refused call raises `BacnetWriteDeniedError` and sends
+nothing. `write_property` and the other typed calls don't look at
+it. Frozen (the class too: `GUARDED` can't be reassigned), equal to
+another policy refusing the same priorities, and hashable.
+
+Usage:
+
+```python
+policy = WritePolicy().allow_priorities([1])
+async with BACnetClient(write_policy=policy) as client:
+    await client.relinquish("192.168.1.100:47808", oid, 1)
+```
+
+Attributes:
+
+- `GUARDED: tuple[int, ...]`: The priorities the default refuses: `(1, 2, 5, 6)`.
+
+Properties:
+
+- `refused: tuple[int, ...]`: The priorities refused, 1 first.
+
+### WritePolicy.__init__
+
+```python
+def __init__(self) -> None
+```
+
+The default policy, refusing `GUARDED`.
+
+### WritePolicy.allow_priorities
+
+```python
+def allow_priorities(self, priorities: Iterable[int]) -> WritePolicy
+```
+
+The same policy, allowing `priorities` (ints from 1 to 16) as
+well; this one is unchanged. One that isn't an int raises TypeError,
+a bool included, and an int outside 1 to 16 ValueError.
+
+### WritePolicy.allows
+
+```python
+def allows(self, priority: int) -> bool
+```
+
+Whether a relinquish at `priority` may go.
+
 ## CovNotification
 
 A Change-of-Value notification received from a remote device.
