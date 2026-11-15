@@ -2412,13 +2412,69 @@ collect the routers that answer for `wait` seconds: one frozen
 it are kept. No answer is an empty list; `network` 0 or 65535 raises
 `BacnetError`.
 
+#### `routing_table(router, *, wait=3.0, quiet=0.5, total=10.0, max_entries=4096) -> RoutingTable`
+
+Read the routing table of the router at `router`, a station on the client's
+own link, without changing it (#2612). The call sends one
+Initialize-Routing-Table with a port count of zero, which only asks; no
+argument can turn it into an update. `router` is the router's address on the
+local link: `bytes` as given (a `DiscoveredRouter`'s `mac`) or a string in
+the binding's address forms. An empty or broadcast address raises
+`ValueError`.
+
+The result is a frozen `RoutingTable`: `entries` (frozen `RoutingTableEntry`
+records with `network`, `port_id` and `port_info`, the octet string the
+standard leaves open, typically dial-up details; in the router's order),
+`acks` (how many acknowledgements carried them) and `truncated`. A long
+table comes as several acknowledgements with nothing to mark the last, so
+the call returns once `quiet` seconds pass after the last acknowledgement
+from the router (other traffic does not restart it), at `total` seconds
+from the send, or at `max_entries` entries (at least 1). The last two set
+`truncated`, which covers those bounds only: a quiet end does not prove the
+table whole, since on MS/TP acknowledgements after the first wait for the
+router's token. Use a larger `quiet` on a slow trunk. A late acknowledgement
+of an earlier query to the same router can also be counted by the next one
+(nothing pairs answers with questions), so leave a gap between repeated
+queries; entries are reported as received, not deduplicated, so a network
+number can appear twice.
+
+- A router with an empty table, or an older router's acknowledgement with
+  no data, returns a `RoutingTable` with no entries.
+- A router that sends nothing within `wait` seconds raises
+  `BacnetTimeoutError`. A router that ignores the message (an older one)
+  looks the same as one that is absent, and on B/IP so does one that
+  answers from another address or port than the one queried. Neither is an
+  empty table.
+- A router that answers with a Reject-Message-To-Network before any
+  acknowledgement raises `BacnetNetworkRejectError`, with the router's
+  `reason` octet and `network`. Rejects with reasons 1, 2 and 4 concern a
+  DNET, which this local message has none of, and are ignored.
+- A client stopped mid-call raises `RuntimeError`.
+
+Each bound is 0 to 3600 seconds, and `wait` may not exceed `total`
+(`ValueError` otherwise). An acknowledgement from the router's own address
+is taken whether it arrives as a unicast or a broadcast. Only a router on
+the client's own link can be asked: the query is a local message, so a
+router behind another router is out of reach. One query runs at a time per
+client (network messages carry no invoke ID), so a second call waits for
+the first. Like `discover_routers()`, it holds the started client for the
+whole wait.
+
+```python
+for router in await client.discover_routers():
+    table = await client.routing_table(router.mac)
+    for entry in table.entries:
+        print(entry.network, entry.port_id)
+```
+
 #### `network_reports() -> Awaitable[NetworkReportIterator]`
 
 Follow the network reports the client receives from now on, as an async
 iterator of frozen `NetworkReport`: `kind` is `i_am_router_to_network` (with
-`networks`), `network_number_is` (with `network` and `configured`) or
-`reject_message_to_network` (with `reason` and `network`), and `source_mac`,
-`source_network` and `source_address` say where it came from.
+`networks`), `network_number_is` (with `network` and `configured`),
+`reject_message_to_network` (with `reason` and `network`) or `routing_table`
+(with `entries`: one Initialize-Routing-Table-Ack of a query), and
+`source_mac`, `source_network` and `source_address` say where it came from.
 
 Like `connection_events()`, both iterators are independent subscriptions
 that the client never waits for. One that falls behind (256 I-Haves, 64
@@ -6495,6 +6551,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetLogNotAdvancingError` | A paged log read can't advance: the device answered from before the record asked for, or with none its counts say it holds. `requested` and `returned` (`None` when it sent none) name the sequence numbers |
 | `BacnetBvlcNakError` | A BBMD refused a management request (`read_bdt` and its siblings) with a BVLC-Result NAK; `result_code` holds its code |
 | `BacnetBvlcUnexpectedResponseError` | A management request was answered by a BVLC message it doesn't take; `expected` and `got` hold the function codes |
+| `BacnetNetworkRejectError` | A router answered `routing_table()` with a Reject-Message-To-Network; `reason` holds its reason octet and `network` the network it named. Silence is `BacnetTimeoutError` |
 | `BacnetLookupError` | No device could be placed for the name a call gave: no address claims the instance and none answered a Who-Is for it, or no router is known for a routed address's network. Also a `LookupError`. `target` is the name as given, `instance` the instance it holds (None for an address) and `candidates` empty. The typed `_from_device` calls raise it for an instance the table doesn't hold |
 | `BacnetPagingError` | A device broke a rule of a paged read (it named an object twice, or said more remain with no new object); `service` and `object_id` say where. No call pages yet |
 | `BacnetAmbiguousDeviceError` | A `BacnetLookupError`. A call named a device by instance and two or more addresses claim it; nothing was sent. `instance` is the instance and `candidates` lists each claimant as `(network, mac)`, network 0 the local one |

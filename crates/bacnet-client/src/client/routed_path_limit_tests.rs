@@ -18,8 +18,8 @@ use super::{BACnetClient, ClientConfig, routed_path_limits::MAX_ROUTED_PATH_ENTR
 pub(super) const DNET: u16 = 100;
 
 pub(super) struct SentFrame {
-    npdu: Bytes,
-    destination: MacAddr,
+    pub(super) npdu: Bytes,
+    pub(super) destination: MacAddr,
 }
 
 /// A link with `max_apdu` as its egress limit, fed by the returned sender,

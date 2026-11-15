@@ -2,9 +2,9 @@
 //! reports, and the async iterators over the I-Have and network-report
 //! streams (#1850).
 
-use bacnet_client::client::{DiscoveredRouter, ReceivedIHave};
+use bacnet_client::client::{DiscoveredRouter, ReceivedIHave, RoutingTable};
 use bacnet_encoding::npdu::NpduAddress;
-use bacnet_network::layer::{NetworkReport, ReceivedNetworkReport};
+use bacnet_network::layer::{NetworkReport, ReceivedNetworkReport, RoutingTableEntry};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -113,21 +113,111 @@ impl PyDiscoveredRouter {
     }
 }
 
+/// One entry of a router's routing table.
+#[pyclass(name = "RoutingTableEntry", module = "rusty_bacnet", frozen)]
+pub(crate) struct PyRoutingTableEntry(pub(crate) RoutingTableEntry);
+
+#[pymethods]
+impl PyRoutingTableEntry {
+    /// The network the entry is for.
+    #[getter]
+    fn network(&self) -> u16 {
+        self.0.network
+    }
+
+    /// The router's identifier for the port that reaches `network`.
+    #[getter]
+    fn port_id(&self) -> u8 {
+        self.0.port_id
+    }
+
+    /// The port information octets, which the standard defines only as an
+    /// octet string (typically dial-up details for a point-to-point link);
+    /// empty when the entry has none.
+    #[getter]
+    fn port_info<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.0.port_info)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "RoutingTableEntry(network={}, port_id={})",
+            self.0.network, self.0.port_id
+        )
+    }
+
+    /// Refuses `copy` and `pickle`, as the other received values do. See
+    /// [`crate::types::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(crate::types::not_picklable(slf.as_any()))
+    }
+}
+
+/// A router's routing table, as `routing_table()` read it.
+#[pyclass(name = "RoutingTable", module = "rusty_bacnet", frozen)]
+pub(crate) struct PyRoutingTable(pub(crate) RoutingTable);
+
+#[pymethods]
+impl PyRoutingTable {
+    /// The entries, in the order the router listed them across every
+    /// acknowledgement. Empty for a router that answered with an empty
+    /// table; a router that did not answer raises instead.
+    #[getter]
+    fn entries(&self) -> Vec<PyRoutingTableEntry> {
+        self.0
+            .entries
+            .iter()
+            .cloned()
+            .map(PyRoutingTableEntry)
+            .collect()
+    }
+
+    /// How many acknowledgements carried the entries.
+    #[getter]
+    fn acks(&self) -> usize {
+        self.0.acks
+    }
+
+    /// Whether the call stopped at its total or entry bound, or lost
+    /// acknowledgements, rather than after a quiet interval: the table may
+    /// be incomplete.
+    #[getter]
+    fn truncated(&self) -> bool {
+        self.0.truncated
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "RoutingTable(entries={}, acks={}, truncated={})",
+            self.0.entries.len(),
+            self.0.acks,
+            if self.0.truncated { "True" } else { "False" }
+        )
+    }
+
+    /// Refuses `copy` and `pickle`, as the other received values do. See
+    /// [`crate::types::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(crate::types::not_picklable(slf.as_any()))
+    }
+}
+
 /// A network-layer report this client received.
 #[pyclass(name = "NetworkReport", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyNetworkReport(ReceivedNetworkReport);
 
 #[pymethods]
 impl PyNetworkReport {
-    /// `"i_am_router_to_network"`, `"network_number_is"` or
-    /// `"reject_message_to_network"`; `"other"` for a report this binding
-    /// doesn't name yet.
+    /// `"i_am_router_to_network"`, `"network_number_is"`,
+    /// `"reject_message_to_network"` or `"routing_table"`; `"other"` for a
+    /// report this binding doesn't name yet.
     #[getter]
     fn kind(&self) -> &'static str {
         match &self.0.report {
             NetworkReport::IAmRouterToNetwork(_) => "i_am_router_to_network",
             NetworkReport::NetworkNumberIs { .. } => "network_number_is",
             NetworkReport::RejectMessageToNetwork(_) => "reject_message_to_network",
+            NetworkReport::RoutingTable(_) => "routing_table",
             _ => "other",
         }
     }
@@ -178,6 +268,18 @@ impl PyNetworkReport {
     fn configured(&self) -> Option<bool> {
         match &self.0.report {
             NetworkReport::NetworkNumberIs { configured, .. } => Some(*configured),
+            _ => None,
+        }
+    }
+
+    /// The entries one Initialize-Routing-Table-Ack lists, for the
+    /// `"routing_table"` kind; `None` for the others.
+    #[getter]
+    fn entries(&self) -> Option<Vec<PyRoutingTableEntry>> {
+        match &self.0.report {
+            NetworkReport::RoutingTable(entries) => {
+                Some(entries.iter().cloned().map(PyRoutingTableEntry).collect())
+            }
             _ => None,
         }
     }
@@ -293,6 +395,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIHave>()?;
     m.add_class::<PyIHaveIterator>()?;
     m.add_class::<PyDiscoveredRouter>()?;
+    m.add_class::<PyRoutingTableEntry>()?;
+    m.add_class::<PyRoutingTable>()?;
     m.add_class::<PyNetworkReport>()?;
     m.add_class::<PyNetworkReportIterator>()?;
     Ok(())

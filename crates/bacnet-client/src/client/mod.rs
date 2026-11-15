@@ -611,6 +611,9 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
     i_have_tx: broadcast::Sender<ReceivedIHave>,
     network_report_tx: broadcast::Sender<bacnet_network::layer::ReceivedNetworkReport>,
+    /// The routing-table query's state (#2612), behind one pointer to keep
+    /// the client small.
+    routing_query: Arc<routing_table::RoutingQueries>,
     dispatch_task: Option<JoinHandle<()>>,
     network_number_task: Option<JoinHandle<()>>,
     /// Purges devices not heard from; see `lifecycle::spawn_device_purge`.
@@ -942,6 +945,7 @@ mod read_range;
 mod requests;
 mod response_admission;
 mod routed_path_limits;
+mod routing_table;
 mod seat;
 pub use seat::SeatedClientBuilder;
 mod segmentation;
@@ -960,6 +964,7 @@ use routed_path_limits::{
 };
 pub(crate) use transaction_peer::TransactionPeer;
 
+pub use bacnet_network::layer::RoutingTableEntry;
 pub use cov::CovPropertySubscription;
 pub use cov_notifications::{
     COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,
@@ -976,6 +981,9 @@ pub use event_notifications::{
 pub use i_have::{I_HAVE_CHANNEL_CAPACITY, MAX_I_HAVE_REPLIES, ReceivedIHave, collect_answers};
 pub use network_reports::{DiscoveredRouter, NETWORK_REPORT_CHANNEL_CAPACITY};
 pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
+pub use routing_table::{
+    DEFAULT_ROUTING_TABLE_MAX_ENTRIES, RoutingTable, RoutingTableError, RoutingTableWait,
+};
 pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]
