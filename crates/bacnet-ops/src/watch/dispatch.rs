@@ -3,7 +3,9 @@
 //! entry's device and names its object (and property). The loop's arms
 //! never await: applying a notification takes two std mutexes in turn (the
 //! table's, released before the entry's), and a held-back signal is a
-//! deadline the loop sleeps toward.
+//! deadline the loop sleeps toward. It also hands each device's scheduler
+//! the moves of handles following the device's instance away from its
+//! address ([`ClientEvent::Moved`]).
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -20,16 +22,38 @@ use bacnet_types::enums::PropertyIdentifier;
 use super::options::MAX_ROWS;
 use super::shared::{Registry, Shared};
 use super::{Point, Watched};
+use bacnet_client::client::{DeviceEvent, DeviceEventKind};
+
+use crate::device::{ClientEvent, DeviceAddress};
 use crate::format::{RawRow, decode_all};
+
+/// What the receiver hears besides the notifications: the client's own
+/// events and the discovery table's.
+pub(super) struct Heard {
+    /// Handles moving ([`ClientEvent::Moved`]).
+    pub(super) events: broadcast::Receiver<ClientEvent>,
+    /// Devices announcing themselves.
+    pub(super) devices: broadcast::Receiver<DeviceEvent>,
+    /// The client's own network's number, once known: an address on it is
+    /// the local station, as the hub keys it.
+    pub(super) own: Box<dyn Fn() -> Option<u16> + Send>,
+}
 
 /// Route notifications until the hub stops or the client closes its
 /// channel.
 pub(super) async fn run(
     registry: Arc<Registry>,
     mut notifications: broadcast::Receiver<ReceivedCOVNotification>,
+    heard: Heard,
     mut stop: watch::Receiver<bool>,
 ) {
+    let Heard {
+        mut events,
+        mut devices,
+        own,
+    } = heard;
     let mut held: Vec<(Instant, Arc<Shared>)> = Vec::new();
+    let (mut following, mut announcing) = (true, true);
     loop {
         let due = held.iter().map(|(at, _)| *at).min();
         tokio::select! {
@@ -41,6 +65,30 @@ pub(super) async fn run(
                     registry.lagged.fetch_add(missed, Ordering::Relaxed);
                 }
                 Err(RecvError::Closed) => break,
+            },
+            event = events.recv(), if following => match event {
+                Ok(ClientEvent::Moved { instance, from, to }) => {
+                    registry.moved(instance, &from, to);
+                }
+                // Another kind of event says nothing a watch needs.
+                #[allow(unreachable_patterns)]
+                Ok(_) => {}
+                // A move missed is found by the device's next unanswered
+                // request instead.
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => following = false,
+            },
+            change = devices.recv(), if announcing => match change {
+                Ok(change) if change.kind != DeviceEventKind::Lost => {
+                    if let Some(at) = DeviceAddress::of(&change.device) {
+                        let instance = change.device.object_identifier.instance_number();
+                        registry.announced(&at.localized(own()), instance);
+                    }
+                }
+                // A loss, or announcements missed: a point given up waits
+                // for the next.
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => announcing = false,
             },
             () = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                 let now = Instant::now();
@@ -122,7 +170,7 @@ fn watched_value(point: &Point, value: &BACnetPropertyValue) -> bool {
 /// Whether `value` is the Status_Flags a property watch keeps beside its
 /// property when the hub reads them ([`Reads::property_flags`]).
 ///
-/// [`Reads::property_flags`]: super::Reads::property_flags
+/// [`Reads::property_flags`]: super::hub::Reads::property_flags
 fn flags_value(point: &Point, value: &BACnetPropertyValue, property_flags: bool) -> bool {
     property_flags
         && matches!(point.watched, Watched::Property { property, .. } if property != PropertyIdentifier::STATUS_FLAGS)

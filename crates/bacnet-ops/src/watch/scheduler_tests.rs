@@ -14,9 +14,14 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::PropertyValue;
 use tokio::time::Instant;
 
-use super::test_lab::{Lab, RP, RPM, SUBSCRIBE_COV, ai, lab_at, nc, object, oid, settle};
+use super::hub::Phase;
+use super::hub::*;
+use super::test_lab::{
+    Lab, RP, RPM, SUBSCRIBE_COV, ai, lab_at, nc, object, oid, routed_at, settle,
+};
 use super::tests::present_value;
 use super::*;
+use crate::DeviceAddress;
 
 fn retrying() -> WatchOptions {
     WatchOptions {
@@ -47,7 +52,7 @@ async fn polled_points_of_a_device_share_one_request() {
     assert_eq!(lab.sent(RPM, from), 3, "{:?}", lab.services());
     for lease in &leases {
         assert_eq!(lease.snapshot().polls, 3);
-        assert_eq!(lease.snapshot().state, State::Live);
+        assert_eq!(lease.snapshot().state, Phase::Live);
     }
     let vias: Vec<Via> = std::iter::from_fn(|| samples.try_next())
         .map(|s| s.via)
@@ -71,7 +76,7 @@ async fn a_batch_too_large_is_asked_a_row_at_a_time() {
     assert_eq!(lab.sent(RP, from), 0);
     for lease in &leases {
         assert_eq!(lease.snapshot().polls, 1);
-        assert_eq!(lease.snapshot().state, State::Live);
+        assert_eq!(lease.snapshot().state, Phase::Live);
     }
     lab.stop().await;
 }
@@ -115,7 +120,7 @@ async fn a_failed_batch_is_read_one_property_at_a_time() {
     assert!(!lab.client.refused_rpm(&lab_at()));
     for lease in &leases {
         let snapshot = lease.snapshot();
-        assert_eq!((snapshot.polls, snapshot.state), (1, State::Live));
+        assert_eq!((snapshot.polls, snapshot.state), (1, Phase::Live));
     }
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert_eq!(lab.sent(RPM, from), 2, "RPM again at the next poll");
@@ -148,7 +153,7 @@ async fn a_silent_device_is_polled_with_a_growing_wait() {
     let polls = lab.sent(RPM, from);
     assert!((6..=12).contains(&polls), "{polls} polls in 300 s");
     for lease in &leases {
-        assert_eq!(lease.snapshot().state, State::Unreachable);
+        assert_eq!(lease.snapshot().state, Phase::Unreachable);
     }
     lab.quirks.muted.store(false, Ordering::Relaxed);
     lab.stop().await;
@@ -165,12 +170,12 @@ async fn an_unanswered_subscription_is_retried_after_its_backoff() {
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.source, Some(Source::Poll), "{snapshot:?}");
-    assert_eq!(snapshot.state, State::Unreachable);
+    assert_eq!(snapshot.state, Phase::Unreachable);
     assert!(
-        matches!(snapshot.why, Some(Why::Refused(_))),
+        matches!(snapshot.why, Some(Why::NoAnswer(_))),
         "{snapshot:?}"
     );
-    assert!(snapshot.note.unwrap().starts_with("COV refused"));
+    assert!(snapshot.note.unwrap().starts_with("no answer"));
     assert!(lab.table().await.is_empty());
     tokio::time::sleep(Duration::from_secs(25)).await;
     assert_eq!(
@@ -180,7 +185,7 @@ async fn an_unanswered_subscription_is_retried_after_its_backoff() {
     tokio::time::sleep(Duration::from_secs(6)).await;
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.source, Some(Source::Cov), "{snapshot:?}");
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     assert_eq!(snapshot.note, None);
     assert_eq!(snapshot.why, None, "subscribed: nothing to explain");
     assert_eq!(lab.table().await.len(), 1);
@@ -259,8 +264,8 @@ async fn a_refusal_is_not_retried() {
     lab.stop().await;
 }
 
-/// Under [`MissingDevice::Fail`] a point whose device isn't in the table
-/// is given up: nothing is sent, then or later.
+/// Under [`MissingDevice::Fail`] a point with no route to its address is
+/// given up: nothing is sent, then or later.
 #[tokio::test(start_paused = true)]
 async fn a_missing_device_can_be_given_up() {
     let options = WatchOptions {
@@ -269,15 +274,16 @@ async fn a_missing_device_can_be_given_up() {
     };
     let lab = Lab::start(options).await;
     let point = Point {
-        device: 2002,
+        device: routed_at(),
         ..object(ai(1))
     };
     let lease = lab.hub.watch(point).unwrap();
     settle().await;
     let snapshot = lease.snapshot();
-    assert_eq!(snapshot.state, State::Gone);
-    assert!(snapshot.note.unwrap().contains("device table"));
-    lab.client.low_level().add_device(2002, &[2]).await.unwrap();
+    assert_eq!(snapshot.state, Phase::Gone);
+    assert_eq!(snapshot.why, Some(Why::Missing));
+    assert!(snapshot.note.unwrap().contains("no route"));
+    lab.route().await;
     tokio::time::sleep(Duration::from_secs(120)).await;
     assert!(lab.services().is_empty(), "{:?}", lab.services());
     assert_eq!(lease.snapshot().polls, 0);
@@ -527,7 +533,7 @@ fn from(instance: u32, mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedCOVN
 fn a_routed_device_is_matched_by_its_address() {
     const DEVICE: u32 = 2001;
     let point = Point {
-        device: DEVICE,
+        device: DeviceAddress::new(10, &[3]).unwrap(),
         ..object(ai(1))
     };
     let target = CovTarget::routed(&[2], 10, &[3]);

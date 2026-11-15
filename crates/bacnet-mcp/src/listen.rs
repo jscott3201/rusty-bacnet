@@ -34,7 +34,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use bacnet_ops::watch::{Changes, Lease, Point, WatchError};
+use bacnet_ops::watch::hub::{Changes, Lease};
+use bacnet_ops::watch::{Point, WatchError};
 use bacnet_transport::port::TransportPort;
 use rmcp::ErrorData;
 use rmcp::service::SubscriptionContext;
@@ -145,7 +146,7 @@ pub(crate) struct Hold {
 impl Drop for Hold {
     fn drop(&mut self) {
         if let Some(subs) = self.subs.upgrade() {
-            subs.release(&[self.point]);
+            subs.release(std::slice::from_ref(&self.point));
         }
     }
 }
@@ -258,12 +259,12 @@ impl Subs {
         if new && !points.contains_key(&point) && points.len() >= ctx.policy.caps.watches {
             return Err("principal-cap");
         }
-        let lease = hub.watch(point).map_err(|e| match e {
-            WatchError::Shut => SHUTTING_DOWN,
+        let lease = hub.watch(point.clone()).map_err(|e| match e {
             WatchError::Full { .. } => "process-cap",
+            _ => SHUTTING_DOWN,
         })?;
         if new {
-            *points.entry(point).or_default() += 1;
+            *points.entry(point.clone()).or_default() += 1;
         }
         *state.held.entry(point).or_default() += 1;
         Ok(lease)
@@ -275,7 +276,7 @@ impl Subs {
         ctx: &Ctx<T>,
         point: Point,
     ) -> Result<Hold, &'static str> {
-        let lease = self.take(ctx, point)?;
+        let lease = self.take(ctx, point.clone())?;
         Ok(Hold {
             subs: Arc::downgrade(self),
             point,
@@ -391,13 +392,13 @@ impl Subs {
                 .tool
                 .iter()
                 .filter(|(_, (at, _))| now.saturating_duration_since(*at) >= idle)
-                .map(|(point, _)| *point)
+                .map(|(point, _)| point.clone())
                 .collect();
             old.into_iter()
                 .filter_map(|point| state.tool.remove(&point).map(|(_, l)| (point, l)))
                 .collect()
         };
-        let points: Vec<Point> = expired.iter().map(|(p, _)| *p).collect();
+        let points: Vec<Point> = expired.iter().map(|(p, _)| p.clone()).collect();
         self.release(&points);
     }
 
@@ -412,7 +413,7 @@ impl Subs {
             *at = now;
             return Ok(());
         }
-        let lease = self.take(ctx, point)?;
+        let lease = self.take(ctx, point.clone())?;
         let mut state = self.lock();
         if state.closed {
             // The session ended meanwhile; the lease goes after the lock.
@@ -465,14 +466,22 @@ impl Subs {
                     pages += 1;
                     pages <= MAX_DEVICE_PAGES
                 }
-                Ok(Uri::Point(point)) if ctx.reach_known(point.device) => {
-                    match self.take(ctx, point) {
-                        Ok(lease) => {
-                            claim.points.push(point);
-                            claim.leases.push((text.clone(), lease));
-                            true
-                        }
-                        Err(_) => false,
+                // At the one address its instance names now: a URI names a
+                // device by its instance.
+                Ok(Uri::Point(uri)) => {
+                    let at = ctx
+                        .known_at(uri.device)
+                        .filter(|_| ctx.reach_known(uri.device));
+                    match at.map(|at| uri.at(at)) {
+                        Some(point) => match self.take(ctx, point.clone()) {
+                            Ok(lease) => {
+                                claim.points.push(point);
+                                claim.leases.push((text.clone(), lease));
+                                true
+                            }
+                            Err(_) => false,
+                        },
+                        None => false,
                     }
                 }
                 Ok(Uri::Alarms) => ctx.hub.is_some(),
@@ -493,8 +502,7 @@ impl Subs {
                 // A device summary has no updates; a device-list page past
                 // the cap or on a passive server isn't honoured; anything
                 // else isn't ours.
-                Ok(Uri::Device(_) | Uri::Point(_) | Uri::Devices | Uri::DevicesAfter(_))
-                | Err(_) => false,
+                Ok(Uri::Device(_) | Uri::Devices | Uri::DevicesAfter(_)) | Err(_) => false,
             };
             if honoured {
                 accepted.push(text.clone());
@@ -575,7 +583,7 @@ impl Subs {
             drop(legacy);
             self.legacy_changed.send_modify(|n| *n = n.wrapping_add(1));
         }
-        let points: Vec<Point> = tool.keys().copied().collect();
+        let points: Vec<Point> = tool.keys().cloned().collect();
         drop(tool);
         self.release(&points);
     }

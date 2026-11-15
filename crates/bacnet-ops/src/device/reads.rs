@@ -222,10 +222,19 @@ impl<T: TransportPort + 'static> Device<T> {
 
     /// The device's [`DEVICE_PROPERTIES`]. A handle that doesn't know the
     /// instance reads it first ([`resolve_instance`](Self::resolve_instance)).
+    /// The client notes which COV services its Protocol_Services_Supported
+    /// lists ([`cov_support`](Self::cov_support)).
     pub async fn describe_device(&self) -> Result<DeviceSummary, OpsError> {
         let device = self.resolve_instance().await?;
         let object = ObjectIdentifier::new(ObjectType::DEVICE, device)?;
         let (rows, via) = self.rows(object, Wanted::List(&DEVICE_PROPERTIES)).await?;
+        let services = rows
+            .iter()
+            .find(|(p, _)| *p == PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED)
+            .and_then(|(_, value)| crate::watch::services(value.as_deref().ok()?));
+        if let Some(services) = services {
+            self.client.cov_declared(&self.address(), services);
+        }
         let readings = readings(rows.into_iter().map(|row| (object, None, row)).collect());
         Ok(DeviceSummary {
             device,

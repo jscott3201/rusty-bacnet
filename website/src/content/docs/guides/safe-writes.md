@@ -43,6 +43,8 @@ bacnet read 192.168.1.100 av:1 pv
 
 Relinquishing removes that slot's command. It does **not** promise a return to the previously observed number: another active priority or the relinquish default may now determine the effective value. If the slot was already occupied, clearing it is not a valid restoration of the prior command. Use the site's restoration procedure and retain the needed pre-change state.
 
+From Python, `await client.relinquish(address, object_id, 8)` sends the same NULL at that slot, then reads the priority array back and returns it: the sixteen slots, the one now in control (`in_control`) and the relinquish default. `await client.priority_array(address, object_id)` reads the same before you write. `relinquish` refuses priorities 1, 2, 5 and 6, sending nothing, unless the client was built with a `write_policy` that allows them; see the [Python client reference](/rusty-bacnet/reference/python/client/).
+
 ## The write guard
 
 The CLI refuses a one-shot command that changes a device unless the command line has `--allow-write`. Communication control and reinitialize also need `--yes` when stdin is not a terminal; at a terminal they ask you to type the device instance instead, or the target exactly as you gave it when that was an address. A refused command exits with status 4 and sends nothing, and with `--json` its reason is one line of JSON on stderr. The terminal UI ignores both flags and arms writes with its own time-boxed write session. With the flag, the commands on this page are:
