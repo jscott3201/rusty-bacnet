@@ -40,7 +40,7 @@ pub struct MstpTransport<S: SerialPort> {
     /// What a send needs, from start on. A stop leaves it and closes its
     /// queues, so every later send is refused (#2617).
     link: Option<Link>,
-    /// The node's task and its thread, which a stop through `&self` takes;
+    /// The node's task and its thread, which a stop through `&self` ends;
     /// only `start`, `stop` and `abort` lock it.
     running: StdMutex<Running>,
     /// One stop at a time (#2617).
@@ -51,11 +51,32 @@ pub struct MstpTransport<S: SerialPort> {
     frame_tap: crate::tap::FrameTap,
 }
 
-/// The started node: its task and, in dedicated execution, its thread.
+/// The started node: its task and, in dedicated execution, its thread. A
+/// stop takes each only once it has ended, so a cancelled stop leaves the
+/// rest to the next.
 #[derive(Default)]
 struct Running {
     task: Option<tokio::task::JoinHandle<()>>,
-    dedicated_runtime: Option<DedicatedRuntime>,
+    runtime: Option<DedicatedRuntime>,
+}
+
+/// The node's task, which a stop waits for: back in [`Running`] if the
+/// wait is cancelled.
+struct Joining<'a> {
+    running: &'a StdMutex<Running>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for Joining<'_> {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            lock(self.running).task = Some(task);
+        }
+    }
+}
+
+fn lock(running: &StdMutex<Running>) -> std::sync::MutexGuard<'_, Running> {
+    running.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// What a send needs from a started transport.
@@ -184,12 +205,12 @@ impl<S: SerialPort> MstpTransport<S> {
     fn abort_task_and_release_state(&mut self) {
         let running = self.running_mut();
         if let Some(task) = running.task.take() {
-            if let Some(runtime) = &running.dedicated_runtime {
+            if let Some(runtime) = &running.runtime {
                 runtime.hold_until_node_dropped();
             }
             task.abort();
         }
-        running.dedicated_runtime.take();
+        running.runtime.take();
         self.serial.take();
         self.link.take();
     }
@@ -293,7 +314,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         self.diagnostics.counters.publish_execution(status);
         *self.running_mut() = Running {
             task: Some(task),
-            dedicated_runtime,
+            runtime: dedicated_runtime,
         };
         self.link = Some(Link {
             queues,
@@ -318,22 +339,41 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         if let Some(link) = &self.link {
             link.queues.close();
         }
-        let Running {
-            task,
-            dedicated_runtime,
-        } = std::mem::take(&mut *self.running.lock().unwrap_or_else(PoisonError::into_inner));
-        if let Some(task) = task {
-            // The node ends on its own thread; test time waits for it.
-            let _held = dedicated_runtime.as_ref().map(DedicatedRuntime::hold_time);
-            if let Some(runtime) = &dedicated_runtime {
-                runtime.hold_until_node_dropped();
+        let joining = {
+            let mut running = lock(&self.running);
+            running.task.take().map(|task| {
+                // The node ends on its own thread; test time waits for it.
+                let held = running.runtime.as_ref().map(DedicatedRuntime::hold_time);
+                if let Some(runtime) = &running.runtime {
+                    runtime.hold_until_node_dropped();
+                }
+                task.abort();
+                (held, task)
+            })
+        };
+        if let Some((_held, task)) = joining {
+            // A join cancelled here puts the task back for the next stop.
+            let mut joining = Joining {
+                running: &self.running,
+                task: Some(task),
+            };
+            if let Some(task) = joining.task.as_mut() {
+                let _ = task.await;
             }
-            task.abort();
-            let _ = task.await;
+            joining.task = None;
         }
-        if let Some(runtime) = dedicated_runtime {
-            runtime.stop().await;
+        // The thread ends once the task is joined; it stays here until it
+        // has, so a cancelled stop leaves the wait to the next.
+        let ending = lock(&self.running)
+            .runtime
+            .as_mut()
+            .map(|runtime| (runtime.hold_time(), runtime.stopping()));
+        if let Some((_held, mut finished)) = ending {
+            // Returns once the thread sends, or with an error once it has
+            // gone: either way, it has ended.
+            let _ = finished.changed().await;
         }
+        lock(&self.running).runtime.take();
         stopping.finish();
         Ok(())
     }
@@ -571,11 +611,52 @@ mod abort_tests {
         assert!(ExclusiveSerial::open(in_use.clone()).is_none());
 
         transport.abort();
-        assert!(transport.running.lock().unwrap().task.is_none());
+        assert!(lock(&transport.running).task.is_none());
         assert!(transport.link.is_none());
         assert!(transport.send_broadcast(&[1, 0]).await.is_err());
         drop(reopen(&in_use).await);
         assert!(!in_use.load(Ordering::SeqCst));
+    }
+
+    /// A stop cancelled while it waits leaves the rest to the next stop,
+    /// which returns only once the node's thread has let go of the serial
+    /// port (#2617). Each round cancels the first stop after one more poll,
+    /// so it is cancelled in the task's join and in the thread's end.
+    #[tokio::test]
+    async fn a_cancelled_stop_leaves_the_rest_to_the_next() {
+        for polls in 1..=3 {
+            let in_use = Arc::new(AtomicBool::new(false));
+            let serial = ExclusiveSerial::open(in_use.clone()).unwrap();
+            let mut transport = MstpTransport::new(serial, MstpConfig::default())
+                .with_execution_mode(MstpExecutionMode::dedicated_thread());
+            let _rx = transport.start().await.unwrap();
+            let finished = {
+                let mut stop = Box::pin(transport.stop());
+                let mut finished = false;
+                for _ in 0..polls {
+                    let polled =
+                        std::future::poll_fn(|cx| std::task::Poll::Ready(stop.as_mut().poll(cx)))
+                            .await;
+                    if polled.is_ready() {
+                        finished = true;
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                finished
+            };
+            if !finished {
+                // The thread stays with the transport until a stop has seen
+                // it end.
+                assert!(lock(&transport.running).runtime.is_some(), "{polls} polls");
+            }
+            transport.stop().await.unwrap();
+            assert!(
+                !in_use.load(Ordering::SeqCst),
+                "the second stop joined the thread ({polls} polls)"
+            );
+            assert!(lock(&transport.running).runtime.is_none());
+        }
     }
 
     #[tokio::test]
