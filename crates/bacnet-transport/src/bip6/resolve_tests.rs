@@ -10,8 +10,8 @@ use tokio::sync::oneshot::error::TryRecvError;
 use tokio::time::Instant;
 
 use super::resolve::{
-    Failure, Limit, MAX_QUEUED, MAX_QUEUED_PER_VMAC, MAX_RESOLVING, MAX_VIRTUAL, MAX_WAITERS,
-    MAX_WAITERS_PER_VMAC, Neighbours, Route, VirtualRoute,
+    Closed, Failure, Limit, MAX_QUEUED, MAX_QUEUED_PER_VMAC, MAX_RESOLVING, MAX_VIRTUAL,
+    MAX_WAITERS, MAX_WAITERS_PER_VMAC, Neighbours, Route, VirtualRoute,
 };
 use super::resolve_counters::{Bip6ResolutionCounters, ResolutionCounts};
 use super::vmac_table::{
@@ -576,6 +576,18 @@ fn clearing_fails_every_waiter() {
     assert_eq!(state.resolving(), 0);
     assert!(state.poll(t0, &counts).flush.is_empty());
     assert_eq!(counts.snapshot().queued_dropped, 2, "stop counts the queue");
+    // Closed from then on (#2617): a send or lookup registers nothing,
+    // until a start opens the table again.
+    assert!(matches!(
+        state.route(PEER, NPDU, QUEUE, t0, &counts),
+        Route::Closed(Closed::Stopped)
+    ));
+    assert!(matches!(
+        state.resolve_virtual(addr(5), t0),
+        VirtualRoute::Closed(Closed::Stopped)
+    ));
+    assert_eq!(state.resolving(), 0);
+    state.closed = None;
     let _ = wait(&mut state, PEER, t0, &counts);
 }
 

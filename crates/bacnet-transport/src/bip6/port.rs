@@ -150,6 +150,8 @@ impl Bip6Transport {
     ///   valid 22-bit device instance (per Clause H.7.2). Otherwise an
     ///   OS-random Random Device Instance VMAC is generated at startup.
     pub fn new(interface: Ipv6Addr, port: u16, device_instance: Option<u32>) -> Self {
+        let resolver = Arc::<Resolver>::default();
+        resolver.close_until_started();
         Self {
             interface,
             port,
@@ -161,7 +163,7 @@ impl Bip6Transport {
             socket: SocketSlot::default(),
             tasks: Tasks::default(),
             stop_gate: StopGate::default(),
-            resolver: Arc::default(),
+            resolver,
             unresolved: UnresolvedSend::default(),
             broadcast_scope: Bip6BroadcastScope::SiteLocal,
             foreign_device: None,
@@ -718,6 +720,7 @@ impl TransportPort for Bip6Transport {
 
         let (tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
+        self.resolver.open();
         self.resolver.set_own(Some(source_vmac));
         let receiver = Receiver {
             socket: Arc::clone(&socket),
@@ -793,6 +796,8 @@ impl TransportPort for Bip6Transport {
         }
         let socket = self.socket.take();
         drop(socket);
+        // A send waiting on a resolution fails now, and none starts one.
+        self.resolver.clear();
         self.tasks.stop().await;
         // Only now, so no pass or answer in flight leaves one behind.
         if let Some(fd) = &self.foreign_device {
@@ -839,10 +844,9 @@ impl TransportPort for Bip6Transport {
     /// `QuotaExceeded` when 64 VMACs are resolving, or 64 sends wait on this
     /// one (512 in all), or 8 NPDUs are queued for it (128 in all).
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        if !self.socket.is_some() {
-            return Err(self.not_running());
-        }
-        // The slot is read again as the datagram goes, after any wait.
+        // The resolver refuses a send while the transport isn't running,
+        // under the lock it takes anyway (#2617), and the socket slot is
+        // read as the datagram goes, after any wait.
         self.resolver
             .send_unicast(&self.socket, self.source_vmac, self.unresolved, npdu, mac)
             .await

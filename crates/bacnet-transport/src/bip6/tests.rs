@@ -305,6 +305,59 @@ async fn bip6_stop_with_another_holder_alive_fails_later_sends_and_frees_the_por
     assert_eq!(other.local_mac(), [0; 3]);
 }
 
+/// A send waiting on a resolution when the transport stops fails at the
+/// stop, not seconds later; one after the stop fails at once and starts no
+/// resolution; and a restart begins with none left over (#2617).
+#[tokio::test]
+async fn bip6_a_stop_ends_waiting_sends_and_a_restart_starts_clean() {
+    let is_stopped = |sent: &Result<(), bacnet_types::error::Error>| matches!(sent, Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected);
+    let resolving =
+        |transport: &Bip6Transport| transport.resolver.with_state(|state, _| state.resolving());
+    let nobody = [0x00, 0x00, 0x09];
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(1));
+    assert!(is_stopped(
+        &transport.send_unicast(&[0x01, 0x00], &nobody).await
+    ));
+    let _rx = transport.start().await.unwrap();
+    let transport = std::sync::Arc::new(transport);
+    let waiting = tokio::spawn({
+        let transport = std::sync::Arc::clone(&transport);
+        async move { transport.send_unicast(&[0x01, 0x00], &nobody).await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while resolving(&transport) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the send waits on a resolution");
+    transport.stop().await.unwrap();
+    let sent = tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("the stop ended the waiting send")
+        .unwrap();
+    assert!(is_stopped(&sent), "{sent:?}");
+    let late = transport.send_unicast(&[0x01, 0x00], &nobody).await;
+    assert!(is_stopped(&late), "{late:?}");
+    assert!(late.unwrap_err().to_string().contains("transport stopped"));
+    assert_eq!(
+        resolving(&transport),
+        0,
+        "a send after the stop resolves nothing"
+    );
+
+    let mut transport = std::sync::Arc::into_inner(transport).unwrap();
+    let _rx = transport.start().await.unwrap();
+    assert_eq!(resolving(&transport), 0, "nothing left over");
+    let again = tokio::time::timeout(
+        Duration::from_millis(50),
+        transport.send_unicast(&[0x01, 0x00], &nobody),
+    )
+    .await;
+    assert!(again.is_err(), "a send after the restart resolves again");
+    transport.stop().await.unwrap();
+}
+
 /// The MAC is the 3-octet VMAC (U.1.3): a node that found its peer's VMAC
 /// from the peer's address sends to that VMAC, the frame arrives with the
 /// sender's VMAC as its source MAC, and the peer answers that VMAC at once,
