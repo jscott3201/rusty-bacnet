@@ -1,4 +1,6 @@
 ---
 section: Migration notes
 ---
-- **Breaking (Rust API, #2614):** Move imports of `bacnet_tool::decode::frame`, the NPDU/APDU summary types and reader, and `decode::testing` to `bacnet_ops::decode`. Frame builders now use `bacnet-ops/test-support`; the tool's feature retains its filesystem test hooks. Detailed field trees remain in `bacnet_tool::decode::tree`.
+- **Frame summaries (Rust API, #2614):** a `bacnet_ops::decode::frame::FrameSummary`
+  literal or pattern names the new `original_source` and `parse_error` fields
+  (or ends in `..`), and a `Link` literal names `original_source`.

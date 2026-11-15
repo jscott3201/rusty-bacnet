@@ -1,6 +1,7 @@
 //! `bacnet_decode`: a frame, NPDU or APDU the agent passes as hex, decoded
-//! by the capture screen's decoder (`bacnet_tool::decode`). Nothing is sent,
-//! so it works in passive mode.
+//! by the capture screen's decoder: the summary from `bacnet_ops::decode`,
+//! the field tree from `bacnet_tool::decode::tree`. Nothing is sent, so it
+//! works in passive mode.
 //!
 //! The octets are the agent's, but whatever wrote them chose any character
 //! string inside: those come back as untrusted envelopes, like any device
