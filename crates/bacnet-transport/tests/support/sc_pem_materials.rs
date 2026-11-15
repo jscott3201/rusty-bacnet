@@ -23,6 +23,18 @@ pub fn pem(kind: &str, der: &[u8]) -> Vec<u8> {
     format!("-----BEGIN {kind}-----\n{body}\n-----END {kind}-----\n").into_bytes()
 }
 
+/// OpenSSL's older encrypted key form: a `label` section (SEC1 or PKCS#1)
+/// with RFC 1421 `Proc-Type`/`DEK-Info` headers before a made-up `body`.
+/// The `BEGIN` line is joined here from the label at run time, so no
+/// tracked file carries a literal private key `BEGIN` line
+/// (`scripts/ci/check-no-secrets.sh`).
+pub fn legacy_encrypted_pem(label: &str, body: &str) -> String {
+    format!(
+        "-----BEGIN {label}-----\nProc-Type: 4,ENCRYPTED\n\
+         DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\n{body}\n-----END {label}-----\n"
+    )
+}
+
 pub fn tlv(tag: u8, bytes: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
     if bytes.len() < 128 {

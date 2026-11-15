@@ -1,8 +1,9 @@
 //! Independent fixture encodings exercise the public offline boundary.
 #![cfg(feature = "sc-tls")]
 
-use bacnet_transport::sc_tls::{inspection::*, pem};
-use rustls::pki_types::PrivateKeyDer;
+use bacnet_transport::sc_tls::inspection::*;
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject;
 #[path = "support/sc_pem_materials.rs"]
 mod fixture;
 use fixture::*;
@@ -22,45 +23,6 @@ fn has(entry: &ScInspectedCertificate, area: ScFindingArea, kind: ScFindingKind)
 }
 fn extension(oid: &[u64], bytes: Vec<u8>) -> rcgen::CustomExtension {
     rcgen::CustomExtension::from_oid_content(oid, bytes)
-}
-
-#[test]
-fn decoder_retains_order_empty_unknown_and_first_key_contracts() {
-    let mut chain = pem("UNKNOWN", b"ignored");
-    chain.extend(pem("CERTIFICATE", b"first"));
-    chain.extend(pem("CERTIFICATE", b"second"));
-    let certs = pem::certificates(&chain).unwrap();
-    assert_eq!(
-        certs.iter().map(|c| c.as_ref()).collect::<Vec<_>>(),
-        [b"first".as_slice(), b"second"]
-    );
-    assert!(pem::certificates(b"").unwrap().is_empty());
-    for (label, expected) in [
-        ("RSA PRIVATE KEY", 1),
-        ("EC PRIVATE KEY", 2),
-        ("PRIVATE KEY", 3),
-    ] {
-        let mut bytes = pem(label, b"unusable DER still decodes");
-        bytes.extend(b"-----BEGIN SECRET malformed\n");
-        let key = pem::private_key(&bytes).unwrap();
-        assert!(matches!(
-            (expected, key),
-            (1, PrivateKeyDer::Pkcs1(_))
-                | (2, PrivateKeyDer::Sec1(_))
-                | (3, PrivateKeyDer::Pkcs8(_))
-        ));
-    }
-    assert!(pem::private_key(&pem("ENCRYPTED PRIVATE KEY", b"encrypted")).is_err());
-    let mut invalid_tail = pem("CERTIFICATE", b"first");
-    invalid_tail.extend(b"-----BEGIN CERTIFICATE-----\n***\n-----END CERTIFICATE-----\n");
-    let mut iter = pem::certificate_iter(&invalid_tail);
-    assert_eq!(iter.next().unwrap().unwrap().as_ref(), b"first");
-    assert!(iter.next().unwrap().is_err());
-    assert!(pem::certificates(&invalid_tail).is_err());
-    let read = pem::certificate_reader(std::io::Cursor::new(&chain))
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(read, certs);
 }
 
 #[test]
@@ -128,7 +90,7 @@ fn malformed_der_keeps_exact_fingerprint_but_no_fabricated_metadata() {
         ScFindingKind::Malformed
     ));
     let (valid, _) = certificate(params());
-    let mut der = pem::certificates(&valid).unwrap().remove(0).to_vec();
+    let mut der = CertificateDer::from_pem_slice(&valid).unwrap().to_vec();
     der.push(0);
     assert!(inspect(&pem("CERTIFICATE", &der)).metadata.is_none());
 }
@@ -199,6 +161,59 @@ fn key_results_distinguish_mismatch_unusable_omission_and_unavailable_leaf() {
             .key_consistency,
         ScKeyConsistency::Unknown
     );
+}
+
+/// The inspection decodes the key by the TLS configurations' rule (#2600):
+/// two keys, an encrypted key in either form, and a malformed section after
+/// a good key are refused, as a connect refuses them.
+#[test]
+fn key_input_follows_the_tls_configurations_one_key_rule() {
+    let (bytes, key) = certificate(params());
+    let other_key = rcgen::KeyPair::generate().unwrap().serialize_pem();
+    let legacy = legacy_encrypted_pem("EC PRIVATE KEY", "Zml4dHVyZQ==").into_bytes();
+    let mut two = key.clone();
+    two.extend(other_key.as_bytes());
+    let mut tail = key.clone();
+    tail.extend(b"-----BEGIN SECRET invalid\n");
+    for (name, input, expected) in [
+        ("two keys", two, ScInputErrorKind::MultiplePrivateKeys),
+        (
+            "a key and a legacy encrypted key",
+            [key.as_slice(), legacy.as_slice()].concat(),
+            ScInputErrorKind::MultiplePrivateKeys,
+        ),
+        (
+            "a legacy encrypted key and a key",
+            [legacy.as_slice(), key.as_slice()].concat(),
+            ScInputErrorKind::MultiplePrivateKeys,
+        ),
+        (
+            "encrypted PKCS#8",
+            pem("ENCRYPTED PRIVATE KEY", b"sealed"),
+            ScInputErrorKind::UnsupportedPrivateKey,
+        ),
+        (
+            "legacy encrypted",
+            legacy.to_vec(),
+            ScInputErrorKind::UnsupportedPrivateKey,
+        ),
+        ("malformed tail", tail, ScInputErrorKind::MalformedPem),
+        (
+            "no key",
+            pem("CERTIFICATE", b"abc"),
+            ScInputErrorKind::MissingPrivateKey,
+        ),
+    ] {
+        let error = inspect_sc_pem(&bytes, None, Some(&input), Some(NOW)).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ScInspectionError::Input { role: ScInputRole::PrivateKey, kind, .. }
+                    if kind == expected
+            ),
+            "{name}: {error:?}"
+        );
+    }
 }
 
 #[test]
