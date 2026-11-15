@@ -99,6 +99,7 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "network_reports",
     "connection_events",
     "frames",
+    "i_am_arrivals",
     "discovered_devices",
     "get_device",
     "clear_devices",

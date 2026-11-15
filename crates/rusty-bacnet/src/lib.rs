@@ -23,6 +23,7 @@ mod group_members;
 mod high_level;
 mod hub;
 mod hub_bindings;
+mod i_am_arrivals;
 mod load_shedder;
 mod log_records;
 mod logging_bridge;
@@ -85,6 +86,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     sc_events::register(m)?;
     frames::register(m)?;
     frame_decode::register(m)?;
+    i_am_arrivals::register(m)?;
     discovery::register(m)?;
     export_223::register(m)?;
     high_level::register(m)?;

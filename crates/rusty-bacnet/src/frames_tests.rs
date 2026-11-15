@@ -160,7 +160,8 @@ async fn fresh(iterator: &PyFrameIterator) -> (PyFrame, Arc<dyn crate::py_async:
     let Some(crate::event_stream::Next::Fresh(frame)) = next else {
         panic!("expected a fresh frame");
     };
-    (iterator.converter().frame(frame), hook)
+    let gaps = iterator.subscription.gaps();
+    (iterator.converter()(frame, &gaps), hook)
 }
 
 /// A full one-frame queue: frame 0 queued, then 1 and 2 lost behind it.

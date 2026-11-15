@@ -4831,6 +4831,147 @@ class FrameIterator:
         no ``missed_before`` has reported yet. Readable after close."""
         ...
 
+class IAmArrival:
+    """One I-Am the owner's link handed it, frozen at arrival (#2612).
+
+    Every I-Am frame received is a record, in arrival order: repeats, and
+    two devices claiming one instance at different addresses, included.
+    ``link_sender`` is who put the frame on this node's link, in
+    ``Frame.peer``'s form; ``link_source`` is the source MAC the stack takes,
+    in the address form the calls take on that link (``"ip:port"``,
+    ``"bip6:0x0004D2"``, an SC VMAC in colon hex, ``"mstp:5"``). See "I-Am
+    arrivals" in docs/python-api.md for who is who on each link. The
+    parameters are kept as sent, odd ones included. A record compares,
+    hashes, copies and pickles by its fields.
+
+    The tap shows frames before the stack filters them, so a record does
+    not prove the discovery table took the I-Am."""
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+    def __repr__(self) -> str:
+        """The instance, ``device_address`` and ``link_sender``."""
+        ...
+    @property
+    def monotonic(self) -> float:
+        """Arrival time on ``time.monotonic()``'s clock and origin, as
+        ``Frame.monotonic`` (with its Windows note)."""
+        ...
+    @property
+    def timestamp(self) -> float:
+        """Arrival time as POSIX seconds from the wall clock, as
+        ``Frame.timestamp``."""
+        ...
+    @property
+    def link(self) -> Literal["bip", "ipv6", "sc", "mstp", "other"]:
+        """The link, as ``Frame.link``."""
+        ...
+    @property
+    def device_identifier(self) -> ObjectIdentifier:
+        """The I-Am's device identifier, of the type it was sent with;
+        ``.instance`` is the device instance."""
+        ...
+    @property
+    def max_apdu_length(self) -> int:
+        """Max APDU length accepted, as sent (below 50 included)."""
+        ...
+    @property
+    def segmentation_supported(self) -> Segmentation:
+        """Segmentation supported, as sent (a value outside the
+        enumeration included)."""
+        ...
+    @property
+    def vendor_id(self) -> int:
+        """Vendor identifier, as sent."""
+        ...
+    @property
+    def link_sender(self) -> str:
+        """Who put the frame on this node's link, as ``Frame.peer`` writes
+        it: the UDP source on B/IP and B/IPv6 (for a Forwarded-NPDU the BBMD
+        that forwarded it), ``"primary"`` or ``"failover"`` on SC, the
+        source station in decimal on MS/TP."""
+        ...
+    @property
+    def link_source(self) -> str:
+        """The source MAC the stack takes for the frame: the origin a
+        Forwarded-NPDU carries, else the sender, on B/IP; the source VMAC on
+        B/IPv6 (the original source's when forwarded); the originating VMAC
+        on SC; the source station on MS/TP. The router when
+        ``source_network`` is set."""
+        ...
+    @property
+    def original_source(self) -> Optional[str]:
+        """The originating node's ``"ip:port"`` or ``"[ip]:port"`` a BBMD
+        wrote into a B/IP or B/IPv6 Forwarded-NPDU; None otherwise."""
+        ...
+    @property
+    def forwarded(self) -> bool:
+        """True when the frame carried an origin other than its sender: a
+        BBMD forwarded it. Never on SC or MS/TP."""
+        ...
+    @property
+    def source_network(self) -> Optional[int]:
+        """SNET, when a router relayed the I-Am from another network."""
+        ...
+    @property
+    def source_address(self) -> Optional[bytes]:
+        """SADR, the device's MAC on ``source_network``."""
+        ...
+    @property
+    def broadcast(self) -> bool:
+        """A link broadcast or a broadcast on a network. False for an MS/TP
+        I-Am one station unicast to another, which the bus lets this
+        station hear."""
+        ...
+    @property
+    def device_address(self) -> Optional[str]:
+        """The device's address as ``BACnetClient.device()`` takes it:
+        ``link_source`` for a device on this link, ``"5:0x07"`` for one a
+        router relayed. None when those name no one station."""
+        ...
+    @property
+    def next_hop_router(self) -> Optional[str]:
+        """The router that relayed it, when ``source_network`` is set: its
+        ``link_source``."""
+        ...
+    @property
+    def forwarding_bbmd(self) -> Optional[str]:
+        """The BBMD that forwarded it, when ``forwarded``: its
+        ``link_sender``."""
+        ...
+    @property
+    def missed_before(self) -> int:
+        """Frames of any kind this subscription lost just before this
+        record, as ``Frame.missed_before``: the tap cannot tell which of
+        them held an I-Am. Summed over the records received, plus any lost
+        after the last one, it is ``IAmArrivalIterator.missed``."""
+        ...
+
+class IAmArrivalIterator:
+    """A bounded subscription to the I-Ams the owner's link hands it,
+    with ``FrameIterator``'s semantics: the queue holds frames of every kind
+    (``capacity``), a full queue drops new frames, a cancelled read keeps
+    the next record, and close or owner shutdown wakes pending reads. It
+    never keeps the owner's socket alive. With a subscriber the transport
+    copies every frame once, as for ``frames()``; the decode runs where the
+    records are read, never on the transport's path."""
+    def __aiter__(self) -> IAmArrivalIterator: ...
+    def __anext__(self) -> Awaitable[IAmArrival]: ...
+    def aclose(self) -> Awaitable[None]:
+        """Idempotently stop this subscription, without stopping its owner."""
+        ...
+    @property
+    def missed(self) -> int:
+        """Frames of any kind lost so far, live, as ``FrameIterator.missed``.
+        Readable after close."""
+        ...
+    @property
+    def malformed(self) -> int:
+        """Inbound I-Am frames read so far that made no record: parameters
+        that don't decode, or an SC message naming no originating VMAC.
+        A frame whose headers don't decode is not counted: it is not known
+        to hold an I-Am. Readable after close."""
+        ...
+
 class BACnetClient:
     """Async BACnet client for reading/writing properties on remote devices.
 
@@ -5477,6 +5618,15 @@ class BACnetClient:
         before start and after stop; a router application client
         (``transport="router"``) has no link of its own and raises
         ValueError. Stop ends the iterator; a restart needs a new one."""
+        ...
+
+    def i_am_arrivals(self, capacity: int = 1024) -> Awaitable[IAmArrivalIterator]:
+        """Follow every I-Am this client's own transport receives from now
+        on (B/IP, B/IPv6, SC or MS/TP), one ``IAmArrival`` each (#2612),
+        from a tap queue of ``capacity`` frames of every kind (1 to 65536,
+        else ValueError). This client's own I-Am come back to it is left
+        out. RuntimeError before start and after stop; a router application
+        client raises ValueError. Stop ends the iterator."""
         ...
 
     def discovered_devices(self) -> Awaitable[list[DiscoveredDevice]]:
@@ -9609,6 +9759,13 @@ class BipEndpoint:
         beside both roles' traffic, ``capacity`` frames queued at most (1 to
         65536, else ValueError). RuntimeError before start and after close.
         Close ends the iterator; a restart needs a new one."""
+        ...
+
+    def i_am_arrivals(self, capacity: int = 1024) -> Awaitable[IAmArrivalIterator]:
+        """Follow every I-Am the endpoint's socket receives from now on, as
+        ``BACnetClient.i_am_arrivals`` does (#2612); the endpoint's own I-Am
+        come back to it is left out. RuntimeError before start and after
+        close. Close ends the iterator."""
         ...
 
     def read_bdt(self, address: str) -> Awaitable[list[tuple[str, str]]]:
