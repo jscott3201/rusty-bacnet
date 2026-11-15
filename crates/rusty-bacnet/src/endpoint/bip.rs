@@ -77,6 +77,19 @@ async fn bvlc_tables(
         .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))
 }
 
+/// A table read's failure. One that `close()` cut off, or that met the
+/// transport stopping, raises what a read after `close()` does (#2612).
+fn table_read_error(error: bacnet_transport::bip::BvlcExchangeError) -> PyErr {
+    match &error {
+        bacnet_transport::bip::BvlcExchangeError::Transport(
+            bacnet_types::error::Error::Transport(io),
+        ) if io.kind() == std::io::ErrorKind::NotConnected => {
+            PyRuntimeError::new_err("endpoint not started")
+        }
+        _ => crate::errors::bvlc_exchange_err(error),
+    }
+}
+
 impl BipEndpointConfig {
     async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<BipSession> {
         let config = self;
@@ -157,6 +170,8 @@ impl BipEndpointConfig {
 pub struct PyBipEndpoint {
     lifecycle: Lifecycle<BipSession, PendingObject>,
     config: BipEndpointConfig,
+    /// The BBMD table reads started, for `read_bdt` and `read_fdt` (#2612).
+    table_reads: super::table_reads::TableReads,
 }
 
 impl PyBipEndpoint {
@@ -391,6 +406,7 @@ impl PyBipEndpoint {
         )?;
         Ok(Self {
             lifecycle: Lifecycle::new(),
+            table_reads: super::table_reads::TableReads::default(),
             config: BipEndpointConfig {
                 interface: interface_ip,
                 port,
@@ -618,38 +634,57 @@ impl PyBipEndpoint {
     /// (`"ip"` or `"ip:port"`) through this endpoint's own socket, beside the
     /// roles' traffic (#2612), as `BACnetClient.read_bdt` does: the same
     /// `("ip:port", "mask")` rows and the same errors. Raises RuntimeError
-    /// before start and after close.
+    /// before start and after close, and for a read that close cuts off.
     fn read_bdt<'py>(&self, py: Python<'py>, address: String) -> PyResult<Bound<'py, PyAny>> {
         let target = crate::bip_options::bip_mac(&address, "address")?;
         let inner = self.lifecycle.session.clone();
-        crate::py_async::future_into_py(py, async move {
+        // A cancelled read gives its request up before the same read
+        // starts again (#2612).
+        let key = (super::table_reads::Table::Bdt, target);
+        let (id, give_up) = self.table_reads.begin(py, key)?;
+        let reads = give_up.clone();
+        let read = async move {
             let rows = bvlc_tables(&inner)
                 .await?
+                .with_give_up(&reads)
                 .read_bdt(&target)
                 .await
-                .map_err(crate::errors::bvlc_exchange_err)?;
+                .map_err(table_read_error)?;
             Ok(rows
                 .iter()
                 .map(crate::bip_options::bdt_row)
                 .collect::<Vec<_>>())
-        })
+        };
+        let on_done = self.table_reads.on_done(key, id, give_up.clone());
+        let future = crate::py_async::future_into_py_on_done(py, read, on_done)?;
+        self.table_reads.started(key, id, &future, give_up);
+        Ok(future)
     }
 
     /// Read the Foreign Device Table of the BBMD at `address` through this
     /// endpoint's own socket (#2612), as `BACnetClient.read_fdt` does: a
     /// dict per entry with `address`, `ttl` and `seconds_remaining`, and the
-    /// same errors. Raises RuntimeError before start and after close.
+    /// same errors. Raises RuntimeError before start and after close, and
+    /// for a read that close cuts off.
     fn read_fdt<'py>(&self, py: Python<'py>, address: String) -> PyResult<Bound<'py, PyAny>> {
         let target = crate::bip_options::bip_mac(&address, "address")?;
         let inner = self.lifecycle.session.clone();
-        crate::py_async::future_into_py(py, async move {
+        let key = (super::table_reads::Table::Fdt, target);
+        let (id, give_up) = self.table_reads.begin(py, key)?;
+        let reads = give_up.clone();
+        let read = async move {
             let entries = bvlc_tables(&inner)
                 .await?
+                .with_give_up(&reads)
                 .read_fdt(&target)
                 .await
-                .map_err(crate::errors::bvlc_exchange_err)?;
+                .map_err(table_read_error)?;
             crate::py_async::attach(|py| crate::bip_options::fdt_rows(py, &entries))
-        })
+        };
+        let on_done = self.table_reads.on_done(key, id, give_up.clone());
+        let future = crate::py_async::future_into_py_on_done(py, read, on_done)?;
+        self.table_reads.started(key, id, &future, give_up);
+        Ok(future)
     }
 
     /// Broadcast one I-Am consistent with the composed identity.

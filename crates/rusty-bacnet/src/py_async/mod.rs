@@ -130,6 +130,31 @@ where
     spawn_into_py(py, fut, None)
 }
 
+/// [`future_into_py`], with `on_done` run on the event loop as soon as the
+/// asyncio future is done, cancelled included, before any code awaiting it
+/// resumes (#2612). It is for a cancellation that must release something at
+/// once: the aborted Rust future is only dropped later, on a runtime
+/// thread. `on_done` must not block or attach to Python.
+pub(crate) fn future_into_py_on_done<'py, F, T>(
+    py: Python<'py>,
+    fut: F,
+    on_done: impl FnOnce() + Send + 'static,
+) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'p> IntoPyObject<'p> + Send + 'static,
+{
+    let future = spawn_into_py(py, fut, None)?;
+    let callback = Bound::new(py, RunOnDone(Mutex::new(Some(Box::new(on_done)))))?;
+    if let Err(err) = future.call_method1(intern!(py, "add_done_callback"), (&callback,)) {
+        // Nobody will await it: end the Rust future and release now.
+        let _ = future.call_method0(intern!(py, "cancel"));
+        callback.get().run();
+        return Err(err);
+    }
+    Ok(future)
+}
+
 /// Takes back a value whose asyncio future was already done, cancelled
 /// most often, when the value reached it (#1858). An event iterator keeps
 /// it for its next `__anext__`, so a cancelled wait loses no item.
@@ -346,6 +371,26 @@ struct AbortOnDone(AbortHandle);
 impl AbortOnDone {
     fn __call__(&self, _future: &Bound<'_, PyAny>) {
         self.0.abort();
+    }
+}
+
+/// Done callback for [`future_into_py_on_done`]: runs its closure once.
+#[pyclass(frozen)]
+struct RunOnDone(Mutex<Option<Box<dyn FnOnce() + Send>>>);
+
+impl RunOnDone {
+    fn run(&self) {
+        let on_done = self.0.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(on_done) = on_done {
+            on_done();
+        }
+    }
+}
+
+#[pymethods]
+impl RunOnDone {
+    fn __call__(&self, _future: &Bound<'_, PyAny>) {
+        self.run();
     }
 }
 

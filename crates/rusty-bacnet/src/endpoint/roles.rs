@@ -34,10 +34,10 @@ enum Target {
 }
 
 impl Target {
-    /// `address` as a read's target. A `RoutedTarget` must name its router:
-    /// the client role learns no routes, and sending a confirmed request to
-    /// the link's broadcast address for the routers to pick up is not done
-    /// silently.
+    /// `address` as a read's target. A `RoutedTarget` with a router goes to
+    /// that router; one without goes as a broadcast on the local link that
+    /// names the destination network, for whichever router serves it to
+    /// forward (Clause 6.5.3): the client role learns no routes.
     fn of(address: &Bound<'_, PyAny>) -> PyResult<Self> {
         if let Ok(text) = address.cast::<PyString>() {
             return Ok(Self::Direct(text.to_cow()?.into_owned()));
@@ -49,16 +49,17 @@ impl Target {
             )));
         };
         let (network, station, router) = target.get().parts();
-        let router = router.ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "the endpoint client learns no routes: give the RoutedTarget a router, the \
-                 address on this link of a router to network {network}"
-            ))
-        })?;
-        Ok(Self::Routed(EndpointApduDestination::Routed {
-            destination_network: network,
-            destination_mac: MacAddr::from_slice(station),
-            router_mac: MacAddr::from_slice(router),
+        let destination_mac = MacAddr::from_slice(station);
+        Ok(Self::Routed(match router {
+            Some(router) => EndpointApduDestination::Routed {
+                destination_network: network,
+                destination_mac,
+                router_mac: MacAddr::from_slice(router),
+            },
+            None => EndpointApduDestination::RoutedViaLocalBroadcast {
+                destination_network: network,
+                destination_mac,
+            },
         }))
     }
 
@@ -158,14 +159,12 @@ impl PyEndpointClient {
             "commandable" => Commandability::Commandable,
             "noncommandable" => Commandability::Noncommandable,
             _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
+                return Err(PyValueError::new_err(
                     "commandability must be 'commandable' or 'noncommandable'",
                 ));
             }
         };
-        let invalid = |error: bacnet_types::error::Error| {
-            pyo3::exceptions::PyValueError::new_err(error.to_string())
-        };
+        let invalid = |error: bacnet_types::error::Error| PyValueError::new_err(error.to_string());
         bacnet_services::write_property::validate_priority(priority).map_err(invalid)?;
         let mut encoded = bytes::BytesMut::new();
         bacnet_encoding::primitives::encode_property_value(&mut encoded, &value.inner)
@@ -209,7 +208,7 @@ impl PyEndpointClient {
         );
         request
             .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let bacnet_client::EndpointReadRequest::Multiple(request) = request else {
             unreachable!()
         };

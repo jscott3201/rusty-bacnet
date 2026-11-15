@@ -19,6 +19,7 @@ mod mstp;
 mod roles;
 mod sc;
 mod source_audit;
+mod table_reads;
 
 pub(crate) use bip::PyBipEndpoint;
 pub(crate) use mstp::PyMstpEndpoint;

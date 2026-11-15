@@ -343,3 +343,159 @@ async fn the_session_reads_a_bbmd_table_through_its_own_socket() {
     .unwrap();
     assert!(other.bvlc_tables().is_none());
 }
+
+#[path = "support/eventually.rs"]
+mod eventually;
+
+/// A ComplexAck to ReadProperty of `log()`'s Record_Count with `count`,
+/// relayed from the station behind a router: SNET/SADR naming it.
+fn relayed_count(invoke_id: u8, count: u64) -> Bytes {
+    let mut value = BytesMut::new();
+    bacnet_encoding::primitives::encode_property_value(&mut value, &PropertyValue::Unsigned(count))
+        .unwrap();
+    let mut ack = BytesMut::new();
+    ReadPropertyACK {
+        object_identifier: log(),
+        property_identifier: PropertyIdentifier::RECORD_COUNT,
+        property_array_index: None,
+        property_value: value.to_vec(),
+    }
+    .encode(&mut ack)
+    .unwrap();
+    let mut apdu = BytesMut::new();
+    encode_apdu(
+        &mut apdu,
+        &Apdu::ComplexAck(ComplexAck {
+            segmented: false,
+            more_follows: false,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            service_ack: ack.freeze(),
+        }),
+    )
+    .unwrap();
+    let mut npdu = BytesMut::new();
+    encode_npdu(
+        &mut npdu,
+        &Npdu {
+            source: Some(NpduAddress {
+                network: NETWORK,
+                mac_address: MacAddr::from_slice(&STATION),
+            }),
+            payload: apdu.freeze(),
+            ..Npdu::default()
+        },
+    )
+    .unwrap();
+    npdu.freeze()
+}
+
+/// With no router known, a read goes as one broadcast on the local link
+/// naming the station's network and MAC (Clause 6.5.3). When two routers
+/// both forward it, the first answer completes the read, the second is
+/// dropped and counted, and no lease is left; a network no router answers
+/// for times out (#2612).
+#[tokio::test(start_paused = true)]
+async fn a_read_by_local_broadcast_takes_the_first_of_two_answers() {
+    use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+    use bacnet_transport::test_transport::{BIP_LOCAL_MAC, TestTransport};
+
+    let (inbound, receiver) = tokio::sync::mpsc::channel(8);
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .inbound(receiver)
+        .build();
+    let sent = transport.sent();
+    let mut session = bacnet_endpoint::session::EndpointSession::new(
+        transport,
+        SessionRole::ClientOnly,
+        bacnet_endpoint::session::SessionConfig {
+            apdu_timeout_ms: 1_000,
+            apdu_retries: 0,
+            ..bacnet_endpoint::session::SessionConfig::default()
+        },
+    )
+    .unwrap();
+    session.start().await.unwrap();
+    let by_broadcast = |network| EndpointApduDestination::RoutedViaLocalBroadcast {
+        destination_network: network,
+        destination_mac: MacAddr::from_slice(&STATION),
+    };
+    let client = session.cloned_client_handle().unwrap();
+    let to = by_broadcast(NETWORK);
+    let read = tokio::spawn(async move {
+        client
+            .read_property_with_destination(
+                to,
+                Vec::new(),
+                log(),
+                PropertyIdentifier::RECORD_COUNT,
+                None,
+            )
+            .await
+    });
+    eventually::eventually(WAIT, "the broadcast goes out", async || {
+        sent.broadcasts().len() == 1
+    })
+    .await;
+    let frame = sent.broadcasts().remove(0);
+    assert!(frame.broadcast);
+    let npdu = frame.decode_npdu();
+    let destination = npdu
+        .destination
+        .clone()
+        .expect("DNET/DADR on the broadcast");
+    assert_eq!(
+        (destination.network, destination.mac_address.as_slice()),
+        (NETWORK, &STATION[..])
+    );
+    assert_eq!(npdu.hop_count, 255);
+    assert!(npdu.expecting_reply);
+    let Apdu::ConfirmedRequest(request) = frame.apdu() else {
+        panic!("a confirmed request")
+    };
+    assert_eq!(session.active_leases(), 1);
+    // Both routers on the link forward it, and both relay the answer.
+    for (router, count) in [
+        ([10, 0, 0, 1, 0xBA, 0xC0], 3),
+        ([10, 0, 0, 2, 0xBA, 0xC0], 4),
+    ] {
+        inbound
+            .send(ReceivedNpdu {
+                direct_response: None,
+                npdu: relayed_count(request.invoke_id, count),
+                source_mac: MacAddr::from_slice(&router),
+                link_layer_group: false,
+                data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
+                reply_tx: None,
+            })
+            .await
+            .unwrap();
+    }
+    let ack = read.await.unwrap().unwrap();
+    assert_eq!(ack.property_value, [0x21, 3]);
+    eventually::eventually(WAIT, "the second answer is counted", async || {
+        session.policy_counters().await.unclaimed_terminal == 1
+    })
+    .await;
+    assert_eq!(session.active_leases(), 0);
+
+    // A network no router answers for: the read ends at its timeout.
+    let client = session.cloned_client_handle().unwrap();
+    let silent = client
+        .read_property_with_destination(
+            by_broadcast(9),
+            Vec::new(),
+            log(),
+            PropertyIdentifier::RECORD_COUNT,
+            None,
+        )
+        .await;
+    assert!(matches!(silent, Err(Error::Timeout(_))), "{silent:?}");
+    assert_eq!(sent.broadcasts().len(), 2);
+    assert_eq!(session.active_leases(), 0);
+    session.stop().await.unwrap();
+}

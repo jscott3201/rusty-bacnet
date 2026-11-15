@@ -8119,6 +8119,62 @@ class ScHub:
 
 
 # ---------------------------------------------------------------------------
+# Core types: a station behind a router (#2612)
+# ---------------------------------------------------------------------------
+
+class RoutedTarget:
+    """A station on another BACnet network (#2612), where a read takes an
+    ``address``: ``RoutedTarget(network, address, router=None)``, in that
+    order. A ``str`` address always names a station on the local link.
+
+    ``network`` is the station's network number, an ``int`` from 1 to 65534
+    (ValueError outside it, OverflowError outside 0 to 65535, TypeError for
+    a ``bool``). ``address`` is the station's MAC on that network, 1 to 18
+    octets: ``bytes`` as given, such as a ``DiscoveredDevice``'s
+    ``source_address``, or a string in the binding's address forms:
+    ``"ip:port"`` (a B/IP station's MAC is its IPv4 address and UDP port on
+    any B/IP network, local or not), ``"bip6:N"`` or ``"bip6:0x..."`` (a
+    B/IPv6 VMAC), two or more hex octets ``"aa:bb:..."``, or one octet in
+    decimal as ``"N"`` or ``"mstp:N"`` (0 to 254), so
+    ``RoutedTarget(5, "10") == RoutedTarget(5, b"\\x0a")``. A one-octet 255
+    is refused in either form: it is an MS/TP link's broadcast address, not
+    a station.
+
+    ``router`` is the next hop's address on the local link, in the same
+    forms or as ``bytes``, such as a routed ``DiscoveredDevice``'s
+    ``mac_address``, or ``BACnetClient.discover_routers()``' ``mac``. Without
+    one, each request is one broadcast on the local link that names the
+    destination network, for the router that serves it to forward. On a B/IP
+    network with BBMDs, or from a foreign device, that broadcast reaches
+    every subnet in the BDT and every registered foreign device, so pass
+    ``router`` for scans. Learning the router once and reusing it comes with
+    the full client (#2617). Other values raise ValueError, a type other than
+    ``str`` or ``bytes`` TypeError, and so does a call in another order,
+    since ``network`` takes an ``int``.
+
+    Frozen; compares and hashes by its network and octets, however they were
+    written; copies and pickles.
+    """
+
+    def __init__(
+        self,
+        network: int,
+        address: str | bytes,
+        router: str | bytes | None = None,
+    ) -> None: ...
+    @property
+    def network(self) -> int: ...
+    @property
+    def address(self) -> bytes:
+        """The station's MAC on its network."""
+        ...
+    @property
+    def router(self) -> bytes | None:
+        """The router's MAC on the local link, or None for the broadcast form."""
+        ...
+
+
+# ---------------------------------------------------------------------------
 # Endpoint (RB-19): one transport above both roles
 # ---------------------------------------------------------------------------
 
@@ -8214,54 +8270,16 @@ class ReadAccessResult(TypedDict):
     object_id: ObjectIdentifier
     results: list[ReadPropertyResult]
 
-class RoutedTarget:
-    """A station on another BACnet network (#2612), where a read takes an
-    ``address``: ``RoutedTarget(network, address, router=None)``, in that
-    order. A ``str`` address always names a station on the local link.
-
-    ``network`` is the station's network number, 1 to 65534 (ValueError
-    outside it, OverflowError outside 0 to 65535). ``address`` is the
-    station's MAC on that network, 1 to 18 octets: ``bytes`` as given, such
-    as a ``DiscoveredDevice``'s ``source_address``, or a string in the
-    binding's address forms: ``"ip:port"`` (a B/IP station's MAC is its IPv4
-    address and UDP port on any B/IP network, local or not), ``"bip6:N"`` or
-    ``"bip6:0x..."`` (a B/IPv6 VMAC), two or more hex octets ``"aa:bb:..."``,
-    or one octet as ``"N"`` or ``"mstp:N"`` (0 to 254). ``router`` is the
-    next hop's address on the local link, in the same forms or as
-    ``bytes``, such as a routed ``DiscoveredDevice``'s ``mac_address``; the
-    endpoint client learns no routes, so its reads need it. Other values
-    raise ValueError, a type other than ``str`` or ``bytes`` TypeError, and
-    so does a call in another order, since ``network`` takes an ``int``.
-
-    Frozen; compares and hashes by its network and octets, however they were
-    written; copies and pickles.
-    """
-
-    def __init__(
-        self,
-        network: int,
-        address: str | bytes,
-        router: str | bytes | None = None,
-    ) -> None: ...
-    @property
-    def network(self) -> int: ...
-    @property
-    def address(self) -> bytes:
-        """The station's MAC on its network."""
-        ...
-    @property
-    def router(self) -> bytes | None:
-        """The router's MAC on the local link, or None."""
-        ...
-
 class EndpointClient:
     """Client role cloned from a running endpoint (no lifecycle).
 
     Initiates ``read_property``, ``read_range``, ``read_property_multiple`` and direct B/IP ``write_property`` through the owner's single transport.
     The reads take a ``str`` address on the local link or a ``RoutedTarget``
-    with its ``router`` for a station behind one (#2612); a ``RoutedTarget``
-    without a router raises ValueError before any I/O, since the endpoint
-    learns no routes. After the owner closes, calls fail closed with ``BacnetError``.
+    for a station behind a router (#2612): through its ``router``, or, with
+    none, as one broadcast on the local link per request that names the
+    destination network (see ``RoutedTarget``). A router given as a
+    broadcast or group address raises BacnetError before anything is sent.
+    After the owner closes, calls fail closed with ``BacnetError``.
     """
 
     def read_property(
@@ -8277,9 +8295,14 @@ class EndpointClient:
         requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
         BacnetError; this method returns the property value, not ACK metadata,
         shaped as ``PropertyValue`` describes for read results. A routed
-        read goes to the router with the station's network and MAC as its
-        destination, is answered through it, and is audited and paced as a
-        direct one is.
+        read goes to the router, or by local broadcast, with the station's
+        network and MAC as its destination; the answer relayed from the
+        station completes it, and a second copy (two routers forwarding one
+        broadcast) is dropped and counted in ``status()``'s
+        ``unclaimed_terminal``. It is audited and paced as a direct read is.
+        A router that can't reach the network may send back a
+        Reject-Message-To-Network, which this read doesn't report: it ends
+        at its timeout with BacnetTimeoutError.
         """
         ...
 
@@ -8637,7 +8660,10 @@ class BipEndpoint:
         BacnetBvlcNakError with its ``result_code`` (0x0020 from a node that
         is no BBMD), no answer within 3 seconds BacnetTimeoutError. A bad
         address raises ValueError before I/O; RuntimeError before start and
-        after close."""
+        after close, and for a read that ``close()`` cuts off (``close()``
+        doesn't wait for one). A cancelled read gives its request up, so the
+        same read can start again at once; the same read beside one still
+        running is refused, as ``BACnetClient``'s is."""
         ...
 
     def read_fdt(self, address: str) -> Awaitable[list[FdtEntry]]:

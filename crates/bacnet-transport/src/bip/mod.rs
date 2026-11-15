@@ -46,7 +46,7 @@ mod datagram;
 mod exchange;
 mod link_returns;
 pub use bacnet_bip_core::node::ExchangeRefusal;
-pub use exchange::{BvlcExchangeError, BvlcTableReader};
+pub use exchange::{BvlcExchangeError, BvlcGiveUp, BvlcTableReader};
 mod foreign_device;
 mod foreign_target;
 mod mode;

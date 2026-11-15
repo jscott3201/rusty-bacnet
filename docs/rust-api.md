@@ -13445,7 +13445,10 @@ endpoint destinations: `read_property_with_destination`,
 `read_property_multiple_with_destination`, `read_range_with_destination` and
 `read_log_page_with_destination` take an `EndpointApduDestination`, such as
 `Routed { destination_network, destination_mac, router_mac }` for a station
-behind a router (#2612). ReadRange returns a correlated `ReadRangeAck` with raw
+behind a router, or `RoutedViaLocalBroadcast { destination_network,
+destination_mac }` to reach it by one local broadcast when its router isn't
+known (#2612). A `Routed` destination whose `router_mac` is a broadcast or
+group address on the link is refused before a transaction is registered. ReadRange returns a correlated `ReadRangeAck` with raw
 item bytes; empty and multiple-item ACKs each produce one value-free source READ
 record. `read_range_with` and `read_range_with_destination` take a
 `ReadRangeRequest` and a `ReadRangeValidation`: a lenient read keeps

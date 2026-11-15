@@ -128,6 +128,42 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(peer.received), 3)
         self.assertEqual((await self.endpoint.status())["active_leases"], 0)
 
+    async def test_close_during_a_read_fails_it_as_a_read_after_close(self):
+        silent = self.peer(lambda data, source: None)
+        read = asyncio.ensure_future(self.endpoint.read_bdt(silent.address))
+        async with asyncio.timeout(5):
+            while not silent.received:
+                await asyncio.sleep(0.01)
+        # close() doesn't wait for the read's answer.
+        await asyncio.wait_for(self.endpoint.close(), 2)
+        with self.assertRaisesRegex(RuntimeError, "not started"):
+            await asyncio.wait_for(read, 2)
+
+    async def test_a_cancelled_read_frees_its_slot_at_once(self):
+        answered = []
+
+        def handle(datagram, source):
+            answered.append(datagram)
+            # The first request goes unanswered; the next one is answered.
+            return [BDT_ACK] if len(answered) > 1 else None
+
+        peer = self.peer(handle)
+        first = asyncio.ensure_future(self.endpoint.read_bdt(peer.address))
+        async with asyncio.timeout(5):
+            while not answered:
+                await asyncio.sleep(0.01)
+        # While it is wanted, the same read beside it is refused, as
+        # BACnetClient's is.
+        with self.assertRaisesRegex(rb.BacnetError, "in flight"):
+            await asyncio.wait_for(self.endpoint.read_bdt(peer.address), 5)
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        self.assertTrue(first.cancelled())
+        # The same read to the same BBMD again, at once: not refused as in flight.
+        rows = await asyncio.wait_for(self.endpoint.read_bdt(peer.address), 5)
+        self.assertEqual(rows, [("127.0.0.2:47808", "255.255.255.255")])
+        self.assertEqual(answered, [READ_BDT, READ_BDT])
+
     async def test_bad_arguments_and_lifecycle(self):
         for name in ("read_bdt", "read_fdt"):
             method = getattr(self.endpoint, name)

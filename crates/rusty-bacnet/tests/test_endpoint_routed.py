@@ -18,6 +18,7 @@ from pathlib import Path
 
 import rusty_bacnet as rb
 from bvll_peer import RawPeer, bvll, mac
+from test_bip_modes import accepted_registration
 from test_endpoint_stub_parity import (
     installed_stub, runtime_arg_kinds, stub_arg_kinds, stub_classes, stub_method,
 )
@@ -62,9 +63,10 @@ class RoutedTargetTests(unittest.TestCase):
             "bip6:0x0A0B0C": bytes([0x0A, 0x0B, 0x0C]),
             "0a:0b": bytes([0x0A, 0x0B]),                           # hex octets
             "aa:bb:cc:dd:ee:ff": bytes.fromhex("aabbccddeeff"),
-            "10": b"\x0a",                                          # one octet
+            "10": b"\x0a",                                          # one octet, decimal
             "mstp:254": b"\xfe",
         }
+        self.assertEqual(rb.RoutedTarget(5, "10"), rb.RoutedTarget(5, b"\x0a"))
         for text, octets in forms.items():
             with self.subTest(text=text):
                 target = rb.RoutedTarget(7, text, router=text)
@@ -81,10 +83,17 @@ class RoutedTargetTests(unittest.TestCase):
                      (5, "not an address"), (5, b"\x0a", b""), (5, b"\x0a", "nowhere")):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 rb.RoutedTarget(*args)
+        # A one-octet 255 is an MS/TP link's broadcast, however it is written.
+        for args in ((5, b"\xff"), (5, "255"), (5, b"\x0a", b"\xff"), (5, b"\x0a", "mstp:255")):
+            with self.subTest(args=args), self.assertRaisesRegex(ValueError, "broadcast"):
+                rb.RoutedTarget(*args)
+        with self.assertRaisesRegex(ValueError, "not a station"):
+            rb.RoutedTarget(5, b"\xff")
         for args in ((-1, b"\x0a"), (65536, b"\x0a")):
             with self.subTest(args=args), self.assertRaises(OverflowError):
                 rb.RoutedTarget(*args)
         for args in ((5, 10), (5, bytearray(b"\x0a")), (5, b"\x0a", 7), (5.0, b"\x0a"),
+                     (True, b"\x0a"), (False, b"\x0a"),
                      # The reporter's fork's order: (router, network, address).
                      ("10.0.0.1:47808", 5, b"\x0a")):
             with self.subTest(args=args), self.assertRaises(TypeError):
@@ -127,15 +136,15 @@ class RoutedTargetTests(unittest.TestCase):
         self.assertEqual(ast.unparse(node.args.args[1].annotation), "str")
 
 
-def answer(network, station, request):
+def answer(network, station, request, value=0):
     """A ComplexAck to the confirmed request in `request`, relayed from
     `station` on `network` as a router relays it (SNET/SADR naming it), or
     sent direct when `network` is None; None for a request this peer
     doesn't answer."""
     apdu = request["apdu"]
     invoke, service, body = apdu[2], apdu[3], apdu[4:]
-    if service == 12:    # ReadProperty: echo the reference, value Unsigned 0
-        reply = body + b"\x3e\x21\x00\x3f"
+    if service == 12:    # ReadProperty: echo the reference, value Unsigned `value`
+        reply = body + b"\x3e\x21" + bytes([value]) + b"\x3f"
     elif service == 14:  # ReadPropertyMultiple of one property: Unsigned 7
         reply = body[:5] + b"\x1e\x29" + body[7:8] + b"\x4e\x21\x07\x4f\x1f"
     elif service == 26:  # ReadRange: no items, no flags
@@ -147,9 +156,10 @@ def answer(network, station, request):
     return bvll(0x0A, bytes([0x01, control]) + source + bytes([0x30, invoke, service]) + reply)
 
 
-def request_of(datagram):
-    """An Original-Unicast-NPDU's NPDU fields and APDU."""
-    assert datagram[:2] == b"\x81\x0a", datagram
+def request_of(datagram, function=0x0A):
+    """The NPDU fields and APDU of an Original-Unicast-NPDU, or of the BVLC
+    message with `function` (0x09, a foreign device's broadcast)."""
+    assert datagram[:2] == bytes([0x81, function]), datagram
     npdu = datagram[4:]
     control = npdu[1]
     fields = {"control": control, "dnet": None, "dadr": None, "hop_count": None}
@@ -249,8 +259,7 @@ class EndpointRoutedWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request["control"], 0x04)  # expecting a reply, no DNET
         self.assertIsNone(request["dnet"])
 
-    async def test_a_target_without_a_router_raises_before_any_io(self):
-        alone = rb.RoutedTarget(5, self.STATION)
+    async def test_a_wrong_address_type_raises_at_the_call(self):
         calls = {
             "read_property": lambda to: self.role.read_property(to, AI_1, P.PRESENT_VALUE),
             "read_property_multiple": lambda to: self.role.read_property_multiple(
@@ -260,26 +269,151 @@ class EndpointRoutedWireTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertEqual(set(calls), set(READS))
         for name, call in calls.items():
-            with self.subTest(method=name):
-                # Raised by the call itself: no future, nothing sent.
-                with self.assertRaisesRegex(ValueError, "learns no routes.*network 5"):
-                    call(alone)
-                with self.assertRaisesRegex(TypeError, "str or a RoutedTarget, not int"):
-                    call(7)
-        await asyncio.sleep(0.2)
+            with self.subTest(method=name), \
+                    self.assertRaisesRegex(TypeError, "str or a RoutedTarget, not int"):
+                call(7)
         self.assertEqual(self.router.received, [])
-        self.assertEqual((await self.endpoint.status())["active_leases"], 0)
         # write_property takes a direct address only.
         with self.assertRaises(TypeError):
             self.role.write_property(self.target, AI_1, P.PRESENT_VALUE,
                                      rb.PropertyValue.real(1.0), commandability="commandable")
+
+    async def test_a_group_router_is_refused_before_anything_is_sent(self):
+        endpoint = rb.BipEndpoint(NEAR + 10, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.255.255.255", apdu_timeout_ms=2000)
+        async with endpoint:
+            role = await endpoint.client()
+            own = (await endpoint.local_address()).rsplit(":", 1)[1]
+            # The configured broadcast (a loopback one counts at the link's
+            # own port), the limited broadcast and a multicast group.
+            for router in (f"127.255.255.255:{own}", "255.255.255.255:47808",
+                           "239.255.1.1:47808"):
+                with self.subTest(router=router):
+                    target = rb.RoutedTarget(5, self.STATION, router=router)
+                    with self.assertRaisesRegex(rb.BacnetError, "name no router"):
+                        await asyncio.wait_for(
+                            role.read_property(target, AI_1, P.PRESENT_VALUE), 5)
+                    self.assertEqual((await endpoint.status())["active_leases"], 0)
+
+    async def test_the_endpoints_own_network_goes_direct_without_its_router(self):
+        station_requests = []
+
+        def station(datagram, source):
+            request = request_of(datagram)
+            station_requests.append(request)
+            return [answer(None, None, request, value=5)]
+
+        peer = RawPeer(station)
+        self.addCleanup(peer.close)
+        # A registered Network Port tells the endpoint its network: 7.
+        endpoint = rb.BipEndpoint(NEAR + 20, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.255.255.255", network_number=7,
+                                  registered_network_port=1, apdu_timeout_ms=2000)
+        async with endpoint:
+            role = await endpoint.client()
+            for router in (self.router.address, None):
+                with self.subTest(router=router):
+                    station_requests.clear()
+                    target = rb.RoutedTarget(7, peer.address, router=router)
+                    value = await asyncio.wait_for(
+                        role.read_property(target, AI_1, P.PRESENT_VALUE), 5)
+                    self.assertEqual(value, rb.PropertyValue.unsigned(5))
+                    [request] = station_requests
+                    self.assertEqual(request["control"], 0x04)  # no DNET
+            self.assertEqual(self.router.received, [])
+
+
+class EndpointBroadcastFormTests(unittest.IsolatedAsyncioTestCase):
+    """A RoutedTarget with no router: each request is one broadcast that
+    names the station's network. The endpoint is a foreign device of a raw
+    BBMD here, so its broadcasts reach the BBMD as Distribute-Broadcast-To-
+    Network, where they can be read; two routers both forward each one."""
+
+    STATION = b"\x0a"
+
+    async def asyncSetUp(self):
+        self.requests = []
+        self.second = RawPeer(lambda data, source: None)
+        self.addCleanup(self.second.close)
+
+        def handle(datagram, source):
+            if datagram[:2] == b"\x81\x05":  # Register-Foreign-Device: accept
+                return [bvll(0x00, b"\x00\x00")]
+            if datagram[:2] != b"\x81\x09":
+                return None
+            request = request_of(datagram, 0x09)
+            if request["control"] & 0x80 or request["apdu"][0] >> 4 != 0:
+                return None  # a network message, or no confirmed request
+            self.requests.append(request)
+            # This BBMD's router answers first, a second router after it.
+            first = answer(request["dnet"], request["dadr"], request, value=0)
+            self.bbmd.send(first, source)
+            self.second.send(answer(request["dnet"], request["dadr"], request, value=9), source)
+            return None
+
+        self.bbmd = RawPeer(handle)
+        self.addCleanup(self.bbmd.close)
+        self.endpoint = rb.BipEndpoint(
+            NEAR + 30, interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+            apdu_timeout_ms=2000, foreign_device=rb.ForeignDevice(self.bbmd.address, ttl=60))
+        await asyncio.wait_for(self.endpoint.start(), 10)
+        self.addAsyncCleanup(finish, self.endpoint.close)
+        await accepted_registration(self.endpoint)
+        self.role = await self.endpoint.client()
+        self.target = rb.RoutedTarget(5, self.STATION)
+
+    async def unclaimed(self, at_least):
+        async with asyncio.timeout(5):
+            while (count := (await self.endpoint.status())["unclaimed_terminal"]) < at_least:
+                await asyncio.sleep(0.01)
+        return count
+
+    def assert_broadcast(self, requests, service):
+        self.assertTrue(requests)
+        for request in requests:
+            # DNET present, expecting a reply, no SNET, the station named.
+            self.assertEqual(request["control"], 0x24)
+            self.assertEqual((request["dnet"], request["dadr"]), (5, self.STATION))
+            self.assertEqual(request["hop_count"], 255)
+            self.assertIn(request["apdu"][3], service)
+
+    async def test_the_first_answer_completes_a_read_and_the_second_is_counted(self):
+        before = (await self.endpoint.status())["unclaimed_terminal"]
+        value = await asyncio.wait_for(
+            self.role.read_property(self.target, AI_1, P.PRESENT_VALUE), 5)
+        self.assertEqual(value, rb.PropertyValue.unsigned(0))  # the first router's
+        self.assert_broadcast(self.requests, {12})
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(await self.unclaimed(before + 1), before + 1)
+        self.assertEqual((await self.endpoint.status())["active_leases"], 0)
+
+        # Every read takes the form: one broadcast per request.
+        self.requests.clear()
+        [result] = await asyncio.wait_for(self.role.read_property_multiple(
+            self.target, [(AI_1, [(P.PRESENT_VALUE, None)])]), 5)
+        self.assertEqual(result["results"][0]["value"], rb.PropertyValue.unsigned(7))
+        result = await asyncio.wait_for(self.role.read_range(
+            self.target, LOG, P.LOG_BUFFER, range_type="position", reference_index=1,
+            count=5), 5)
+        self.assertEqual(result["item_count"], 0)
+        page = await asyncio.wait_for(self.role.read_log_page(self.target, LOG), 5)
+        self.assertEqual((page["records"], page["done"]), ([], True))
+        self.assert_broadcast(self.requests, {12, 14, 26})
+        self.assertEqual([request["apdu"][3] for request in self.requests], [14, 26, 12, 12, 12])
+        await self.unclaimed(before + 6)
+        self.assertEqual((await self.endpoint.status())["active_leases"], 0)
 
 
 class EndpointRoutedRouterTests(unittest.IsolatedAsyncioTestCase):
     """Through a real BACnetRouter to a real server on network 5."""
 
     async def asyncSetUp(self):
-        self.router = rb.BACnetRouter([port(1), port(5)])
+        # Port 1 is a BBMD that takes foreign devices, so a foreign device's
+        # broadcast reaches the router on loopback.
+        self.router = rb.BACnetRouter([
+            rb.BipRouterPort(1, interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                             bbmd=rb.Bbmd(accept_foreign_devices=True)),
+            port(5)])
         await asyncio.wait_for(self.router.start(), 10)
         self.addAsyncCleanup(finish, self.router.close)
         self.router_address = (await self.router.ports())[0].address
@@ -341,15 +475,37 @@ class EndpointRoutedRouterTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(len(records), NOTIFICATIONS)
             self.assertEqual((await endpoint.status())["active_leases"], 0)
 
-    async def test_a_network_the_router_cant_reach_times_out(self):
-        endpoint = rb.BipEndpoint(NEAR, interface="127.0.0.1", port=0,
-                                  broadcast_address="127.0.0.1", apdu_timeout_ms=500)
+    async def test_the_broadcast_form_reaches_the_station_through_the_router(self):
+        endpoint = self.endpoint(foreign_device=rb.ForeignDevice(self.router_address, ttl=60))
         async with endpoint:
+            await accepted_registration(endpoint)
             role = await endpoint.client()
-            nowhere = rb.RoutedTarget(9, self.far_address, router=self.router_address)
-            with self.assertRaises(rb.BacnetTimeoutError):
-                await asyncio.wait_for(role.read_property(nowhere, AI_1, P.PRESENT_VALUE), 5)
+            nearest = rb.RoutedTarget(5, self.far_address)
+            self.assertEqual(
+                await asyncio.wait_for(role.read_property(nearest, AI_1, P.PRESENT_VALUE), 5),
+                await role.read_property(self.far_address, AI_1, P.PRESENT_VALUE))
+            specs = [(AI_1, [(P.PRESENT_VALUE, None), (P.OBJECT_NAME, None)])]
+            self.assertEqual(await role.read_property_multiple(nearest, specs),
+                             await role.read_property_multiple(self.far_address, specs))
+            self.assertEqual(await role.read_range(nearest, LOG, P.LOG_BUFFER),
+                             await role.read_range(self.far_address, LOG, P.LOG_BUFFER))
+            self.assertEqual(await self.pages(role, nearest),
+                             await self.pages(role, self.far_address))
             self.assertEqual((await endpoint.status())["active_leases"], 0)
+
+    async def test_a_network_the_router_cant_reach_times_out(self):
+        endpoint = self.endpoint(apdu_timeout_ms=500,
+                                 foreign_device=rb.ForeignDevice(self.router_address, ttl=60))
+        async with endpoint:
+            await accepted_registration(endpoint)
+            role = await endpoint.client()
+            for router in (self.router_address, None):
+                with self.subTest(router=router):
+                    nowhere = rb.RoutedTarget(9, self.far_address, router=router)
+                    with self.assertRaises(rb.BacnetTimeoutError):
+                        await asyncio.wait_for(
+                            role.read_property(nowhere, AI_1, P.PRESENT_VALUE), 5)
+                    self.assertEqual((await endpoint.status())["active_leases"], 0)
 
     async def test_routed_reads_are_audited_naming_the_station(self):
         directory = tempfile.TemporaryDirectory()
@@ -367,7 +523,8 @@ class EndpointRoutedRouterTests(unittest.IsolatedAsyncioTestCase):
             device_write_policy=lambda context: True,
             source_audit_reporter=rb.ObjectIdentifier(O.AUDIT_REPORTER, 1),
             audit_recipient={"kind": "device", "object_identifier": sink_device},
-            audit_device_bindings=[(sink_device, sink_address)])
+            audit_device_bindings=[(sink_device, sink_address)],
+            foreign_device=rb.ForeignDevice(self.router_address, ttl=60))
         endpoint.add_audit_reporter(
             1, "Source", audit_level="audit_all",
             auditable_operations=1 << rb.AuditOperation.READ.to_raw(),
@@ -377,8 +534,11 @@ class EndpointRoutedRouterTests(unittest.IsolatedAsyncioTestCase):
                                       "source_device_identifier": rb.ObjectIdentifier(O.DEVICE, NEAR)},
                  "requested_count": 32}
         async with endpoint, rb.BACnetClient(interface="127.0.0.1", port=0) as client:
+            await accepted_registration(endpoint)
             role = await endpoint.client()
             await role.read_property(self.target, AI_1, P.PRESENT_VALUE)
+            # The broadcast form is audited the same way.
+            await role.read_property(rb.RoutedTarget(5, self.far_address), AI_1, P.PRESENT_VALUE)
             # A page from the oldest record: three count reads and a ReadRange.
             page = await role.read_log_page(self.target, LOG)
             self.assertTrue(page["done"])
@@ -388,10 +548,10 @@ class EndpointRoutedRouterTests(unittest.IsolatedAsyncioTestCase):
                 return [entry["record"]["datum"]["audit_notification"]
                         for entry in result["records"]]
             async with asyncio.timeout(5):
-                while len(found := await records()) < 5:
+                while len(found := await records()) < 6:
                     await asyncio.sleep(0.02)
         station = {"kind": "address", "network_number": 5, "mac_address": mac(self.far_address)}
-        self.assertEqual(len(found), 5)
+        self.assertEqual(len(found), 6)
         for record in found:
             self.assertEqual(record["operation"], rb.AuditOperation.READ)
             self.assertEqual(record["target_device"], station)

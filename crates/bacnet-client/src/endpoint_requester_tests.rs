@@ -426,6 +426,63 @@ async fn routed_destination_to_no_single_device_fails_before_registration() {
     endpoint.stop().await.unwrap();
 }
 
+/// A routed destination whose router is the link's broadcast address, an
+/// MS/TP station 255 or an SC VMAC of all ones, is refused before a
+/// transaction is registered (#2612), and the refusal says to name no
+/// router for the local-broadcast form. One naming the endpoint's own
+/// network goes to its station direct, so its router doesn't matter.
+#[tokio::test(start_paused = true)]
+async fn a_group_router_fails_before_registration() {
+    use bacnet_types::network_number::NetworkNumber;
+
+    for (local, peer, broadcast) in [
+        (vec![0x01], vec![0x02], vec![0xFF]),
+        (vec![0x01; 6], vec![0x02; 6], vec![0xFF; 6]),
+    ] {
+        let (mut endpoint_transport, _peer_transport) = LoopbackTransport::pair(local, peer);
+        endpoint_transport.set_broadcast_mac(broadcast.clone());
+        let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
+        let ingress = endpoint.start().await.unwrap();
+        ingress
+            .egress
+            .local_network_number()
+            .publish(NetworkNumber::configured(7).unwrap());
+        let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+        let requester =
+            EndpointRequester::new(ingress.egress.clone(), Arc::clone(&coordinator), config())
+                .unwrap();
+        let through = |destination_network| EndpointApduDestination::Routed {
+            destination_network,
+            destination_mac: MacAddr::from_slice(&[3]),
+            router_mac: MacAddr::from_slice(&broadcast),
+        };
+        let prepare = |destination| {
+            requester.prepare_read_property(
+                destination,
+                Vec::new(),
+                object_identifier(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+        };
+        let refused = prepare(through(9)).await.err();
+        assert!(
+            matches!(&refused, Some(Error::Encoding(message))
+                if message.contains("group router address")
+                    && message.contains("name no router")),
+            "{broadcast:?}: {refused:?}"
+        );
+        assert_eq!(coordinator.active_count().unwrap(), 0);
+        assert_eq!(requester.inner.tsm.lock().unwrap().pending_count(), 0);
+        // Network 7 is this one: the request goes to station 3, router unused.
+        let prepared = prepare(through(7)).await.unwrap();
+        assert_eq!(coordinator.active_count().unwrap(), 1);
+        drop(prepared);
+        assert_eq!(coordinator.active_count().unwrap(), 0);
+        endpoint.stop().await.unwrap();
+    }
+}
+
 /// A direct destination that reaches a group of nodes, as named or once a
 /// routed one naming the endpoint's own network is localized to it, is a
 /// local broadcast (#1479). The requester refuses it before it registers a

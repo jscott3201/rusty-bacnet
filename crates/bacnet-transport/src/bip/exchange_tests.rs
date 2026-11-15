@@ -193,3 +193,46 @@ async fn a_table_reader_reads_through_the_running_transport() {
         not_started(reader.read_fdt(&mac).await.unwrap_err());
     }
 }
+
+/// A read given up from elsewhere frees its slot at once, before its future
+/// is dropped, so the same read can go out right after; one given up before
+/// it starts sends nothing (#2612).
+#[tokio::test]
+async fn a_given_up_read_frees_its_slot_at_once() {
+    let (peer, mac) = peer().await;
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _rx = transport.start().await.unwrap();
+    let reader = transport.bvlc_table_reader();
+    let give_up = BvlcGiveUp::default();
+    let given_up = reader.with_give_up(&give_up);
+    let first = given_up.read_bdt(&mac);
+    tokio::pin!(first);
+    tokio::select! {
+        result = &mut first => panic!("the read ended unanswered: {result:?}"),
+        (request, _) = received(&peer) => assert_eq!(request, [0x81, 2, 0, 4]),
+    }
+    give_up.give_up();
+    // The first read's future is still alive; its slot is free anyway.
+    let answer = async {
+        let (request, source) = received(&peer).await;
+        assert_eq!(request, [0x81, 2, 0, 4]);
+        peer.send_to(&[0x81, 3, 0, 4], source).await.unwrap();
+    };
+    let (rows, ()) = tokio::join!(reader.read_bdt(&mac), answer);
+    assert!(rows.unwrap().is_empty());
+    assert!(first.await.is_err());
+    // Given up before it starts: refused, and nothing is sent.
+    let early = BvlcGiveUp::default();
+    early.give_up();
+    assert!(reader.with_give_up(&early).read_fdt(&mac).await.is_err());
+    let mut packet = [0; 16];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), peer.recv_from(&mut packet))
+            .await
+            .is_err()
+    );
+    let snapshot = transport.bvlc_client_snapshot();
+    assert_eq!(snapshot.read_bdt.sent, 2);
+    assert_eq!(snapshot.read_fdt.sent, 0);
+    transport.stop().await.unwrap();
+}

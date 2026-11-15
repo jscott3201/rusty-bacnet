@@ -5,7 +5,7 @@
 
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use bacnet_bip_codec::{self as codec, BdtEntries, BvlcFunction, BvlcResultCode, Bvll};
@@ -51,7 +51,8 @@ pub enum BvlcExchangeError {
     /// was sent; a busy refusal may pass on a later try.
     Refused(ExchangeRefusal),
     /// The request failed on this side or the answer could not be read: the
-    /// transport is not started, the send failed, the request could not be
+    /// transport is not started (or stopped while the request waited, which
+    /// fails the same way), the send failed, the request could not be
     /// encoded or the response was malformed.
     Transport(Error),
 }
@@ -115,15 +116,21 @@ pub(super) struct Exchange {
 impl NodeHandle {
     /// Send `request` to the B/IP address `target` and wait up to `timeout`
     /// after the send for the response that answers it.
+    /// With `give_up`, the exchange is admitted through it, so that it can
+    /// be given up from elsewhere.
     pub(super) async fn request(
         self: &Arc<Self>,
         target: &[u8],
         request: Bvll<'_>,
         timeout: Duration,
+        give_up: Option<&BvlcGiveUp>,
     ) -> Result<BvllMessage, BvlcExchangeError> {
         let (ip, port) = decode_bip_mac(target)?;
         let peer = SocketAddrV4::new(Ipv4Addr::from(ip), port);
-        let (exchange, response) = self.begin(peer, request, timeout)?;
+        let (exchange, response) = match give_up {
+            Some(give_up) => give_up.begin(self, peer, request, timeout)?,
+            None => self.begin(peer, request, timeout)?,
+        };
         let mut buf = BytesMut::new();
         if let Err(error) = encode_bvll(&mut buf, &request) {
             exchange.failed();
@@ -136,7 +143,9 @@ impl NodeHandle {
         exchange.sent();
         match response.await {
             Ok(outcome) => Ok(outcome?),
-            Err(_) => Err(Error::Encoding("BVLC response channel dropped".into()).into()),
+            // The node drops its waiters when the transport stops: a request
+            // cut off by a stop fails as one made after it does (#2612).
+            Err(_) => Err(super::not_started().into()),
         }
     }
 
@@ -150,9 +159,7 @@ impl NodeHandle {
         let (tx, rx) = oneshot::channel();
         let id = self.with(|state, now| {
             if state.stopped {
-                return Err(BvlcExchangeError::Transport(Error::Encoding(
-                    "B/IP management client is stopped".into(),
-                )));
+                return Err(BvlcExchangeError::Transport(super::not_started()));
             }
             let (id, _) = state
                 .node
@@ -199,10 +206,77 @@ impl Exchange {
     }
 
     fn end(&self, why: LocalFailure) {
-        self.node.with(|state, now| {
-            state.waiters.remove(&self.id);
-            state.node.exchange_failed(self.id, why, now);
+        self.node.end_exchange(self.id, why);
+    }
+}
+
+impl NodeHandle {
+    /// End `id` on this side: its waiter goes, and the node frees its slot.
+    /// An exchange that already ended is left as it is.
+    fn end_exchange(&self, id: ExchangeId, why: LocalFailure) {
+        self.with(|state, now| {
+            state.waiters.remove(&id);
+            state.node.exchange_failed(id, why, now);
         });
+    }
+}
+
+/// Gives up one [`BvlcTableReader`] read from outside the task that runs it
+/// (#2612). Dropping the read's future gives it up too, but a bridge whose
+/// caller cancels before the task is dropped, as an asyncio cancellation
+/// does, needs the request's slot free at once: a read sent right after it
+/// would find the same request still in flight and be refused. Give one
+/// read to [`BvlcTableReader::with_give_up`]; [`give_up`](Self::give_up)
+/// ends it then, or keeps it from starting.
+#[derive(Clone, Debug, Default)]
+pub struct BvlcGiveUp(Arc<Mutex<GiveUp>>);
+
+/// Where a [`BvlcGiveUp`]'s read is.
+#[derive(Debug, Default)]
+enum GiveUp {
+    /// Not admitted yet.
+    #[default]
+    Waiting,
+    /// Admitted as this exchange of this node.
+    Admitted(Weak<NodeHandle>, ExchangeId),
+    /// Given up: a read not admitted yet is refused.
+    GivenUp,
+}
+
+impl BvlcGiveUp {
+    /// Give the read up: end its exchange now, or refuse it if it hasn't
+    /// started. One that already ended is left as it is.
+    pub fn give_up(&self) {
+        let state = std::mem::replace(&mut *self.lock(), GiveUp::GivenUp);
+        if let GiveUp::Admitted(node, id) = state
+            && let Some(node) = node.upgrade()
+        {
+            node.end_exchange(id, LocalFailure::Cancelled);
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, GiveUp> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Admit the read through `node`, unless it was given up. The slot's
+    /// lock is held across the admission, so a give-up can't fall between.
+    fn begin(
+        &self,
+        node: &Arc<NodeHandle>,
+        peer: SocketAddrV4,
+        request: Bvll<'_>,
+        timeout: Duration,
+    ) -> Result<(Exchange, oneshot::Receiver<Outcome>), BvlcExchangeError> {
+        let mut state = self.lock();
+        if matches!(*state, GiveUp::GivenUp) {
+            return Err(BvlcExchangeError::Transport(Error::Encoding(
+                "BVLC table read given up".into(),
+            )));
+        }
+        let (exchange, response) = node.begin(peer, request, timeout)?;
+        *state = GiveUp::Admitted(Arc::downgrade(node), exchange.id);
+        Ok((exchange, response))
     }
 }
 
@@ -221,7 +295,7 @@ impl BipTransport {
         request: Bvll<'_>,
     ) -> Result<BvllMessage, BvlcExchangeError> {
         let node = Arc::clone(self.require_node()?);
-        node.request(target, request, Self::BVLC_RESPONSE_TIMEOUT)
+        node.request(target, request, Self::BVLC_RESPONSE_TIMEOUT, None)
             .await
     }
 
@@ -246,7 +320,10 @@ impl BipTransport {
     /// this transport after it is handed to an owner that keeps it out of
     /// reach, as an endpoint session does (#2612).
     pub fn bvlc_table_reader(&self) -> BvlcTableReader {
-        BvlcTableReader(Arc::clone(&self.client_record))
+        BvlcTableReader {
+            record: Arc::clone(&self.client_record),
+            give_up: None,
+        }
     }
 
     /// Send Read-Broadcast-Distribution-Table and return the response entries.
@@ -255,7 +332,7 @@ impl BipTransport {
     /// with [`BvlcExchangeError::Nak`]; one that stays silent, with
     /// [`BvlcExchangeError::NoReply`].
     pub async fn read_bdt(&self, target: &[u8]) -> Result<Vec<BdtEntry>, BvlcExchangeError> {
-        read_bdt(self.require_node()?, target).await
+        read_bdt(self.require_node()?, target, None).await
     }
 
     /// Send Write-Broadcast-Distribution-Table; `Ok` when the peer answers
@@ -283,7 +360,7 @@ impl BipTransport {
     ///
     /// It fails as [`read_bdt`](Self::read_bdt) does.
     pub async fn read_fdt(&self, target: &[u8]) -> Result<Vec<FdtEntryWire>, BvlcExchangeError> {
-        read_fdt(self.require_node()?, target).await
+        read_fdt(self.require_node()?, target, None).await
     }
 
     /// Send Delete-Foreign-Device-Table-Entry for `ip`:`port` to `target`;
@@ -333,24 +410,36 @@ impl BipTransport {
 /// one before start does. It only reads: the table writes and the
 /// registration stay on the transport. Cloning it is cheap.
 #[derive(Clone, Debug)]
-pub struct BvlcTableReader(Arc<super::ClientRecord>);
+pub struct BvlcTableReader {
+    record: Arc<super::ClientRecord>,
+    give_up: Option<BvlcGiveUp>,
+}
 
 impl BvlcTableReader {
+    /// This reader, whose reads `give_up` can give up: one read for each.
+    #[must_use]
+    pub fn with_give_up(&self, give_up: &BvlcGiveUp) -> Self {
+        Self {
+            record: Arc::clone(&self.record),
+            give_up: Some(give_up.clone()),
+        }
+    }
+
     /// Send Read-Broadcast-Distribution-Table to the B/IP MAC `target`, as
     /// [`BipTransport::read_bdt`] does.
     pub async fn read_bdt(&self, target: &[u8]) -> Result<Vec<BdtEntry>, BvlcExchangeError> {
-        read_bdt(&self.node()?, target).await
+        read_bdt(&self.node()?, target, self.give_up.as_ref()).await
     }
 
     /// Send Read-Foreign-Device-Table to the B/IP MAC `target`, as
     /// [`BipTransport::read_fdt`] does.
     pub async fn read_fdt(&self, target: &[u8]) -> Result<Vec<FdtEntryWire>, BvlcExchangeError> {
-        read_fdt(&self.node()?, target).await
+        read_fdt(&self.node()?, target, self.give_up.as_ref()).await
     }
 
     /// The transport's running node.
     fn node(&self) -> Result<Arc<NodeHandle>, Error> {
-        self.0.node().ok_or_else(super::not_started)
+        self.record.node().ok_or_else(super::not_started)
     }
 }
 
@@ -358,12 +447,14 @@ impl BvlcTableReader {
 async fn read_bdt(
     node: &Arc<NodeHandle>,
     target: &[u8],
+    give_up: Option<&BvlcGiveUp>,
 ) -> Result<Vec<BdtEntry>, BvlcExchangeError> {
     let msg = node
         .request(
             target,
             Bvll::ReadBroadcastDistributionTable,
             BipTransport::BVLC_RESPONSE_TIMEOUT,
+            give_up,
         )
         .await?;
     match msg.message()? {
@@ -383,12 +474,14 @@ async fn read_bdt(
 async fn read_fdt(
     node: &Arc<NodeHandle>,
     target: &[u8],
+    give_up: Option<&BvlcGiveUp>,
 ) -> Result<Vec<FdtEntryWire>, BvlcExchangeError> {
     let msg = node
         .request(
             target,
             Bvll::ReadForeignDeviceTable,
             BipTransport::BVLC_RESPONSE_TIMEOUT,
+            give_up,
         )
         .await?;
     match msg.message()? {
