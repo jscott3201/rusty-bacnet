@@ -217,7 +217,7 @@ async fn an_answer_taken_before_its_send_returns_is_tapped_after_it() {
     assert_eq!(&npdus.recv().await.unwrap().npdu[..], ANSWER);
     assert!(!sending.is_finished());
     release.send(()).unwrap();
-    let mut transport = sending.await.unwrap();
+    let transport = sending.await.unwrap();
 
     let tapped: Vec<_> = std::iter::from_fn(|| frames.try_recv())
         .map(|frame| {

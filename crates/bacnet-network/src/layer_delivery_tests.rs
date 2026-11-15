@@ -117,7 +117,7 @@ fn encoded_reject_message_to_network(reason: RejectMessageReason, dnet: u16) -> 
 
 #[tokio::test]
 async fn opted_in_network_control_stream_preserves_start_apdu_receiver() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut controls = network.enable_network_control_receiver().unwrap();
     assert!(network.enable_network_control_receiver().is_err());
@@ -156,7 +156,7 @@ async fn opted_in_network_control_stream_preserves_start_apdu_receiver() {
 
 #[tokio::test]
 async fn network_controls_without_opt_in_are_discarded_without_stopping_apdu_ingress() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut apdus = network.start().await.unwrap();
 
@@ -190,7 +190,7 @@ async fn network_controls_without_opt_in_are_discarded_without_stopping_apdu_ing
 
 #[tokio::test]
 async fn received_apdu_preserves_raw_and_effective_group_matrix() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut received = network.start().await.unwrap();
 
@@ -242,7 +242,7 @@ async fn received_apdu_preserves_raw_and_effective_group_matrix() {
 async fn router_preserves_link_group_for_ultimate_network_unicast() {
     use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let port = RouterPort {
         transport,
         network_number: 200,

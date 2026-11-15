@@ -198,8 +198,8 @@ fn start_read(
 
 #[tokio::test(start_paused = true)]
 async fn source_read_wire_fields_both_roles_modes_and_result_before_delivery() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         for confirmed in [false, true] {
             let mut session = session(database(confirmed), role, &sink);
@@ -288,8 +288,8 @@ async fn source_read_wire_fields_both_roles_modes_and_result_before_delivery() {
 /// beside a higher Device and every record names the lowest.
 #[tokio::test(start_paused = true)]
 async fn source_read_identity_is_the_lowest_of_several_devices() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut db = database(false);
     let mut other = crate::DeviceIdentity::new(456, 42)
         .unwrap()
@@ -326,8 +326,8 @@ async fn source_read_identity_is_the_lowest_of_several_devices() {
 
 #[tokio::test(start_paused = true)]
 async fn source_read_peer_and_local_failure_outcomes_are_not_success() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     for case in 0..7 {
@@ -415,8 +415,8 @@ async fn source_read_peer_and_local_failure_outcomes_are_not_success() {
 
 #[tokio::test(start_paused = true)]
 async fn source_read_dropped_waiter_retries_once_per_logical_request() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::Both, &sink);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
@@ -452,7 +452,7 @@ async fn source_read_dropped_waiter_retries_once_per_logical_request() {
 
 #[tokio::test(start_paused = true)]
 async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation() {
-    let (mut sink, _records) = network().await;
+    let (sink, _records) = network().await;
     for selectors in [vec![], vec![BACnetObjectSelector::None]] {
         let mut db = database(false);
         db.get_mut(&selected())
@@ -552,7 +552,7 @@ async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
     use bacnet_objects::{analog::AnalogValueObject, audit::ObjectAuditPolicy};
     use bacnet_server::server::{BACnetServer, ServerConfig};
     use bacnet_types::enums::EngineeringUnits;
-    let (mut sink, mut records) = network().await;
+    let (sink, mut records) = network().await;
     let policy = ObjectAuditPolicy {
         level: Some(AuditLevel::NONE),
         operations: Some(AuditOperationFlags::empty()),

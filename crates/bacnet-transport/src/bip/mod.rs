@@ -28,6 +28,7 @@ use crate::bvll::{
     decode_bip_mac, decode_bvll, forwarded_message, forwarded_wire, origin_of, raw_frame,
 };
 use crate::port::{BipPort, ReceivedNpdu, TransportPort};
+use crate::stopping::{StopGate, Tasks};
 #[cfg(test)]
 use crate::udp_metadata::{DestinationReceiver, IpVersion};
 use bacnet_bip_codec as codec;
@@ -125,26 +126,30 @@ pub struct BipTransport {
     share_port_by_address: bool,
     broadcast_address: Ipv4Addr,
     local_mac: [u8; 6],
-    socket: Option<Arc<BipSocket>>,
-    network_port_lease: Option<Arc<()>>,
+    /// A registered Network Port's lease, held until a stop lets go of it.
+    /// Only `start`, `stop` and the registration take the lock.
+    network_port_lease: std::sync::Mutex<Option<Arc<()>>>,
     registration_closed: bool,
-    recv_task: Option<JoinHandle<()>>,
+    /// The running transport's tasks, in the order `start` spawns them: the
+    /// fanout worker, the receive loop, a BBMD's FDT purge and the node's
+    /// driver. A stop through `&self` aborts and joins them (#2617).
+    tasks: Tasks,
+    /// One stop at a time (#2617).
+    stop_gate: StopGate,
     /// BBMD configuration before start (consumed by `start()`).
     bbmd_config: Option<BbmdConfig>,
     /// BBMD state (when acting as a BBMD, created in `start()`).
     bbmd: Option<Arc<std::sync::Mutex<BbmdState>>>,
-    /// BBMD FDT expiry purge task.
-    bbmd_fdt_purge_task: Option<JoinHandle<()>>,
     /// Foreign device registration (when registered as a foreign device),
     /// shared with the Network Port object that can change it.
     foreign_device: Option<Arc<foreign_target::ForeignTarget>>,
     /// Looks up FD_BBMD_Address host names (#1852).
     bbmd_resolver: Arc<dyn crate::bbmd_lookup::BbmdResolver>,
-    /// The node engine of the running transport: its link, its own
-    /// management exchanges and a foreign device's registration.
+    /// The node engine of the started transport: its link, its own
+    /// management exchanges and a foreign device's registration. A stop
+    /// leaves it here, stopped (#2617): it no longer holds the socket, and
+    /// every send through it fails. The next start replaces it.
     node: Option<Arc<NodeHandle>>,
-    /// The task that sends what the node asks for and runs its timers.
-    node_task: Option<JoinHandle<()>>,
     /// This transport's own management exchanges, across restarts.
     client_record: Arc<ClientRecord>,
     /// Optional persisted-BDT file (wire format, 10 bytes per entry): loaded
@@ -155,8 +160,6 @@ pub struct BipTransport {
     management_limiter: Arc<std::sync::Mutex<ManagementRateLimiter>>,
     /// Broadcast forwarding fanout policy.
     fanout_policy: FanoutPolicy,
-    /// Background worker task for broadcast forwarding.
-    fanout_task: Option<JoinHandle<()>>,
     /// Operational counters for broadcast forwarding fanout.
     fanout_counters: Arc<fanout::AtomicFanoutCounters>,
     /// See [`Self::group_source_drops`] and
@@ -183,7 +186,7 @@ pub struct BipTransport {
     /// Runs in a stop between stopping the node and clearing the client
     /// status, where a call racing the stop can land.
     #[cfg(test)]
-    between_stops: Option<Box<dyn FnOnce() + Send + Sync>>,
+    between_stops: std::sync::Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
 }
 
 impl BipTransport {
@@ -217,22 +220,19 @@ impl BipTransport {
             share_port_by_address: false,
             broadcast_address,
             local_mac: [0; 6],
-            socket: None,
-            network_port_lease: None,
+            network_port_lease: std::sync::Mutex::new(None),
             registration_closed: false,
-            recv_task: None,
+            tasks: Tasks::default(),
+            stop_gate: StopGate::default(),
             bbmd_config: None,
             bbmd: None,
-            bbmd_fdt_purge_task: None,
             foreign_device: None,
             bbmd_resolver: Arc::new(crate::bbmd_lookup::SystemResolver),
             node: None,
-            node_task: None,
             client_record: Arc::default(),
             bdt_file: None,
             management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
             fanout_policy,
-            fanout_task: None,
             fanout_counters,
             group_drops: groups::GroupDrops::default(),
             receive_drops: Arc::default(),
@@ -244,7 +244,7 @@ impl BipTransport {
             #[cfg(test)]
             local_ipv4_for_test: None,
             #[cfg(test)]
-            between_stops: None,
+            between_stops: std::sync::Mutex::new(None),
         }
     }
 
@@ -362,9 +362,11 @@ impl BipTransport {
     #[cfg(test)]
     const BBMD_FDT_PURGE_INTERVAL: Duration = Duration::from_millis(20);
 
-    /// Get the socket, returning an error if not started.
-    fn require_socket(&self) -> Result<&Arc<BipSocket>, Error> {
-        self.socket.as_ref().ok_or_else(not_started)
+    /// The running node's socket, for tests: `None` before start and after
+    /// a stop.
+    #[cfg(test)]
+    fn socket(&self) -> Option<Arc<BipSocket>> {
+        self.node.as_ref()?.socket()
     }
 
     fn spawn_bbmd_fdt_purge_task(bbmd: Arc<std::sync::Mutex<BbmdState>>) -> JoinHandle<()> {
@@ -380,46 +382,43 @@ impl BipTransport {
         })
     }
 
-    fn abort_background_tasks(&mut self) -> Vec<JoinHandle<()>> {
-        // The node first: once it is stopped, under its own lock, a call
-        // still running (the receive loop, the driver, a request given up)
-        // counts nothing more, so the status cleared next stays clear.
-        if let Some(node) = self.node.take() {
+    /// What a stop and an abort do at once, through `&self` (#2617). The
+    /// node first: once it is stopped, under its own lock, it holds no
+    /// socket, so every later send fails, and a call still running (the
+    /// receive loop, the driver, a request given up) counts nothing more, so
+    /// the status cleared next stays clear. Then the tasks are aborted, in
+    /// place: a stop joins them, an abort lets go of them.
+    fn stop_at_once(&self) {
+        if let Some(node) = &self.node {
             node.stop();
         }
         self.detach_foreign_device();
         #[cfg(test)]
-        if let Some(between) = self.between_stops.take() {
-            between();
+        {
+            let between = self
+                .between_stops
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(between) = between {
+                between();
+            }
         }
         self.client_record.stop();
-        let mut tasks = Vec::new();
-        if let Some(task) = self.node_task.take() {
-            task.abort();
-            tasks.push(task);
-        }
-        if let Some(task) = self.bbmd_fdt_purge_task.take() {
-            task.abort();
-            tasks.push(task);
-        }
-        if let Some(task) = self.fanout_task.take() {
-            task.abort();
-            tasks.push(task);
-        }
-        if let Some(task) = self.recv_task.take() {
-            task.abort();
-            tasks.push(task);
-        }
-        self.own_broadcast = None;
-        self.socket = None;
+        self.tasks.abort();
         self.multicast.detach();
-        tasks
     }
 
-    /// The running node, or the error for a transport not started.
+    /// The started node, or the error for a transport not started. A
+    /// stopped node is still returned: its sends fail as a stopped
+    /// transport's do.
     fn require_node(&self) -> Result<&Arc<NodeHandle>, Error> {
-        self.require_socket()?;
         self.node.as_ref().ok_or_else(not_started)
+    }
+
+    /// Whether the transport is running: started, and not stopped since.
+    fn is_running(&self) -> bool {
+        self.node.as_ref().is_some_and(|node| !node.is_stopped())
     }
 }
 
@@ -441,17 +440,25 @@ impl TransportPort for BipTransport {
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        let held = self
+            .network_port_lease
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
         if self.registration_closed
-            || self.socket.is_some()
-            || self.recv_task.is_some()
-            || self.network_port_lease.is_some()
+            || self.node.is_some()
+            || self.tasks.is_running()
+            || held
             || self.bip_port().is_none()
         {
             return Err(Error::Encoding(
                 "registered B/IP lease requires an unstarted transport in one B/IP mode".into(),
             ));
         }
-        self.network_port_lease = Some(lease);
+        *self
+            .network_port_lease
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
         Ok(())
     }
     /// A foreign device's registration after a loss (#2572), counted
@@ -484,7 +491,7 @@ impl TransportPort for BipTransport {
             },
             (None, false) => BipPortMode::Normal,
         };
-        let ip = if self.socket.is_some() {
+        let ip = if self.is_running() {
             Ipv4Addr::new(
                 self.local_mac[0],
                 self.local_mac[1],
@@ -511,7 +518,7 @@ impl TransportPort for BipTransport {
     }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.registration_closed = true;
-        if self.recv_task.is_some() {
+        if self.tasks.is_running() {
             return Err(Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "BIP transport already started",
@@ -549,7 +556,11 @@ impl TransportPort for BipTransport {
         let plan = self.bind_plan_for_start().await;
         let listener_interface = plan.local.and_then(|local| local.index);
         let bound = socket::bind(plan).map_err(Error::Transport)?;
-        let lease = self.network_port_lease.clone();
+        let lease = self
+            .network_port_lease
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let listeners = Listeners::open(bound, lease, &self.frame_tap).map_err(Error::Transport)?;
         let socket = Arc::clone(listeners.primary());
 
@@ -683,7 +694,6 @@ impl TransportPort for BipTransport {
         self.client_record.attach(&node);
         self.port = local_port;
         self.local_mac = encode_bip_mac(local_ip.octets(), local_port);
-        self.socket = Some(Arc::clone(&socket));
         self.node = Some(Arc::clone(&node));
         let group_swap = self.attach_multicast(&node, subnet_broadcast);
 
@@ -698,7 +708,7 @@ impl TransportPort for BipTransport {
             fanout_rx,
             Arc::clone(&self.fanout_counters),
         ));
-        self.fanout_task = Some(fanout_task);
+        self.tasks.push(fanout_task);
 
         let fanout_dispatcher = fanout::FanoutDispatcher::new(
             fanout_tx,
@@ -729,29 +739,46 @@ impl TransportPort for BipTransport {
             listener_interface,
             interface_mismatch_seen: Default::default(),
         };
-        self.recv_task = Some(tokio::spawn(receive_loop(
+        self.tasks.push(tokio::spawn(receive_loop(
             listeners, ingress, recv_ctx, group_swap,
         )));
 
         if let Some(bbmd) = self.bbmd.clone() {
-            self.bbmd_fdt_purge_task = Some(Self::spawn_bbmd_fdt_purge_task(bbmd));
+            self.tasks.push(Self::spawn_bbmd_fdt_purge_task(bbmd));
         }
 
-        self.node_task = Some(tokio::spawn(node.drive()));
+        // The driver goes last, so tests find it last.
+        self.tasks.push(tokio::spawn(node.drive()));
+        self.stop_gate.open();
 
         Ok(rx)
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
-        for task in self.abort_background_tasks() {
-            let _ = task.await;
-        }
-        self.network_port_lease = None;
+    /// Stop through a shared reference (#2617): the node lets go of the
+    /// socket, so every later send fails with [`crate::port::stopped`]'s
+    /// error; the tasks are aborted and joined, which closes the receive
+    /// channel and the listeners; and a registered Network Port's lease is
+    /// let go of. The port can then be bound again, and the transport
+    /// started again: a restart rebinds the port it had.
+    async fn stop(&self) -> Result<(), Error> {
+        let Some(stopping) = self.stop_gate.enter().await else {
+            return Ok(());
+        };
+        self.stop_at_once();
+        self.tasks.stop().await;
+        self.network_port_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        stopping.finish();
         Ok(())
     }
 
     fn abort(&mut self) {
-        let _ = self.abort_background_tasks();
+        self.stop_at_once();
+        self.tasks.abort_and_forget();
+        self.own_broadcast = None;
+        self.node = None;
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
@@ -887,6 +914,8 @@ mod send_budget_tests;
 mod send_to_tests;
 #[cfg(test)]
 mod shared_port_tests;
+#[cfg(test)]
+mod shared_stop_tests;
 #[cfg(test)]
 mod socket_tests;
 #[cfg(test)]

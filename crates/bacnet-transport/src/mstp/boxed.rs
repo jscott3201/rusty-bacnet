@@ -173,7 +173,7 @@ mod tests {
         let diagnostics = mstp.diagnostics();
         let mut frames = mstp.frame_tap().subscribe();
         let _npdus = mstp.start().await.unwrap();
-        let mut any = AnyTransport::from(mstp);
+        let any = AnyTransport::from(mstp);
         assert_eq!(any.max_npdu(), bacnet_npdu::NpduLimits::both(1497));
         any.send_broadcast(&[1, 0]).await.unwrap();
         assert!(any.send_broadcast(&[0; 1498]).await.is_err());

@@ -140,7 +140,7 @@ impl<T: TransportPort + 'static> StartingNetwork<T> {
         self.network.take().expect("startup network owned")
     }
     pub(super) async fn cleanup(mut self) -> Result<(), Error> {
-        let mut network = self.network.take().expect("startup network owned");
+        let network = self.network.take().expect("startup network owned");
         self.runtime
             .spawn(async move { network.stop().await })
             .await
@@ -149,7 +149,7 @@ impl<T: TransportPort + 'static> StartingNetwork<T> {
 }
 impl<T: TransportPort + 'static> Drop for StartingNetwork<T> {
     fn drop(&mut self) {
-        if let Some(mut network) = self.network.take() {
+        if let Some(network) = self.network.take() {
             self.runtime.spawn(async move {
                 if let Err(error) = network.stop().await {
                     tracing::warn!(%error, "cancelled startup cleanup failed");

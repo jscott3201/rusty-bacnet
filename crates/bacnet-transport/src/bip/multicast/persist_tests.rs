@@ -74,7 +74,7 @@ async fn hears_the_group(
     rx: &mut mpsc::Receiver<ReceivedNpdu>,
     multicast: BipMulticast,
 ) -> std::io::Result<()> {
-    let (mut peer, _peer_rx) = member(None, multicast).await?;
+    let (peer, _peer_rx) = member(None, multicast).await?;
     peer.send_broadcast(NPDU).await.unwrap();
     let heard = timeout(Duration::from_secs(2), rx.recv())
         .await
@@ -96,7 +96,7 @@ async fn an_activated_group_survives_a_restart() {
         let dir = TempDir::new("multicast-group");
         let path = dir.file("group");
         let port = free_port();
-        let (mut first, _rx) = member(Some(&path), group(GROUP, port)).await?;
+        let (first, _rx) = member(Some(&path), group(GROUP, port)).await?;
         let view = first.bip_port().unwrap().multicast.unwrap();
         view.activate(MOVED.octets()).unwrap();
         saved(&first, 1).await;
@@ -104,7 +104,7 @@ async fn an_activated_group_survives_a_restart() {
         first.stop().await.unwrap();
         drop(first);
 
-        let (mut second, mut rx) = member(Some(&path), group(GROUP, port)).await?;
+        let (second, mut rx) = member(Some(&path), group(GROUP, port)).await?;
         assert_eq!(second.multicast(), Some(group(MOVED, port)));
         let view = second.bip_port().unwrap().multicast.unwrap();
         assert_eq!(view.group(), MOVED.octets());
@@ -118,7 +118,7 @@ async fn an_activated_group_survives_a_restart() {
         saved(&second, 1).await;
         second.stop().await.unwrap();
         drop(second);
-        let (mut third, _rx) = member(Some(&path), group(GROUP, port)).await?;
+        let (third, _rx) = member(Some(&path), group(GROUP, port)).await?;
         assert_eq!(third.multicast(), None);
         third.stop().await.unwrap();
         Ok(())
@@ -135,7 +135,7 @@ async fn a_failed_save_is_counted_and_a_bad_file_ignored() {
         let dir = TempDir::new("multicast-group-fail");
         let port = free_port();
         let unwritable = dir.file("missing").join("group");
-        let (mut transport, _rx) = member(Some(&unwritable), group(GROUP, port)).await?;
+        let (transport, _rx) = member(Some(&unwritable), group(GROUP, port)).await?;
         let view = transport.bip_port().unwrap().multicast.unwrap();
         view.activate(MOVED.octets()).unwrap();
         saved(&transport, 1).await;
@@ -145,7 +145,7 @@ async fn a_failed_save_is_counted_and_a_bad_file_ignored() {
 
         let junk = dir.file("junk");
         std::fs::write(&junk, b"not a group").unwrap();
-        let (mut transport, _rx) = member(Some(&junk), group(GROUP, port)).await?;
+        let (transport, _rx) = member(Some(&junk), group(GROUP, port)).await?;
         assert_eq!(transport.multicast(), Some(group(GROUP, port)));
         transport.stop().await.unwrap();
         Ok(())

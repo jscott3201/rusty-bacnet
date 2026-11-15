@@ -330,7 +330,7 @@ async fn hooks_state_and_lifecycle() {
     let (stop_count, drop_flag) = (Arc::clone(&stops), Arc::clone(&dropped));
     let builder = TestTransport::builder();
     let log = builder.sent();
-    let mut transport = builder
+    let transport = builder
         .on_send(move |frame| {
             let recorded = log.len();
             async move {
@@ -497,4 +497,43 @@ async fn lifecycle_counters_and_started_report() {
         .build();
     assert!(transport.start().await.is_err());
     assert_eq!(seen.load(Ordering::SeqCst), 0);
+}
+
+/// From a stop's return to the next start every send fails with the
+/// stopped error, in every mode, records nothing and runs no hook, as on a
+/// real link (#2617); the stop works through a shared reference.
+#[tokio::test]
+async fn sends_fail_between_a_stop_and_the_next_start() {
+    let hooked = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&hooked);
+    let mut transport = TestTransport::builder()
+        .start(StartMode::Fresh(4))
+        .broadcast(SendMode::Ignore)
+        .on_send(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            async { Ok(()) }
+        })
+        .build();
+    let handle = transport.handle();
+    transport.start().await.unwrap();
+    transport.send_unicast(&[1, 0], &[2]).await.unwrap();
+    let transport = Arc::new(transport);
+    Arc::clone(&transport).stop().await.unwrap();
+    let stopped = |sent: Result<(), Error>| matches!(sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected);
+    assert!(stopped(transport.send_unicast(&[1, 0], &[2]).await));
+    assert!(
+        stopped(transport.send_broadcast(&[1, 0]).await),
+        "Ignore too"
+    );
+    assert!(stopped(
+        transport
+            .send_unicast_with_data_attributes(&[1, 0], &[2], &[attribute()])
+            .await
+    ));
+    assert_eq!(handle.sent().len(), 1, "nothing recorded after the stop");
+    assert_eq!(hooked.load(Ordering::SeqCst), 1, "no hook after the stop");
+    let mut transport = Arc::into_inner(transport).unwrap();
+    transport.start().await.unwrap();
+    transport.send_unicast(&[1, 0], &[2]).await.unwrap();
+    assert_eq!(handle.sent().len(), 2, "a start opens the link again");
 }

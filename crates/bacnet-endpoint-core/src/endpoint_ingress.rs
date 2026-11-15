@@ -132,11 +132,9 @@ enum Lifecycle {
     Stopped,
 }
 
-/// What the session task ends with: its exit, and the started layer when
-/// a full client still held it, so the transport could not be stopped.
-type SessionEnd<T> = Result<(ClassifierExit, Option<Arc<NetworkLayer<T>>>), Error>;
-
-const LINK_HELD: &str = "a full client still holds the endpoint's link: drop it, then stop again";
+/// What the session task ends with: its exit, once the layer it stopped has
+/// stopped.
+type SessionEnd = Result<ClassifierExit, Error>;
 
 /// Owns one network layer and classifies each received APDU exactly once.
 pub struct EndpointIngress<T: TransportPort> {
@@ -145,12 +143,10 @@ pub struct EndpointIngress<T: TransportPort> {
     /// shares (#2617).
     started: std::sync::Weak<NetworkLayer<T>>,
     seats: Option<Arc<SeatSlot>>,
-    /// The layer and exit a stop could not finish with: see [`Self::stop`].
-    held: Option<(ClassifierExit, Arc<NetworkLayer<T>>)>,
     queue_capacity: usize,
     lifecycle: Lifecycle,
     cancel_tx: Option<oneshot::Sender<()>>,
-    session_task: Option<JoinHandle<SessionEnd<T>>>,
+    session_task: Option<JoinHandle<SessionEnd>>,
     egress_open: Option<Arc<AtomicBool>>,
 }
 
@@ -161,7 +157,6 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             network: Some(NetworkLayer::new(transport)),
             started: std::sync::Weak::new(),
             seats: None,
-            held: None,
             queue_capacity,
             lifecycle: Lifecycle::Ready,
             cancel_tx: None,
@@ -351,20 +346,13 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .unwrap_or_default()
     }
 
-    /// Whether the last [`Self::stop`] failed because a full client still
-    /// holds the link. Dropping that client lets the next stop finish.
-    #[doc(hidden)]
-    pub fn link_held(&self) -> bool {
-        self.held.is_some()
-    }
-
     /// Cancels classification, stops the network layer, and reports classifier exit.
     ///
-    /// A client seat's queues close first, which ends its client's tasks.
-    /// When that client itself is still alive it keeps a reference to the
-    /// layer, and the transport cannot be stopped: this fails,
-    /// [`Self::link_held`] turns true, and a stop after the client is
-    /// dropped finishes.
+    /// A client seat's queues close first, which ends its client's tasks;
+    /// then the layer and its transport stop, through the shared reference
+    /// (#2617), whether or not that client itself is still alive. Its
+    /// requests made after that fail with the transport's stopped error, and
+    /// dropping it later changes nothing.
     pub async fn stop(&mut self) -> Result<ClassifierExit, Error> {
         if !matches!(
             self.lifecycle,
@@ -373,11 +361,11 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             return Err(Error::Encoding("endpoint ingress is not running".into()));
         }
         if self.lifecycle == Lifecycle::Starting
-            && let Some(mut network) = self.network.take()
+            && let Some(network) = self.network.take()
         {
             self.session_task = Some(tokio::spawn(async move {
                 network.stop().await?;
-                Ok((ClassifierExit::Cancelled, None))
+                Ok(ClassifierExit::Cancelled)
             }));
         }
         self.lifecycle = Lifecycle::Stopping;
@@ -390,22 +378,6 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
 
         if let Some(seats) = &self.seats {
             seats.close();
-        }
-        // A layer an earlier stop left held: stop it in a task of its own,
-        // as the session task would have, once nothing else holds it.
-        if let Some((exit, network)) = self.held.take() {
-            match Arc::try_unwrap(network) {
-                Ok(mut network) => {
-                    self.session_task = Some(tokio::spawn(async move {
-                        network.stop().await?;
-                        Ok((exit, None))
-                    }));
-                }
-                Err(network) => {
-                    self.held = Some((exit, network));
-                    return Err(Error::Encoding(LINK_HELD.into()));
-                }
-            }
         }
 
         let result = match self.session_task.as_mut() {
@@ -420,20 +392,8 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             )),
         };
         self.session_task.take();
-        match result {
-            Ok((exit, Some(network))) => {
-                self.held = Some((exit, network));
-                Err(Error::Encoding(LINK_HELD.into()))
-            }
-            Ok((exit, None)) => {
-                self.lifecycle = Lifecycle::Stopped;
-                Ok(exit)
-            }
-            Err(error) => {
-                self.lifecycle = Lifecycle::Stopped;
-                Err(error)
-            }
-        }
+        self.lifecycle = Lifecycle::Stopped;
+        result
     }
 }
 
@@ -461,7 +421,7 @@ async fn session_task<T: TransportPort + 'static>(
     mut egress_rx: mpsc::Receiver<NetworkServiceCommand>,
     mut cancel_rx: oneshot::Receiver<()>,
     (egress_open, mut seat_holds): (Arc<AtomicBool>, mpsc::Receiver<()>),
-) -> SessionEnd<T> {
+) -> SessionEnd {
     let mut receive_egress = true;
     let mut prefer_ingress = true;
     let exit = loop {
@@ -520,18 +480,15 @@ async fn session_task<T: TransportPort + 'static>(
             attempted: false,
         });
     }
-    // The seat's queues close, its client's tasks end, and each lets go of
-    // the layer before its hold. A client that is itself still alive keeps
-    // its own reference, and then the layer goes back to the owner unstopped.
+    // The seat's queues close and its client's tasks end, each letting go
+    // of the layer before its hold, so none is still at work when the link
+    // stops. A client that is itself still alive keeps its own reference:
+    // the layer stops through it all the same (#2617), and that client's
+    // later requests fail with the transport's stopped error.
     queues.seats.close();
     while seat_holds.recv().await.is_some() {}
-    match Arc::try_unwrap(network) {
-        Ok(mut network) => {
-            network.stop().await?;
-            Ok((exit, None))
-        }
-        Err(network) => Ok((exit, Some(network))),
-    }
+    network.stop().await?;
+    Ok(exit)
 }
 
 enum SessionEvent {

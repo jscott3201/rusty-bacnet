@@ -492,8 +492,11 @@ pub(super) async fn handle_datagram(
     // The tap sees only what the node keeps, and sees it before the node
     // acts on it, which may send: the node's own listener verdict decides
     // (#1856).
-    if arrival == Arrival::BroadcastListener && ctx.node.link().listener_keeps(&datagram) {
-        ctx.socket().tap_inbound(data, received.peer);
+    if arrival == Arrival::BroadcastListener
+        && ctx.node.link().listener_keeps(&datagram)
+        && let Some(socket) = ctx.socket()
+    {
+        socket.tap_inbound(data, received.peer);
     }
     if let Some(Discard::ListenerMismatch { other_interface }) = receive(&datagram, ctx).await {
         log_listener_mismatch(other_interface, received, local);

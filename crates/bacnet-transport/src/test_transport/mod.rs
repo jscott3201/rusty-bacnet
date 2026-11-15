@@ -25,7 +25,10 @@
 //! `start`, `stop` and `abort`, and takes the unicasts and broadcasts sent
 //! under [`SendMode::Forward`].
 //!
-//! Every send runs this pipeline:
+//! Every send runs this pipeline, unless the transport has stopped: from a
+//! stop's return to the next start every send fails at once with
+//! [`crate::port::stopped`]'s error, recording nothing, as a real link's
+//! does (#2617).
 //! 1. The [`SendMode`] for its kind (unicast or broadcast): `Ignore` returns
 //!    `Ok(())` untouched, skipping every later step, `Panic` panics, and
 //!    `Fail` records the frame and returns its error.
@@ -227,7 +230,7 @@ pub struct TestTransport {
     /// See [`TestTransportBuilder::skip_prepare_for_routing`].
     prepare_inner: bool,
     /// A registered Network Port's lease, held until `stop` or the drop.
-    port_lease: Option<Arc<()>>,
+    port_lease: std::sync::Mutex<Option<Arc<()>>>,
 }
 
 impl TestTransport {
@@ -272,7 +275,7 @@ impl TestTransport {
                 link_returns: None,
                 inner: None,
                 prepare_inner: true,
-                port_lease: None,
+                port_lease: std::sync::Mutex::new(None),
             },
         }
     }
@@ -331,6 +334,10 @@ impl TestTransport {
     }
 
     async fn send_frame(&self, mode: SendMode, frame: SentFrame) -> Result<(), Error> {
+        // After a stop, as on a real link: nothing is recorded or run.
+        if self.shared.stopped.load(Ordering::Acquire) {
+            return Err(crate::port::stopped());
+        }
         let (forward, first) = match mode {
             SendMode::Record => (false, false),
             SendMode::Forward => (true, false),
@@ -449,7 +456,10 @@ impl TransportPort for TestTransport {
             hook(&lease);
         }
         if self.bip_port.is_some() || self.bip6_port.is_some() {
-            self.port_lease = Some(lease);
+            *self
+                .port_lease
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner) = Some(lease);
             return Ok(());
         }
         match &mut self.inner {
@@ -477,6 +487,7 @@ impl TransportPort for TestTransport {
 
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.shared.starts.fetch_add(1, Ordering::SeqCst);
+        self.shared.stopped.store(false, Ordering::Release);
         if let Some(hook) = &self.hooks.on_start {
             hook();
         }
@@ -554,12 +565,17 @@ impl TransportPort for TestTransport {
         Ok(received)
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
+    /// Count the stop and run its hooks (or the inner transport's stop);
+    /// then every send fails until the next start, the `Fresh` channel
+    /// closes and a held lease goes, as on a real link, even when a hook
+    /// failed. A `before_stop` hook that fails ends the stop first, and
+    /// changes nothing.
+    async fn stop(&self) -> Result<(), Error> {
         self.shared.stops.fetch_add(1, Ordering::SeqCst);
         if let Some(hook) = &self.hooks.before_stop {
             hook().await?;
         }
-        let result = match (&self.hooks.on_stop, &mut self.inner) {
+        let result = match (&self.hooks.on_stop, &self.inner) {
             (Some(hook), _) => hook().await,
             (None, Some(inner)) => inner.stop().await,
             (None, None) => Ok(()),
@@ -568,10 +584,14 @@ impl TransportPort for TestTransport {
             (Ok(()), Some(hook)) => hook().await,
             (result, _) => result,
         };
+        self.shared.stopped.store(true, Ordering::Release);
         self.close_fresh_channel();
         // Stopping releases a Network Port lease the transport holds, as a
         // real transport's stop does; a failing stop releases it too.
-        self.port_lease = None;
+        self.port_lease
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         self.refresh_inner_limits();
         result
     }

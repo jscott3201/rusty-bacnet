@@ -293,7 +293,7 @@ async fn a_group_bbmd_joins_members_a_plain_peer_and_a_foreign_device() {
         }
         assert!(bbmd.transport.receive_counters().own_echo >= 1);
         for node in [a, b, bbmd, peer, foreign] {
-            let mut transport = node.transport;
+            let transport = node.transport;
             transport.stop().await.unwrap();
         }
         Ok(())

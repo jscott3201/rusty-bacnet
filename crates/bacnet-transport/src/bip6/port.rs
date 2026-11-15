@@ -7,11 +7,11 @@ use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::bbmd_lookup::{BbmdLookupCounters, BbmdResolver, SystemResolver};
 use crate::port::{Bip6Port, ReceivedNpdu, TransportPort};
+use crate::stopping::{StopGate, Tasks};
 
 use super::collision_probe::Probe;
 use super::foreign_bbmd::Bip6ForeignBbmd;
@@ -21,7 +21,7 @@ use super::receive::Receiver;
 use super::receive_counters::{Bip6ReceiveCounters, ReceiveDrops};
 use super::reply_limit::ReplyLimiter;
 use super::resolver::{Driver, Resolver, UnresolvedSend};
-use super::socket::{Bip6Socket, PortUse, Role};
+use super::socket::{Bip6Socket, PortUse, Role, SocketSlot};
 use super::vmac_table::{generate_random_vmac, vmac_from_device_instance};
 use super::{Bip6Address, Bip6Vmac, Bvll6, MAX_VMAC_RETRIES, encode_bvll6};
 
@@ -60,19 +60,24 @@ pub struct Bip6Transport {
     /// See [`Self::set_share_wildcard_port`].
     share_wildcard_port: bool,
     device_instance: Option<u32>,
-    /// This node's VMAC as the network layer's MAC: zero before start and
-    /// after stop.
+    /// This node's VMAC as the network layer's MAC, from a start on; the
+    /// MAC reported is zero before start and after stop.
     local_mac: [u8; 3],
-    /// See [`Self::local_address`].
+    /// See [`Self::local_address`]: from a start on, reported only while
+    /// the transport runs.
     pub(super) local_address: Option<SocketAddrV6>,
     pub(super) source_vmac: Bip6Vmac,
-    pub(super) socket: Option<Arc<Bip6Socket>>,
-    recv_task: Option<JoinHandle<()>>,
+    /// The socket the sends leave from, which a stop takes out (#2617).
+    pub(super) socket: SocketSlot,
+    /// The running transport's tasks, in the order `start` spawns them: the
+    /// receive loop, the resolver's driver and a foreign device's
+    /// re-registration. A stop through `&self` aborts and joins them.
+    tasks: Tasks,
+    /// One stop at a time (#2617).
+    pub(super) stop_gate: StopGate,
     /// The neighbour table and its resolutions (U.5), shared with the
     /// receive loop and the resolver task.
     pub(super) resolver: Arc<Resolver>,
-    /// The task that sends what the resolver schedules.
-    resolve_task: Option<JoinHandle<()>>,
     /// See [`Self::set_unresolved_send`].
     pub(super) unresolved: UnresolvedSend,
     /// Broadcast scope for send_broadcast.
@@ -85,11 +90,10 @@ pub struct Bip6Transport {
     bbmd_resolver: Arc<dyn BbmdResolver>,
     /// See [`Self::set_release_previous_bbmd`].
     release_previous_bbmd: bool,
-    /// Foreign device re-registration task handle.
-    registration_task: Option<JoinHandle<()>>,
     /// The registered Network Port's lease, handed to the socket at start
-    /// so every task that owns the socket keeps the port registered.
-    network_port_lease: Option<Arc<()>>,
+    /// so every task that owns the socket keeps the port registered. A stop
+    /// lets go of it; only `start`, `stop` and the registration lock it.
+    network_port_lease: std::sync::Mutex<Option<Arc<()>>>,
     /// Set by the first start: a lease can be retained only before it.
     registration_closed: bool,
     /// See [`Self::forwarded_group_origin_drops`].
@@ -154,17 +158,16 @@ impl Bip6Transport {
             local_mac: [0; 3],
             local_address: None,
             source_vmac: Bip6Vmac::new([0; 3]),
-            socket: None,
-            recv_task: None,
+            socket: SocketSlot::default(),
+            tasks: Tasks::default(),
+            stop_gate: StopGate::default(),
             resolver: Arc::default(),
-            resolve_task: None,
             unresolved: UnresolvedSend::default(),
             broadcast_scope: Bip6BroadcastScope::SiteLocal,
             foreign_device: None,
             bbmd_resolver: Arc::new(SystemResolver),
             release_previous_bbmd: false,
-            registration_task: None,
-            network_port_lease: None,
+            network_port_lease: std::sync::Mutex::new(None),
             registration_closed: false,
             forwarded_group_origin_drops: Arc::default(),
             receive_drops: Arc::default(),
@@ -509,7 +512,8 @@ impl TransportPort for Bip6Transport {
     /// Network Port activation can move while the transport runs. This
     /// transport can't act as a BBMD.
     fn bip6_port(&self) -> Option<Bip6Port> {
-        let (endpoint, vmac) = match self.local_address {
+        let local_address = self.local_address();
+        let (endpoint, vmac) = match local_address {
             Some(bound) => (*bound.ip(), Some(self.source_vmac.octets())),
             None => (
                 self.interface,
@@ -518,7 +522,7 @@ impl TransportPort for Bip6Transport {
                     .map(Bip6Vmac::octets),
             ),
         };
-        let port = self.local_address.map_or(self.port, |bound| bound.port());
+        let port = local_address.map_or(self.port, |bound| bound.port());
         let mode = match &self.foreign_device {
             Some(target) => BipPortMode::Foreign {
                 registration: Arc::clone(target) as Arc<dyn ForeignRegistration>,
@@ -534,22 +538,26 @@ impl TransportPort for Bip6Transport {
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        let held = self
+            .network_port_lease
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.registration_closed
             || self.socket.is_some()
-            || self.recv_task.is_some()
-            || self.network_port_lease.is_some()
+            || self.tasks.is_running()
+            || held.is_some()
         {
             return Err(Error::Encoding(
                 "registered B/IPv6 lease requires an unstarted transport".into(),
             ));
         }
-        self.network_port_lease = Some(lease);
+        *held = Some(lease);
         Ok(())
     }
 
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.registration_closed = true;
-        if self.recv_task.is_some() {
+        if self.tasks.is_running() {
             return Err(Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "BIP6 transport already started",
@@ -591,7 +599,12 @@ impl TransportPort for Bip6Transport {
                 .await
                 .map_err(Error::Transport)?
                 .tapped(self.frame_tap.clone())
-                .leased(self.network_port_lease.clone()),
+                .leased(
+                    self.network_port_lease
+                        .get_mut()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone(),
+                ),
         );
         let bound = socket.local_address().map_err(Error::Transport)?;
         let local_port = bound.port();
@@ -737,9 +750,10 @@ impl TransportPort for Bip6Transport {
         self.local_mac = source_vmac.octets();
         self.local_address = Some(local_address);
         self.source_vmac = source_vmac;
-        self.recv_task = Some(recv_task);
-        self.resolve_task = Some(resolve_task);
-        self.socket = Some(Arc::clone(&socket));
+        self.tasks.push(recv_task);
+        self.tasks.push(resolve_task);
+        self.socket.set(Arc::clone(&socket));
+        self.stop_gate.open();
 
         // Start foreign device registration if configured
         if let Some(fd) = &self.foreign_device {
@@ -755,42 +769,43 @@ impl TransportPort for Bip6Transport {
                 Arc::clone(&socket),
                 self.source_vmac,
             ));
-            self.registration_task = Some(reg_task);
+            self.tasks.push(reg_task);
         }
 
         Ok(rx)
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
+    /// Stop through a shared reference (#2617): the socket comes out of the
+    /// send slot first, so every later send fails with
+    /// [`crate::port::stopped`]'s error and a send still waiting for its
+    /// VMAC to resolve sends nothing; the tasks are aborted and joined; and
+    /// once every task that owned the socket has ended, the port and a
+    /// registered Network Port's lease are free. The local MAC, VMAC and
+    /// address then read as before start. The transport can start again.
+    async fn stop(&self) -> Result<(), Error> {
+        let Some(stopping) = self.stop_gate.enter().await else {
+            return Ok(());
+        };
         // Refuse changes first, so none is accepted while the tasks stop
         // and leaves a permit no task will take.
         if let Some(fd) = &self.foreign_device {
             fd.detach();
         }
-        if let Some(task) = self.registration_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.recv_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.resolve_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
+        let socket = self.socket.take();
+        drop(socket);
+        self.tasks.stop().await;
         // Only now, so no pass or answer in flight leaves one behind.
         if let Some(fd) = &self.foreign_device {
             fd.forget_answers();
         }
-        self.socket = None;
-        self.local_mac = [0; 3];
-        self.local_address = None;
-        self.source_vmac = Bip6Vmac::new([0; 3]);
         self.resolver.clear();
         self.resolver.set_own(None);
         // Every task that owned the socket has ended.
-        self.network_port_lease = None;
+        self.network_port_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        stopping.finish();
         Ok(())
     }
 
@@ -814,7 +829,9 @@ impl TransportPort for Bip6Transport {
     /// queued and the call returns at once. A VMAC that failed fails a send
     /// at once for the next ten seconds, unless the transport hears from it.
     ///
-    /// Errors (all [`Error::Transport`]): `NotConnected` before start;
+    /// Errors (all [`Error::Transport`]): `NotConnected` before start and
+    /// after stop, a stop included that comes while the send waits for the
+    /// resolution;
     /// `InvalidInput` for a MAC that isn't three octets, or this node's own
     /// VMAC; `TimedOut` when nothing answered the resolution;
     /// `ConnectionRefused` when the BBMD refused to pass it on and nothing
@@ -822,24 +839,17 @@ impl TransportPort for Bip6Transport {
     /// `QuotaExceeded` when 64 VMACs are resolving, or 64 sends wait on this
     /// one (512 in all), or 8 NPDUs are queued for it (128 in all).
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let socket = self.socket.as_ref().ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "Transport not started",
-            ))
-        })?;
+        if !self.socket.is_some() {
+            return Err(self.not_running());
+        }
+        // The slot is read again as the datagram goes, after any wait.
         self.resolver
-            .send_unicast(&**socket, self.source_vmac, self.unresolved, npdu, mac)
+            .send_unicast(&self.socket, self.source_vmac, self.unresolved, npdu, mac)
             .await
     }
 
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        let socket = self.socket.as_ref().ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "Transport not started",
-            ))
-        })?;
+        let socket = self.socket.get().ok_or_else(|| self.not_running())?;
 
         let source_vmac = self.source_vmac;
 
@@ -895,7 +905,11 @@ impl TransportPort for Bip6Transport {
 
     /// This node's 3-octet VMAC (U.1.3), zero before start and after stop.
     fn local_mac(&self) -> &[u8] {
-        &self.local_mac
+        if self.socket.is_some() {
+            &self.local_mac
+        } else {
+            &[0; 3]
+        }
     }
 
     /// No VMAC names a group: a B/IPv6 broadcast is the network layer's
@@ -914,15 +928,7 @@ impl Drop for Bip6Transport {
     fn drop(&mut self) {
         // The tasks own socket clones. Abort them so dropping the transport
         // cannot detach a receive/registration lifetime from its owner.
-        if let Some(task) = self.registration_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.recv_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.resolve_task.take() {
-            task.abort();
-        }
+        self.tasks.abort_and_forget();
         // Fails any waiter a leaked send left behind.
         self.resolver.clear();
     }

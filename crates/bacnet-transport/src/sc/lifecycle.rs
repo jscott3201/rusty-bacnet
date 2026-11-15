@@ -21,11 +21,15 @@ use bytes::BytesMut;
 pub(super) const STOP_SEND_BUDGET: Duration = Duration::from_secs(2);
 
 impl<W: WebSocketPort> ScTransport<W> {
-    pub(super) async fn stop_owned(&mut self) -> Result<(), Error> {
+    /// The stop, through `&self` (#2617). The direct links' shutdown and the
+    /// listener's seal are idempotent, so the shared state they hang off
+    /// stays until the transport drops; the hub socket is taken out of its
+    /// slot once the receive task, the only other publisher, is joined.
+    pub(super) async fn stop_owned(&self) -> Result<(), Error> {
         let budget = tokio::time::Instant::now() + STOP_SEND_BUDGET;
         self.direct_membership.retire_all();
         self.seal_direct_listener();
-        let direct = self.direct.take();
+        let direct = self.direct.clone();
         let direct = async {
             if let Some(shared) = direct {
                 shared.shutdown(budget).await;
@@ -48,10 +52,8 @@ impl<W: WebSocketPort> ScTransport<W> {
             }
         };
         tokio::join!(direct, hub, restore);
-        self.direct_intake = advertisement::DirectIntake::default();
 
-        let conn_for_state = self.connection.clone();
-        let (recv_task, restore_task) = self.abort_background_task_and_drop_sockets();
+        let (recv_task, restore_task) = self.abort_background_tasks();
         if let Some(task) = recv_task {
             let _ = task.await;
         }
@@ -63,7 +65,13 @@ impl<W: WebSocketPort> ScTransport<W> {
         self.observer
             .disconnected(super::ScDisconnectCause::LocalClose);
 
-        if let Some(conn) = conn_for_state {
+        // Nothing publishes a socket now: take it out, so every later send
+        // fails, and let it go once the lock is free.
+        if let Some(slot) = &self.ws_shared {
+            let socket = slot.lock().await.take();
+            drop(socket);
+        }
+        if let Some(conn) = &self.connection {
             let mut c = conn.lock().await;
             c.state = ScConnectionState::Disconnected;
             self.state_tx.send_replace(c.state);
@@ -85,12 +93,16 @@ impl<W: WebSocketPort> ScTransport<W> {
         let mut states = self.state_tx.subscribe();
         let (ws, disconnect_msg) = {
             let ws = ws.lock().await;
+            // Already taken out: a stop said goodbye before.
+            let Some(ws) = ws.as_ref() else {
+                return;
+            };
             let mut c = conn.lock().await;
             let disconnect_msg = c.build_disconnect_request().ok();
             if disconnect_msg.is_some() {
                 self.state_tx.send_replace(c.state);
             }
-            (ws.clone(), disconnect_msg)
+            (std::sync::Arc::clone(ws), disconnect_msg)
         };
         if let Some(msg) = disconnect_msg {
             let mut buf = BytesMut::new();
@@ -106,18 +118,26 @@ impl<W: WebSocketPort> ScTransport<W> {
         let _ = tokio::time::timeout_at(grace, ws.close(Some(super::CLOSE_NORMAL))).await;
     }
 
-    pub(super) fn seal_direct_listener(&mut self) {
+    /// Seal the direct listener; sealing again changes nothing.
+    pub(super) fn seal_direct_listener(&self) {
         #[cfg(feature = "sc-tls")]
-        if let Some(shutdown) = self.direct_listener_shutdown.take() {
+        if let Some(shutdown) = &self.direct_listener_shutdown {
             shutdown.send_replace(true);
         }
     }
 
-    pub(super) fn abort_background_task_and_drop_sockets(
-        &mut self,
+    /// Abort the receive and restore tasks and close the connection's
+    /// record, through `&self`: what a stop and an abort both do. Returns the
+    /// tasks for a stop to join.
+    pub(super) fn abort_background_tasks(
+        &self,
     ) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
         self.direct_membership.retire_all();
-        let task = self.recv_task.take();
+        let task = self
+            .recv_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         if let Some(task) = &task {
             task.abort();
         }
@@ -138,17 +158,29 @@ impl<W: WebSocketPort> ScTransport<W> {
         self.state_tx.send_replace(ScConnectionState::Disconnected);
         self.observer
             .disconnected(super::ScDisconnectCause::LocalClose);
+        // Pending Address-Resolution waiters observe closure via their hub
+        // send or timeout and fall back to the hub path.
+        if let Some(shared) = &self.direct {
+            shared.disable();
+        }
+        (task, restore_task)
+    }
+
+    /// [`Self::abort_background_tasks`], then drop the sockets and the
+    /// direct discovery state, for `abort` and drop.
+    pub(super) fn abort_background_task_and_drop_sockets(&mut self) {
+        self.seal_direct_listener();
+        #[cfg(feature = "sc-tls")]
+        {
+            self.direct_listener_shutdown = None;
+        }
+        self.direct_intake = advertisement::DirectIntake::default();
+        let _ = self.abort_background_tasks();
         self.ws_shared = None;
         self.connection = None;
         self.ws = None;
         self.failover_ws = None;
-        // Direct discovery state is dropped with the transport; pending
-        // Address-Resolution waiters observe closure via their hub send or
-        // timeout and fall back to the hub path.
-        if let Some(shared) = self.direct.take() {
-            shared.disable();
-        }
-        (task, restore_task)
+        self.direct = None;
     }
 }
 

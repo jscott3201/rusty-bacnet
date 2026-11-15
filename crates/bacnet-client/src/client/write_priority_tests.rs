@@ -67,7 +67,7 @@ async fn write(
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn write_priority_invalid_direct_local_routed_and_batch_never_admit_or_send() {
-    let (mut client, mut peer, mut received) = setup().await;
+    let (mut client, peer, mut received) = setup().await;
     for priority in [0, 17, 255] {
         for path in [0, 10, 11, 999] {
             // Holding the lookup table also proves invalid input is rejected before resolution.
@@ -111,7 +111,7 @@ async fn write_priority_invalid_direct_local_routed_and_batch_never_admit_or_sen
 
 #[tokio::test]
 async fn write_priority_valid_direct_local_routed_preserve_exact_wire_and_complete() {
-    let (mut client, mut peer, mut received) = setup().await;
+    let (mut client, peer, mut received) = setup().await;
     for path in [0, 10, 11] {
         for priority in std::iter::once(None).chain((1..=16).map(Some)) {
             let send = write(&client, path, priority);

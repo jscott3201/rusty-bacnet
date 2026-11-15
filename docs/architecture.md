@@ -163,7 +163,7 @@ All transports implement the `TransportPort` trait:
 ```rust
 pub trait TransportPort: Send + Sync {
     fn start(&mut self) -> impl Future<Output = Result<mpsc::Receiver<ReceivedNpdu>, Error>> + Send;
-    fn stop(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
+    fn stop(&self) -> impl Future<Output = Result<(), Error>> + Send; // through a shared reference; later sends fail (#2617)
     fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> impl Future<Output = Result<(), Error>> + Send;
     fn send_broadcast(&self, npdu: &[u8]) -> impl Future<Output = Result<(), Error>> + Send;
     fn local_mac(&self) -> &[u8];

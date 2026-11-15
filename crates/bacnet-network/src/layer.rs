@@ -359,7 +359,9 @@ pub struct RoutedTarget<'a> {
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
-    dispatch_task: Option<JoinHandle<()>>,
+    /// Set by a start; a stop through `&self` takes it (#2617). No send or
+    /// receive locks it.
+    dispatch_task: std::sync::Mutex<Option<JoinHandle<()>>>,
     /// Whether [`Self::start`] or [`Self::start_with_admission`] has run.
     started: bool,
     /// The [`ApduReceiver`]'s transport queue, which [`Self::stop`] and
@@ -386,7 +388,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             local_broadcasts: transport.local_broadcast_destinations(),
             transport,
             response_scope: Default::default(),
-            dispatch_task: None,
+            dispatch_task: std::sync::Mutex::new(None),
             started: false,
             receiver_queue: std::sync::Weak::new(),
             network_control_tx: None,
@@ -855,7 +857,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         Ok(buf)
     }
 
-    /// Stop the network layer and underlying transport.
+    /// Stop the network layer and underlying transport, through a shared
+    /// reference, so the owner of an `Arc<NetworkLayer>` can stop it while a
+    /// client or another holder still has it (#2617).
     ///
     /// After start, aborts and awaits dispatch before stopping the transport;
     /// it does not wait for consumers, even with full APDU/control queues.
@@ -864,7 +868,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// consumed or the receiver is dropped. Stop does not count as an admission
     /// drop or clear depth/high-water/drop totals. See the
     /// [receive-queue contract](self#receive-queue-admission).
-    pub async fn stop(&mut self) -> Result<(), Error> {
+    ///
+    /// Once it returns, every send through the layer fails with the
+    /// transport's stopped error ([`TransportPort::stop`]). A second stop
+    /// waits for a first that is still stopping the transport.
+    pub async fn stop(&self) -> Result<(), Error> {
         self.seal_responses();
         // The raw receiver drains what the transport queued, then ends.
         ingress::close_queue(&self.receiver_queue);
@@ -887,8 +895,12 @@ pub(crate) fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
 }
 
 impl<T: TransportPort> NetworkLayer<T> {
-    fn abort_dispatch_task(&mut self) -> Option<JoinHandle<()>> {
-        let task = self.dispatch_task.take()?;
+    fn abort_dispatch_task(&self) -> Option<JoinHandle<()>> {
+        let task = self
+            .dispatch_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
         task.abort();
         Some(task)
     }
@@ -1113,6 +1125,10 @@ mod delivery_tests;
 #[cfg(test)]
 #[path = "layer_admission_tests.rs"]
 mod admission_tests;
+
+#[cfg(test)]
+#[path = "layer_stop_tests.rs"]
+mod stop_tests;
 
 #[cfg(test)]
 #[path = "layer_sc_data_options_tests.rs"]

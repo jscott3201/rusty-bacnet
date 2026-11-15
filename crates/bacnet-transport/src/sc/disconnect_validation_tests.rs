@@ -18,7 +18,7 @@ async fn rejection_barrier(ws: &LoopbackWebSocket) {
 
 #[tokio::test]
 async fn heartbeat_explicit_destination_is_silent_at_hub_connector() {
-    let (mut transport, _rx, ws) = start_transport().await;
+    let (transport, _rx, ws) = start_transport().await;
     for destination in [[0x01; 6], [0x44; 6], [0xFF; 6]] {
         for source in [None, Some([0x22; 6])] {
             let mut wire = vec![0x0A, if source.is_some() { 12 } else { 4 }, 0x11, 0x22];
@@ -39,7 +39,7 @@ async fn heartbeat_explicit_destination_is_silent_at_hub_connector() {
 
 #[tokio::test]
 async fn disconnect_request_payload_gets_nak_before_state_change() {
-    let (mut transport, _rx, ws) = start_transport().await;
+    let (transport, _rx, ws) = start_transport().await;
     ws.send(&[0x08, 0, 0x22, 0x33, 0x42]).await.unwrap();
     assert_eq!(recv(&ws).await, [0, 0, 0x22, 0x33, 8, 1, 0, 0, 7, 0, 7]);
     assert_eq!(
@@ -150,7 +150,7 @@ fn disconnect_envelope_matrix_preserves_public_state_and_queued_ack() {
 
 #[tokio::test(start_paused = true)]
 async fn disconnect_envelopes_preserve_node_state_and_pending_probe() {
-    let (mut transport, mut rx, ws) = start_timed().await;
+    let (transport, mut rx, ws) = start_timed().await;
     let probe = recv(&ws).await;
     assert_eq!(probe[0], 0x0A);
     for case in invalid_disconnects([0x01; 6]) {
@@ -215,7 +215,7 @@ async fn disconnect_envelopes_preserve_node_state_and_pending_probe() {
 
 #[tokio::test(start_paused = true)]
 async fn disconnect_invalid_traffic_does_not_refresh_node_liveness() {
-    let (mut transport, _rx, ws) = start_timed().await;
+    let (transport, _rx, ws) = start_timed().await;
     let mut states = transport.connection_state_changes();
     let mut messages = Vec::new();
     for case in invalid_disconnects([0x01; 6]) {

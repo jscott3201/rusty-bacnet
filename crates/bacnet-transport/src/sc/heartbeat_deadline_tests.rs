@@ -100,7 +100,7 @@ async fn state(conn: &Arc<Mutex<ScConnection>>) -> ScConnectionState {
 /// interval later, so 2 ms of lateness against a 1 ms round trip dropped it.
 #[tokio::test(start_paused = true)]
 async fn sc_idle_node_with_answering_hub_survives_late_timer_ticks() {
-    let (mut transport, ws_hub) = start_node().await;
+    let (transport, ws_hub) = start_node().await;
     let conn = transport.connection().unwrap().clone();
     let (hub, mut seen) = spawn_hub(ws_hub, Some(ms(1)));
     for cycle in 0..5 {
@@ -132,7 +132,7 @@ async fn sc_idle_node_with_answering_hub_survives_late_timer_ticks() {
 /// previous ACK, not every second interval.
 #[tokio::test(start_paused = true)]
 async fn sc_idle_node_sends_a_heartbeat_every_interval() {
-    let (mut transport, ws_hub) = start_node().await;
+    let (transport, ws_hub) = start_node().await;
     let (hub, mut seen) = spawn_hub(ws_hub, Some(ms(1)));
     let mut previous = next_heartbeat(&mut seen, "first").await;
     for n in 1..5 {
@@ -153,7 +153,7 @@ async fn sc_idle_node_sends_a_heartbeat_every_interval() {
 #[tokio::test(start_paused = true)]
 async fn sc_unanswered_heartbeat_disconnects_at_the_timeout() {
     let connected_at = Instant::now();
-    let (mut transport, ws_hub) = start_node().await;
+    let (transport, ws_hub) = start_node().await;
     let conn = transport.connection().unwrap().clone();
     let (hub, mut seen) = spawn_hub(ws_hub, None);
     let h = next_heartbeat(&mut seen, "first").await;

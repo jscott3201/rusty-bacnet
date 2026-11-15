@@ -42,7 +42,7 @@ fn local_frame(field: AddressField, length: u8, control: Option<NetworkMessageTy
 
 #[tokio::test]
 async fn non_router_drops_and_counts_an_over_long_address_in_either_field() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut controls = network.enable_network_control_receiver().unwrap();
     let mut apdus = network.start().await.unwrap();

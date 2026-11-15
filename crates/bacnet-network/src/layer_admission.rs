@@ -590,7 +590,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             }
         });
 
-        self.dispatch_task = Some(dispatch_task);
+        *self
+            .dispatch_task
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(dispatch_task);
         Ok((apdu_rx, counters))
     }
 }

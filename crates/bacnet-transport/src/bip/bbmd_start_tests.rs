@@ -181,7 +181,7 @@ async fn wildcard_bbmd_uses_its_own_bdt_row_as_origin_and_local_mac() {
     let bdt_peer = udp().await;
     // The host's real addresses: 127.0.0.1 is local, and the default-route
     // address, whatever it is, must not win over the own row.
-    let (mut bbmd, port, started) = start_on_free_port(|port| {
+    let (bbmd, port, started) = start_on_free_port(|port| {
         wildcard_bbmd(
             port,
             vec![
@@ -239,7 +239,7 @@ async fn wildcard_bbmd_with_several_own_rows_fails_start_and_keeps_its_config() 
                 && text.contains("bind an explicit interface address"),
             "{text}"
         );
-        assert!(bbmd.socket.is_none() && bbmd.recv_task.is_none());
+        assert!(bbmd.socket().is_none() && !bbmd.tasks.is_running());
         assert!(bbmd.bbmd.is_none());
         assert!(
             bbmd.bbmd_config.is_some(),
@@ -327,7 +327,7 @@ async fn wildcard_start_without_a_listed_address_fails_with_or_without_a_bbmd() 
                     && text.ends_with("; bind an explicit interface address instead"),
                 "bbmd {bbmd}: {text}"
             );
-            assert!(transport.socket.is_none() && transport.recv_task.is_none());
+            assert!(transport.socket().is_none() && !transport.tasks.is_running());
             assert_eq!(transport.bbmd_config.is_some(), bbmd);
         }
     }
@@ -337,7 +337,7 @@ async fn wildcard_start_without_a_listed_address_fails_with_or_without_a_bbmd() 
 async fn wildcard_bbmd_reads_its_own_row_from_the_persisted_bdt() {
     // The configured BDT names the other local address; the persisted BDT is
     // the one the BBMD runs with, so its row decides.
-    let (mut bbmd, port, started) = start_on_free_port(|port| {
+    let (bbmd, port, started) = start_on_free_port(|port| {
         let mut bbmd = wildcard_bbmd(
             port,
             vec![row(LAN, port)],
@@ -383,7 +383,7 @@ async fn wildcard_bbmd_does_not_fall_back_when_the_persisted_bdt_cannot_choose()
         bbmd.bdt_persist_path().unwrap().display()
     );
     assert!(text.contains(&expected), "{text}");
-    assert!(bbmd.socket.is_none() && bbmd.bbmd.is_none());
+    assert!(bbmd.socket().is_none() && bbmd.bbmd.is_none());
     assert!(bbmd.bbmd_config.is_some());
 }
 
@@ -497,7 +497,7 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
             text.contains("the BDT has rows for several local IPv4 addresses"),
             "{text}"
         );
-        assert!(bbmd.socket.is_none() && bbmd.recv_task.is_none());
+        assert!(bbmd.socket().is_none() && !bbmd.tasks.is_running());
         {
             let mut state = bbmd.bbmd_state().unwrap().lock().unwrap();
             assert_eq!(state.local_pair(), own);
@@ -559,7 +559,7 @@ async fn restart_that_would_overflow_the_bdt_fails_with_context_and_keeps_the_st
             text.contains(&moved) && text.contains("would exceed the BDT limit of 128 entries"),
             "{text}"
         );
-        assert!(bbmd.socket.is_none());
+        assert!(bbmd.socket().is_none());
         let state = bbmd.bbmd_state().unwrap().lock().unwrap();
         assert_eq!(state.local_pair(), (LAN.octets(), port));
         assert_eq!(state.bdt(), full.as_slice());
@@ -596,7 +596,7 @@ async fn explicit_interface_restart_keeps_the_bbmd_address_without_locking_the_s
         let outcome = tokio::time::timeout(Duration::from_secs(2), &mut restarting).await;
         release.send(()).unwrap();
         holder.join().unwrap();
-        let (mut bbmd, restarted) = outcome
+        let (bbmd, restarted) = outcome
             .expect("an explicit-interface restart does not lock the BBMD state")
             .unwrap();
         let Some(started) = restarted else {

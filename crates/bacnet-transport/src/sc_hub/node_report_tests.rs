@@ -112,7 +112,7 @@ async fn a_graceful_hub_shutdown_reads_as_endpoint_leaves_before_connect() {
 async fn a_node_the_hub_retires_reads_closed_by_peer() {
     let tls = TestTls::new();
     let mut hub = graceful_hub(&tls).await;
-    let (mut transport, mut events) = connected(&tls, &hub, NODE_UUID).await;
+    let (transport, mut events) = connected(&tls, &hub, NODE_UUID).await;
     let mut again = tls.websocket(hub.local_addr().unwrap()).await;
     again.send(request([0x43; 6], NODE_UUID)).await.unwrap();
     let cause = disconnected(&mut events).await;
@@ -134,7 +134,7 @@ async fn a_node_the_hub_retires_reads_closed_by_peer() {
 async fn a_graceful_hub_shutdown_reads_as_a_disconnect_request_once_connected() {
     let tls = TestTls::new();
     let mut hub = graceful_hub(&tls).await;
-    let (mut transport, mut events) = connected(&tls, &hub, NODE_UUID).await;
+    let (transport, mut events) = connected(&tls, &hub, NODE_UUID).await;
     let node = async {
         let cause = disconnected(&mut events).await;
         transport.stop().await.unwrap();
@@ -277,7 +277,7 @@ async fn a_nodes_orderly_close_reads_as_an_orderly_end_at_the_hub() {
     let mut hub = graceful_hub(&tls).await;
     let ws = dial(&tls, &hub).await;
     ws.close(Some(1000)).await.unwrap();
-    let (mut transport, _events) = connected(&tls, &hub, NODE_UUID).await;
+    let (transport, _events) = connected(&tls, &hub, NODE_UUID).await;
     transport.stop().await.unwrap();
     let logged = |message: &str| !logs.matching(message).is_empty();
     tokio::time::timeout(WAIT, async {

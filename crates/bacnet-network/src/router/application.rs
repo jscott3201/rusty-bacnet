@@ -138,8 +138,11 @@ pub struct RouterApplicationPort {
     cap: Option<NpduLimits>,
     /// [`Self::max_npdu`]'s changes, for [`TransportPort::max_npdu_changes`].
     published: watch::Sender<NpduLimits>,
-    /// The task that publishes them, once started.
-    follow: Option<JoinHandle<()>>,
+    /// The task that publishes them, once started. Only `start`, `stop` and
+    /// `abort` lock it.
+    follow: std::sync::Mutex<Option<JoinHandle<()>>>,
+    /// Set by a stop through `&self`, after which every send fails (#2617).
+    stopped: std::sync::atomic::AtomicBool,
     source: SourceSelection,
 }
 
@@ -279,7 +282,8 @@ impl BACnetRouter {
             initial,
             cap: None,
             published: watch::Sender::new(initial),
-            follow: None,
+            follow: std::sync::Mutex::new(None),
+            stopped: std::sync::atomic::AtomicBool::new(false),
             source: SourceSelection::default(),
         }
     }
@@ -308,6 +312,9 @@ impl RouterApplicationPort {
     /// Send the NPDU a stack above wrote: an answer through its request's
     /// saved plan, anything else originated.
     async fn send(&self, npdu: &[u8]) -> Result<(), Error> {
+        if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(bacnet_transport::port::stopped());
+        }
         let npdu = Npdu::decode(npdu)
             .map_err(|error| Error::Encoding(format!("router application send: {error}")))?;
         if npdu.message_type.is_some() {
@@ -348,9 +355,17 @@ impl RouterApplicationPort {
         originate(&self.outputs, &self.shared, &request).map_err(failure_error)
     }
 
-    fn end_tasks(&mut self) {
+    /// Detach from the feed, which lets go of its sender to this port's
+    /// receive channel, and abort the limit follower: what a stop, an abort
+    /// and a drop all do.
+    fn end_tasks(&self) {
         self.feed.detach(slot(self.side));
-        if let Some(task) = self.follow.take() {
+        let follow = self
+            .follow
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = follow {
             task.abort();
         }
     }
@@ -392,7 +407,10 @@ impl TransportPort for RouterApplicationPort {
         let mut limits = self.limits.clone();
         let published = self.published.clone();
         let cap = self.cap;
-        self.follow = Some(tokio::spawn(async move {
+        *self
+            .follow
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tokio::spawn(async move {
             loop {
                 let now = capped(cap, *limits.borrow_and_update());
                 published.send_if_modified(|current| std::mem::replace(current, now) != now);
@@ -404,7 +422,13 @@ impl TransportPort for RouterApplicationPort {
         Ok(self.feed.attach(slot(self.side)))
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
+    /// Stop through a shared reference (#2617): every later send fails with
+    /// [`bacnet_transport::port::stopped`]'s error, and the port leaves the
+    /// router's feed. The router itself runs on. The port does not start
+    /// again.
+    async fn stop(&self) -> Result<(), Error> {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::Release);
         self.end_tasks();
         Ok(())
     }

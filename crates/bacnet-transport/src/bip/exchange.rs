@@ -136,7 +136,11 @@ impl NodeHandle {
             exchange.failed();
             return Err(error.into());
         }
-        if let Err(error) = self.socket().send_to(&buf, peer).await {
+        let Some(socket) = self.socket() else {
+            exchange.failed();
+            return Err(super::not_started().into());
+        };
+        if let Err(error) = socket.send_to(&buf, peer).await {
             exchange.failed();
             return Err(Error::Transport(error).into());
         }

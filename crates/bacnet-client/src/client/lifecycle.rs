@@ -487,9 +487,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Stop the client, aborting and joining dispatch, the device purge and
-    /// local Number work. A client on a seat ([`Self::start_on_seat`]) stops
-    /// only itself: the node that owns the link stops the transport, once
-    /// this client is dropped.
+    /// local Number work, then stopping its network layer and transport,
+    /// whoever else still holds the layer: their sends fail from then on
+    /// (#2617). A client on a seat ([`Self::start_on_seat`]) stops only
+    /// itself: the node that owns the link stops the transport, and this
+    /// client's calls fail once it has.
     /// Canceling this waiter retains task joins for a subsequent stop.
     pub async fn stop(&mut self) -> Result<(), Error> {
         self.abort_owned_tasks();
@@ -501,11 +503,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if self.device_table.asking.seated {
             return Ok(());
         }
-        let network = Arc::get_mut(&mut self.network).ok_or_else(|| {
-            Error::Encoding("cannot stop BACnetClient while network references remain".into())
-        })?;
-        network.stop().await?;
-        Ok(())
+        self.network.stop().await
     }
 }
 

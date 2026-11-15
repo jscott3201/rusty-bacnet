@@ -112,7 +112,7 @@ async fn a_plain_transport_claims_its_requested_port() {
         let port = free_port();
         let mut transport = Bip6Transport::new(LOCAL, port, Some(10));
         let _rx = transport.start().await.map_err(bind_error)?;
-        assert!(!reuses_address(transport.socket.as_ref().unwrap()));
+        assert!(!reuses_address(&transport.socket.get().unwrap()));
         let refused = squatter(ANY, port, true, false).unwrap_err();
         assert!(lost_to_another_socket(&refused), "{refused}");
         transport.stop().await.unwrap();
@@ -436,7 +436,7 @@ async fn a_claimed_port_still_takes_its_groups_and_its_own_echo() {
         let mut transport = Bip6Transport::new(LOCAL, port, Some(10));
         transport.set_broadcast_scope(Bip6BroadcastScope::LinkLocal);
         let mut rx = transport.start().await.map_err(bind_error)?;
-        assert!(!reuses_address(transport.socket.as_ref().unwrap()));
+        assert!(!reuses_address(&transport.socket.get().unwrap()));
         let own = transport.local_address().unwrap();
 
         // An Original-Broadcast-NPDU from VMAC 00 04 D2, sent to the group.

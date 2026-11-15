@@ -152,8 +152,7 @@ impl super::BipTransport {
         let link = test_link(own, broadcast, mode);
         let record = Arc::clone(&self.client_record);
         let refusals = Arc::clone(&self.send_refusals);
-        let node = NodeHandle::new(link, Arc::clone(&socket), record, refusals).unwrap();
+        let node = NodeHandle::new(link, socket, record, refusals).unwrap();
         self.node = Some(Arc::new(node));
-        self.socket = Some(socket);
     }
 }

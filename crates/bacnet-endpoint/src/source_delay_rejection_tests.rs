@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(start_paused = true)]
 async fn source_read_delay_preflight_is_atomic_and_adapter_rejects_even_zero() {
-    let (mut sink, _records) = network().await;
+    let (sink, _records) = network().await;
     for seconds in [0, 3600] {
         let mut db = database(false);
         db.get_mut(&selected())

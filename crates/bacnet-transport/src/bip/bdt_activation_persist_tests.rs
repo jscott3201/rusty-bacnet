@@ -95,7 +95,7 @@ fn bdt_changes(table: Vec<BACnetBDTEntry>) -> BbmdChanges {
 async fn an_activated_bdt_is_saved_and_a_restart_loads_it() {
     let dir = TempDir::new("bdt-activation");
     let path = dir.file("bdt.bin");
-    let mut transport = bbmd_at(&path).await;
+    let transport = bbmd_at(&path).await;
     assert!(
         !path.exists(),
         "nothing is written until a BDT is activated"
@@ -156,7 +156,7 @@ async fn a_failed_save_is_counted_and_keeps_the_activation() {
     // The file's directory doesn't exist, so neither the temporary file nor
     // the rename can be made.
     let path = dir.file("missing").join("bdt.bin");
-    let mut transport = bbmd_at(&path).await;
+    let transport = bbmd_at(&path).await;
     let table = vec![row([10, 0, 0, 3], 0xBAC0)];
     tables(&transport).activate(&bdt_changes(table)).unwrap();
     saved(&transport, 1).await;
@@ -173,7 +173,7 @@ async fn a_failed_save_is_counted_and_keeps_the_activation() {
 async fn a_shorter_bdt_replaces_the_file_whole() {
     let dir = TempDir::new("bdt-activation-shrink");
     let path = dir.file("bdt.bin");
-    let mut transport = bbmd_at(&path).await;
+    let transport = bbmd_at(&path).await;
     let view = tables(&transport);
     view.activate(&bdt_changes(vec![
         row([10, 0, 0, 2], 0xBAC0),
@@ -199,7 +199,7 @@ async fn a_shorter_bdt_replaces_the_file_whole() {
 async fn racing_saves_leave_the_newest_table() {
     let dir = TempDir::new("bdt-activation-race");
     let path = dir.file("bdt.bin");
-    let mut transport = bbmd_at(&path).await;
+    let transport = bbmd_at(&path).await;
     let view = tables(&transport);
     for last in 1..=20u8 {
         view.activate(&bdt_changes(vec![row([10, 0, 1, last], 0xBAC0)]))

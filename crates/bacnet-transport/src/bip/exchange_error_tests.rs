@@ -69,7 +69,7 @@ async fn started() -> BipTransport {
 #[tokio::test]
 async fn each_helper_reports_a_nak_as_the_nak_variant() {
     let (peer, target) = peer().await;
-    let mut transport = started().await;
+    let transport = started().await;
     for helper in Helper::ALL {
         let code = helper.function().nak().unwrap();
         let request = helper.call(&transport, &target);
@@ -103,7 +103,7 @@ async fn each_helper_reports_a_nak_as_the_nak_variant() {
 #[tokio::test]
 async fn each_helper_reports_silence_as_no_reply() {
     let (peer, target) = peer().await;
-    let mut transport = started().await;
+    let transport = started().await;
     for helper in Helper::ALL {
         // Read the clock before the request starts: its timeout begins when
         // the exchange is admitted, on real time, before the pause below, so

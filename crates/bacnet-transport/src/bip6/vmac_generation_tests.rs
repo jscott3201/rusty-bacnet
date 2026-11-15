@@ -108,7 +108,7 @@ async fn random_vmac_foreign_device_fails_before_bip6_startup() {
     assert!(
         matches!(error, Error::Transport(error) if error.kind() == std::io::ErrorKind::InvalidInput)
     );
-    assert!(transport.socket.is_none());
+    assert!(!transport.socket.is_some());
 }
 
 #[tokio::test]
@@ -156,7 +156,7 @@ async fn peer_probe_collision_fails_startup_without_publishing_socket() {
             && error.to_string() == "configured BACnet Device instance VMAC is already in use"),
         "{error:?}"
     );
-    assert!(transport.socket.is_none());
+    assert!(!transport.socket.is_some());
     let send_error = transport.send_broadcast(&[0x01, 0x00]).await.unwrap_err();
     assert!(
         matches!(send_error, Error::Transport(error) if error.kind() == std::io::ErrorKind::NotConnected)

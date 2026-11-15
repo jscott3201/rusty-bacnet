@@ -17,23 +17,25 @@ impl NodeHandle {
     /// (Annex J.3). One of the link's group addresses is refused, unsent
     /// (#1677).
     pub(super) async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        // In a block, so only the datagram and its address are held across
-        // the send (#1713). The datagram is the BVLL header and `npdu`,
-        // sent as one without copying `npdu` into a buffer (#1978 item 5).
-        let (datagram, to) = {
+        // In a block, so only the datagram, its address and the socket are
+        // held across the send (#1713). The datagram is the BVLL header and
+        // `npdu`, sent as one without copying `npdu` into a buffer (#1978
+        // item 5). The socket comes with the link, under its one read lock,
+        // and fails the send once the node stopped (#2617).
+        let (datagram, to, socket) = {
             let dest = codec::address_from_slice(mac).map_err(bvll_error)?;
-            let outgoing = self
-                .link()
+            let (link, socket) = self.sending()?;
+            let outgoing = link
                 .unicast(dest, npdu)
                 .map_err(|refusal| self.refuse_send(refusal))?;
             // An Original-Unicast-NPDU is a four-octet header and `npdu`.
             let datagram = OutgoingDatagram::split(&outgoing.message, npdu).ok_or_else(|| {
                 Error::Encoding("a unicast BVLL message is not a header and its NPDU".into())
             })?;
-            (datagram, outgoing.to)
+            (datagram, outgoing.to, socket)
         };
 
-        self.socket()
+        socket
             .send_datagram(datagram, to)
             .await
             .map_err(Error::Transport)?;
@@ -50,7 +52,9 @@ impl NodeHandle {
         npdu: &[u8],
         forwarder: Option<&OwnBroadcastForwarder>,
     ) -> Result<(), Error> {
-        let link = self.link();
+        // The socket comes with the link, and fails the send once the node
+        // stopped (#2617).
+        let (link, socket) = self.sending()?;
         // The link refuses what it can't carry. A foreign device whose BBMD
         // isn't known yet has nowhere to send (#2308): its node holds the
         // broadcast, or refuses it, below.
@@ -107,7 +111,7 @@ impl NodeHandle {
             forwarder.forward(npdu);
         }
 
-        self.socket()
+        socket
             .send_to(&buf, outgoing.to)
             .await
             .map_err(Error::Transport)?;

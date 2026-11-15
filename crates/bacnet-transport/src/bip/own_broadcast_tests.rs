@@ -103,9 +103,9 @@ fn hand_wired_bbmd(
 }
 
 fn spawn_worker(transport: &mut BipTransport, rx: mpsc::Receiver<fanout::FanoutJob>) {
-    let socket = Arc::clone(transport.socket.as_ref().unwrap());
+    let socket = transport.socket().unwrap();
     let counters = Arc::clone(&transport.fanout_counters);
-    transport.fanout_task = Some(tokio::spawn(fanout::run_fanout_worker(
+    transport.tasks.push(tokio::spawn(fanout::run_fanout_worker(
         socket, rx, counters,
     )));
 }
@@ -319,7 +319,10 @@ async fn started_bbmd_forwards_its_own_broadcasts_across_restart() {
         for round in ["first start", "restart"] {
             if round == "restart" {
                 bbmd.stop().await.unwrap();
-                assert!(bbmd.own_broadcast.is_none(), "stop drops the forwarder");
+                assert!(
+                    bbmd.send_broadcast(NPDU).await.is_err(),
+                    "a stopped BBMD sends nothing"
+                );
                 let Some(started) = restart(&mut bbmd, attempt).await else {
                     continue 'run;
                 };

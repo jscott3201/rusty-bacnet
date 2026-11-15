@@ -312,7 +312,7 @@ async fn an_address_and_port_are_not_shared_twice() {
         squatter(Ipv4Addr::UNSPECIFIED).is_err(),
         "SO_REUSEADDR on 0.0.0.0"
     );
-    let [mut node] = [node];
+    let [node] = [node];
     node.transport.stop().await.unwrap();
 }
 

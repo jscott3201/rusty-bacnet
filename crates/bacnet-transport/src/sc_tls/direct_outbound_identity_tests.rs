@@ -67,7 +67,7 @@ async fn outbound_verified_leaf_full_and_resumed_tls_have_new_incarnations() {
             ws.send(Message::Close(None)).await.unwrap();
         }
     });
-    let (mut transport, mut rx, hub) = start_outbound(&ca).await;
+    let (transport, mut rx, hub) = start_outbound(&ca).await;
     discover_send(&transport, &hub, &uri).await;
     let mut identities = Vec::new();
     for index in 0..2 {

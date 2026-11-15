@@ -144,7 +144,7 @@ async fn a_read_property_over_tls_is_tapped_in_plaintext() {
     .unwrap()
     .unwrap();
     assert_eq!(ack.object_identifier, device);
-    let mut responder = answer.await.unwrap();
+    let responder = answer.await.unwrap();
 
     let mut seen = Vec::new();
     while let Some(frame) = frames.try_recv() {

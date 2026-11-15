@@ -3,6 +3,7 @@ use bacnet_mstp_core::{Duration as CoreDuration, QueueRefusal};
 use bacnet_time::HostClock;
 use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
+use std::sync::{Mutex as StdMutex, PoisonError};
 use tokio::sync::{Mutex, mpsc};
 
 use super::adapter::Task;
@@ -14,6 +15,7 @@ use super::{
 };
 use crate::port::{ReceivedNpdu, TransportPort};
 use crate::runtime_clock::tokio_clock;
+use crate::stopping::StopGate;
 
 // ---------------------------------------------------------------------------
 // MS/TP Transport
@@ -35,13 +37,25 @@ pub struct MstpTransport<S: SerialPort> {
     serial: Option<S>,
     config: MstpConfig,
     local_mac: [u8; 1],
+    /// What a send needs, from start on. A stop leaves it and closes its
+    /// queues, so every later send is refused (#2617).
     link: Option<Link>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    /// The node's task and its thread, which a stop through `&self` takes;
+    /// only `start`, `stop` and `abort` lock it.
+    running: StdMutex<Running>,
+    /// One stop at a time (#2617).
+    stop_gate: StopGate,
     execution_mode: MstpExecutionMode,
-    dedicated_runtime: Option<DedicatedRuntime>,
     diagnostics: MstpDiagnostics,
     /// See [`Self::frame_tap`].
     frame_tap: crate::tap::FrameTap,
+}
+
+/// The started node: its task and, in dedicated execution, its thread.
+#[derive(Default)]
+struct Running {
+    task: Option<tokio::task::JoinHandle<()>>,
+    dedicated_runtime: Option<DedicatedRuntime>,
 }
 
 /// What a send needs from a started transport.
@@ -60,9 +74,9 @@ impl<S: SerialPort> MstpTransport<S> {
             config,
             local_mac: [mac],
             link: None,
-            task: None,
+            running: StdMutex::default(),
+            stop_gate: StopGate::default(),
             execution_mode: MstpExecutionMode::default(),
-            dedicated_runtime: None,
             diagnostics: MstpDiagnostics::new(),
             frame_tap: crate::tap::FrameTap::new(),
         }
@@ -152,23 +166,30 @@ impl<S: SerialPort> MstpTransport<S> {
             config: self.config.clone(),
             local_mac: self.local_mac,
             link: self.link.take(),
-            task: self.task.take(),
+            running: StdMutex::new(std::mem::take(self.running_mut())),
+            stop_gate: std::mem::take(&mut self.stop_gate),
             execution_mode: std::mem::take(&mut self.execution_mode),
-            dedicated_runtime: self.dedicated_runtime.take(),
             diagnostics: std::mem::replace(&mut self.diagnostics, MstpDiagnostics::new()),
             frame_tap: std::mem::replace(&mut self.frame_tap, crate::tap::FrameTap::new()),
         }
         // `self` now holds nothing its `Drop` would release.
     }
 
+    fn running_mut(&mut self) -> &mut Running {
+        self.running
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn abort_task_and_release_state(&mut self) {
-        if let Some(task) = self.task.take() {
-            if let Some(runtime) = &self.dedicated_runtime {
+        let running = self.running_mut();
+        if let Some(task) = running.task.take() {
+            if let Some(runtime) = &running.dedicated_runtime {
                 runtime.hold_until_node_dropped();
             }
             task.abort();
         }
-        self.dedicated_runtime.take();
+        running.dedicated_runtime.take();
         self.serial.take();
         self.link.take();
     }
@@ -269,35 +290,51 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             Some(runtime) => runtime.spawn(task.run()),
             None => tokio::spawn(task.run()),
         };
-        self.dedicated_runtime = dedicated_runtime;
         self.diagnostics.counters.publish_execution(status);
-        self.task = Some(task);
+        *self.running_mut() = Running {
+            task: Some(task),
+            dedicated_runtime,
+        };
         self.link = Some(Link {
             queues,
             clock,
             queue_max_age: config.queue_max_age,
         });
+        self.stop_gate.open();
         Ok(npdu_rx)
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.task.take() {
+    /// Stop through a shared reference (#2617). Later sends are refused at
+    /// once, with the error for a transport no longer running; queued NPDUs
+    /// go with the task, which is aborted and joined, and the serial port
+    /// with it; then a dedicated thread ends. The stop hands no token on.
+    /// The transport does not start again after a stop: its serial port
+    /// went with the task.
+    async fn stop(&self) -> Result<(), Error> {
+        let Some(stopping) = self.stop_gate.enter().await else {
+            return Ok(());
+        };
+        // The node's own close on exit misses a task aborted before it ran.
+        if let Some(link) = &self.link {
+            link.queues.close();
+        }
+        let Running {
+            task,
+            dedicated_runtime,
+        } = std::mem::take(&mut *self.running.lock().unwrap_or_else(PoisonError::into_inner));
+        if let Some(task) = task {
             // The node ends on its own thread; test time waits for it.
-            let _held = self
-                .dedicated_runtime
-                .as_ref()
-                .map(DedicatedRuntime::hold_time);
-            if let Some(runtime) = &self.dedicated_runtime {
+            let _held = dedicated_runtime.as_ref().map(DedicatedRuntime::hold_time);
+            if let Some(runtime) = &dedicated_runtime {
                 runtime.hold_until_node_dropped();
             }
             task.abort();
             let _ = task.await;
         }
-        if let Some(runtime) = self.dedicated_runtime.take() {
+        if let Some(runtime) = dedicated_runtime {
             runtime.stop().await;
         }
-        // Queued NPDUs go with the task; later sends are refused.
-        self.link = None;
+        stopping.finish();
         Ok(())
     }
 
@@ -534,7 +571,7 @@ mod abort_tests {
         assert!(ExclusiveSerial::open(in_use.clone()).is_none());
 
         transport.abort();
-        assert!(transport.task.is_none());
+        assert!(transport.running.lock().unwrap().task.is_none());
         assert!(transport.link.is_none());
         assert!(transport.send_broadcast(&[1, 0]).await.is_err());
         drop(reopen(&in_use).await);

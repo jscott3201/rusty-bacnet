@@ -18,7 +18,7 @@ use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn legacy_loopback_traffic_reaches_apdu_as_unverified() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut rx = network.start().await.unwrap();
 

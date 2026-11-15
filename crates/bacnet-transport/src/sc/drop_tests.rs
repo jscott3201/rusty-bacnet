@@ -80,6 +80,8 @@ async fn sc_drop_aborts_recv_task_and_closes_loopback_socket() {
     let conn = transport.connection().unwrap().clone();
     let abort_handle = transport
         .recv_task
+        .lock()
+        .unwrap()
         .as_ref()
         .expect("SC start spawns recv task")
         .abort_handle();
@@ -99,15 +101,17 @@ async fn sc_drop_aborts_recv_task_and_closes_loopback_socket() {
 
     assert_closed_without_post_drop_heartbeat(&ws_hub, "dropped SC transport").await;
 
-    let (mut replacement, _replacement_hub) = start_loopback_sc(client_vmac, hub_vmac).await;
+    let (replacement, _replacement_hub) = start_loopback_sc(client_vmac, hub_vmac).await;
     replacement.stop().await.unwrap();
 }
 
 #[tokio::test]
 async fn sc_stop_sends_disconnect_and_drop_after_stop_is_idempotent() {
-    let (mut transport, ws_hub) = start_loopback_sc([0x01; 6], [0x10; 6]).await;
+    let (transport, ws_hub) = start_loopback_sc([0x01; 6], [0x10; 6]).await;
     let abort_handle = transport
         .recv_task
+        .lock()
+        .unwrap()
         .as_ref()
         .expect("SC start spawns recv task")
         .abort_handle();
@@ -123,4 +127,62 @@ async fn sc_stop_sends_disconnect_and_drop_after_stop_is_idempotent() {
     assert!(abort_handle.is_finished());
 
     drop(transport);
+}
+
+/// A stop through a shared reference, with another holder alive (#2617):
+/// the hub hears the Disconnect-Request, the hub socket leaves the send
+/// slot, every later send fails with the stopped error, the receiver ends,
+/// and a stop again or at once beside it changes nothing.
+#[tokio::test]
+async fn sc_stop_through_a_shared_reference_fails_every_later_send() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
+    let hub = tokio::spawn(async move {
+        hub_accept(&ws_hub, [0x10; 6]).await;
+        ws_hub
+    });
+    let mut rx = transport.start().await.unwrap();
+    let ws_hub = hub.await.unwrap();
+    let transport = Arc::new(transport);
+    let other = Arc::clone(&transport);
+    transport
+        .send_unicast(&[0x01, 0x00], &[0x20; 6])
+        .await
+        .unwrap();
+    ws_hub.recv().await.unwrap();
+
+    let (first, second) = tokio::join!(transport.stop(), other.stop());
+    first.unwrap();
+    second.unwrap();
+    let data = timeout(Duration::from_secs(1), ws_hub.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        decode_sc_message(&data).unwrap().function,
+        ScFunction::DisconnectRequest
+    );
+    assert!(
+        other.ws_shared.as_ref().unwrap().lock().await.is_none(),
+        "the hub socket left the send slot"
+    );
+    for sent in [
+        other.send_unicast(&[0x01, 0x00], &[0x20; 6]).await,
+        other.send_broadcast(&[0x01, 0x00]).await,
+        other
+            .send_unicast_with_data_attributes(&[0x01, 0x00], &[0x20; 6], &[])
+            .await,
+    ] {
+        assert!(
+            matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+            "{sent:?}"
+        );
+    }
+    assert!(
+        timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    other.stop().await.unwrap();
 }
