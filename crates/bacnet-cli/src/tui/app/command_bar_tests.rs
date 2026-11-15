@@ -1,5 +1,6 @@
 //! The command bar's parsing: targets, writes, watches and the rest.
 
+use bacnet_ops::Scope;
 use bacnet_ops::target::routed_station;
 use bacnet_types::enums::{ObjectType, Segmentation};
 
@@ -117,7 +118,7 @@ fn writem_names_the_claimants_of_a_contested_instance() {
 #[test]
 fn find_takes_the_rest_of_the_line_as_typed() {
     let find = |line: &str| match parse(line) {
-        Ok(Line::Find(name)) => name,
+        Ok(Line::Find(name, Scope::Local)) => name,
         other => panic!("{line}: {other:?}"),
     };
     assert_eq!(find("find Joe's office"), "Joe's office");
@@ -132,6 +133,41 @@ fn find_takes_the_rest_of_the_line_as_typed() {
     assert_eq!(find(r#"find "Zone 1"#), r#""Zone 1"#);
     assert_eq!(find(r"find C:\temp"), r"C:\temp");
     assert_eq!(find("\"find\" x  y"), "x  y");
+    // A name that starts with two dashes is quoted.
+    assert_eq!(find(r#"find "--global""#), "--global");
+}
+
+/// `find` sends its Who-Has to this network alone; `--dnet N` or
+/// `--global` first names one remote network or every network, as the
+/// one-shot `find` takes them (#2596). One flag, then a name; network 0
+/// and 65535 are refused naming the option to use, and so is another
+/// flag.
+#[test]
+fn find_takes_a_scope_flag_before_the_name() {
+    assert_eq!(
+        parse("find Zone Temp"),
+        Ok(Line::Find("Zone Temp".into(), Scope::Local))
+    );
+    assert_eq!(
+        parse("find --global Zone Temp"),
+        Ok(Line::Find("Zone Temp".into(), Scope::Global))
+    );
+    assert_eq!(
+        parse(r#"find --dnet 5 "Zone  Temp""#),
+        Ok(Line::Find("Zone  Temp".into(), Scope::Network(5)))
+    );
+    for (line, says) in [
+        ("find --dnet 0 Zone", "leave --dnet out"),
+        ("find --dnet 65535 Zone", "--global"),
+        ("find --dnet x Zone", "1 to 65534"),
+        ("find --global", "usage: find"),
+        (r#"find --global """#, "usage: find"),
+        ("find --global --dnet 5 Zone", "usage: find"),
+        ("find --target 10.0.0.9 Zone", "usage: find"),
+    ] {
+        let refused = parse(line).unwrap_err();
+        assert!(refused.contains(says), "{line}: {refused}");
+    }
 }
 
 /// A quoted VALUE is a CharacterString, spaces and all, with any
@@ -265,7 +301,7 @@ fn watch_lines_name_a_device_an_object_and_maybe_a_property() {
     );
     assert!(parse("watch 100 ai:1 object-list[2]").is_err());
     assert!(parse("watch 100 ai:x").is_err());
-    assert_eq!(parse("find"), Ok(Line::Find(String::new())));
+    assert_eq!(parse("find"), Ok(Line::Find(String::new(), Scope::Local)));
     let ms = Duration::from_millis;
     assert_eq!(
         parse("mstp rotation 1500"),
@@ -344,7 +380,7 @@ fn row_of(line: &Line) -> &'static str {
         Line::Csv(_) => "csv",
         Line::Writem(_) => "writem",
         Line::Bbmd(_) => "bbmd",
-        Line::Find(_) => "find",
+        Line::Find(..) => "find",
         Line::Mstp(_) | Line::Scan(_) => "mstp",
         Line::Manage(Action::Dcc { .. }) => "dcc",
         Line::Manage(Action::Reinit { .. }) => "reinit",
@@ -363,6 +399,7 @@ fn every_command_has_its_hint_from_the_table_the_parser_reads() {
         "bbmd",
         "bbmd 10.0.0.1",
         "find Supply Temp",
+        "find --global Supply Temp",
         "mstp hold 250",
         "mstp listen 30",
         "dcc disable-initiation 30",
@@ -401,4 +438,20 @@ fn hints_follow_what_is_typed() {
     assert_eq!(names("mstp hold"), ["mstp"]);
     assert!(names("zz").is_empty());
     assert!(names("zz 1").is_empty());
+}
+
+/// Each `find` form says where its Who-Has goes, and a passive session,
+/// which sends none, says the scoped forms are not for it (#2596).
+#[test]
+fn each_find_form_says_where_it_asks() {
+    let find = command("find").unwrap();
+    let said = |form: &str, passive| find.description(form, passive);
+    assert_eq!(said("find NAME", false), find.what);
+    assert!(said("find --dnet N NAME", false).contains("remote network N"));
+    assert!(said("find --global NAME", false).contains("every network"));
+    assert!(said("find NAME", true).contains("observed"));
+    for form in ["find --dnet N NAME", "find --global NAME"] {
+        assert!(!said(form, false).contains("alone"), "{form}");
+        assert!(said(form, true).contains("passive"), "{form}");
+    }
 }

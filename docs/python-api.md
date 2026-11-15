@@ -1983,34 +1983,52 @@ A confirmed request goes to one device. A confirmed call such as
 an IPv4 multicast address, raises `BacnetError` before anything is sent
 (#1479).
 
-#### `who_has_by_id(object_id, low_limit=None, high_limit=None)`
+#### `who_has_by_id(object_id, low_limit=None, high_limit=None, scope="local")`
 
-Find a device hosting a specific object by identifier.
+Find a device hosting a specific object by identifier. The Who-Has goes where
+`scope` says, as for `who_is()` (#2596): this network alone by default, a
+local broadcast which no router passes on; `scope="global"` every network,
+where every device that hears it searches its objects; a network number from
+1 to 65534 that remote network. The same values raise the same errors as
+`who_is()`'s, before anything is sent, and on `transport="router"` a local
+Who-Has raises `ValueError` naming the scopes to use. Answers come through
+`i_have_events()`.
 
 ```python
 await client.who_has_by_id(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1))
+await client.who_has_by_id(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1), scope=5)
 ```
 
-#### `who_has_by_name(name, low_limit=None, high_limit=None)`
+#### `who_has_by_name(name, low_limit=None, high_limit=None, scope="local")`
 
-Find a device hosting a specific object by name.
+Find a device hosting a specific object by name, compared exactly, with the
+same limits and `scope` as `who_has_by_id()`.
 
 ```python
 await client.who_has_by_name("Zone Temperature")
+await client.who_has_by_name("Zone Temperature", scope="global")
 ```
 
-#### `who_has_replies(object, low_limit=None, high_limit=None, timeout_ms=3000) -> list[IHave]`
+#### `who_has_replies(object, low_limit=None, high_limit=None, timeout_ms=3000, scope="local") -> list[IHave]`
 
-Broadcast a Who-Has for `object`, an `ObjectIdentifier` or a name as `str`,
-and collect the I-Haves that answer it for `timeout_ms`: one per device and
-object, in arrival order, and an empty list when none answer. The limits
-follow `who_has_by_id()`'s rule. Each frozen `IHave` has
-`device_identifier`, `object_identifier`, `object_name`, `source_mac`, and
-`source_network`/`source_address` when a router passed it on.
+Send a Who-Has for `object`, an `ObjectIdentifier` or a name as `str`, and
+collect the I-Haves that answer it from that scope for `timeout_ms`: one per
+device, object and station (so two devices sharing an instance both come
+back, and a station's copy through a router on this client's own network is
+its local answer), in arrival order, and an empty list when none answer. An
+I-Have heard from elsewhere during the wait is not an answer. Collection stops
+at 4,096 answers, so a list of exactly that many may have been cut short. The limits and `scope`
+follow `who_has_by_id()`'s rules: with the default scope an empty list says
+only that nothing on this network has the object.
+Each frozen `IHave` has `device_identifier`, `object_identifier`,
+`object_name`, `source_mac`, and `source_network`/`source_address` when a
+router passed it on.
 
 ```python
 for reply in await client.who_has_replies("Zone Temperature", timeout_ms=1000):
     print(reply.device_identifier, reply.object_identifier)
+# Nothing here: ask every network.
+replies = await client.who_has_replies("Zone Temperature", scope="global")
 ```
 
 #### `i_have_events() -> Awaitable[IHaveIterator]`

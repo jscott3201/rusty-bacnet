@@ -302,12 +302,99 @@ async fn objects_are_found_by_name_type_and_object() {
     assert_eq!(devices, [&json!(1201), &json!(1202)], "{body}");
     assert_eq!(body["skipped"], json!([]));
 
+    // A search that finds something carries no note; one that matches
+    // nothing says the miss is the discovered devices', not the site's,
+    // and how a discovery reaches further (#2596).
+    assert!(body.get("note").is_none(), "{body}");
+    let missed = lab
+        .agent
+        .call(
+            "bacnet_find_object",
+            json!({ "name": "no such point", "range": "1201" }),
+        )
+        .await;
+    let missed = ok(&missed);
+    assert_eq!(missed["matches"], json!([]), "{missed}");
+    let note = missed["note"].as_str().unwrap_or_default();
+    assert!(
+        note.contains("discovered so far") && note.contains("network or global"),
+        "{missed}"
+    );
+
     let nothing = lab
         .agent
         .call("bacnet_find_object", json!({ "range": "1201" }))
         .await;
     assert_eq!(failed(&nothing)["error"], json!("invalid-argument"));
     lab.stop().await;
+}
+
+/// Every page of `args`' search, following its cursors.
+async fn find_pages(lab: &mut Lab, args: &Value) -> Vec<Value> {
+    let mut pages = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..50 {
+        let mut call = args.clone();
+        if let Some(cursor) = &cursor {
+            call["cursor"] = json!(cursor);
+        }
+        let page = lab.agent.call("bacnet_find_object", call).await;
+        let body = ok(&page).clone();
+        cursor = body["next_cursor"].as_str().map(str::to_string);
+        pages.push(body);
+        if cursor.is_none() {
+            return pages;
+        }
+    }
+    panic!("the search didn't end: {pages:?}");
+}
+
+/// A search the call budget pages carries the note on its last page when
+/// no page matched, and on no page when one did (#2596): the cursor says
+/// whether an earlier page matched.
+#[tokio::test(start_paused = true)]
+async fn a_paged_search_notes_a_miss_on_its_last_page() {
+    // A lab of its own for each search: names read are kept, and a search
+    // that reads none isn't paged.
+    let lab = || {
+        let policy = Policy {
+            caps: Caps {
+                budget: Duration::from_millis(500),
+                ..Caps::default()
+            },
+            ..Policy::default()
+        };
+        Lab::start_site(policy, Duration::from_millis(200))
+    };
+    let mut missing = lab().await;
+    missing.agent.initialize().await;
+    let args = json!({ "name": "no such point", "range": "1201-1202" });
+    let missed = find_pages(&mut missing, &args).await;
+    assert!(missed.len() > 1, "the budget pages it: {missed:?}");
+    let (last, earlier) = missed.split_last().unwrap();
+    assert!(
+        earlier.iter().all(|page| page.get("note").is_none()),
+        "{earlier:?}"
+    );
+    let note = last["note"].as_str().unwrap_or_default();
+    assert!(note.contains("discovered so far"), "{last}");
+    missing.stop().await;
+
+    let mut found = lab().await;
+    found.agent.initialize().await;
+    let hit = find_pages(&mut found, &json!({ "name": "zone", "range": "1201-1202" })).await;
+    assert!(hit.len() > 1, "the budget pages it: {hit:?}");
+    assert!(
+        hit.iter().any(|page| page["matches"] != json!([])),
+        "{hit:?}"
+    );
+    assert_eq!(
+        hit.last().unwrap()["matches"],
+        json!([]),
+        "the premise: {hit:?}"
+    );
+    assert!(hit.iter().all(|page| page.get("note").is_none()), "{hit:?}");
+    found.stop().await;
 }
 
 /// A page holds the policy's object page; the cursor goes on where it

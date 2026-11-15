@@ -1,6 +1,8 @@
-"""Where who_is() and discover() send their Who-Is (#2560).
+"""Where who_is() and discover() send their Who-Is (#2560), and
+who_has_by_id(), who_has_by_name() and who_has_replies() their Who-Has
+(#2596).
 
-With no scope the Who-Is is a local broadcast, which no router passes on:
+With no scope the request is a local broadcast, which no router passes on:
 its NPDU names no destination network. scope="global" and a network number
 are the explicit choices. The client is a foreign device of a raw BBMD
 peer, so each broadcast reaches the peer as Distribute-Broadcast-To-Network
@@ -16,7 +18,8 @@ from pathlib import Path
 
 import rusty_bacnet
 from bvll_peer import RawPeer, bvll
-from rusty_bacnet import BACnetClient, BACnetRouter, BipRouterPort, ForeignDevice
+from rusty_bacnet import (BACnetClient, BACnetRouter, BipRouterPort, ForeignDevice,
+                          ObjectIdentifier, ObjectType)
 from test_bip_modes import accepted_registration
 
 # A Who-Is with no range: Unconfirmed-Request PDU, service choice 8.
@@ -31,6 +34,13 @@ NETWORK_5 = bytes([0x01, 0x20, 0x00, 0x05, 0x00, 0xFF]) + WHO_IS
 # no destination network.
 ASK = bytes([0x01, 0x80, 0x12])
 
+# A Who-Has for analog-value 1, by identifier: Unconfirmed-Request PDU,
+# service choice 7, then the identifier under context tag 2.
+AV1 = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+WHO_HAS_AV1 = bytes([0x10, 0x07, 0x2C, 0x00, 0x80, 0x00, 0x01])
+# The NPDU headers of a local broadcast, a global one and one to DNET 5.
+HEADERS = {"local": LOCAL[:2], "global": GLOBAL[:6], 5: NETWORK_5[:6]}
+
 REGISTER_FOREIGN_DEVICE = 0x05
 DISTRIBUTE_BROADCAST = 0x09
 
@@ -42,7 +52,9 @@ def bbmd(data, source):
     return None
 
 
-class DiscoveryScopeTests(unittest.IsolatedAsyncioTestCase):
+class ForeignClient(unittest.IsolatedAsyncioTestCase):
+    """A started client registered as a foreign device of a raw BBMD peer."""
+
     async def asyncSetUp(self):
         self.peer = RawPeer(bbmd)
         self.addCleanup(self.peer.close)
@@ -68,6 +80,8 @@ class DiscoveryScopeTests(unittest.IsolatedAsyncioTestCase):
                 return npdus
             await asyncio.sleep(0.02)
 
+
+class DiscoveryScopeTests(ForeignClient):
     async def test_no_scope_is_a_local_broadcast(self):
         client = self.client
         for name, call, sent in (("who_is", client.who_is, [ASK, LOCAL]),
@@ -102,6 +116,47 @@ class DiscoveryScopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([d for d, _ in self.peer.received if d[1] == DISTRIBUTE_BROADCAST], [])
 
 
+class WhoHasScopeTests(ForeignClient):
+    """The Who-Has calls take the scope the Who-Is calls take."""
+
+    def who_has_calls(self, **scope):
+        client = self.client
+        return (("who_has_by_id", lambda: client.who_has_by_id(AV1, **scope)),
+                ("who_has_replies", lambda: client.who_has_replies(AV1, timeout_ms=0, **scope)))
+
+    async def test_no_scope_is_a_local_broadcast(self):
+        for name, call in self.who_has_calls() + self.who_has_calls(scope="local"):
+            with self.subTest(call=name):
+                self.assertEqual(await self.broadcast_npdus(call), [HEADERS["local"] + WHO_HAS_AV1])
+        # By name, the name follows under context tag 3 (UTF-8, its length).
+        [npdu] = await self.broadcast_npdus(lambda: self.client.who_has_by_name("AV-1"))
+        self.assertEqual(npdu, HEADERS["local"] + bytes([0x10, 0x07, 0x3D, 0x05, 0x00]) + b"AV-1")
+
+    async def test_global_and_a_network_are_explicit(self):
+        for scope in ("global", 5):
+            calls = self.who_has_calls(scope=scope) + (
+                ("who_has_by_name", lambda: self.client.who_has_by_name("AV-1", scope=scope)),)
+            for name, call in calls:
+                with self.subTest(call=name, scope=scope):
+                    [npdu] = await self.broadcast_npdus(call)
+                    self.assertEqual(npdu[:len(HEADERS[scope]) + 2], HEADERS[scope] + bytes([0x10, 0x07]))
+
+    async def test_a_bad_scope_raises_before_anything_is_sent(self):
+        client = self.client
+        self.peer.received.clear()
+        calls = (("who_has_by_id", lambda scope: client.who_has_by_id(AV1, scope=scope)),
+                 ("who_has_by_name", lambda scope: client.who_has_by_name("AV-1", scope=scope)),
+                 ("who_has_replies", lambda scope: client.who_has_replies("AV-1", scope=scope)))
+        for scope, error in (("everywhere", ValueError), (0, ValueError), (65535, ValueError),
+                             (True, TypeError), (1.5, TypeError)):
+            for name, call in calls:
+                with self.subTest(call=name, scope=scope):
+                    with self.assertRaisesRegex(error, "scope is 'local', 'global' or a network"):
+                        call(scope)
+        await asyncio.sleep(0.1)
+        self.assertEqual([d for d, _ in self.peer.received if d[1] == DISTRIBUTE_BROADCAST], [])
+
+
 class RouterApplicationScopeTests(unittest.TestCase):
     def test_a_local_who_is_on_a_router_application_names_the_scopes_to_use(self):
         router = BACnetRouter([BipRouterPort(1, interface="127.0.0.1", port=0)],
@@ -110,7 +165,15 @@ class RouterApplicationScopeTests(unittest.TestCase):
         for call in (client.who_is, client.discover):
             for scope in ({}, {"scope": "local"}):
                 with self.subTest(call=call.__name__, scope=scope):
-                    with self.assertRaisesRegex(ValueError, "scope=<network number>.*scope='global'"):
+                    with self.assertRaisesRegex(ValueError, "local Who-Is: pass scope=<network number>.*scope='global'"):
+                        call(**scope)
+        oid = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+        for name, call in (("who_has_by_id", lambda **s: client.who_has_by_id(oid, **s)),
+                           ("who_has_by_name", lambda **s: client.who_has_by_name("AV-1", **s)),
+                           ("who_has_replies", lambda **s: client.who_has_replies(oid, **s))):
+            for scope in ({}, {"scope": "local"}):
+                with self.subTest(call=name, scope=scope):
+                    with self.assertRaisesRegex(ValueError, "local Who-Has: pass scope=<network number>.*scope='global'"):
                         call(**scope)
 
 
@@ -127,7 +190,8 @@ class DiscoverySignatureTests(unittest.TestCase):
                     if isinstance(node, ast.FunctionDef) and node.name == name)
 
     def test_runtime_and_stub_signatures_match(self):
-        for name in ("who_is", "discover", "who_is_directed"):
+        for name in ("who_is", "discover", "who_is_directed", "who_has_by_id", "who_has_by_name",
+                     "who_has_replies"):
             with self.subTest(method=name):
                 runtime = inspect.signature(getattr(BACnetClient, name))
                 runtime_params = [(p.name, p.default) for p in runtime.parameters.values()
@@ -140,7 +204,10 @@ class DiscoverySignatureTests(unittest.TestCase):
                                 else default)
                                for i, (arg, default) in enumerate(zip(args, defaults))]
                 self.assertEqual(runtime_params, stub_params)
-        self.assertEqual(inspect.signature(BACnetClient.who_is).parameters["scope"].default, "local")
+        for name in ("who_is", "discover", "who_has_by_id", "who_has_by_name", "who_has_replies"):
+            with self.subTest(method=name):
+                scope = inspect.signature(getattr(BACnetClient, name)).parameters["scope"]
+                self.assertEqual(scope.default, "local")
 
 
 if __name__ == "__main__":

@@ -2,15 +2,19 @@
 //! discovery worker to send, and what it hears back, as plain data with no
 //! transport type. Unlike the BBMD reads, these work on every transport.
 
+use bacnet_ops::Scope;
 use bacnet_types::primitives::ObjectIdentifier;
 
 /// UI to the discovery worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DiscoveryCommand {
-    /// Broadcast a Who-Has for the object with this name.
+    /// Send a Who-Has for the object with this name.
     WhoHas {
         /// The object name, compared exactly.
         name: String,
+        /// Where it goes: this network alone unless `:find` named another
+        /// scope (#2596).
+        scope: Scope,
     },
     /// Broadcast a Who-Is-Router-To-Network for every network.
     WhoIsRouter,

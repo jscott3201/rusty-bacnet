@@ -15,11 +15,13 @@
 //! - `bbmd [ADDRESS]`: show and read that BBMD's tables on the Network screen
 //!   (`ip` or `ip:port`, port 47808 by default); `bbmd` alone goes back to
 //!   the tables of the BBMD the session registers with.
-//! - `find NAME`: in active mode broadcast Who-Has; in passive mode search
-//!   local observed names. NAME is the rest
-//!   of the line as typed (one quoted word is unwrapped), and list the
-//!   answers below the device table; `find` alone, or `find ""`, closes the
-//!   list.
+//! - `find NAME`: in active mode broadcast a Who-Has on this network
+//!   alone, or with `--dnet N` first on one remote network and with
+//!   `--global` on every network (#2596); in passive mode search local
+//!   observed names. NAME is the rest of the line as typed after any flag
+//!   (one quoted word is unwrapped, so a name that starts `--` is quoted),
+//!   and list the answers below the device table; `find` alone, or
+//!   `find ""`, closes the list.
 //! - `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`: the MS/TP
 //!   monitor's thresholds, and how long its join wizard listens.
 //! - `dcc ACTION [MINUTES]` (or `control`) and `reinit STATE`:
@@ -39,7 +41,7 @@ use std::time::Duration;
 
 use bacnet_ops::parse::{parse_object_specifier, parse_property, parse_value_for_with_priority};
 use bacnet_ops::target::{Target, parse_target};
-use bacnet_ops::{DeviceAddress, Priority};
+use bacnet_ops::{DeviceAddress, Priority, Scope};
 use bacnet_types::enums::{EnableDisable, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -70,12 +72,18 @@ pub(crate) struct Syntax {
 }
 
 impl Syntax {
-    /// The command description for the session policy.
-    pub(crate) fn description(&self, passive: bool) -> &'static str {
-        if passive && self.name == "find" {
-            "Search local observed object names; alone, close the list"
-        } else {
-            self.what
+    /// What `form`, one of the command's forms, does under the session
+    /// policy: `find`'s scoped forms send further than this network, and
+    /// a passive session's `find` searches what it overheard.
+    pub(crate) fn description(&self, form: &str, passive: bool) -> &'static str {
+        match (self.name, form) {
+            ("find", "find NAME") if passive => {
+                "Search local observed object names; alone, close the list"
+            }
+            ("find", _) if passive => "Not in a passive session, which sends no Who-Has",
+            ("find", "find --dnet N NAME") => "Who-Has by object name on remote network N",
+            ("find", "find --global NAME") => "Who-Has by object name on every network",
+            _ => self.what,
         }
     }
 }
@@ -109,7 +117,7 @@ pub(crate) const COMMANDS: &[Syntax] = &[
     Syntax {
         name: "find",
         alias: None,
-        usage: &["find NAME"],
+        usage: &["find NAME", "find --dnet N NAME", "find --global NAME"],
         what: "Who-Has by object name; alone, close the list",
     },
     Syntax {
@@ -185,8 +193,9 @@ pub(crate) enum Line {
     Writem(Vec<WriteSpec>),
     /// Show a BBMD's tables.
     Bbmd(Option<std::net::SocketAddrV4>),
-    /// Search for an object by name; empty closes the search.
-    Find(String),
+    /// Search for an object by name, where the scope says; an empty name
+    /// closes the search.
+    Find(String, Scope),
     /// An MS/TP monitor setting.
     Mstp(Setting),
     /// Start a baud scan, or cancel when no window is supplied.
@@ -360,6 +369,36 @@ fn value(
     Ok((format!("\"{text}\""), priority))
 }
 
+/// `find`'s line after the command: `--dnet N` or `--global` first, for
+/// where the Who-Has goes (this network alone without either), then the
+/// name ([`find_name`]).
+fn find_line(rest: &str) -> Result<Line, String> {
+    const USAGE: &str = "usage: find NAME | find --dnet N NAME | find --global NAME";
+    let word = |text: &str| -> (String, String) {
+        let (first, after) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+        (first.to_string(), after.trim_start().to_string())
+    };
+    let (first, after) = word(rest);
+    let (scope, name) = match first.as_str() {
+        "--global" => (Scope::Global, after),
+        "--dnet" => {
+            let (network, after) = word(&after);
+            let network = crate::core::range::parse_dnet(&network)?;
+            (Scope::Network(network), after)
+        }
+        // Another flag is a typo, not a name: a name that starts `--` is
+        // quoted.
+        flag if flag.starts_with("--") => return Err(USAGE.into()),
+        _ => return Ok(Line::Find(find_name(rest), Scope::Local)),
+    };
+    // One flag, then a name: a second flag, or no name, is no search.
+    let name = (!name.starts_with("--"))
+        .then(|| find_name(&name))
+        .filter(|name| !name.is_empty())
+        .ok_or(USAGE)?;
+    Ok(Line::Find(name, scope))
+}
+
 /// The name `find` looks for: the rest of the line as typed, or, when all
 /// of it is one quoted word, that word unwrapped (`"Zone  Temp"`). An empty
 /// name closes the list.
@@ -406,7 +445,7 @@ pub(crate) fn parse(text: &str, devices: &DeviceTable) -> Result<Line, String> {
     let line = text.trim();
     let (head, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
     if command(head).is_some_and(|syntax| syntax.name == "find") {
-        return Ok(Line::Find(find_name(rest.trim())));
+        return find_line(rest.trim());
     }
     let all = words::split(text)?;
     let Some((first, args)) = all.split_first() else {
@@ -461,7 +500,7 @@ pub(crate) fn parse(text: &str, devices: &DeviceTable) -> Result<Line, String> {
             state: parse_reinit_state(state)?,
         })),
         // A quoted first word, `"find"`, is still find.
-        ("find", _) => Ok(Line::Find(find_name(rest.trim()))),
+        ("find", _) => find_line(rest.trim()),
         _ => Err(wrong()),
     }
 }
@@ -491,7 +530,7 @@ impl App {
                     Ok(Line::Csv(on)) => out.push(Command::Watch(WatchCommand::Csv(on))),
                     Ok(Line::Writem(specs)) => self.prepare(specs, true, out),
                     Ok(Line::Bbmd(bbmd)) => self.show_bbmd(bbmd, out),
-                    Ok(Line::Find(name)) => self.find(name, out),
+                    Ok(Line::Find(name, scope)) => self.find(name, scope, out),
                     Ok(Line::Mstp(setting)) => self.mstp_setting(setting),
                     Ok(Line::Scan(window)) => self.mstp_scan(window, out),
                     Ok(Line::Manage(action)) => self.open_manage(action),

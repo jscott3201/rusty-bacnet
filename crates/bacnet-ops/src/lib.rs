@@ -16,8 +16,8 @@
 //!   gate, rates per network and per-caller accounts;
 //! - [`client`](mod@client): [`Client`], the high-level client: its connect
 //!   builders ([`Client::bip`] and the others), and discovery over those
-//!   limits ([`Discover`], a local broadcast unless it names another
-//!   [`Scope`]);
+//!   limits: devices ([`Discover`]) and the devices that hold an object
+//!   ([`Find`]), each a local broadcast unless it names another [`Scope`];
 //! - [`device`]: [`DeviceAddress`], where a device answers, and the
 //!   [`Device`] handle, pinned to an address or following an instance, whose
 //!   methods are the read operations (properties, the object list, a device
@@ -65,7 +65,7 @@ pub mod target;
 pub mod watch;
 pub mod write;
 
-pub use client::{Client, Discover, ResolveScope, Scope};
+pub use client::{Client, Discover, Find, ResolveScope, Scope};
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};
