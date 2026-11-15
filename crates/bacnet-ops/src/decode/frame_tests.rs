@@ -105,3 +105,64 @@ fn an_sc_nak_names_its_error_code() {
     let summary = summarize_frame(Framing::Sc, &sc_nak(300));
     assert_eq!(summary.problem.as_deref(), Some("NAK 300"));
 }
+
+/// A BVLC function its annex leaves unassigned is a parse failure on every
+/// BVLC link, and the message goes unnamed (`malformed`) on each: Annex J.2
+/// stops at 0x0B, Table U-1 at 0x0C with 0x0B removed, Table AB-1 at 0x0C.
+#[test]
+fn an_unassigned_bvlc_function_is_a_parse_error_on_every_link() {
+    let cases: [(Framing, &[u8]); 6] = [
+        (Framing::Bip, &[0x81, 0x0C, 0x00, 0x04]),
+        (Framing::Bip, &[0x81, 0x7F, 0x00, 0x04]),
+        (Framing::Bip6, &[0x82, 0x0B, 0x00, 0x07, 0, 1, 2]),
+        (Framing::Bip6, &[0x82, 0x7F, 0x00, 0x04]),
+        (Framing::Sc, &[0x0D, 0x00, 0x00, 0x01]),
+        (Framing::Sc, &[0x7F, 0x00, 0x00, 0x01]),
+    ];
+    for (framing, frame) in cases {
+        let summary = summarize_frame(framing, frame);
+        let error = summary
+            .parse_error
+            .clone()
+            .unwrap_or_else(|| panic!("{framing:?} {frame:02X?}: {summary:?}"));
+        assert!(error.contains("unknown"), "{framing:?}: {error}");
+        assert_eq!(summary.problem, summary.parse_error);
+        assert_eq!(summary.link, "malformed", "{framing:?}");
+    }
+    // The last assigned function of each still reads.
+    let last = summarize_frame(Framing::Sc, &[0x0C, 0x00, 0x00, 0x01]);
+    assert_eq!(
+        (last.link.as_str(), last.parse_error),
+        ("proprietary-message", None)
+    );
+}
+
+/// Octets of one link read as another are a parse failure, never a quiet
+/// summary of an odd message: B/IP's type octet 0x81 is no BACnet/SC
+/// function, nor is B/IPv6's 0x82 or an MS/TP preamble's 0x55.
+#[test]
+fn a_frame_read_as_another_link_is_a_parse_error() {
+    let data = npdu(&rp_request(1), true);
+    let frames = [
+        (Framing::Bip, bip(&data, false)),
+        (Framing::Bip6, bip6_broadcast(&data)),
+        (Framing::Sc, sc_npdu(&data, None)),
+        (
+            Framing::Mstp,
+            mstp(FrameType::BACNET_DATA_EXPECTING_REPLY, 5, 1, &data),
+        ),
+    ];
+    for (own, frame) in &frames {
+        assert_eq!(summarize_frame(*own, frame).parse_error, None, "{own:?}");
+        for (other, _) in &frames {
+            if other == own {
+                continue;
+            }
+            let summary = summarize_frame(*other, frame);
+            assert!(
+                summary.parse_error.is_some(),
+                "{own:?} octets read as {other:?}: {summary:?}"
+            );
+        }
+    }
+}

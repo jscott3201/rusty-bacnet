@@ -29,7 +29,12 @@ fn routed(network: u16, mac: &[u8]) -> String {
 }
 
 /// The link a frame was captured on, which decides how its octets are read.
+///
+/// Non-exhaustive: more links can join (BACnet Ethernet, Clause 7, is the
+/// next one the stack taps), so a `match` outside this crate needs a
+/// wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Framing {
     /// A B/IP BVLL message, the UDP payload (Annex J).
     Bip,
@@ -55,7 +60,7 @@ impl Framing {
 }
 
 /// What the capture list shows of a frame, read from its headers.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct FrameSummary {
     /// The link message: a BVLC function, an MS/TP frame type.
     pub link: String,
@@ -66,8 +71,10 @@ pub struct FrameSummary {
     pub link_source: Option<String>,
     /// See [`link_source`](Self::link_source).
     pub link_destination: Option<String>,
-    /// Original IP address and UDP port encoded by a forwarded B/IP or
-    /// B/IPv6 message. The physical forwarding peer is not in these octets.
+    /// The originating node's IP address and UDP port, as a BBMD wrote them
+    /// into a message it forwarded: a B/IP Forwarded-NPDU (Annex J.2.5), or
+    /// a B/IPv6 Forwarded-NPDU or Forwarded-Address-Resolution (Annex U.2.9,
+    /// U.2.5). The forwarding peer itself is not in the octets.
     pub original_source: Option<String>,
     /// SNET, when a router added one.
     pub snet: Option<u16>,
@@ -125,7 +132,8 @@ pub struct Link {
     pub source: Option<String>,
     /// The link's destination, where the frame names one.
     pub destination: Option<String>,
-    /// Original IP address and UDP port encoded in a forwarded message.
+    /// The originating node's address a forwarded message carries; see
+    /// [`FrameSummary::original_source`].
     pub original_source: Option<String>,
     /// A NAK, or why the header doesn't decode.
     pub problem: Option<String>,
@@ -185,7 +193,11 @@ pub fn link(framing: Framing, frame: &[u8]) -> Link {
 
 fn bip(frame: &[u8], link: &mut Link) -> Result<(), String> {
     let message = bvll::decode_bvll(frame).map_err(|e| e.to_string())?;
-    link.name = kebab(message.function);
+    // A function Annex J.2 doesn't assign (0x0C and up) fails to read below
+    // and stays unnamed, `malformed`, as on the other two BVLC links.
+    if message.function.is_defined() {
+        link.name = kebab(message.function);
+    }
     link.broadcast = matches!(
         message.function,
         BvlcFunction::ORIGINAL_BROADCAST_NPDU
@@ -233,6 +245,12 @@ fn bip6(frame: &[u8], link: &mut Link) -> Result<(), String> {
 
 fn sc(frame: &[u8], link: &mut Link) -> Result<(), String> {
     let message = decode_sc_message(frame).map_err(|e| e.to_string())?;
+    // Table AB-1 assigns 0x00 to 0x0C. The codec passes any other function
+    // through, so it is refused here, as the B/IP and B/IPv6 codecs refuse
+    // theirs: octets of another link read as BACnet/SC land here too.
+    if let ScFunction::Unknown(function) = message.function {
+        return Err(format!("unknown BVLC-SC function {function:#04X}"));
+    }
     link.name = kebab(format!("{:?}", message.function));
     link.source = message.originating_vmac.map(|v| hex_sep(&v, ":"));
     link.destination = message.destination_vmac.map(|v| hex_sep(&v, ":"));
@@ -330,6 +348,8 @@ pub fn summarize_npdu(npdu: &[u8]) -> FrameSummary {
 
 /// What the network layer and the APDU's header add to a summary.
 fn network_layer(summary: &mut FrameSummary, npdu: Bytes) {
+    // The routing comes from the borrowed view, read once: it holds even
+    // when the APDU behind it fails to decode below.
     if let Ok(view) = bacnet_npdu::Npdu::decode(&npdu) {
         summary.snet = view.source.map(|address| address.network);
         summary.dnet = view.destination.map(|address| address.network);
@@ -341,9 +361,6 @@ fn network_layer(summary: &mut FrameSummary, npdu: Bytes) {
     }
     match decode_npdu_layer(npdu) {
         Ok(npdu) => {
-            summary.broadcast |= npdu.broadcast;
-            summary.snet = npdu.source_network;
-            summary.dnet = npdu.dest_network;
             summary.network_message = npdu
                 .network_message_type
                 .map(|kind| kebab(bacnet_npdu::NetworkMessageType::from_raw(kind)));

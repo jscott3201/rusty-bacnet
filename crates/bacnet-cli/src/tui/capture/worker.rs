@@ -230,9 +230,13 @@ pub(crate) fn route(
 /// header and data, a line error as a frame with no octets.
 fn from_record(record: MonitorRecord, epoch: SystemTime) -> CaptureFrame {
     let time = epoch + record.at;
-    let line = |link: &str, problem: String, destination: Option<u8>| {
+    // `refused` marks a frame the decoder refused (a CRC or header check),
+    // a parse failure as `summarize_frame` reports one; noise and a frame
+    // abort never were a frame, so they carry a problem only.
+    let line = |link: &str, problem: String, destination: Option<u8>, refused: bool| {
         let summary = FrameSummary {
             link: link.into(),
+            parse_error: refused.then(|| problem.clone()),
             problem: Some(problem),
             link_destination: destination.map(|d| AddressStyle::Mstp.format(&[d])),
             ..FrameSummary::default()
@@ -254,7 +258,7 @@ fn from_record(record: MonitorRecord, epoch: SystemTime) -> CaptureFrame {
                     let summary = summarize_frame(Framing::Mstp, &wire);
                     (Bytes::from(wire), summary)
                 }
-                Err(error) => line("frame", format!("not encodable: {error}"), None),
+                Err(error) => line("frame", format!("not encodable: {error}"), None, false),
             }
         }
         LineEvent::Error {
@@ -272,10 +276,13 @@ fn from_record(record: MonitorRecord, epoch: SystemTime) -> CaptureFrame {
                 }
             ),
             destination,
+            true,
         ),
-        LineEvent::Noise { octets } => line("noise", format!("{octets} octets of noise"), None),
-        LineEvent::FrameAbort => line("frame-abort", "a frame stopped midway".into(), None),
-        _ => line("line-event", "unknown line event".into(), None),
+        LineEvent::Noise { octets } => {
+            line("noise", format!("{octets} octets of noise"), None, false)
+        }
+        LineEvent::FrameAbort => line("frame-abort", "a frame stopped midway".into(), None, false),
+        _ => line("line-event", "unknown line event".into(), None, false),
     };
     let (source, destination, via) = route(
         summary.link_source.clone().unwrap_or_default(),

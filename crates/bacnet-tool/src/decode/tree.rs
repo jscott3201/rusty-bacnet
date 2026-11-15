@@ -86,6 +86,13 @@ pub fn decode_tree(framing: Framing, frame: &[u8]) -> Vec<Field> {
         Framing::Bip6 => bvll6(frame, npdu_start, &link),
         Framing::Sc => sc(frame, npdu_start, &link),
         Framing::Mstp => mstp(frame, &link),
+        // A link the tree doesn't lay out yet: its name and problem only.
+        _ => header(
+            format!("Link: {}", link.name),
+            0..npdu_start,
+            Vec::new(),
+            &link,
+        ),
     }];
     match link.npdu {
         Some(Npdu::At(range)) => fields.extend(npdu(&frame[range.clone()], range.start)),

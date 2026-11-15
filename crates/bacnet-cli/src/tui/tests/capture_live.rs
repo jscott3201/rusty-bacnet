@@ -226,5 +226,17 @@ async fn the_monitor_feeds_the_capture_and_still_writes_nothing() {
         .unwrap();
     assert_eq!(&token.bytes[..2], &[0x55, 0xFF], "from the preamble");
     assert_eq!(token.direction, Direction::Wire);
+    assert_eq!(token.summary.parse_error, None);
+    // The damaged broadcasts are frames the decoder refused: a parse
+    // failure, as the summary of the same octets would report it.
+    let refused: Vec<_> = (1..capture.ring.next())
+        .filter_map(|n| capture.ring.get(n))
+        .filter(|f| f.summary.link == "line-error")
+        .collect();
+    assert!(!refused.is_empty(), "{links:?}");
+    for frame in refused {
+        assert!(frame.summary.parse_error.is_some(), "{frame:?}");
+        assert_eq!(frame.summary.parse_error, frame.summary.problem);
+    }
     assert_eq!(run.quit().await, b"", "the monitor wrote to the line");
 }
