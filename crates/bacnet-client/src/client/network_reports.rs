@@ -106,6 +106,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             None => 0,
         };
+        self.seat_open()?;
         self.network
             .send_network_message(
                 NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
@@ -137,6 +138,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         &self,
         destination_mac: Option<&[u8]>,
     ) -> Result<(), Error> {
+        self.seat_open()?;
         self.network
             .send_network_message(
                 NetworkMessageType::WHAT_IS_NETWORK_NUMBER,

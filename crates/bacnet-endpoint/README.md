@@ -131,6 +131,28 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
 }
 ```
 
+## A full client on the session
+
+[`EndpointSession::full_client`](session::EndpointSession::full_client) gives
+a full `bacnet-client` `BACnetClient` on the session's one transport, beside
+the server role and the narrow client role below: discovery in every scope,
+segmented reads, files, COV, router discovery, and the link's own calls and
+frame tap through its `transport()`. It shares the session's invoke-ID pool,
+so its requests and the server role's notifications never collide, and
+`bacnet_ops::Client::over` takes it as it is. Beside a server role the client
+answers only the COV notifications of its own subscriptions; the server role
+answers everything else. The narrow server role doesn't execute
+ConfirmedEventNotification: the node answers one with a Reject (unrecognized
+service) while the full client still publishes it, until the full server
+takes a seat and acknowledges it. The session has the one owner of the local
+network number. A session with a source Audit Reporter refuses a full client, whose
+requests would not be audited. Drop the client before stopping the session:
+the client keeps the link alive, so a stop while it lives fails, and finishes
+when called again once the client is gone. From that first stop the client
+sends nothing more (its requests and unconfirmed sends fail at once); only a
+call made directly on its `transport()`, such as a BVLC query, still reaches
+the link until the client is dropped.
+
 ## What is proven
 
 - The client role initiates unsegmented ReadProperty, ReadRange and bounded

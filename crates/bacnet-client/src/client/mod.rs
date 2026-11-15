@@ -942,6 +942,8 @@ mod read_range;
 mod requests;
 mod response_admission;
 mod routed_path_limits;
+mod seat;
+pub use seat::SeatedClientBuilder;
 mod segmentation;
 mod segmentation_abort;
 mod segmentation_context;

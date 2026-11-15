@@ -34,9 +34,18 @@ pub(super) struct Asking {
     /// The link takes the local Number controls: without them nothing is
     /// asked, and no owner runs.
     numbers: bool,
+    /// The client runs on a seat (#2617): the node owns the network layer,
+    /// so the client's stop leaves it running. Kept here, beside the other
+    /// flag, so neither the client nor this allocation grows for it.
+    pub(super) seated: bool,
     /// A question went out. A send that failed doesn't count, so the next
     /// need asks again.
     asked: AtomicBool,
+    /// The seat this client ran on has closed (#2617): its node stopped or
+    /// dropped it, or the client was stopped. Nothing more is sent, the
+    /// question for the network's number included. Never set for a client
+    /// with a transport of its own.
+    sealed: AtomicBool,
     /// Held across a send, so two needs at once ask once.
     sending: tokio::sync::Mutex<()>,
     /// Wakes the owner to ask for the dispatch task, which never waits on
@@ -52,6 +61,21 @@ impl Asking {
         }
     }
 
+    /// The client's seat closed: see the field.
+    pub(super) fn seal(&self) {
+        self.sealed.store(true, Ordering::Release);
+    }
+
+    /// Whether the client's seat has closed.
+    pub(super) fn is_sealed(&self) -> bool {
+        self.sealed.load(Ordering::Relaxed)
+    }
+
+    /// Wait until the dispatch task wants the number asked for.
+    pub(super) async fn wanted(&self) {
+        self.wanted.notified().await;
+    }
+
     /// Ask now, unless the link takes no Number controls, the number is
     /// known, or the question went out already. Awaited before a Who-Is,
     /// so the question goes ahead of it; a send that fails is logged and
@@ -60,7 +84,7 @@ impl Asking {
         let needed = || {
             !self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none()
         };
-        if !self.numbers || !needed() {
+        if !self.numbers || self.is_sealed() || !needed() {
             return;
         }
         let _one = self.sending.lock().await;
@@ -88,10 +112,13 @@ impl Asking {
     /// It never waits on the send lock, so the owner's controls keep
     /// moving: a busy lock means a question is going out already, and one
     /// that fails is asked again at the next need.
-    async fn owner_need<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
+    pub(super) async fn owner_need<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
         let needed = || {
             !self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none()
         };
+        if self.is_sealed() {
+            return;
+        }
         let Ok(_one) = self.sending.try_lock() else {
             return;
         };
@@ -103,10 +130,10 @@ impl Asking {
     /// The link is back: ask again if a question went out before and the
     /// number is still unknown. A link return never starts the asking, and
     /// the owner doesn't wait for a question already going out.
-    async fn again<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
+    pub(super) async fn again<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
         let needed =
             || self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none();
-        if !needed() {
+        if self.is_sealed() || !needed() {
             return;
         }
         let Ok(_one) = self.sending.try_lock() else {
@@ -131,10 +158,13 @@ pub(super) struct Discovery {
 }
 
 impl Discovery {
-    pub(super) fn new(numbers: bool) -> Self {
+    pub(super) fn new(numbers: bool, seated: bool) -> Self {
         Self {
             table: SyncMutex::new(DeviceTable::new()),
-            asking: Asking::new(numbers),
+            asking: Asking {
+                seated,
+                ..Asking::new(numbers)
+            },
         }
     }
 }
@@ -183,7 +213,7 @@ async fn announce<T: TransportPort + 'static>(network: &NetworkLayer<T>, state: 
 
 /// Wait for the link to come back; forever once the transport has no more
 /// returns to report, or never had any.
-async fn link_returned(returns: &mut Option<watch::Receiver<u64>>) {
+pub(super) async fn link_returned(returns: &mut Option<watch::Receiver<u64>>) {
     let back = match returns.as_mut() {
         Some(returns) => returns.changed().await.is_ok(),
         None => false,
