@@ -77,7 +77,7 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | guides/safe-writes.md:16 | sh | `bacnet readm 192.168.1.100 av:1 object-name,units,pv` | run against a loopback server |  |
 | guides/safe-writes.md:28 | sh | `bacnet write 192.168.1.100 av:1 pv 72.5 --priority 8` | run against a loopback server |  |
 | guides/safe-writes.md:39 | sh | `bacnet write 192.168.1.100 av:1 pv null --priority 8` | run against a loopback server |  |
-| guides/safe-writes.md:50 | sh | `bacnet --allow-write write 192.168.1.100 av:1 pv 72.5 --p...` | run against a loopback server |  |
+| guides/safe-writes.md:52 | sh | `bacnet --allow-write write 192.168.1.100 av:1 pv 72.5 --p...` | run against a loopback server |  |
 | integrate/pics.mdx:26 | rust | `use bacnet_objects::DeviceIdentity;` | compiled: a Cargo example's exact text |  |
 | integrate/router.mdx:40 | sh | `bacnet whois-router` | CLI arguments parsed by the CLI (--help) |  |
 | integrate/router.mdx:93 | toml | `<Code code={routerManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |

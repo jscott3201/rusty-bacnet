@@ -3365,6 +3365,7 @@ dependencies = [
  "bacnet-types",
  "bytes",
  "pyo3",
+ "serde_json",
  "tokio",
  "tokio-rustls",
  "tracing",

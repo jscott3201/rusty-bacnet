@@ -2,6 +2,7 @@
 
 use super::{ClientInner, CoreClient};
 use crate::errors::to_py_err;
+use crate::high_level::OpsClient;
 use bacnet_transport::sc::ScEvent;
 use bacnet_types::error::Error;
 use pyo3::PyResult;
@@ -16,10 +17,44 @@ use tokio::task::JoinHandle;
 #[path = "state_tests.rs"]
 mod tests;
 
+/// A started client: the low-level client, and the high-level client over
+/// it that the priority calls go through (#2561), which shares it, its
+/// discovery table and one set of request limits.
+pub(super) struct Started {
+    core: Arc<CoreClient>,
+    /// `None` only once a stop has begun: the high-level client lets go of
+    /// the low-level one first, so the stop can own it.
+    high: Option<OpsClient>,
+}
+
+impl Started {
+    /// `core` and a high-level client over it whose writes go under
+    /// `policy`.
+    pub(super) fn new(core: CoreClient, policy: bacnet_ops::WritePolicy) -> Self {
+        let core = Arc::new(core);
+        let high = crate::high_level::client(Arc::clone(&core), policy);
+        Self {
+            core,
+            high: Some(high),
+        }
+    }
+
+    /// Stop the low-level client, once the high-level one has let go of
+    /// it. A failed stop leaves the client closed to new operations (see
+    /// [`close`]), so the high-level client isn't needed again.
+    async fn stop(&mut self) -> Result<(), Error> {
+        self.high = None;
+        let core = Arc::get_mut(&mut self.core).ok_or_else(|| {
+            Error::Encoding("cannot stop BACnetClient while high-level references remain".into())
+        })?;
+        core.stop().await
+    }
+}
+
 /// One binding owner, including an independently owned shutdown task.
 #[derive(Default)]
 pub(super) struct ClientState {
-    client: RwLock<Option<CoreClient>>,
+    client: RwLock<Option<Started>>,
     closing: AtomicBool,
     /// Woken when close is admitted, so an operation or entry queued behind
     /// a pending entry's exclusive hold fails at once instead of waiting
@@ -79,18 +114,31 @@ async fn admitted<G>(inner: &ClientInner, guard: impl Future<Output = G>) -> PyR
     }
 }
 
+fn not_started() -> pyo3::PyErr {
+    PyRuntimeError::new_err("client not started — use 'async with'")
+}
+
 /// Hold shared ownership through a native operation, without serializing readers.
 pub(super) async fn started(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_, CoreClient>> {
     let guard = admitted(inner, inner.client.read()).await?;
-    RwLockReadGuard::try_map(guard, Option::as_ref)
-        .map_err(|_| PyRuntimeError::new_err("client not started — use 'async with'"))
+    RwLockReadGuard::try_map(guard, |slot| slot.as_ref().map(|started| &*started.core))
+        .map_err(|_| not_started())
+}
+
+/// [`started`] for a call through the high-level client: the same lease,
+/// so a stop waits for the call, and its handles let go of the client with
+/// it.
+pub(super) async fn high_level(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_, OpsClient>> {
+    let guard = admitted(inner, inner.client.read()).await?;
+    RwLockReadGuard::try_map(guard, |slot| slot.as_ref().and_then(|s| s.high.as_ref()))
+        .map_err(|_| not_started())
 }
 
 /// Keep entry exclusive through preparation and publication. A dropped startup
 /// future drops this guard and its still-private builder without publishing.
 pub(super) async fn starting(
     inner: &ClientInner,
-) -> PyResult<RwLockWriteGuard<'_, Option<CoreClient>>> {
+) -> PyResult<RwLockWriteGuard<'_, Option<Started>>> {
     let guard = admitted(inner, inner.client.write()).await?;
     if guard.is_some() {
         return Err(PyRuntimeError::new_err("client already started"));
@@ -129,8 +177,8 @@ pub(super) async fn close(inner: ClientInner) -> PyResult<()> {
 /// Keep the native client present until its teardown successfully completes.
 async fn stop_native(state: ClientInner) -> Result<(), Error> {
     let mut client = state.client.write().await;
-    if let Some(client) = client.as_mut() {
-        client.stop().await?;
+    if let Some(started) = client.as_mut() {
+        started.stop().await?;
     }
     *client = None;
     // A receiver nobody took ends with the client; a restart subscribes anew.

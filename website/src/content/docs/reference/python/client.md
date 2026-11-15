@@ -68,6 +68,10 @@ colon hex such as `"01:02:03:04:05:06"` (SC, or `"00:04:d2"` for a
 VMAC), or an MS/TP station. `"[ip]:port"` raises ValueError: use
 `resolve_vmac`. So does a `bip6:` address on any other transport.
 
+Properties:
+
+- `write_policy: WritePolicy`: The priorities `relinquish` may use, as `write_policy=` set them.
+
 ### BACnetClient.__init__
 
 ```python
@@ -112,8 +116,16 @@ def __init__(
     sc_connect_timeout_ms: int | None = None,
     sc_control_rate_limit: tuple[int, int] | None = None,
     router: Optional[BACnetRouter] = None,
+    write_policy: Optional[WritePolicy] = None,
 ) -> None
 ```
+
+`write_policy` (default None, which is `WritePolicy()`): the
+priorities `relinquish` may use. The default refuses 1, 2, 5 and 6
+with `BacnetWriteDeniedError`, sending nothing;
+`WritePolicy().allow_priorities([...])` allows some of them too
+(#2561). `write_property` and the other typed calls don't look at
+it. Anything but a `WritePolicy` raises TypeError.
 
 `transport="router"` with `router` (a `BACnetRouter` built
 with `application="client"` or `"client_and_server"`): run the
@@ -275,7 +287,62 @@ def write_property(
 Write a single property on a remote device.
 
 Priority is None or 1..16. Invalid u8 priorities raise ValueError
-synchronously; integers outside u8 raise OverflowError.
+synchronously; integers outside u8 raise OverflowError. The client's
+`write_policy` doesn't apply: this is the low-level write.
+
+### BACnetClient.relinquish
+
+```python
+def relinquish(
+    self,
+    address: str,
+    object_id: ObjectIdentifier,
+    priority: int,
+) -> Awaitable[PriorityView]
+```
+
+Release a command: NULL written to the object's Present\_Value at
+`priority`, so the next slot down, or Relinquish\_Default, takes
+over. Then the object's priorities as read just after, in one
+ReadPropertyMultiple: two requests. Nothing is looked up first: the
+device at `address` needn't be in the discovery table.
+
+`priority` is required, an int from 1 to 16: a relinquish names
+the slot it releases, and is never a write of Relinquish\_Default.
+A bool, a float or another type raises TypeError and another int
+ValueError, as does an address `read_property` refuses, before the
+Future is made. Raised on await, with nothing sent:
+`BacnetWriteDeniedError` for a priority the client's
+`write_policy` refuses (1, 2, 5 and 6 by default), and ValueError
+for an object type with no Priority\_Array (an input, or a Channel,
+which passes commands on to its members). Then the device's refusal
+of the write raises `BacnetProtocolError`, `BacnetRejectError`
+or `BacnetAbortError`, and no answer `BacnetTimeoutError`: the
+write may or may not have been applied. A relinquish the device
+acknowledged whose read after it failed raises
+`BacnetReadBackError`, and one whose read says the object has no
+Priority\_Array raises `BacnetNoPriorityArrayError`: both hold the
+acknowledged write as `written`, and it needs no second send.
+
+### BACnetClient.priority_array
+
+```python
+def priority_array(
+    self,
+    address: str,
+    object_id: ObjectIdentifier,
+) -> Awaitable[PriorityView]
+```
+
+Read an object's commands: its Priority\_Array, Relinquish\_Default
+and Present\_Value in one ReadPropertyMultiple, as a
+`PriorityView`.
+
+An address `read_property` refuses raises ValueError before the
+Future is made; an object type with no Priority\_Array raises
+ValueError on await, with nothing sent. A device that says the
+object has none raises `BacnetNoPriorityArrayError`, its other
+refusals the usual protocol errors.
 
 ### BACnetClient.read_property_multiple
 
