@@ -290,11 +290,14 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                     (None, f"localhost:{port}", True, 1, 0))
                 self.assertIn(status["last_bbmd_lookup_failure"],
                               ("unusable_address", "no_ipv6_address"))
-                # With no BBMD, a broadcast is refused, and counted.
+                # With no BBMD, a broadcast is refused, and counted: the
+                # What-Is-Network-Number the client asks before its first
+                # Who-Is (#2572), then the Who-Is.
+                self.assertEqual(status["broadcasts_refused"], 0)
                 with self.assertRaises(OSError):
                     await client.who_is(INSTANCE, INSTANCE)
                 status = await client.foreign_registration()
-                self.assertEqual(status["broadcasts_refused"], 1)
+                self.assertEqual(status["broadcasts_refused"], 2)
         await rerun_on_lost_port(run)
 
     async def test_the_bbmds_answer_reads_as_on_b_ip(self):

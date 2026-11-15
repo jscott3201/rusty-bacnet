@@ -77,7 +77,10 @@ pub const DEVICE_EVENT_CHANNEL_CAPACITY: usize = 64;
 pub enum DeviceEventKind {
     /// An I-Am added a device to the discovery table: from a new address,
     /// or from a known one announcing another instance, after that
-    /// address's old device is reported `Lost`.
+    /// address's old device is reported `Lost`. Also a routed station on
+    /// this client's own network that became its local row when the client
+    /// learned the network's number, after its routed row is reported
+    /// `Lost` (#2572).
     Discovered,
     /// A later I-Am from the same address, for the same instance, refreshed
     /// its row.
@@ -599,7 +602,9 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     config: ClientConfig,
     network: Arc<NetworkLayer<T>>,
     tsm: Arc<SyncMutex<Tsm>>,
-    device_table: Arc<SyncMutex<DeviceTable>>,
+    /// The discovery table, with the asking for the network's number
+    /// beside it (#2572).
+    device_table: Arc<network_number::Discovery>,
     cov_tx: broadcast::Sender<ReceivedCOVNotification>,
     event_tx: broadcast::Sender<ReceivedEventNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,

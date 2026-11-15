@@ -110,6 +110,12 @@ pub(crate) enum PeerSegmentation {
 struct TableEntry {
     device: DiscoveredDevice,
     segmentation: PeerSegmentation,
+    /// A local row that is local only because the client's network number
+    /// said so (#2572): a routed row the number's learning folded in, or a
+    /// relayed I-Am or routed registration naming that number. Direct
+    /// evidence, an I-Am heard with no SNET, clears it; a change of number
+    /// drops the rows that still carry it.
+    by_number: bool,
 }
 
 /// A row's address: the network (0 for the local one) and the MAC there.
@@ -229,16 +235,6 @@ pub(crate) struct Heard {
     pub(crate) contested: Vec<u32>,
 }
 
-/// [`DeviceTable::remove`]'s outcome.
-#[derive(Debug)]
-pub(crate) struct Removed {
-    /// The row taken out.
-    pub(crate) device: DiscoveredDevice,
-    /// Its instance, when other rows still claim it: a contest shrank or
-    /// ended.
-    pub(crate) contested: Option<u32>,
-}
-
 /// [`DeviceTable::purge_stale_collect`]'s outcome.
 #[derive(Debug, Default)]
 pub(crate) struct Purged {
@@ -265,14 +261,29 @@ impl DeviceTable {
     /// full, is not stored.
     pub fn upsert(&mut self, device: DiscoveredDevice) {
         let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
-        let _ = self.insert(device, segmentation);
+        let _ = self.insert(device, segmentation, false);
+    }
+
+    /// [`upsert`](Self::upsert) a local row that is local only because the
+    /// client's network number says so: a routed registration naming that
+    /// number (#2572).
+    pub(crate) fn upsert_by_number(&mut self, device: DiscoveredDevice) {
+        let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
+        let _ = self.insert(device, segmentation, true);
     }
 
     /// Ingest a device heard in an I-Am: [`upsert`](Self::upsert), saying
     /// what changed.
     pub(crate) fn heard(&mut self, device: DiscoveredDevice) -> Heard {
         let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
-        self.insert(device, segmentation)
+        self.insert(device, segmentation, false)
+    }
+
+    /// [`heard`](Self::heard) for a relayed I-Am that names the client's own
+    /// network, so lands on a local row by the number alone (#2572).
+    pub(crate) fn heard_by_number(&mut self, device: DiscoveredDevice) -> Heard {
+        let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
+        self.insert(device, segmentation, true)
     }
 
     /// Insert or update a device whose capability fields are manual
@@ -280,10 +291,18 @@ impl DeviceTable {
     /// (legacy `add_device`). Its `segmentation_supported` must never drive
     /// a capability decision (#371).
     pub(crate) fn upsert_placeholder(&mut self, device: DiscoveredDevice) {
-        let _ = self.insert(device, PeerSegmentation::Placeholder);
+        let _ = self.insert(device, PeerSegmentation::Placeholder, false);
     }
 
-    fn insert(&mut self, device: DiscoveredDevice, segmentation: PeerSegmentation) -> Heard {
+    /// Store `device`. `by_number` says the row is local by the network
+    /// number alone: a refresh keeps that only while no direct evidence
+    /// comes, and another instance at the address takes this one's.
+    fn insert(
+        &mut self,
+        device: DiscoveredDevice,
+        segmentation: PeerSegmentation,
+        by_number: bool,
+    ) -> Heard {
         let mut heard = Heard {
             change: Change::Dropped,
             replaced: None,
@@ -293,16 +312,19 @@ impl DeviceTable {
             return heard;
         };
         let instance = device.object_identifier.instance_number();
-        let entry = TableEntry {
+        let mut entry = TableEntry {
             device,
             segmentation,
+            by_number,
         };
         let full = self.rows.len() >= MAX_DEVICE_TABLE_ENTRIES;
         let previous = match self.rows.get_mut(&key) {
             Some(row) => {
+                let same = row.device.object_identifier.instance_number() == instance;
+                entry.by_number = by_number && (row.by_number || !same);
                 let old = std::mem::replace(row, entry).device;
                 let previous = old.object_identifier.instance_number();
-                if previous == instance {
+                if same {
                     heard.change = Change::Updated;
                     return heard;
                 }
@@ -422,23 +444,6 @@ impl DeviceTable {
         }
     }
 
-    /// Take the row at `mac` on `network` out of the table.
-    pub(crate) fn remove(&mut self, network: u16, mac: &[u8]) -> Option<Removed> {
-        let key = Key::at(network, mac);
-        let entry = self.rows.remove(&key)?;
-        let instance = entry.device.object_identifier.instance_number();
-        self.claims.remove(&(instance, key));
-        let contested = self
-            .claims_of(instance)
-            .next()
-            .is_some()
-            .then_some(instance);
-        Some(Removed {
-            device: entry.device,
-            contested,
-        })
-    }
-
     /// Clear all entries.
     pub fn clear(&mut self) {
         self.rows.clear();
@@ -489,6 +494,10 @@ impl DeviceTable {
         purged
     }
 }
+
+#[path = "discovery_localize.rs"]
+mod localize;
+pub(crate) use localize::Folded;
 
 #[cfg(test)]
 #[path = "discovery_collision_tests.rs"]

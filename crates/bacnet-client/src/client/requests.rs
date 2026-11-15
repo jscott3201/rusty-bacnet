@@ -666,6 +666,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         )
     }
 
+    /// Before the first Who-Is, of any scope, ask this network's number
+    /// (#2572): the I-Ams about to fill the discovery table may include a
+    /// device a router relays back from this network. Only one frame goes
+    /// ahead of the Who-Is, and a question that fails to send holds nothing
+    /// back.
+    pub(super) async fn ask_before(&self, service_choice: UnconfirmedServiceChoice) {
+        if service_choice == UnconfirmedServiceChoice::WHO_IS {
+            self.device_table.asking.first_need(&self.network).await;
+        }
+    }
+
     /// Send an unconfirmed request (fire-and-forget) to a specific destination.
     pub async fn unconfirmed_request(
         &self,
@@ -681,6 +692,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
+        self.ask_before(service_choice).await;
         self.network
             .send_apdu(&buf, destination_mac, false, NetworkPriority::Normal)
             .await
@@ -700,6 +712,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
+        self.ask_before(service_choice).await;
         self.network
             .broadcast_apdu(&buf, false, NetworkPriority::Normal)
             .await
@@ -719,6 +732,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
+        self.ask_before(service_choice).await;
         self.network
             .broadcast_global_apdu(&buf, false, NetworkPriority::Normal)
             .await
@@ -743,6 +757,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
+        // Network 0 and 65535 are refused below, before anything goes: a
+        // refused Who-Is asks nothing.
+        if matches!(dest_network, 1..=0xFFFE) {
+            self.ask_before(service_choice).await;
+        }
         if self.network.local_network_number().get() == Some(dest_network) {
             return self
                 .network

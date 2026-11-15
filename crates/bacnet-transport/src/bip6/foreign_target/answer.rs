@@ -100,6 +100,13 @@ pub(super) struct Answers {
     unanswered: u64,
     /// Register-Foreign-Device NAKs taken as answers, from every BBMD.
     refused: u64,
+    /// A broadcast went to the BBMD while nothing showed it held this
+    /// device's entry (its latest answer wasn't a success, or a
+    /// registration has gone unanswered for [`ANSWER_TIMEOUT`]), or the BBMD
+    /// refused one: it may have dropped it, and the next success brings the
+    /// link back (#2572). B/IPv6 holds no broadcasts for the first
+    /// registration, so this covers a start's too.
+    unproven: bool,
 }
 
 /// Whether `a` and `b` are one B/IPv6 address. Neither a zone index nor a
@@ -131,6 +138,7 @@ impl Answers {
         self.replaced = None;
         self.last = None;
         self.unanswered = 0;
+        self.unproven = false;
     }
 
     /// Report the latest answer, how long before `now` it was recorded,
@@ -177,14 +185,20 @@ impl State {
 
     /// `peer` sent a BVLC-Result with `code` at `now`: the answer to the
     /// registration outstanding, if it went to `peer` and `code` is a
-    /// success or the Register-Foreign-Device NAK.
-    fn registration_answered(&mut self, peer: SocketAddrV6, code: Bvlc6ResultCode, now: Instant) {
+    /// success or the Register-Foreign-Device NAK. Whether it is a success
+    /// after broadcasts went unproven: the link came back.
+    fn registration_answered(
+        &mut self,
+        peer: SocketAddrV6,
+        code: Bvlc6ResultCode,
+        now: Instant,
+    ) -> bool {
         let answers = &mut self.answers;
         if !answers
             .outstanding
             .is_some_and(|sent| same(sent.bbmd, peer))
         {
-            return;
+            return false;
         }
         let answer = if code == Bvlc6ResultCode::SUCCESSFUL_COMPLETION {
             Bip6RegistrationAnswer::Held
@@ -193,12 +207,13 @@ impl State {
             answers.refused = answers.refused.saturating_add(1);
             Bip6RegistrationAnswer::Refused
         } else {
-            return;
+            return false;
         };
         answers.outstanding = None;
         answers.replaced = None;
         answers.unanswered = 0;
         answers.last = Some((answer, now));
+        answer == Bip6RegistrationAnswer::Held && std::mem::take(&mut answers.unproven)
     }
 }
 
@@ -246,8 +261,41 @@ impl ForeignTarget {
     /// outstanding.
     pub(in crate::bip6) fn result(&self, peer: SocketAddrV6, code: Bvlc6ResultCode) {
         let mut state = self.lock();
-        if !state.release_answered(peer, code) {
-            state.registration_answered(peer, code, Instant::now());
+        if code == Bvlc6ResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK {
+            // The BBMD in use dropped a broadcast and holds no entry for
+            // this device, whatever its last answer said (#2572).
+            let in_use = state.config.bbmd.address();
+            if in_use.is_some_and(|bbmd| same(bbmd, peer)) {
+                state.answers.unproven = true;
+            }
+            return;
         }
+        let back = !state.release_answered(peer, code)
+            && state.registration_answered(peer, code, Instant::now());
+        drop(state);
+        if back {
+            self.returns
+                .send_modify(|count| *count = count.wrapping_add(1));
+        }
+    }
+
+    /// A broadcast went to the BBMD: unproven unless its latest answer was
+    /// a success and no registration since has gone unanswered for
+    /// [`ANSWER_TIMEOUT`].
+    pub(in crate::bip6) fn broadcast_sent(&self) {
+        let answers = &mut self.lock().answers;
+        let held = matches!(answers.last, Some((Bip6RegistrationAnswer::Held, _)));
+        let now = Instant::now();
+        let silent = answers
+            .outstanding
+            .is_some_and(|sent| now.saturating_duration_since(sent.since) >= ANSWER_TIMEOUT);
+        if !held || silent {
+            answers.unproven = true;
+        }
+    }
+
+    /// The link's returns, for `TransportPort::link_returns`.
+    pub(in crate::bip6) fn link_returns(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.returns.subscribe()
     }
 }

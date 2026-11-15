@@ -12,10 +12,12 @@ use ratatui::crossterm::event::KeyCode;
 use tokio::sync::mpsc;
 
 use super::capture::capturing;
-use super::network::{Net, plan};
+use super::network::{Net, local, plan};
 use super::site::bounded;
 use super::*;
-use crate::tui::capture::{CaptureCommand, CaptureEvent, Direction, worker as capture_worker};
+use crate::tui::capture::{
+    CaptureCommand, CaptureEvent, CaptureFrame, Direction, worker as capture_worker,
+};
 use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink};
 
 /// The lab device on loopback.
@@ -150,11 +152,32 @@ async fn the_session_tap_reaches_the_screen_through_the_coordinator() {
     // An unbounded Who-Is asks for a second Enter.
     net.press(KeyCode::Enter).await;
     net.press(KeyCode::Enter).await;
-    net.pump_until("the Who-Is", |app| app.capture.ring.len() > 0)
-        .await;
-    let first = net.app.capture.ring.get(1).unwrap();
-    assert_eq!(first.summary.service.as_deref(), Some("who-is"));
-    assert_eq!(first.direction, Direction::Out);
+    let who_is = |frame: &CaptureFrame| {
+        frame.direction == Direction::Out && frame.summary.service.as_deref() == Some("who-is")
+    };
+    net.pump_until("the Who-Is", |app| {
+        let ring = &app.capture.ring;
+        (1..ring.next()).filter_map(|n| ring.get(n)).any(who_is)
+    })
+    .await;
+    // The client's first Who-Is goes right after the What-Is-Network-Number
+    // it asks on that first need (#2572), the first frame since the tap
+    // opened. This link broadcasts to 127.0.0.1, so the question can come
+    // back to the client's own socket before the Who-Is goes: only that
+    // copy, from the client's own address, may stand between the two.
+    let ring = &net.app.capture.ring;
+    let frames: Vec<_> = (1..ring.next()).filter_map(|n| ring.get(n)).collect();
+    let asked = |frame: &CaptureFrame| frame.bytes.get(4..) == Some(&[1, 0x80, 0x12][..]);
+    assert_eq!(frames[0].direction, Direction::Out);
+    assert!(asked(frames[0]), "{:?}", frames[0]);
+    let own = std::net::SocketAddr::V4(local(&net.app));
+    let at = frames.iter().position(|frame| who_is(frame)).unwrap();
+    for echo in &frames[1..at] {
+        assert_eq!(echo.direction, Direction::In, "{echo:?}");
+        assert!(asked(echo), "{echo:?}");
+        assert_eq!(echo.udp.map(|(source, _)| source), Some(own), "{echo:?}");
+    }
+    let first = frames[at];
     assert!(first.summary.link.contains("broadcast"), "{first:?}");
 
     net.press(KeyCode::Char('x')).await;

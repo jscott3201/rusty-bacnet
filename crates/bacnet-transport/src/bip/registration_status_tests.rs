@@ -114,3 +114,78 @@ async fn a_registration_or_a_lapse_ends_a_run_of_refusals() {
     let registration = device.ctx.node.snapshot().foreign_registration;
     assert_eq!((registration.refused, registration.lapses), (3, 1));
 }
+
+/// The link's returns (#2572). A start's first registration is none: the
+/// broadcasts made before it were held for it. A registration after a lease
+/// lapsed, or after the BBMD refused an attempt, is one: broadcasts may have
+/// gone nowhere meanwhile. A renewal while the lease is live is none.
+#[tokio::test(start_paused = true)]
+async fn a_registration_after_a_loss_is_a_return_of_the_link() {
+    let device = Device::new(Duration::from_secs(10)).await;
+    let returns = device.ctx.node.link_returns();
+    device.at(13).await;
+    device.bbmd_says(0).await;
+    device.at(10_013).await;
+    device.bbmd_says(0).await;
+    assert_eq!(*returns.borrow(), 0, "a start's registration and a renewal");
+    // Every attempt lost from 20 s: the lease, renewed from 10 s, lapses
+    // at 70 s, and the attempt at 75 s is answered.
+    device.at(75_013).await;
+    device.bbmd_says(0).await;
+    assert_eq!(*returns.borrow(), 1, "registered again after the lapse");
+
+    let device = Device::new(Duration::from_secs(10)).await;
+    let returns = device.ctx.node.link_returns();
+    device.at(13).await;
+    device.bbmd_says(0x30).await;
+    device.at(10_013).await;
+    device.bbmd_says(0).await;
+    assert_eq!(*returns.borrow(), 1, "registered after a refusal");
+}
+
+/// A start whose first attempt goes unanswered sends the broadcasts it held
+/// unregistered: its next success is a return of the link (#2572).
+#[tokio::test(start_paused = true)]
+async fn a_success_after_an_unanswered_first_attempt_is_a_return_of_the_link() {
+    let device = Device::new(Duration::from_secs(10)).await;
+    let returns = device.ctx.node.link_returns();
+    // The attempt at start goes unanswered; the retry goes at 6 s.
+    device.at(6_013).await;
+    assert_eq!(device.attempts(), [0, 6_000]);
+    device.bbmd_says(0).await;
+    assert!(device.ctx.node.snapshot().foreign_registration.registered);
+    assert_eq!(*returns.borrow(), 1);
+}
+
+/// The BBMD refusing a broadcast with the Distribute-Broadcast-To-Network
+/// NAK holds no entry for this device, though the lease says live: the
+/// next success, a renewal, is a return of the link (#2572). The same NAK
+/// from another peer changes nothing.
+#[tokio::test(start_paused = true)]
+async fn a_renewal_after_the_bbmd_refused_a_broadcast_is_a_return_of_the_link() {
+    let device = Device::new(Duration::from_secs(10)).await;
+    let returns = device.ctx.node.link_returns();
+    device.at(13).await;
+    device.bbmd_says(0).await;
+    device.at(10_013).await;
+    device.bbmd_says(0).await;
+    device.at(12_000).await;
+    device.says(([192, 0, 2, 30], 0xBAC0), 0x60).await;
+    device.at(12_500).await;
+    assert_eq!(*returns.borrow(), 0, "another peer's NAK");
+    device.bbmd_says(0x60).await;
+    // The NAK brings the next attempt forward, to 13 s; its success is a
+    // renewal of the lease from 10 s.
+    device.at(13_013).await;
+    device.bbmd_says(0).await;
+    assert_eq!(*returns.borrow(), 1);
+    assert_eq!(
+        device
+            .ctx
+            .node
+            .snapshot()
+            .foreign_registration
+            .renewal_hints,
+        1
+    );
+}

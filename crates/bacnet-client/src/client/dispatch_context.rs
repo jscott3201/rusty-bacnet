@@ -7,7 +7,7 @@ pub(super) struct DispatchContext<'a, T: TransportPort + 'static> {
     /// Transaction state machine.
     pub(super) tsm: &'a Arc<SyncMutex<Tsm>>,
     /// Discovered-device table.
-    pub(super) device_table: &'a Arc<SyncMutex<DeviceTable>>,
+    pub(super) device_table: &'a Arc<network_number::Discovery>,
     /// Network layer used to send replies.
     pub(super) network: &'a Arc<NetworkLayer<T>>,
     /// Broadcast channel for COV notifications.
