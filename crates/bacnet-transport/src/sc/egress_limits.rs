@@ -107,9 +107,9 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// once started, what the hub connection carries, both ways, since a
     /// broadcast goes through the hub too. A reconnect or failover can
     /// change it, and a direct connection's own limit isn't known here.
-    /// Before start, the default.
+    /// Before start and after a stop, the default.
     pub(super) fn hub_npdu_limits(&self) -> NpduLimits {
-        if self.connection.is_none() {
+        if self.connection.is_none() || self.stop_gate.is_stopped() {
             return NpduLimits::default();
         }
         self.hub_limits.npdu()

@@ -113,8 +113,8 @@ async fn reinitialize(
 /// built for a refusal or for ACTIVATE_CHANGES would show as a gap.
 #[tokio::test(start_paused = true)]
 async fn endpoint_records_accepted_reinitialize_requests_only() {
-    let (mut sink, mut records) = network().await;
-    let (mut peer, mut replies) = network().await;
+    let (sink, mut records) = network().await;
+    let (peer, mut replies) = network().await;
     let mut db = database(false);
     db.set_clock_reader(None);
     let mut operations = AuditOperationFlags::empty();
@@ -240,7 +240,7 @@ async fn configure_reporter(
 /// takes the first sequence number.
 #[tokio::test(start_paused = true)]
 async fn endpoint_records_a_local_reset_through_the_reporters_filters() {
-    let (mut sink, mut records) = network().await;
+    let (sink, mut records) = network().await;
     let mut db = database(false);
     db.set_clock_reader(None);
     let mut session = session(db, SessionRole::Both, &sink);

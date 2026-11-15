@@ -526,7 +526,7 @@ async fn giving_up_reports_the_attempts_made() {
         max_delay_ms: 25,
         max_retries: 2,
     };
-    let (mut transport, _rx, hub, mut events) =
+    let (transport, _rx, hub, mut events) =
         started(reconnect, connector(Arc::new(AtomicBool::new(false)), tx)).await;
     hub_closes(hub, &mut events).await;
     for attempt in 1..=2 {
@@ -562,7 +562,7 @@ async fn a_stop_during_backoff_ends_the_stream_without_a_terminal_event() {
         max_delay_ms: 60_000,
         max_retries: 3,
     };
-    let (mut transport, _rx, hub, mut events) =
+    let (transport, _rx, hub, mut events) =
         started(reconnect, connector(Arc::new(AtomicBool::new(true)), tx)).await;
     hub_closes(hub, &mut events).await;
     // The episode now sleeps its backoff; nothing is reported until it dials.
@@ -692,7 +692,7 @@ async fn episode(
     let (client, _hub) = LoopbackWebSocket::pair();
     let ws = Arc::new(client);
     let conn = Arc::new(Mutex::new(ScConnection::new([0x22; 6], [1; 16])));
-    let active_ws = Arc::new(Mutex::new(ws.clone()));
+    let active_ws = Arc::new(Mutex::new(Some(ws.clone())));
     let (state_tx, _) = watch::channel(ScConnectionState::Disconnected);
     let mut throttle = super::super::diagnostic_throttle::DiagnosticThrottle::new();
     let config = ScReconnectConfig {

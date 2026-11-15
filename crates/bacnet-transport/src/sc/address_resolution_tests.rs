@@ -250,7 +250,7 @@ async fn absent_listener_refuses_regardless_of_configured_uris() {
         vec![],
         vec!["wss://one.example/sc", "wss://two.example:8443/sc"],
     ] {
-        let (mut transport, mut rx, hub) = start_with_uris(&uris).await;
+        let (transport, mut rx, hub) = start_with_uris(&uris).await;
         for source in [None, Some([0x22; 6])] {
             hub.send(&wire(2, 0x2234, source, None, 0, &[]))
                 .await
@@ -265,7 +265,7 @@ async fn absent_listener_refuses_regardless_of_configured_uris() {
 
 #[tokio::test]
 async fn no_answer_once_disconnected() {
-    let (mut transport, mut rx, hub) = start_with_uris(&["wss://one.example/sc"]).await;
+    let (transport, mut rx, hub) = start_with_uris(&["wss://one.example/sc"]).await;
     // A valid request is refused while connected without a direct listener.
     hub.send(&wire(2, 0x2234, None, None, 0, &[]))
         .await
@@ -335,7 +335,7 @@ async fn barrier(hub: &LoopbackWebSocket) {
 
 #[tokio::test]
 async fn address_resolution_valid_shapes_answered_or_silent_without_npdu() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     // Empty request is the only valid request shape. The fixture transport
     // has no listener, so each answer carries a capability NAK with the
     // request ID copied and the destination mirrored to the origin.
@@ -376,7 +376,7 @@ async fn address_resolution_valid_shapes_answered_or_silent_without_npdu() {
 
 #[tokio::test]
 async fn address_resolution_request_negative_matrix_nak_vs_silence() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     // (body, expected NAK code) for locally-addressed requests.
     let faults: Vec<(Vec<u8>, u16)> = vec![
         (vec![0x00], 7),
@@ -442,7 +442,7 @@ async fn address_resolution_request_negative_matrix_nak_vs_silence() {
 
 #[tokio::test]
 async fn address_resolution_ack_malformed_is_always_silent() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     // Every malformed response is discarded without a Result, per the
     // response rule, and without activity. Valid empty/nonempty lists are
     // covered by the silence test above.
@@ -629,7 +629,7 @@ fn address_resolution_direct_connection_is_pure_in_all_states_and_codec_is_permi
 
 #[tokio::test]
 async fn address_resolution_malformed_generic_wire_is_still_silent() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     for bytes in [
         vec![0x02],
         vec![0x02, 0x80, 0, 1],
@@ -654,7 +654,7 @@ async fn address_resolution_result_for_keeps_existing_parse_and_fatal_policy() {
             (vec![raw, 1, 0, 0, 7, 0, 150], true),
             (vec![raw, 1], true),
         ] {
-            let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+            let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
             let bytes = wire(0, 0x2233, None, None, 0, &body);
             let msg = decode_sc_message(&bytes).unwrap();
             assert_eq!(msg.function, ScFunction::Result);

@@ -3,8 +3,8 @@ use crate::session::bus_port::bus_port;
 
 #[tokio::test(start_paused = true)]
 async fn source_read_filters_priority_independence_and_unsupported_destinations() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::Both, &sink);
     session.start().await.unwrap();
     for (level, bits, property, reports) in [
@@ -113,8 +113,8 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
 
 #[tokio::test(start_paused = true)]
 async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, _records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, _records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let database = Arc::clone(session.database.as_ref().unwrap());
@@ -167,8 +167,8 @@ async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop()
 
 #[tokio::test(start_paused = true)]
 async fn source_read_audit_capacity_deadline_health_and_later_recovery() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(database(true), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let mut first_notification = None;
@@ -273,8 +273,8 @@ async fn source_read_audit_capacity_deadline_health_and_later_recovery() {
 
 #[tokio::test(start_paused = true)]
 async fn source_read_stop_and_drop_cancel_owned_work_with_held_client_clones() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     for stop in [true, false] {
         let mut session = session(database(true), SessionRole::Both, &sink);
         session.client_config.apdu_timeout_ms = 60_000;
@@ -323,7 +323,7 @@ async fn source_read_stop_and_drop_cancel_owned_work_with_held_client_clones() {
 async fn source_read_and_target_reporting_remain_independent() {
     use bacnet_server::server::{AuditReportersConfig, BACnetServer, DeviceBinding};
     use bacnet_types::enums::EngineeringUnits;
-    let (mut sink, mut records) = network().await;
+    let (sink, mut records) = network().await;
     let mut db = crate::DeviceIdentity::new(456, 42)
         .unwrap()
         .build_database()

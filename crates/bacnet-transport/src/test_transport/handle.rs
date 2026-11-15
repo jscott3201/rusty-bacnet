@@ -43,6 +43,9 @@ pub(super) struct Shared {
     /// The sender of the channel the last `StartMode::Fresh` start made,
     /// until a stop or abort drops it.
     pub(super) inbound: Mutex<Option<mpsc::Sender<ReceivedNpdu>>>,
+    /// Set once a stop returns and cleared by a start: every send between
+    /// fails, as a real link's does after its stop (#2617).
+    pub(super) stopped: AtomicBool,
     fail_next: AtomicBool,
     block_next: AtomicBool,
     blocked: Semaphore,
@@ -60,6 +63,7 @@ impl Default for Shared {
             settings: Mutex::default(),
             inner_limits: Mutex::new(None),
             inbound: Mutex::new(None),
+            stopped: AtomicBool::new(false),
             fail_next: AtomicBool::new(false),
             block_next: AtomicBool::new(false),
             blocked: Semaphore::new(0),

@@ -1,8 +1,8 @@
 use super::*;
 #[tokio::test(start_paused = true)]
 async fn source_write_whole_operation_capacity_bounds_prelease_waiters_and_stop() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, _records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, _records) = network().await;
     let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let database = Arc::clone(session.database.as_ref().unwrap());
@@ -55,8 +55,8 @@ async fn source_write_whole_operation_capacity_bounds_prelease_waiters_and_stop(
 
 #[tokio::test(start_paused = true)]
 async fn source_write_audit_capacity_deadline_health_and_later_recovery() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(write_database(true), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let mut first_notification = None;
@@ -161,8 +161,8 @@ async fn source_write_audit_capacity_deadline_health_and_later_recovery() {
 
 #[tokio::test(start_paused = true)]
 async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     for stop in [true, false] {
         let mut session = session(write_database(true), SessionRole::Both, &sink);
         session.client_config.apdu_timeout_ms = 60_000;
@@ -214,9 +214,9 @@ async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() 
 
 #[tokio::test(start_paused = true)]
 async fn source_write_captures_recipient_and_policy_before_peer_completion() {
-    let (mut peer, mut requests) = network().await;
-    let (mut old, mut old_records) = network().await;
-    let (mut new, mut new_records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (old, mut old_records) = network().await;
+    let (new, mut new_records) = network().await;
     let mut session = session(write_database(false), SessionRole::ClientOnly, &old);
     session.start().await.unwrap();
     let pending = start_write(

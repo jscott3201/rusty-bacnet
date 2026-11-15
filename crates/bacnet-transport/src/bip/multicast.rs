@@ -352,7 +352,8 @@ impl MulticastControl {
         group: SocketAddrV4,
         refused: io::Error,
     ) -> io::Result<socket2::Socket> {
-        let primary = socket2::SockRef::from(&***node.socket());
+        let socket = primary_socket(node)?;
+        let primary = socket2::SockRef::from(&**socket);
         let claimed_wildcard = primary
             .local_addr()
             .ok()
@@ -658,7 +659,7 @@ impl MulticastControl {
         // activation outside one couldn't do.
         tokio::runtime::Handle::try_current().map_err(io::Error::other)?;
         configure_sender(
-            socket2::SockRef::from(&***node.socket()),
+            socket2::SockRef::from(&**primary_socket(node)?),
             self.interface,
             next.ttl,
         )?;
@@ -686,12 +687,9 @@ impl MulticastControl {
         let Some(next) = next else {
             return Ok(None);
         };
-        let primary = socket2::SockRef::from(&***node.socket());
-        configure_sender(
-            socket2::SockRef::from(&***node.socket()),
-            self.interface,
-            next.ttl,
-        )?;
+        let socket = primary_socket(node)?;
+        let primary = socket2::SockRef::from(&**socket);
+        configure_sender(socket2::SockRef::from(&**socket), self.interface, next.ttl)?;
         primary.join_multicast_v4(&next.group, &self.interface)?;
         Ok(Some(next.group))
     }
@@ -719,8 +717,10 @@ impl MulticastControl {
             swap.offer(prepared);
         }
         #[cfg(windows)]
-        if let Some(old) = old.filter(|old| Some(old.group) != prepared) {
-            let primary = socket2::SockRef::from(&***node.socket());
+        if let Some(old) = old.filter(|old| Some(old.group) != prepared)
+            && let Some(socket) = node.socket()
+        {
+            let primary = socket2::SockRef::from(&**socket);
             if let Err(error) = primary.leave_multicast_v4(&old.group, &self.interface) {
                 warn!(%error, group = %old.group, "Could not leave the old B/IP multicast group");
             }
@@ -732,8 +732,10 @@ impl MulticastControl {
     #[cfg_attr(not(windows), allow(unused_variables))]
     fn roll_back(&self, node: &NodeHandle, prepared: Prepared, old: Option<BipMulticast>) {
         #[cfg(windows)]
-        if let Some(group) = prepared.filter(|group| old.map(|old| old.group) != Some(*group)) {
-            let primary = socket2::SockRef::from(&***node.socket());
+        if let Some(group) = prepared.filter(|group| old.map(|old| old.group) != Some(*group))
+            && let Some(socket) = node.socket()
+        {
+            let primary = socket2::SockRef::from(&**socket);
             let _ = primary.leave_multicast_v4(&group, &self.interface);
         }
     }
@@ -741,6 +743,13 @@ impl MulticastControl {
 
 fn protocol(code: ErrorCode) -> Error {
     Error::protocol(ErrorClass::PROPERTY, code)
+}
+
+/// The running node's socket, or the error for a node that stopped since
+/// it was found running (#2617).
+fn primary_socket(node: &NodeHandle) -> io::Result<Arc<super::BipSocket>> {
+    node.socket()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "transport stopped"))
 }
 
 impl IpMulticast for MulticastControl {
@@ -980,7 +989,11 @@ impl super::BipTransport {
             subnet,
             swap: swap.clone(),
             bbmd,
-            lease: self.network_port_lease.clone(),
+            lease: self
+                .network_port_lease
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
             tap: self.frame_tap.clone(),
         });
         swap

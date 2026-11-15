@@ -75,7 +75,7 @@ async fn assert_valid_sentinel(
 }
 
 async fn assert_missing_source_unicast_rejected(must_understand: bool) {
-    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let (transport, mut rx, ws_hub) = start_transport().await;
     send(&ws_hub, &npdu(None, None, must_understand)).await;
 
     // Connection-local Result, echoed ID, no VMACs/options, marker zero,
@@ -111,7 +111,7 @@ async fn hub_npdu_missing_source_unicast_returns_connection_local_nak() {
 
 #[tokio::test]
 async fn hub_npdu_missing_source_broadcast_is_silent_with_or_without_options() {
-    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let (transport, mut rx, ws_hub) = start_transport().await;
     for must_understand in [false, true] {
         send(&ws_hub, &npdu(None, Some(BROADCAST_VMAC), must_understand)).await;
         assert_valid_sentinel(&mut rx, &ws_hub, Some(BROADCAST_VMAC)).await;
@@ -129,7 +129,7 @@ async fn hub_npdu_missing_source_broadcast_is_silent_with_or_without_options() {
 }
 
 async fn assert_silent_discard(source: Option<Vmac>, must_understand: bool) {
-    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let (transport, mut rx, ws_hub) = start_transport().await;
     for destination in [None, Some(BROADCAST_VMAC)] {
         send(&ws_hub, &npdu(source, destination, must_understand)).await;
         assert_valid_sentinel(&mut rx, &ws_hub, destination).await;
@@ -229,7 +229,7 @@ fn invalid_source_messages() -> Vec<ScMessage> {
 // the 1 s ACK deadline before the test answered the probe (#2310).
 #[tokio::test(start_paused = true)]
 async fn hub_npdu_invalid_sources_do_not_refresh_liveness() {
-    let (mut transport, mut rx, ws_hub) = start_with_heartbeat_timing().await;
+    let (transport, mut rx, ws_hub) = start_with_heartbeat_timing().await;
     assert_valid_sentinel(&mut rx, &ws_hub, None).await;
     let mut states = transport.connection_state_changes();
     let messages = invalid_source_messages();
@@ -266,7 +266,7 @@ async fn hub_npdu_invalid_sources_do_not_refresh_liveness() {
 
 #[tokio::test(start_paused = true)]
 async fn hub_npdu_invalid_sources_do_not_clear_pending_heartbeat() {
-    let (mut transport, mut rx, ws_hub) = start_with_heartbeat_timing().await;
+    let (transport, mut rx, ws_hub) = start_with_heartbeat_timing().await;
     assert_valid_sentinel(&mut rx, &ws_hub, None).await;
     let heartbeat = decode_sc_message(&recv(&ws_hub).await).unwrap();
     assert_eq!(heartbeat.function, ScFunction::HeartbeatRequest);

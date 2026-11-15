@@ -24,6 +24,7 @@
 use std::{
     io,
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
+    sync::{Arc, PoisonError, RwLock},
 };
 use tokio::net::UdpSocket;
 
@@ -241,6 +242,64 @@ fn classify(selection: Option<SelectedLink>, mut received: ReceivedDatagram) -> 
         }
     }
     Inbound::Datagram(received)
+}
+
+/// The started transport's socket, for its sends: a stop takes it out,
+/// after which every send fails (#2617). Only `start`, `stop` and drop
+/// write it. A send reads it as it sends, after any wait for its VMAC to
+/// resolve, and keeps its own reference only for that one datagram, so a
+/// send waiting when the transport stops holds no socket open.
+#[derive(Default)]
+pub(super) struct SocketSlot(RwLock<Option<Arc<Bip6Socket>>>);
+
+impl SocketSlot {
+    /// The socket, while the transport runs.
+    pub(super) fn get(&self) -> Option<Arc<Bip6Socket>> {
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Whether the transport runs.
+    pub(super) fn is_some(&self) -> bool {
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    /// Hold `socket` from a start on.
+    pub(super) fn set(&mut self, socket: Arc<Bip6Socket>) {
+        *self.0.get_mut().unwrap_or_else(PoisonError::into_inner) = Some(socket);
+    }
+
+    /// Take the socket out, for a stop.
+    pub(super) fn take(&self) -> Option<Arc<Bip6Socket>> {
+        self.0
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+}
+
+impl super::resolver::DatagramSender for SocketSlot {
+    fn send_to(
+        &self,
+        bytes: &[u8],
+        peer: SocketAddrV6,
+    ) -> impl std::future::Future<Output = io::Result<usize>> + Send {
+        let socket = self.get();
+        async move {
+            match socket {
+                Some(socket) => socket.send_to(bytes, peer).await,
+                None => Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "transport stopped",
+                )),
+            }
+        }
+    }
 }
 
 /// What one read of a [`Bip6Socket`] returned.

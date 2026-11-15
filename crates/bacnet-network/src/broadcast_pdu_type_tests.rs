@@ -128,7 +128,7 @@ async fn router_still_relays_an_answer_to_one_device() {
 
 #[tokio::test]
 async fn non_router_delivers_no_broadcast_that_isnt_an_unconfirmed_request() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut controls = network.enable_network_control_receiver().unwrap();
     let mut apdus = network.start().await.unwrap();

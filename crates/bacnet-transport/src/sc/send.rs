@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bytes::BytesMut;
 
 use bacnet_types::error::Error;
@@ -45,7 +47,12 @@ impl<W: WebSocketPort> ScTransport<W> {
         let uris = match direct.cached_uris(&dest_vmac).await {
             Some(uris) => Some(uris),
             None => {
-                let hub = ws_shared.lock().await.clone();
+                // Stopped: the hub socket is gone, and so is discovery.
+                let hub = ws_shared
+                    .lock()
+                    .await
+                    .clone()
+                    .ok_or_else(crate::port::stopped)?;
                 direct
                     .discover_via_hub(dest_vmac, &hub, conn, self.connect_timeout_ms)
                     .await
@@ -104,8 +111,13 @@ impl<W: WebSocketPort> ScTransport<W> {
 
         // Admission is atomic with socket publication. An admitted send owns
         // its Arc and may complete after retirement; it is not rolled back.
+        // A stop takes the socket out of the slot, so a send after it fails
+        // here, under the lock every send takes anyway (#2617).
         let (ws, hub_max_bvlc_length, msg) = {
             let ws = ws_shared.lock().await;
+            let Some(ws) = ws.as_ref() else {
+                return Err(crate::port::stopped());
+            };
             let mut c = conn.lock().await;
             if c.state != ScConnectionState::Connected {
                 return Err(Error::Encoding(
@@ -121,7 +133,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             let hub_max_bvlc_length = c.hub_max_bvlc_length;
             let msg =
                 c.build_encapsulated_npdu_with_data_attributes(dest_vmac, npdu, data_attributes)?;
-            (ws.clone(), hub_max_bvlc_length, msg)
+            (Arc::clone(ws), hub_max_bvlc_length, msg)
         };
 
         let mut buf = BytesMut::new();

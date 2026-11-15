@@ -112,7 +112,7 @@ impl TransportPort for AppTransport {
         each!(self, t => t.start().await)
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
+    async fn stop(&self) -> Result<(), Error> {
         each!(self, t => t.stop().await)
     }
 

@@ -493,8 +493,8 @@ async fn sc_reconnect_connector_timeout_counts_as_failed_attempt() {
         .await
         .expect("no redial after the primary socket closed")
         .unwrap();
-    let receiving = &transport;
-    let ended = || receiving.recv_task.as_ref().unwrap().is_finished();
+    let receiving = transport.recv_task_handle();
+    let ended = || receiving.is_finished();
 
     tokio::time::sleep_until(dialled + CONNECT_TIMEOUT - Duration::from_millis(1)).await;
     assert!(
@@ -797,7 +797,7 @@ async fn sc_drop_aborts_hung_primary_restore_failover_disconnect() {
     })
     .await;
 
-    let abort_handle = transport.recv_task.as_ref().unwrap().abort_handle();
+    let abort_handle = transport.recv_task_handle();
     drop(transport);
     let abort_handle = &abort_handle;
     until("dropping SC transport aborts recv task", || async move {

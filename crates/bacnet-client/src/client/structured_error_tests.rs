@@ -98,7 +98,7 @@ async fn client_and_peer() -> (
 
 #[tokio::test]
 async fn create_object_error_surfaces_the_failed_initial_value() {
-    let (mut client, mut peer, mut received) = client_and_peer().await;
+    let (mut client, peer, mut received) = client_and_peer().await;
     let value = |property: PropertyIdentifier| BACnetPropertyValue {
         property_identifier: property,
         property_array_index: None,
@@ -131,7 +131,7 @@ async fn create_object_error_surfaces_the_failed_initial_value() {
 
 #[tokio::test]
 async fn write_property_multiple_error_surfaces_the_failed_write() {
-    let (mut client, mut peer, mut received) = client_and_peer().await;
+    let (mut client, peer, mut received) = client_and_peer().await;
     let result = answered(
         &peer,
         &mut received,
@@ -164,7 +164,7 @@ async fn write_property_multiple_error_surfaces_the_failed_write() {
 
 #[tokio::test]
 async fn subscribe_cov_property_multiple_error_surfaces_the_failed_subscription() {
-    let (mut client, mut peer, mut received) = client_and_peer().await;
+    let (mut client, peer, mut received) = client_and_peer().await;
     let mut request = BytesMut::new();
     SubscribeCOVPropertyMultipleRequest {
         subscriber_process_identifier: 1,
@@ -224,7 +224,7 @@ async fn subscribe_cov_property_multiple_error_surfaces_the_failed_subscription(
 
 #[tokio::test]
 async fn confirmed_private_transfer_error_surfaces_vendor_service_and_parameters() {
-    let (mut client, mut peer, mut received) = client_and_peer().await;
+    let (mut client, peer, mut received) = client_and_peer().await;
     let mut request = BytesMut::new();
     PrivateTransferRequest {
         vendor_id: 555,
@@ -265,7 +265,7 @@ async fn confirmed_private_transfer_error_surfaces_vendor_service_and_parameters
 
 #[tokio::test]
 async fn vt_close_error_surfaces_the_sessions_not_closed() {
-    let (mut client, mut peer, mut received) = client_and_peer().await;
+    let (mut client, peer, mut received) = client_and_peer().await;
     let mut request = BytesMut::new();
     VTCloseRequest {
         list_of_remote_vt_session_identifiers: vec![10, 11],

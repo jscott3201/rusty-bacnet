@@ -97,11 +97,24 @@ pub(super) enum Route {
     },
     /// The NPDU is queued until the resolution ends.
     Queued { wake: bool },
+    /// The transport isn't running: nothing is sent or waited for.
+    Closed(Closed),
+}
+
+/// Why the table takes no send or lookup (#2617).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Closed {
+    /// The transport hasn't started.
+    NotStarted,
+    /// The transport has stopped.
+    Stopped,
 }
 
 /// What a Virtual-Address-Resolution call does now.
 #[derive(Debug)]
 pub(super) enum VirtualRoute {
+    /// The transport isn't running.
+    Closed(Closed),
     /// The table already maps the address to one VMAC.
     Known(Bip6Vmac),
     /// Refused: a bound is reached.
@@ -190,6 +203,10 @@ pub(super) struct Neighbours {
     queued: usize,
     /// Queued NPDUs whose VMAC resolved, for the driver to send.
     flush: Vec<(SocketAddrV6, Bip6Vmac, Bytes)>,
+    /// Set while the transport isn't running, by [`Self::clear`] at a stop:
+    /// a send or lookup then registers nothing that no driver would end
+    /// (#2617). Open by default, as a table on its own is.
+    pub(super) closed: Option<Closed>,
 }
 
 impl Neighbours {
@@ -203,6 +220,9 @@ impl Neighbours {
         now: Instant,
         counts: &ResolutionCounts,
     ) -> Route {
+        if let Some(closed) = self.closed {
+            return Route::Closed(closed);
+        }
         if let Some(addr) = self.table.lookup(vmac) {
             // A check the bound leaves no room for isn't recorded, so the
             // next send tries again.
@@ -314,6 +334,9 @@ impl Neighbours {
 
     /// Decide what a lookup of `peer`'s VMAC at `now` does.
     pub(super) fn resolve_virtual(&mut self, peer: SocketAddrV6, now: Instant) -> VirtualRoute {
+        if let Some(closed) = self.closed {
+            return VirtualRoute::Closed(closed);
+        }
         if let Some(vmac) = self.table.by_address(peer) {
             return VirtualRoute::Known(vmac);
         }
@@ -460,6 +483,7 @@ impl Neighbours {
     /// Dropping a waiter's sender is how it learns. The queued NPDUs, those
     /// waiting for the driver included, are dropped and counted.
     pub(super) fn clear(&mut self, counts: &ResolutionCounts) {
+        self.closed = Some(Closed::Stopped);
         counts.queued_dropped(self.queued);
         self.table.clear();
         self.pending.clear();

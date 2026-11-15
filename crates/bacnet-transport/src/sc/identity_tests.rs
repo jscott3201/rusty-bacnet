@@ -92,12 +92,12 @@ fn assert_untouched(
     assert!(!states.has_changed().unwrap());
     assert_eq!(*states.borrow(), ScConnectionState::Disconnected);
     assert!(transport.connection().is_none());
-    assert!(transport.ws.is_some());
-    assert!(transport.failover_ws.is_some());
+    assert!(transport.ws.lock().unwrap().is_some());
+    assert!(transport.failover_ws.lock().unwrap().is_some());
     assert!(transport.primary_connector.is_some());
     assert!(transport.failover_connector.is_some());
     assert!(transport.ws_shared.is_none());
-    assert!(transport.recv_task.is_none());
+    assert!(transport.recv_task.lock().unwrap().is_none());
     assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
     assert_eq!(transport.egress_apdu_limit(), DEFAULT_MAX_APDU_LENGTH);
     assert_eq!(transport.local_mac(), vmac);
@@ -156,7 +156,7 @@ async fn reject_identity(vmac: Vmac, uuid: Option<[u8; 16]>, expected: &str) {
         transport.stop().await.unwrap();
         assert_eq!(*states.borrow(), ScConnectionState::Disconnected);
         assert!(rx.recv().await.is_none());
-        assert!(transport.recv_task.is_none());
+        assert!(transport.recv_task.lock().unwrap().is_none());
         assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
         assert_eq!(counts.drops.load(Ordering::SeqCst), 2);
     }

@@ -74,7 +74,9 @@ async fn rejection_deadline_no_factory_never_rehandshakes_or_flushes_retired_soc
         let _rx = started(&mut transport, &hub).await;
         expire(&transport, &hub, &observed).await;
         let before = snapshot(&observed);
-        within(transport.recv_task.take().unwrap()).await.unwrap();
+        within(transport.recv_task.get_mut().unwrap().take().unwrap())
+            .await
+            .unwrap();
         assert!(transport.send_broadcast(&[1, 0]).await.is_err());
         transport.stop().await.unwrap();
         assert_retired(&observed, before);
@@ -95,7 +97,9 @@ async fn rejection_deadline_without_reconnect_does_not_dial_or_consume_failover(
         });
     let _rx = started(&mut transport, &hub).await;
     expire(&transport, &hub, &observed).await;
-    within(transport.recv_task.take().unwrap()).await.unwrap();
+    within(transport.recv_task.get_mut().unwrap().take().unwrap())
+        .await
+        .unwrap();
     assert_eq!(dials.load(Ordering::SeqCst), 0);
     assert_eq!(snapshot(&failover_observed), (0, 0));
     transport.stop().await.unwrap();
@@ -296,7 +300,9 @@ async fn rejection_deadline_fresh_primary_restore_and_outstanding_disconnect_cle
     expire(&transport, &fresh, &fresh_observed).await;
     wait_count(&failover_observed.disconnect_dropped, 1).await;
     let fresh_before = snapshot(&fresh_observed);
-    within(transport.recv_task.take().unwrap()).await.unwrap();
+    within(transport.recv_task.get_mut().unwrap().take().unwrap())
+        .await
+        .unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 3);
     assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
     failover_observed.release.notify_waiters();
@@ -330,7 +336,9 @@ async fn rejection_deadline_active_failover_expiry_does_not_reuse_or_change_reco
     let primary_before = snapshot(&observed);
     expire(&transport, &failover_hub, &failover_observed).await;
     let failover_before = snapshot(&failover_observed);
-    within(transport.recv_task.take().unwrap()).await.unwrap();
+    within(transport.recv_task.get_mut().unwrap().take().unwrap())
+        .await
+        .unwrap();
     assert_eq!(
         *transport.connection_state_changes().borrow(),
         ScConnectionState::Disconnected
@@ -423,11 +431,24 @@ async fn rejection_deadline_drop_terminates_pending_nak_without_claiming_socket_
     let (client, hub, observed) = GateSocket::pair();
     let mut transport = transport(client);
     let _rx = started(&mut transport, &hub).await;
-    let retained = transport.ws_shared.as_ref().unwrap().lock().await.clone();
+    let retained = transport
+        .ws_shared
+        .as_ref()
+        .unwrap()
+        .lock()
+        .await
+        .clone()
+        .unwrap();
     observed.hold_nak.store(true, Ordering::SeqCst);
     hub.send(&rejection_wires()[0]).await.unwrap();
     wait_count(&observed.nak_started, 1).await;
-    let task = transport.recv_task.as_ref().unwrap().abort_handle();
+    let task = transport
+        .recv_task
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .abort_handle();
     drop(transport);
     let task = &task;
     until(

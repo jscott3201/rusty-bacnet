@@ -54,15 +54,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// (#2617 step 4). A session with no server role leaves the client to
     /// answer as a standalone one does, acknowledgment included.
     ///
-    /// **Stopping.** Drop the client before [`stop`](Self::stop). The
-    /// client keeps the link alive, so a stop while it lives closes the
-    /// session's roles, ends the client's tasks, fails its open requests,
-    /// and then fails with an error that says so; it finishes when called
-    /// again after the client is dropped. From that first stop on, the
-    /// client sends nothing: each request and each Who-Is or other
-    /// unconfirmed send fails at once. Only what goes through the client's
-    /// `transport()` itself, such as a B/IP BVLC call or the frame tap,
-    /// still reaches the link until the client is dropped.
+    /// **Stopping.** One [`stop`](Self::stop) stops the session, whether
+    /// the client is still alive or not (#2617): it closes the session's
+    /// roles, ends the client's tasks, fails its open requests and stops
+    /// the link. From then on the client sends nothing: each request and
+    /// each Who-Is or other unconfirmed send fails at once, as its seat has
+    /// closed, and what goes through its `transport()` itself, such as a B/IP
+    /// BVLC call, fails with the transport's stopped error. Dropping the
+    /// client after that changes nothing, and the client's own
+    /// [`BACnetClient::stop`] is not needed.
     ///
     /// ```no_run
     /// use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
@@ -74,11 +74,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// let mut session =
     ///     EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
     /// session.start().await?;
-    /// let mut client = session.full_client()?;
+    /// let client = session.full_client()?;
     /// client.who_is(None).await?;
-    /// client.stop().await?;
-    /// drop(client);
     /// session.stop().await?;
+    /// // The client is still alive; its calls now fail.
+    /// assert!(client.who_is(None).await.is_err());
     /// # Ok(())
     /// # }
     /// ```

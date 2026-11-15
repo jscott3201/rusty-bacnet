@@ -58,7 +58,7 @@ async fn assert_active_initial_abort(
     segmented_response_accepted: bool,
     expected_wire_reason: AbortReason,
 ) {
-    let (request, mut server, mut rx, invoke_id) =
+    let (request, server, mut rx, invoke_id) =
         start_reassembly(config(segmented_response_accepted)).await;
 
     send_to_client(
@@ -123,7 +123,7 @@ async fn idle_precedes_unsupported_capability() {
 
 #[tokio::test]
 async fn supported_sequence_zero_enters_segmented_response_and_completes() {
-    let (request, mut server, mut rx, invoke_id) = start_reassembly(config(true)).await;
+    let (request, server, mut rx, invoke_id) = start_reassembly(config(true)).await;
 
     send_to_client(&server, &response_segment(invoke_id, 0, true, b"first-")).await;
     expect_segment_ack(&mut rx, invoke_id, 0).await;

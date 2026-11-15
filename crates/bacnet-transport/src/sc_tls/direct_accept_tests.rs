@@ -575,7 +575,7 @@ async fn assert_accept_direct(hub: &crate::sc::LoopbackWebSocket, expected: u8) 
 #[tokio::test]
 async fn accept_registered_bit_is_one_while_listening_and_npdu_reaches_transport() {
     let ca = TestCa::generate();
-    let (mut transport, mut listener, mut rx, hub) = registered_listener(&ca).await;
+    let (transport, mut listener, mut rx, hub) = registered_listener(&ca).await;
     assert_accept_direct(&hub, 1).await;
     let (ws, _) = dial_and_handshake(
         &direct_url(&listener.local_addr()),
@@ -646,7 +646,7 @@ async fn assert_listener_closed(
 
 async fn registered_listener_reverts_to_zero(drop_listener: bool) {
     let ca = TestCa::generate();
-    let (mut transport, listener, mut rx, hub) = registered_listener(&ca).await;
+    let (transport, listener, mut rx, hub) = registered_listener(&ca).await;
     let addr = listener.local_addr();
     let accept_task = listener.accept_task.as_ref().unwrap().abort_handle();
     let mut listener = Some(listener);
@@ -692,7 +692,7 @@ async fn accept_registered_bit_reverts_after_drop() {
 #[tokio::test]
 async fn accept_registered_bit_reverts_if_accept_task_is_cancelled() {
     let ca = TestCa::generate();
-    let (mut transport, mut listener, _rx, hub) = registered_listener(&ca).await;
+    let (transport, mut listener, _rx, hub) = registered_listener(&ca).await;
     assert_accept_direct(&hub, 1).await;
     listener.accept_task.as_ref().unwrap().abort();
     let mut stopped = listener.shutdown_status();
@@ -712,7 +712,7 @@ async fn accept_registered_bit_reverts_if_accept_task_is_cancelled() {
 #[tokio::test]
 async fn accept_registered_bit_is_zero_without_application_intake_or_matching_identity() {
     let ca = TestCa::generate();
-    let (mut transport, mut listener, rx, hub) = registered_listener(&ca).await;
+    let (transport, mut listener, rx, hub) = registered_listener(&ca).await;
     transport.connection().unwrap().lock().await.local_vmac = [0xBB; 6];
     assert_accept_direct(&hub, 0).await;
     transport.connection().unwrap().lock().await.local_vmac = LISTENER_VMAC;

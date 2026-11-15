@@ -4,8 +4,8 @@ use bacnet_types::error::RemoteError;
 
 #[tokio::test(start_paused = true)]
 async fn source_write_preflight_is_silent_with_and_without_reporter() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     for reported in [false, true] {
         let mut endpoint = if reported {
             session(write_database(false), SessionRole::ClientOnly, &sink)
@@ -95,8 +95,8 @@ async fn source_write_preflight_is_silent_with_and_without_reporter() {
 
 #[tokio::test(start_paused = true)]
 async fn source_write_before_admission_cancel_and_after_admission_retry_are_bounded() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
@@ -214,7 +214,7 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
     use bacnet_objects::{analog::AnalogValueObject, notification_class::NotificationClass};
     use bacnet_server::server::{BACnetServer, ServerConfig};
     use bacnet_types::enums::EngineeringUnits;
-    let (mut sink, mut records) = network().await;
+    let (sink, mut records) = network().await;
     let mut db = crate::DeviceIdentity::new(456, 42)
         .unwrap()
         .build_database()
@@ -280,8 +280,8 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
 
 #[tokio::test(start_paused = true)]
 async fn source_write_wrong_service_error_cannot_finish_or_steal_retry_identity() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
