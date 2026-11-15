@@ -40,7 +40,8 @@ pub async fn scope<T: TransportPort + 'static>(
         (Some(target), _) => {
             let mac =
                 target::address_mac(client.transport(), target, target::TARGET_NOT_AN_ADDRESS)
-                    .await?;
+                    .await
+                    .map_err(crate::destination::with_link_flag)?;
             Scope::Directed(DeviceAddress::local(&mac)?)
         }
         (None, Some(network)) => Scope::Network(network),

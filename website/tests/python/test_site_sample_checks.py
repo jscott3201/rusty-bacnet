@@ -129,7 +129,7 @@ class PythonBlocks(unittest.TestCase):
             (good.replace("ttl=600", "tll=600"), "ForeignDevice"),
             (good.replace("ForeignDevice\n", "ForeignDevise\n", 1), "ForeignDevise"),
             (good.replace("client.foreign_registration()", "client.foreign_registrations()"), "foreign_registrations"),
-            (good.replace("discover(timeout_ms=3000)", "discover(wait_ms=3000)"), "BACnetClient.discover"),
+            (good.replace("discover(wait=3.0)", "discover(wait_ms=3000)"), "BACnetClient.discover"),
             (good.replace('BACnetClient(port=0', 'BACnetClient(prot=0'), "BACnetClient"),
         ):
             with self.subTest(needle=needle):

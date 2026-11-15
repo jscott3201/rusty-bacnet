@@ -489,7 +489,7 @@ async fn serve_with<T: TransportPort + 'static>(
                             }
                             if let WhoIsScope::Directed { to: DirectedTo::Bip6(peer), .. } = &spec.scope {
                                 let lookup = bacnet_ops::target::bip6_vmac(client.transport(), *peer);
-                                let vmac = Box::pin(async move { lookup.await.map_err(|e| e.to_string()) });
+                                let vmac = Box::pin(async move { lookup.await.map_err(|e| crate::destination::with_link_flag(e.to_string())) });
                                 resolving = Some(Resolving { op, spec, vmac });
                             } else {
                                 listening = who_is(&client, &sink, op, &spec).await;

@@ -286,3 +286,30 @@ async fn one_objects_state_texts_fall_back_to_none() {
     }
     stop(client, server).await;
 }
+
+/// The operations core refuses a target another link is needed for without
+/// naming a flag; the CLI names its own, and leaves every other refusal as
+/// it came.
+#[tokio::test]
+async fn a_link_refusal_names_the_cli_flag() {
+    let transport = LoopbackTransport::pair(vec![1], vec![2]).0;
+    for (target, flag) in [("bip6:1234", "--ipv6"), ("mstp:5", "--mstp")] {
+        let refused = parse_target_on(&transport, target).unwrap_err();
+        assert!(!refused.contains("--"), "{refused}");
+        let shown = with_link_flag(refused.clone());
+        assert_eq!(shown, format!("{refused} ({flag})"));
+    }
+    // A B/IPv6 socket address on another link: both resolvers name the flag.
+    let (client, server) = lab().await;
+    let by_resolve = resolve(&client, "[::1]:47808", std::time::Duration::ZERO).await;
+    let by_mac = resolve_mac(&client, "[::1]:47808").await;
+    for refused in [
+        by_resolve.map(drop).unwrap_err(),
+        by_mac.map(drop).unwrap_err(),
+    ] {
+        assert!(refused.ends_with("(--ipv6)"), "{refused}");
+    }
+    stop(client, server).await;
+    let other = parse_target_on(&transport, "nonsense").unwrap_err();
+    assert_eq!(with_link_flag(other.clone()), other);
+}

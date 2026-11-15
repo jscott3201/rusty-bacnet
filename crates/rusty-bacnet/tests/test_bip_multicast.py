@@ -108,7 +108,7 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                 while device is None:
                     self.assertLess(asyncio.get_running_loop().time(), deadline,
                                     "the server was not discovered")
-                    await client.who_is(3201, 3201)
+                    await client.who_is(low=3201, high=3201)
                     await asyncio.sleep(0.2)
                     device = await client.get_device(3201)
                 self.assertEqual(device.object_identifier,
@@ -141,7 +141,7 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                 while device is None:
                     self.assertLess(asyncio.get_running_loop().time(), deadline,
                                     "the BBMD was not discovered")
-                    await client.who_is(3202, 3202)
+                    await client.who_is(low=3202, high=3202)
                     await asyncio.sleep(0.2)
                     device = await client.get_device(3202)
                 oid = ObjectIdentifier(ObjectType.NETWORK_PORT, 1)

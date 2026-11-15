@@ -18,6 +18,7 @@ async fn running_client() -> ClientInner {
             .await
             .unwrap(),
         bacnet_ops::WritePolicy::default(),
+        None,
     ));
     state
 }
@@ -153,4 +154,33 @@ async fn queued_work_behind_a_pending_entry_learns_of_close_at_once() {
         .unwrap()
         .unwrap();
     assert!(!state.closing.load(Ordering::Acquire));
+}
+
+/// A Python `Device` that goes away takes its handle out of the started
+/// client's map, so the map holds only handles someone can still call.
+#[tokio::test]
+async fn a_dropped_tie_forgets_its_handle_while_the_client_runs() {
+    let state = running_client().await;
+    let tie = crate::client::DeviceTie::new(Arc::clone(&state));
+    let other = crate::client::DeviceTie::new(Arc::clone(&state));
+    for tie in [&tie, &other] {
+        let held = tie
+            .hold(|client| async move {
+                let station =
+                    bacnet_ops::DeviceAddress::local(&[127, 0, 0, 1, 0xBA, 0xC0]).unwrap();
+                Ok(client.device(station).await.unwrap())
+            })
+            .await
+            .unwrap();
+        drop(held);
+        assert!(tie.peek(|_| ()).is_some());
+    }
+    assert_eq!(state.handles.lock().unwrap().len(), 2);
+    drop(tie);
+    // The client is still started, and only the other's handle is left.
+    assert!(started(&state).await.is_ok());
+    assert_eq!(state.handles.lock().unwrap().len(), 1);
+    assert!(other.peek(|_| ()).is_some());
+    close(Arc::clone(&state)).await.unwrap();
+    assert!(other.peek(|_| ()).is_none(), "a stop drops the rest");
 }

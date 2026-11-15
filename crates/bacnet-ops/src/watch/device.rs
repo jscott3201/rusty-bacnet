@@ -49,7 +49,7 @@ use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
 use super::support::fills_table;
 use crate::client::batch::Missing;
-use crate::client::unreachable;
+use crate::client::{failed_locally, unreachable};
 use crate::device::DeviceAddress;
 use crate::format::PropertyError;
 use crate::limits::charged;
@@ -589,9 +589,14 @@ impl<T: TransportPort + 'static> Device<T> {
                 shared.set_state(seq, source, state, Some(note));
             }
         }
-        // A subscription with no answer, or one refused for a full table,
-        // is asked for again; any other refusal isn't.
-        let unanswered = matches!(&started.outcome, Outcome::Asked(Err(e)) if unreachable(e));
+        // A subscription with no answer, one the client itself failed to
+        // ask (its link reconnecting, say: no word of the device's), or one
+        // refused for a full table, is asked for again; any other refusal
+        // isn't.
+        let unanswered = matches!(
+            &started.outcome,
+            Outcome::Asked(Err(e)) if unreachable(e) || failed_locally(e)
+        );
         let full = matches!(&started.outcome, Outcome::Asked(Err(e)) if fills_table(e));
         let transient = match &started.outcome {
             Outcome::Asked(Err(_)) => unanswered || full,

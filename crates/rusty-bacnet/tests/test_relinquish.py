@@ -1,6 +1,6 @@
 """Relinquish and the priority array from Python (#2561).
 
-``BACnetClient.relinquish`` writes NULL at one slot of an object's
+``Device.relinquish`` writes NULL at one slot of an object's
 Priority_Array and reads the slots back; ``priority_array`` reads them. Both
 go through the high-level client, so the client's ``write_policy`` refuses
 priorities 1, 2, 5 and 6 unless it allows them, while ``write_property``
@@ -32,6 +32,7 @@ from rusty_bacnet import (
     BacnetReadBackError,
     BacnetTimeoutError,
     BacnetWriteDeniedError,
+    Device,
     ErrorClass,
     ErrorCode,
     ObjectIdentifier,
@@ -165,7 +166,13 @@ def lab() -> BACnetServer:
 
 
 def client(**keywords) -> BACnetClient:
-    return BACnetClient(**{"interface": "127.0.0.1", "port": 0, "apdu_timeout_ms": 2000, **keywords})
+    """A client on loopback whose local broadcasts stay on loopback, as the
+    suite's other loopback clients' do: the default broadcast address,
+    255.255.255.255, has no route from 127.0.0.1 on some hosts (CI's macOS
+    runner), where a local Who-Is then fails with EHOSTUNREACH."""
+    defaults = {"interface": "127.0.0.1", "port": 0, "broadcast_address": "127.0.0.1",
+                "apdu_timeout_ms": 2000}
+    return BACnetClient(**{**defaults, **keywords})
 
 
 class Lab(unittest.IsolatedAsyncioTestCase):
@@ -195,7 +202,7 @@ class PriorityArrayTests(Lab):
         async with client() as c:
             await self.command(c, 8, 72.5)
             await self.command(c, 12, 50.0)
-            view = await c.priority_array(self.address, AO)
+            view = await (await c.device(self.address)).priority_array(AO)
         self.assertEqual(self.relay.services, [READ_PROPERTY_MULTIPLE])
         self.assertIsInstance(view, PriorityView)
         self.assertEqual(view.object_id, AO)
@@ -220,7 +227,7 @@ class PriorityArrayTests(Lab):
 
     async def test_every_slot_empty(self) -> None:
         async with client() as c:
-            view = await c.priority_array(self.address, AO)
+            view = await (await c.device(self.address)).priority_array(AO)
         self.assertEqual(view.slots, (None,) * 16)
         self.assertIsNone(view.in_control)
         self.assertEqual(view.present_value.text, view.relinquish_default.text)
@@ -230,7 +237,7 @@ class PriorityArrayTests(Lab):
             await c.write_property(
                 self.direct, BO, PV, PropertyValue.enumerated(1), priority=10
             )
-            view = await c.priority_array(self.address, BO)
+            view = await (await c.device(self.address)).priority_array(BO)
         slot = view.slot(10)
         self.assertEqual(slot.text, "active")
         self.assertEqual(slot.data, {"value": 1, "name": "active"})
@@ -249,7 +256,7 @@ class RelinquishTests(Lab):
         async with client() as c:
             await self.command(c, 8, 72.5)
             await self.command(c, 12, 50.0)
-            after = await c.relinquish(self.address, AO, 8)
+            after = await (await c.device(self.address)).relinquish(AO, 8)
             self.assertEqual(self.relay.services, [WRITE_PROPERTY, READ_PROPERTY_MULTIPLE])
             prop, value, priority = write_request(self.relay.requests[0][1])
             self.assertEqual(self.relay.requests[0][1][1:5], bytes([0x00, 0x40, 0x00, 0x01]))
@@ -260,7 +267,7 @@ class RelinquishTests(Lab):
             self.assertEqual(after.present_value.text, "50")
             # Releasing the last command leaves Relinquish_Default.
             self.relay.clear()
-            last = await c.relinquish(self.address, AO, priority=12)
+            last = await (await c.device(self.address)).relinquish(AO, priority=12)
             self.assertEqual(self.relay.services, [WRITE_PROPERTY, READ_PROPERTY_MULTIPLE])
             self.assertEqual(write_request(self.relay.requests[0][1])[2], 12)
         self.assertEqual(last.slots, (None,) * 16)
@@ -270,55 +277,62 @@ class RelinquishTests(Lab):
     async def test_the_priority_is_required(self) -> None:
         async with client() as c:
             with self.assertRaises(TypeError):
-                c.relinquish(self.address, AO)  # type: ignore[call-arg]
+                (await c.device(self.address)).relinquish(AO)  # type: ignore[call-arg]
         self.assertEqual(self.relay.requests, [])
 
     async def test_bad_priorities_raise_before_anything_is_sent(self) -> None:
         async with client() as c:
             for bad in (0, 17, -1, 2**70):
                 with self.subTest(priority=bad), self.assertRaisesRegex(ValueError, "1 to 16"):
-                    c.relinquish(self.address, AO, bad)
+                    (await c.device(self.address)).relinquish(AO, bad)
             for bad in (True, False, 8.0, "8", None):
                 with self.subTest(priority=bad), self.assertRaisesRegex(TypeError, "int"):
-                    c.relinquish(self.address, AO, bad)
+                    (await c.device(self.address)).relinquish(AO, bad)
             with self.assertRaises(ValueError):
-                c.relinquish("not an address", AO, 8)
+                c.device("not an address")
+            # The object is an ObjectIdentifier or its text, nothing else.
             with self.assertRaises(TypeError):
-                c.relinquish(self.address, "ao:1", 8)  # P1 takes an ObjectIdentifier
+                (await c.device(self.address)).relinquish(5, 8)
+            with self.assertRaises(ValueError):
+                (await c.device(self.address)).relinquish("not an object", 8)
         self.assertEqual(self.relay.requests, [])
 
-    async def test_an_address_the_link_cannot_carry_fails_on_await(self) -> None:
+    async def test_an_address_the_link_cannot_carry_is_refused(self) -> None:
         async with client() as c:
-            # A B/IPv6 VMAC's length, and one no local network uses: the
-            # parser takes both, so the Future is made, and the call refuses
-            # them when awaited.
-            for address in ("00:04:d2", "01:02"):
-                for call in (
-                    lambda: c.relinquish(address, AO, 8),
-                    lambda: c.priority_array(address, AO),
-                ):
-                    with self.subTest(address=address):
-                        pending = call()
-                        with self.assertRaises(ValueError):
-                            await pending
+            # Colon-separated hex of another length than six octets is no
+            # address to the grammar: three parts are refused when the call
+            # is made. (Two decimal parts, "10:20", are instance 20 on
+            # network 10, not a two-octet MAC.)
+            for target in ("00:04:d2", "0a:0b", "01:02:03:04"):
+                with self.subTest(target=target), self.assertRaises(ValueError):
+                    c.device(target)
+            # Octets the grammar can't judge, a B/IPv6 VMAC's length and an
+            # MS/TP station's, are refused for this link on await.
+            for mac in (b"\x00\x04\xd2", b"\x05"):
+                with self.subTest(mac=mac), self.assertRaises(ValueError):
+                    await c.device((0, mac))
+            # An MS/TP station is spelled "mstp:5" (a bare "5" is device
+            # instance 5); this B/IP link refuses it, naming the keyword.
+            with self.assertRaisesRegex(ValueError, r"MS/TP.*transport='mstp'"):
+                await c.device("mstp:5")
         self.assertEqual(self.relay.requests, [])
 
     async def test_an_object_type_without_priorities_sends_nothing(self) -> None:
         async with client() as c:
             with self.assertRaisesRegex(ValueError, "Priority_Array"):
-                await c.relinquish(self.address, AI, 8)
+                await (await c.device(self.address)).relinquish(AI, 8)
             with self.assertRaisesRegex(ValueError, "Priority_Array"):
-                await c.priority_array(self.address, AI)
+                await (await c.device(self.address)).priority_array(AI)
         self.assertEqual(self.relay.requests, [])
 
     async def test_an_object_without_a_priority_array(self) -> None:
         async with client() as c:
             with self.assertRaises(BacnetNoPriorityArrayError) as read:
-                await c.priority_array(self.address, PLAIN)
+                await (await c.device(self.address)).priority_array(PLAIN)
             self.assertEqual(self.relay.services, [READ_PROPERTY_MULTIPLE])
             self.relay.clear()
             with self.assertRaises(BacnetNoPriorityArrayError) as released:
-                await c.relinquish(self.address, PLAIN, 8)
+                await (await c.device(self.address)).relinquish(PLAIN, 8)
             self.assertEqual(self.relay.services, [WRITE_PROPERTY, READ_PROPERTY_MULTIPLE])
         for caught in (read.exception, released.exception):
             self.assertIsInstance(caught, BacnetProtocolError)
@@ -342,7 +356,7 @@ class RelinquishTests(Lab):
         missing = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 99)
         async with client() as c:
             with self.assertRaises(BacnetProtocolError) as caught:
-                await c.relinquish(self.address, missing, 8)
+                await (await c.device(self.address)).relinquish(missing, 8)
         self.assertNotIsInstance(caught.exception, BacnetNoPriorityArrayError)
         self.assertEqual(caught.exception.error_code, ErrorCode.UNKNOWN_OBJECT)
         self.assertEqual(self.relay.services, [WRITE_PROPERTY])
@@ -355,7 +369,7 @@ class PolicyTests(Lab):
             for priority in GUARDED:
                 with self.subTest(priority=priority):
                     with self.assertRaises(BacnetWriteDeniedError) as caught:
-                        await c.relinquish(self.address, AO, priority)
+                        await (await c.device(self.address)).relinquish(AO, priority)
                     denied = caught.exception
                     self.assertIsInstance(denied, BacnetError)
                     self.assertNotIsInstance(denied, BacnetProtocolError)
@@ -368,7 +382,7 @@ class PolicyTests(Lab):
                         str(denied),
                     )
             # The other twelve go.
-            await c.relinquish(self.address, AO, 7)
+            await (await c.device(self.address)).relinquish(AO, 7)
         self.assertEqual(self.relay.services, [WRITE_PROPERTY, READ_PROPERTY_MULTIPLE])
 
     async def test_allowed_after_opting_in(self) -> None:
@@ -379,7 +393,7 @@ class PolicyTests(Lab):
                 with self.subTest(priority=priority):
                     await self.command(c, priority, 10.0 + priority)
                     self.relay.clear()
-                    after = await c.relinquish(self.address, AO, priority)
+                    after = await (await c.device(self.address)).relinquish(AO, priority)
                     self.assertEqual(
                         self.relay.services, [WRITE_PROPERTY, READ_PROPERTY_MULTIPLE]
                     )
@@ -387,22 +401,22 @@ class PolicyTests(Lab):
                     self.assertIsNone(after.slot(priority))
         # One priority allowed leaves the other three refused.
         async with client(write_policy=WritePolicy().allow_priorities([5])) as c:
-            await c.relinquish(self.address, AO, 5)
+            await (await c.device(self.address)).relinquish(AO, 5)
             with self.assertRaises(BacnetWriteDeniedError):
-                await c.relinquish(self.address, AO, 6)
+                await (await c.device(self.address)).relinquish(AO, 6)
 
     async def test_write_property_stays_unguarded(self) -> None:
         async with client() as c:
             await c.write_property(self.address, AO, PV, PropertyValue.real(9.0), priority=1)
             self.assertEqual(self.relay.services, [WRITE_PROPERTY])
             self.assertEqual(write_request(self.relay.requests[0][1])[2], 1)
-            view = await c.priority_array(self.address, AO)
+            view = await (await c.device(self.address)).priority_array(AO)
             self.assertEqual(view.in_control, 1)
             with self.assertRaises(BacnetWriteDeniedError):
-                await c.relinquish(self.address, AO, 1)
+                await (await c.device(self.address)).relinquish(AO, 1)
             # The low-level write releases it as before.
             await c.write_property(self.address, AO, PV, PropertyValue.null(), priority=1)
-            self.assertIsNone((await c.priority_array(self.address, AO)).in_control)
+            self.assertIsNone((await (await c.device(self.address)).priority_array(AO)).in_control)
 
     def test_the_policy_object(self) -> None:
         policy = WritePolicy()
@@ -449,9 +463,9 @@ class ReadBackTests(Lab):
         async with client(apdu_timeout_ms=300) as c:
             await self.command(c, 8, 72.5)
             with self.assertRaises(BacnetReadBackError) as caught:
-                await c.relinquish(self.address, AO, 8)
+                await (await c.device(self.address)).relinquish(AO, 8)
             # It took effect: the slot is empty now.
-            view = await c.priority_array(self.direct, AO)
+            view = await (await c.device(self.direct)).priority_array(AO)
         error = caught.exception
         self.assertNotIsInstance(error, BacnetTimeoutError)
         self.assertIsInstance(error.__cause__, BacnetTimeoutError)
@@ -467,11 +481,11 @@ class NoAnswerTests(Lab):
     async def test_no_answer_to_the_write(self) -> None:
         async with client(apdu_timeout_ms=300) as c:
             with self.assertRaises(BacnetTimeoutError) as caught:
-                await c.relinquish(self.address, AO, 8)
+                await (await c.device(self.address)).relinquish(AO, 8)
             self.assertNotIsInstance(caught.exception, BacnetReadBackError)
             self.assertEqual(self.relay.services, [WRITE_PROPERTY])
             with self.assertRaises(BacnetTimeoutError):
-                await c.priority_array(self.address, AO)
+                await (await c.device(self.address)).priority_array(AO)
             # The typed calls report the same silence as the transaction
             # state machine's abort, as the docs say.
             with self.assertRaises(BacnetAbortError) as written:
@@ -493,7 +507,7 @@ class CancelledTests(Lab):
         c = client(apdu_timeout_ms=10_000)
         await c.__aenter__()
         try:
-            pending = asyncio.ensure_future(c.relinquish(self.address, AO, 8))
+            pending = asyncio.ensure_future((await c.device(self.address)).relinquish(AO, 8))
             async with asyncio.timeout(10):
                 while len(self.relay.requests) < 2:
                     await asyncio.sleep(0.01)
@@ -506,24 +520,26 @@ class CancelledTests(Lab):
             # client and stops it, long before the read would time out.
             await asyncio.wait_for(c.stop(), 5)
         with self.assertRaisesRegex(RuntimeError, "not started"):
-            await c.priority_array(self.address, AO)
+            await (await c.device(self.address)).priority_array(AO)
         # The same client starts again, and its priority calls work.
         self.relay.passing = 1_000_000
         async with c:
-            view = await c.priority_array(self.address, AO)
+            view = await (await c.device(self.address)).priority_array(AO)
         self.assertIsNone(view.slot(8))
 
 
 class ReceivedValueTests(Lab):
-    async def test_received_values_refuse_copy_and_pickle(self) -> None:
+    async def test_a_view_refuses_copy_and_pickle_and_its_values_copy(self) -> None:
         async with client() as c:
-            view = await c.priority_array(self.address, AO)
-        for received in (view, view.present_value):
-            with self.subTest(kind=type(received).__name__):
-                with self.assertRaises(TypeError):
-                    pickle.dumps(received)
-                with self.assertRaises(TypeError):
-                    copy.copy(received)
+            view = await (await c.device(self.address)).priority_array(AO)
+        with self.assertRaises(TypeError):
+            pickle.dumps(view)
+        with self.assertRaises(TypeError):
+            copy.copy(view)
+        # A Value is a value class (part 2): it copies and pickles.
+        value = view.present_value
+        self.assertEqual(copy.copy(value), value)
+        self.assertEqual(pickle.loads(pickle.dumps(value)), value)
         with self.assertRaises(AttributeError):
             view.in_control = 3  # type: ignore[misc]
 
@@ -539,13 +555,8 @@ class RouterTransportTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(cleanup, router.close)
         address = (await router.ports())[0].address
         async with BACnetClient(transport="router", router=router, apdu_timeout_ms=2000) as c:
-            for call in (
-                lambda: c.relinquish(address, AO, 8),
-                lambda: c.priority_array(address, AO),
-            ):
-                pending = call()
-                with self.assertRaisesRegex(ValueError, "transport='router' has no network"):
-                    await asyncio.wait_for(pending, 10)
+            with self.assertRaisesRegex(ValueError, "transport='router' has no network"):
+                await asyncio.wait_for(c.device(address), 10)
             with self.assertRaisesRegex(BacnetError, "no network of its own"):
                 await asyncio.wait_for(c.read_property(address, AO, PV), 10)
 
@@ -576,7 +587,7 @@ class ScAddressTests(mtls.MtlsFixture):
         await asyncio.wait_for(c.__aenter__(), 5)
         self.addAsyncCleanup(self.stop_server, c)
         with self.assertRaises(BacnetNoPriorityArrayError) as caught:
-            await asyncio.wait_for(c.relinquish("02:00:00:00:00:04", PLAIN, 8), 5)
+            await asyncio.wait_for((await c.device("02:00:00:00:00:04")).relinquish(PLAIN, 8), 5)
         self.assertEqual(caught.exception.written.address, "02:00:00:00:00:04")
 
 
@@ -615,20 +626,22 @@ def runtime_parameters(callable_: object) -> list[tuple[str, inspect._ParameterK
 class StubParityTests(unittest.TestCase):
     def test_the_calls_match_the_stub(self) -> None:
         for name, expected in (
-            ("relinquish", ["address", "object_id", "priority"]),
-            ("priority_array", ["address", "object_id"]),
+            ("relinquish", ["object", "priority"]),
+            ("priority_array", ["object"]),
         ):
             with self.subTest(method=name):
-                runtime = runtime_parameters(getattr(BACnetClient, name))
+                # On the handle only: the client has no second spelling.
+                self.assertFalse(hasattr(BACnetClient, name))
+                runtime = runtime_parameters(getattr(Device, name))
                 self.assertEqual([n for n, _ in runtime], expected)
-                self.assertEqual(runtime, stub_parameters(stub_method("BACnetClient", name)))
+                self.assertEqual(runtime, stub_parameters(stub_method("Device", name)))
                 # No default: a relinquish always names its slot.
-                for parameter in inspect.signature(getattr(BACnetClient, name)).parameters.values():
+                for parameter in inspect.signature(getattr(Device, name)).parameters.values():
                     self.assertIs(parameter.default, inspect.Parameter.empty)
 
     def test_the_write_policy_keyword_matches_the_stub(self) -> None:
         runtime = runtime_parameters(BACnetClient)
-        self.assertEqual(runtime[-1], ("write_policy", inspect.Parameter.KEYWORD_ONLY))
+        self.assertEqual(runtime[-2], ("write_policy", inspect.Parameter.KEYWORD_ONLY))
         self.assertIsNone(inspect.signature(BACnetClient).parameters["write_policy"].default)
         self.assertEqual(runtime, stub_parameters(stub_method("BACnetClient", "__init__")))
         self.assertEqual(runtime_parameters(WritePolicy), [])
@@ -640,11 +653,11 @@ class StubParityTests(unittest.TestCase):
 
     def test_the_new_names_are_in_the_stub(self) -> None:
         for name, members in (
-            ("Value", {"value", "text", "data"}),
+            ("Value", {"value", "text", "data", "raw"}),
             ("PriorityView", {"object_id", "slots", "in_control", "relinquish_default",
                               "present_value", "slot"}),
             ("Written", {"address", "object_id", "property_id", "array_index", "value",
-                         "priority"}),
+                         "priority", "commandable"}),
             ("WritePolicy", {"allow_priorities", "allows", "refused"}),
         ):
             with self.subTest(cls=name):

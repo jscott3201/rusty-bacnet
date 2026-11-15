@@ -3,7 +3,11 @@
 //! Text that names nothing a call can use raises ValueError; a device that
 //! didn't answer, BacnetTimeoutError or BacnetTransportError; the device's
 //! own Error, Reject or Abort, the protocol, reject and abort errors the
-//! typed calls raise. Three are the write calls' own:
+//! typed calls raise; a device that can't be placed, BacnetLookupError, or
+//! its subclass BacnetAmbiguousDeviceError when two addresses claim it; a
+//! device that breaks a paged read's rules, BacnetPagingError; and a watch
+//! the client's hub has no room for, RuntimeError. Three are the write
+//! calls' own:
 //!
 //! - BacnetWriteDeniedError: the client's write policy refused the
 //!   priority, so nothing was sent;
@@ -16,10 +20,10 @@
 //! tells "sent" from "not sent" without parsing text, and never sends a
 //! relinquish twice.
 
+use bacnet_ops::error::PagingFault;
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::target::AddressStyle;
-use bacnet_ops::{OpsError, WriteDenied, Written};
-use bacnet_types::constructed::BACnetAddress;
+use bacnet_ops::{OpsError, ResolveScope, WriteDenied, Written};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -29,13 +33,14 @@ use pyo3::prelude::*;
 
 use super::priorities::PyWritten;
 use crate::errors::{
-    BacnetError, BacnetProtocolError, BacnetTimeoutError, DETAIL_ATTRIBUTES, set_enum_attr,
-    to_py_err,
+    BacnetError, BacnetProtocolError, BacnetTimeoutError, DETAIL_ATTRIBUTES, Lookup, lookup_error,
+    set_enum_attr, to_py_err,
 };
 use crate::types::{PyObjectIdentifier, PyPropertyIdentifier};
 
 create_exception!(rusty_bacnet, BacnetWriteDeniedError, BacnetError);
 create_exception!(rusty_bacnet, BacnetReadBackError, BacnetError);
+create_exception!(rusty_bacnet, BacnetPagingError, BacnetError);
 create_exception!(
     rusty_bacnet,
     BacnetNoPriorityArrayError,
@@ -62,7 +67,7 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
         return BacnetTimeoutError::new_err(message);
     }
     match error {
-        OpsError::Parse { reason, .. } => PyValueError::new_err(reason),
+        OpsError::Parse { reason, .. } => PyValueError::new_err(super::link_hint(reason)),
         OpsError::Unreachable { source, .. } | OpsError::Client(source) => to_py_err(source),
         OpsError::Refused {
             error: RemoteError::Error { class, code },
@@ -77,10 +82,34 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
         OpsError::Ambiguous {
             instance,
             candidates,
-        } => to_py_err(Error::AmbiguousDevice {
-            instance,
-            candidates: candidates.into_iter().map(BACnetAddress::from).collect(),
-        }),
+        } => lookup_error(
+            message,
+            Lookup::ambiguous(
+                instance,
+                candidates
+                    .iter()
+                    .map(|address| (address.network(), address.mac().to_vec()))
+                    .collect(),
+            ),
+        ),
+        OpsError::ObjectList { source, .. } => object_list(message, *source, style),
+        OpsError::UnknownDevice { target, asked } => lookup_error(
+            match asked {
+                // Ops' own text names the Rust call that widens the scope.
+                Some(ResolveScope::Local) => format!(
+                    "device {target} did not answer a Who-Is on this network, the only one \
+                     asked: name its network in the target ('5:{target}' for network 5), or \
+                     give BACnetClient resolve_scope='global' or a network number"
+                ),
+                _ => message,
+            },
+            Lookup::unknown(target),
+        ),
+        OpsError::Paging(fault) => paging(message, fault),
+        // The hub's own limit, or no runtime: nothing was watched, and the
+        // device said nothing. The state errors of this binding are
+        // RuntimeError ("client not started").
+        OpsError::Watch(_) => PyRuntimeError::new_err(message),
         OpsError::Denied(denied) => write_denied(&denied),
         // As the binding's own SC startup reports TLS material it refused.
         OpsError::Tls(_) => PyRuntimeError::new_err(format!("TLS config error: {message}")),
@@ -99,14 +128,69 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
             relinquished,
             ..
         } => no_priority_array(message, object, relinquished.as_deref(), style),
-        // UnknownDevice and Paging, which no priority call meets, and any
-        // later variant.
+        // `OpsError` is non-exhaustive: a variant added after this was
+        // written. `every_variant_is_mapped` (the tests) lists the ones
+        // mapped here, so a new one is noticed when that list is updated.
         _ => BacnetError::new_err(message),
     }
 }
 
+/// BacnetLookupError for a bare `instance` a router's application hasn't
+/// heard from and has nowhere to ask for: it was given no `resolve_scope`.
+pub(super) fn unasked(instance: u32) -> PyErr {
+    lookup_error(
+        format!(
+            "device {instance} is not known to the client, and a client on \
+             transport='router' has no network of its own to ask on: name its network in \
+             the target ('5:{instance}' for network 5), or give BACnetClient \
+             resolve_scope='global' or a network number"
+        ),
+        Lookup::unknown(instance.to_string()),
+    )
+}
+
+/// An [`OpsError::ObjectList`]: the exception its `source` raises, of the
+/// same class and with its attributes, saying which element of the
+/// Object_List failed. An element's read that timed out is a
+/// BacnetTimeoutError before this is reached.
+fn object_list(message: String, source: OpsError, style: AddressStyle) -> PyErr {
+    let cause = ops_err(source, style);
+    let fallback = message.clone();
+    crate::py_async::attach(|py| {
+        let class = cause.get_type(py);
+        let raised = class.call1((message,))?;
+        if let (Ok(from), Ok(to)) = (
+            cause.value(py).getattr("__dict__"),
+            raised.getattr("__dict__"),
+        ) {
+            to.call_method1("update", (from,))?;
+        }
+        Ok(PyErr::from_value(raised))
+    })
+    .unwrap_or_else(|_| BacnetError::new_err(fallback))
+}
+
+/// BacnetPagingError for `fault`, with the paged service and, for a
+/// repeated object, the object.
+fn paging(message: String, fault: PagingFault) -> PyErr {
+    let error = BacnetPagingError::new_err(message);
+    let (service, object) = match fault {
+        PagingFault::Repeated { service, object } => (service, Some(object)),
+        PagingFault::Stalled { service } => (service, None),
+        // Non-exhaustive: a later fault says what it can.
+        _ => ("", None),
+    };
+    let _ = crate::py_async::attach(|py| {
+        let value = error.value(py);
+        let _ = value.setattr("service", service);
+        let _ = value.setattr("object_id", object.map(PyObjectIdentifier::from_rust));
+        Ok(())
+    });
+    error
+}
+
 /// BacnetWriteDeniedError for `denied`, saying how to allow the priority.
-fn write_denied(denied: &WriteDenied) -> PyErr {
+pub(super) fn write_denied(denied: &WriteDenied) -> PyErr {
     let priority = denied.priority;
     let what = if denied.relinquish {
         "relinquish"
@@ -183,9 +267,13 @@ fn set_written(py: Python<'_>, error: &PyErr, written: Option<&Written>, style: 
     }
 }
 
-/// Register the three exception types, their attributes None on the class.
+/// Register the exception types, their attributes None on the class.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
+    let paging = py.get_type::<BacnetPagingError>();
+    paging.setattr("service", py.None())?;
+    paging.setattr("object_id", py.None())?;
+    m.add("BacnetPagingError", paging)?;
     let denied = py.get_type::<BacnetWriteDeniedError>();
     for name in DENIED_ATTRIBUTES {
         denied.setattr(name, py.None())?;
