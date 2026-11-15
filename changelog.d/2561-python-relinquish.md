@@ -1,7 +1,4 @@
 ---
 section: Added
 ---
-- **Python API:** `BACnetClient.relinquish(address, object_id, priority)`
-  releases one command slot and returns the slots read back, and
-  `priority_array(address, object_id)` reads them, as a `PriorityView` of
-  `Value`s (#2561).
+- **Python API:** `Device.relinquish(object, priority)` releases one command slot and returns the slots read back, and `Device.priority_array(object)` reads them, as a `PriorityView` of `Value`s (#2561).

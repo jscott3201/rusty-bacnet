@@ -146,7 +146,10 @@ impl Scope {
         .encode(&mut buf)?;
         let service = UnconfirmedServiceChoice::WHO_HAS;
         match (self, station) {
-            (Self::Local, _) => client.broadcast_unconfirmed(service, &buf).await,
+            (Self::Local, _) => client
+                .broadcast_unconfirmed(service, &buf)
+                .await
+                .map_err(|error| super::discover::to_local_broadcast(client, error)),
             (Self::Network(network), _) => {
                 client
                     .broadcast_network_unconfirmed(service, &buf, *network)
@@ -168,12 +171,12 @@ impl Scope {
     /// answer from that station. An I-Have from elsewhere during the wait,
     /// unasked or another's answer, is no answer to this search.
     fn answered_by(&self, reply: &ReceivedIHave, own: Option<u16>) -> bool {
-        let from = reply.source_network.as_ref().map(|routed| routed.network);
-        match self {
-            Self::Global => true,
-            Self::Local => from.is_none() || from == own,
-            Self::Network(network) => from.map_or(own == Some(*network), |n| n == *network),
-            Self::Directed(station) => source(reply, own) == Some(station.clone().localized(own)),
+        // One rule for a Who-Is's answers and a Who-Has's: where the
+        // reply came from, as the discovery table keys a device.
+        match source(reply, own) {
+            Some(from) => self.covers(&from, own),
+            // A source that names no one station is in no scope but all.
+            None => matches!(self, Self::Global),
         }
     }
 }

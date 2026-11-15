@@ -52,6 +52,19 @@ fn not_found(instance: u32) -> String {
     format!("Device {instance} not found. Run 'discover' first or use an address.")
 }
 
+/// A target's refusal, naming the flag that picks the link it needs when
+/// it says it needs another: the operations core's text names no front
+/// end's flags (#2561).
+pub fn with_link_flag(reason: String) -> String {
+    use bacnet_ops::target::{NEEDS_BIP6, NEEDS_MSTP};
+    let flag = match () {
+        () if reason.ends_with(NEEDS_BIP6) => "--ipv6",
+        () if reason.ends_with(NEEDS_MSTP) => "--mstp",
+        () => return reason,
+    };
+    format!("{reason} ({flag})")
+}
+
 /// Resolve `text` to a [`Destination`]. An address names its station, and
 /// nothing is sent to resolve a local one or a routed one the discovery
 /// table holds. A routed target asks its network with a Who-Is when the
@@ -61,12 +74,12 @@ pub async fn resolve<T: TransportPort + 'static>(
     text: &str,
     wait: Duration,
 ) -> Result<Destination, String> {
-    match parse_target_on(client.transport(), text)? {
+    match parse_target_on(client.transport(), text).map_err(with_link_flag)? {
         Target::Mac(mac) => Destination::local(&mac),
         Target::Bip6(peer) => Destination::local(
             &bip6_vmac(client.transport(), peer)
                 .await
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| with_link_flag(e.to_string()))?,
         ),
         Target::Instance(instance) => match client
             .get_device(instance)
@@ -113,11 +126,11 @@ pub async fn resolve_mac<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     text: &str,
 ) -> Result<Vec<u8>, String> {
-    match parse_target_on(client.transport(), text)? {
+    match parse_target_on(client.transport(), text).map_err(with_link_flag)? {
         Target::Mac(mac) => Ok(mac),
         Target::Bip6(peer) => bip6_vmac(client.transport(), peer)
             .await
-            .map_err(|e| e.to_string()),
+            .map_err(|e| with_link_flag(e.to_string())),
         Target::Instance(instance) => match client
             .get_device(instance)
             .await

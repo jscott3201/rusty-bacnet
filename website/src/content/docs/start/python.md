@@ -18,24 +18,18 @@ import argparse
 import asyncio
 import sys
 
-from rusty_bacnet import (
-    BACnetClient,
-    BacnetError,
-    ObjectIdentifier,
-    ObjectType,
-    PropertyIdentifier,
-)
+from rusty_bacnet import BACnetClient, BacnetError
 
 
 async def read_one(address: str, instance: int) -> None:
     # An ephemeral local port is suitable for this directed-read example.
     # This example does not validate broadcast discovery or COV delivery.
     async with BACnetClient(port=0) as client:
-        object_id = ObjectIdentifier(ObjectType.ANALOG_INPUT, instance)
-        value = await client.read_property(
-            address, object_id, PropertyIdentifier.PRESENT_VALUE
-        )
-        print(f"{value.tag}: {value.value}")
+        # A handle pinned to the address: making it sends nothing.
+        device = await client.device(address)
+        # "ai:1" is analog input 1; a read with no property is its present value.
+        value = await device.read(f"ai:{instance}")
+        print(f"{value.value.tag}: {value.text}")
 
 
 def main() -> int:
@@ -76,13 +70,15 @@ Do not generalize this setup to a broadcast-discovery, server, foreign-device, o
 
 ## Add context to the value
 
-Read `OBJECT_NAME` and `UNITS` as well as `PRESENT_VALUE` before assigning meaning to a result. For several properties on the same device, `read_property_multiple` is available, but individual results can contain property-level errors. A completed call does not mean every requested property succeeded.
+`client.device(address)` gives a handle on one device, and `device.read` takes an object and a property as text (`"ai:1"`, `"pv"`) or as the typed `ObjectIdentifier` and `PropertyIdentifier`. The result holds the value typed (`value.value`), as text (`value.text`) and as plain data (`value.data`).
+
+Read the object's name and units as well as its present value before assigning meaning to a result. `await device.read_many(["ai:1 object-name", "ai:1 units", "ai:1 pv"])` reads several properties in one request, and the text of a number then names its units. Each reading holds a value or its own error (`reading.error`): a completed call does not mean every requested property succeeded.
 
 Keep requests bounded. Avoid starting one task per point across an entire building before measuring the device and network behavior.
 
 ## Lifecycle and errors
 
-The async context manager starts the client and stops it when the block exits. The Python API includes typed protocol, timeout, reject, and abort exceptions beneath the library error surface. Record the target, object, property, transport, and exception type when troubleshooting; sanitize site identifiers before sharing logs.
+The async context manager starts the client and stops it when the block exits. The Python API includes typed protocol, timeout, reject, and abort exceptions beneath the library error surface. A `Device` handle belongs to its client: after the block exits, a call on it raises `RuntimeError`. Record the target, object, property, transport, and exception type when troubleshooting; sanitize site identifiers before sharing logs.
 
 ## Next steps
 

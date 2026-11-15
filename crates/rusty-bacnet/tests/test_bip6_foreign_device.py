@@ -295,7 +295,7 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                 # Who-Is (#2572), then the Who-Is.
                 self.assertEqual(status["broadcasts_refused"], 0)
                 with self.assertRaises(OSError):
-                    await client.who_is(INSTANCE, INSTANCE)
+                    await client.who_is(low=INSTANCE, high=INSTANCE)
                 status = await client.foreign_registration()
                 self.assertEqual(status["broadcasts_refused"], 2)
         await rerun_on_lost_port(run)
@@ -344,7 +344,7 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             # Known by address: no host name to show.
             self.assertEqual((status["bbmd"], status["bbmd_name"]), (self.bbmd.address, None))
             # A Who-Is goes to the BBMD as a Distribute-Broadcast-To-Network.
-            await client.who_is(INSTANCE, INSTANCE)
+            await client.who_is(low=INSTANCE, high=INSTANCE)
             datagram, _ = await self.bbmd.next(DISTRIBUTE_BROADCAST)
             self.assertEqual(datagram[4:7], vmac(CLIENT_INSTANCE))
 

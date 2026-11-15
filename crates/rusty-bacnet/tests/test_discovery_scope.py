@@ -85,7 +85,7 @@ class DiscoveryScopeTests(ForeignClient):
     async def test_no_scope_is_a_local_broadcast(self):
         client = self.client
         for name, call, sent in (("who_is", client.who_is, [ASK, LOCAL]),
-                                 ("discover", lambda: client.discover(timeout_ms=0), [LOCAL]),
+                                 ("discover", lambda: client.discover(wait=0), [LOCAL]),
                                  ("who_is local", lambda: client.who_is(scope="local"), [LOCAL])):
             with self.subTest(call=name):
                 self.assertEqual(await self.broadcast_npdus(call, len(sent)), sent)
@@ -95,7 +95,7 @@ class DiscoveryScopeTests(ForeignClient):
         first = True
         for scope, npdu in (("global", GLOBAL), (5, NETWORK_5)):
             for name, call in (("who_is", lambda: client.who_is(scope=scope)),
-                               ("discover", lambda: client.discover(timeout_ms=0, scope=scope))):
+                               ("discover", lambda: client.discover(wait=0, scope=scope))):
                 # Only the client's first Who-Is is asked before.
                 sent = [ASK, npdu] if first else [npdu]
                 first = False
@@ -110,7 +110,7 @@ class DiscoveryScopeTests(ForeignClient):
                              (1.5, TypeError), (b"local", TypeError)):
             for name, call in (("who_is", client.who_is), ("discover", client.discover)):
                 with self.subTest(call=name, scope=scope):
-                    with self.assertRaisesRegex(error, "scope is 'local', 'global' or a network"):
+                    with self.assertRaisesRegex(error, "scope is 'local', 'global', a network"):
                         call(scope=scope)
         await asyncio.sleep(0.1)
         self.assertEqual([d for d, _ in self.peer.received if d[1] == DISTRIBUTE_BROADCAST], [])
@@ -122,7 +122,7 @@ class WhoHasScopeTests(ForeignClient):
     def who_has_calls(self, **scope):
         client = self.client
         return (("who_has_by_id", lambda: client.who_has_by_id(AV1, **scope)),
-                ("who_has_replies", lambda: client.who_has_replies(AV1, timeout_ms=0, **scope)))
+                ("who_has_replies", lambda: client.who_has_replies(AV1, wait=0, **scope)))
 
     async def test_no_scope_is_a_local_broadcast(self):
         for name, call in self.who_has_calls() + self.who_has_calls(scope="local"):
@@ -151,7 +151,7 @@ class WhoHasScopeTests(ForeignClient):
                              (True, TypeError), (1.5, TypeError)):
             for name, call in calls:
                 with self.subTest(call=name, scope=scope):
-                    with self.assertRaisesRegex(error, "scope is 'local', 'global' or a network"):
+                    with self.assertRaisesRegex(error, "scope is 'local', 'global', a network"):
                         call(scope)
         await asyncio.sleep(0.1)
         self.assertEqual([d for d, _ in self.peer.received if d[1] == DISTRIBUTE_BROADCAST], [])
@@ -190,7 +190,7 @@ class DiscoverySignatureTests(unittest.TestCase):
                     if isinstance(node, ast.FunctionDef) and node.name == name)
 
     def test_runtime_and_stub_signatures_match(self):
-        for name in ("who_is", "discover", "who_is_directed", "who_has_by_id", "who_has_by_name",
+        for name in ("who_is", "discover", "who_has_by_id", "who_has_by_name",
                      "who_has_replies"):
             with self.subTest(method=name):
                 runtime = inspect.signature(getattr(BACnetClient, name))
@@ -203,7 +203,20 @@ class DiscoverySignatureTests(unittest.TestCase):
                 stub_params = [(arg.arg, inspect.Parameter.empty if i < len(args) - len(method.args.defaults)
                                 else default)
                                for i, (arg, default) in enumerate(zip(args, defaults))]
+                stub_params += [(arg.arg, ast.literal_eval(default)) for arg, default
+                                in zip(method.args.kwonlyargs, method.args.kw_defaults)]
                 self.assertEqual(runtime_params, stub_params)
+                # The range, the wait and the scope go by keyword only: the
+                # calls would otherwise take them in differing positions.
+                keyword_only = {p.name for p in runtime.parameters.values()
+                                if p.kind is inspect.Parameter.KEYWORD_ONLY}
+                self.assertEqual(keyword_only, {"low", "high", "scope", "wait"}
+                                 & set(runtime.parameters))
+                self.assertEqual(keyword_only, {arg.arg for arg in method.args.kwonlyargs})
+        routers = inspect.signature(BACnetClient.discover_routers).parameters
+        self.assertIs(routers["wait"].kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertEqual([arg.arg for arg in self.stub_method("discover_routers").args.kwonlyargs],
+                         ["wait"])
         for name in ("who_is", "discover", "who_has_by_id", "who_has_by_name", "who_has_replies"):
             with self.subTest(method=name):
                 scope = inspect.signature(getattr(BACnetClient, name)).parameters["scope"]

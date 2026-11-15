@@ -90,7 +90,11 @@ impl<T: TransportPort + 'static> Device<T> {
     /// included ([`read_object`](Self::read_object) reads those)
     /// ([`OpsError::Parse`]); and a device that can't be placed, an
     /// instance two addresses claim, or a routed address with no route
-    /// ([`OpsError::UnknownDevice`], [`OpsError::Ambiguous`]).
+    /// ([`OpsError::UnknownDevice`], [`OpsError::Ambiguous`]). And a
+    /// request the client or the link failed itself (a link that refuses
+    /// the send, say; [`OpsError::Client`], #2610) when nothing had been
+    /// read yet: a read fails only when nothing could be read. After the
+    /// first rows it ends with them, the error in [`Readings::stopped`].
     pub async fn read_many<P: IntoProperty>(
         &self,
         properties: impl IntoIterator<Item = P>,

@@ -90,7 +90,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         replies = []
         for _ in range(10):  # the first broadcast can race the registration
-            replies = await client.who_has_replies(AI, timeout_ms=500)
+            replies = await client.who_has_replies(AI, wait=0.5)
             if replies:
                 break
         [reply] = replies
@@ -98,11 +98,11 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply.device_identifier, ObjectIdentifier(ObjectType.DEVICE, 3301))
         self.assertEqual((reply.object_identifier, reply.object_name), (AI, "Zone Temp"))
         self.assertIsNone(reply.source_network)
-        by_name = await client.who_has_replies("Zone Temp", 3301, 3301, timeout_ms=1500)
+        by_name = await client.who_has_replies("Zone Temp", low=3301, high=3301, wait=1.5)
         self.assertEqual([r.object_identifier for r in by_name], [AI])
-        self.assertEqual(await client.who_has_replies("Nothing", timeout_ms=300), [])
+        self.assertEqual(await client.who_has_replies("Nothing", wait=0.3), [])
         # Out of range: the device's own I-Have doesn't answer this Who-Has.
-        self.assertEqual(await client.who_has_replies(AI, 1, 2, timeout_ms=300), [])
+        self.assertEqual(await client.who_has_replies(AI, low=1, high=2, wait=0.3), [])
 
         # The iterator saw every I-Have, the out-of-range answer included.
         first = await asyncio.wait_for(events.__anext__(), 5)
@@ -120,7 +120,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
             if n % 25 == 24:
                 await asyncio.sleep(0.02)
         # The client keeps working while nobody reads: discovery answers.
-        [found] = await client.discover_routers(timeout_ms=1500)
+        [found] = await client.discover_routers(wait=1.5)
         self.assertEqual(found.networks, [5, 7])
         router.send(i_have(77, 1000, "after"))
 
@@ -148,16 +148,16 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         client = await self.foreign_client(router.address)
         reports = await client.network_reports()
 
-        [found] = await client.discover_routers(timeout_ms=1500)
+        [found] = await client.discover_routers(wait=1.5)
         self.assertIsInstance(found, DiscoveredRouter)
         self.assertEqual((found.mac, found.networks), (mac(router.address), [5, 7]))
         self.assertEqual(router.who_is_router[-1], b"")  # every network
-        [only] = await client.discover_routers(7, timeout_ms=1500)
+        [only] = await client.discover_routers(7, wait=1.5)
         self.assertEqual(only.networks, [5, 7])
         self.assertEqual(router.who_is_router[-1], struct.pack(">H", 7))
-        self.assertEqual(await client.discover_routers(9, timeout_ms=500), [])
+        self.assertEqual(await client.discover_routers(9, wait=0.5), [])
         with self.assertRaises(BacnetError):
-            await client.discover_routers(0, timeout_ms=100)
+            await client.discover_routers(0, wait=0.1)
 
         # Unsolicited: a Network-Number-Is broadcast and a reject, unicast.
         router.send(router.forwarded(b"\x01\x80\x13" + struct.pack(">HB", 3, 1)))

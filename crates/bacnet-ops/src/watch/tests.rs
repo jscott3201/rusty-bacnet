@@ -506,3 +506,68 @@ async fn a_notified_value_clears_the_whole_objects_error() {
     registry.deliver(&value);
     assert!(shared.lock().failure.is_none(), "a value of the property");
 }
+
+/// A first read the link never sent fails the point the same way whether
+/// the watch reads the whole object or one property: `Phase::Failed`, with
+/// no row of text standing in for a value (#2610). Before, the
+/// one-property watch kept the refusal as a row. With no subscription the
+/// point is polled at once, and the poll is refused the same way, so the
+/// state seen is the poll's as well as the first read's; the rows are the
+/// first read's alone, which a failed poll leaves as they were.
+#[tokio::test(start_paused = true)]
+async fn a_first_read_never_sent_fails_both_kinds_of_watch_alike() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.unsent_reads.store(true, Ordering::Relaxed);
+    // No subscription either, whose first notification would bring the
+    // values a read couldn't: the point stays as its first read left it.
+    lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
+    let property = Point {
+        device: lab_at(),
+        object: ai(2),
+        watched: Watched::Property {
+            property: PropertyIdentifier::PRESENT_VALUE,
+            index: None,
+        },
+    };
+    let leases = [
+        lab.hub.watch(object(ai(1))).unwrap(),
+        lab.hub.watch(property).unwrap(),
+    ];
+    settle().await;
+    for lease in &leases {
+        let snapshot = lease.snapshot();
+        // The first read left no row: a refusal kept as a row would show.
+        assert!(snapshot.rows.is_empty(), "{:?}", snapshot.rows);
+        assert_eq!(snapshot.state, Phase::Failed, "{:?}", lease.point());
+        let note = snapshot.note.as_deref().unwrap_or_default();
+        assert!(note.contains("the link refused the send"), "{note}");
+    }
+    drop(leases);
+    settle().await;
+    lab.stop().await;
+}
+
+/// A subscription the client's own link failed to send is no refusal by
+/// the device: nothing is remembered against its COV support, and the
+/// point is asked again after the backoff and subscribes, where it used to
+/// be polled for good.
+#[tokio::test(start_paused = true)]
+async fn a_subscription_never_sent_is_asked_again() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.unsent_cov.store(true, Ordering::Relaxed);
+    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    settle().await;
+    assert!(lab.table().await.is_empty());
+    let device = lab.client.device(LAB).await.unwrap();
+    assert_ne!(device.cov_support(), CovSupport::Refused);
+    drop(device);
+    assert_ne!(lease.snapshot().cov, CovSupport::Refused);
+    // The link is back: the retry subscribes.
+    lab.quirks.unsent_cov.store(false, Ordering::Relaxed);
+    tokio::time::sleep(Duration::from_secs(3600)).await;
+    assert_eq!(lab.table().await.len(), 1, "{:?}", lease.snapshot());
+    assert_eq!(lease.snapshot().source, Some(Source::Cov));
+    drop(lease);
+    settle().await;
+    lab.stop().await;
+}

@@ -129,7 +129,7 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | start/local-lab.mdx:85 | powershell | `.\.venv\Scripts\python.exe loopback_lab.py --serve --seco...` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
 | start/local-lab.mdx:117 | python | `<Code code={labSource} lang="python" title="loopback_lab....` | run or compiled by another CI test |  |
 | start/python.md:14 | python | `from __future__ import annotations` | run or compiled by another CI test |  |
-| start/python.md:65 | sh | `python first_read.py 192.168.1.100:47808 --instance 1` | run or compiled by another CI test |  |
+| start/python.md:59 | sh | `python first_read.py 192.168.1.100:47808 --instance 1` | run or compiled by another CI test |  |
 | start/rust.md:10 | sh | `cargo new first-read` | not checked (class F) | installs or builds software |
 | start/rust.md:17 | toml | `[dependencies]` | run or compiled by another CI test |  |
 | start/rust.md:31 | rust | `use std::net::{Ipv4Addr, SocketAddrV4};` | run or compiled by another CI test |  |
@@ -151,12 +151,12 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | tui/writes.mdx:111 | text | `:dcc disable-initiation 30` | run or compiled by another CI test |  |
 | README.md:46 | python | `# local_server.py: one simulated temperature sensor on 12...` | run or compiled by another CI test |  |
 | README.md:81 | python | `# read_value.py: read Analog Input 1's present value` | run against a loopback server |  |
-| README.md:105 | rust | `use bacnet_client::client::BACnetClient;` | compiled: a Cargo example's exact text |  |
-| README.md:138 | bash | `bacnet --interface 127.0.0.1 --port 0 read 127.0.0.1:4780...` | run against a loopback server |  |
-| README.md:154 | rust | `use bacnet_objects::DeviceIdentity;` | compiled: a Cargo example's exact text |  |
-| README.md:197 | python | `# watch_value.py: subscribe to Analog Input 1 and print i...` | run against a loopback server |  |
-| README.md:232 | sh | `bacnet` | CLI arguments parsed by the CLI (--help) |  |
-| README.md:251 | sh | `bacnet mcp authorize --profile plant-a` | CLI arguments parsed by the CLI (--help) |  |
-| README.md:258 | json | `{` | CLI arguments parsed by the CLI (--help) |  |
-| README.md:287 | toml | `[dependencies]` | dependency table checked against the workspace |  |
-| README.md:358 | bash | `git clone https://github.com/jscott3201/rusty-bacnet.git` | not checked (class F) | installs or builds software |
+| README.md:102 | rust | `use bacnet_client::client::BACnetClient;` | compiled: a Cargo example's exact text |  |
+| README.md:135 | bash | `bacnet --interface 127.0.0.1 --port 0 read 127.0.0.1:4780...` | run against a loopback server |  |
+| README.md:151 | rust | `use bacnet_objects::DeviceIdentity;` | compiled: a Cargo example's exact text |  |
+| README.md:194 | python | `# watch_value.py: subscribe to Analog Input 1 and print i...` | run against a loopback server |  |
+| README.md:229 | sh | `bacnet` | CLI arguments parsed by the CLI (--help) |  |
+| README.md:248 | sh | `bacnet mcp authorize --profile plant-a` | CLI arguments parsed by the CLI (--help) |  |
+| README.md:255 | json | `{` | CLI arguments parsed by the CLI (--help) |  |
+| README.md:284 | toml | `[dependencies]` | dependency table checked against the workspace |  |
+| README.md:355 | bash | `git clone https://github.com/jscott3201/rusty-bacnet.git` | not checked (class F) | installs or builds software |
