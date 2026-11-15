@@ -4537,37 +4537,76 @@ class ScEventIterator:
         ...
 
 class Frame:
-    """Frozen raw frame. Pass octets and link to decode_frame for a summary."""
+    """One frame the owner's transport sent or received, frozen at capture.
+
+    The octets are raw; ``decode_frame(frame.octets, frame.link)`` gives the
+    decoded header summary. ``local_address`` and ``peer`` use one form per
+    link (see "Raw frame observation" in docs/python-api.md)."""
+    @property
+    def monotonic(self) -> float:
+        """Capture time in seconds on the clock and origin of
+        ``time.monotonic()``, so ``time.monotonic() - frame.monotonic`` is
+        the frame's age. It never decreases within a subscription.
+
+        The first ``frames()`` call in the process pairs the capture clock
+        with ``time.monotonic()`` once, and each capture converts by its
+        offset from that pair. Both read the same OS clock on Linux
+        (``CLOCK_MONOTONIC``), on macOS (``mach_absolute_time``) and on
+        Windows from Python 3.13 (``QueryPerformanceCounter``); neither
+        counts system sleep on Linux or macOS, both count it on Windows. On
+        Windows with Python 3.11 or 3.12, ``time.monotonic()`` reads
+        ``GetTickCount64`` instead: it also counts sleep, but moves in 10-16
+        ms steps, so a value can sit up to one step away from it, and the two
+        counters are not guaranteed to stay in step over a long run."""
+        ...
     @property
     def timestamp(self) -> float:
-        """Monotonic capture seconds from the first subscription in this module.
-        Comparable across subscriptions, not to wall time or Python's clock origin."""
+        """Capture time as POSIX seconds from the wall clock, as
+        ``time.time()``: comparable with other machines' clocks, but a clock
+        adjustment can move it either way, so order frames by ``monotonic``."""
         ...
     @property
-    def direction(self) -> str:
-        """'inbound' or 'outbound'."""
+    def direction(self) -> Literal["inbound", "outbound", "other"]:
+        """``"inbound"`` or ``"outbound"`` (``"other"`` only for a direction a
+        later release adds)."""
         ...
     @property
-    def link(self) -> str:
-        """Link display name, such as 'BACnet/IP'."""
+    def link(self) -> Literal["bip", "ipv6", "sc", "mstp", "other"]:
+        """The link, as the ``transport=`` argument spells it; ``"other"``
+        for a link no Python owner runs."""
         ...
     @property
     def local_address(self) -> str:
-        """Local address at subscription: IPv4 ip:port, otherwise a hex MAC."""
+        """This node's address on the link when the subscription began, in
+        the form ``peer`` uses for that link: ``"ip:port"`` on B/IP,
+        ``"[ip]:port"`` on B/IPv6 (the UDP socket, not the VMAC), the VMAC
+        in colon hex on SC, the station in decimal on MS/TP."""
         ...
     @property
     def peer(self) -> str:
-        """UDP peer, SC hub name, MS/TP station or Ethernet MAC.
-        This is the next hop, not a forwarded frame's original source."""
+        """The other end on the link: the datagram's source or destination
+        on B/IP (``"ip:port"``) and B/IPv6 (``"[ip]:port"``, the form
+        ``resolve_vmac`` takes), the hub connection on SC (``"primary"`` or
+        ``"failover"``, as ``ScEvent.hub``), the station in decimal on
+        MS/TP (``"255"`` for a broadcast). The next hop, not a forwarded
+        frame's original source."""
         ...
     @property
     def octets(self) -> bytes:
-        """Raw link octets, including malformed received datagrams."""
+        """The frame as the link carries it, malformed received datagrams
+        included."""
         ...
     @property
-    def missed(self) -> int:
-        """Cumulative queue overflow at the first delivery attempt.
-        Redelivery after cancellation keeps this snapshot; iterator.missed is live."""
+    def missed_before(self) -> int:
+        """Frames this subscription missed just before this one: dropped by
+        its full queue (which keeps the oldest frames and drops the newest),
+        or lost on the way to Python together with the gap such a frame
+        carried. A frame redelivered after a cancelled read keeps its value.
+        Summed over the frames received, plus any lost after the last one,
+        it is ``FrameIterator.missed``."""
+        ...
+    def __repr__(self) -> str:
+        """Direction, link, peer and length; never the octets."""
         ...
 
 class FrameSummary:
@@ -4648,7 +4687,9 @@ class FrameIterator:
         ...
     @property
     def missed(self) -> int:
-        """Frames lost to overflow or failed delivery; readable after close."""
+        """Frames lost so far, live: dropped by the full queue or lost on the
+        way to Python, including any lost after the last frame read, which
+        no ``missed_before`` has reported yet. Readable after close."""
         ...
 
 class BACnetClient:
@@ -4707,11 +4748,6 @@ class BACnetClient:
     VMAC), or an MS/TP station. ``"[ip]:port"`` raises ValueError: use
     ``resolve_vmac``. So does a ``bip6:`` address on any other transport.
     """
-
-    def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]:
-        """Observe raw frames on the running owner; capacity is 1–65536.
-        Owner shutdown ends this subscription; a restart needs a new one."""
-        ...
 
     def __init__(
         self,
@@ -5249,6 +5285,15 @@ class BACnetClient:
         """Follow the I-Am-Router-To-Network, Network-Number-Is and
         Reject-Message-To-Network messages the client receives from now on
         (#1850). RuntimeError before start and after stop."""
+        ...
+
+    def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]:
+        """Observe the raw frames this client's own transport sends and
+        receives from now on (B/IP, B/IPv6, SC or MS/TP), ``capacity``
+        frames queued at most (1 to 65536, else ValueError). RuntimeError
+        before start and after stop; a router application client
+        (``transport="router"``) has no link of its own and raises
+        ValueError. Stop ends the iterator; a restart needs a new one."""
         ...
 
     def discovered_devices(self) -> Awaitable[list[DiscoveredDevice]]:
@@ -9192,11 +9237,6 @@ class BipEndpoint:
     # local Network Number controls. Only explicit
     # registration supplies configured provenance; an unregistered owner starts unknown.
 
-    def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]:
-        """Observe raw frames on the running owner; capacity is 1–65536.
-        Owner shutdown ends this subscription; a restart needs a new one."""
-        ...
-
     def __init__(
         self,
         device_instance: int,
@@ -9378,6 +9418,13 @@ class BipEndpoint:
     def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]:
         """How the foreign-device registration is going (#938), as for
         ``BACnetClient``. RuntimeError before start and after close."""
+        ...
+
+    def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]:
+        """Observe the raw frames on the endpoint's own socket from now on,
+        beside both roles' traffic, ``capacity`` frames queued at most (1 to
+        65536, else ValueError). RuntimeError before start and after close.
+        Close ends the iterator; a restart needs a new one."""
         ...
 
     def read_bdt(self, address: str) -> Awaitable[list[tuple[str, str]]]:

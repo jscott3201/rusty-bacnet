@@ -2,10 +2,12 @@
 //! iterator: SC connection events (#1829), I-Haves and network reports
 //! (#1850), and COV notifications.
 //!
-//! The Rust senders never wait for a receiver: one that falls behind the
-//! channel's capacity loses the oldest items. The Python iterators keep
-//! going past such a gap and count what was lost in `missed`, so a slow
-//! Python consumer costs only its own items, never the sender's progress.
+//! The Rust senders never wait for a receiver. A broadcast channel that a
+//! receiver falls behind loses that receiver's oldest items; the raw-frame
+//! source (frames.rs, over the transport's frame tap) keeps its oldest and
+//! loses the newest instead. The Python iterators keep going past either
+//! gap and count what was lost in `missed`, so a slow Python consumer
+//! costs only its own items, never the sender's progress.
 //! Holding one holds no sender, so once the owner stops and its senders
 //! drop, the next item is the end of the iteration.
 //!
@@ -250,6 +252,16 @@ impl Drop for Delivery {
     }
 }
 
+/// A stream's running count of items lost, readable apart from the stream.
+#[derive(Clone)]
+pub(crate) struct Lost(Arc<Redelivery>);
+
+impl Lost {
+    pub(crate) fn get(&self) -> u64 {
+        self.0.missed.load(Ordering::Relaxed)
+    }
+}
+
 /// What `next()` yields: an item fresh from the channel, or one a cancelled
 /// `__anext__` put back, already a Python object.
 pub(crate) enum Next<T> {
@@ -305,7 +317,13 @@ impl<T: Send + 'static, R: EventSource<T> + 'static> LossyReceiver<T, R> {
 
     /// Items lost so far: to lag, or dropped on the way to a read.
     pub(crate) fn missed(&self) -> u64 {
-        self.slot.missed.load(Ordering::Relaxed)
+        self.lost().get()
+    }
+
+    /// A handle on [`missed`](Self::missed) that a read's future can keep
+    /// without keeping this receiver.
+    pub(crate) fn lost(&self) -> Lost {
+        Lost(Arc::clone(&self.slot))
     }
 
     /// The next item, with the put-back hook for that same delivery: hand
