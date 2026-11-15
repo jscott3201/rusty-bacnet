@@ -410,6 +410,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // is dropped (#2617).
         if let Some(seat) = seat {
             seat.abort_on_stop(dispatch_task.abort_handle());
+            seat.abort_on_stop(device_purge_task.abort_handle());
             if let Some(task) = &network_number_task {
                 seat.abort_on_stop(task.abort_handle());
             }

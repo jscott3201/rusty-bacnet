@@ -155,6 +155,11 @@ impl<T: TransportPort> Drop for Seated<T> {
     fn drop(&mut self) {
         if let Some((tsm, discovery)) = self.closing.take() {
             discovery.asking.seal();
+            // A blocking lock, where the crate's other drops only try: a
+            // close skipped here would leave the client's leases held and
+            // its coordinator in place. It can't deadlock: an aborted task
+            // is dropped by the runtime, never inside a caller that holds
+            // the guard, and no TSM guard is held across an await.
             tsm.lock().close_coordinated();
         }
     }

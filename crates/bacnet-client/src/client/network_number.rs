@@ -42,8 +42,9 @@ pub(super) struct Asking {
     /// need asks again.
     asked: AtomicBool,
     /// The seat this client ran on has closed (#2617): its node stopped or
-    /// dropped it, or the client was stopped. Nothing more is sent. Never
-    /// set for a client with a transport of its own.
+    /// dropped it, or the client was stopped. Nothing more is sent, the
+    /// question for the network's number included. Never set for a client
+    /// with a transport of its own.
     sealed: AtomicBool,
     /// Held across a send, so two needs at once ask once.
     sending: tokio::sync::Mutex<()>,
@@ -83,7 +84,7 @@ impl Asking {
         let needed = || {
             !self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none()
         };
-        if !self.numbers || !needed() {
+        if !self.numbers || self.is_sealed() || !needed() {
             return;
         }
         let _one = self.sending.lock().await;
@@ -115,6 +116,9 @@ impl Asking {
         let needed = || {
             !self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none()
         };
+        if self.is_sealed() {
+            return;
+        }
         let Ok(_one) = self.sending.try_lock() else {
             return;
         };
@@ -129,7 +133,7 @@ impl Asking {
     pub(super) async fn again<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
         let needed =
             || self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none();
-        if !needed() {
+        if self.is_sealed() || !needed() {
             return;
         }
         let Ok(_one) = self.sending.try_lock() else {

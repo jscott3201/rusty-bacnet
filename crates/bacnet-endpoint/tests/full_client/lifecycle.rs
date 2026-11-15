@@ -126,8 +126,9 @@ async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
         client.stop().await.unwrap();
         assert_eq!(lab.node_link.stops(), 0);
         drop(client);
-        // With the client dropped the session takes another at once, with
-        // no yield for the first one's aborted tasks to end.
+        // The stopped client's tasks were joined by its stop, so the seat
+        // is free as soon as the client is dropped. (A client dropped
+        // without a stop is the next test's.)
         let at_once = lab.session.full_client().expect("the seat is free");
         drop(at_once);
         lab.wire.release(&Wire::mac(NODE));
@@ -174,6 +175,78 @@ async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
         stop(lab).await;
         assert_no_task_left().await;
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_client_dropped_without_a_stop_frees_the_seat_at_once() {
+    let lab = lab(SessionRole::Both).await;
+    let peer = Wire::mac(PEER);
+    let mut client = lab.session.full_client().unwrap();
+    for _ in 0..20 {
+        // The drop aborts the client's tasks, which still hold the seat's
+        // queue until the runtime next runs them. The session takes the
+        // next client anyway, with no yield in between, and it works.
+        drop(client);
+        client = lab
+            .session
+            .full_client()
+            .expect("the dropped client's seat is free");
+        client
+            .read_property(&peer, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
+            .await
+            .unwrap();
+    }
+    assert_eq!(lab.session.active_leases(), 0);
+    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+
+    drop(client);
+    stop(lab).await;
+    assert_no_task_left().await;
+}
+
+/// On a link that takes the Number controls, a client would ask for the
+/// network's number when it stores a routed device while the number is
+/// unknown. Once its seat has closed it asks nothing.
+#[tokio::test(start_paused = true)]
+async fn a_client_whose_seat_closed_does_not_ask_for_the_network_number() {
+    let mut lab = lab_with(SessionRole::Both, true).await;
+    let client = lab.session.full_client().unwrap();
+    assert_eq!(client.network_number(), None);
+    let routed = || bacnet_client::discovery::RoutedDeviceConfig {
+        instance: 777,
+        router_mac: Wire::mac(9).to_vec(),
+        remote_network: 5,
+        remote_mac: vec![0x09],
+        max_apdu_length: 480,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
+        max_segments_accepted: None,
+    };
+
+    assert!(
+        lab.session.stop().await.is_err(),
+        "the client holds the link"
+    );
+    let sent = lab.node_sent.len();
+    client.add_routed_device(routed()).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(lab.node_sent.len(), sent, "no frame went out");
+
+    drop(client);
+    lab.session.stop().await.unwrap();
+    lab.peer.stop().await.unwrap();
+
+    // The same call on a running session's client does ask, once: the
+    // check above is not passing for want of a question.
+    let mut lab = lab_with(SessionRole::Both, true).await;
+    let client = lab.session.full_client().unwrap();
+    client.add_routed_device(routed()).await.unwrap();
+    assert_eq!(
+        network_messages(&lab.node_sent),
+        [bacnet_npdu::NetworkMessageType::WHAT_IS_NETWORK_NUMBER]
+    );
+    drop(client);
+    lab.session.stop().await.unwrap();
+    lab.peer.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
