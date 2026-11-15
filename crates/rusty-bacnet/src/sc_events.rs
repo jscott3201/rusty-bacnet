@@ -15,7 +15,8 @@ use tokio::sync::broadcast;
 use crate::event_stream::LossyReceiver;
 use crate::types::IntEnumValue;
 
-fn hub_name(hub: ScActiveHub) -> &'static str {
+/// `"primary"` or `"failover"`, as the SC events and frames name a hub.
+pub(crate) fn hub_name(hub: ScActiveHub) -> &'static str {
     match hub {
         ScActiveHub::Primary => "primary",
         ScActiveHub::Failover => "failover",

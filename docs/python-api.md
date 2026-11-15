@@ -6709,6 +6709,99 @@ asyncio.run(client_example())
 
 ---
 
+## Raw frame observation
+
+`BipEndpoint.frames(capacity=1024)` and `BACnetClient.frames(capacity=1024)`
+return an awaitable for a `FrameIterator` on the owner's existing transport,
+with no socket or reader of its own. `BipEndpoint.frames` observes the
+endpoint's one B/IP socket; `BACnetClient.frames` observes the client's own
+link on any transport it runs: B/IP, B/IPv6, SC or MS/TP. Subscribe after
+starting the owner. The endpoint continues answering requests and its client
+role can issue reads while observation runs:
+
+```python
+async with BipEndpoint(1001, interface="127.0.0.1", port=0) as endpoint:
+    frames = await endpoint.frames(capacity=256)
+    try:
+        async for frame in frames:
+            print(frame.monotonic, frame.direction, frame.peer, frame.octets.hex())
+    finally:
+        await frames.aclose()
+```
+
+Each frozen `Frame` holds `monotonic`, `timestamp`, `direction`, `link`,
+`local_address`, `peer`, `octets` and `missed_before`; its `repr` shows the
+direction, link, peer and length, never the octets. Both times are taken in
+Rust when the transport hands the frame over, not when Python reads it:
+
+- `monotonic` is in seconds on the clock and origin of `time.monotonic()`, so
+  `time.monotonic() - frame.monotonic` is the frame's age, and it never
+  decreases within a subscription. The first `frames()` call in the process
+  pairs the capture clock with `time.monotonic()` once. Both read the same OS
+  clock on Linux (`CLOCK_MONOTONIC`), on macOS (`mach_absolute_time`) and on
+  Windows from Python 3.13 (`QueryPerformanceCounter`). On Windows with Python
+  3.11 or 3.12, `time.monotonic()` reads `GetTickCount64`, which moves in 10-16
+  ms steps: a value there can sit up to one step away from it, and the two
+  counters are not guaranteed to stay in step over a long run.
+- `timestamp` is the wall-clock capture time in POSIX seconds, as `time.time()`
+  reads it. A clock adjustment can move it either way; order frames by
+  `monotonic`.
+
+`direction` is `"inbound"` or `"outbound"`. `link` is the link as the
+`transport=` argument spells it, `"bip"`, `"ipv6"`, `"sc"` or `"mstp"`, and
+`"other"` for a link no Python owner runs. `local_address` (this node, as the
+subscription began) and `peer` (the other end) use one form per link:
+
+| `link` | `local_address` | `peer` |
+|---|---|---|
+| `"bip"` | the socket, `"ip:port"`, as `BipEndpoint.local_address()` | the datagram's source or destination, `"ip:port"` |
+| `"ipv6"` | the UDP socket, `"[ip]:port"` | the datagram's source or destination, `"[ip]:port"`, the form `resolve_vmac` takes |
+| `"sc"` | the VMAC in colon hex, `"02:00:00:00:00:02"`, as `ScEndpoint.local_address()` | the hub connection, `"primary"` or `"failover"`, as `ScEvent.hub` |
+| `"mstp"` | the station in decimal, `"3"`, as `MstpEndpoint.local_address()` | the frame's source or destination station in decimal, `"255"` for a broadcast |
+
+On B/IPv6 both are UDP socket addresses, not VMACs: the node's own VMAC and
+the peer's travel in the B/IPv6 header inside `octets`, and `resolve_vmac`
+turns a peer's socket address into its VMAC. On SC the messages all go over
+the hub connection, and the source and destination VMACs travel in the
+BVLC-SC header. `peer` is always the next hop on the link, not a forwarded
+packet's original sender.
+
+The queue holds 1–65536 frames. A full queue keeps the oldest frames and drops
+**new** arrivals without delaying the transport. The next frame queued after
+a gap reports it: `Frame.missed_before` counts the frames this subscription
+missed just before that frame, dropped by the full queue, or lost on the way to
+Python (a closed event loop, say) together with the gap such a frame carried. A
+frame redelivered after a cancelled read keeps its value. `FrameIterator.missed`
+is the live total and remains readable after close: the sum of `missed_before`
+over the frames received, plus any frames lost after the last one, which no
+frame has reported yet.
+
+Received datagrams rejected by the protocol decoder still appear as raw octets.
+A failed operating-system read does not appear: B/IP and B/IPv6 read each
+datagram into a 2048-byte buffer, and a longer one fails the read, so it never
+appears either. Outgoing B/IP, B/IPv6 and SC frames appear before the socket
+write, even if the write subsequently fails; an MS/TP frame appears once it is
+written. On B/IP, B/IPv6 and SC this observes this process's own traffic, not
+all traffic on the network; SC observations are plaintext from inside TLS. On
+MS/TP the bus is shared, so it hears every frame on the line, other stations'
+traffic and the Token and Poll For Master frames included.
+
+Cancelling `anext(frames)` leaves the subscription usable and preserves a frame
+being delivered for the next read. `await frames.aclose()` discards queued
+frames, wakes pending reads with `StopAsyncIteration` and releases the
+subscription. Closing or dropping the owner does the same. Admission to a native
+read and close share one ordering point: a delivery admitted before close may
+still complete its asyncio Future; no later delivery is admitted. Restarting an
+owner needs a new iterator. Read each iterator from one running event loop;
+concurrent reads keep arrival order. A slow or closed event loop can delay
+redelivery, as on the existing event iterators; explicit close ends that wait.
+
+Router application clients (`transport="router"`) have no link of their own and
+raise `ValueError`. `BACnetServer`, `ScEndpoint` and `MstpEndpoint` have no
+`frames()` yet; Rust-decoded summaries, parse failures and forwarding/router
+provenance are follow-up work for #2614. Observation opens no socket and
+changes no port sharing (see [Interfaces are addresses](#interfaces-are-addresses)).
+
 ## Endpoint (one transport, both roles)
 
 `BipEndpoint`, `ScEndpoint`, and `MstpEndpoint` own one transport above both
@@ -7538,6 +7631,19 @@ asyncio.run(main())
 ---
 
 ## Transport Configuration Examples
+
+### Interfaces are addresses
+
+`interface` for B/IP is an IPv4 address, not an OS interface name.
+`ipv6_interface` is an IPv6 address, also not an OS interface name; `None` and
+`"::"` use the automatic selection described under
+[BACnet/IPv6](#bacnetipv6). How a port is shared on Linux, macOS and Windows is
+set by `share_port_by_address` and `share_wildcard_port` (see
+[Claiming the port](#claiming-the-port) and
+[Sharing a port by address](#sharing-a-port-by-address)); observing frames
+with `frames()` opens no additional socket and changes none of it. Two
+separately constructed stacks stay two stacks on two sockets: use an endpoint
+for one transport serving both roles.
 
 ### BACnet/IP (default)
 

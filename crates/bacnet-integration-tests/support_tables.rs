@@ -98,6 +98,7 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "cov_notifications",
     "network_reports",
     "connection_events",
+    "frames",
     "discovered_devices",
     "get_device",
     "clear_devices",
