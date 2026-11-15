@@ -8,7 +8,7 @@
 //! One client per session: while it runs, `endpoint.client()` returns the
 //! same object; once its `stop()` has finished, a fresh one. The session
 //! lock orders `client()` against close, and close stops the client first
-//! (see [`Running::stop`]).
+//! (the `stop` of its lifecycle `Session` impl).
 
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
