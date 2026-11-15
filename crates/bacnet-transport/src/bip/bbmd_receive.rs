@@ -101,7 +101,7 @@ pub(super) async fn handle(share: ForBbmd<'_>, ctx: &RecvContext) {
             let sender = request.sender();
             debug!(?request, "Answering a BBMD management request");
             match reply {
-                Reply::Result(code) => send_bvlc_result(ctx, sender, code).await,
+                Reply::Result(code) => send_bvlc_result(ctx.socket(), sender, code).await,
                 ack => send_table_ack(ack.message(), sender, ctx).await,
             }
         }
@@ -130,7 +130,7 @@ async fn distribute_broadcast(npdu: &[u8], sender: SocketAddrV4, ctx: &RecvConte
                 %sender,
                 "Rejecting DISTRIBUTE_BROADCAST_TO_NETWORK from non-registered sender"
             );
-            send_bvlc_result(ctx, sender, refusal.result_code()).await;
+            send_bvlc_result(ctx.socket(), sender, refusal.result_code()).await;
             return;
         }
     };
@@ -150,7 +150,7 @@ async fn distribute_broadcast(npdu: &[u8], sender: SocketAddrV4, ctx: &RecvConte
     let remote_ok = forward_remote(ctx, npdu, forward).await;
 
     if !(local_ok && remote_ok) {
-        send_bvlc_result(ctx, sender, nak).await;
+        send_bvlc_result(ctx.socket(), sender, nak).await;
     }
 }
 
@@ -189,7 +189,7 @@ async fn send_table_ack(ack: Bvll<'_>, sender: SocketAddrV4, ctx: &RecvContext) 
     let mut buf = BytesMut::with_capacity(resp_len);
     match encode_bvll(&mut buf, &ack) {
         Ok(()) => {
-            let _ = ctx.send_to(&buf, sender).await;
+            let _ = ctx.socket().send_to(&buf, sender).await;
         }
         Err(e) => warn!(error = %e, "Failed to encode table ACK"),
     }
@@ -247,7 +247,7 @@ async fn send_forwarded_npdu(
     let Some(buf) = forwarded_npdu(origin, npdu) else {
         return false;
     };
-    match ctx.send_to(&buf, dest).await {
+    match ctx.socket().send_to(&buf, dest).await {
         Ok(_) => true,
         Err(e) => {
             ctx.drops.forward_failed(&e, dest);
@@ -278,7 +278,7 @@ async fn forward_npdu(
     let mut all_sent = true;
 
     for (i, &dest) in targets.iter().enumerate() {
-        if let Err(e) = ctx.send_to(&frame, dest).await {
+        if let Err(e) = ctx.socket().send_to(&frame, dest).await {
             all_sent = false;
             ctx.drops.forward_failed(&e, dest);
         }

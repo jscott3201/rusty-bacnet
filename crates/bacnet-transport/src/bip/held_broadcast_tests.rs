@@ -217,19 +217,16 @@ async fn held_broadcasts_count_as_discarded_when_the_node_stops() {
         ),
         (2, 0, 2)
     );
-    // Nothing is counted once stopped: not a broadcast made after the stop,
-    // which fails as a stopped transport's send does (#2617), nor one held
-    // by a call that raced the stop (stopped between the call's read of the
-    // link and its admission), nor its drop at a second stop.
-    let late = broadcast(&device, 3).await.unwrap_err();
-    assert!(
-        matches!(&late, bacnet_types::error::Error::Transport(io) if io.kind() == std::io::ErrorKind::NotConnected),
-        "{late}"
-    );
+    // Nothing is held or counted once stopped: a broadcast made after the
+    // stop, or by a call that raced it (stopped between the call's read of
+    // the link and its admission), fails as a stopped transport's send does
+    // (#2617), and a second stop drops nothing more.
+    let is_stopped = |sent: Result<(), bacnet_types::error::Error>| matches!(sent, Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected);
+    assert!(is_stopped(broadcast(&device, 3).await));
     let raced = Device::new(Duration::from_secs(10)).await;
     let stopper = Arc::clone(&raced.ctx.node);
     *raced.ctx.node.before_admit.lock().unwrap() = Some(Box::new(move || stopper.stop()));
-    broadcast(&raced, 3).await.unwrap();
+    assert!(is_stopped(broadcast(&raced, 3).await));
     raced.ctx.node.stop();
     let again = raced.ctx.node.snapshot().foreign_registration;
     assert_eq!((again.broadcasts_held, again.broadcasts_discarded), (0, 0));

@@ -723,6 +723,7 @@ impl TransportPort for BipTransport {
 
         let recv_ctx = RecvContext {
             node: Arc::clone(&node),
+            socket: Arc::clone(&socket),
             npdu_tx,
             bbmd: self.bbmd.clone(),
             management_limiter: Arc::clone(&self.management_limiter),
@@ -747,6 +748,11 @@ impl TransportPort for BipTransport {
             self.tasks.push(Self::spawn_bbmd_fdt_purge_task(bbmd));
         }
 
+        // Wakes the sends a full socket left waiting, until the stop joins
+        // it.
+        self.tasks.push(tokio::spawn(
+            Arc::clone(&node).relay_writable(Arc::clone(&socket)),
+        ));
         // The driver goes last, so tests find it last.
         self.tasks.push(tokio::spawn(node.drive()));
         self.stop_gate.open();

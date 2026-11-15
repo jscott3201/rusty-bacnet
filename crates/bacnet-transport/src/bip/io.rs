@@ -33,6 +33,10 @@ pub(super) struct RecvContext {
     /// The node: its link decides each datagram, and it matches responses
     /// to its own requests.
     pub(super) node: Arc<NodeHandle>,
+    /// The socket the loop's own sends leave from (BVLC-Results, table
+    /// ACKs, a BBMD's forwards): the loop's own reference, which goes with
+    /// the task a stop joins (#2617).
+    pub(super) socket: Arc<BipSocket>,
     pub(super) npdu_tx: mpsc::Sender<ReceivedNpdu>,
     pub(super) bbmd: Option<Arc<std::sync::Mutex<BbmdState>>>,
     pub(super) management_limiter: Arc<std::sync::Mutex<ManagementRateLimiter>>,
@@ -48,19 +52,9 @@ pub(super) struct RecvContext {
 }
 
 impl RecvContext {
-    /// The socket every send leaves from, until the node stops.
-    pub(super) fn socket(&self) -> Option<Arc<BipSocket>> {
-        self.node.socket()
-    }
-
-    /// Send `buf` to `dest` from the node's socket. Once the node has
-    /// stopped, which the receive loop sees only in the moment before its
-    /// task is aborted, nothing is sent.
-    pub(super) async fn send_to(&self, buf: &[u8], dest: SocketAddrV4) -> std::io::Result<usize> {
-        match self.socket() {
-            Some(socket) => socket.send_to(buf, dest).await,
-            None => Err(std::io::ErrorKind::NotConnected.into()),
-        }
+    /// The socket the loop's own sends leave from.
+    pub(super) fn socket(&self) -> &BipSocket {
+        &self.socket
     }
 
     /// This subnet's B/IP broadcast address, where a BBMD rebroadcasts.
@@ -125,7 +119,7 @@ pub(super) async fn receive(datagram: &Datagram<'_>, ctx: &RecvContext) -> Optio
                 ctx.drops.count(DropReason::MalformedPayload);
                 debug!("Refusing a malformed BVLL management request");
             }
-            send_bvlc_result(ctx, to, code).await;
+            send_bvlc_result(ctx.socket(), to, code).await;
         }
         Received::Response(response) => {
             // A malformed response is counted here as well as against the
@@ -170,11 +164,11 @@ fn discarded(discard: Discard, datagram: &Datagram<'_>, ctx: &RecvContext) {
 }
 
 /// Send a BVLC-Result to a destination.
-pub(super) async fn send_bvlc_result(ctx: &RecvContext, dest: SocketAddrV4, code: BvlcResultCode) {
+pub(super) async fn send_bvlc_result(socket: &BipSocket, dest: SocketAddrV4, code: BvlcResultCode) {
     let mut buf = BytesMut::with_capacity(6);
     if let Err(e) = encode_bvll(&mut buf, &Bvll::BvlcResult(code)) {
         warn!(error = %e, "Failed to encode BVLC-Result");
         return;
     }
-    let _ = ctx.send_to(&buf, dest).await;
+    let _ = socket.send_to(&buf, dest).await;
 }

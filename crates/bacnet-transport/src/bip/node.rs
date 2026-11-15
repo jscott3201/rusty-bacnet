@@ -302,6 +302,12 @@ pub(super) struct NodeHandle {
     state: Mutex<NodeState>,
     /// Tells the driver that the node changed.
     wake: Notify,
+    /// Wakes the sends waiting for the socket to take a datagram: when it
+    /// can ([`relay_writable`](Self::relay_writable)), and when the node
+    /// stops. A waiting send holds no socket (#2617).
+    pub(super) writable: Notify,
+    /// A waiting send asks the relay to watch the socket.
+    pub(super) wants_writable: Notify,
     /// Runs, with no lock held, as the driver sends each automatic
     /// registration attempt to the address in use: where a foreign device
     /// whose BBMD is known by host name may look it up again alongside it
@@ -350,6 +356,8 @@ impl NodeHandle {
                 stopped: false,
             }),
             wake: Notify::new(),
+            writable: Notify::new(),
+            wants_writable: Notify::new(),
             attempt_hook: OnceLock::new(),
             #[cfg(test)]
             before_admit: Mutex::new(None),
@@ -366,15 +374,18 @@ impl NodeHandle {
             .link
     }
 
-    /// The node's link and the socket a send leaves from, read together
-    /// under the one read lock a send takes, or the error for a stopped
-    /// transport once the node has stopped (#2617). The send keeps its own
-    /// reference to the socket until it returns, so a stop that runs
-    /// meanwhile doesn't close the socket under it.
-    pub(super) fn sending(&self) -> Result<(Link, Arc<BipSocket>), Error> {
+    /// Run `send` on the node's link and the socket a send leaves from,
+    /// under the one read lock every send takes, or fail with the error for
+    /// a stopped transport once the node has stopped (#2617). `send` decides
+    /// and makes one non-blocking try, nothing else: a stop's write waits
+    /// for it, so no datagram goes out once the stop has taken the socket.
+    pub(super) fn with_sending<R>(
+        &self,
+        send: impl FnOnce(&Link, &Arc<BipSocket>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
         let linked = self.link.read().unwrap_or_else(PoisonError::into_inner);
         match &linked.socket {
-            Some(socket) => Ok((linked.link, Arc::clone(socket))),
+            Some(socket) => send(&linked.link, socket),
             None => Err(crate::port::stopped()),
         }
     }
@@ -556,6 +567,10 @@ impl NodeHandle {
     /// counted as a full hold.
     pub(super) fn admit_broadcast(&self, npdu: &[u8]) -> Result<Option<Link>, Error> {
         self.with(|state, now| {
+            // A stopped node holds nothing: the send fails (#2617).
+            if state.stopped {
+                return Err(crate::port::stopped());
+            }
             let admission = state
                 .node
                 .admit_broadcast(now)
@@ -654,6 +669,8 @@ impl NodeHandle {
         state.releasing = false;
         drop(state);
         drop(socket);
+        // A send waiting for the socket wakes, finds it gone and fails.
+        self.writable.notify_waiters();
     }
 
     /// The sends this node's link refused, as counted.
