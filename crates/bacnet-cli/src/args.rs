@@ -652,6 +652,17 @@ pub(crate) enum Command {
         wait: u64,
     },
 
+    /// Read the routing table of the router at TARGET, on the local
+    /// network, without changing it (an Initialize-Routing-Table query).
+    RoutingTable {
+        /// The router's address on the local network, as `whois-router`
+        /// prints it.
+        target: String,
+        /// Seconds to wait for the router's first answer.
+        #[arg(long, default_value_t = 3)]
+        wait: u64,
+    },
+
     /// Acknowledge an alarm.
     #[command(alias = "ack")]
     AckAlarm {

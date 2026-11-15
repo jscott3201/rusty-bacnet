@@ -22,6 +22,7 @@ create_exception!(rusty_bacnet, BacnetLogNotAdvancingError, BacnetError);
 create_exception!(rusty_bacnet, BacnetReadRangeViolationError, BacnetError);
 create_exception!(rusty_bacnet, BacnetBvlcNakError, BacnetError);
 create_exception!(rusty_bacnet, BacnetBvlcUnexpectedResponseError, BacnetError);
+create_exception!(rusty_bacnet, BacnetNetworkRejectError, BacnetError);
 
 mod lookup;
 pub(crate) use lookup::{Lookup, lookup_error};
@@ -214,6 +215,30 @@ pub(crate) fn bvlc_exchange_err(err: BvlcExchangeError) -> PyErr {
         }
         BvlcExchangeError::Refused(_) => BacnetError::new_err(err.to_string()),
         BvlcExchangeError::Transport(error) => to_py_err(error),
+        other => BacnetError::new_err(other.to_string()),
+    }
+}
+
+/// What `routing_table()` raises: silence is `BacnetTimeoutError`, a router's
+/// Reject-Message-To-Network is `BacnetNetworkRejectError` with its `reason`
+/// octet and `network`, and a failure to send is what [`to_py_err`] makes of
+/// it. A refusal and silence never share a class (#2612).
+pub(crate) fn routing_table_err(err: bacnet_client::client::RoutingTableError) -> PyErr {
+    use bacnet_client::client::RoutingTableError;
+    match err {
+        RoutingTableError::NoAnswer { .. } => BacnetTimeoutError::new_err(err.to_string()),
+        RoutingTableError::Rejected(reject) => {
+            let py_err =
+                BacnetNetworkRejectError::new_err(RoutingTableError::Rejected(reject).to_string());
+            let _ = crate::py_async::attach(|py| {
+                let value = py_err.value(py);
+                let _ = value.setattr("reason", reject.reason.to_raw());
+                let _ = value.setattr("network", reject.network);
+                Ok(())
+            });
+            py_err
+        }
+        RoutingTableError::Send(error) => to_py_err(error),
         other => BacnetError::new_err(other.to_string()),
     }
 }
@@ -418,6 +443,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     unexpected.setattr("expected", m.py().None())?;
     unexpected.setattr("got", m.py().None())?;
     m.add("BacnetBvlcUnexpectedResponseError", unexpected)?;
+    let network_reject = m.py().get_type::<BacnetNetworkRejectError>();
+    network_reject.setattr("reason", m.py().None())?;
+    network_reject.setattr("network", m.py().None())?;
+    m.add("BacnetNetworkRejectError", network_reject)?;
     lookup::register(m)
 }
 

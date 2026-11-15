@@ -108,6 +108,7 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "sc_npdu_drop_counts",
     "sc_peer_info",
     "discover_routers",
+    "routing_table",
     "read_bdt",
     "write_bdt",
     "read_fdt",

@@ -1066,6 +1066,28 @@ Properties:
 - `mac: bytes`: The router's MAC on the local network: the next hop to `networks`.
 - `networks: list[int]`: Every network it listed, ascending, each once.
 
+## RoutingTableEntry
+
+One entry of a router's routing table (#2612), frozen. Refuses
+`copy` and `pickle`.
+
+Properties:
+
+- `network: int`: The network the entry is for.
+- `port_id: int`: The router's identifier for the port that reaches `network`.
+- `port_info: bytes`: The port information octets: dial-up details for a point-to-point link, empty on any other port.
+
+## RoutingTable
+
+A router's routing table, as `BACnetClient.routing_table()` read it
+(#2612), frozen. Refuses `copy` and `pickle`.
+
+Properties:
+
+- `entries: list[RoutingTableEntry]`: The entries in the order the router listed them, across every acknowledgement. Empty for a router that answered with an empty table: a router that did not answer raises instead.
+- `acks: int`: How many acknowledgements carried the entries.
+- `truncated: bool`: Whether the call stopped at its `total` or `max_entries` bound, or lost acknowledgements, rather than after a quiet interval. A table cut short has no marker of its own, so this is the only sign the list may be incomplete.
+
 ## NetworkReport
 
 A network-layer report this client received (#1850), frozen. Fields
@@ -1073,13 +1095,14 @@ that don't apply to its `kind` are None.
 
 Properties:
 
-- `kind: Literal['i_am_router_to_network', 'network_number_is', 'reject_message_to_network', 'other']`
+- `kind: Literal['i_am_router_to_network', 'network_number_is', 'reject_message_to_network', 'routing_table', 'other']`
 - `source_mac: bytes`: The link-layer peer that sent it: for an I-Am-Router-To-Network, the router to send through.
 - `source_network: int | None`: SNET, when a router passed it on from another network.
 - `source_address: bytes | None`: SADR, when a router passed it on from another network.
 - `networks: list[int] | None`: The networks an I-Am-Router-To-Network lists, in its order.
 - `network: int | None`: A Network-Number-Is's network, or the one a refused message was for.
 - `configured: bool | None`: Whether a Network-Number-Is sender had its number configured.
+- `entries: list[RoutingTableEntry] | None`: The entries one Initialize-Routing-Table-Ack lists, for the `"routing_table"` kind (#2612).
 - `reason: int | None`: A Reject-Message-To-Network's reason octet.
 
 ## NetworkReportIterator

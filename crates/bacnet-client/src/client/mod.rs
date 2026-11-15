@@ -942,6 +942,7 @@ mod read_range;
 mod requests;
 mod response_admission;
 mod routed_path_limits;
+mod routing_table;
 mod seat;
 pub use seat::SeatedClientBuilder;
 mod segmentation;
@@ -976,6 +977,9 @@ pub use event_notifications::{
 pub use i_have::{I_HAVE_CHANNEL_CAPACITY, MAX_I_HAVE_REPLIES, ReceivedIHave, collect_answers};
 pub use network_reports::{DiscoveredRouter, NETWORK_REPORT_CHANNEL_CAPACITY};
 pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
+pub use routing_table::{
+    DEFAULT_ROUTING_TABLE_MAX_ENTRIES, RoutingTable, RoutingTableError, RoutingTableWait,
+};
 pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]

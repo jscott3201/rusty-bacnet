@@ -6,17 +6,43 @@
 use super::*;
 use crate::network_number::NumberControl;
 use bacnet_npdu::{NetworkMessageType, RejectMessageToNetwork};
-use bacnet_router_core::message::{NetworkNumberIs, Networks};
+use bacnet_router_core::message::{NetworkNumberIs, Networks, RoutingEntries};
 use bacnet_router_core::table::is_reserved;
 
-/// The network messages [`NetworkLayer::send_network_message`] sends: the
-/// two questions a non-routing node asks. The rest change routing tables,
-/// flow control or connections, or announce routes this node doesn't
-/// have, so each joins the list only deliberately, with its own review.
-pub const SENDABLE_NETWORK_MESSAGES: [NetworkMessageType; 2] = [
+/// The network messages this node's user may send: the two questions a
+/// non-routing node asks ([`NetworkLayer::send_network_message`]) and the
+/// routing-table query ([`NetworkLayer::send_routing_table_query`]). The
+/// rest change routing tables, flow control or connections, or announce
+/// routes this node doesn't have, so each joins the list only
+/// deliberately, with its own review.
+///
+/// Initialize-Routing-Table is here for its query form alone (a port count
+/// of zero, Clauses 6.4.7 and 6.6.3.8), which changes nothing in the
+/// router. Only that form is ever built: its payload is fixed inside the
+/// network layer, and the update form, which carries a routing table, can
+/// not be expressed through any public function.
+pub const SENDABLE_NETWORK_MESSAGES: [NetworkMessageType; 3] = [
     NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
     NetworkMessageType::WHAT_IS_NETWORK_NUMBER,
+    NetworkMessageType::INITIALIZE_ROUTING_TABLE,
 ];
+
+/// The data portion of every routing-table query: a port count of zero and
+/// nothing else (Clause 6.4.7).
+const ROUTING_TABLE_QUERY: [u8; 1] = [0];
+
+/// One entry of a router's table, as an Initialize-Routing-Table-Ack lists
+/// it (Clause 6.4.8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutingTableEntry {
+    /// The network the entry is for.
+    pub network: u16,
+    /// The router's own identifier for the port that reaches it.
+    pub port_id: u8,
+    /// The port information octets: dial-up details for a point-to-point
+    /// link, empty on any other port.
+    pub port_info: Vec<u8>,
+}
 
 /// A network message that tells a non-routing node something about the
 /// internetwork, read from a [`ReceivedNetworkControl`].
@@ -37,6 +63,12 @@ pub enum NetworkReport {
     /// Reject-Message-To-Network (Clause 6.4.4): a router refused a message
     /// this node sent, for the reason and network it names.
     RejectMessageToNetwork(RejectMessageToNetwork),
+    /// Initialize-Routing-Table-Ack (Clause 6.4.8) that answers a table
+    /// query: the entries this one message lists, possibly none. A long
+    /// table comes as several messages, and nothing marks the last
+    /// (Clause 6.6.3.9). The acknowledgement of a table update carries no
+    /// data and is not a report.
+    RoutingTable(Vec<RoutingTableEntry>),
 }
 
 /// A [`NetworkReport`] and where it came from.
@@ -65,6 +97,9 @@ impl ReceivedNetworkReport {
     ///   ignored here too (Clause 6.4.20).
     /// - Reject-Message-To-Network: [`RejectMessageToNetwork::decode`],
     ///   exactly three octets.
+    /// - Initialize-Routing-Table-Ack: router-core's [`RoutingEntries`]
+    ///   view; an empty payload (an update's acknowledgement) or one that
+    ///   ends inside an entry is refused.
     pub fn parse(control: &ReceivedNetworkControl) -> Option<Self> {
         Self::parse_with(control, NumberControl::parse(control))
     }
@@ -111,6 +146,19 @@ impl NetworkReport {
             NetworkMessageType::REJECT_MESSAGE_TO_NETWORK => NetworkReport::RejectMessageToNetwork(
                 RejectMessageToNetwork::decode(&npdu.payload).ok()?,
             ),
+            NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK => {
+                let entries = RoutingEntries::parse(&npdu.payload).ok()?;
+                NetworkReport::RoutingTable(
+                    entries
+                        .iter()
+                        .map(|entry| RoutingTableEntry {
+                            network: entry.network,
+                            port_id: entry.port_id,
+                            port_info: entry.port_info.to_vec(),
+                        })
+                        .collect(),
+                )
+            }
             _ => return None,
         })
     }
@@ -125,24 +173,76 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// What-Is-Network-Number need (Clauses 6.4.1 and 6.4.19). A
     /// `destination_mac` that is one of the link's local broadcast
     /// destinations goes out as the local broadcast, as
-    /// [`Self::send_apdu`] does. Only the types in
-    /// [`SENDABLE_NETWORK_MESSAGES`] are sent; any other is refused before
-    /// anything is sent.
+    /// [`Self::send_apdu`] does. Only the two questions in
+    /// [`SENDABLE_NETWORK_MESSAGES`] are sent here; any other type,
+    /// Initialize-Routing-Table included (it has
+    /// [`Self::send_routing_table_query`], which takes no payload), is
+    /// refused before anything is sent.
     pub async fn send_network_message(
         &self,
         message_type: NetworkMessageType,
         payload: &[u8],
         destination_mac: Option<&[u8]>,
     ) -> Result<(), Error> {
-        if !SENDABLE_NETWORK_MESSAGES.contains(&message_type) {
+        if !SENDABLE_NETWORK_MESSAGES.contains(&message_type)
+            || message_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE
+        {
             return Err(Error::Encoding(format!(
                 "network message type {message_type} is not one a non-routing node sends; \
                  only Who-Is-Router-To-Network and What-Is-Network-Number are"
             )));
         }
+        self.send_local_message(message_type, payload, false, destination_mac)
+            .await
+    }
+
+    /// Send a routing-table query to one router on the local network: an
+    /// Initialize-Routing-Table with a port count of zero, which asks the
+    /// router to return its whole table in Initialize-Routing-Table-Acks
+    /// and change nothing (Clauses 6.4.7 and 6.6.3.8). The acks come as
+    /// [`NetworkReport::RoutingTable`] through the network-control
+    /// receiver.
+    ///
+    /// The data portion is fixed here: no caller supplies a payload or a
+    /// port list, so the update form, which would rewrite the router's
+    /// table, cannot be sent. The message goes out with the
+    /// data-expecting-reply flag set, as Clause 6.4.7 requires; on MS/TP
+    /// that is what lets the router answer inside the reply window
+    /// instead of waiting for the token.
+    ///
+    /// `router_mac` must be one router's own address: a link-wide
+    /// broadcast destination, or an empty one, is refused before anything
+    /// is sent.
+    pub async fn send_routing_table_query(&self, router_mac: &[u8]) -> Result<(), Error> {
+        if router_mac.is_empty() || self.local_broadcasts.contains(router_mac) {
+            return Err(Error::Encoding(
+                "a routing-table query goes to one router's own address, not a broadcast".into(),
+            ));
+        }
+        self.send_local_message(
+            NetworkMessageType::INITIALIZE_ROUTING_TABLE,
+            &ROUTING_TABLE_QUERY,
+            true,
+            Some(router_mac),
+        )
+        .await
+    }
+
+    /// Build and send one local network message of a type on
+    /// [`SENDABLE_NETWORK_MESSAGES`]. Private: its callers fix the payload
+    /// for the types that need it fixed.
+    async fn send_local_message(
+        &self,
+        message_type: NetworkMessageType,
+        payload: &[u8],
+        expecting_reply: bool,
+        destination_mac: Option<&[u8]>,
+    ) -> Result<(), Error> {
+        debug_assert!(SENDABLE_NETWORK_MESSAGES.contains(&message_type));
         let npdu = Npdu {
             message_type: Some(message_type),
             payload: Bytes::copy_from_slice(payload),
+            expecting_reply,
             ..Npdu::default()
         };
         let mut buf = BytesMut::with_capacity(3 + payload.len());
