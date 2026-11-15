@@ -86,8 +86,19 @@ pub fn text(bytes: Vec<u8>) -> String {
     String::from_utf8(bytes).unwrap()
 }
 
+/// `pem` with LF line ends. rcgen writes CRLF on Windows and LF elsewhere,
+/// so a test that edits lines starts from this to mean the same everywhere.
+pub fn lf(pem: &str) -> String {
+    pem.replace("\r\n", "\n")
+}
+
 pub fn crlf(pem: &str) -> String {
-    pem.replace("\r\n", "\n").replace('\n', "\r\n")
+    lf(pem).replace('\n', "\r\n")
+}
+
+/// `pem` with lone CR line ends, as old Mac files have them.
+pub fn cr(pem: &str) -> String {
+    lf(pem).replace('\n', "\r")
 }
 
 pub fn node(ca: &str, chain: &str, key: &str) -> Result<ScNodeTlsConfig, ScTlsConfigError> {

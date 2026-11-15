@@ -16,7 +16,7 @@ use fixture::{legacy_encrypted_pem, pem};
 #[allow(dead_code)]
 #[path = "support/sc_tls_site.rs"]
 mod site;
-use site::{Site, both, crlf, hub, node, text, unwrap_pkcs8};
+use site::{Site, both, cr, crlf, hub, lf, node, text, unwrap_pkcs8};
 
 #[test]
 fn pem_constructors_read_pkcs8_sec1_and_pkcs1_keys_with_an_intermediate() {
@@ -67,6 +67,9 @@ fn pem_text_around_sections_crlf_and_other_sections_are_taken() {
     let key_file = format!("{}{key}-- end of file --\n", site.root);
     both(&ca, &chain, &key_file).unwrap();
     both(&crlf(&ca), &crlf(&chain), &crlf(&key_file)).unwrap();
+    // The parser takes a lone CR as a line end too, so PEM with old Mac
+    // line ends loads: well-formed PEM, nothing to refuse.
+    both(&cr(&ca), &cr(&chain), &cr(&key_file)).unwrap();
     // A bundle of several CAs, the one that issued last.
     let other = Site::new();
     both(&format!("{}{}", other.root, site.root), &leaf.chain, &key).unwrap();
@@ -461,42 +464,51 @@ fn inputs_are_checked_ca_first_then_decoded_before_der_checks() {
 fn no_error_or_configuration_shows_key_material() {
     let site = Site::new();
     let leaf = site.leaf();
-    let key = leaf.key.serialize_pem();
-    let body: String = key.lines().nth(1).unwrap().chars().take(24).collect();
-    let one_line = key.replace('\n', "");
     let wrong_leaf = site.leaf();
-    let cases = [
-        (site.root.clone(), leaf.chain.clone(), one_line.clone()),
-        (site.root.clone(), leaf.chain.clone(), format!("{key}{key}")),
-        (
-            site.root.clone(),
-            leaf.chain.clone(),
-            key.replace("-----END", "-----BEGIN"),
-        ),
-        (
-            site.root.clone(),
-            leaf.chain.clone(),
-            key.replacen('\n', "!\n", 2),
-        ),
-        (site.root.clone(), wrong_leaf.chain.clone(), key.clone()),
-        (key.clone(), leaf.chain.clone(), key.clone()),
-        (one_line.clone(), leaf.chain.clone(), key.clone()),
-        (site.root.clone(), one_line.clone(), key.clone()),
-        (
-            site.root.clone(),
-            leaf.chain.clone(),
-            key.replace("PRIVATE KEY", "ENCRYPTED PRIVATE KEY"),
-        ),
-    ];
-    for (ca, chain, key_text) in cases {
-        let error = both(&ca, &chain, &key_text).unwrap_err();
-        for shown in [format!("{error}"), format!("{error:?}")] {
-            assert!(!shown.contains(&body), "key material shown: {shown}");
-            assert!(!shown.contains("PRIVATE KEY"), "key label shown: {shown}");
+    // rcgen writes CRLF on Windows and LF elsewhere; both renderings run
+    // here on every platform. The malformed forms start from LF text: the
+    // parser takes a lone CR as a line end, so removing only the LFs from
+    // CRLF text would leave a key that still loads.
+    let generated = leaf.key.serialize_pem();
+    for (ending, key) in [("LF", lf(&generated)), ("CRLF", crlf(&generated))] {
+        let body: String = key.lines().nth(1).unwrap().chars().take(24).collect();
+        let one_line = key.replace(['\r', '\n'], "");
+        let key_lf = lf(&key);
+        let cases = [
+            (site.root.clone(), leaf.chain.clone(), one_line.clone()),
+            (site.root.clone(), leaf.chain.clone(), format!("{key}{key}")),
+            (
+                site.root.clone(),
+                leaf.chain.clone(),
+                key_lf.replace("-----END", "-----BEGIN"),
+            ),
+            (
+                site.root.clone(),
+                leaf.chain.clone(),
+                key_lf.replacen('\n', "!\n", 2),
+            ),
+            (site.root.clone(), wrong_leaf.chain.clone(), key.clone()),
+            (key.clone(), leaf.chain.clone(), key.clone()),
+            (one_line.clone(), leaf.chain.clone(), key.clone()),
+            (site.root.clone(), one_line.clone(), key.clone()),
+            (
+                site.root.clone(),
+                leaf.chain.clone(),
+                key_lf.replace("PRIVATE KEY", "ENCRYPTED PRIVATE KEY"),
+            ),
+        ];
+        for (index, (ca, chain, key_text)) in cases.into_iter().enumerate() {
+            let Err(error) = both(&ca, &chain, &key_text) else {
+                panic!("{ending} case {index} loaded, but every case here is malformed");
+            };
+            for shown in [format!("{error}"), format!("{error:?}")] {
+                assert!(!shown.contains(&body), "key material shown: {shown}");
+                assert!(!shown.contains("PRIVATE KEY"), "key label shown: {shown}");
+            }
         }
+        let config = node(&site.root, &leaf.chain, &key).unwrap();
+        assert_eq!(format!("{config:?}"), "ScNodeTlsConfig { .. }");
+        let config = hub(&site.root, &leaf.chain, &key).unwrap();
+        assert_eq!(format!("{config:?}"), "ScHubTlsConfig { .. }");
     }
-    let config = node(&site.root, &leaf.chain, &key).unwrap();
-    assert_eq!(format!("{config:?}"), "ScNodeTlsConfig { .. }");
-    let config = hub(&site.root, &leaf.chain, &key).unwrap();
-    assert_eq!(format!("{config:?}"), "ScHubTlsConfig { .. }");
 }
