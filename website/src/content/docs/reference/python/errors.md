@@ -168,6 +168,23 @@ Attributes:
 - `expected: int`
 - `got: int`
 
+## BacnetNetworkRejectError
+
+`class BacnetNetworkRejectError(BacnetError)`
+
+Raised when a router answers a network-layer message the client sent
+with a Reject-Message-To-Network, as `routing_table()` reports it
+(#2612). Silence raises `BacnetTimeoutError` instead.
+
+Attributes:
+reason: The reject reason octet the router sent.
+network: The network the router named.
+
+Attributes:
+
+- `reason: int`
+- `network: int`
+
 ## BacnetLookupError
 
 `class BacnetLookupError(BacnetError, LookupError)`

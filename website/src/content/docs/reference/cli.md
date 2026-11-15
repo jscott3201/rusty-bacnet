@@ -134,6 +134,7 @@ These options go before or after the command. Each command also takes `-h` or `-
 | [`register`](#bacnet-register) | — | Register as foreign device with BBMD, once, for --ttl seconds. |
 | [`unregister`](#bacnet-unregister) | — | Unregister from BBMD. |
 | [`whois-router`](#bacnet-whois-router) | — | List the routers on the local network and the networks they reach (Who-Is-Router-To-Network). |
+| [`routing-table`](#bacnet-routing-table) | — | Read the routing table of the router at TARGET, on the local network, without changing it (an Initialize-Routing-Table query). |
 | [`ack-alarm`](#bacnet-ack-alarm) | `ack` | Acknowledge an alarm. |
 | [`read-range`](#bacnet-read-range) | `rr` | Read a range of items from a list or log buffer. |
 | [`create-object`](#bacnet-create-object) | — | Create an object on a remote device. |
@@ -611,6 +612,22 @@ Options:
 
 - `--dnet <DNET>`: Ask only for the router to this network number.
 - `--wait <WAIT>`: Seconds to wait for responses. Default: `3`.
+
+### bacnet routing-table
+
+Read the routing table of the router at TARGET, on the local network, without changing it (an Initialize-Routing-Table query).
+
+```text
+Usage: bacnet routing-table [OPTIONS] <TARGET>
+```
+
+Arguments:
+
+- `<TARGET>`: The router's address on the local network, as `whois-router` prints it. Required.
+
+Options:
+
+- `--wait <WAIT>`: Seconds to wait for the router's first answer (0 to 3600). Default: `3`.
 
 ### bacnet ack-alarm
 

@@ -347,6 +347,10 @@ async fn execute_command<T: TransportPort + 'static>(
         Command::WhoisRouter { dnet, wait } => {
             commands::router::whois_router_cmd(client, *dnet, *wait, format).await?;
         }
+        Command::RoutingTable { target, wait } => {
+            let mac = resolve_target_mac(client, target).await?;
+            commands::router::routing_table_cmd(client, &mac, *wait, format).await?;
+        }
         Command::AckAlarm {
             target,
             object,

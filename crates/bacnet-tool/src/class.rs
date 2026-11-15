@@ -66,6 +66,7 @@ pub const COMMANDS: &[(&str, Class)] = &[
     ("bdt", Read),
     ("fdt", Read),
     ("whois-router", Read),
+    ("routing-table", Read),
     ("subscribe", Read),
     ("cov", Read),
     ("register", Read),

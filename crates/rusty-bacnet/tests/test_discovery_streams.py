@@ -207,7 +207,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
                        "source_mac", "source_network", "source_address"}),
             ("DiscoveredRouter", {"mac", "networks"}),
             ("NetworkReport", {"kind", "source_mac", "source_network", "source_address",
-                               "networks", "network", "configured", "reason"}),
+                               "networks", "network", "configured", "reason", "entries"}),
             ("IHaveIterator", {"missed"}),
             ("NetworkReportIterator", {"missed"}),
         ):

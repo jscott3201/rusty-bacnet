@@ -166,3 +166,111 @@ async fn only_the_two_questions_are_sent() {
         assert!(frame.is_none(), "{refused}");
     }
 }
+
+/// The sendable list is the two questions: `send_network_message` refuses
+/// Initialize-Routing-Table with any payload, so the update form has no
+/// way out.
+#[tokio::test]
+async fn the_update_form_of_initialize_routing_table_cannot_be_sent() {
+    assert_eq!(
+        SENDABLE_NETWORK_MESSAGES,
+        [
+            NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
+            NetworkMessageType::WHAT_IS_NETWORK_NUMBER,
+        ]
+    );
+    // A routing table (one network, port 1, no port info), an empty
+    // payload and the zero count: none goes out through the general send.
+    for payload in [&[1, 0, 5, 1, 0][..], &[], &[0]] {
+        for destination in [None, Some(&[2][..])] {
+            let (result, frame) = sent(
+                NetworkMessageType::INITIALIZE_ROUTING_TABLE,
+                payload,
+                destination,
+            )
+            .await;
+            assert!(result.is_err(), "{payload:?}");
+            assert!(frame.is_none(), "{payload:?}");
+        }
+    }
+}
+
+/// The query is one unicast with a port count of zero and the
+/// data-expecting-reply flag set (Clause 6.4.7): control octet 0x84, type 6.
+#[tokio::test]
+async fn the_query_is_a_zero_count_and_expects_a_reply() {
+    let (a, mut b) = LoopbackTransport::pair(vec![1], vec![2]);
+    let mut rx = b.start().await.unwrap();
+    let mut layer = NetworkLayer::new(a);
+    let _apdus = layer.start().await.unwrap();
+    layer.send_routing_table_query(&[2]).await.unwrap();
+    let frame = tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .unwrap()
+        .expect("the query reaches the router");
+    assert_eq!(&frame.npdu[..], [1, 0x84, 0x06, 0]);
+    assert!(!frame.link_layer_group, "a unicast, not a broadcast");
+}
+
+/// A query goes to one router: a broadcast or empty destination is refused
+/// with nothing sent.
+#[tokio::test]
+async fn a_broadcast_query_is_refused() {
+    let (mut a, mut b) = LoopbackTransport::pair(vec![1], vec![2]);
+    a.set_broadcast_mac(vec![0xFF]);
+    let mut rx = b.start().await.unwrap();
+    let mut layer = NetworkLayer::new(a);
+    let _apdus = layer.start().await.unwrap();
+    for destination in [&[0xFF][..], &[]] {
+        let error = layer
+            .send_routing_table_query(destination)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("one router's own address"), "{error}");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+fn an_ack_to_a_query_lists_its_entries_and_an_update_ack_is_no_report() {
+    // Two entries: network 2 on port 1 with no info, network 3000 on port
+    // 2 with two port-info octets.
+    assert_eq!(
+        report(
+            &[1, 0x80, 0x07, 2, 0, 2, 1, 0, 0x0B, 0xB8, 2, 2, 0xAB, 0xCD],
+            false
+        ),
+        Some(NetworkReport::RoutingTable(vec![
+            RoutingTableEntry {
+                network: 2,
+                port_id: 1,
+                port_info: vec![],
+            },
+            RoutingTableEntry {
+                network: 3000,
+                port_id: 2,
+                port_info: vec![0xAB, 0xCD],
+            },
+        ]))
+    );
+    // A router with an empty table answers with a count of zero.
+    assert_eq!(
+        report(&[1, 0x80, 0x07, 0], false),
+        Some(NetworkReport::RoutingTable(vec![]))
+    );
+    // An update's ack has no data; a count past the data, a cut port info
+    // and trailing octets are refused.
+    for bytes in [
+        &[1, 0x80, 0x07][..],
+        &[1, 0x80, 0x07, 2, 0, 2, 1, 0],
+        &[1, 0x80, 0x07, 1, 0, 2, 1, 2, 0xAB],
+        &[1, 0x80, 0x07, 0, 9],
+    ] {
+        assert_eq!(report(bytes, false), None, "{bytes:?}");
+    }
+}

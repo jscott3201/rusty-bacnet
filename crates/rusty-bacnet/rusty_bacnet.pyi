@@ -3567,13 +3567,62 @@ class DiscoveredRouter:
         ...
 
 
+class RoutingTableEntry:
+    """One entry of a router's routing table (#2612), frozen. Refuses
+    ``copy`` and ``pickle``."""
+
+    @property
+    def network(self) -> int:
+        """The network the entry is for."""
+        ...
+    @property
+    def port_id(self) -> int:
+        """The router's identifier for the port that reaches ``network``."""
+        ...
+    @property
+    def port_info(self) -> bytes:
+        """The port information octets, which the standard defines only as an
+        octet string (typically dial-up details for a point-to-point link);
+        empty when the entry has none."""
+        ...
+
+
+class RoutingTable:
+    """A router's routing table, as ``BACnetClient.routing_table()`` read it
+    (#2612), frozen. Refuses ``copy`` and ``pickle``."""
+
+    @property
+    def entries(self) -> list[RoutingTableEntry]:
+        """The entries in the order the router listed them, across every
+        acknowledgement. Empty for a router that answered with an empty
+        table: a router that did not answer raises instead."""
+        ...
+    @property
+    def acks(self) -> int:
+        """How many acknowledgements carried the entries."""
+        ...
+    @property
+    def truncated(self) -> bool:
+        """Whether the call stopped at its ``total`` or ``max_entries`` bound,
+        or lost acknowledgements, rather than after a quiet interval. It
+        covers those cases only: a quiet end does not prove the table whole
+        (on MS/TP, acknowledgements after the first wait for the router's
+        token), so use a larger ``quiet`` on a slow trunk. A late
+        acknowledgement of an earlier query to the same router can also be
+        counted by the next one (nothing pairs answers with questions), so
+        leave a gap between repeated queries; entries are reported as
+        received, so a network number can appear twice."""
+        ...
+
+
 class NetworkReport:
     """A network-layer report this client received (#1850), frozen. Fields
     that don't apply to its ``kind`` are None."""
 
     @property
     def kind(self) -> Literal["i_am_router_to_network", "network_number_is",
-                              "reject_message_to_network", "other"]: ...
+                              "reject_message_to_network", "routing_table",
+                              "other"]: ...
     @property
     def source_mac(self) -> bytes:
         """The link-layer peer that sent it: for an I-Am-Router-To-Network,
@@ -3598,6 +3647,11 @@ class NetworkReport:
     @property
     def configured(self) -> bool | None:
         """Whether a Network-Number-Is sender had its number configured."""
+        ...
+    @property
+    def entries(self) -> list[RoutingTableEntry] | None:
+        """The entries one Initialize-Routing-Table-Ack lists, for the
+        ``"routing_table"`` kind (#2612)."""
         ...
     @property
     def reason(self) -> int | None:
@@ -3752,6 +3806,18 @@ class BacnetBvlcUnexpectedResponseError(BacnetError):
     """
     expected: int
     got: int
+
+class BacnetNetworkRejectError(BacnetError):
+    """Raised when a router answers a network-layer message the client sent
+    with a Reject-Message-To-Network, as ``routing_table()`` reports it
+    (#2612). Silence raises ``BacnetTimeoutError`` instead.
+
+    Attributes:
+        reason: The reject reason octet the router sent.
+        network: The network the router named.
+    """
+    reason: int
+    network: int
 
 class BacnetLookupError(BacnetError, LookupError):
     """Raised when no device could be placed for the name a call gave
@@ -5219,10 +5285,54 @@ class BACnetClient:
         whole wait, so ``stop()`` waits up to ``wait`` seconds for it."""
         ...
 
+    def routing_table(
+        self, router: str | bytes, *, wait: float = 3.0, quiet: float = 0.5,
+        total: float = 10.0, max_entries: int = 4096,
+    ) -> Awaitable[RoutingTable]:
+        """Read the routing table of the router at ``router``, a station on
+        this client's own link, without changing it (#2612). The call sends
+        one Initialize-Routing-Table with a port count of zero, which only
+        asks; no argument can make it an update.
+
+        ``router`` is the router's address on the local link: ``bytes`` as
+        given, such as a ``DiscoveredRouter``'s ``mac``, or a string in the
+        binding's address forms (``"ip:port"``, ``"bip6:N"``, hex octets, an
+        MS/TP station). An empty or broadcast address raises ValueError.
+
+        A long table comes as several acknowledgements with nothing to mark
+        the last, so the call returns once ``quiet`` seconds pass after the
+        last acknowledgement from the router (other traffic does not restart
+        it), at ``total`` seconds from the send, or at ``max_entries``
+        entries (at least 1); the last two set ``truncated`` on the result,
+        which covers those bounds only. A quiet end does not prove the table
+        whole: on MS/TP, acknowledgements after the first wait for the
+        router's token, so use a larger ``quiet`` on a slow trunk. A late
+        acknowledgement of an earlier query to the same router can be
+        counted by the next one (nothing pairs answers with questions), so
+        leave a gap between repeated queries; entries are reported as
+        received, not deduplicated.
+
+        An empty table, or an older router's acknowledgement with no data,
+        is a ``RoutingTable`` with no entries. A router that sends nothing
+        within ``wait`` seconds raises BacnetTimeoutError: one that ignores
+        the message looks the same as one that is absent (on B/IP, so does
+        one that answers from another address or port), and neither is an
+        empty table. A Reject-Message-To-Network from the router before any
+        acknowledgement raises BacnetNetworkRejectError; rejects with
+        reasons 1, 2 and 4 concern a DNET and are ignored. Each bound is 0 to
+        3600 seconds and ``wait`` may not exceed ``total`` (ValueError
+        otherwise). A client stopped mid-call raises RuntimeError. Only a
+        router on the local link can be asked; one behind another router
+        cannot. One query runs at a time per client; a second call waits for
+        the first. It holds the started client for the whole wait, so
+        ``stop()`` waits for it."""
+        ...
+
     def network_reports(self) -> Awaitable[NetworkReportIterator]:
-        """Follow the I-Am-Router-To-Network, Network-Number-Is and
-        Reject-Message-To-Network messages the client receives from now on
-        (#1850). RuntimeError before start and after stop."""
+        """Follow the I-Am-Router-To-Network, Network-Number-Is,
+        Reject-Message-To-Network and Initialize-Routing-Table-Ack (query
+        answers, #2612) messages the client receives from now on (#1850).
+        RuntimeError before start and after stop."""
         ...
 
     def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]:

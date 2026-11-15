@@ -33,15 +33,39 @@ pub struct DiscoveredRouter {
 /// Read `control` as a report and hand it to the subscribers; `number` is
 /// what [`NumberControl::parse`] made of it. With no subscriber nothing is
 /// parsed. Never waits.
+///
+/// While a routing-table query waits on a router (`queried`), an
+/// Initialize-Routing-Table-Ack with no data from that router's own MAC, not
+/// routed, is published as an empty table: this client never sends the
+/// update form, so such an ack can only be that router's older-style answer
+/// to the query. From any other source, or outside a query, it is no
+/// report.
 pub(super) fn publish(
     tx: &broadcast::Sender<ReceivedNetworkReport>,
     control: &ReceivedNetworkControl,
     number: Option<NumberControl>,
+    queried: &std::sync::Mutex<Option<MacAddr>>,
 ) {
     if tx.receiver_count() == 0 {
         return;
     }
-    if let Some(report) = ReceivedNetworkReport::parse_with(control, number) {
+    let report = ReceivedNetworkReport::parse_with(control, number).or_else(|| {
+        let empty_ack = control.npdu.message_type
+            == Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
+            && control.npdu.payload.is_empty()
+            && control.npdu.source.is_none()
+            && queried
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                == Some(&control.source_mac);
+        empty_ack.then(|| ReceivedNetworkReport {
+            source_mac: control.source_mac.clone(),
+            source_network: control.npdu.source.clone(),
+            report: NetworkReport::RoutingTable(Vec::new()),
+        })
+    });
+    if let Some(report) = report {
         let _ = tx.send(report);
     }
 }
