@@ -78,6 +78,11 @@ async fn failed_shutdown_keeps_client_closed_to_operations_until_retry() {
     assert!(error.to_string().contains("injected shutdown failure"));
     assert!(state.client.read().await.is_some());
     assert!(state.closing.load(Ordering::Acquire));
+    // An endpoint asked for a client learns why, not that it is stopping
+    // forever (#2617).
+    assert!(
+        matches!(state.liveness(), Liveness::Failed(cause) if cause.contains("injected shutdown failure"))
+    );
     assert!(started(&state).await.is_err());
     assert!(starting(&state).await.is_err());
     timeout(Duration::from_secs(3), close(Arc::clone(&state)))
@@ -86,6 +91,7 @@ async fn failed_shutdown_keeps_client_closed_to_operations_until_retry() {
         .unwrap();
     assert!(state.client.read().await.is_none());
     assert!(!state.closing.load(Ordering::Acquire));
+    assert_eq!(state.liveness(), Liveness::Stopped);
 }
 
 /// A call through the high-level client holds the same lease as any other,

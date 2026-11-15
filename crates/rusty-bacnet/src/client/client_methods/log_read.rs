@@ -47,7 +47,7 @@ impl BACnetClient {
                 }
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
-                    let path = target.path(&high).await?;
+                    let path = target.path(&high, &inner.route_misses).await?;
                     routed::read_range(high.low_level(), &path, &request, validation).await
                 }
             }
@@ -84,7 +84,7 @@ impl BACnetClient {
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
                     let c = high.low_level();
-                    match target.path(&high).await? {
+                    match target.path(&high, &inner.route_misses).await? {
                         routed::Path::Local(mac) => {
                             c.read_log_page(&mac, log, cursor, page_size).await
                         }

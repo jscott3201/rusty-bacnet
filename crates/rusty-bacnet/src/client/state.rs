@@ -84,17 +84,25 @@ pub(crate) struct ClientState {
     /// A client on an endpoint's link (#2617), which its endpoint starts
     /// and which can't be started again once stopped.
     seated: bool,
+    /// Routed stations that didn't answer a Who-Is lately (#2617).
+    pub(super) route_misses: super::routed::RecentMisses,
+    /// Why the last stop failed, until a stop is tried again: an endpoint
+    /// asked for a client then says so (#2617).
+    stop_failure: std::sync::Mutex<Option<String>>,
 }
 
 /// Where a client on an endpoint's link stands, for the endpoint deciding
 /// whether `endpoint.client()` hands it out again (#2617).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Liveness {
     /// Started: calls go through.
     Started,
     /// A stop is admitted or running: the Rust client may still hold the
     /// endpoint's seat.
     Stopping,
+    /// The last stop failed, for this reason: the client stays closed to
+    /// calls and may still hold the seat until a stop is tried again.
+    Failed(String),
     /// Stopped: the Rust client, and with it the seat, is gone.
     Stopped,
 }
@@ -124,11 +132,24 @@ impl ClientState {
         }
     }
 
+    /// Record why the last stop failed, or that a new stop is under way.
+    fn set_stop_failure(&self, failure: Option<String>) {
+        *self
+            .stop_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = failure;
+    }
+
     /// Where this client stands; see [`Liveness`]. Sends nothing and waits
     /// for nothing.
     pub(crate) fn liveness(&self) -> Liveness {
         if self.closing.load(Ordering::Acquire) {
-            return Liveness::Stopping;
+            let failure = self
+                .stop_failure
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            return failure.map_or(Liveness::Stopping, Liveness::Failed);
         }
         match self.client.try_read() {
             Ok(slot) if slot.is_some() => Liveness::Started,
@@ -318,6 +339,8 @@ pub(crate) async fn close(inner: ClientInner) -> PyResult<()> {
         inner.closing.store(true, Ordering::Release);
         inner.closing_admitted.notify_waiters();
         inner.frames.close();
+        // This try is a new one: an earlier failure no longer stands.
+        inner.set_stop_failure(None);
         let state = Arc::clone(&inner);
         *shutdown = Some(tokio::spawn(stop_native(state)));
     }
@@ -329,10 +352,15 @@ pub(crate) async fn close(inner: ClientInner) -> PyResult<()> {
             inner.closing.store(false, Ordering::Release);
             Ok(())
         }
-        Ok(Err(error)) => Err(to_py_err(error)),
-        Err(error) => Err(PyRuntimeError::new_err(format!(
-            "client shutdown task failed: {error}"
-        ))),
+        Ok(Err(error)) => {
+            inner.set_stop_failure(Some(error.to_string()));
+            Err(to_py_err(error))
+        }
+        Err(error) => {
+            let message = format!("client shutdown task failed: {error}");
+            inner.set_stop_failure(Some(message.clone()));
+            Err(PyRuntimeError::new_err(message))
+        }
     }
 }
 

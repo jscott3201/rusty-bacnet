@@ -423,14 +423,42 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((row.source_network, bytes(row.source_address)), (5, self.STATION))
         self.assertEqual(bytes(row.mac_address), mac(self.bbmd.address))
 
-    async def test_a_station_that_never_answers_is_a_lookup_error(self):
-        silent = rb.RoutedTarget(5, b"\x0b")  # the BBMD answers for 0x0a only
-        self.bbmd.handler = lambda datagram, source: (
-            [bvll(0x00, b"\x00\x00")] if datagram[:2] == b"\x81\x05" else None)
+    async def test_a_silent_station_says_to_name_its_router_and_isnt_asked_again(self):
+        # 0x0b sends no I-Am, as an MS/TP slave doesn't: the BBMD answers
+        # the Who-Is for 0x0a only.
+        silent = rb.RoutedTarget(5, b"\x0b")
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         with self.assertRaises(rb.BacnetLookupError) as caught:
             await asyncio.wait_for(self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 10)
-        self.assertIn("5:0x0B", str(caught.exception))
+        self.assertGreaterEqual(loop.time() - started, 2.5)  # the Who-Is's wait
+        text = str(caught.exception)
+        for words in ("5:0x0B", "Who-Is on network 5", "router=", "discover_routers()"):
+            self.assertIn(words, text)
+        self.assertEqual(len(self.who_is), 1)
+        # Asked again soon: it raises at once, and no second Who-Is goes.
+        started = loop.time()
+        for name, call in calls(self.role, silent).items():
+            with self.subTest(method=name), self.assertRaises(rb.BacnetLookupError) as again:
+                await asyncio.wait_for(call(), 1)
+        self.assertLess(loop.time() - started, 1)
+        self.assertIn("in the last 30 s", str(again.exception))
+        self.assertEqual(len(self.who_is), 1)
         self.assertEqual([d for d, _ in self.bbmd.received if d[:2] == b"\x81\x0a"], [])
+        # Naming the router works at once.
+        through = rb.RoutedTarget(5, b"\x0b", router=self.bbmd.address)
+        self.assertEqual(await asyncio.wait_for(
+            self.role.read_property(through, AI_1, P.PRESENT_VALUE), 5), rb.PropertyValue.unsigned(0))
+        # So does an I-Am the station sends on its own: its row is the route.
+        ip, port = (await self.endpoint.local_address()).rsplit(":", 1)
+        self.bbmd.send(i_am(5, b"\x0b", FAR + 1), (ip, int(port)))
+        async with asyncio.timeout(5):
+            while not any(row.object_identifier.instance == FAR + 1
+                          for row in await self.role.discovered_devices()):
+                await asyncio.sleep(0.01)
+        self.assertEqual(await asyncio.wait_for(
+            self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 1), rb.PropertyValue.unsigned(0))
+        self.assertEqual(len(self.who_is), 1)
 
 
 class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):

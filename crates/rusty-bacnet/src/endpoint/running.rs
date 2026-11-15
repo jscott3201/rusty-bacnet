@@ -64,6 +64,12 @@ impl Running {
                          for another",
                     ));
                 }
+                Liveness::Failed(cause) => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "the endpoint's last client failed to stop ({cause}): await its stop() \
+                         again before asking for another"
+                    )));
+                }
                 Liveness::Stopped => {}
             }
         }

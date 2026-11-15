@@ -7370,9 +7370,12 @@ async with endpoint:
 With a `router`, each request goes to that router with the station's
 network and MAC as its destination. Without one, the client uses the route
 it knows, as `device()` does: the router its discovery table names for the
-station, after one Who-Is to the station's network when it has no row; a
-station that doesn't answer raises `BacnetLookupError`, so pass `router` for
-one that never sends an I-Am. A `router` that is a broadcast or group
+station, after one Who-Is to the station's network when it has no row. A
+station that doesn't answer raises `BacnetLookupError`, and for 30 seconds
+a call to it with no router raises at once, without asking again, unless an
+I-Am from it gives the client a row first. **A station that never announces
+itself, such as an MS/TP slave, needs `router`**: `discover_routers()` finds
+the routers on the link. A `router` that is a broadcast or group
 address on the link (the configured broadcast address, 255.255.255.255, a
 multicast group, MS/TP station 255) raises `BacnetError` before anything is
 sent: a routed request goes to its router by unicast. A network that turns
@@ -7420,13 +7423,14 @@ on the endpoint's link. Its calls keep their names and result shapes:
 | `EndpointClient` | `BACnetClient` from `endpoint.client()` |
 |---|---|
 | `read_property(address, ...)`, a `str` or a `RoutedTarget` | the same call; a `RoutedTarget` with no `router` now takes the route the client learns, not a broadcast per request |
+| `read_property_multiple` checked its arguments at the call (`ValueError`) | a bad address raises `ValueError`, and an empty list `BacnetError`, when awaited |
 | `read_property_multiple(address, specs)` | the same call, with the standalone profile: selectors and wildcard instances are taken, an empty list raises `BacnetError` when awaited, and the answer comes back as the device gave it, each result naming its object, property and index, for you to compare with what you asked |
 | `read_range(address, ..., validation=...)` | the same call |
 | `read_log_page(address, object_id, cursor, page_size)` | the same call |
 | `write_property(address, ..., *, commandability=...)` | `write_property(address, ...)` without `commandability=`; it takes a `RoutedTarget` too, and sends a raw value as given |
 | `service_scope()` | gone: the client initiates every service it has a call for |
 | a request no one answered: `BacnetTimeoutError` | `BacnetAbortError` for the transaction's timeout, as a typed call raises it |
-| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint |
+| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the endpoint closed |
 | an endpoint with `source_audit_reporter`: audited reads | `NotImplementedError` until source Audit moves to the full client (#2617 step 3) |
 
 Not yet routed on the full client: `atomic_read_file`, `atomic_write_file`,

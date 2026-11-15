@@ -40,7 +40,7 @@ impl BACnetClient {
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
                     let c = high.low_level();
-                    match target.path(&high).await? {
+                    match target.path(&high, &inner.route_misses).await? {
                         routed::Path::Local(mac) => {
                             c.read_property(&mac, oid, pid, array_index).await
                         }
@@ -115,7 +115,7 @@ impl BACnetClient {
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
                     let c = high.low_level();
-                    match target.path(&high).await? {
+                    match target.path(&high, &inner.route_misses).await? {
                         routed::Path::Local(mac) => {
                             c.write_property(&mac, oid, pid, array_index, value, priority)
                                 .await
@@ -260,7 +260,7 @@ impl BACnetClient {
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
                     let c = high.low_level();
-                    match target.path(&high).await? {
+                    match target.path(&high, &inner.route_misses).await? {
                         routed::Path::Local(mac) => {
                             c.read_property_multiple(&mac, rust_specs).await
                         }

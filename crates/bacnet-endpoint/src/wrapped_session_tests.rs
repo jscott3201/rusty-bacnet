@@ -39,12 +39,26 @@ async fn a_wrapped_bip_session_keeps_its_link_calls_and_one_socket() {
 }
 
 /// An MS/TP session over `AnyTransport`, its serial port boxed, keeps its
-/// diagnostics, which are readable in any state.
-#[test]
-fn a_wrapped_mstp_session_keeps_its_diagnostics() {
-    let (serial, _peer) = LoopbackSerial::pair();
-    let session = MstpEndpointBuilder::new(serial, 3)
+/// diagnostics: the handle taken before the wrap still counts what the
+/// wrapped transport does, here the read error a closed port gives.
+#[tokio::test]
+async fn a_wrapped_mstp_session_keeps_its_diagnostics() {
+    let (serial, peer) = LoopbackSerial::pair();
+    let mut session = MstpEndpointBuilder::new(serial, 3)
+        .role(SessionRole::ClientOnly)
         .build_session_wrapped(AnyTransport::from)
         .unwrap();
-    assert!(session.mstp_diagnostics().is_some());
+    let diagnostics = session.mstp_diagnostics().expect("taken before the wrap");
+    session.start().await.unwrap();
+    assert_eq!(diagnostics.snapshot().serial_read_errors, 0);
+    drop(peer);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while diagnostics.snapshot().serial_read_errors == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the closed port's read error is counted"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    let _ = session.stop().await;
 }

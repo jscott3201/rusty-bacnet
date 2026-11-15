@@ -273,7 +273,15 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
             while not peer.received:
                 await asyncio.sleep(0.01)
         stop = asyncio.ensure_future(client.stop())
-        await asyncio.sleep(0.05)
+        # The stop is admitted once the client refuses new work.
+        async with asyncio.timeout(5):
+            while True:
+                try:
+                    await client.who_is()
+                except RuntimeError as error:
+                    self.assertIn("closing", str(error))
+                    break
+                await asyncio.sleep(0.01)
         with self.assertRaisesRegex(RuntimeError, "stopping"):
             await self.endpoint.client()
         read.cancel()
@@ -317,7 +325,7 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
         # requests, stops the client, then the link.
         await asyncio.wait_for(self.endpoint.close(), 1.5)
         for read in reads:
-            with self.assertRaises(rb.BacnetError):
+            with self.assertRaisesRegex(rb.BacnetError, "its endpoint closed"):
                 await asyncio.wait_for(read, 1)
         self.assertLess(loop.time() - started, 1.5)
         with self.assertRaisesRegex(RuntimeError, "ran on an endpoint"):
@@ -334,6 +342,15 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
         _, peer_address = await self.server(PEER)
         self.assertEqual(await fresh.read_property(peer_address, AI_1, P.PRESENT_VALUE),
                          rb.PropertyValue.real(float(PEER)))
+        # The old client stays stopped on the new session, and sends nothing.
+        peer = silent_peer(self)
+        for call in (lambda: client.read_property(peer.address, AI_1, P.PRESENT_VALUE),
+                     lambda: client.who_is(),
+                     lambda: client.read_bdt(peer.address)):
+            with self.assertRaisesRegex(RuntimeError, "ran on an endpoint"):
+                await asyncio.wait_for(call(), 5)
+        await asyncio.sleep(0.2)
+        self.assertEqual(peer.received, [])
 
 
 class AuditedEndpointTests(unittest.IsolatedAsyncioTestCase):

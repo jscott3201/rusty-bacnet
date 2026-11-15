@@ -1356,9 +1356,11 @@ forms or as `bytes`, such as a routed `DiscoveredDevice`'s
 request goes through it. Without one, the client uses the route it
 knows: the router its discovery table names for the station, after
 one Who-Is to the station's network when it has none, as
-`BACnetClient.device()` does; a station that doesn't answer raises
-`BacnetLookupError`, so pass `router` for one that never sends an
-I-Am. A station on the client's own network, once it knows the number,
+`BACnetClient.device()` does. A station that doesn't answer raises
+`BacnetLookupError`, and for 30 seconds a call to it with no router
+raises at once without asking again, unless an I-Am from it arrives
+first. A station that never announces itself, such as an MS/TP slave,
+needs `router`: `BACnetClient.discover_routers()` finds them. A station on the client's own network, once it knows the number,
 is sent to directly either way. Other values raise ValueError, a type
 other than `str` or `bytes` TypeError, and so does a call in another
 order, since `network` takes an `int`.
