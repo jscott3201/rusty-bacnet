@@ -6790,8 +6790,10 @@ authenticates an encoded source.
 (a display name such as `"BACnet/IP"`, or `"bip6"`) raise `ValueError`. Octets
 decoded as the wrong link, B/IP octets as BACnet/SC say, come back with a
 `parse_error` rather than as another link's message. Summaries compare and
-hash by value, so they can key a dictionary or fill a set; `copy` and `pickle`
-rebuild one by decoding the same octets and link again. The input
+hash by value, so they can key a dictionary or fill a set. A summary holds its
+fields only, never the frame's octets: `copy` and `pickle` carry those fields
+and nothing else, so a password in the frame stays out of a pickled
+transcript of summaries. The input
 octets and `Frame.octets` remain unredacted, including any service parameters
 they contain; this API does not apply the CLI capture's password masking.
 

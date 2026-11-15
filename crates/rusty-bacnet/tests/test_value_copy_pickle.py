@@ -103,9 +103,16 @@ def samples() -> dict[type, list[Any]]:
             BitString(3, b"\xa0"),
             BitString(4, b"\x40", PropertyIdentifier.STATUS_FLAGS),
         ],
-        # Rebuilt by decoding the same octets again (#2614): a request, a
-        # NAK, a malformed frame and an MS/TP token.
+        # Copied by its fields (#2614): a request, a NAK, a malformed
+        # frame, a B/IPv6 broadcast, an MS/TP token, and every field set
+        # at the edge of its range.
         FrameSummary: [
+            FrameSummary._rebuild(  # type: ignore[attr-defined]
+                "forwarded-npdu", True, "bip6:0xFFFFFF", "bip6:0x000000",
+                "[2001:db8::1]:65535", 65535, 65535, "65535:0xFF", "65535:*",
+                "i-am-router-to-network", "Abort", 255, "read-property",
+                "abort other", "malformed: APDU decode error: x", 4194303,
+            ),
             decode_frame(bytes.fromhex("810a001101000005010c0c02000312194b"), "bip"),
             decode_frame(bytes.fromhex("810000060030"), "bip"),
             decode_frame(b"\x81", "bip"),

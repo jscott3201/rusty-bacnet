@@ -4617,13 +4617,13 @@ class FrameSummary:
     original_source is the originating address a BBMD wrote into a B/IP
     Forwarded-NPDU, or a B/IPv6 Forwarded-NPDU or Forwarded-Address-Resolution;
     Frame.peer is the actual transport peer. Neither field proves the sender's
-    identity or its path. Summaries compare and hash by value; copy and pickle
-    decode the same octets and link again.
+    identity or its path. Summaries compare and hash by value. A summary holds
+    its fields only, never the frame's octets: copy and pickle carry those
+    fields and nothing else.
     """
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
-    def __reduce__(self) -> tuple[Any, tuple[bytes, str]]: ...
     @property
     def link_message(self) -> str:
         """BVLC function or MS/TP frame type, such as original-unicast-npdu.

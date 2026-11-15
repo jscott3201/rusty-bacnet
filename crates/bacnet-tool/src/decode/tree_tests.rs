@@ -168,3 +168,49 @@ fn a_character_string_is_marked_and_bare_layers_decode() {
     let summary = bacnet_ops::decode::frame::summarize_npdu(&data);
     assert_eq!(summary.pdu.as_deref(), Some("Unconfirmed-Request"));
 }
+
+/// A function octet no table assigns reads `unassigned`; a code the 2020
+/// standard removed reads `withdrawn`; an assigned one keeps its name.
+#[test]
+fn an_unassigned_or_withdrawn_function_is_labelled_so() {
+    let cases: [(Framing, &[u8], &str); 6] = [
+        (
+            Framing::Bip,
+            &[0x81, 0x0C, 0x00, 0x04],
+            "Function: withdrawn (0x0C)",
+        ),
+        (
+            Framing::Bip,
+            &[0x81, 0x7F, 0x00, 0x04],
+            "Function: unassigned (0x7F)",
+        ),
+        (
+            Framing::Bip6,
+            &[0x82, 0x0B, 0x00, 0x07, 0, 1, 2],
+            "Function: withdrawn (0x0B)",
+        ),
+        (
+            Framing::Bip6,
+            &[0x82, 0x7F, 0x00, 0x04],
+            "Function: unassigned (0x7F)",
+        ),
+        (
+            Framing::Sc,
+            &[0x7F, 0x00, 0x00, 0x01],
+            "Function: unassigned (0x7F)",
+        ),
+        (
+            Framing::Sc,
+            &[0x0C, 0x00, 0x00, 0x01],
+            "Function: proprietary-message (0x0C)",
+        ),
+    ];
+    for (framing, frame, label) in cases {
+        let fields = decode_tree(framing, frame);
+        let labels: Vec<String> = flat(&fields).into_iter().map(|(l, _)| l).collect();
+        assert!(
+            labels.iter().any(|l| l == label),
+            "{framing:?}: {labels:#?}"
+        );
+    }
+}

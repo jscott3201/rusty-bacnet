@@ -1,5 +1,7 @@
 """Offline Rust header summaries and same-socket trap transcripts."""
 import asyncio
+import copy
+import pickle
 import socket
 import unittest
 
@@ -76,9 +78,27 @@ class FrameDecodeTests(unittest.TestCase):
         self.assertNotEqual(one, decode_frame(FORWARDED, "bip"))
         self.assertEqual(
             repr(one),
-            'FrameSummary(link_message="original-unicast-npdu", pdu="Confirmed-Request", '
-            'service="read-property", invoke_id=1)',
+            "FrameSummary(link_message='original-unicast-npdu', pdu='Confirmed-Request', "
+            "service='read-property', invoke_id=1)",
         )
+
+    def test_copy_and_pickle_carry_the_fields_not_the_frame(self):
+        # A DeviceCommunicationControl request whose password is secret123.
+        dcc = bytes.fromhex("810a00180104000501111900" "2d0a00") + b"secret123"
+        summary = decode_frame(dcc, "bip")
+        self.assertEqual(summary.service, "device-communication-control")
+        for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+            with self.subTest(protocol=protocol):
+                dumped = pickle.dumps(summary, protocol)
+                self.assertNotIn(b"secret", dumped)
+                loaded = pickle.loads(dumped)
+                self.assertEqual(loaded, summary)
+                self.assertEqual(hash(loaded), hash(summary))
+                self.assertEqual(repr(loaded), repr(summary))
+        for copied in (copy.copy(summary), copy.deepcopy(summary)):
+            self.assertEqual(copied, summary)
+            self.assertEqual(hash(copied), hash(summary))
+        self.assertFalse(hasattr(summary, "octets"))
 
     def test_every_frame_link_token_but_other_decodes_and_names_are_refused(self):
         # One valid frame per Frame.link token the decoder reads.
@@ -98,7 +118,7 @@ class FrameDecodeTests(unittest.TestCase):
         for link in refused:
             with self.subTest(link=link), self.assertRaises(ValueError) as caught:
                 decode_frame(REQUEST, link=link)
-            self.assertIn('"bip", "ipv6", "sc", "mstp"', str(caught.exception))
+            self.assertIn("one of 'bip', 'ipv6', 'sc', 'mstp'", str(caught.exception))
 
 class TrapTranscriptTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_socket_records_responses_malformed_and_forwarded_frames(self):

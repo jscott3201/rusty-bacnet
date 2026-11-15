@@ -1,4 +1,4 @@
-use super::{Framing, summarize_frame};
+use super::{Framing, kebab, summarize_frame};
 use crate::decode::testing::*;
 use bacnet_encoding::npdu::{NpduAddress, decode_npdu, encode_npdu};
 use bacnet_transport::bip6::{Bip6Address, Bip6Vmac, Bvll6, encode_bvll6};
@@ -161,14 +161,24 @@ proptest::proptest! {
             (Framing::Sc, sc_npdu(&npdu, broadcast.then_some([0xFF; 6]))),
             (Framing::Mstp, mstp(mstp_type, if broadcast { 255 } else { 5 }, 1, &npdu)),
         ];
-        for (framing, frame) in frames {
+        // The message each header names: exact, so a header that fails to
+        // read fails here (an MS/TP frame's type is named before its CRCs
+        // are checked, so `malformed` alone would not catch one there; the
+        // parse_error check below does).
+        let messages = [
+            if broadcast {
+                "original-broadcast-npdu"
+            } else {
+                "original-unicast-npdu"
+            }
+            .to_string(),
+            "original-broadcast-npdu".to_string(),
+            "encapsulated-npdu".to_string(),
+            kebab(mstp_type.name().unwrap()),
+        ];
+        for ((framing, frame), message) in frames.into_iter().zip(messages) {
             let summary = summarize_frame(framing, &frame);
-            proptest::prop_assert_ne!(
-                summary.link_message.as_str(),
-                "malformed",
-                "{:?}",
-                framing
-            );
+            proptest::prop_assert_eq!(&summary.link_message, &message, "{:?}", framing);
             if let Some(error) = &summary.parse_error {
                 proptest::prop_assert!(
                     error.contains("NPDU decode error") || error.contains("APDU decode error"),

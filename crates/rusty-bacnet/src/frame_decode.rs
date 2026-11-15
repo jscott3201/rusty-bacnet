@@ -1,43 +1,21 @@
 //! Python access to the shared, offline Rust frame-summary decoder.
 
 use bacnet_ops::decode::frame::{FrameSummary, Framing, summarize_frame};
-use std::hash::{Hash, Hasher};
-
 use bacnet_types::data_link::DataLink;
 use pyo3::exceptions::PyValueError;
-use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::PyTuple;
 
 use crate::frames::link_token;
 
 /// A frozen header summary; unavailable fields remain `None`. Two
-/// summaries are equal, and hash alike, when every field is.
+/// summaries are equal, and hash alike, when every field is. It holds the
+/// fields only, never the frame's octets, so a password the frame carried
+/// is not in it or in its pickle.
 #[pyclass(name = "FrameSummary", module = "rusty_bacnet", frozen, eq, hash)]
+#[derive(PartialEq, Eq, Hash)]
 pub(crate) struct PyFrameSummary {
     summary: FrameSummary,
-    /// The octets and `Frame.link` token it was decoded from, which `copy`
-    /// and `pickle` decode again; not part of its value.
-    octets: Box<[u8]>,
-    link: &'static str,
-}
-
-/// What [`PyFrameSummary::__reduce__`] gives `copy` and `pickle`:
-/// `decode_frame` and its arguments.
-type Reduce<'py> = (Bound<'py, PyAny>, (Bound<'py, PyBytes>, &'static str));
-
-impl PartialEq for PyFrameSummary {
-    fn eq(&self, other: &Self) -> bool {
-        self.summary == other.summary
-    }
-}
-
-impl Eq for PyFrameSummary {}
-
-impl Hash for PyFrameSummary {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.summary.hash(state);
-    }
 }
 
 #[pymethods]
@@ -46,33 +24,96 @@ impl PyFrameSummary {
     /// failure or problem, where the summary has them.
     fn __repr__(&self) -> String {
         let summary = &self.summary;
-        let mut parts = vec![format!("link_message={:?}", summary.link_message)];
+        let mut parts = vec![format!("link_message='{}'", summary.link_message)];
         if let Some(pdu) = &summary.pdu {
-            parts.push(format!("pdu={pdu:?}"));
+            parts.push(format!("pdu='{pdu}'"));
         }
         if let Some(service) = &summary.service {
-            parts.push(format!("service={service:?}"));
+            parts.push(format!("service='{service}'"));
         }
         if let Some(id) = summary.invoke_id {
             parts.push(format!("invoke_id={id}"));
         }
         if let Some(error) = &summary.parse_error {
-            parts.push(format!("parse_error={error:?}"));
+            parts.push(format!("parse_error='{error}'"));
         } else if let Some(problem) = &summary.problem {
-            parts.push(format!("problem={problem:?}"));
+            parts.push(format!("problem='{problem}'"));
         }
         format!("FrameSummary({})", parts.join(", "))
     }
 
-    /// `copy` and `pickle` call `decode_frame` on the same octets and link
-    /// again, which gives an equal summary.
-    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<Reduce<'py>> {
+    /// Copy and pickle by value: `_rebuild` with the sixteen fields, in
+    /// the order the stub lists them, and nothing of the frame.
+    fn __reduce__<'py>(
+        slf: &Bound<'py, Self>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
         let py = slf.py();
-        let this = slf.get();
-        let decode = py
-            .import(intern!(py, "rusty_bacnet"))?
-            .getattr(intern!(py, "decode_frame"))?;
-        Ok((decode, (PyBytes::new(py, &this.octets), this.link)))
+        let s = &slf.get().summary;
+        let fields = [
+            s.link_message.clone().into_pyobject(py)?.into_any(),
+            s.broadcast.into_pyobject(py)?.to_owned().into_any(),
+            s.link_source.clone().into_pyobject(py)?,
+            s.link_destination.clone().into_pyobject(py)?,
+            s.original_source.clone().into_pyobject(py)?,
+            s.snet.into_pyobject(py)?,
+            s.dnet.into_pyobject(py)?,
+            s.routed_source.clone().into_pyobject(py)?,
+            s.routed_destination.clone().into_pyobject(py)?,
+            s.network_message.clone().into_pyobject(py)?,
+            s.pdu.clone().into_pyobject(py)?,
+            s.invoke_id.into_pyobject(py)?,
+            s.service.clone().into_pyobject(py)?,
+            s.problem.clone().into_pyobject(py)?,
+            s.parse_error.clone().into_pyobject(py)?,
+            s.device.into_pyobject(py)?,
+        ];
+        Ok((
+            slf.get_type().getattr("_rebuild")?,
+            PyTuple::new(py, fields)?,
+        ))
+    }
+
+    /// A summary from a pickle's fields, as [`Self::__reduce__`] lists
+    /// them. Nothing is decoded.
+    #[staticmethod]
+    fn _rebuild(
+        link_message: String,
+        broadcast: bool,
+        link_source: Option<String>,
+        link_destination: Option<String>,
+        original_source: Option<String>,
+        snet: Option<u16>,
+        dnet: Option<u16>,
+        routed_source: Option<String>,
+        routed_destination: Option<String>,
+        network_message: Option<String>,
+        pdu: Option<String>,
+        invoke_id: Option<u8>,
+        service: Option<String>,
+        problem: Option<String>,
+        parse_error: Option<String>,
+        device: Option<u32>,
+    ) -> Self {
+        Self {
+            summary: FrameSummary {
+                link_message,
+                broadcast,
+                link_source,
+                link_destination,
+                original_source,
+                snet,
+                dnet,
+                network_message,
+                pdu,
+                invoke_id,
+                service,
+                problem,
+                parse_error,
+                device,
+                routed_source,
+                routed_destination,
+            },
+        }
     }
 
     /// The link message, a BVLC function or MS/TP frame type such as
@@ -174,18 +215,18 @@ const DECODED: [(DataLink, Framing); 4] = [
 /// The framing a `Frame.link` token names, exactly as `Frame.link` writes
 /// it. `"other"`, a display name or any other text is refused, with the
 /// tokens accepted.
-fn framing(token: &str) -> PyResult<(Framing, &'static str)> {
+fn framing(token: &str) -> PyResult<Framing> {
     DECODED
         .iter()
         .find(|(link, _)| link_token(*link) == token)
-        .map(|(link, framing)| (*framing, link_token(*link)))
+        .map(|(_, framing)| *framing)
         .ok_or_else(|| {
             let accepted: Vec<String> = DECODED
                 .iter()
-                .map(|(link, _)| format!("{:?}", link_token(*link)))
+                .map(|(link, _)| format!("'{}'", link_token(*link)))
                 .collect();
             PyValueError::new_err(format!(
-                "link must be a Frame.link token the decoder reads, one of {}; got {token:?}",
+                "link must be a Frame.link token the decoder reads, one of {}; got '{token}'",
                 accepted.join(", ")
             ))
         })
@@ -199,11 +240,8 @@ fn framing(token: &str) -> PyResult<(Framing, &'static str)> {
 #[pyfunction]
 #[pyo3(signature = (octets, link))]
 fn decode_frame(octets: &[u8], link: &str) -> PyResult<PyFrameSummary> {
-    let (framing, link) = framing(link)?;
     Ok(PyFrameSummary {
-        summary: summarize_frame(framing, octets),
-        octets: octets.into(),
-        link,
+        summary: summarize_frame(framing(link)?, octets),
     })
 }
 
@@ -245,7 +283,7 @@ mod tests {
                 assert!(
                     error
                         .to_string()
-                        .contains(r#"one of "bip", "ipv6", "sc", "mstp""#),
+                        .contains("one of 'bip', 'ipv6', 'sc', 'mstp'"),
                     "{error}"
                 );
             }
@@ -264,8 +302,7 @@ mod tests {
     #[test]
     fn frame_link_tokens_select_their_framing() {
         for (link, framing) in DECODED {
-            let token = link_token(link);
-            assert_eq!(super::framing(token).unwrap(), (framing, token));
+            assert_eq!(super::framing(link_token(link)).unwrap(), framing);
         }
         Python::initialize();
         for link in [DataLink::Ethernet, DataLink::Loopback] {
@@ -288,16 +325,50 @@ mod tests {
             assert_eq!(one.hash().unwrap(), again.hash().unwrap());
             assert_eq!(
                 one.repr().unwrap().to_string(),
-                "FrameSummary(link_message=\"original-unicast-npdu\", pdu=\"Confirmed-Request\", \
-                 service=\"read-property\", invoke_id=1)"
+                "FrameSummary(link_message='original-unicast-npdu', pdu='Confirmed-Request', \
+                 service='read-property', invoke_id=1)"
             );
             assert!(
                 other
                     .repr()
                     .unwrap()
                     .to_string()
-                    .starts_with("FrameSummary(link_message=\"malformed\", parse_error=")
+                    .starts_with("FrameSummary(link_message='malformed', parse_error='")
             );
+        });
+    }
+
+    /// A DeviceCommunicationControl request on B/IP whose password is
+    /// `secret123`.
+    const DCC: &[u8] = &[
+        0x81, 0x0A, 0x00, 0x18, 0x01, 0x04, 0x00, 0x05, 0x01, 0x11, 0x19, 0x00, 0x2D, 0x0A, 0x00,
+        b's', b'e', b'c', b'r', b'e', b't', b'1', b'2', b'3',
+    ];
+
+    /// Copies are equal and hash alike, and what `copy` and `pickle` get
+    /// is the summary's fields: none of the frame, so not its password.
+    #[test]
+    fn a_copy_carries_the_fields_and_not_the_frame() {
+        Python::initialize();
+        Python::attach(|py| {
+            let decode = module(py).getattr("decode_frame").unwrap();
+            let summary = decode.call1((DCC, "bip")).unwrap();
+            let service: String = summary.getattr("service").unwrap().extract().unwrap();
+            assert_eq!(service, "device-communication-control");
+            let reduced = summary.call_method0("__reduce__").unwrap();
+            let text = reduced.repr().unwrap().to_string();
+            assert!(!text.contains("secret"), "{text}");
+            assert_eq!(reduced.get_item(1).unwrap().len().unwrap(), 16);
+            let copy = py.import("copy").unwrap();
+            for how in ["copy", "deepcopy"] {
+                let copied = copy.call_method1(how, (&summary,)).unwrap();
+                assert!(copied.eq(&summary).unwrap(), "{how}");
+                assert_eq!(copied.hash().unwrap(), summary.hash().unwrap(), "{how}");
+                assert_eq!(
+                    copied.repr().unwrap().to_string(),
+                    summary.repr().unwrap().to_string()
+                );
+            }
         });
     }
 }

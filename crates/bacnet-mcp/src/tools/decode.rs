@@ -107,8 +107,9 @@ fn summary_schema() -> Value {
     let properties = json!({
         "link_message": {
             "type": "string",
-            "description": "The BVLC function or MS/TP frame type, or malformed; the data \
-                            link is the top-level link",
+            "description": "The BVLC function or MS/TP frame type, or malformed; empty \
+                            for npdu and apdu input, which has no link layer. The data link \
+                            is the top-level link",
         },
         "broadcast": { "type": "boolean" },
         "link_source": text,
