@@ -72,6 +72,15 @@ Properties:
 
 - `write_policy: WritePolicy`: The priorities `relinquish` may use, as `write_policy=` set them.
 
+### BACnetClient.frames
+
+```python
+def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]
+```
+
+Observe raw frames on the running owner; capacity is 1–65536.
+Owner shutdown ends this subscription; a restart needs a new one.
+
 ### BACnetClient.__init__
 
 ```python
@@ -1795,6 +1804,54 @@ def __aiter__(self) -> ScEventIterator
 ```python
 def __anext__(self) -> Awaitable[ScEvent]
 ```
+
+## Frame
+
+Frozen raw frame; no decoded summary or forwarding provenance yet.
+
+Properties:
+
+- `timestamp: float`: Monotonic capture seconds from the first subscription in this module. Comparable across subscriptions, not to wall time or Python's clock origin.
+- `direction: str`: 'inbound' or 'outbound'.
+- `link: str`: Link display name, such as 'BACnet/IP'.
+- `local_address: str`: Local address at subscription: IPv4 ip:port, otherwise a hex MAC.
+- `peer: str`: UDP peer, SC hub name, MS/TP station or Ethernet MAC. This is the next hop, not a forwarded frame's original source.
+- `octets: bytes`: Raw link octets, including malformed received datagrams.
+- `missed: int`: Cumulative queue overflow at the first delivery attempt. Redelivery after cancellation keeps this snapshot; iterator.missed is live.
+
+## FrameIterator
+
+Bounded raw-frame subscription. A full queue drops new arrivals.
+
+Cancelling a read preserves the next frame and the subscription. Explicit
+close or owner shutdown discards queued frames and wakes pending reads.
+A native delivery admitted before close may still complete its asyncio Future.
+Each subscription is independent and never keeps the owner's socket alive.
+Read from one running event loop; concurrent reads keep arrival order.
+
+Properties:
+
+- `missed: int`: Frames lost to overflow or failed delivery; readable after close.
+
+### FrameIterator.__aiter__
+
+```python
+def __aiter__(self) -> FrameIterator
+```
+
+### FrameIterator.__anext__
+
+```python
+def __anext__(self) -> Awaitable[Frame]
+```
+
+### FrameIterator.aclose
+
+```python
+def aclose(self) -> Awaitable[None]
+```
+
+Idempotently stop this subscription, without stopping its owner.
 
 ## _DeviceReadBatchResult
 

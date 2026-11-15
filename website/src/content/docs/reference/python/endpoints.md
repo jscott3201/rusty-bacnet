@@ -37,6 +37,15 @@ Properties:
 - `device_instance: int`
 - `vendor_id: int`
 
+### BipEndpoint.frames
+
+```python
+def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]
+```
+
+Observe raw frames on the running owner; capacity is 1–65536.
+Owner shutdown ends this subscription; a restart needs a new one.
+
 ### BipEndpoint.__init__
 
 ```python
