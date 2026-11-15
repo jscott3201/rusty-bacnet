@@ -513,8 +513,13 @@ async fn a_dropped_client_frees_the_seat_before_its_tasks_have_ended() {
     drop((seat, next));
 }
 
+/// The error a send through a stopped layer gets (#2617).
+fn is_stopped(error: &Error) -> bool {
+    matches!(error, Error::Transport(io) if io.kind() == std::io::ErrorKind::NotConnected)
+}
+
 #[tokio::test]
-async fn stop_fails_while_a_client_keeps_the_layer_and_finishes_once_it_is_dropped() {
+async fn one_stop_stops_the_link_while_a_seat_still_keeps_the_layer() {
     let Seated {
         mut endpoint,
         link,
@@ -522,28 +527,33 @@ async fn stop_fails_while_a_client_keeps_the_layer_and_finishes_once_it_is_dropp
         coordinator,
         ..
     } = seated(true, 8).await;
-    // A seat nobody started a client on holds the layer too, but no hold:
-    // the stop doesn't wait for it.
-    let error = timeout(WAIT, endpoint.stop()).await.unwrap().unwrap_err();
-    assert!(error.to_string().contains("full client still holds"));
-    assert!(endpoint.link_held());
-    assert_eq!(link.stops(), 0);
+    // A seat nobody started a client on keeps the layer too, but no hold:
+    // the stop neither waits for it nor needs it dropped (#2617).
+    assert!(matches!(
+        timeout(WAIT, endpoint.stop()).await.unwrap().unwrap(),
+        ClassifierExit::Cancelled
+    ));
+    assert_eq!(link.stops(), 1);
     assert!(seat.holds.hold().is_none());
     assert!(
         endpoint
             .client_seat(coordinator, SeatRoles::new(true), 8)
             .is_err()
     );
-    // Still held: the same answer, and still no transport stop.
-    assert!(endpoint.stop().await.is_err());
-    assert_eq!(link.stops(), 0);
-
+    // The layer the seat still keeps has stopped: what goes through it,
+    // or straight to its transport, fails as a stopped link's send does.
+    let sent = link.counters.sent().len();
+    let through_layer = seat
+        .network
+        .broadcast_apdu(WHO_IS, false, NetworkPriority::Normal)
+        .await
+        .unwrap_err();
+    assert!(is_stopped(&through_layer), "{through_layer}");
+    let direct = seat.network.transport().send_broadcast(WHO_IS).await;
+    assert!(is_stopped(&direct.unwrap_err()));
+    assert_eq!(link.counters.sent().len(), sent, "nothing reached the link");
+    // Dropping the seat afterwards changes nothing.
     drop(seat);
-    assert!(matches!(
-        endpoint.stop().await.unwrap(),
-        ClassifierExit::Cancelled
-    ));
-    assert!(!endpoint.link_held());
     assert_eq!(link.stops(), 1);
     assert!(endpoint.stop().await.is_err(), "stopped once");
 }

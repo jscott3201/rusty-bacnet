@@ -370,8 +370,10 @@ pub(super) struct DedicatedRuntime {
     /// The spawned node's gate, on test time.
     #[cfg(any(test, feature = "test-support"))]
     node: Option<super::test_time::Node>,
-    shutdown: oneshot::Sender<()>,
-    finished: oneshot::Receiver<()>,
+    shutdown: Option<oneshot::Sender<()>>,
+    /// Changes, or closes, as the thread ends; a stop that was cancelled
+    /// leaves it here for the next to watch (#2617).
+    finished: tokio::sync::watch::Receiver<()>,
 }
 
 impl DedicatedRuntime {
@@ -385,7 +387,7 @@ impl DedicatedRuntime {
         let _held = config.hold_time();
         let (started_tx, started_rx) = oneshot::channel();
         let (shutdown, shutdown_rx) = oneshot::channel();
-        let (finished_tx, finished) = oneshot::channel();
+        let (finished_tx, finished) = tokio::sync::watch::channel(());
         std::thread::Builder::new()
             .name("bacnet-mstp".into())
             .spawn(move || {
@@ -427,7 +429,7 @@ impl DedicatedRuntime {
                 test_time,
                 #[cfg(any(test, feature = "test-support"))]
                 node: None,
-                shutdown,
+                shutdown: Some(shutdown),
                 finished,
             },
             status,
@@ -469,9 +471,11 @@ impl DedicatedRuntime {
         }
     }
 
-    pub(super) async fn stop(self) {
-        let _held = self.hold_time();
-        drop(self.shutdown);
-        let _ = self.finished.await;
+    /// Tell the thread to end, if not told yet, and return what changes
+    /// or closes once it has: a stop waits on it, holding no lock, and a
+    /// stop after a cancelled one tells nothing more and waits the same.
+    pub(super) fn stopping(&mut self) -> tokio::sync::watch::Receiver<()> {
+        self.shutdown.take();
+        self.finished.clone()
     }
 }

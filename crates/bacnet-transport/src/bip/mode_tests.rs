@@ -126,7 +126,7 @@ async fn the_status_handle_follows_a_transport_it_does_not_own() {
     assert!(!status.snapshot().running);
     let in_the_gap = Arc::new(std::sync::Mutex::new(None));
     let (gap_status, gap) = (status.clone(), Arc::clone(&in_the_gap));
-    transport.between_stops = Some(Box::new(move || {
+    *transport.between_stops.get_mut().unwrap() = Some(Box::new(move || {
         *gap.lock().unwrap() = Some(gap_status.snapshot());
     }));
     let _rx = transport.start().await.unwrap();

@@ -18,7 +18,7 @@
 //! finds the peer's 256-frame receive queue full is dropped and counted in
 //! the peer's [`LoopbackTransport::receive_drops`] (#1713).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use bacnet_types::MacAddr;
@@ -53,6 +53,8 @@ pub struct LoopbackTransport {
     /// The MAC [`TransportPort::is_broadcast_mac`] recognises, once
     /// [`Self::set_broadcast_mac`] names one.
     broadcast_mac: Option<MacAddr>,
+    /// Set by a stop, after which every send fails (#2617).
+    stopped: AtomicBool,
 }
 
 impl LoopbackTransport {
@@ -91,6 +93,7 @@ impl LoopbackTransport {
             record_order: Mutex::new(()),
             carries_data_attributes: false,
             broadcast_mac: None,
+            stopped: AtomicBool::new(false),
         }
     }
 
@@ -143,8 +146,12 @@ impl LoopbackTransport {
     }
 
     /// Room for one frame in the peer's queue: `None` when it is full, the
-    /// drop counted, as a full data link drops a frame.
+    /// drop counted, as a full data link drops a frame. Once this side has
+    /// stopped, the error for a stopped transport.
     fn reserve(&self) -> Result<Option<mpsc::Permit<'_, ReceivedNpdu>>, Error> {
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(crate::port::stopped());
+        }
         match self.peer_tx.try_reserve() {
             Ok(permit) => Ok(Some(permit)),
             Err(mpsc::error::TrySendError::Full(())) => {
@@ -228,8 +235,12 @@ impl TransportPort for LoopbackTransport {
             .ok_or_else(|| Error::Encoding("loopback transport already started".to_string()))
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
-        // Nothing to clean up — channels drop naturally.
+    /// Refuse every later send (#2617). The loopback has no task and holds
+    /// no socket: the receive channel stays open while the peer holds its
+    /// sender, and a network layer above closes its own end as it stops.
+    /// It does not start again.
+    async fn stop(&self) -> Result<(), Error> {
+        self.stopped.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -454,5 +465,37 @@ mod tests {
         let (a, b) = LoopbackTransport::pair(vec![0xAA], vec![0xBB]);
         assert_eq!(a.local_mac(), &[0xAA]);
         assert_eq!(b.local_mac(), &[0xBB]);
+    }
+
+    /// A stop through a shared reference fails every later send of that
+    /// side, with the stopped error, and delivers nothing (#2617). The peer
+    /// still sends.
+    #[tokio::test]
+    async fn a_stopped_side_sends_nothing() {
+        let (mut a, mut b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+        let mut rx_b = b.start().await.unwrap();
+        let mut rx_a = a.start().await.unwrap();
+        let a = std::sync::Arc::new(a);
+        let other = std::sync::Arc::clone(&a);
+        a.stop().await.unwrap();
+        a.stop().await.unwrap();
+        for sent in [
+            other.send_unicast(b"one", &[0x02]).await,
+            other.send_broadcast(b"two").await,
+            other
+                .send_unicast_with_data_attributes(b"three", &[0x02], &[])
+                .await,
+            other
+                .send_broadcast_with_data_attributes(b"four", &[])
+                .await,
+        ] {
+            assert!(
+                matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+                "{sent:?}"
+            );
+        }
+        assert!(rx_b.try_recv().is_err(), "nothing reached the peer");
+        b.send_unicast(b"back", &[0x01]).await.unwrap();
+        assert_eq!(&rx_a.recv().await.unwrap().npdu[..], b"back");
     }
 }

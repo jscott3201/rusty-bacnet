@@ -259,7 +259,7 @@ fn reject_of(npdu: &[u8]) -> (u8, u16) {
 /// next router.
 #[tokio::test(start_paused = true)]
 async fn an_npdu_too_long_for_an_mstp_port_draws_reason_4() {
-    let (mut router, [(mut next_router, mut at_next), (mut source, mut at_source)]) =
+    let (mut router, [(next_router, mut at_next), (source, mut at_source)]) =
         two_links([true, true]).await;
     {
         let now = router.now();
@@ -289,13 +289,8 @@ async fn an_npdu_too_long_for_an_mstp_port_draws_reason_4() {
 /// network 1, and one at 501 goes out.
 #[tokio::test(start_paused = true)]
 async fn a_standard_frame_mstp_port_refuses_502_octets() {
-    let (
-        mut router,
-        [
-            (mut destination, mut at_destination),
-            (mut source, mut at_source),
-        ],
-    ) = two_links([false, true]).await;
+    let (mut router, [(destination, mut at_destination), (source, mut at_source)]) =
+        two_links([false, true]).await;
 
     let too_long = npdu_of(503, 1, 1);
     source.send_unicast(&too_long, &[0]).await.unwrap();

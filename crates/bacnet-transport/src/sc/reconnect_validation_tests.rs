@@ -105,10 +105,10 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
                 assert!(!state.has_changed().unwrap());
                 assert_eq!(*state.borrow(), ScConnectionState::Disconnected);
                 assert!(transport.connection().is_none());
-                assert!(transport.ws.is_some());
-                assert!(transport.failover_ws.is_some());
+                assert!(transport.ws.lock().unwrap().is_some());
+                assert!(transport.failover_ws.lock().unwrap().is_some());
                 assert!(transport.ws_shared.is_none());
-                assert!(transport.recv_task.is_none());
+                assert!(transport.recv_task.lock().unwrap().is_none());
                 assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
                 assert_eq!(transport.local_mac(), vmac);
                 assert_eq!(transport.device_uuid, uuid);
@@ -137,7 +137,7 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
     );
     transport.stop().await.unwrap();
     assert_eq!(counts.drops.load(Ordering::SeqCst), 2);
-    assert!(transport.recv_task.is_none());
+    assert!(transport.recv_task.lock().unwrap().is_none());
     assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
 }
 
@@ -210,12 +210,12 @@ async fn failing_connectors_obey_reconnect_budget_plus_single_failover_allowance
             // not proof that all retries (or the failover allowance) have ended.
             tokio::time::timeout(
                 Duration::from_secs(1),
-                transport.recv_task.as_mut().unwrap(),
+                transport.recv_task.get_mut().unwrap().as_mut().unwrap(),
             )
             .await
             .expect("reconnect budget did not terminate")
             .unwrap();
-            let _ = transport.recv_task.take();
+            let _ = transport.recv_task.get_mut().unwrap().take();
             let primary_count = primary_dials.load(Ordering::SeqCst);
             let failover_count = failover_dials.load(Ordering::SeqCst);
             assert_eq!(primary_count, max_retries as usize);
@@ -302,7 +302,7 @@ async fn zero_retries_skips_active_hub_retry_but_allows_initial_failover_and_res
     assert_eq!(message.destination_vmac, Some([0x33; 6]));
     assert_eq!(message.payload.as_ref(), [1, 2, 3]);
     transport.stop().await.unwrap();
-    assert!(transport.recv_task.is_none());
+    assert!(transport.recv_task.lock().unwrap().is_none());
     assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
 }
 
@@ -463,7 +463,7 @@ async fn check_invalid_accept_failover_and_primary_probe(field: std::ops::Range<
     assert_eq!(transport.local_mac(), vmac);
     assert_eq!(conn.lock().await.device_uuid, uuid);
     transport.stop().await.unwrap();
-    assert!(transport.recv_task.is_none());
+    assert!(transport.recv_task.lock().unwrap().is_none());
     assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
 }
 
@@ -544,5 +544,5 @@ async fn check_invalid_accept_reconnect_probe(field: std::ops::Range<usize>) {
     wait_for_hub(&transport, [0x44; 6]).await;
     assert_eq!(conn.lock().await.hub_device_uuid, Some([0x33; 16]));
     transport.stop().await.unwrap();
-    assert!(transport.recv_task.is_none());
+    assert!(transport.recv_task.lock().unwrap().is_none());
 }

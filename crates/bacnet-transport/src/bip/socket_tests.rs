@@ -18,27 +18,17 @@ async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _rx = transport.start().await.unwrap();
 
-    let local = transport
-        .socket
-        .as_ref()
-        .expect("socket exists after start")
-        .local_addr()
-        .expect("local_addr is queryable");
+    let socket = transport.socket().expect("socket exists after start");
+    let local = socket.local_addr().expect("local_addr is queryable");
 
     assert!(
         local.ip().is_unspecified(),
         "BIP socket must bind to 0.0.0.0 for broadcast reception; got {local}"
     );
     assert!(
-        socket2::SockRef::from(
-            &**transport
-                .socket
-                .as_ref()
-                .expect("socket exists after start")
-                .as_ref()
-        )
-        .broadcast()
-        .expect("SO_BROADCAST is queryable"),
+        socket2::SockRef::from(&**socket)
+            .broadcast()
+            .expect("SO_BROADCAST is queryable"),
         "BIP socket must enable SO_BROADCAST for Original-Broadcast-NPDU sends"
     );
 
@@ -55,11 +45,8 @@ async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
 }
 
 fn reuses_address(transport: &BipTransport) -> bool {
-    let socket = transport
-        .socket
-        .as_ref()
-        .expect("socket exists after start");
-    socket2::SockRef::from(&***socket)
+    let socket = transport.socket().expect("socket exists after start");
+    socket2::SockRef::from(&**socket)
         .reuse_address()
         .expect("SO_REUSEADDR is queryable")
 }

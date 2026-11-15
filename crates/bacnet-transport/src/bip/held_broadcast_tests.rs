@@ -3,6 +3,7 @@
 //! that attempt succeeds or goes unanswered, dropped if the BBMD refuses
 //! it or the node stops, and sent at once after that, in the order made.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::registration_schedule_tests::Device;
@@ -216,9 +217,19 @@ async fn held_broadcasts_count_as_discarded_when_the_node_stops() {
         ),
         (2, 0, 2)
     );
-    // Nothing is counted once stopped: not a broadcast held by a call that
-    // raced the stop, nor its drop at a second stop.
-    broadcast(&device, 3).await.unwrap();
+    // Nothing is held or counted once stopped: a broadcast made after the
+    // stop, or by a call that raced it (stopped between the call's read of
+    // the link and its admission), fails as a stopped transport's send does
+    // (#2617), and a second stop drops nothing more.
+    let is_stopped = |sent: Result<(), bacnet_types::error::Error>| matches!(sent, Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected);
+    assert!(is_stopped(broadcast(&device, 3).await));
+    let raced = Device::new(Duration::from_secs(10)).await;
+    let stopper = Arc::clone(&raced.ctx.node);
+    *raced.ctx.node.before_admit.lock().unwrap() = Some(Box::new(move || stopper.stop()));
+    assert!(is_stopped(broadcast(&raced, 3).await));
+    raced.ctx.node.stop();
+    let again = raced.ctx.node.snapshot().foreign_registration;
+    assert_eq!((again.broadcasts_held, again.broadcasts_discarded), (0, 0));
     device.ctx.node.stop();
     let again = device.ctx.node.snapshot().foreign_registration;
     assert_eq!((again.broadcasts_held, again.broadcasts_discarded), (2, 2));

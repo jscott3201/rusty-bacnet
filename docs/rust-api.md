@@ -963,6 +963,21 @@ unqualified Clause 13.19 support claim.
 
 Transport-layer implementations. All implement the `TransportPort` trait.
 
+### Stopping through a shared reference
+
+`TransportPort::stop` takes `&self` (#2617), and so does `NetworkLayer::stop`:
+the owner of a link stops it while a client or another holder of the
+`Arc<NetworkLayer>` still has it. Once a stop returns, every send fails with
+an `Error::Transport` of kind `NotConnected`, the kind a send before start
+gets (`bacnet_transport::port::stopped()` makes one); the receiver `start`
+returned yields what was queued and then ends; the background tasks are joined;
+and sockets and Network Port leases are let go of, so the port can be bound
+again at once. A send already under way may finish. A stop is idempotent, and
+one called while another runs waits for it. B/IP and B/IPv6 start again after
+a stop, as before; MS/TP, BACnet/SC, the loopback and a router's application
+port do not. A custom transport keeps what its stop takes behind a lock that
+only start and stop use, and fails every later send.
+
 ### Throttled peer warnings
 
 A warning that a peer can set off once per frame or connection (a frame that
@@ -9272,8 +9287,10 @@ the selected transport and its background work.
 `client.transport()` borrows the transport a built client owns, whichever
 builder made it. The transport lives in the client's network layer for the
 client's whole life, so this is a shared borrow: `&mut self` methods such as
-`start`, `stop` and the setters stay out of reach, and `client.stop()` stops
-the transport in place. What you take from it can outlive the borrow, which
+`start` and the setters stay out of reach, and `client.stop()` stops the
+transport in place. The transport's own `stop()` takes a shared borrow too
+(#2617): called through `transport()` it stops the link under the client,
+whose sends then fail. What you take from it can outlive the borrow, which
 suits a long-lived UI:
 
 ```rust
@@ -13285,8 +13302,8 @@ let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConf
 session.start().await?;
 let client = session.full_client()?;
 client.who_is(None).await?;
-drop(client); // before the session stops
-session.stop().await?;
+session.stop().await?; // the client may still be alive
+assert!(client.who_is(None).await.is_err());
 ```
 
 - One full client at a time; another is refused until the first is dropped.
@@ -13300,13 +13317,12 @@ session.stop().await?;
   a standalone client does.
 - The session has the one owner of the local network number: the client asks
   What-Is-Network-Number on first need and never answers one.
-- Stopping: drop the client first. A `stop()` while it lives closes the
-  session's roles, ends the client's tasks, fails its open requests, and
-  returns an error naming the client; call `stop()` again once the client is
-  dropped. From the first `stop()` the client sends nothing more: requests
-  and unconfirmed sends fail at once. Only a call made directly on
-  `client.transport()`, such as a BVLC query, still reaches the link until
-  the client is dropped.
+- Stopping: one `stop()` stops the session with the client still alive
+  (#2617). It closes the session's roles, ends the client's tasks, fails its
+  open requests and stops the link. From then on the client sends nothing:
+  requests and unconfirmed sends fail at once, and a call made directly on
+  `client.transport()`, such as a BVLC query, fails with the transport's
+  stopped error. Dropping the client afterwards changes nothing.
 
 ### Endpoint shutdown and the object database
 

@@ -131,8 +131,9 @@ async fn a_plain_transport_claims_its_requested_port() {
         let port = free_port();
         let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::BROADCAST);
         let _rx = transport.start().await.map_err(bind_error)?;
-        let primary = socket2::SockRef::from(&***transport.socket.as_ref().unwrap());
-        assert!(!primary.reuse_address().unwrap());
+        let socket = transport.socket().unwrap();
+        assert!(!socket2::SockRef::from(&**socket).reuse_address().unwrap());
+        drop(socket);
         let refused = squatter(Ipv4Addr::UNSPECIFIED, port, true, false).unwrap_err();
         assert!(lost_to_another_socket(&refused), "{refused}");
         transport.stop().await.unwrap();
@@ -344,7 +345,14 @@ mod linux {
     }
 
     fn primary_address(node: &BipTransport) -> SocketAddr {
-        node.socket.as_ref().unwrap().local_addr().unwrap()
+        node.socket().unwrap().local_addr().unwrap()
+    }
+
+    /// What `query` reads from the node's primary socket. The test keeps no
+    /// reference to the socket, so a stop still frees the port.
+    fn primary<R>(node: &BipTransport, query: impl FnOnce(socket2::SockRef<'_>) -> R) -> R {
+        let socket = node.socket().unwrap();
+        query(socket2::SockRef::from(&**socket))
     }
 
     /// A member that starts with its group on its own port binds its
@@ -400,13 +408,12 @@ mod linux {
             let port = free_port();
             let mut node = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
             let mut rx = node.start().await.map_err(bind_error)?;
-            let primary = || socket2::SockRef::from(&***node.socket.as_ref().unwrap());
-            assert!(!primary().reuse_port().unwrap());
+            assert!(!primary(&node, |p| p.reuse_port()).unwrap());
             let view = node.bip_port().unwrap().multicast.unwrap();
             view.activate(GROUP.octets()).map_err(bind_error)?;
             assert_eq!(node.multicast(), Some(own_port_group()));
-            assert!(primary().reuse_port().unwrap());
-            assert!(!primary().reuse_address().unwrap());
+            assert!(primary(&node, |p| p.reuse_port()).unwrap());
+            assert!(!primary(&node, |p| p.reuse_address()).unwrap());
             peer().send_to(&frame(0x0B), (GROUP, port)).unwrap();
             let heard = next(&mut rx).await;
             assert_eq!((&heard.npdu[..], heard.link_layer_group), (WHO_IS, true));
@@ -477,20 +484,19 @@ mod linux {
             let port = free_port();
             let mut node = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
             let mut rx = node.start().await.map_err(bind_error)?;
-            let primary = || socket2::SockRef::from(&***node.socket.as_ref().unwrap());
             let view = node.bip_port().unwrap().multicast.unwrap();
             node.multicast
                 .fail_next_switch
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             assert!(view.activate(GROUP.octets()).is_err());
-            assert!(!primary().reuse_port().unwrap());
+            assert!(!primary(&node, |p| p.reuse_port()).unwrap());
             assert_eq!(node.multicast(), None);
             // Nothing listens on the group's port for the node: a datagram
             // sent there is not heard.
             peer().send_to(&frame(0x0B), (GROUP, port)).unwrap();
             hears_nothing(&mut rx).await;
             view.activate(GROUP.octets()).map_err(bind_error)?;
-            assert!(primary().reuse_port().unwrap());
+            assert!(primary(&node, |p| p.reuse_port()).unwrap());
             peer().send_to(&frame(0x0B), (GROUP, port)).unwrap();
             assert!(next(&mut rx).await.link_layer_group);
             node.stop().await.unwrap();
@@ -513,8 +519,7 @@ mod linux {
             let view = member.bip_port().unwrap().multicast.unwrap();
             view.activate(moved.octets()).map_err(bind_error)?;
             assert_eq!(member.multicast(), Some(BipMulticast::new(moved).unwrap()));
-            let primary = socket2::SockRef::from(&***member.socket.as_ref().unwrap());
-            assert!(!primary.reuse_port().unwrap());
+            assert!(!primary(&member, |p| p.reuse_port()).unwrap());
             let own = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
             assert_eq!(primary_address(&member), own);
             let peer = peer();
@@ -598,16 +603,15 @@ mod linux {
             let port = free_port();
             let mut node = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
             let mut rx = node.start().await.map_err(bind_error)?;
-            let primary = || socket2::SockRef::from(&***node.socket.as_ref().unwrap());
             let view = node.bip_port().unwrap().multicast.unwrap();
             view.activate(GROUP.octets()).map_err(bind_error)?;
-            assert!(primary().reuse_port().unwrap());
+            assert!(primary(&node, |p| p.reuse_port()).unwrap());
             node.multicast
                 .fail_next_switch
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             let moved = Ipv4Addr::new(239, 255, 94, 4);
             assert!(view.activate(moved.octets()).is_err());
-            assert!(primary().reuse_port().unwrap());
+            assert!(primary(&node, |p| p.reuse_port()).unwrap());
             assert_eq!(node.multicast(), Some(own_port_group()));
             peer().send_to(&frame(0x0B), (GROUP, port)).unwrap();
             assert!(next(&mut rx).await.link_layer_group);

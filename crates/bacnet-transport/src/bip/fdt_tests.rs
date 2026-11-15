@@ -25,7 +25,7 @@ async fn bbmd_fdt_purge_task_clears_expired_entry_without_bvlc_request() {
     bbmd_transport.enable_bbmd(vec![]);
     bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
-    assert!(bbmd_transport.bbmd_fdt_purge_task.is_some());
+    assert!(bbmd_transport.tasks.len() == 5);
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
     let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -49,7 +49,7 @@ async fn bbmd_fdt_purge_task_clears_expired_entry_without_bvlc_request() {
 
     client_transport.stop().await.unwrap();
     bbmd_transport.stop().await.unwrap();
-    assert!(bbmd_transport.bbmd_fdt_purge_task.is_none());
+    assert!(!bbmd_transport.tasks.is_running());
 }
 
 #[tokio::test]

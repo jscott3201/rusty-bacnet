@@ -361,7 +361,7 @@ impl BipServerBuilder {
     }
 }
 
-type TransportCleanup<T> = JoinHandle<(NetworkLayer<T>, Result<(), Error>)>;
+type TransportCleanup<T> = JoinHandle<(Arc<NetworkLayer<T>>, Result<(), Error>)>;
 
 /// BACnet server with APDU dispatch and service handling.
 ///

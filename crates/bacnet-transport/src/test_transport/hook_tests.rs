@@ -8,7 +8,7 @@ async fn before_stop_holds_the_stop_and_the_inner_stop_still_runs() {
     let seen = inner.handle();
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let hold = Arc::clone(&gate);
-    let mut outer = TestTransport::builder()
+    let outer = TestTransport::builder()
         .inner(inner)
         .before_stop(move || {
             let hold = Arc::clone(&hold);
@@ -35,7 +35,7 @@ async fn before_stop_holds_the_stop_and_the_inner_stop_still_runs() {
     // A failing hook ends the stop with the inner transport untouched.
     let inner = TestTransport::new();
     let seen = inner.handle();
-    let mut outer = TestTransport::builder()
+    let outer = TestTransport::builder()
         .inner(inner)
         .before_stop(|| async { Err(Error::Encoding("refused".into())) })
         .build();
@@ -102,7 +102,7 @@ async fn after_stop_runs_after_a_successful_stop_only() {
             async { Ok(()) }
         })
         .build();
-    let mut outer = TestTransport::builder()
+    let outer = TestTransport::builder()
         .inner(inner)
         .after_stop(move || {
             log_hook.lock().unwrap().push("after");
@@ -115,7 +115,7 @@ async fn after_stop_runs_after_a_successful_stop_only() {
     // A failing stop skips the hook; a failing hook fails the stop.
     let ran = Arc::new(AtomicUsize::new(0));
     let count = Arc::clone(&ran);
-    let mut failing = TestTransport::builder()
+    let failing = TestTransport::builder()
         .on_stop(|| async { Err(Error::Encoding("stop failed".into())) })
         .after_stop(move || {
             count.fetch_add(1, Ordering::SeqCst);
@@ -124,7 +124,7 @@ async fn after_stop_runs_after_a_successful_stop_only() {
         .build();
     assert!(failing.stop().await.is_err());
     assert_eq!(ran.load(Ordering::SeqCst), 0);
-    let mut refusing = TestTransport::builder()
+    let refusing = TestTransport::builder()
         .after_stop(|| async { Err(Error::Encoding("after failed".into())) })
         .build();
     assert!(matches!(refusing.stop().await, Err(Error::Encoding(m)) if m == "after failed"));

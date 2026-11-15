@@ -90,7 +90,7 @@ pub(super) async fn retire<W: WebSocketPort>(
 
 async fn publish_connected_ws<W: WebSocketPort>(
     conn: &Arc<Mutex<ScConnection>>,
-    active_ws: &Arc<Mutex<Arc<W>>>,
+    active_ws: &super::HubSlot<W>,
     ws: &Arc<W>,
     probe_conn: &Arc<Mutex<ScConnection>>,
     state_tx: &watch::Sender<ScConnectionState>,
@@ -100,7 +100,8 @@ async fn publish_connected_ws<W: WebSocketPort>(
     let mut current = active_ws.lock().await;
     let mut c = conn.lock().await;
     *c = restored;
-    *current = ws.clone();
+    // A stop takes the slot only once this task has been joined.
+    *current = Some(ws.clone());
     hub_limits.publish(&c);
     hub_limits.returned();
     state_tx.send_replace(c.state);
@@ -136,7 +137,7 @@ pub(super) struct Recovery<'a, W: WebSocketPort> {
     pub failover_connector: &'a Option<WebSocketConnector<W>>,
     pub failover_ws: &'a mut Option<Arc<W>>,
     pub conn: &'a Arc<Mutex<ScConnection>>,
-    pub active_ws: &'a Arc<Mutex<Arc<W>>>,
+    pub active_ws: &'a super::HubSlot<W>,
     pub state_tx: &'a watch::Sender<ScConnectionState>,
     pub connect_timeout_ms: u64,
     pub hub_limits: &'a HubLimits,

@@ -55,7 +55,7 @@ async fn barrier(hub: &LoopbackWebSocket) {
 
 #[tokio::test]
 async fn proprietary_valid_shapes_are_consumed_silently_without_npdu() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     for payload in [minimal_proprietary(), valid_proprietary()] {
         for source in [None, Some([0x22; 6])] {
             hub.send(&wire(12, 0x2233, source, None, 0, &payload))
@@ -78,7 +78,7 @@ async fn proprietary_valid_shapes_are_consumed_silently_without_npdu() {
 
 #[tokio::test]
 async fn proprietary_negative_matrix_nak_vs_silence() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     // (body, expected NAK code, MU marker)
     let mut faults: Vec<(Vec<u8>, u16, u8)> = Vec::new();
     faults.push((vec![], 149, 0));
@@ -279,7 +279,7 @@ fn proprietary_direct_connection_is_pure_in_all_states_and_codec_is_permissive()
 
 #[tokio::test]
 async fn proprietary_malformed_generic_wire_is_still_silent() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     for bytes in [
         vec![0x0C],
         vec![0x0C, 0x80, 0, 1],
@@ -303,7 +303,7 @@ async fn proprietary_result_for_keeps_existing_parse_and_fatal_policy() {
         (vec![12, 1, 0, 0, 7, 0, 144], true),
         (vec![12, 1], true),
     ] {
-        let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+        let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
         let bytes = wire(0, 0x2233, None, None, 0, &body);
         let msg = decode_sc_message(&bytes).unwrap();
         assert_eq!(msg.function, ScFunction::Result);

@@ -3,7 +3,7 @@ use super::*;
 
 #[tokio::test]
 async fn custom_direct_factory_cannot_admit_application_npdu_or_fabricate_identity() {
-    let (mut transport, mut rx, hub, _, mut peers) = start_direct(500).await;
+    let (transport, mut rx, hub, _, mut peers) = start_direct(500).await;
     let (sent, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar = decode_sc_message(&hub_recv(&hub).await).unwrap();
         hub.send(&ack_for(ar.message_id, b"wss://peer.example/sc"))
@@ -103,7 +103,7 @@ async fn uncertain_started_direct_write_is_not_redialed_or_replayed_through_hub(
 
 #[tokio::test]
 async fn direct_length_refusals_never_write_to_peer_or_fall_back_to_hub() {
-    let (mut transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
+    let (transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
     let (sent, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar = decode_sc_message(&hub_recv(&hub).await).unwrap();
         hub.send(&ack_for(ar.message_id, b"wss://peer.example/sc"))

@@ -5,7 +5,7 @@ use tokio::time::timeout;
 
 #[tokio::test]
 async fn heartbeat_request_payload_gets_nak_before_ack() {
-    let (mut transport, _rx, ws) = start_transport().await;
+    let (transport, _rx, ws) = start_transport().await;
     ws.send(&[0x0A, 0x00, 0x22, 0x33, 0x42]).await.unwrap();
     let response = timeout(Duration::from_secs(1), ws.recv())
         .await
@@ -51,7 +51,7 @@ async fn rejection_barrier(ws: &LoopbackWebSocket) {
 
 #[tokio::test(start_paused = true)]
 async fn heartbeat_unsupported_ack_does_not_clear_pending_probe() {
-    let (mut transport, _rx, ws) = start_timed().await;
+    let (transport, _rx, ws) = start_timed().await;
     let probe = recv(&ws).await;
     assert_eq!(probe[0], 0x0A);
     ws.send(&[0x0B, 2, probe[2], probe[3], 0x5E]).await.unwrap();
@@ -90,7 +90,7 @@ async fn heartbeat_unsupported_ack_does_not_clear_pending_probe() {
 
 #[tokio::test(start_paused = true)]
 async fn heartbeat_invalid_traffic_does_not_refresh_node_liveness() {
-    let (mut transport, _rx, ws) = start_timed().await;
+    let (transport, _rx, ws) = start_timed().await;
     let mut states = transport.connection_state_changes();
     let mut messages = Vec::new();
     for case in invalid_heartbeats([0x01; 6]) {
@@ -144,7 +144,7 @@ async fn heartbeat_invalid_traffic_does_not_refresh_node_liveness() {
 
 #[tokio::test]
 async fn heartbeat_envelopes_obey_nak_precedence_addressing_and_silence() {
-    let (mut transport, _rx, ws) = start_transport().await;
+    let (transport, _rx, ws) = start_transport().await;
     for case in invalid_heartbeats([0x01; 6]) {
         assert!(decode_sc_message(&case.wire).is_ok(), "{}", case.name);
         ws.send(&case.wire).await.unwrap();

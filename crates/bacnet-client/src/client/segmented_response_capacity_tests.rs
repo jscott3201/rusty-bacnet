@@ -149,7 +149,7 @@ impl FullCapacityFixture {
             .collect()
     }
 
-    async fn stop(mut self) {
+    async fn stop(self) {
         for session in &self.sessions {
             send_peer_abort(&self.server, session.invoke_id).await;
         }

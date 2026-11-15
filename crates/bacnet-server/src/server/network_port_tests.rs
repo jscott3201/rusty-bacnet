@@ -1,4 +1,5 @@
-//! The reservation follows the final network owner even when stop cannot unwrap it.
+//! Without a stop the reservation follows the final network owner; a stop
+//! releases it at once, whoever else still holds the network (#2617).
 use super::*;
 use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
 
@@ -58,7 +59,13 @@ async fn registered_port_keeps_lease(stop_first: bool) -> std::io::Result<()> {
     let network = server.test_network().clone();
     let address = network.transport().bip_port().unwrap().endpoint;
     if stop_first {
-        assert!(server.stop().await.is_err());
+        // The stop goes through the network this test still holds: the
+        // reservation and the port go with it.
+        server.stop().await.unwrap();
+        assert!(matches!(db.write().await.remove(&oid), Ok(Some(_))));
+        std::net::UdpSocket::bind(address).map(drop)?;
+        drop((server, network));
+        return Ok(());
     }
     drop(server);
     assert!(db.write().await.remove(&oid).is_err());

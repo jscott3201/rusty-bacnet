@@ -215,7 +215,7 @@ async fn survey(a: SocketAddrV4) -> bacnet_tool::bbmd::Matrix {
 
 #[tokio::test]
 async fn symmetric_bdts_read_as_consistent() {
-    let (mut a, mut b) = (bbmd_transport().await, bbmd_transport().await);
+    let (a, b) = (bbmd_transport().await, bbmd_transport().await);
     let (a_at, b_at) = (
         address_of(a.local_mac()).unwrap(),
         address_of(b.local_mac()).unwrap(),
@@ -236,7 +236,7 @@ async fn symmetric_bdts_read_as_consistent() {
 
 #[tokio::test]
 async fn a_bdt_missing_its_peer_is_flagged_one_way() {
-    let (mut a, mut b) = (bbmd_transport().await, bbmd_transport().await);
+    let (a, b) = (bbmd_transport().await, bbmd_transport().await);
     let (a_at, b_at) = (
         address_of(a.local_mac()).unwrap(),
         address_of(b.local_mac()).unwrap(),
@@ -262,7 +262,7 @@ async fn a_bdt_missing_its_peer_is_flagged_one_way() {
 /// BBMD as refusing; neither stalls the survey.
 #[tokio::test(start_paused = true)]
 async fn silent_and_refusing_peers_are_named() {
-    let mut a = bbmd_transport().await;
+    let a = bbmd_transport().await;
     let a_at = address_of(a.local_mac()).unwrap();
     let silent = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await

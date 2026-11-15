@@ -3,6 +3,7 @@
 use super::*;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
+use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ConfirmedServiceChoice, PropertyIdentifier};
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -46,27 +47,34 @@ async fn assert_no_task_left() {
     .await;
 }
 
+/// Whether `result` failed as a send on a stopped transport does (#2617).
+fn stopped<T: std::fmt::Debug>(result: Result<T, bacnet_types::error::Error>) -> bool {
+    matches!(
+        result,
+        Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected
+    )
+}
+
 #[tokio::test(start_paused = true)]
-async fn the_session_stopping_first_fails_open_requests_and_waits_for_the_client_to_go() {
+async fn the_session_stopping_first_fails_open_requests_and_stops_the_link_under_a_live_client() {
     for _ in 0..20 {
         let mut lab = lab(SessionRole::Both).await;
         let client = Arc::new(lab.session.full_client().unwrap());
         let read = open_read(&lab, &client).await;
 
-        // The session's stop ends the client's tasks, so the open read
-        // fails now, not at its timeout. The client itself still holds the
-        // link, so the stop says so and leaves the transport running.
+        // One stop, with the client still alive (#2617): it ends the
+        // client's tasks, so the open read fails now, not at its timeout,
+        // and it stops the link the client still holds.
         let asked = Instant::now();
-        let error = lab.session.stop().await.expect_err("the link is held");
-        assert!(error.to_string().contains("full client still holds"));
+        lab.session.stop().await.unwrap();
         assert!(read.await.unwrap().is_err());
         assert_eq!(asked.elapsed(), Duration::ZERO);
-        assert_eq!(lab.node_link.stops(), 0);
+        assert_eq!(lab.node_link.stops(), 1);
         assert!(!lab.session.is_running());
         assert!(lab.session.full_client().is_err());
         // From here the client sends nothing: a request, a Who-Is in any
         // scope and a network message each fail at once, and no frame of
-        // theirs reaches the link, which is still up under the client.
+        // theirs reaches the link.
         let (sent, asked) = (lab.node_sent.len(), Instant::now());
         let late = client
             .read_property(
@@ -87,21 +95,24 @@ async fn the_session_stopping_first_fails_open_requests_and_waits_for_the_client
         assert!(client.who_is_network(7, None).await.is_err());
         assert!(client.who_is_router_to_network(None, None).await.is_err());
         assert!(client.what_is_network_number(None).await.is_err());
+        // Nor does the link itself, reached through the client.
+        let transport = client.transport();
+        assert!(stopped(transport.send_broadcast(&[0x01, 0x00]).await));
+        assert!(stopped(
+            transport
+                .send_unicast(&[0x01, 0x00], &Wire::mac(PEER))
+                .await
+        ));
         assert_eq!(asked.elapsed(), Duration::ZERO);
         assert_eq!(lab.node_sent.len(), sent, "no frame went out");
-        // The link itself is still the client's to reach.
-        assert_eq!(client.transport().handle().stops(), 0);
 
-        // The client's own stop succeeds and stops nothing of the node's.
+        // The client's own stop succeeds and stops nothing more, and its
+        // drop is harmless.
         let mut client = Arc::try_unwrap(client).ok().expect("the only handle");
         client.stop().await.unwrap();
-        assert_eq!(lab.node_link.stops(), 0);
-        assert!(lab.session.stop().await.is_err(), "still held");
-
-        // With the client gone the same call finishes the stop.
         drop(client);
-        lab.session.stop().await.unwrap();
         assert_eq!(lab.node_link.stops(), 1);
+        assert!(lab.session.stop().await.is_err(), "stopped once");
         assert_eq!(lab.session.active_leases(), 0);
         lab.peer.stop().await.unwrap();
         drop(lab);
@@ -222,17 +233,13 @@ async fn a_client_whose_seat_closed_does_not_ask_for_the_network_number() {
         max_segments_accepted: None,
     };
 
-    assert!(
-        lab.session.stop().await.is_err(),
-        "the client holds the link"
-    );
+    lab.session.stop().await.unwrap();
     let sent = lab.node_sent.len();
     client.add_routed_device(routed()).await.unwrap();
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert_eq!(lab.node_sent.len(), sent, "no frame went out");
 
     drop(client);
-    lab.session.stop().await.unwrap();
     lab.peer.stop().await.unwrap();
 
     // The same call on a running session's client does ask, once: the
@@ -322,15 +329,14 @@ async fn the_sessions_stop_does_not_wait_on_a_client_task_stuck_in_a_turn() {
     lab.node_link.wait_blocked().await;
 
     let asked = Instant::now();
-    let stopped = tokio::time::timeout(WAIT, lab.session.stop())
+    tokio::time::timeout(WAIT, lab.session.stop())
         .await
-        .expect("the stop doesn't wait on the stuck task");
-    assert!(stopped.is_err(), "the client still holds the link");
+        .expect("the stop doesn't wait on the stuck task")
+        .expect("one stop, with the client still alive (#2617)");
     assert_eq!(asked.elapsed(), Duration::ZERO);
+    assert_eq!(lab.node_link.stops(), 1);
     drop(client);
     lab.node_link.release_sends(1);
-    lab.session.stop().await.unwrap();
-    assert_eq!(lab.node_link.stops(), 1);
     lab.peer.stop().await.unwrap();
 }
 

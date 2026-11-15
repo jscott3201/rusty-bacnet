@@ -136,9 +136,9 @@ fn assert_record(
 
 #[tokio::test(start_paused = true)]
 async fn source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters() {
-    let (mut old, mut old_records) = network().await;
-    let (mut new, mut new_records) = network().await;
-    let (mut peer, mut replies) = network().await;
+    let (old, mut old_records) = network().await;
+    let (new, mut new_records) = network().await;
+    let (peer, mut replies) = network().await;
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         for level in [AuditLevel::NONE, AuditLevel::AUDIT_ALL] {
             let mut db = database(false);
@@ -209,7 +209,7 @@ async fn source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters
 
 #[tokio::test(start_paused = true)]
 async fn source_recipient_null_equal_invalid_and_second_permit_preserve_commit_state() {
-    let (mut sink, mut records) = network().await;
+    let (sink, mut records) = network().await;
     let mut db = database(false);
     db.set_clock_reader(None);
     let mut session = session(db, SessionRole::ClientOnly, &sink);
@@ -299,9 +299,9 @@ async fn source_recipient_null_equal_invalid_and_second_permit_preserve_commit_s
 
 #[tokio::test(start_paused = true)]
 async fn source_recipient_read_keeps_admitted_route_and_later_read_uses_new_value() {
-    let (mut old, mut old_records) = network().await;
-    let (mut new, mut new_records) = network().await;
-    let (mut peer, mut requests) = network().await;
+    let (old, mut old_records) = network().await;
+    let (new, mut new_records) = network().await;
+    let (peer, mut requests) = network().await;
     let mut db = database(false);
     db.set_clock_reader(None);
     let mut session = session(db, SessionRole::ClientOnly, &old);
@@ -354,8 +354,8 @@ mod lifetime;
 #[tokio::test(start_paused = true)]
 async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let (mut sink, mut records) = network().await;
-    let (mut peer, mut replies) = network().await;
+    let (sink, mut records) = network().await;
+    let (peer, mut replies) = network().await;
     let decision = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
     let d = decision.clone();
@@ -428,8 +428,8 @@ async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
 
 #[tokio::test(start_paused = true)]
 async fn source_recipient_unresolved_device_preserves_read_and_rejects_live_change() {
-    let (mut sink, mut records) = network().await;
-    let (mut peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
     let mut db = database(false);
     db.set_clock_reader(None);
     let mut session = session(db, SessionRole::ClientOnly, &sink);
@@ -474,8 +474,8 @@ async fn source_recipient_unresolved_device_preserves_read_and_rejects_live_chan
 /// one to the new, from this Device with no invoke ID, in either role.
 #[tokio::test(start_paused = true)]
 async fn a_local_write_of_the_recipient_tells_the_old_and_the_new_one() {
-    let (mut old, mut old_records) = network().await;
-    let (mut new, mut new_records) = network().await;
+    let (old, mut old_records) = network().await;
+    let (new, mut new_records) = network().await;
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         let mut db = database(false);
         db.set_clock_reader(None);
@@ -515,8 +515,8 @@ async fn a_local_write_of_the_recipient_tells_the_old_and_the_new_one() {
 /// new recipient at a priority outside 1 to 16.
 #[tokio::test(start_paused = true)]
 async fn a_refused_local_write_of_the_recipient_sends_nothing() {
-    let (mut old, mut old_records) = network().await;
-    let (mut new, mut new_records) = network().await;
+    let (old, mut old_records) = network().await;
+    let (new, mut new_records) = network().await;
     let mut db = database(false);
     db.set_clock_reader(None);
     let mut session = session(db, SessionRole::Both, &old);

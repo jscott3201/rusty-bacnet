@@ -12,7 +12,7 @@ fn wire(payload: &[u8]) -> Vec<u8> {
 
 #[tokio::test]
 async fn empty_npdu_node_does_not_deliver_before_positive_sentinel() {
-    let (mut transport, mut rx, hub) = start_transport().await;
+    let (transport, mut rx, hub) = start_transport().await;
     hub.send(&wire(&[])).await.unwrap();
     hub.send(&wire(&[1, 0, 0x30])).await.unwrap();
     let first = timeout(Duration::from_secs(1), rx.recv())
@@ -58,7 +58,7 @@ fn nak(destination: Option<Vmac>, marker: u8, code: u8) -> Vec<u8> {
 
 #[tokio::test]
 async fn empty_npdu_node_wire_source_mu_precedence_and_option_boundaries() {
-    let (mut transport, mut rx, hub) = start_transport().await;
+    let (transport, mut rx, hub) = start_transport().await;
     for source in [None, Some([0; 6]), Some(BROADCAST_VMAC), Some([0x22; 6])] {
         for destination in [None, Some(BROADCAST_VMAC), Some([1; 6]), Some([0x44; 6])] {
             // HeaderData (including zero length), MoreOptions, and Data Options

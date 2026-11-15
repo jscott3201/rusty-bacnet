@@ -124,7 +124,7 @@ async fn an_unanswered_release_is_given_up_after_3_s() {
 #[tokio::test]
 async fn without_the_option_a_move_releases_nothing() {
     let (a, b) = (bbmd().await, bbmd().await);
-    let (mut transport, lent) = started(&a, 300).await;
+    let (transport, lent) = started(&a, 300).await;
     lent.activate(&changes(Some(address_of(&b)), None)).unwrap();
     assert_eq!(registration(&b).await, 300);
     // A release would have gone in the same pass, right after.

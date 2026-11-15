@@ -177,7 +177,7 @@ impl TransportPort for AnyTransport {
         }
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
+    async fn stop(&self) -> Result<(), Error> {
         match self {
             Self::Bip(t) => t.stop().await,
             Self::Mstp(t) => t.stop().await,

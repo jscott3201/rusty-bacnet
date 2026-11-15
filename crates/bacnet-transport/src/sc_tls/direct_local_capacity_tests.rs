@@ -132,7 +132,7 @@ async fn outbound_direct_advertises_1478_and_enforces_1478_1479_with_smaller_pee
         }
         done.await.unwrap();
     });
-    let (mut transport, mut rx, hub) = start_outbound(&ca).await;
+    let (transport, mut rx, hub) = start_outbound(&ca).await;
     assert_eq!(transport.local_receive_apdu_capacity(), 1476);
     discover_send(&transport, &hub, &uri).await;
     assert_intake(&mut rx).await;

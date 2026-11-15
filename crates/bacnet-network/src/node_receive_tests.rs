@@ -13,7 +13,7 @@ use bacnet_router_core::node::Node;
 
 #[tokio::test]
 async fn npdus_for_another_network_reach_neither_receiver_and_are_counted() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut controls = network.enable_network_control_receiver().unwrap();
     let mut apdus = network.start().await.unwrap();
@@ -70,7 +70,7 @@ async fn npdus_for_another_network_reach_neither_receiver_and_are_counted() {
 
 #[tokio::test]
 async fn malformed_npdus_are_counted() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut apdus = network.start().await.unwrap();
 

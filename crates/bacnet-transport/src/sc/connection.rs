@@ -539,4 +539,12 @@ impl<W: super::WebSocketPort> super::ScTransport<W> {
     pub(crate) fn connection(&self) -> Option<&std::sync::Arc<tokio::sync::Mutex<ScConnection>>> {
         self.connection.as_ref()
     }
+
+    /// The running receive task's abort handle. Test-only.
+    pub(crate) fn recv_task_handle(&self) -> tokio::task::AbortHandle {
+        let task = self.recv_task.lock().unwrap();
+        task.as_ref()
+            .expect("SC start spawns recv task")
+            .abort_handle()
+    }
 }

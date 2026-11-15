@@ -170,7 +170,7 @@ pub(super) async fn prepare_primary_restore<W: WebSocketPort>(
 
 /// Live publication belongs exclusively to the receive loop.
 pub(super) struct PrimaryRestoreContext<'a, W> {
-    pub(super) active_ws: &'a Arc<Mutex<Arc<W>>>,
+    pub(super) active_ws: &'a super::HubSlot<W>,
     pub(super) conn: &'a Arc<Mutex<ScConnection>>,
     pub(super) restore_disconnect_task: &'a Arc<StdMutex<Option<JoinHandle<()>>>>,
     pub(super) state_tx: &'a watch::Sender<ScConnectionState>,
@@ -188,7 +188,10 @@ pub(super) async fn publish_primary_restore<W: WebSocketPort>(
     let mut c = ctx.conn.lock().await;
     // Stop can seal the live state while a candidate is finishing. Never
     // publish its success or failed-probe retry metadata after that boundary.
-    if c.state != ScConnectionState::Connected || !Arc::ptr_eq(&current, current_ws) {
+    let still_current = current
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, current_ws));
+    if c.state != ScConnectionState::Connected || !still_current {
         drop((c, current));
         // A connected candidate dialled for this attempt is given up: an
         // orderly end, 1000 (#2520). The kept primary stays open.
@@ -206,7 +209,7 @@ pub(super) async fn publish_primary_restore<W: WebSocketPort>(
     };
     let disconnect_msg = c.clone().build_disconnect_request().ok();
     *c = candidate.connection;
-    *current = restored_ws.clone();
+    *current = Some(restored_ws.clone());
     ctx.hub_limits.publish(&c);
     ctx.state_tx.send_replace(c.state);
     let hub_vmac = c.hub_vmac;
@@ -291,7 +294,7 @@ mod tests {
         ] {
             let (live, _hub) = recorder();
             let live = Arc::new(live);
-            let active = Arc::new(Mutex::new(live.clone()));
+            let active = Arc::new(Mutex::new(Some(live.clone())));
             let mut connection = ScConnection::new([1; 6], [1; 16]);
             connection.state = ScConnectionState::Connected;
             connection.hub_vmac = Some([0x20; 6]);
@@ -335,7 +338,7 @@ mod tests {
             assert_eq!(c.local_vmac, [1; 6]);
             assert_eq!(c.hub_vmac, Some([0x20; 6]));
             assert!(c.connect_retry_allowed);
-            assert!(Arc::ptr_eq(&*active.lock().await, &live));
+            assert!(Arc::ptr_eq(active.lock().await.as_ref().unwrap(), &live));
             assert_eq!(*state.borrow(), ScConnectionState::Disconnecting);
             assert_eq!(limits.apdu(), super::super::DEFAULT_MAX_APDU_LENGTH);
             assert_eq!(

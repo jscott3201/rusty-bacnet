@@ -51,7 +51,7 @@ async fn barrier(hub: &LoopbackWebSocket) {
 
 #[tokio::test]
 async fn advertisement_valid_shapes_are_consumed_silently_without_npdu() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     for status in [0, 1, 2] {
         for direct in [0, 1] {
             let mut payload = vec![status, direct, 0, 0, 0, 0];
@@ -82,7 +82,7 @@ async fn advertisement_valid_shapes_are_consumed_silently_without_npdu() {
 
 #[tokio::test]
 async fn advertisement_negative_matrix_nak_vs_silence() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     // (function, body, expected NAK code, MU marker)
     let mut faults: Vec<(u8, Vec<u8>, u16, u8)> = Vec::new();
     faults.push((4, vec![], 149, 0));
@@ -311,7 +311,7 @@ fn advertisement_direct_connection_is_pure_in_all_states_and_codec_is_permissive
 
 #[tokio::test]
 async fn advertisement_malformed_generic_wire_is_still_silent() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     for bytes in [
         vec![0x04],
         vec![0x04, 0x80, 0, 1],
@@ -336,7 +336,7 @@ async fn advertisement_result_for_keeps_existing_parse_and_fatal_policy() {
             (vec![raw, 1, 0, 0, 7, 0, 150], true),
             (vec![raw, 1], true),
         ] {
-            let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+            let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
             let bytes = wire(0, 0x2233, None, None, 0, &body);
             let msg = decode_sc_message(&bytes).unwrap();
             assert_eq!(msg.function, ScFunction::Result);
@@ -372,7 +372,7 @@ fn solicited_reply_payload() -> Vec<u8> {
 
 #[tokio::test]
 async fn advertisement_default_accept_direct_stays_zero_on_raw_wire() {
-    let (mut transport, _rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, _rx, hub) = super::data_attribute_tests::start_transport().await;
     hub.send(&[5, 0, 0x22, 0x34]).await.unwrap();
     let reply = recv(&hub).await;
     assert_eq!(reply.len(), 10);
@@ -394,7 +394,7 @@ async fn recv_reply(hub: &LoopbackWebSocket) -> crate::sc_frame::ScMessage {
 
 #[tokio::test]
 async fn advertisement_solicited_reply_shape_hub_peer_origin() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     hub.send(&wire(5, 0x2234, None, None, 0, &[]))
         .await
         .unwrap();
@@ -420,7 +420,7 @@ async fn advertisement_solicited_reply_shape_hub_peer_origin() {
 
 #[tokio::test]
 async fn advertisement_solicited_reply_targets_relayed_origin() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     hub.send(&wire(5, 0x2235, Some([0x22; 6]), None, 0, &[]))
         .await
         .unwrap();
@@ -441,7 +441,7 @@ async fn advertisement_solicited_reply_targets_relayed_origin() {
 
 #[tokio::test]
 async fn advertisement_solicited_reply_is_rate_gated() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     hub.send(&wire(5, 0x2234, None, None, 0, &[]))
         .await
         .unwrap();
@@ -467,7 +467,7 @@ async fn advertisement_solicited_reply_is_rate_gated() {
 
 #[tokio::test]
 async fn advertisement_solicited_reply_recurs_after_interval() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     hub.send(&wire(5, 0x2234, None, None, 0, &[]))
         .await
         .unwrap();
