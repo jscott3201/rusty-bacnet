@@ -1,9 +1,10 @@
 //! The generic view of tagged octets the formatter has no model for: each
 //! field by its context tag, `[0] 30, [1] (…)`, an application value as
-//! the formatter writes it.
+//! the formatter writes it. The octets are read with the shared tag-tree
+//! decoder (`bacnet_encoding::tags::tree`, #2618).
 
 use bacnet_encoding::primitives::decode_application_value;
-use bacnet_encoding::tags::{TagClass, decode_tag};
+use bacnet_encoding::tags::tree::{TagBody, TagNode, decode_tag_tree};
 use bacnet_types::enums::PropertyIdentifier;
 
 use super::primitive::text;
@@ -12,6 +13,27 @@ use crate::octets::hex;
 
 /// The element kind the data names an unknown choice by.
 const UNKNOWN_CHOICE: &str = "unknown-choice";
+
+/// The element kind of a value with no decoded form that holds a context
+/// tag, shown as its tags (#2618).
+pub(super) const TAGGED: &str = "tagged";
+
+/// A value with no decoded form that holds a context tag (#2618): as text,
+/// its tags ([`fields_text`]); as data, a `tagged` element with that text
+/// and the value's octets as hex under `data`. Any application value in it
+/// may be a CharacterString, so the element isn't plain.
+pub(super) fn tagged(data: &[u8], floats: Floats) -> (String, Datum) {
+    let text = fields_text(data, floats);
+    let datum = Datum::Constructed {
+        element: TAGGED.into(),
+        text: text.clone(),
+        fields: Some(Fields::new(vec![(
+            "data".into(),
+            Datum::Raw { raw: hex(data) },
+        )])),
+    };
+    (text, datum)
+}
 
 /// An alternative of a CHOICE under a context tag the standard doesn't
 /// assign, kept as received (#2474): a log record's datum, a Trend Log
@@ -44,91 +66,48 @@ pub fn unknown_choice(tag: u8, constructed: bool, data: &[u8], floats: Floats) -
     (text, datum)
 }
 
-/// Deepest nesting of opening and closing tags shown before the rest is
-/// left as hex.
-const MAX_DEPTH: usize = 8;
-
 /// `data` as its tagged fields: a context primitive as `[n] [raw …]`
 /// (its datatype isn't known, so its octets aren't read as a number), a
-/// constructed field as `[n] (…)`, and an application value as its text. Octets that
-/// don't parse end the view as `[raw …]`.
+/// constructed field as `[n] (…)`, and an application value as its text;
+/// one that doesn't decode, as its octets. From a fault in the framing on,
+/// the octets are one `[raw …]`, the elements before it shown.
 pub(super) fn fields_text(data: &[u8], floats: Floats) -> String {
-    let mut parts = Vec::new();
-    let (end, _) = fields(data, 0, None, 0, floats, &mut parts);
-    if end < data.len() {
-        parts.push(raw_text(&data[end..]));
+    let (nodes, rest) = match decode_tag_tree(data) {
+        Ok(nodes) => (nodes, &[][..]),
+        Err(error) => {
+            let (read, rest) = data.split_at(error.valid_up_to.min(data.len()));
+            (decode_tag_tree(read).unwrap_or_default(), rest)
+        }
+    };
+    let mut parts: Vec<String> = nodes.iter().map(|node| node_text(node, floats)).collect();
+    if !rest.is_empty() {
+        parts.push(raw_text(rest));
     }
     parts.join(", ")
 }
 
-/// The fields from `offset` up to the closing tag `closing` (or the end),
-/// pushed to `parts`. Returns the offset reached, past the closing tag, and
-/// whether that tag was found; on octets that don't parse, the offset where
-/// they start.
-fn fields(
-    data: &[u8],
-    mut offset: usize,
-    closing: Option<u8>,
-    depth: usize,
-    floats: Floats,
-    parts: &mut Vec<String>,
-) -> (usize, bool) {
+/// One element as [`fields_text`] writes it.
+fn node_text(node: &TagNode<'_>, floats: Floats) -> String {
     // Any property: no enumeration, named bits or state.
     const ANY: PropertyIdentifier = PropertyIdentifier::LOG_BUFFER;
-    while offset < data.len() {
-        let Ok((tag, contents)) = decode_tag(data, offset) else {
-            return (offset, false);
-        };
-        if tag.is_closing {
-            return if Some(tag.number) == closing {
-                (contents, true)
-            } else {
-                (offset, false)
-            };
-        }
-        if tag.class == TagClass::Application {
-            let Ok((value, next)) = decode_application_value(data, offset) else {
-                return (offset, false);
-            };
-            parts.push(text(ANY, &value, floats));
-            offset = next;
-            continue;
-        }
-        if tag.is_opening {
-            if depth >= MAX_DEPTH {
-                return (offset, false);
-            }
-            let mut inner = Vec::new();
-            let (next, closed) = fields(
-                data,
-                contents,
-                Some(tag.number),
-                depth + 1,
-                floats,
-                &mut inner,
-            );
-            if !closed {
-                return (offset, false);
-            }
-            parts.push(format!("[{}] ({})", tag.number, inner.join(", ")));
-            offset = next;
-            continue;
-        }
-        let Some(octets) = contents
-            .checked_add(tag.length as usize)
-            .and_then(|end| data.get(contents..end))
-        else {
-            return (offset, false);
-        };
-        if octets.is_empty() {
-            parts.push(format!("[{}]", tag.number));
-            offset = contents;
-            continue;
-        }
-        parts.push(format!("[{}] {}", tag.number, raw_text(octets)));
-        offset = contents + octets.len();
+    match &node.body {
+        TagBody::Application(_) => match decode_application_value(node.octets, 0) {
+            Ok((value, _)) => text(ANY, &value, floats),
+            Err(_) => raw_text(node.octets),
+        },
+        TagBody::Context([]) => format!("[{}]", node.number),
+        TagBody::Context(contents) => format!("[{}] {}", node.number, raw_text(contents)),
+        TagBody::Constructed(members) => format!(
+            "[{}] ({})",
+            node.number,
+            members
+                .iter()
+                .map(|member| node_text(member, floats))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        _ => raw_text(node.octets),
     }
-    (offset, closing.is_none())
 }
 
 #[cfg(test)]

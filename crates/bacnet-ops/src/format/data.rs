@@ -14,7 +14,9 @@ use bacnet_types::primitives::PropertyValue;
 use serde::Serialize;
 
 use super::primitive::{date_text, plain_bits, time_text};
-use super::{ValueFormat, constructed, decode_all, event_parameter, holds_state, is_binary};
+use super::{
+    ValueFormat, constructed, decode_all, event_parameter, holds_state, is_binary, tagged,
+};
 use crate::label::kebab;
 use crate::octets::hex;
 
@@ -256,7 +258,11 @@ impl ValueFormat<'_> {
                 _ => Datum::List(items),
             };
         }
-        let Some(values) = decode_all(data) else {
+        let values = decode_all(data);
+        if self.holds_tags(property, data, values.as_deref()) {
+            return tagged::tagged(data, self.floats).1;
+        }
+        let Some(values) = values else {
             return Datum::Raw { raw: hex(data) };
         };
         match values.as_slice() {
