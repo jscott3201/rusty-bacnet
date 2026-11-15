@@ -31,6 +31,12 @@ tokio = { workspace = true, features = ["sync", "time"] }
 # transports draw from it already.
 getrandom = { workspace = true }
 
+[features]
+# A hook for tests, this crate's and other crates': fixed waits before a
+# node's Network-Number-Is answer in place of random ones (#2597). Not for
+# production builds.
+test-support = []
+
 [dev-dependencies]
 bacnet-transport = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }

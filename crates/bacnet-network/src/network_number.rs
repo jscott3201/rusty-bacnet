@@ -112,7 +112,9 @@ impl LocalNetworkNumber {
 }
 
 mod answer;
-pub use answer::{ANSWER_DELAY_MAX, ANSWER_DELAY_MIN, DelayedAnswer, says_as_much};
+#[cfg(any(test, feature = "test-support"))]
+pub use answer::queue_answer_waits;
+pub use answer::{ANSWER_DELAY_MAX, ANSWER_DELAY_MIN, DelayedAnswer};
 
 #[cfg(test)]
 mod tests;

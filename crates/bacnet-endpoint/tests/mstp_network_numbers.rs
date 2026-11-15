@@ -10,6 +10,7 @@ use bacnet_encoding::{
     apdu::{Apdu, decode_apdu},
     npdu::decode_npdu,
 };
+use bacnet_network::network_number::{ANSWER_DELAY_MAX, ANSWER_DELAY_MIN};
 use bacnet_transport::{
     mstp::MstpExecutionMode, mstp::MstpThreadConfig, mstp::codec::FrameType, port::TransportPort,
     test_transport::TestTransport,
@@ -18,9 +19,22 @@ use bacnet_types::{
     enums::{ObjectType, PropertyIdentifier},
     primitives::ObjectIdentifier,
 };
+use std::time::Duration;
 use support::*;
 
-async fn controls(role: Role, mode: MstpExecutionMode) {
+/// How the walk asks its first question once the number is known.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Clock {
+    /// The test's paused time: the walk asks by broadcast too, and sees
+    /// the answer come after the node's wait (#2597).
+    Paused,
+    /// The host's clock: every question goes to the node alone, since a
+    /// broadcast one would leave an answer due at a time the walk can't
+    /// place.
+    Wall,
+}
+
+async fn controls(role: Role, mode: MstpExecutionMode, clock: Clock) {
     let (mut owner, mut peer) = fixture(role, mode, Gates::new(false, false, false)).await;
     let link = peer.link.clone();
     // An unknown owner and a unicast announcement cannot yield an earlier reply.
@@ -29,11 +43,21 @@ async fn controls(role: Role, mode: MstpExecutionMode) {
     peer.control(NODE, &[1, 0x80, 0x13, 0, 99, 1]).await;
     peer.control(BROADCAST, &[1, 0x80, 0x12]).await;
     peer.control(BROADCAST, &[1, 0x80, 0x13, 0, 77, 0]).await;
-    // A broadcast question's answer waits (Clause 6.4.19, #2597); the
-    // question to the node alone is answered at once, and its broadcast
-    // settles the waiting one. Any second answer would carry 77 into the
-    // exact replies below.
-    peer.control(BROADCAST, &[1, 0x80, 0x12]).await;
+    if clock == Clock::Paused {
+        // A node that is not a router holds its answer to a broadcast
+        // question (Clause 6.4.19, #2597): never sooner than the shortest
+        // wait, and within the longest plus the token's way round.
+        let asked = tokio::time::Instant::now();
+        peer.control(BROADCAST, &[1, 0x80, 0x12]).await;
+        peer.number_within(77, ANSWER_DELAY_MAX + Duration::from_secs(2))
+            .await;
+        assert!(
+            asked.elapsed() >= ANSWER_DELAY_MIN,
+            "answered a broadcast question after {:?}",
+            asked.elapsed()
+        );
+    }
+    // A question to the node alone is answered at once.
     peer.control(NODE, &[1, 0x80, 0x12]).await;
     peer.number(77).await;
     for (number, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {
@@ -260,24 +284,29 @@ mode_tests!(
 mode_tests!(
     mstp_number_server_wire_tokio,
     mstp_number_server_wire_dedicated,
-    |mode| controls(Role::Server, mode).await
+    |mode| controls(Role::Server, mode, Clock::Paused).await
 );
 /// The one dedicated variant on the wall clock, the node's own runtime's:
 /// a smoke test of production timing, which host starvation can still fail
 /// (#2277).
 #[tokio::test]
 async fn mstp_number_server_wire_dedicated_wall_clock() {
-    controls(Role::Server, MstpExecutionMode::dedicated_thread()).await;
+    controls(
+        Role::Server,
+        MstpExecutionMode::dedicated_thread(),
+        Clock::Wall,
+    )
+    .await;
 }
 mode_tests!(
     mstp_number_endpoint_wire_tokio,
     mstp_number_endpoint_wire_dedicated,
-    |mode| controls(Role::Endpoint, mode).await
+    |mode| controls(Role::Endpoint, mode, Clock::Paused).await
 );
 mode_tests!(
     mstp_number_client_wire_tokio,
     mstp_number_client_wire_dedicated,
-    |mode| controls(Role::Client, mode).await
+    |mode| controls(Role::Client, mode, Clock::Paused).await
 );
 mode_tests!(
     mstp_number_held_producer_preserves_application_progress_tokio,

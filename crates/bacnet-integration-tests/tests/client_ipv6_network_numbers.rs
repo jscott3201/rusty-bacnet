@@ -123,11 +123,10 @@ async fn normal_client_network_number_wire() {
         receive_fence(&peer, local).await;
         send(&peer, group, true, QUERY).await; // UNKNOWN broadcast is silent too.
         send(&peer, group, true, &number(77, 0)).await;
-        // A broadcast question's answer waits (Clause 6.4.19, #2597); the
-        // unicast one is answered at once, and that broadcast settles the
-        // waiting answer. The exact replies after this are asked for by
-        // unicast.
-        send(&peer, group, true, QUERY).await;
+        // Every exact reply is asked for by unicast, which is answered at
+        // once. A broadcast question's answer waits up to ten seconds
+        // (Clause 6.4.19, #2597), which is tested on paused time, not on
+        // this wall clock.
         send(&peer, local, false, QUERY).await;
         expect_number(observer.number(), local, observation_index, false, 77).await;
         for (value, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {
@@ -259,10 +258,6 @@ async fn foreign_client_network_number_wire() {
         forward(&bbmd, local, &number(77, 1)).await;
         send(&bbmd, local, false, QUERY).await;
         expect_number(local_number(&bbmd), local, index, true, 77).await;
-        // Actual UDP unicast delivery of Forwarded-NPDU still represents a
-        // group, so this question's answer waits (#2597); the next unicast
-        // question's answer settles it.
-        forward(&bbmd, local, QUERY).await;
         for (value, flag, expected) in [(78, 0, 77), (79, 1, 79)] {
             forward(&bbmd, local, &number(value, flag)).await;
             send(&bbmd, local, false, QUERY).await;

@@ -42,7 +42,9 @@ pub const ANSWER_DELAY_MIN: Duration = Duration::from_millis(500);
 pub const ANSWER_DELAY_MAX: Duration = Duration::from_secs(10);
 
 /// One node's answer to What-Is-Network-Number: none pending, or one due at
-/// a deadline. There is never more than one.
+/// a deadline. There is never more than one. Hidden: it is the stack's own
+/// owners' machinery, shared across its crates, not an application API.
+#[doc(hidden)]
 #[derive(Debug, Default)]
 pub struct DelayedAnswer {
     due: Option<Instant>,
@@ -76,16 +78,12 @@ impl DelayedAnswer {
 
     /// A Network-Number-Is with `number` and `flag` was heard, and `ours`
     /// is this node's number after applying it. Drops the pending answer
-    /// when the heard one says as much ([`says_as_much`]).
+    /// when the heard one says as much: the same number, and the configured
+    /// flag if this node's answer would carry it.
     pub fn heard(&mut self, ours: NetworkNumber, number: u16, flag: u8) {
         if says_as_much(ours, number, flag) {
             self.due = None;
         }
-    }
-
-    /// Whether an answer is waiting for its deadline.
-    pub fn is_pending(&self) -> bool {
-        self.due.is_some()
     }
 
     /// Wait for the pending answer's deadline; forever when none is
@@ -110,15 +108,36 @@ impl DelayedAnswer {
 /// number, and the configured flag when that answer would carry it. Only a
 /// node configured with its number sends the flag (Clause 6.4.20); one that
 /// learned it, from a configured announcement or not, sends it clear.
-pub fn says_as_much(ours: NetworkNumber, number: u16, flag: u8) -> bool {
+fn says_as_much(ours: NetworkNumber, number: u16, flag: u8) -> bool {
     let (our_number, quality) = ours.snapshot();
     let our_flag = u8::from(quality == 3);
     our_number != 0 && number == our_number && flag >= our_flag
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static QUEUED_WAITS: std::cell::RefCell<std::collections::VecDeque<Duration>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+/// Give the next broadcast questions taken in on this thread these waits,
+/// in order, in place of random ones; once they are used up the waits are
+/// random again. For a test of several nodes on one current-thread
+/// runtime, where which node answers first has to be known: hand each node
+/// its question in turn, so the waits go to the nodes in that order.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn queue_answer_waits(waits: impl IntoIterator<Item = Duration>) {
+    QUEUED_WAITS.with(|queued| queued.borrow_mut().extend(waits));
+}
+
 /// A wait drawn from the OS's random source. Without one the node waits
 /// the longest, which leaves the answer to every other node first.
 fn answer_delay() -> Duration {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(wait) = QUEUED_WAITS.with(|queued| queued.borrow_mut().pop_front()) {
+        return wait;
+    }
     let mut random = [0u8; 4];
     match getrandom::fill(&mut random) {
         Ok(()) => delay_from(u32::from_ne_bytes(random)),

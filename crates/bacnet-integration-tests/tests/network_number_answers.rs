@@ -10,7 +10,7 @@
 use std::sync::{Arc, Mutex};
 
 use bacnet_client::client::BACnetClient;
-use bacnet_network::network_number::{ANSWER_DELAY_MAX, ANSWER_DELAY_MIN};
+use bacnet_network::network_number::{ANSWER_DELAY_MAX, queue_answer_waits};
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -110,6 +110,26 @@ impl Segment {
         };
         self.carry(ASKER, &frame);
         tokio::time::sleep(TURN).await;
+    }
+
+    /// Broadcast the question from the asker's station, reaching the ports
+    /// one turn apart in the order they joined, so waits queued with
+    /// `queue_answer_waits` go to the nodes in that order.
+    async fn ask_each_in_turn(&self) {
+        let ports = self.ports.lock().unwrap().clone();
+        for (_, port) in ports {
+            port.try_send(ReceivedNpdu {
+                npdu: Bytes::from_static(QUERY),
+                source_mac: MacAddr::from_slice(&[ASKER]),
+                link_layer_group: true,
+                data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
+                direct_response: None,
+                reply_tx: None,
+            })
+            .expect("a port's queue has room");
+            tokio::time::sleep(TURN).await;
+        }
     }
 
     /// The answers noted since the last look.
@@ -241,8 +261,8 @@ async fn a_router_and_five_nodes_give_one_answer() {
 }
 
 /// With no router, the nodes that know the number answer for the segment:
-/// the first whose wait ends, and no node that heard it. (Nodes whose
-/// waits end in the same instant would each answer; none answers later.)
+/// the one whose wait ends first, and no node that heard it. The waits are
+/// fixed here, so the node at MAC 20 is first, two seconds on.
 #[tokio::test(start_paused = true)]
 async fn without_a_router_the_first_node_answers_for_all() {
     let segment = Arc::new(Segment::default());
@@ -260,24 +280,19 @@ async fn without_a_router_the_first_node_answers_for_all() {
     assert_eq!(announced[0].from, ASKER);
     each_answers_when_asked_alone(&segment).await;
 
+    queue_answer_waits([5, 3, 7, 2, 9].map(Duration::from_secs));
     let asked = Instant::now();
-    segment.say(None, QUERY).await;
+    segment.ask_each_in_turn().await;
     tokio::time::sleep(ANSWER_DELAY_MAX * 2).await;
     let answers = segment.answers();
-    let first = answers.first().expect("some node answers");
-    let waited = first.at - asked;
-    assert!(
-        (ANSWER_DELAY_MIN..=ANSWER_DELAY_MAX).contains(&waited),
-        "inside the window: {waited:?}"
+    assert_eq!(answers.len(), 1, "one answer for the segment: {answers:?}");
+    assert_eq!(
+        (answers[0].from, answers[0].number, answers[0].flag),
+        (NODES[3], NETWORK, 0)
     );
-    for answer in &answers {
-        assert_eq!((answer.number, answer.flag), (NETWORK, 0), "{answer:?}");
-        assert_eq!(answer.at, first.at, "none after the first: {answers:?}");
-    }
-    assert!(
-        answers.len() < NODES.len(),
-        "not one from each: {answers:?}"
-    );
+    let waited = answers[0].at - asked;
+    let two = Duration::from_secs(2);
+    assert!((two..two + TURN * 5).contains(&waited), "{waited:?}");
 
     nodes.stop().await;
 }

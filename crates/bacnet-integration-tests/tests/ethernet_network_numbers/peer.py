@@ -62,9 +62,8 @@ def run():
         send(BROADCAST, number(77))
         send(owner, QUERY)
         expect(number(77, 0))
-        # A broadcast question's answer waits (Clause 6.4.19, #2597); the next
-        # question to the owner alone is answered at once and settles it.
-        send(BROADCAST, QUERY)
+        # No broadcast question once the number is known: its answer waits
+        # up to ten seconds (Clause 6.4.19, #2597), tested on paused time.
         for value, flag, result in [(78, 0, 77), (79, 1, 79), (80, 0, 79), (81, 1, 81)]:
             send(BROADCAST, number(value, flag))
             send(owner, QUERY)

@@ -41,10 +41,10 @@ Supported owners consume What-Is-Network-Number and Network-Number-Is automatica
 | Any nonconfigured learned state + valid broadcast NNI, flag 1 | Learn with configured precedence; later flag-0 announcements cannot replace it |
 | Locally CONFIGURED + conflicting NNI | Keep configuration; emit a debug diagnostic |
 | Known state + valid local unicast query | Send a local-broadcast NNI at once; learned states transmit flag 0 |
-| Known state + valid local broadcast query | Send that NNI after a random wait of 0.5 to 10 seconds, once for all queries in the wait, unless another node's NNI is heard first |
+| Known state + valid local broadcast query | Send that NNI after a random wait of 0.5 to 10 seconds, once for all queries in the wait, unless a matching Network-Number-Is (next row) is heard first |
 | Answer waiting + broadcast NNI with the owner's number (flag 1 when the owner is CONFIGURED) | Drop the waiting answer |
 
-These owners are not routers, so Clause 6.4.19 lets them wait before answering a broadcast query and stay quiet when another device answers first. A segment with many of them then answers a query once, with a router's answer when a router is there, since a `BACnetRouter` answers at once. A heard NNI is learned from first and compared after, so an owner that takes the announced number over counts as agreeing with it.
+These owners are not routers, so Clause 6.4.19 lets them wait before answering a broadcast query and stay quiet when another device answers first. A segment with many of them then gives about one answer to a query, a router's when a router is there, since a `BACnetRouter` answers at once. A configured owner still answers after a learned one, and two owners whose waits end together both answer. On an MS/TP trunk a second answer is possible too: a frame already queued for the token cannot be recalled when another node's answer arrives. A heard NNI is learned from first and compared after, so an owner that takes the announced number over counts as agreeing with it.
 
 Routed controls, malformed payloads and unicast NNI are ignored. Rejection of zero, reserved 65535 and flags beyond 0/1 is the implementation's validation policy. A Forwarded-NPDU can be a logical broadcast even when its UDP hop is unicast; it still has to pass that mode's transport admission rules. Learning a number does not authenticate its origin.
 

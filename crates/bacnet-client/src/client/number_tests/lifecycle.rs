@@ -7,7 +7,7 @@ async fn client_number_cancelled_stop_retains_task_joins_and_transport_cleanup()
     inject(&inbound, &number(77, 1), true).await;
     inject(&inbound, QUERY, false).await;
     bounded(gates.entered.acquire()).await.unwrap().forget();
-    inject(&inbound, QUERY, true).await;
+    inject(&inbound, QUERY, false).await;
     gates.hold_stop.store(true, Ordering::SeqCst);
     {
         let stop = client.stop();
@@ -58,7 +58,7 @@ async fn client_number_drop_aborts_pending_and_queued_replies() {
     inject(&inbound, &number(77, 1), true).await;
     inject(&inbound, QUERY, false).await;
     bounded(gates.entered.acquire()).await.unwrap().forget();
-    inject(&inbound, QUERY, true).await;
+    inject(&inbound, QUERY, false).await;
     drop(client);
     bounded(gates.dropped.acquire()).await.unwrap().forget();
     bounded(gates.transport_dropped.acquire())

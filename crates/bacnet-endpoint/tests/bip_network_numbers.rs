@@ -41,7 +41,8 @@ async fn forward(socket: &UdpSocket, target: SocketAddrV4, npdu: &[u8]) {
 /// Ask `target` for its number by unicast, which it answers at once. The
 /// answer to a broadcast question waits up to ten seconds (Clause 6.4.19,
 /// #2597), on paused time in the owners' own tests, so the exact replies
-/// here are all asked for this way.
+/// here are all asked for this way: a broadcast question on the wall
+/// clock would leave an answer due at a time the test can't place.
 async fn ask(socket: &UdpSocket, target: SocketAddrV4) {
     send(socket, target, &frame(0x0a, QUERY)).await;
 }
@@ -110,11 +111,6 @@ async fn endpoint_number_foreign_client_wire_and_alternate_sender() {
         forward(&alternate, local, QUERY).await;
         fence(&alternate, local).await;
         forward(&bbmd, local, &number(77, 0)).await;
-        // The forwarded question is a broadcast, so its answer waits; the
-        // unicast one is answered at once, and that broadcast settles the
-        // waiting answer. A second answer would carry 77 into the exact
-        // replies below.
-        forward(&bbmd, local, QUERY).await;
         ask(&alternate, local).await;
         expect_number(&bbmd, local, 9, 77).await;
         // A foreign device takes a Forwarded-NPDU only from its BBMD by unicast
@@ -207,9 +203,6 @@ async fn endpoint_number_bbmd_server_wire_admission() {
         ask(&peer, local).await;
         fence(&peer, local).await;
         send(&peer, group, &frame(0x0b, &number(77, 0))).await;
-        // The broadcast question's answer waits; the unicast one is
-        // answered at once, and that broadcast settles the waiting answer.
-        send(&peer, group, &frame(0x0b, QUERY)).await;
         ask(&peer, local).await;
         expect_number(&observer, local, 0x0b, 77).await;
         forward(&impostor, local, &number(200, 1)).await;

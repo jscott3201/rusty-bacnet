@@ -42,19 +42,19 @@ fn the_wait_covers_the_window_and_never_leaves_it() {
 async fn a_broadcast_question_is_answered_inside_the_window() {
     let mut answer = DelayedAnswer::new();
     assert!(!answer.asked(learned(7, 0), true), "not at once");
-    assert!(answer.is_pending());
+    assert!(answer.due.is_some());
     let asked = Instant::now();
     assert!(
         !due_within(&answer, ANSWER_DELAY_MIN - Duration::from_millis(1)).await,
         "never before the shortest wait"
     );
-    assert!(answer.is_pending(), "a wait cut short keeps the answer");
+    assert!(answer.due.is_some(), "a wait cut short keeps the answer");
     answer.due().await;
     assert!(asked.elapsed() <= ANSWER_DELAY_MAX);
     // Due stays due until the caller takes it.
     assert!(due_within(&answer, Duration::ZERO).await);
     answer.taken();
-    assert!(!answer.is_pending());
+    assert!(answer.due.is_none());
     assert!(!due_within(&answer, ANSWER_DELAY_MAX * 2).await);
 }
 
@@ -72,10 +72,10 @@ async fn a_second_question_keeps_the_first_deadline() {
 async fn a_question_to_the_node_alone_is_answered_now_and_settles_a_pending_one() {
     let mut answer = DelayedAnswer::new();
     assert!(answer.asked(learned(7, 0), false));
-    assert!(!answer.is_pending());
+    assert!(answer.due.is_none());
     answer.asked(learned(7, 0), true);
     assert!(answer.asked(learned(7, 0), false));
-    assert!(!answer.is_pending(), "the answer sent now is a broadcast");
+    assert!(answer.due.is_none(), "the answer sent now is a broadcast");
 }
 
 #[tokio::test(start_paused = true)]
@@ -83,7 +83,7 @@ async fn a_node_without_a_number_has_no_answer() {
     let mut answer = DelayedAnswer::new();
     for broadcast in [false, true] {
         assert!(!answer.asked(NetworkNumber::default(), broadcast));
-        assert!(!answer.is_pending());
+        assert!(answer.due.is_none());
     }
 }
 
@@ -121,10 +121,25 @@ async fn a_heard_answer_drops_the_pending_one_only_when_it_says_as_much() {
     answer.heard(configured(7), 7, 0);
     answer.heard(configured(7), 8, 1);
     assert!(
-        answer.is_pending(),
+        answer.due.is_some(),
         "a learned or differing answer leaves it"
     );
     answer.heard(configured(7), 7, 1);
-    assert!(!answer.is_pending());
+    assert!(answer.due.is_none());
     assert!(!due_within(&answer, ANSWER_DELAY_MAX * 2).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn queued_waits_are_used_in_order_before_random_ones() {
+    queue_answer_waits([Duration::from_secs(3), Duration::from_secs(1)]);
+    let asked = Instant::now();
+    for wait in [3, 1] {
+        let mut answer = DelayedAnswer::new();
+        answer.asked(configured(7), true);
+        assert_eq!(answer.due, Some(asked + Duration::from_secs(wait)));
+    }
+    let mut answer = DelayedAnswer::new();
+    answer.asked(configured(7), true);
+    let wait = answer.due.unwrap() - asked;
+    assert!((ANSWER_DELAY_MIN..=ANSWER_DELAY_MAX).contains(&wait));
 }

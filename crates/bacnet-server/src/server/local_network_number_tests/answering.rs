@@ -178,3 +178,112 @@ async fn stopping_in_the_wait_sends_nothing() {
         assert!(sent.is_empty(), "{:?}", sent.frames());
     }
 }
+
+/// An answer that came due while the database was busy is not lost when a
+/// control arrives first: the wait for the database is cut off for the
+/// control, and the answer, still pending, goes out after it.
+#[tokio::test(start_paused = true)]
+async fn an_answer_cut_off_at_the_database_still_goes_out() {
+    let started = configured().await;
+    started.control(QUERY, true).await;
+    let held = started.server.database().clone().write_owned().await;
+    // The answer comes due and its owner queues for the database.
+    tokio::time::sleep(ANSWER_DELAY_MAX + TURN).await;
+    assert_eq!(started.answers(), NONE);
+    // A control that settles nothing: a learned number against the
+    // configured one. Taking it drops the owner's wait for the database.
+    started.control(&number_is(8, 0), true).await;
+    drop(held);
+    tokio::time::sleep(TURN * 3).await;
+    assert_eq!(started.answers(), [(THIS_NETWORK, 1)]);
+    tokio::time::sleep(ANSWER_DELAY_MAX * 2).await;
+    assert_eq!(started.answers(), NONE, "once");
+    started.stop().await;
+}
+
+/// One answer seen on a shared segment: which node sent it, what it
+/// carried, and how long after the question.
+#[derive(Debug, PartialEq, Eq)]
+struct Heard {
+    node: usize,
+    number: u16,
+    flag: u8,
+    after: Duration,
+}
+
+/// Put `nodes` on one segment, ask them all by broadcast, and carry every
+/// answer to the other nodes until all waits are over. The nodes get the
+/// question in order, one turn apart, so `waits` go to them in that order
+/// (`queue_answer_waits`); time moves a millisecond at a time, so an answer
+/// reaches the others before any later wait ends.
+async fn ask_the_segment(nodes: &[Started], waits: &[u64]) -> Vec<Heard> {
+    bacnet_network::network_number::queue_answer_waits(
+        waits.iter().map(|seconds| Duration::from_secs(*seconds)),
+    );
+    let asked = tokio::time::Instant::now();
+    for node in nodes {
+        node.control(QUERY, true).await;
+    }
+    let mut heard = Vec::new();
+    while asked.elapsed() < ANSWER_DELAY_MAX * 2 {
+        tokio::time::sleep(TURN).await;
+        for (index, node) in nodes.iter().enumerate() {
+            for (number, flag) in node.answers() {
+                heard.push(Heard {
+                    node: index,
+                    number,
+                    flag,
+                    after: asked.elapsed(),
+                });
+                for (other, peer) in nodes.iter().enumerate() {
+                    if other != index {
+                        peer.feed(&number_is(number, flag), true).await;
+                    }
+                }
+            }
+        }
+    }
+    heard
+}
+
+/// `after` is `seconds` after the question, give or take the turns the
+/// nodes took the question in.
+fn about(after: Duration, seconds: u64) -> bool {
+    let wait = Duration::from_secs(seconds);
+    (wait..wait + TURN * 10).contains(&after)
+}
+
+/// Several servers configured with the same number and no router: the one
+/// whose wait ends first answers, and the others, hearing a configured
+/// answer for their number, stay quiet.
+#[tokio::test(start_paused = true)]
+async fn configured_servers_on_a_segment_give_one_answer() {
+    let nodes = [configured().await, configured().await, configured().await];
+    let heard = ask_the_segment(&nodes, &[4, 2, 6]).await;
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!((heard[0].node, heard[0].number, heard[0].flag), (1, 7, 1));
+    assert!(about(heard[0].after, 2), "{heard:?}");
+    for node in nodes {
+        node.stop().await;
+    }
+}
+
+/// A learned node that answers first doesn't silence a configured one,
+/// whose answer says more (two answers); a configured one that answers
+/// first silences the learned node (one answer).
+#[tokio::test(start_paused = true)]
+async fn a_learned_answer_first_leaves_the_configured_one() {
+    let nodes = [configured().await, taught(1).await];
+    let heard = ask_the_segment(&nodes, &[4, 2]).await;
+    assert_eq!(heard.len(), 2, "{heard:?}");
+    assert_eq!((heard[0].node, heard[0].number, heard[0].flag), (1, 7, 0));
+    assert_eq!((heard[1].node, heard[1].number, heard[1].flag), (0, 7, 1));
+    assert!(about(heard[0].after, 2) && about(heard[1].after, 4));
+
+    let heard = ask_the_segment(&nodes, &[2, 4]).await;
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!((heard[0].node, heard[0].number, heard[0].flag), (0, 7, 1));
+    for node in nodes {
+        node.stop().await;
+    }
+}
