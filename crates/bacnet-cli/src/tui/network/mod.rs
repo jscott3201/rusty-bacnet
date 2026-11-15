@@ -212,12 +212,13 @@ mod tests {
         };
         assert!(matches!(probe_error(&success), Probe::Unreachable(_)));
         assert!(read_error(&success).starts_with("unexpected reply: "));
-        let local = BvlcExchangeError::Transport(bacnet_types::error::Error::Encoding(
-            "B/IP management client is stopped".into(),
+        // What a request returns once its transport has stopped (#2612).
+        let local = BvlcExchangeError::Transport(bacnet_types::error::Error::Transport(
+            std::io::Error::new(std::io::ErrorKind::NotConnected, "Transport not started"),
         ));
         assert_eq!(
             probe_error(&local),
-            Probe::Unreachable("encoding error: B/IP management client is stopped".into())
+            Probe::Unreachable("transport error: Transport not started".into())
         );
         assert!(read_error(&local).starts_with("unreachable: "));
         let mac = mac("10.0.0.1:47809".parse().unwrap());

@@ -658,6 +658,33 @@ pub(crate) fn bdt_row(row: &BdtEntry) -> (String, String) {
     )
 }
 
+/// FDT entries as Python reads them: a dict per entry with `address`
+/// (`"ip:port"`), `ttl` and `seconds_remaining`.
+pub(crate) fn fdt_rows(
+    py: Python<'_>,
+    entries: &[bacnet_transport::bbmd::FdtEntryWire],
+) -> PyResult<Py<PyAny>> {
+    let list = pyo3::types::PyList::empty(py);
+    for entry in entries {
+        let dict = PyDict::new(py);
+        let at = SocketAddrV4::new(Ipv4Addr::from(entry.ip), entry.port);
+        dict.set_item("address", at.to_string())?;
+        dict.set_item("ttl", entry.ttl)?;
+        dict.set_item("seconds_remaining", entry.seconds_remaining)?;
+        list.append(dict)?;
+    }
+    Ok(list.into_any().unbind())
+}
+
+/// The six-octet B/IP MAC of `"ip"` or `"ip:port"`, a BVLC request's target.
+pub(crate) fn bip_mac(text: &str, what: &str) -> PyResult<[u8; 6]> {
+    let address = parse_address(text, what)?;
+    let mut mac = [0u8; 6];
+    mac[..4].copy_from_slice(&address.ip().octets());
+    mac[4..].copy_from_slice(&address.port().to_be_bytes());
+    Ok(mac)
+}
+
 /// A BDT row: `"ip[:port]"`, its broadcasts forwarded by unicast, or
 /// `("ip[:port]", "mask")`.
 pub(crate) fn bdt_entry(row: &Bound<'_, PyAny>) -> PyResult<BdtEntry> {

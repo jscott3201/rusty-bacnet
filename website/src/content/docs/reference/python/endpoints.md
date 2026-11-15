@@ -359,6 +359,35 @@ def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]
 How the foreign-device registration is going (#938), as for
 `BACnetClient`. RuntimeError before start and after close.
 
+### BipEndpoint.read_bdt
+
+```python
+def read_bdt(self, address: str) -> Awaitable[list[tuple[str, str]]]
+```
+
+Read the Broadcast Distribution Table of the BBMD at `address`
+(`"ip"` or `"ip:port"`) through this endpoint's own socket, beside
+the roles' traffic (#2612), as `BACnetClient.read_bdt` does: the
+same `("ip:port", "mask")` rows, and the same errors: a NAK raises
+BacnetBvlcNakError with its `result_code` (0x0020 from a node that
+is no BBMD), no answer within 3 seconds BacnetTimeoutError. A bad
+address raises ValueError before I/O; RuntimeError before start and
+after close, and for a read that `close()` cuts off (`close()`
+doesn't wait for one). A cancelled read gives its request up, so the
+same read can start again at once; the same read beside one still
+running is refused, as `BACnetClient`'s is.
+
+### BipEndpoint.read_fdt
+
+```python
+def read_fdt(self, address: str) -> Awaitable[list[FdtEntry]]
+```
+
+Read the Foreign Device Table of the BBMD at `address` through
+this endpoint's own socket (#2612), as `BACnetClient.read_fdt`
+does, with the errors of `read_bdt`. The BVLC writes stay on
+`BACnetClient`.
+
 ### BipEndpoint.broadcast_i_am
 
 ```python
@@ -1129,6 +1158,11 @@ so Event\_State stays as it is. RuntimeError before `start()`.
 Client role cloned from a running endpoint (no lifecycle).
 
 Initiates `read_property`, `read_range`, `read_property_multiple` and direct B/IP `write_property` through the owner's single transport.
+The reads take a `str` address on the local link or a `RoutedTarget`
+for a station behind a router (#2612): through its `router`, or, with
+none, as one broadcast on the local link per request that names the
+destination network (see `RoutedTarget`). A router given as a
+broadcast or group address raises BacnetError before anything is sent.
 After the owner closes, calls fail closed with `BacnetError`.
 
 ### EndpointClient.read_property
@@ -1136,7 +1170,7 @@ After the owner closes, calls fail closed with `BacnetError`.
 ```python
 def read_property(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     property_id: PropertyIdentifier,
     array_index: Optional[int] = None,
@@ -1148,7 +1182,15 @@ Read a property through the shared transport.
 ACK object/property/index must match. Device/Network Port instance 4194303
 requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
 BacnetError; this method returns the property value, not ACK metadata,
-shaped as `PropertyValue` describes for read results.
+shaped as `PropertyValue` describes for read results. A routed
+read goes to the router, or by local broadcast, with the station's
+network and MAC as its destination; the answer relayed from the
+station completes it, and a second copy (two routers forwarding one
+broadcast) is dropped and counted in `status()`'s
+`unclaimed_terminal`. It is audited and paced as a direct read is.
+A router that can't reach the network may send back a
+Reject-Message-To-Network, which this read doesn't report: it ends
+at its timeout with BacnetTimeoutError.
 
 ### EndpointClient.write_property
 
@@ -1166,7 +1208,8 @@ def write_property(
 ) -> Awaitable[None]
 ```
 
-Write to a direct IPv4 B/IP peer through the shared requester.
+Write to a direct IPv4 B/IP peer through the shared requester; it
+takes no `RoutedTarget`.
 
 Commandability is required even without a source Reporter. It controls
 Audit filtering, never the wire priority. Omitted commandable priority
@@ -1181,7 +1224,7 @@ After source admission, caller cancellation does not cancel the attempt.
 ```python
 def read_property_multiple(
     self,
-    address: str,
+    address: str | RoutedTarget,
     specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]],
 ) -> Awaitable[list[ReadAccessResult]]
 ```
@@ -1199,7 +1242,7 @@ BacnetError. Returned dictionaries share standalone RPM conversion.
 ```python
 def read_range(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     property_id: PropertyIdentifier,
     array_index: Optional[int] = None,
@@ -1237,7 +1280,7 @@ Decode a log's records with `decode_log_records`.
 ```python
 def read_log_page(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     cursor: LogCursor = None,
     page_size: int = 100,
@@ -1262,7 +1305,8 @@ records don't decode raises BacnetError, dropping the records before
 the failing one; an answer that breaks a rule the reader can't
 tolerate, such as an echo that doesn't match, raises
 BacnetReadRangeViolationError. A non-log object or a `page_size`
-outside 1..=32767 raises ValueError before I/O.
+outside 1..=32767 raises ValueError before I/O. Every request of a
+page, the count reads included, goes to `address`.
 
 ### EndpointClient.service_scope
 
@@ -1270,7 +1314,8 @@ outside 1..=32767 raises ValueError before I/O.
 def service_scope(self) -> dict[str, Any]
 ```
 
-Narrow scope: initiates reads and direct B/IP `write_property`.
+Narrow scope: initiates reads, direct or routed, and direct B/IP
+`write_property`.
 
 ## EndpointServer
 

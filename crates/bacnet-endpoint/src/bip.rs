@@ -14,8 +14,10 @@
 //! alternate forwarders, and Both requester/responder progress with cleanup.
 //! The modes themselves run on the same transport as the standalone client
 //! and server. [`EndpointSession::foreign_registration`] reports a foreign
-//! device's registration. Live BVLC queries (`read_bdt` / `write_bdt` /
-//! `read_fdt` / …) stay on [`BipTransport`].
+//! device's registration, and [`EndpointSession::bvlc_tables`] reads a
+//! BBMD's tables through the session's socket (#2612). The BVLC writes
+//! (`write_bdt`, `delete_fdt_entry`, a one-shot registration) stay on
+//! [`BipTransport`].
 //!
 //! ```no_run
 //! use std::net::Ipv4Addr;
@@ -52,8 +54,9 @@ use crate::session::{EndpointSession, SessionConfig, SessionRole};
 /// Concrete B/IP endpoint builder.
 ///
 /// [`mode`](Self::mode) sets the B/IP mode, as on the standalone client and
-/// server builders; live BVLC queries (`read_bdt`/`write_bdt`/`read_fdt`/…)
-/// stay on [`BipTransport`].
+/// server builders. A session it builds reads a BBMD's tables through
+/// [`EndpointSession::bvlc_tables`]; the BVLC writes stay on
+/// [`BipTransport`].
 pub struct BipEndpointBuilder {
     interface: Ipv4Addr,
     port: u16,
@@ -382,13 +385,19 @@ impl BipEndpointBuilder {
     /// in [`EndpointSession`]. Bind-count proofs use a counting test double
     /// plus real-socket corroboration (single nonzero local MAC/port).
     pub fn build_session(self) -> Result<EndpointSession<BipTransport>, Error> {
-        let mut bip_status = None;
+        let mut handles = None;
         let mut endpoint = self.compose(|builder| {
             let transport = builder.build_transport()?;
-            bip_status = Some(transport.bvlc_client_status());
+            handles = Some((
+                transport.bvlc_client_status(),
+                transport.bvlc_table_reader(),
+            ));
             Ok(transport)
         })?;
-        endpoint.bip_status = bip_status;
+        if let Some((status, tables)) = handles {
+            endpoint.bip_status = Some(status);
+            endpoint.bip_tables = Some(tables);
+        }
         Ok(endpoint)
     }
 

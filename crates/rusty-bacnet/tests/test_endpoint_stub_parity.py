@@ -146,8 +146,8 @@ class EndpointStubParityTests(unittest.TestCase):
         # Native Future-returning owner methods.
         for cls, methods in (
             (BipEndpoint, ["start", "close", "client", "server", "local_address",
-                           "status", "foreign_registration", "broadcast_i_am",
-                           "report_device_reset_local"]),
+                           "status", "foreign_registration", "read_bdt", "read_fdt",
+                           "broadcast_i_am", "report_device_reset_local"]),
             (ScEndpoint, ["start", "close", "client", "server", "local_address",
                           "status", "broadcast_i_am", "report_device_reset_local",
                           "connection_events", "connection_status"]),
@@ -253,6 +253,7 @@ class EndpointStubParityTests(unittest.TestCase):
                 "class EndpointClient",
                 "class EndpointServer",
                 "class EndpointStatus",
+                "class RoutedTarget",
             ):
                 with self.subTest(symbol=symbol):
                     self.assertIn(symbol, repo_text)

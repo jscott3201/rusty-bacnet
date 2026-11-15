@@ -6664,11 +6664,14 @@ object: a tracked object's Value_Source reads null.
 `await endpoint.status()` returns a redacted snapshot (`is_running`,
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
 `active_leases`, plus policy counters). `BipEndpoint` also takes `bbmd=` and
-`foreign_device=`, and reports a registration with `foreign_registration()`
-(see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)). `local_address()` is `"ip:port"`
+`foreign_device=`, reports a registration with `foreign_registration()`
+(see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)), and
+reads a BBMD's tables with `read_bdt()` and `read_fdt()` (see
+[Endpoint BBMD table reads](#endpoint-bbmd-table-reads)). `local_address()` is `"ip:port"`
 (BIP), VMAC hex (SC), or station string (MS/TP). Roles expose no callbacks;
 the client initiates `read_property`, `read_property_multiple`, `read_range`,
-`read_log_page` and `write_property` (see
+`read_log_page`, each to a station on the local link or behind a router (see
+[Endpoint routed reads](#endpoint-routed-reads)), and `write_property` (see
 [Endpoint direct WriteProperty](#endpoint-direct-writeproperty)), and the owner
 broadcasts one I-Am for its identity with `await endpoint.broadcast_i_am()`; concurrent use is
 `asyncio.gather` over these reads plus
@@ -6990,6 +6993,89 @@ Standalone RPM retains its broader selector profile but now rejects empty lists
 through the shared fallible encoder. A `BipEndpoint` with a source Audit
 Reporter reports these reads through it, filtered by its operations (see
 [Endpoint source Audit Reporter](#endpoint-source-audit-reporter)).
+
+### Endpoint routed reads
+
+`read_property`, `read_property_multiple`, `read_range` and `read_log_page`
+take, where they take `address`, either a `str`, which always names a
+station on the endpoint's own link, or a `RoutedTarget` naming one behind a
+router (#2612). `RoutedTarget(network, address, router=None)` takes its
+arguments in that order, positionally or by keyword:
+
+- `network`: the station's network number, an `int` from 1 to 65534.
+- `address`: the station's MAC on that network, 1 to 18 octets, as `bytes`
+  (a `DiscoveredDevice`'s `source_address`, say) or in the binding's address
+  forms: `"ip:port"` for a B/IP station (its MAC is its IPv4 address and UDP
+  port on whichever B/IP network it sits), `"bip6:N"` or `"bip6:0x..."` for
+  a B/IPv6 VMAC, two or more hex octets `"aa:bb:..."`, or one octet in
+  decimal as `"N"` or `"mstp:N"` (0 to 254): `RoutedTarget(5, "10")` equals
+  `RoutedTarget(5, b"\x0a")`. The string forms refuse 255 (MS/TP's
+  broadcast), while `b"\xff"` is taken: a station on an ARCNET network,
+  whose broadcast is 0.
+- `router`: the next hop's address on the local link, in the same forms or
+  as `bytes` (a routed `DiscoveredDevice`'s `mac_address`, or the `mac` of a
+  router `BACnetClient.discover_routers()` found), or `None`.
+
+```python
+from rusty_bacnet import RoutedTarget
+
+# MS/TP station 10 on network 5, behind the router at 192.168.1.20.
+station = RoutedTarget(5, "10", router="192.168.1.20:47808")
+async with endpoint:
+    client = await endpoint.client()
+    value = await client.read_property(station, oid, pid)
+    page = await client.read_log_page(station, log_oid)
+```
+
+With a `router`, each request goes to that router with the station's
+network and MAC as its destination. Without one, each request is one
+broadcast on the local link carrying the destination network and station,
+which the router serving that network forwards (the way to reach a network
+whose router is not known). On a B/IP network with BBMDs, or from a foreign
+device, that broadcast reaches every subnet in the BDT and every registered
+foreign device, so pass `router` for scans. The endpoint client learns no
+routes: learning a network's router once and reusing it comes with the full
+client (#2617). A `router` that is a broadcast or group address on the
+link (the configured broadcast address, 255.255.255.255, a multicast group,
+MS/TP station 255) raises `BacnetError` before anything is sent: leave the
+router out for the broadcast form.
+
+The answer the router relays from the station completes the read. When two
+routers forward one broadcast, the first answer completes it and the second
+is dropped and counted in `status()`'s `unclaimed_terminal`. A router that
+can't reach the network may send back a Reject-Message-To-Network, which
+the endpoint's read doesn't report today: the read ends at its timeout
+(`BacnetTimeoutError`); the full client reports it. A network that turns out
+to be the endpoint's own goes to the station direct, its router unused.
+Routed reads are paced and, on a `BipEndpoint` with a source Audit Reporter,
+audited as direct ones are; a record names the station by its network and
+MAC. Every request of a `read_log_page`, the count reads included, goes to
+the same target. `write_property` takes a direct address only, and
+`service_scope()` lists the same services as before.
+
+`RoutedTarget` is frozen, compares and hashes by its network and octets
+however they were written, and copies and pickles. A bad value raises
+`ValueError`, a network outside 0 to 65535 `OverflowError`, a `bool` network
+or a type other than `str` or `bytes` `TypeError`, as does a call in another
+order, since `network` takes an `int`.
+
+### Endpoint BBMD table reads
+
+`await endpoint.read_bdt(address)` and `await endpoint.read_fdt(address)`
+read the Broadcast Distribution Table and the Foreign Device Table of the
+BBMD at `address` (`"ip"` or `"ip:port"`) through the `BipEndpoint`'s own
+socket (#2612), beside its device answering and its client role's reads. They
+return what `BACnetClient.read_bdt` and `read_fdt` return, `("ip:port",
+"mask")` rows and `FdtEntry` dicts, and fail as they do (see
+[BBMD management](#bbmd-management)): a NAK raises `BacnetBvlcNakError` with
+its `result_code` (0x0020 or 0x0040 from a node that is no BBMD), no answer
+within three seconds `BacnetTimeoutError`. A bad address raises
+`ValueError` before any I/O, and both raise `RuntimeError` before `start()`
+and after `close()`, as does a read that `close()` cuts off: `close()` doesn't
+wait for one. A cancelled read gives its request up, so the same read can
+start again at once; the same read beside one still running is refused, as
+`BACnetClient`'s is. They only read: Write-BDT, Delete-FDT-Entry and a
+one-shot registration stay on `BACnetClient`.
 
 ### Migration: separately-constructed client/server to endpoint
 

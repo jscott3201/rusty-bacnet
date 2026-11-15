@@ -319,10 +319,13 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
             .read_range_with_destination(
                 bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::LocalBroadcast,
                 vec![],
-                target(),
-                PropertyIdentifier::LOG_BUFFER,
-                None,
-                None
+                bacnet_services::read_range::ReadRangeRequest {
+                    object_identifier: target(),
+                    property_identifier: PropertyIdentifier::LOG_BUFFER,
+                    property_array_index: None,
+                    range: None,
+                },
+                bacnet_services::read_range::ReadRangeValidation::Strict,
             )
             .await
             .is_err()

@@ -46,7 +46,7 @@ mod datagram;
 mod exchange;
 mod link_returns;
 pub use bacnet_bip_core::node::ExchangeRefusal;
-pub use exchange::BvlcExchangeError;
+pub use exchange::{BvlcExchangeError, BvlcGiveUp, BvlcTableReader};
 mod foreign_device;
 mod foreign_target;
 mod mode;
@@ -364,12 +364,7 @@ impl BipTransport {
 
     /// Get the socket, returning an error if not started.
     fn require_socket(&self) -> Result<&Arc<BipSocket>, Error> {
-        self.socket.as_ref().ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "Transport not started",
-            ))
-        })
+        self.socket.as_ref().ok_or_else(not_started)
     }
 
     fn spawn_bbmd_fdt_purge_task(bbmd: Arc<std::sync::Mutex<BbmdState>>) -> JoinHandle<()> {
@@ -424,13 +419,16 @@ impl BipTransport {
     /// The running node, or the error for a transport not started.
     fn require_node(&self) -> Result<&Arc<NodeHandle>, Error> {
         self.require_socket()?;
-        self.node.as_ref().ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "Transport not started",
-            ))
-        })
+        self.node.as_ref().ok_or_else(not_started)
     }
+}
+
+/// The error for a transport that isn't started.
+fn not_started() -> Error {
+    Error::Transport(std::io::Error::new(
+        std::io::ErrorKind::NotConnected,
+        "Transport not started",
+    ))
 }
 
 impl TransportPort for BipTransport {
