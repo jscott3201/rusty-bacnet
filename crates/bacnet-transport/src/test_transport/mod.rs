@@ -231,6 +231,8 @@ pub struct TestTransport {
     prepare_inner: bool,
     /// A registered Network Port's lease, held until `stop` or the drop.
     port_lease: std::sync::Mutex<Option<Arc<()>>>,
+    /// One stop at a time, as on a real link (#2617).
+    stop_gate: crate::stopping::StopGate,
 }
 
 impl TestTransport {
@@ -276,6 +278,7 @@ impl TestTransport {
                 inner: None,
                 prepare_inner: true,
                 port_lease: std::sync::Mutex::new(None),
+                stop_gate: crate::stopping::StopGate::default(),
             },
         }
     }
@@ -488,6 +491,7 @@ impl TransportPort for TestTransport {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.shared.starts.fetch_add(1, Ordering::SeqCst);
         self.shared.stopped.store(false, Ordering::Release);
+        self.stop_gate.open();
         if let Some(hook) = &self.hooks.on_start {
             hook();
         }
@@ -569,9 +573,14 @@ impl TransportPort for TestTransport {
     /// then every send fails until the next start, the `Fresh` channel
     /// closes and a held lease goes, as on a real link, even when a hook
     /// failed. A `before_stop` hook that fails ends the stop first, and
-    /// changes nothing.
+    /// changes nothing. As on a real link, a stop that comes while another
+    /// runs waits for it, and one after a stop that succeeded, before the
+    /// next start, runs nothing; every call is counted (#2617).
     async fn stop(&self) -> Result<(), Error> {
         self.shared.stops.fetch_add(1, Ordering::SeqCst);
+        let Some(stopping) = self.stop_gate.enter().await else {
+            return Ok(());
+        };
         if let Some(hook) = &self.hooks.before_stop {
             hook().await?;
         }
@@ -593,6 +602,10 @@ impl TransportPort for TestTransport {
             .unwrap_or_else(PoisonError::into_inner)
             .take();
         self.refresh_inner_limits();
+        // A stop that failed may be tried again.
+        if result.is_ok() {
+            stopping.finish();
+        }
         result
     }
 

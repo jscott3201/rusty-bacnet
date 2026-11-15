@@ -115,7 +115,6 @@ use bytes::{Bytes, BytesMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 
 #[path = "layer_issuance.rs"]
 mod issuance;
@@ -359,9 +358,9 @@ pub struct RoutedTarget<'a> {
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
-    /// Set by a start; a stop through `&self` takes it (#2617). No send or
-    /// receive locks it.
-    dispatch_task: std::sync::Mutex<Option<JoinHandle<()>>>,
+    /// The dispatch task, from a start on: a stop through `&self` aborts it
+    /// and waits for it to end (#2617). No send or receive touches it.
+    dispatch: Option<Dispatch>,
     /// Whether [`Self::start`] or [`Self::start_with_admission`] has run.
     started: bool,
     /// The [`ApduReceiver`]'s transport queue, which [`Self::stop`] and
@@ -381,6 +380,13 @@ pub struct NetworkLayer<T: TransportPort> {
     local_broadcasts: GroupDestinations,
 }
 
+/// A started layer's dispatch task: how to end it, and how to see it end.
+pub(crate) struct Dispatch {
+    pub(crate) abort: tokio::task::AbortHandle,
+    /// Its sender lives in the task's future, so every clone ends with it.
+    pub(crate) ended: tokio::sync::watch::Receiver<()>,
+}
+
 impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// Create a new network layer wrapping the given transport.
     pub fn new(transport: T) -> Self {
@@ -388,7 +394,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             local_broadcasts: transport.local_broadcast_destinations(),
             transport,
             response_scope: Default::default(),
-            dispatch_task: std::sync::Mutex::new(None),
+            dispatch: None,
             started: false,
             receiver_queue: std::sync::Weak::new(),
             network_control_tx: None,
@@ -871,13 +877,16 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ///
     /// Once it returns, every send through the layer fails with the
     /// transport's stopped error ([`TransportPort::stop`]). A second stop
-    /// waits for a first that is still stopping the transport.
+    /// waits, as the first does, for the dispatch task to end and for the
+    /// transport to stop.
     pub async fn stop(&self) -> Result<(), Error> {
         self.seal_responses();
         // The raw receiver drains what the transport queued, then ends.
         ingress::close_queue(&self.receiver_queue);
-        if let Some(task) = self.abort_dispatch_task() {
-            let _ = task.await;
+        if let Some(dispatch) = &self.dispatch {
+            dispatch.abort.abort();
+            // Ends, with an error, once the task's future has gone.
+            let _ = dispatch.ended.clone().changed().await;
         }
         self.transport.stop().await
     }
@@ -895,14 +904,10 @@ pub(crate) fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
 }
 
 impl<T: TransportPort> NetworkLayer<T> {
-    fn abort_dispatch_task(&self) -> Option<JoinHandle<()>> {
-        let task = self
-            .dispatch_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()?;
-        task.abort();
-        Some(task)
+    fn abort_dispatch_task(&self) {
+        if let Some(dispatch) = &self.dispatch {
+            dispatch.abort.abort();
+        }
     }
 }
 
@@ -910,7 +915,7 @@ impl<T: TransportPort> Drop for NetworkLayer<T> {
     fn drop(&mut self) {
         self.response_scope.seal();
         ingress::close_queue(&self.receiver_queue);
-        let _ = self.abort_dispatch_task();
+        self.abort_dispatch_task();
         self.transport.abort();
     }
 }

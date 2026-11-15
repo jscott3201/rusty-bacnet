@@ -186,3 +186,17 @@ async fn sc_stop_through_a_shared_reference_fails_every_later_send() {
     );
     other.stop().await.unwrap();
 }
+
+/// A stop before start lets go of the socket it was given, as a drop
+/// would, and a later start fails as one after a stop does (#2617).
+#[tokio::test]
+async fn sc_stop_before_start_lets_go_of_the_socket() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
+    transport.stop().await.unwrap();
+    let closed = timeout(Duration::from_secs(1), ws_hub.recv())
+        .await
+        .unwrap();
+    assert!(closed.is_err(), "the socket closed");
+    assert!(transport.start().await.is_err());
+}

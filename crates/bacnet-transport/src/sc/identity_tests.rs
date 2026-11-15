@@ -92,8 +92,8 @@ fn assert_untouched(
     assert!(!states.has_changed().unwrap());
     assert_eq!(*states.borrow(), ScConnectionState::Disconnected);
     assert!(transport.connection().is_none());
-    assert!(transport.ws.is_some());
-    assert!(transport.failover_ws.is_some());
+    assert!(transport.ws.lock().unwrap().is_some());
+    assert!(transport.failover_ws.lock().unwrap().is_some());
     assert!(transport.primary_connector.is_some());
     assert!(transport.failover_connector.is_some());
     assert!(transport.ws_shared.is_none());

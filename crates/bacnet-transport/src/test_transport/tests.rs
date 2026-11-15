@@ -537,3 +537,52 @@ async fn sends_fail_between_a_stop_and_the_next_start() {
     transport.send_unicast(&[1, 0], &[2]).await.unwrap();
     assert_eq!(handle.sent().len(), 2, "a start opens the link again");
 }
+
+/// Two stops at once run the stop hook once, and both return once it has
+/// finished; a stop after it runs nothing until a start, and one that
+/// failed is run again. Every call is counted (#2617).
+#[tokio::test(start_paused = true)]
+async fn stops_at_once_run_the_hooks_once() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let fail = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (count, failing, gate) = (Arc::clone(&runs), Arc::clone(&fail), Arc::clone(&release));
+    let transport = TestTransport::builder()
+        .on_stop(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            let (failing, gate) = (Arc::clone(&failing), Arc::clone(&gate));
+            async move {
+                gate.notified().await;
+                match failing.load(Ordering::SeqCst) {
+                    true => Err(Error::Encoding("stop refused".into())),
+                    false => Ok(()),
+                }
+            }
+        })
+        .build();
+    let handle = transport.handle();
+    let transport = Arc::new(transport);
+    fail.store(true, Ordering::SeqCst);
+    let first = tokio::spawn({
+        let transport = Arc::clone(&transport);
+        async move { transport.stop().await }
+    });
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    let second = tokio::spawn({
+        let transport = Arc::clone(&transport);
+        async move { transport.stop().await }
+    });
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "the second waits");
+    // The first fails: the second runs the hook itself, and succeeds.
+    release.notify_one();
+    assert!(first.await.unwrap().is_err());
+    fail.store(false, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    release.notify_one();
+    second.await.unwrap().unwrap();
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+    transport.stop().await.unwrap();
+    assert_eq!(runs.load(Ordering::SeqCst), 2, "nothing runs after a stop");
+    assert_eq!(handle.stops(), 3, "every call counts");
+}

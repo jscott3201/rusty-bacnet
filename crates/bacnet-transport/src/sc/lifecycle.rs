@@ -65,6 +65,9 @@ impl<W: WebSocketPort> ScTransport<W> {
         self.observer
             .disconnected(super::ScDisconnectCause::LocalClose);
 
+        // A stop before start lets go of the sockets it was given.
+        drop(lock_unstarted(&self.ws).take());
+        drop(lock_unstarted(&self.failover_ws).take());
         // Nothing publishes a socket now: take it out, so every later send
         // fails, and let it go once the lock is free.
         if let Some(slot) = &self.ws_shared {
@@ -178,10 +181,22 @@ impl<W: WebSocketPort> ScTransport<W> {
         let _ = self.abort_background_tasks();
         self.ws_shared = None;
         self.connection = None;
-        self.ws = None;
-        self.failover_ws = None;
+        *self
+            .ws
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *self
+            .failover_ws
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.direct = None;
     }
+}
+
+/// An unstarted socket's slot, locked.
+fn lock_unstarted<W>(slot: &std::sync::Mutex<Option<W>>) -> std::sync::MutexGuard<'_, Option<W>> {
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl<W: WebSocketPort> Drop for ScTransport<W> {

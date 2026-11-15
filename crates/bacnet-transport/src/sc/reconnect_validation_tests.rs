@@ -105,8 +105,8 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
                 assert!(!state.has_changed().unwrap());
                 assert_eq!(*state.borrow(), ScConnectionState::Disconnected);
                 assert!(transport.connection().is_none());
-                assert!(transport.ws.is_some());
-                assert!(transport.failover_ws.is_some());
+                assert!(transport.ws.lock().unwrap().is_some());
+                assert!(transport.failover_ws.lock().unwrap().is_some());
                 assert!(transport.ws_shared.is_none());
                 assert!(transport.recv_task.lock().unwrap().is_none());
                 assert!(transport.restore_disconnect_task.lock().unwrap().is_none());

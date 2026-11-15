@@ -123,7 +123,9 @@ pub(crate) use websocket::{CLOSE_GRACE, CLOSE_NORMAL, close_within_grace};
 /// rolled back. References (including the send slot until stop/drop or fresh
 /// publication) may retain the socket; retirement is not immediate OS closure.
 pub struct ScTransport<W: WebSocketPort> {
-    ws: Option<W>,
+    /// The primary WebSocket until start takes it; a stop before start lets
+    /// go of it, as the failover's.
+    ws: StdMutex<Option<W>>,
     /// The active hub WebSocket for the send methods, from start on. A stop
     /// takes the socket out, which fails every later send (#2617).
     ws_shared: Option<HubSlot<TappedSocket<W>>>,
@@ -146,7 +148,7 @@ pub struct ScTransport<W: WebSocketPort> {
     connect_timeout_ms: u64,
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
-    failover_ws: Option<W>,
+    failover_ws: StdMutex<Option<W>>,
     initial_hub: ScActiveHub,
     primary_connector: Option<WebSocketConnector<W>>,
     failover_connector: Option<WebSocketConnector<W>>,
@@ -209,14 +211,20 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
         let primary_ws = self
             .ws
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .ok_or_else(|| Error::Encoding("BACnet/SC transport already started".into()))?;
 
         // Every hub socket goes through the frame tap (tap.rs).
         let tap = &self.frame_tap;
         let primary_ws = Arc::new(TappedSocket::new(primary_ws, tap, self.initial_hub));
-        let mut failover_ws = (self.failover_ws.take())
-            .map(|ws| Arc::new(TappedSocket::new(ws, tap, ScActiveHub::Failover)));
+        let mut failover_ws = (self
+            .failover_ws
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take())
+        .map(|ws| Arc::new(TappedSocket::new(ws, tap, ScActiveHub::Failover)));
         let primary_connector = (self.primary_connector.as_ref())
             .map(|dial| tapped_connector(dial, tap, ScActiveHub::Primary));
         let failover_connector = (self.failover_connector.as_ref())

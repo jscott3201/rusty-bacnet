@@ -668,7 +668,9 @@ pub trait TransportPort: Send + Sync {
     /// are released, so a port can be bound again.
     /// A send already under way when the stop begins may still finish, and
     /// lets go of the link as it returns. Stop is idempotent, and one called
-    /// while another runs waits for it. A transport that can start again
+    /// while another runs waits for it: a first stop's future kept alive but
+    /// never polled again holds every later stop up, until it is dropped,
+    /// which hands the stop to the next. A transport that can start again
     /// after a stop says so in its own documentation.
     fn stop(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
