@@ -18,8 +18,9 @@ use super::test_lab::{
     serve_logged, services, stop,
 };
 use super::*;
-use crate::client::{Halt, ReadVia, Reader};
+use crate::client::{ReadVia, Reader};
 use crate::format::Datum;
+use crate::raw::InventoryHalt;
 
 /// ReadProperty and ReadPropertyMultiple, as the send log names them.
 const RP: u8 = 12;
@@ -391,7 +392,20 @@ async fn a_list_that_fails_part_way_is_an_error() {
         .inventory(&InventoryOptions::new())
         .await
         .unwrap_err();
-    assert!(error.unreachable(), "{error}");
+    assert!(error.unreachable() && error.timed_out(), "{error}");
+    // The error names the element, so it doesn't read as the whole list
+    // failing.
+    let text = error.to_string();
+    assert!(text.starts_with("Object_List element 3 of 13: "), "{text}");
+    let named = matches!(
+        error,
+        OpsError::ObjectList {
+            index: 3,
+            total: 13,
+            ..
+        }
+    );
+    assert!(named, "{error:?}");
     // The handle, following its instance, asks once where it went.
     assert_eq!(services(&log).len(), 6, "no object asked for");
     drop(device);
@@ -486,7 +500,7 @@ async fn a_stop_flag_cancels_the_reading() {
     };
     // The flag goes up as the Object_List's request leaves.
     let read = crate::raw::read_inventory(&mut reader, &InventoryOptions::new()).await;
-    assert!(matches!(read, Err(Halt::Cancelled)), "{read:?}");
+    assert!(matches!(read, Err(InventoryHalt::Cancelled)), "{read:?}");
     assert_eq!(services(&log), [RPM, RP], "no object asked for");
     stop(client, server).await;
 
@@ -508,7 +522,7 @@ async fn a_stop_flag_cancels_the_reading() {
         rpm: true,
     };
     let read = crate::raw::read_inventory(&mut reader, &InventoryOptions::new()).await;
-    assert!(matches!(read, Err(Halt::Cancelled)), "{read:?}");
+    assert!(matches!(read, Err(InventoryHalt::Cancelled)), "{read:?}");
     assert_eq!(services(&log).len(), last, "none of the batch's other 30");
     stop(client, server).await;
 }
@@ -621,4 +635,118 @@ async fn a_device_answering_one_object_at_a_time_refuses_three_batches() {
     assert_eq!(refused, 3, "{sent:?}");
     assert!(sent[after_list..].iter().all(|&service| service == RPM));
     assert_eq!(sent.len(), after_list + 3 + 42);
+}
+
+/// An object with nothing left to ask (everything its list names is
+/// already known) gets its record from what is known, with no request,
+/// by RPM and by ReadProperty alike, and the objects beside it are read
+/// as usual: the reading can't stand still on it.
+#[tokio::test(start_paused = true)]
+async fn an_object_with_nothing_to_ask_is_built_from_what_is_known() {
+    use super::read::{Own, records};
+    use super::test_lab::{row, text};
+    use bacnet_types::enums::PropertyIdentifier as P;
+    let own_object = oid(ObjectType::DEVICE, LAB);
+    let ai = oid(ObjectType::ANALOG_INPUT, 1);
+    let cases = [
+        (Faults::default(), vec![RPM]),
+        (refusing_rpm(), vec![RPM, RP, RP, RP]),
+    ];
+    for (faults, sent) in cases {
+        let (client, server, log) = lab_logged(faults).await;
+        let flag = AtomicBool::new(false);
+        let mut reader = Reader {
+            client: client.low_level(),
+            device: lab_at(),
+            instance: Some(LAB),
+            rate: client.limits(),
+            cancel: &flag,
+            rpm: true,
+        };
+        // Both properties of the Device object's list are known.
+        let own = Own {
+            object: own_object,
+            rows: vec![
+                row(P::OBJECT_NAME, text("Known")),
+                row(P::DESCRIPTION, text("Already read")),
+            ],
+        };
+        let options = InventoryOptions::new();
+        let alone = records(&mut reader, &[own_object], &options, Some(&own)).await;
+        let alone = alone.unwrap().records;
+        assert_eq!(alone.len(), 1);
+        assert_eq!(alone[0].name.as_deref(), Some("Known"));
+        assert_eq!(alone[0].description.as_deref(), Some("Already read"));
+        assert!(services(&log).is_empty(), "nothing to ask, nothing sent");
+
+        let objects = [own_object, ai, own_object];
+        let both = records(&mut reader, &objects, &options, Some(&own)).await;
+        let both = both.unwrap().records;
+        let read: Vec<_> = both.iter().map(|record| record.object).collect();
+        assert_eq!(read, objects, "in step with the list");
+        assert_eq!(both[1].name.as_deref(), Some("Zone Temp"));
+        assert_eq!(services(&log), sent);
+        stop(client, server).await;
+    }
+}
+
+/// Two rows for one object answered with their blocks in the other order
+/// don't swap: each row takes the block that starts with its own first
+/// property. A block for an object nobody asked for is skipped.
+#[tokio::test(start_paused = true)]
+async fn read_many_pairs_two_rows_of_one_object_by_their_property() {
+    let extra = oid(ObjectType::ANALOG_INPUT, 77);
+    for script in [Scripted::EndsSwapped, Scripted::Extra(extra)] {
+        let faults = Faults {
+            scripted: Some(script),
+            ..Faults::default()
+        };
+        let (client, server, log) = lab_logged(faults).await;
+        let device = lab_device(&client).await;
+        let read = device
+            .read_many(["ai:1 pv", "ai:2 pv", "ai:1 units"])
+            .await
+            .unwrap();
+        assert_eq!(services(&log), [RPM]);
+        let values: Vec<_> = read
+            .readings
+            .iter()
+            .map(|reading| reading.value.as_ref().map(|value| value.text.clone()))
+            .collect();
+        let expected = [
+            Ok("1 °C".to_string()),
+            Ok("2".to_string()),
+            Ok("degrees-celsius".to_string()),
+        ];
+        assert_eq!(values, expected);
+        assert!(read.stopped.is_none());
+        drop(device);
+        stop(client, server).await;
+    }
+}
+
+/// An older device: no ReadPropertyMultiple, and an Object_List it can't
+/// send whole (no segmentation, a small APDU). The inventory is whole all
+/// the same, by ReadProperty: the refused RPM, the summary's thirteen, the
+/// refused list, its size and thirteen elements, then each object's
+/// properties.
+#[tokio::test(start_paused = true)]
+async fn an_older_device_is_read_by_read_property_alone() {
+    let faults = Faults {
+        reject_whole_list: true,
+        ..refusing_rpm()
+    };
+    let (client, server, log) = lab_logged(faults).await;
+    let options = InventoryOptions::new();
+    let inventory = lab_device(&client).await.inventory(&options).await.unwrap();
+    let objects: Vec<_> = inventory.points.iter().map(|point| point.object).collect();
+    assert_eq!(objects, lab_objects());
+    assert!(inventory.stopped.is_none());
+    assert!(inventory.points.iter().all(|p| p.problems.is_empty()));
+    assert_eq!(count(&log, RPM), 1);
+    assert_eq!(
+        count(&log, RP),
+        13 + (1 + 1 + 13) + lab_properties(&options)
+    );
+    stop(client, server).await;
 }

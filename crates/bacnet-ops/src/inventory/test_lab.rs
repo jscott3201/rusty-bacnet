@@ -70,14 +70,19 @@ pub(crate) struct Faults {
 }
 
 /// How a scripted ReadPropertyMultiple answer differs from the request:
-/// each object's Object_Name is its label (`analog-input 1`) and every
-/// other property an unknown-property error.
+/// each object's Object_Name is its label (`analog-input 1`), its
+/// Present_Value a REAL of its instance number, its Units degrees Celsius
+/// (62), and every other property an unknown-property error.
 #[derive(Clone, Copy)]
 pub(crate) enum Scripted {
     /// The objects in the reverse of the order asked.
     Reversed,
     /// The answer leaves this object out.
     Without(ObjectIdentifier),
+    /// The first and the last object's results change places.
+    EndsSwapped,
+    /// A result for this object, which nobody asked for, comes first.
+    Extra(ObjectIdentifier),
 }
 
 impl Default for Faults {
@@ -180,22 +185,50 @@ fn scripted(script: Scripted, rest: &[u8]) -> Option<Vec<u8>> {
                 .list_of_property_references
                 .into_iter()
                 .map(|reference| {
-                    let name = reference.property_identifier == PropertyIdentifier::OBJECT_NAME;
-                    let label = crate::label::object_label(spec.object_identifier);
+                    let property = reference.property_identifier;
+                    let object = spec.object_identifier;
+                    let value = match property {
+                        PropertyIdentifier::OBJECT_NAME => {
+                            Some(text(&crate::label::object_label(object)))
+                        }
+                        PropertyIdentifier::PRESENT_VALUE => {
+                            Some(PropertyValue::Real(object.instance_number() as f32))
+                        }
+                        PropertyIdentifier::UNITS => Some(PropertyValue::Enumerated(62)),
+                        _ => None,
+                    };
+                    let unknown = (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY);
                     ReadResultElement {
-                        property_identifier: reference.property_identifier,
+                        property_identifier: property,
                         property_array_index: None,
-                        property_value: name
-                            .then(|| row(reference.property_identifier, text(&label)).1.unwrap()),
-                        error: (!name)
-                            .then_some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
+                        error: value.is_none().then_some(unknown),
+                        property_value: value.and_then(|value| row(property, value).1.ok()),
                     }
                 })
                 .collect(),
         })
         .collect();
-    if matches!(script, Scripted::Reversed) {
-        results.reverse();
+    match script {
+        Scripted::Reversed => results.reverse(),
+        Scripted::EndsSwapped => {
+            let last = results.len() - 1;
+            results.swap(0, last);
+        }
+        Scripted::Extra(object) => {
+            let pv = PropertyIdentifier::PRESENT_VALUE;
+            let element = ReadResultElement {
+                property_identifier: pv,
+                property_array_index: None,
+                property_value: row(pv, PropertyValue::Real(99.0)).1.ok(),
+                error: None,
+            };
+            let unasked = ReadAccessResult {
+                object_identifier: object,
+                list_of_results: vec![element],
+            };
+            results.insert(0, unasked);
+        }
+        Scripted::Without(_) => {}
     }
     let mut out = bytes::BytesMut::new();
     let ack = ReadPropertyMultipleACK {

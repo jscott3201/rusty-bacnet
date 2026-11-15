@@ -9,7 +9,7 @@ use bacnet_ops::inventory::{CsvOptions, Inventory, InventoryOptions, PointRecord
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::parse::parse_object_type;
-use bacnet_ops::raw::{Halt, Reader, read_inventory};
+use bacnet_ops::raw::{InventoryHalt, Reader, read_inventory};
 use bacnet_ops::{OpsError, Value};
 use bacnet_transport::port::TransportPort;
 
@@ -93,8 +93,9 @@ pub async fn inventory_cmd<T: TransportPort + 'static>(
     };
     let inventory = match read_inventory(&mut reader, &options).await {
         Ok(inventory) => inventory,
-        Err(Halt::Device(error)) => return Err(error.into()),
-        Err(Halt::Cancelled) => return Err("the inventory was stopped".into()),
+        Err(InventoryHalt::Device(error)) => return Err(error.into()),
+        // A list read element by element that failed: say which element.
+        Err(halt) => return Err(halt.to_string().into()),
     };
     // Stdout carries only the data; the notes go to stderr in every format.
     match args.layout {

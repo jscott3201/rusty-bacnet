@@ -118,6 +118,12 @@ fn sample() -> Inventory {
             point(ObjectType::ANALOG_VALUE, 10, formula),
             point(ObjectType::BINARY_INPUT, 4, at_sign),
             point(ObjectType::CHARACTERSTRING_VALUE, 1, string),
+            // A formula behind a leading space.
+            point(
+                ObjectType::TREND_LOG,
+                2,
+                vec![row(P::OBJECT_NAME, text(" =1+1"))],
+            ),
         ],
         unread: vec![oid(ObjectType::ANALOG_INPUT, 2)],
         stopped: Some(OpsError::at(
@@ -253,7 +259,7 @@ fn the_csv_quotes_what_it_must() {
     assert_eq!(CSV_HEADER.split(',').count(), 16);
     assert!(csv.ends_with('\n'));
     let rows = parse(&csv);
-    assert_eq!(rows.len(), 1 + 9);
+    assert_eq!(rows.len(), 1 + 10);
     assert!(rows.iter().all(|row| row.len() == 16), "{rows:?}");
     let zone = &rows[1];
     assert_eq!(zone[..3], ["192.168.1.10:47808", "1234", "analog-input:1"]);
@@ -326,7 +332,9 @@ fn the_csv_guards_device_text_that_reads_as_a_formula() {
     let guarded = parse(&inventory.to_csv(&CsvOptions::new()));
     let exact = parse(&inventory.to_csv(&CsvOptions::new().with_exact(true)));
     assert_ne!(guarded, exact);
-    let (formula, at_sign, string) = (7, 8, 9);
+    let (formula, at_sign, string, spaced) = (7, 8, 9, 10);
+    assert_eq!(guarded[spaced][3], "' =1+1", "before the original text");
+    assert_eq!(exact[spaced][3], " =1+1");
     assert_eq!(guarded[formula][3..5], ["'+SUM(A1)", "'-2+3"]);
     assert_eq!(exact[formula][3..5], ["+SUM(A1)", "-2+3"]);
     for rows in [&guarded, &exact] {
@@ -356,6 +364,21 @@ fn the_csv_guards_device_text_that_reads_as_a_formula() {
         ('A', false),
         ('\'', false),
     ] {
+        // Behind leading spaces and line breaks too, which don't hide it. A
+        // tab or a carriage return there is itself such white space, and
+        // counts only as the cell's very first character.
+        let spaced = format!(" \n {lead}x");
+        let guard_spaced = guard && !lead.is_whitespace();
+        let rows = vec![row(P::OBJECT_NAME, text(&spaced))];
+        let record = point(ObjectType::TREND_LOG, 1, rows);
+        let mut out = String::new();
+        record.write_csv(&mut out, &CsvOptions::new()).unwrap();
+        let expected = if guard_spaced {
+            format!("'{spaced}")
+        } else {
+            spaced.clone()
+        };
+        assert_eq!(parse(&out)[0][3], expected, "{lead:?} after whitespace");
         let name = format!("{lead}x");
         let record = point(
             ObjectType::TREND_LOG,

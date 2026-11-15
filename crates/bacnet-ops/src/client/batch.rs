@@ -306,9 +306,12 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
     let ack = path.read_property_multiple(client, specs).await;
     drop(turn);
     let ack = ack?;
-    // Each row takes the first result not yet taken that names its object,
-    // wherever the answer put it: a device may answer out of order. A row
-    // with none is missing, and the rows after it still find theirs.
+    // Each row takes a result not yet taken that names its object,
+    // wherever the answer put it: a device may answer out of order. Of two
+    // such results (two rows for one object), the first whose first
+    // property is the row's first wanted one, else the first of them. A
+    // row with none is missing, and the rows after it still find theirs; a
+    // result nobody asked for is left untaken.
     let mut results: Vec<Option<ReadAccessResult>> = ack
         .list_of_read_access_results
         .into_iter()
@@ -317,13 +320,19 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
     Ok(batch
         .iter()
         .map(|row| {
-            let found = results
-                .iter_mut()
-                .find(|slot| {
-                    slot.as_ref()
-                        .is_some_and(|result| answers(row.object, result))
+            let fits = |slot: &Option<ReadAccessResult>, exactly: bool| {
+                slot.as_ref().is_some_and(|result| {
+                    let first = result.list_of_results.first();
+                    let wanted = row.wanted.first().map(|&(property, _)| property);
+                    answers(row.object, result)
+                        && (!exactly || first.map(|e| e.property_identifier) == wanted)
                 })
-                .and_then(Option::take);
+            };
+            let at = results
+                .iter()
+                .position(|slot| fits(slot, true))
+                .or_else(|| results.iter().position(|slot| fits(slot, false)));
+            let found = at.and_then(|at| results[at].take());
             let Some(result) = found else {
                 return (row.key, Err(Missing));
             };

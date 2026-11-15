@@ -10,7 +10,7 @@ use bacnet_ops::export::s223::{
     to_turtle,
 };
 use bacnet_ops::limits::RequestLimits;
-use bacnet_ops::raw::{Halt, Reader, read_inventory};
+use bacnet_ops::raw::{InventoryHalt, Reader, read_inventory};
 use bacnet_ops::{DeviceAddress, InventoryOptions, Priority};
 use bacnet_types::enums::EngineeringUnits;
 use pyo3::exceptions::PyValueError;
@@ -71,8 +71,19 @@ pub(crate) async fn read(
                 inventory,
             })
         }),
-        Err(Halt::Device(error)) => Err(to_py_err(error)),
-        Err(Halt::Cancelled) => unreachable!("nothing sets the export's stop flag"),
+        Err(InventoryHalt::Device(error)) => Err(to_py_err(error)),
+        // The usual error for the element's failure, with a note saying
+        // which element of the list it was.
+        Err(InventoryHalt::ObjectList(stop)) => {
+            let note = format!("Object_List element {} of {}", stop.index, stop.total);
+            let error = to_py_err(stop.error);
+            crate::py_async::attach(|py| {
+                error.value(py).call_method1("add_note", (note,))?;
+                Ok(())
+            })?;
+            Err(error)
+        }
+        Err(InventoryHalt::Cancelled) => unreachable!("nothing sets the export's stop flag"),
     }
 }
 

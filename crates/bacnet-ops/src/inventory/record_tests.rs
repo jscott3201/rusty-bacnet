@@ -188,13 +188,32 @@ fn required_settings_and_values_are_problems_when_lacking() {
         ObjectType::CHARACTERSTRING_VALUE,
         ObjectType::DATEPATTERN_VALUE,
         ObjectType::ACCUMULATOR,
+        ObjectType::LOOP,
+        ObjectType::PULSE_CONVERTER,
+        ObjectType::LIFE_SAFETY_POINT,
+        ObjectType::LIFE_SAFETY_ZONE,
+        ObjectType::CHANNEL,
+        ObjectType::SCHEDULE,
+        ObjectType::LOAD_CONTROL,
+        ObjectType::TIMER,
+        ObjectType::STAGING,
+        ObjectType::GLOBAL_GROUP,
+        ObjectType::CREDENTIAL_DATA_INPUT,
     ] {
         assert_eq!(problems(other), values, "{other}");
     }
+    // These have a Present_Value and no Status_Flags.
+    for value_only in [
+        ObjectType::GROUP,
+        ObjectType::COLOR,
+        ObjectType::COLOR_TEMPERATURE,
+    ] {
+        assert_eq!(problems(value_only), [P::PRESENT_VALUE], "{value_only}");
+    }
+
     // A Channel passes commands on and keeps no Relinquish_Default; a
     // trend log, a Device and a vendor's type needn't have any of them.
     for none in [
-        ObjectType::CHANNEL,
         ObjectType::TREND_LOG,
         ObjectType::DEVICE,
         ObjectType::from_raw(700),

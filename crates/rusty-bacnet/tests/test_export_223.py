@@ -401,11 +401,16 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                 interface="127.0.0.1", port=0, apdu_timeout_ms=300
             ) as client:
                 await client.add_device(DEVICE, relay_address(relay))
-                with self.assertRaises(BacnetError):
+                with self.assertRaises(BacnetError) as raised:
                     await client.export_223_experimental(DEVICE)
         finally:
             close(relay)
         self.assertEqual(relay.requests, 6)
+        # A note names the element, so it doesn't read as the whole list
+        # failing.
+        notes = getattr(raised.exception, "__notes__", [])
+        self.assertEqual(len(notes), 1, notes)
+        self.assertRegex(notes[0], r"^Object_List element 3 of \d+$")
 
 
 class RefusalTests(unittest.IsolatedAsyncioTestCase):

@@ -1570,8 +1570,12 @@ included.
   ReadPropertyMultiple for each batch, filled in Object_List order up to
   16 objects or 32 properties, whichever comes first: 10 analog inputs, 8
   binary inputs or analog values, 6 multi-state values, 16 objects of a
-  type that reads only its name and description. That is about N/8 + 2
-  requests for N objects, N/5 + 2 with `--values`, one at a time. A target
+  type that reads only its name and description. N objects of one type
+  that each read p properties take N divided by the batch's size, rounded
+  up, where the size is the smaller of 16 and 32/p rounded down: 31 analog
+  inputs, at three properties each, take 4 requests. That is about N/8 + 2
+  requests for a typical controller, N/5 + 2 with `--values`, one at a
+  time. A target
   given by address costs one more, a read of the Device object by the
   wildcard instance. A device that can't send a batch's answer for its
   size is asked for that batch an object at a time, and for at most half
@@ -1589,7 +1593,8 @@ included.
 - **Exit status.** 0 when every object was read, also when the device has
   none of the selected types (stderr says so). 1 when the device doesn't
   answer or refuses its Object_List, or an Object_List read element by
-  element fails partway, with nothing on stdout; and 1 when it goes silent
+  element fails partway (the error names the element: `Object_List element
+  3 of 40: ...`), with nothing on stdout; and 1 when it goes silent
   while its objects are read: what was read is still printed, and stderr
   says how many objects were not read.
 
@@ -1662,7 +1667,10 @@ device,device_instance,object,name,description,units,state_texts,number_of_state
   a carriage return as a formula. So a `name`, `description` or
   `state_texts` cell that starts with one (for `state_texts`, the joined
   cell) gets an apostrophe before it, which a spreadsheet shows as text:
-  `=1+1` is written `'=1+1`. A value cell holding device text is guarded
+  `=1+1` is written `'=1+1`. Leading spaces and line breaks before such a
+  character don't hide it. A program that reads the CSV back sees the
+  apostrophe in guarded cells: use `--csv-exact` or JSON for machine use.
+  A value cell holding device text is guarded
   the same way, though a string value prints in double quotes and so
   never starts with one. Numbers (`-40`), addresses, objects, units and
   `problems` are never changed. `--csv-exact` turns the guard off and

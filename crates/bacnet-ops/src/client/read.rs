@@ -487,15 +487,15 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
 }
 
 /// Where an element-by-element read of an Object_List stopped, and on
-/// what.
+/// what. Written `element 3 of 40: ` and the error.
 #[derive(Debug)]
-pub(crate) struct ListStop {
+pub struct ListStop {
     /// The element whose read failed, from 1.
-    pub(crate) index: u32,
+    pub index: u32,
     /// How many elements the list said it has.
-    pub(crate) total: u32,
+    pub total: u32,
     /// The failure.
-    pub(crate) error: Error,
+    pub error: Error,
 }
 
 impl std::fmt::Display for ListStop {

@@ -30,7 +30,8 @@ use bacnet_types::error::Error;
 use crate::client::{Ask, Scope, find};
 use crate::error::OpsError;
 
-pub use crate::inventory::read::{read_inventory, read_point_record};
+pub use crate::client::read::ListStop;
+pub use crate::inventory::read::{InventoryHalt, read_inventory, read_point_record};
 
 pub use crate::client::read::{
     Halt, Reader, RpmFailure, rpm_failure, rpm_rows, timed_out, unreachable,

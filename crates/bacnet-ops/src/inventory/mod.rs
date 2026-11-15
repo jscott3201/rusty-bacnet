@@ -20,10 +20,12 @@
 //! reads ([`properties`]): 16 objects of a type that reads two, 10 analog
 //! inputs, 8 binary inputs or analog values, 6 multi-state values. With
 //! values each object reads two more, and a batch holds 4 to 8; with
-//! settings as well, 3 to 8. N objects that each read p properties take
-//! the larger of N/16 and N×p/32 requests, rounded up, when all are one
-//! type, and at most one or two more for a mix: about N/8 + 2 for a
-//! typical controller, N/5 + 2 with values. A handle made from an address
+//! settings as well, 3 to 8. N objects of one type that each read p
+//! properties take N divided by the batch's size, rounded up, where the
+//! size is the smaller of 16 and 32/p rounded down: 31 analog inputs, at
+//! three properties each, go ten a batch and take 4 requests. A mix of
+//! types takes at most one or two more than its types would apart: about
+//! N/8 + 2 for a typical controller, N/5 + 2 with values. A handle made from an address
 //! whose instance isn't known yet costs one more, a read of the Device
 //! object by the wildcard instance.
 //!
@@ -64,9 +66,10 @@
 //! Whatever is decided before a request is sent is an error with nothing
 //! sent: a device that can't be placed, an instance two addresses claim, a
 //! routed address with no route. So is a device that doesn't answer the
-//! summary or the Object_List, or refuses the list, an element of a list
-//! read element by element included: no record was read that a caller
-//! could keep. After that the inventory is `Ok`: a property or an object
+//! summary or the Object_List, or refuses the list: no record was read
+//! that a caller could keep. A list read element by element that fails at
+//! one element fails the same way, as [`OpsError::ObjectList`], which
+//! names the element. After that the inventory is `Ok`: a property or an object
 //! the device refuses is data on its record ([`PointRecord::problems`]),
 //! and a device that goes silent while the objects are read, or whose
 //! route is lost then, leaves the records read so far, the objects not
@@ -99,11 +102,11 @@ use bacnet_types::primitives::ObjectIdentifier;
 use serde::Serialize;
 
 pub use self::plan::properties;
-use self::read::{read_inventory, read_point_record};
+use self::read::{InventoryHalt, read_inventory, read_point_record};
 #[cfg(test)]
 pub(crate) use self::record::record as record_of;
 pub use self::write::{CSV_HEADER, CsvOptions};
-use crate::client::{DeviceSummary, device_error};
+use crate::client::{DeviceSummary, Halt, device_error};
 use crate::device::{Device, DeviceAddress, sent};
 use crate::error::OpsError;
 use crate::format::{PropertyError, StateTexts, Value};
@@ -376,16 +379,41 @@ impl<T: TransportPort + 'static> Device<T> {
     /// addresses claim, or a routed address with no route
     /// ([`OpsError::UnknownDevice`], [`OpsError::Ambiguous`]). And a
     /// device that doesn't answer the summary or the Object_List, or
-    /// refuses the list or one of its elements. A device that goes silent
-    /// after that is not an error: see [`Inventory::stopped`].
+    /// refuses the list; a list read element by element that fails at one
+    /// element is [`OpsError::ObjectList`], which names the element. A
+    /// device that goes silent after that is not an error: see
+    /// [`Inventory::stopped`].
     pub async fn inventory(&self, options: &InventoryOptions) -> Result<Inventory, OpsError> {
         let instance = self.resolve_instance().await?;
-        let mut inventory = sent!(self, |at| {
+        // Which element of a list read element by element failed, for the
+        // error to name.
+        let mut element;
+        let read = sent!(self, |at| {
+            element = None;
             let mut reader = self.client().reader(at, Some(instance));
             let read = read_inventory(&mut reader, options).await;
             self.client().settle(&reader);
-            read.map_err(device_error)
-        })?;
+            read.map_err(|halt| match halt {
+                InventoryHalt::Device(error) => error,
+                InventoryHalt::ObjectList(stop) => {
+                    element = Some((stop.index, stop.total));
+                    stop.error
+                }
+                InventoryHalt::Cancelled => device_error(Halt::Cancelled),
+            })
+        });
+        let mut inventory = match (read, element) {
+            (Ok(inventory), _) => inventory,
+            (Err(source), Some((index, total))) => {
+                let source = Box::new(source);
+                return Err(OpsError::ObjectList {
+                    index,
+                    total,
+                    source,
+                });
+            }
+            (Err(error), None) => return Err(error),
+        };
         let services = inventory
             .device
             .value(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED)

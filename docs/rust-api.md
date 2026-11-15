@@ -12285,6 +12285,7 @@ makes, which the tool's planner shares.
 points, read in as few requests as the device allows.
 
 ```rust,no_run
+use bacnet_ops::inventory::CsvOptions;
 use bacnet_ops::{Client, InventoryOptions, OpsError};
 use bacnet_types::enums::ObjectType;
 
@@ -12315,7 +12316,7 @@ for point in &inputs.points {
 if let Some(why) = &inputs.stopped {
     eprintln!("stopped early ({why}); {} objects not read", inputs.unread.len());
 }
-std::fs::write("inputs.csv", inputs.to_csv()).ok();
+std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
 # Ok(())
 # }
 ```
@@ -12353,9 +12354,11 @@ std::fs::write("inputs.csv", inputs.to_csv()).ok();
   objects or 32 properties, whichever comes first: 16 objects of a type
   that reads two properties, 10 analog inputs, 8 binary inputs or analog
   values, 6 multi-state values. N objects of one type that each read p
-  properties take the larger of N/16 and N×p/32 requests, rounded up, and
-  a mix one or two more: about N/8 + 2 requests for a typical controller,
-  N/5 + 2 with values. A handle made from an address whose instance isn't
+  properties take N divided by the batch's size, rounded up, where the
+  size is the smaller of 16 and 32/p rounded down (31 analog inputs, at
+  three properties each, go ten a batch and take 4 requests), and a mix
+  one or two more than its types would apart: about N/8 + 2 requests for a
+  typical controller, N/5 + 2 with values. A handle made from an address whose instance isn't
   known yet costs one more. A batch whose answer the device can't send for
   its size is asked again an object at a time, and the batches after it
   hold at most half as many objects as it did, down to one: at most four
@@ -12377,8 +12380,10 @@ std::fs::write("inputs.csv", inputs.to_csv()).ok();
 - **Errors.** `Err` is whatever is decided before a request is sent (a
   device that can't be placed, an ambiguous instance, no route), and a
   device that doesn't answer the summary or the Object_List, or refuses
-  the list, an element of a list read element by element included: no
-  record was read to keep. After that the call is `Ok`. A device that goes
+  the list: no record was read to keep. A list read element by element
+  that fails at one element is `OpsError::ObjectList { index, total,
+  source }`, written `Object_List element 3 of 40: ...`, so it doesn't
+  read as the whole list failing. After that the call is `Ok`. A device that goes
   silent while its objects are read, or whose route is lost then, leaves
   the records read, `unread` (the objects not read) and `stopped` (why).
 - **One object.** `Device::point_record(object, &options)` reads one
@@ -12387,10 +12392,13 @@ std::fs::write("inputs.csv", inputs.to_csv()).ok();
 - **Without a `Client`.** `bacnet_ops::raw::read_inventory(&mut reader,
   &options)` and `raw::read_point_record` are the layer under
   `Device::inventory`, for a caller that owns a low-level client and a
-  `raw::Reader`; they fail with `Halt`, and the `bacnet` CLI uses them. A
+  `raw::Reader`. `read_inventory` fails with `raw::InventoryHalt`
+  (`Cancelled`, `Device(error)` or `ObjectList(ListStop)`, the last naming
+  the element) and `read_point_record` with `Halt`; the `bacnet` CLI uses
+  them. A
   reader's stop flag is checked before each batch and before each
   ReadProperty of a batch read property by property; a stopped read is
-  `Halt::Cancelled` and what it had read is dropped.
+  `Cancelled` and what it had read is dropped.
 - **JSON and CSV.** `Inventory` and `PointRecord` implement
   `serde::Serialize` with stable field names, and `Inventory::to_json()`
   is the indented document `bacnet inventory --json` prints: `address`,
@@ -12411,7 +12419,10 @@ std::fs::write("inputs.csv", inputs.to_csv()).ok();
   device text exactly. The CSV guards it by default: a `name`,
   `description` or `state_texts` cell that starts with `=`, `+`, `-`, `@`,
   a tab or a carriage return, which a spreadsheet would run as a formula,
-  gets an apostrophe before it (for `state_texts`, the joined cell). A
+  gets an apostrophe before it (for `state_texts`, the joined cell);
+  leading spaces and line breaks before such a character don't hide it. A
+  program that reads the CSV back sees the apostrophe in guarded cells:
+  use `with_exact(true)` or the JSON for machine use. A
   value cell is guarded the same way when its value may hold device text,
   though a string value's text is in quotes and so never starts with one;
   a number (`-40`) is never touched, nor are the address, object, units

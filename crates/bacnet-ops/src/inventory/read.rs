@@ -13,6 +13,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use super::record::record;
 use super::{Inventory, InventoryOptions, PointRecord, properties};
 use crate::client::batch::{self, BatchRow, MAX_BATCH, MAX_BATCH_PROPERTIES};
+use crate::client::read::ListStop;
 use crate::client::{
     DEVICE_PROPERTIES, DeviceSummary, Halt, Reader, RpmFailure, Wanted, rpm_failure, unreachable,
 };
@@ -35,15 +36,16 @@ use crate::watch::CovSupport;
 /// # Errors
 ///
 /// A device that doesn't answer the summary or the Object_List, or
-/// refuses the list, an element of a list read element by element
-/// included. And [`Halt::Cancelled`] once the reader's stop flag is set,
-/// checked before each batch and before each ReadProperty of a batch read
-/// property by property: the records read before it are dropped with the
-/// call, since `Halt` has nowhere to carry them.
+/// refuses the list ([`InventoryHalt::Device`]); an element of a list
+/// read element by element that fails, which names the element
+/// ([`InventoryHalt::ObjectList`]); and [`InventoryHalt::Cancelled`] once
+/// the reader's stop flag is set, checked before each batch and before
+/// each ReadProperty of a batch read property by property: the records
+/// read before it are dropped with the call.
 pub async fn read_inventory<T: TransportPort + 'static>(
     reader: &mut Reader<'_, T>,
     options: &InventoryOptions,
-) -> Result<Inventory, Halt> {
+) -> Result<Inventory, InventoryHalt> {
     let device = summary(reader).await?;
     let cov = declared(&device);
     // What the summary read of the Device object is not asked for again
@@ -62,7 +64,7 @@ pub async fn read_inventory<T: TransportPort + 'static>(
     let (list, list_stop) = reader.object_list_until(|_, _| {}).await?;
     if let Some(stop) = list_stop {
         // Part of a list is not the device: no object is asked for.
-        return Err(Halt::Device(stop.error));
+        return Err(InventoryHalt::ObjectList(stop));
     }
     // A list that names an object twice gets one record for it.
     let mut seen = HashSet::new();
@@ -78,7 +80,7 @@ pub async fn read_inventory<T: TransportPort + 'static>(
     let mut most = MAX_BATCH;
     while next < wanted.len() {
         if reader.cancel.load(Ordering::Relaxed) {
-            return Err(Halt::Cancelled);
+            return Err(InventoryHalt::Cancelled);
         }
         let count = one_batch(&wanted[next..], most, options, &own);
         let objects = &wanted[next..next + count];
@@ -86,7 +88,7 @@ pub async fn read_inventory<T: TransportPort + 'static>(
             Ok(read) => read,
             // No route to the device any more: as a device gone silent.
             Err(Halt::Device(error)) => Records::stopped(error),
-            Err(Halt::Cancelled) => return Err(Halt::Cancelled),
+            Err(Halt::Cancelled) => return Err(InventoryHalt::Cancelled),
         };
         next += read.records.len();
         inventory.points.extend(read.records);
@@ -123,10 +125,45 @@ pub async fn read_point_record<T: TransportPort + 'static>(
     }
 }
 
+/// Why [`read_inventory`] failed.
+#[derive(Debug)]
+pub enum InventoryHalt {
+    /// The reader's stop flag went up.
+    Cancelled,
+    /// The device, or the way to it, failed the summary's read or the
+    /// Object_List's.
+    Device(Error),
+    /// An Object_List read element by element failed at one element:
+    /// written `Object_List element 3 of 40: ` and the error, so it
+    /// doesn't read as the whole list failing.
+    ObjectList(ListStop),
+}
+
+impl From<Halt> for InventoryHalt {
+    fn from(halt: Halt) -> Self {
+        match halt {
+            Halt::Cancelled => Self::Cancelled,
+            Halt::Device(error) => Self::Device(error),
+        }
+    }
+}
+
+impl std::fmt::Display for InventoryHalt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("the inventory was stopped"),
+            Self::Device(error) => write!(f, "{error}"),
+            Self::ObjectList(stop) => write!(f, "Object_List {stop}"),
+        }
+    }
+}
+
+impl std::error::Error for InventoryHalt {}
+
 /// What one batch read.
-struct Records {
+pub(super) struct Records {
     /// The objects read whole, in the order asked.
-    records: Vec<PointRecord>,
+    pub(super) records: Vec<PointRecord>,
     /// The device stopped answering, or the route to it is gone: the
     /// objects after `records` weren't read.
     stopped: Option<Error>,
@@ -146,9 +183,9 @@ impl Records {
 }
 
 /// The Device object, and what the summary already read of it.
-struct Own {
-    object: ObjectIdentifier,
-    rows: Vec<RawRow>,
+pub(super) struct Own {
+    pub(super) object: ObjectIdentifier,
+    pub(super) rows: Vec<RawRow>,
 }
 
 impl Own {
@@ -199,80 +236,100 @@ fn one_batch(
 
 /// The records of `objects`, read together ([`batch::read_until`]). What
 /// `own` holds of the Device object is taken from it instead of asked for.
-async fn records<T: TransportPort + 'static>(
+pub(super) async fn records<T: TransportPort + 'static>(
     reader: &mut Reader<'_, T>,
     objects: &[ObjectIdentifier],
     options: &InventoryOptions,
     own: Option<&Own>,
 ) -> Result<Records, Halt> {
     let instance = reader.instance().await?;
+    // Only the objects with something left to ask go to the device, each
+    // row keyed by its object's place among `objects`.
     let rows: Vec<BatchRow<usize>> = objects
         .iter()
         .enumerate()
-        .map(|(key, &object)| {
+        .filter_map(|(key, &object)| {
             let wanted: Vec<_> = asked(object, options, own)
                 .into_iter()
                 .map(|property| (property, None))
                 .collect();
-            BatchRow {
+            let row = BatchRow {
                 key,
                 object,
                 one_by_one: wanted.len(),
                 wanted,
-            }
+            };
+            (!row.wanted.is_empty()).then_some(row)
         })
         .collect();
-    let read = batch::read_until(
-        reader.client,
-        reader.rate,
-        &reader.gate(),
-        &rows,
-        reader.rpm,
-        reader.cancel,
-    )
-    .await
-    .map_err(Halt::Device)?;
-    if read.refused_rpm {
-        reader.rpm = false;
+    let (mut answers, stopped, too_large) = if rows.is_empty() {
+        (Vec::new(), None, false)
+    } else {
+        let read = batch::read_until(
+            reader.client,
+            reader.rate,
+            &reader.gate(),
+            &rows,
+            reader.rpm,
+            reader.cancel,
+        )
+        .await
+        .map_err(Halt::Device)?;
+        if read.refused_rpm {
+            reader.rpm = false;
+        }
+        if read.cancelled {
+            return Err(Halt::Cancelled);
+        }
+        // An object read only in part before the device stopped is not
+        // read.
+        let whole = read.rows.len() - usize::from(read.partial);
+        let answers: Vec<_> = read.rows.into_iter().take(whole).collect();
+        (answers, read.stopped, read.too_large)
+    };
+    // One record an object, in the order asked, each answer found by its
+    // key whatever order the answers came back in. An object with nothing
+    // to ask is built from what is known. While the device answers, an
+    // object without an answer has no value for any property; once it has
+    // stopped, the first such object ends the records.
+    let mut records = Vec::with_capacity(objects.len());
+    for (key, &object) in objects.iter().enumerate() {
+        let sent = rows.iter().any(|row| row.key == key);
+        let answer = answers
+            .iter()
+            .position(|(answered, _)| *answered == key)
+            .map(|at| answers.swap_remove(at).1);
+        if sent && answer.is_none() && stopped.is_some() {
+            break;
+        }
+        // In the order asked for, the summary's rows in their places. A
+        // property the answer left out, or every property of an object it
+        // left out, has no value.
+        let mut answer: Vec<Option<RawRow>> = answer
+            .and_then(Result::ok)
+            .unwrap_or_default()
+            .into_iter()
+            .map(Some)
+            .collect();
+        let all = properties(object.object_type(), options)
+            .into_iter()
+            .map(
+                |property| match own.and_then(|own| own.row(object, property)) {
+                    Some(row) => row.clone(),
+                    None => answer
+                        .iter_mut()
+                        .find(|slot| slot.as_ref().is_some_and(|(read, _)| *read == property))
+                        .and_then(Option::take)
+                        .unwrap_or((property, Err(PropertyError::NoValue))),
+                },
+            )
+            .collect();
+        records.push(record(&reader.device, instance, object, all));
     }
-    if read.cancelled {
-        return Err(Halt::Cancelled);
-    }
-    // An object read only in part before the device stopped is not read.
-    let whole = read.rows.len() - usize::from(read.partial);
-    let records = read
-        .rows
-        .into_iter()
-        .take(whole)
-        .filter_map(|(key, answer)| {
-            // The answer's row is the one asked under its key, whatever
-            // order the answers came back in.
-            let row = rows.get(key)?;
-            // In the order asked for, the summary's rows in their places.
-            // A property the answer left out, or every property of an
-            // object it left out, has no value.
-            let mut answer: Vec<Option<RawRow>> =
-                answer.unwrap_or_default().into_iter().map(Some).collect();
-            let all = properties(row.object.object_type(), options)
-                .into_iter()
-                .map(
-                    |property| match own.and_then(|own| own.row(row.object, property)) {
-                        Some(row) => row.clone(),
-                        None => answer
-                            .iter_mut()
-                            .find(|slot| slot.as_ref().is_some_and(|(read, _)| *read == property))
-                            .and_then(Option::take)
-                            .unwrap_or((property, Err(PropertyError::NoValue))),
-                    },
-                )
-                .collect();
-            Some(record(&reader.device, instance, row.object, all))
-        })
-        .collect();
     Ok(Records {
         records,
-        stopped: read.stopped,
-        too_large: read.too_large,
+        stopped,
+        too_large,
     })
 }
 

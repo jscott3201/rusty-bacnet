@@ -18,8 +18,10 @@
 //! characters included. So does the CSV, but for one guard, on unless
 //! [`CsvOptions::exact`] turns it off: a spreadsheet takes a cell that
 //! starts with `=`, `+`, `-`, `@`, a tab or a carriage return for a
-//! formula, so a cell of device text that starts with one gets an
-//! apostrophe before it, which a spreadsheet shows as text. The guarded
+//! formula, so a cell of device text that starts with one, after any
+//! leading spaces and line breaks, gets an apostrophe before it, which a
+//! spreadsheet shows as text and a program reading the CSV back sees. The
+//! guarded
 //! cells are `name`, `description` and `state_texts` (the joined cell).
 //! A value cell is guarded too when its value may hold device text
 //! ([`Value::may_hold_device_text`]), though none starts with one of those
@@ -110,7 +112,9 @@ pub struct CsvOptions {
     /// Write device text exactly, with no guard. Off by default: a cell
     /// of device text that starts with `=`, `+`, `-`, `@`, a tab or a
     /// carriage return, which a spreadsheet would run as a formula, is
-    /// written behind an apostrophe.
+    /// written behind an apostrophe; leading spaces and line breaks don't
+    /// hide one. A program that reads the CSV back sees that apostrophe
+    /// in the guarded cells: set this, or use the JSON, for machine use.
     pub exact: bool,
 }
 
@@ -126,9 +130,14 @@ impl CsvOptions {
         self
     }
 
-    /// `text`, a cell of device text, as these options write it.
+    /// `text`, a cell of device text, as these options write it: behind an
+    /// apostrophe when its first character after any leading spaces, tabs,
+    /// carriage returns and line feeds is one a spreadsheet takes for a
+    /// formula's, or it starts with a tab or a carriage return itself.
     fn device_text(self, text: String) -> String {
-        if !self.exact && text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        let leads = |text: &str| text.starts_with(['=', '+', '-', '@', '\t', '\r']);
+        let trimmed = text.trim_start_matches([' ', '\t', '\r', '\n']);
+        if !self.exact && (leads(&text) || leads(trimmed)) {
             format!("'{text}")
         } else {
             text

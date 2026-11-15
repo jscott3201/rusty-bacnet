@@ -12,7 +12,7 @@ use bacnet_ops::Priority;
 use bacnet_ops::export::s223::{Model, TurtleOptions, inventory_options, write_turtle};
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::parse::parse_object_type;
-use bacnet_ops::raw::{Halt, Reader, read_inventory};
+use bacnet_ops::raw::{InventoryHalt, Reader, read_inventory};
 use bacnet_transport::port::TransportPort;
 
 use crate::args::ExportFormat;
@@ -68,8 +68,9 @@ pub async fn export_cmd<T: TransportPort + 'static>(
     };
     let inventory = match read_inventory(&mut reader, &options).await {
         Ok(inventory) => Model::from(&inventory),
-        Err(Halt::Device(error)) => return Err(error.into()),
-        Err(Halt::Cancelled) => return Err("the export was stopped".into()),
+        Err(InventoryHalt::Device(error)) => return Err(error.into()),
+        // A list read element by element that failed: say which element.
+        Err(halt) => return Err(halt.to_string().into()),
     };
     let device = inventory.device.instance;
     let mut text = String::new();

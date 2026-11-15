@@ -317,6 +317,32 @@
       },
       "status_flags": null,
       "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "trend-log",
+        "type_number": 20,
+        "instance": 2
+      },
+      "name": " =1+1",
+      "description": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": null,
+      "status_flags": null,
+      "problems": []
     }
   ],
   "unread": [

@@ -832,10 +832,11 @@ raises ValueError before anything is sent.
 
 A device that doesn't answer the summary read, or a failed read of the
 Object\_List, raises the usual error; so does a device that can't send
-the list whole, is read element by element, and fails an element. A
-device that goes silent while its objects are read gives an inventory
-with `stopped` set and the objects read before it. `stop()`, and
-leaving `async with`, wait for a running export to finish.
+the list whole, is read element by element, and fails an element; a
+note on that exception names the element. A device that goes silent
+while its objects are read gives an inventory with `stopped` set and
+the objects read before it. `stop()`, and leaving `async with`,
+wait for a running export to finish.
 
 ### BACnetClient.add_device
 

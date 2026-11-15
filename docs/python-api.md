@@ -2253,7 +2253,8 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
 - A device that doesn't answer the summary read, or a failed read of the
   Object_List, raises the usual error. A device that can't send the list
   whole is read element by element, and an element that fails there (an
-  error or no answer) raises too: part of a list is no inventory. A device
+  error or no answer) raises too, with a note on the exception naming the
+  element (`Object_List element 3 of 40`): part of a list is no inventory. A device
   that goes silent while its objects are read gives an inventory with
   `stopped` set (a reason string naming the first object not read) and the
   objects read before it, and the Turtle's header says it is incomplete.
