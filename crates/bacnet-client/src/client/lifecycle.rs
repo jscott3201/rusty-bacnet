@@ -224,6 +224,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let i_have_tx_dispatch = i_have_tx.clone();
         let (network_report_tx, _) = broadcast::channel(NETWORK_REPORT_CHANNEL_CAPACITY);
         let network_report_tx_dispatch = network_report_tx.clone();
+        let (routing_end, routing_ended) = tokio::sync::watch::channel(());
+        let routing_query = Arc::new(routing_table::RoutingQueries::new(routing_ended));
+        let routing_query_dispatch = Arc::clone(&routing_query);
         let seg_ack_senders: Arc<SyncMutex<HashMap<SegAckKey, SegmentAckRoute>>> =
             Arc::new(SyncMutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
@@ -256,6 +259,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         );
         let device_purge = device_purge_task.abort_handle();
         let dispatch_task = tokio::spawn(async move {
+            // Dropped when this task ends, however it ends (#2612).
+            let _routing_end = routing_end;
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
             let mut order = TurnOrder::default();
 
@@ -269,7 +274,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         // Read once; subscribers first, and a broadcast
                         // send never waits.
                         let number = bacnet_network::network_number::NumberControl::parse(&control);
-                        network_reports::publish(&network_report_tx_dispatch, &control, number);
+                        network_reports::publish(
+                            &network_report_tx_dispatch,
+                            &control,
+                            number,
+                            &routing_query_dispatch.outstanding,
+                        );
                         if let Some((tx, parsed)) = number_tx.as_ref().zip(number) {
                             if tx.try_send(parsed).is_err() {
                                 debug!(
@@ -428,6 +438,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             device_collision_tx,
             i_have_tx,
             network_report_tx,
+            routing_query,
             dispatch_task: Some(dispatch_task),
             network_number_task,
             device_purge_task: Some(device_purge_task),

@@ -630,15 +630,68 @@ routers listing it. An empty list when none answer. `network` 0 or
 (`ValueError` otherwise). It holds the started client for the
 whole wait, so `stop()` waits up to `wait` seconds for it.
 
+### BACnetClient.routing_table
+
+```python
+def routing_table(
+    self,
+    router: str | bytes,
+    *,
+    wait: float = 3.0,
+    quiet: float = 0.5,
+    total: float = 10.0,
+    max_entries: int = 4096,
+) -> Awaitable[RoutingTable]
+```
+
+Read the routing table of the router at `router`, a station on
+this client's own link, without changing it (#2612). The call sends
+one Initialize-Routing-Table with a port count of zero, which only
+asks; no argument can make it an update.
+
+`router` is the router's address on the local link: `bytes` as
+given, such as a `DiscoveredRouter`'s `mac`, or a string in the
+binding's address forms (`"ip:port"`, `"bip6:N"`, hex octets, an
+MS/TP station). An empty or broadcast address raises ValueError.
+
+A long table comes as several acknowledgements with nothing to mark
+the last, so the call returns once `quiet` seconds pass after the
+last acknowledgement from the router (other traffic does not restart
+it), at `total` seconds from the send, or at `max_entries`
+entries (at least 1); the last two set `truncated` on the result,
+which covers those bounds only. A quiet end does not prove the table
+whole: on MS/TP, acknowledgements after the first wait for the
+router's token, so use a larger `quiet` on a slow trunk. A late
+acknowledgement of an earlier query to the same router can be
+counted by the next one (nothing pairs answers with questions), so
+leave a gap between repeated queries; entries are reported as
+received, not deduplicated.
+
+An empty table, or an older router's acknowledgement with no data,
+is a `RoutingTable` with no entries. A router that sends nothing
+within `wait` seconds raises BacnetTimeoutError: one that ignores
+the message looks the same as one that is absent (on B/IP, so does
+one that answers from another address or port), and neither is an
+empty table. A Reject-Message-To-Network from the router before any
+acknowledgement raises BacnetNetworkRejectError; rejects with
+reasons 1, 2 and 4 concern a DNET and are ignored. Each bound is 0 to
+3600 seconds and `wait` may not exceed `total` (ValueError
+otherwise). A client stopped mid-call raises RuntimeError. Only a
+router on the local link can be asked; one behind another router
+cannot. One query runs at a time per client; a second call waits for
+the first. It holds the started client for the whole wait, so
+`stop()` waits for it.
+
 ### BACnetClient.network_reports
 
 ```python
 def network_reports(self) -> Awaitable[NetworkReportIterator]
 ```
 
-Follow the I-Am-Router-To-Network, Network-Number-Is and
-Reject-Message-To-Network messages the client receives from now on
-(#1850). RuntimeError before start and after stop.
+Follow the I-Am-Router-To-Network, Network-Number-Is,
+Reject-Message-To-Network and Initialize-Routing-Table-Ack (query
+answers, #2612) messages the client receives from now on (#1850).
+RuntimeError before start and after stop.
 
 ### BACnetClient.frames
 

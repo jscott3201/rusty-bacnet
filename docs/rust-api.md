@@ -10357,6 +10357,36 @@ subscriber, and one that falls behind loses the oldest and gets
 `ReceivedNetworkReport` live in `bacnet_network::layer`, which also has
 `NetworkLayer::send_network_message` for a local network message.
 
+Reading a router's routing table (#2612) is a read-only query:
+
+```rust
+use bacnet_client::client::{RoutingTable, RoutingTableError, RoutingTableWait};
+
+// An Initialize-Routing-Table with a port count of zero, to one router on
+// this link; the acks are collected until a quiet interval (500 ms after
+// the last ack by default), inside a 10 s total and a 4096-entry bound.
+match client.routing_table(&router_mac, RoutingTableWait::default()).await {
+    Ok(RoutingTable { entries, truncated, .. }) => {
+        for entry in &entries {
+            println!("network {} via port {}", entry.network, entry.port_id);
+        }
+        if truncated { eprintln!("a bound cut the answer short"); }
+    }
+    Err(RoutingTableError::NoAnswer { waited }) => eprintln!("silent for {waited:?}"),
+    Err(RoutingTableError::Rejected(reject)) => eprintln!("refused: {}", reject.reason),
+    Err(other) => return Err(other.into()),
+}
+```
+
+The data is fixed inside the network layer
+(`NetworkLayer::send_routing_table_query` takes only the router's address),
+so the update form of Initialize-Routing-Table cannot be sent.
+`NetworkReport::RoutingTable(Vec<RoutingTableEntry>)` carries one ack's
+entries to `network_reports()` subscribers. No answer is `NoAnswer`, never
+an empty table; an empty table is `Ok` with no entries. `first_answer` may
+not exceed `total` (`InvalidArgument`), and a client runs one such query at
+a time. Only a router on the local link can be asked.
+
 ### Device Management
 
 ```rust
