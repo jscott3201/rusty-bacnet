@@ -1,8 +1,8 @@
 """Installed-artifact tests for the Loop and Pulse Converter references (#1312).
 
 Controlled_Variable_Reference, Manipulated_Variable_Reference and Input_Reference
-read as ``application_data`` holding the context-tagged
-BACnetObjectPropertyReference, and Setpoint_Reference holding the
+read as a ``tagged`` value holding the context-tagged
+BACnetObjectPropertyReference (#2618), and Setpoint_Reference holding the
 BACnetSetpointReference. They take writes in those encodings, locally and over
 the network, and refuse the flat list they used to read as with
 INVALID_DATA_TYPE. Unset, the first three read as a reference to the reserved
@@ -89,8 +89,8 @@ class LoopReferenceTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(property=prop):
                 for value in (await self.server.read_property(oid, prop),
                               await self.client.read_property(self.address, oid, prop)):
-                    self.assertEqual(value.tag, "application_data")
-                    self.assertEqual(value.value, UNSET[prop])
+                    self.assertEqual(value.tag, "tagged")
+                    self.assertEqual(value.octets, UNSET[prop])
         # A Setpoint_Reference without a reference has no octets.
         self.assertEqual(
             await self.server.read_property(LOOP, P.SETPOINT_REFERENCE), PropertyValue.list([])
@@ -107,8 +107,8 @@ class LoopReferenceTests(unittest.IsolatedAsyncioTestCase):
                 )
                 for value in (await self.server.read_property(oid, prop),
                               await self.client.read_property(self.address, oid, prop)):
-                    self.assertEqual(value.tag, "application_data")
-                    self.assertEqual(value.value, octets)
+                    self.assertEqual(value.tag, "tagged")
+                    self.assertEqual(value.octets, octets)
                 # The value read writes back locally unchanged.
                 value = await self.server.read_property(oid, prop)
                 await self.server.write_property_local(oid, prop, value, source_object=None)
@@ -147,7 +147,7 @@ class LoopReferenceTests(unittest.IsolatedAsyncioTestCase):
                     oid, prop, PropertyValue.null(), source_object=None
                 )
                 value = await self.server.read_property(oid, prop)
-                self.assertEqual(value.value, octets)
+                self.assertEqual(value.octets, octets)
                 # The unset form clears it: the reserved instance, or for
                 # Setpoint_Reference the value with no octets.
                 unset = UNSET.get(prop)
@@ -156,7 +156,7 @@ class LoopReferenceTests(unittest.IsolatedAsyncioTestCase):
                 await self.client.write_property(self.address, oid, prop, cleared)
                 value = await self.server.read_property(oid, prop)
                 if unset is not None:
-                    self.assertEqual(value.value, unset)
+                    self.assertEqual(value.octets, unset)
                 else:
                     self.assertEqual(value, PropertyValue.list([]))
 

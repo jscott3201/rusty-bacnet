@@ -1379,6 +1379,13 @@ Text output names what the device sent:
 - a list or array whole, every element, in brackets; an indexed read of an
   array as its one element (`weekly-schedule[3]` is Wednesday), and index 0
   as the array's size;
+- a value with a context tag and no decoded form (a vendor's property, a
+  Lighting_Command) as its tags, in wire order (#2618): each context field
+  by its tag, a constructed one with its members in parentheses, and
+  application values decoded inside, `[0] [raw 02], [1] (1.5, "hi"), 7`.
+  A context-tagged primitive's octets stay `[raw …]`, since only the
+  property's datatype says what they are, and so does an application value
+  inside that doesn't decode;
 - anything that doesn't decode as hex, `[raw 0e 0f]`, the one spelling every
   command uses for undecoded octets.
 
@@ -1408,6 +1415,7 @@ names' spelling:
 | Date, Time | `{"date": "2026-10-19"}`, `{"time": "07:00"}` |
 | Object identifier | `{"type": "analog-input", "type_number": 0, "instance": 1}` |
 | Constructed element | `{"element": "daily-schedule", "text": "Mon 07:00 = 72.5"}`: its kind and the text form |
+| A value shown as its tags | `{"element": "tagged", "text": "[0] [raw 02]", "fields": {"data": {"raw": "0902"}}}`: the tags as text, and the value's octets under `fields.data` |
 | Several values, a list or array | an array of the above |
 | Octets that don't decode | `{"raw": "0e0f"}` |
 
@@ -1421,8 +1429,8 @@ join it later without removing `text`. The kinds are `access-rule`,
 `event-parameter`, `name-value`, `object-property-reference`,
 `port-permission`, `prescale`, `property-access-result`,
 `read-access-result`, `read-access-specification`, `recipient`, `scale`,
-`shed-level`, `special-event`, `stage-limit-value`, `time-stamp` and
-`value-source`.
+`shed-level`, `special-event`, `stage-limit-value`, `tagged`, `time-stamp`
+and `value-source`.
 
 An `event-parameter` element also has `fields`, an object of the value's
 members by their snake-case names in wire order, each in the forms above:

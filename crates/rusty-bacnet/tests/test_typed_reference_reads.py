@@ -115,14 +115,18 @@ class PeerReferenceReadTests(unittest.IsolatedAsyncioTestCase):
         for target in TARGETS:
             _, examples = vectors(target)
             raw = examples[0][0]
-            for malformed in (bytes.fromhex("2c00000007"), raw + raw, raw + b"\x21\x07", b"\x72\x00\xff"):
+            # Context-tagged content reads as its tags (#2618); a string
+            # PropertyValue can't hold keeps the octets as application_data.
+            for malformed, generic in ((bytes.fromhex("2c00000007"), "tagged"),
+                                       (raw + raw, "tagged"), (raw + b"\x21\x07", "tagged"),
+                                       (b"\x72\x00\xff", "application_data")):
                 for route in ("rp", "rpm"):
                     with self.subTest(target=target, raw=malformed, route=route):
                         value = await ReferencePeer(self, target).read(malformed, route=route)
-                        self.assertEqual((value.tag, value.value), ("application_data", malformed))
+                        self.assertEqual((value.tag, value.octets), (generic, malformed))
             for index in (0, 1):
                 value = await ReferencePeer(self, target).read(raw, index)
-                self.assertEqual((value.tag, value.value), ("application_data", raw))
+                self.assertEqual((value.tag, value.octets), ("tagged", raw))
             value = await ReferencePeer(self, target).read(b"\x21\x07")
             self.assertEqual((value.tag, value.value), ("unsigned", 7))
 
@@ -133,7 +137,7 @@ class PeerReferenceReadTests(unittest.IsolatedAsyncioTestCase):
             wrong = bytes.fromhex("2c00000007")
             values = await ReferencePeer(self, target).read(raw, route="rpm", extra=(wrong, b"\x21\x07"))
             self.assert_reference(values[0], tag, expected)
-            self.assertEqual((values[1].tag, values[1].value), ("application_data", wrong))
+            self.assertEqual((values[1].tag, values[1].octets), ("tagged", wrong))
             self.assertEqual((values[2].tag, values[2].value), ("unsigned", 7))
             # The helper independently asserts the last DESCRIPTION error row.
 

@@ -2474,10 +2474,17 @@ class PropertyValue:
       Each element keeps its octets, so the value
       writes back unchanged. A value that isn't those elements, to the last
       octet, follows the rules below.
-    - Other context-tagged content (a Load Control's shed levels, an Event
-      Enrollment's Event_Parameters), or content this type has no form for
-      (a UCS-4, DBCS or JIS string, bad UTF-8, an ENUMERATED past 32 bits),
-      is ``application_data`` holding the octets exactly as served.
+    - Other content with a context tag (a Lighting Output's
+      Lighting_Command, a vendor's proprietary property) is ``tagged``
+      (#2618): ``value`` is the tree of its tags, a list of ``TagNode``, and
+      ``octets`` are the octets exactly as served, so a write sends them
+      back unchanged. Every tag reads without the property's datatype
+      (Clause 20.2.1.6); a context-tagged primitive's contents stay
+      ``bytes``, since only the property's datatype says what they are.
+    - Content this type has no form for (a UCS-4, DBCS or JIS string, bad
+      UTF-8, an ENUMERATED past 32 bits, anywhere in the value), or a tree
+      past the decoder's 10,000 elements, is ``application_data`` holding
+      the octets exactly as served.
     - A whole read (no ``array_index``) of a property the stack's
       classification table marks as an array or list on that object type
       (every BACnetARRAY and BACnetLIST of the 2020 object tables) is a
@@ -2550,13 +2557,25 @@ class PropertyValue:
     def application_data(bytes: bytes) -> PropertyValue:
         """Create an ApplicationData value from pre-encoded application-layer bytes (e.g. a framed BACnetEventParameter)."""
         ...
+    @staticmethod
+    def tagged(octets: bytes) -> PropertyValue:
+        """The value ``octets`` encode, as their tags: what a read of a value
+        with no typed form and a context tag gives (#2618). ``value`` is a
+        list of ``TagNode``; the octets are kept as given, so a write sends
+        them unchanged. Octets that don't read as tagged elements (cut short,
+        a closing tag that closes nothing, opening tags nested past 32, more
+        than 10,000 elements), or hold an application value this type has no
+        form for, raise ValueError. A ``list`` of tagged values keeps its
+        items tagged."""
+        ...
 
     @property
     def tag(self) -> str:
         """Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double',
         'octet_string', 'character_string', 'bit_string', 'enumerated',
-        'date', 'time', 'object_identifier', 'list', 'application_data', or
-        one typed constructed element: 'destination', 'port_permission',
+        'date', 'time', 'object_identifier', 'list', 'application_data',
+        'tagged' (a value read as its tags, ``value`` a list of ``TagNode``),
+        or one typed constructed element: 'destination', 'port_permission',
         'read_access_specification', 'read_access_result', 'action_list',
         'device_object_reference', 'authentication_factor_format',
         'stage_limit_value', 'access_rule', 'device_object_property_reference',
@@ -2572,6 +2591,7 @@ class PropertyValue:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
         ObjectIdentifier, BitString, list, or None); ``application_data`` is ``bytes``
         (except a DateTime Value's set Priority_Array slot, ``[date, time]``),
+        ``tagged`` a list of ``TagNode``,
         and a typed constructed element the form its typed write takes, or
         the form docs/python-api.md gives it. A date is ``(year, month, day,
         day_of_week)`` with the full year, or 255 for an unspecified year,
@@ -2599,6 +2619,58 @@ class PropertyValue:
         ...
 
     def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
+class TagNode:
+    """One tagged element of a value read as its tags (#2618), frozen:
+    ``PropertyValue.tagged`` values hold a list of them.
+
+    BACnet tags read without knowing a value's datatype (Clause 20.2.1.6):
+    an application tag names its datatype, every primitive gives its length,
+    and a constructed element sits between an opening and a closing tag of
+    one number. A context tag's meaning is the property's to say, so a
+    context-tagged primitive keeps its contents as ``bytes``.
+
+    Two nodes are equal when they hold the same octets, and equal nodes hash
+    alike. ``copy`` and ``pickle`` rebuild a node from its octets.
+    """
+
+    @property
+    def tag_class(self) -> Literal["application", "context"]:
+        """The tag's class (Clause 20.2.1.1)."""
+        ...
+    @property
+    def tag_number(self) -> int:
+        """The tag number, 0 to 254: an application tag's datatype (0 NULL,
+        1 BOOLEAN, 2 Unsigned, 3 Signed, 4 REAL, 5 Double, 6 OCTET STRING, 7
+        CharacterString, 8 BIT STRING, 9 ENUMERATED, 10 Date, 11 Time, 12
+        BACnetObjectIdentifier; Clause 20.2.1.4), or a context tag's field."""
+        ...
+    @property
+    def constructed(self) -> bool:
+        """Whether it is the members between an opening and a closing tag
+        (Clause 20.2.1.3.2)."""
+        ...
+    @property
+    def value(self) -> PropertyValue | bytes | list[TagNode]:
+        """An application primitive's ``PropertyValue`` (the value a bare
+        read of it gives, without names from a property), a context
+        primitive's contents as ``bytes``, or a constructed element's
+        members."""
+        ...
+    @property
+    def octets(self) -> bytes:
+        """The element's octets exactly as read: its tag and contents, or its
+        opening tag through its closing tag."""
+        ...
+    def __repr__(self) -> str:
+        """A short description, not code: ``<TagNode application 4 real
+        1.5>``, ``<TagNode context 0, 1 octet>`` or ``<TagNode context 1
+        constructed, 3 members>``. A long value is cut short, and contents
+        are counted, not shown."""
+        ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
 
@@ -7287,7 +7359,7 @@ class BACnetServer:
         Peers can write Action (DIRECT until written).
 
         Controlled_Variable_Reference and Manipulated_Variable_Reference read
-        as ``application_data`` holding the context-tagged reference; while
+        as a ``tagged`` value holding the context-tagged reference; while
         unset they name instance 4194303 (an Analog Input and an Analog Output
         respectively), and writing a reference to that instance unsets them.
         A null written to any Loop reference succeeds and changes nothing.
@@ -7451,8 +7523,9 @@ class BACnetServer:
     ) -> None:
         """Add a Lighting Output object.
 
-        Its Lighting_Command reads and writes as ``application_data`` holding
-        the context-tagged BACnetLightingCommand, operation NONE
+        Its Lighting_Command reads as a ``tagged`` value, and writes as
+        ``application_data``, holding the context-tagged BACnetLightingCommand,
+        operation NONE
         (``b"\\x09\\x00"``) until written. An ``octet_string`` or any other
         datatype is refused with INVALID_DATA_TYPE, and a command its operation
         can't take with VALUE_OUT_OF_RANGE. The object carries each command
@@ -8136,7 +8209,7 @@ class BACnetServer:
     def add_pulse_converter(self, instance: int, name: str, units: EngineeringUnits | int = 62) -> None:
         """Add a Pulse Converter (Clause 12.23) to the server (before starting).
 
-        Input_Reference reads as ``application_data`` holding the
+        Input_Reference reads as a ``tagged`` value holding the
         context-tagged reference; while unset it reads as Accumulator
         4194303's Present_Value, and writing a reference to instance 4194303
         unsets it. A null written to it succeeds and changes nothing.

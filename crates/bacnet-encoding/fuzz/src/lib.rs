@@ -92,6 +92,7 @@ macro_rules! value_first {
 pub mod apdu;
 pub mod constructed;
 pub mod service;
+pub mod tag_tree;
 pub mod value;
 
 #[cfg(test)]

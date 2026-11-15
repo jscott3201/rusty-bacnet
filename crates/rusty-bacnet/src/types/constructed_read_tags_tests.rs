@@ -20,7 +20,7 @@ fn tags_typed_mapping_preserves_none_null_original_bytes_and_local_read_parity()
         let wire = [SEMANTIC, NULL].concat();
         let decoded =
             decode_read_value(ObjectType::COLOR, PropertyIdentifier::TAGS, None, &wire).unwrap();
-        assert_eq!(decoded.element, Some(Element::NameValue));
+        assert_eq!(decoded.element(), Some(Element::NameValue));
         let mut encoded = BytesMut::new();
         encode_property_value(&mut encoded, &decoded.inner).unwrap();
         assert_eq!(encoded.as_ref(), wire);
@@ -85,7 +85,7 @@ fn tags_failed_typed_decode_preserves_generic_fallback_and_rpm_framing_errors() 
     ] {
         let value =
             decode_read_value(ObjectType::COLOR, PropertyIdentifier::TAGS, index, &bytes).unwrap();
-        assert_eq!(value.element, None);
+        assert_eq!(value.element(), None);
         assert_eq!(value.inner, PropertyValue::ApplicationData(bytes));
     }
     let broken = vec![0x0d];
@@ -125,7 +125,7 @@ fn tags_empty_and_count_reads_keep_existing_generic_shapes() {
     };
     assert_eq!(read(None, &[]).inner, PropertyValue::List(vec![]));
     assert_eq!(read(Some(0), &[0x21, 0]).inner, PropertyValue::Unsigned(0));
-    assert_eq!(read(Some(1), &[]).element, None);
-    assert_eq!(read(Some(0), SEMANTIC).element, None);
-    assert_eq!(read(Some(0), &[0x21, 1, 0x21, 2]).element, None);
+    assert_eq!(read(Some(1), &[]).element(), None);
+    assert_eq!(read(Some(0), SEMANTIC).element(), None);
+    assert_eq!(read(Some(0), &[0x21, 1, 0x21, 2]).element(), None);
 }
