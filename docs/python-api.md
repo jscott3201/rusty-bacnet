@@ -1910,9 +1910,17 @@ runs every 5 minutes and takes devices silent for more than 10).
 
 An I-Am that a router relays back from the client's own network, with that
 network's number as its source, is the local device once the client has
-learned the number. A relay heard before then is listed as a routed device of
-its own, and the instance is ambiguous until the next relay folds it into the
-local one; if the number is never learned, it stays until the purge.
+learned the number. The client asks for the number once, on first need:
+broadcasting one What-Is-Network-Number on its own link before its first
+`who_is()`, or when it first lists a routed device while the number is
+unknown (#2572). A client that only reads and writes by address never asks.
+After that question, it asks again when its link comes back (a BACnet/SC
+hub reconnect, a foreign device registering again) while no answer has
+come. A relay heard before the answer is listed as a routed device of its
+own, and the instance is ambiguous (`BacnetAmbiguousDeviceError`) until
+then; learning the number folds the routed entry into the local one, or
+makes it the local one when there is none or only an `add_device` entry. If
+nothing on the network knows the number, it stays until the purge.
 
 ```python
 await client.who_is()

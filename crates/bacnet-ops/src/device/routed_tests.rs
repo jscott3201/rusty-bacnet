@@ -219,6 +219,7 @@ async fn handles_named_before_the_number_is_learned_are_local_after() {
     })
     .await
     .unwrap();
+    assert_eq!(low.network_number(), None, "the premise: not learned yet");
     let pinned = lab.client.device("1:0x0A000002BAC0").await.unwrap();
     let following = lab.client.device("1:2002").await.unwrap();
     let routed = DeviceAddress::new(1, &mac(2)).unwrap();

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_ops::client::Wanted;
 use bacnet_ops::format::{self, RawRow};
 use bacnet_ops::label::kebab;
@@ -12,6 +13,7 @@ use bacnet_ops::watch::Watched;
 use bacnet_ops::watch::hub::{Phase, Snapshot, Source};
 use bacnet_ops::{DeviceAddress, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::constructed::BACnetAddress;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
@@ -191,15 +193,30 @@ pub(crate) fn state_name(state: Phase) -> &'static str {
     }
 }
 
+/// The row a device is listed by: its instance, then its address as the
+/// discovery table keys it. No two rows share it. A row with no one
+/// station to name (the table keeps none) falls back to its MAC. The table
+/// never stores such a row, so the fallback cannot run; it only spares a
+/// panic.
+fn row_key(found: &DiscoveredDevice) -> uri::DeviceCursor {
+    let address = found.address().unwrap_or_else(|| BACnetAddress {
+        network_number: 0,
+        mac_address: found.mac_address.clone(),
+    });
+    uri::DeviceCursor::new(found.object_identifier.instance_number(), address)
+}
+
 /// A page of the discovery table, in reach: no device text, nothing sent.
-/// Devices are sorted by instance, and `after` starts the page past that
-/// instance. The cursor is an instance, not a position, so a device found
-/// between two reads shifts nothing already listed. `total` counts every
-/// device in reach, `truncated` says whether more follow this page, and
-/// `next` names the page that holds them.
+/// Devices are sorted by instance, then address (several addresses can
+/// claim one instance), and `after` starts the page past that row. The
+/// cursor names a row, not a position, so a device found between two reads
+/// shifts nothing already listed, and a page boundary inside one instance's
+/// claimants loses none. `total` counts every device in reach, `truncated`
+/// says whether more follow this page, and `next` names the page that
+/// holds them.
 pub(super) async fn devices<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    after: Option<u32>,
+    after: Option<&uri::DeviceCursor>,
 ) -> Result<Value, ToolError> {
     let client = ctx.client()?;
     let mut devices = client.devices().await;
@@ -209,10 +226,10 @@ pub(super) async fn devices<T: TransportPort + 'static>(
                 .policy
                 .allows_device(found.object_identifier.instance_number())
     });
-    devices.sort_by_key(|found| found.object_identifier.instance_number());
+    devices.sort_by_cached_key(row_key);
     let total = devices.len();
     let start = after.map_or(0, |after| {
-        devices.partition_point(|found| found.object_identifier.instance_number() <= after)
+        devices.partition_point(|found| row_key(found) <= *after)
     });
     let page = ctx.policy.caps.devices;
     let shown = &devices[start..total.min(start.saturating_add(page))];
@@ -231,7 +248,7 @@ pub(super) async fn devices<T: TransportPort + 'static>(
         "hint": "bacnet_discover finds more; this lists only devices already heard",
     });
     if truncated && let Some(last) = shown.last() {
-        body["next"] = json!(uri::devices_after(last.object_identifier.instance_number()));
+        body["next"] = json!(uri::devices_after(&row_key(last)));
     }
     Ok(body)
 }

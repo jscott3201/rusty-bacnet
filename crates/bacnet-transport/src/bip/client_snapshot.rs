@@ -7,6 +7,7 @@ use std::time::Duration;
 use bacnet_bip_codec::BvlcResultCode;
 use bacnet_bip_core::node::{AttemptOutcome, ExchangeCounters, NodeCounters, Operation};
 
+use super::link_returns::LinkReturns;
 use super::node::NodeHandle;
 use crate::bbmd_lookup::BbmdLookupFailure;
 
@@ -243,6 +244,8 @@ pub(super) struct ClientRecord {
     snapshot: Mutex<BvlcClientSnapshot>,
     /// The running node, which knows the registration's lease and schedule.
     node: Mutex<Weak<NodeHandle>>,
+    /// A foreign device's link returns (#2572), kept across restarts.
+    pub(super) returns: LinkReturns,
 }
 
 impl ClientRecord {
@@ -256,6 +259,7 @@ impl ClientRecord {
 
     /// The transport started: clear the last-attempt status.
     pub(super) fn start(&self) {
+        self.returns.restart();
         let mut snapshot = self.lock();
         snapshot.reset_status();
         snapshot.running = true;

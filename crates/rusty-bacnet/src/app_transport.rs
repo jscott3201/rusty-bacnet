@@ -165,6 +165,10 @@ impl TransportPort for AppTransport {
         each!(self, t => t.max_npdu_changes())
     }
 
+    fn link_returns(&self) -> Option<watch::Receiver<u64>> {
+        each!(self, t => t.link_returns())
+    }
+
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         each!(self, t => t.is_broadcast_mac(mac))
     }

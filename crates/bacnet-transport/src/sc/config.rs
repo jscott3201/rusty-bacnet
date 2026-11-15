@@ -1,9 +1,63 @@
-//! Builder-style settings and the state watch for [`ScTransport`], kept out
-//! of the transport loop file to stay within the file-size cap.
+//! The constructor, builder-style settings and the state watch for
+//! [`ScTransport`], kept out of the transport loop file to stay within the
+//! file-size cap.
+
+use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::watch;
 
-use super::{ScActiveHub, ScConnectionState, ScReconnectConfig, ScTransport, WebSocketPort};
+use super::egress_limits::HubLimits;
+use super::observability::ScObserver;
+use super::{
+    ScActiveHub, ScConnectionState, ScNpduAdmissionPolicy, ScReconnectConfig, ScTransport,
+    WebSocketPort, advertisement, direct_membership, heartbeat,
+};
+use crate::sc_frame::Vmac;
+
+impl<W: WebSocketPort> ScTransport<W> {
+    /// Stable local APDU receive capacity, available before opening a connection.
+    /// Negotiated outgoing limits do not change this declaration.
+    pub const LOCAL_RECEIVE_APDU_CAPACITY: u16 = crate::sc_limits::LOCAL_RECEIVE_APDU_CAPACITY;
+
+    /// Create an unstarted transport with an unconfigured, zero UUID placeholder.
+    /// Call [`Self::with_device_uuid`] before
+    /// [`TransportPort::start`](crate::port::TransportPort::start).
+    /// The supplied local VMAC must be neither all-zero nor broadcast.
+    pub fn new(ws: W, local_vmac: Vmac) -> Self {
+        let (state_tx, _) = watch::channel(ScConnectionState::Disconnected);
+        Self {
+            ws: Some(ws),
+            ws_shared: None,
+            local_vmac,
+            device_uuid: [0u8; 16],
+            advertised_uris: Vec::new(),
+            direct_intake: advertisement::DirectIntake::default(),
+            #[cfg(feature = "sc-tls")]
+            direct_listener_shutdown: None,
+            connection: None,
+            hub_limits: Arc::new(HubLimits::new()),
+            state_tx,
+            recv_task: None,
+            connect_timeout_ms: 10_000,
+            heartbeat_interval_ms: heartbeat::DEFAULT_HEARTBEAT_INTERVAL_MS,
+            heartbeat_timeout_ms: heartbeat::DEFAULT_HEARTBEAT_TIMEOUT_MS,
+            failover_ws: None,
+            initial_hub: ScActiveHub::Primary,
+            primary_connector: None,
+            failover_connector: None,
+            reconnect_config: None,
+            npdu_admission_policy: ScNpduAdmissionPolicy::default(),
+            npdu_admission: None,
+            restore_disconnect_task: Arc::new(StdMutex::new(None)),
+            observer: Arc::new(ScObserver::new()),
+            direct_membership: Arc::new(direct_membership::DirectMembership::default()),
+            direct: None,
+            frame_tap: crate::tap::FrameTap::new(),
+            #[cfg(test)]
+            allow_test_heartbeat_timing: false,
+        }
+    }
+}
 
 impl<W: WebSocketPort> ScTransport<W> {
     /// Configure the device UUID before start (builder-style).

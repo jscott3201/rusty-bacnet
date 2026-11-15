@@ -376,6 +376,20 @@ impl TransportPort for AnyTransport {
         }
     }
 
+    fn link_returns(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        match self {
+            Self::Bip(t) => t.link_returns(),
+            Self::Mstp(t) => t.link_returns(),
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => t.link_returns(),
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => t.link_returns(),
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => t.link_returns(),
+            Self::Loopback(t) => t.link_returns(),
+        }
+    }
+
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         match self {
             Self::Bip(t) => t.is_broadcast_mac(mac),
@@ -651,7 +665,17 @@ mod tests {
     #[tokio::test]
     async fn as_bip_names_the_sc_data_link() {
         let (_hub_end, ws) = crate::sc_hub::ws_limits_test_support::initiating_pair().await;
-        assert_refused(&ScTransport::new(ws, [0x02; 6]).into(), DataLink::Sc);
+        let any: AnyTransport = ScTransport::new(ws, [0x02; 6]).into();
+        assert_refused(&any, DataLink::Sc);
+        // The wrapper hands on the link's returns (#2572): SC's, and B/IP's,
+        // which a foreign device's registration moves; MS/TP has none.
+        assert_eq!(any.link_returns().map(|returns| *returns.borrow()), Some(0));
+        let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let returns = AnyTransport::from(bip).link_returns();
+        assert_eq!(returns.map(|returns| *returns.borrow()), Some(0));
+        let (serial, _) = LoopbackSerial::pair();
+        let mstp: AnyTransport = MstpTransport::new(serial, MstpConfig::default()).into();
+        assert!(mstp.link_returns().is_none());
     }
 
     #[test]

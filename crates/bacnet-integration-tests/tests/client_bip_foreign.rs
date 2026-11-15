@@ -115,6 +115,14 @@ async fn bip_foreign_builder_discovers_device_through_bbmd_after_observed_regist
 
     let mut discovered = client.device_events();
     client.who_is(None).await.unwrap();
+    // The client's first Who-Is goes after the What-Is-Network-Number it
+    // asks on that first need (#2572): the BBMD and, forwarded, its BDT peer
+    // take the question first.
+    let asked = timeout(Duration::from_secs(2), bbmd_input.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(asked.npdu.as_ref(), [1, 0x80, 0x12]);
     let received = timeout(Duration::from_secs(2), bbmd_input.recv())
         .await
         .unwrap()
@@ -125,6 +133,13 @@ async fn bip_foreign_builder_discovers_device_through_bbmd_after_observed_regist
         if r.service_choice == UnconfirmedServiceChoice::WHO_IS)
     );
     let mut packet = [0; 2048];
+    let (length, _) = timeout(Duration::from_secs(2), observer.recv_from(&mut packet))
+        .await
+        .unwrap()
+        .unwrap();
+    let forwarded = decode_bvll(&packet[..length]).unwrap();
+    assert_eq!(forwarded.function, BvlcFunction::FORWARDED_NPDU);
+    assert_eq!(forwarded.npdu().as_deref(), Some(&[1, 0x80, 0x12][..]));
     let (length, _) = timeout(Duration::from_secs(2), observer.recv_from(&mut packet))
         .await
         .unwrap()

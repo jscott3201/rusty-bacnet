@@ -1037,13 +1037,29 @@ global broadcasts and control fan-outs never draw a reply. The reply enters
 the existing bounded priority queue; refusing that reply cannot start a loop.
 Other failures do not imply a length refusal, even if the port's limit changed.
 
-The default `max_npdu_changes()` result, `None`, says the limit never changes
-once started, which holds for the other
-built-in transports. Wrappers and `AnyTransport` delegate both methods, and a
-wrapper around an MS/TP or BACnet/SC transport that doesn't loses its real
-limit. A custom transport that carries more than 1,497 octets must override
-`max_npdu()`, or a router refuses what it could have sent; one that carries
-less must too, or the router assumes 1,497.
+The default `max_npdu_changes()` result, `None`, says the limit never
+changes once started, which holds for the other built-in transports.
+`link_returns()` is the same kind of receiver for the link itself: a count
+that rises each time the link comes back, for a stack to send again what may
+have gone nowhere meanwhile. BACnet/SC counts each hub connection its
+recovery makes after losing the one it had (a reconnect or a failover, not a
+move back to the primary). B/IP reports a count in every mode, kept across
+restarts, which moves for a foreign device: each registration the BBMD takes
+after an attempt was refused or unanswered or the lease lapsed, and the next
+success, even a renewal, after the BBMD refused a broadcast with a
+Distribute-Broadcast-To-Network NAK; a start's first attempt succeeding is
+none, as the broadcasts made before it were held for it. B/IPv6 counts, for
+a foreign device, each registration the BBMD takes after a broadcast went to
+it unproven: before any success, after a refusal, while a registration had
+gone unanswered for 3 seconds, or refused by that NAK. MS/TP, Ethernet and
+B/IPv6 outside foreign mode return `None`. The standalone client, once it
+has asked its network's number, asks again then while it is still unknown
+(#2572). Wrappers and `AnyTransport` delegate all three methods: a wrapper
+around an MS/TP or BACnet/SC transport that doesn't loses its real limit,
+and one around a transport with returns loses those too. A custom transport
+that carries more than 1,497 octets must override `max_npdu()`, or a router
+refuses what it could have sent; one that carries less must too, or the
+router assumes 1,497.
 
 ### Feature Flags
 
@@ -10147,12 +10163,50 @@ reports each change to such a contest, the end included.
 
 An I-Am that a router relays back from the client's own network, with that
 network's number as its SNET, names a local device: once the client has
-learned the number, it lands on the device's local row (#1358). A relay heard
-before then made a routed row for the same device, and the instance is
-ambiguous until the next relay folds that row into the local one, reported
-`Lost`; `add_routed_device` naming the client's own network stores a local
-row the same way. If the number is never learned, the routed row stays until
-the purge takes it.
+learned the number, it lands on the device's local row (#1358), and
+`add_routed_device` naming the client's own network stores a local row the
+same way. So that it learns the number when it can matter, a client on a
+link that takes the local Number controls asks for it once, on first need:
+one What-Is-Network-Number, a local broadcast, sent right before its first
+Who-Is of any scope (the I-Ams about to arrive may include a relayed one),
+or when it first stores a routed row while the number is unknown (from a
+routed I-Am or `add_routed_device`). It sends nothing at start, and a client
+that only names devices by address never asks. A question that fails to
+send holds the Who-Is back no further and doesn't count, so the next need
+asks again. After a question went, each return of the link
+(`TransportPort::link_returns`) while the number is still unknown asks once
+more; a known number is kept rather than asked for again (Clause 6.4.19,
+#2572). A caller's own `what_is_network_number` counts as the question. On
+MS/TP a question counts as asked once it is queued for the token; one that
+ages out of the queue before the token comes is not sent again, as MS/TP
+reports no link returns.
+
+Until the answer comes, the table is in an interim state. A relay heard then
+makes a routed row for the same device, so its instance is ambiguous, though
+both rows stay reachable by address. A request named by the device's local
+MAC is sized by its local row, or by the configured limits when only the
+routed row exists: while the number is unknown nothing says the routed row's
+network is this one, and the same MAC names other devices on other networks,
+so the client doesn't size by that row. Learning the number, from the answer
+or any later Network-Number-Is, folds the table in the same locked step: a
+routed row on this network whose station has a local row is removed and
+reported `Lost`; one without becomes the local row, keeping what its I-Am
+said, reported `Lost` and then `Discovered`; so does one whose station has
+only an `add_device` row, whose placeholders give way to what the device
+announced (`Updated` for the same instance). Each contest that changed gets
+a collision notice. If nothing on the network knows the number, the routed
+row stays until the purge takes it.
+
+A known number that changes (a learned one replaced by a router's
+configured one, or two configured routers that disagree) is logged as a
+warning naming both, throttled when the number keeps flipping; the table
+follows every change. The rows that were local only by the old number (a
+routed row it folded in, a relay or a routed registration it placed on a
+local row) are dropped then, each reported `Lost`, as nothing now says
+where those devices are. A device that announces itself comes back with
+its next I-Am; one registered with `add_routed_device` never announces, so
+register it again. A row a device's own I-Am, heard with no SNET,
+refreshed stays.
 
 A station is reached by its address too, which is how one of two devices
 sharing an instance is reached (#2560):
@@ -12588,7 +12642,7 @@ Routed controls, malformed payloads and unicast Network-Number-Is are ignored. A
 
 The full server publishes the number its owner holds on `NetworkLayer::local_network_number` (a `bacnet_network::network_number::LocalNetworkNumber` handle), where event routing, writes in other devices and Audit delivery read it without the database lock (#1298, #1358). With a registered Network Port the port stays the one authority: startup copies the port's number there once the bind is published, and the worker copies the port's state after each control under the same database write lock that changed it, so the handle never holds a number the port does not. Without a registered port, the handle holds the number the worker learned. A later announcement that replaces the number takes effect for the next notification or write sent. Nothing withdraws a known number, since no announcement can, so it stays until a new runtime starts again from the configured number or unknown. The standalone client publishes its learned number on its own layer the same way, where its routed requests and network broadcasts read it (#1358); neither exposes its layer. Every sender that reads the number sends a destination naming it as local traffic, with no DNET, and keys a confirmed request to the MAC it went to, since the answer comes from there with no SNET. `NetworkLayer`'s own send methods frame the destination they are given and never rewrite it, so answers to a request, and COV notifications to a subscriber, keep the route the request arrived by. The shared endpoint session's owner publishes on its own layer in the same way, a registered port's number from startup, and the endpoint's requester and source Audit routes read it (#1403); its answers also keep their route.
 
-Standalone clients start UNKNOWN on transports that opt into local nonrouter Number controls. They learn and reply using the same validation and precedence rules, without a Device object, registered Network Port, configured-number setter or persistence. One 256-entry serial worker owns this state; full or closed admission drops only Number controls. A held Number send leaves routed reason-4 Reject correlation and independent APDU dispatch available. Stop aborts and joins both the Number worker and dispatch before transport cleanup, retaining their joins across a canceled stop waiter. Drop aborts both. Already transmitted bytes cannot be retracted. Controlled-client tests qualify the shared intake/lifecycle behavior; Linux NORMAL-B/IP loopback and Ethernet virtual-link tests independently observe actual reply frames. Constrained-TLS SC tests observe Hub broadcast VMAC and exact Number bytes, including replies to direct-peer queries, while ordinary confirmed client requests complete. SC stop/drop retires client connections; the external DirectListener must separately be stopped and joined before its bind is released. Pending-send/queue cancellation remains covered by the generic controlled-client tests, rather than inferred from wire silence. Rust standalone-client B/IPv6 tests independently capture normal selected-link OriginalBroadcast and configured-foreign DBTN with exact source, destination, interface and Number bytes. Positive reply fences cover UNKNOWN, precedence and invalid/admission refusal; stop and eventual Drop release the socket, and reconstruction starts UNKNOWN. These external ignored Linux tests require the integration `ipv6` feature and isolated observer; ordinary hosted CI does not execute them. They add no Python foreign-device API, configured-client authority or physical-LAN claim. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD. Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, the refusal of another sender's Forwarded-NPDU in foreign mode, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration. An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added. MS/TP LoopbackSerial tests also cover the standalone client in both execution modes, with the same frame decoding and fences as the full server and shared endpoint below; its own ReadProperty to the peer completes while a Number send is held.
+Standalone clients start UNKNOWN on transports that opt into local nonrouter Number controls. They learn and reply using the same validation and precedence rules, without a Device object, registered Network Port, configured-number setter or persistence. Unlike the other two owners, a standalone client asks (#2572): one local-broadcast What-Is-Network-Number on first need (before its first Who-Is, or when it first stores a routed row while the number is unknown; never at start), and, once it has asked, one more each time `TransportPort::link_returns` reports the link back while the number is still unknown; a known number is not asked for again, and a change of a known number is logged as a warning. Learning a number folds the client's discovery table to it, as the client's Discovery section describes. One 256-entry serial worker owns this state; full or closed admission drops only Number controls. A held Number send leaves routed reason-4 Reject correlation and independent APDU dispatch available. Stop aborts and joins both the Number worker and dispatch before transport cleanup, retaining their joins across a canceled stop waiter. Drop aborts both. Already transmitted bytes cannot be retracted. Controlled-client tests qualify the shared intake/lifecycle behavior; Linux NORMAL-B/IP loopback and Ethernet virtual-link tests independently observe actual reply frames. Constrained-TLS SC tests observe Hub broadcast VMAC and exact Number bytes, including replies to direct-peer queries, while ordinary confirmed client requests complete. SC stop/drop retires client connections; the external DirectListener must separately be stopped and joined before its bind is released. Pending-send/queue cancellation remains covered by the generic controlled-client tests, rather than inferred from wire silence. Rust standalone-client B/IPv6 tests independently capture normal selected-link OriginalBroadcast and configured-foreign DBTN with exact source, destination, interface and Number bytes. Positive reply fences cover UNKNOWN, precedence and invalid/admission refusal; stop and eventual Drop release the socket, and reconstruction starts UNKNOWN. These external ignored Linux tests require the integration `ipv6` feature and isolated observer; ordinary hosted CI does not execute them. They add no Python foreign-device API, configured-client authority or physical-LAN claim. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD. Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, the refusal of another sender's Forwarded-NPDU in foreign mode, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration. An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added. MS/TP LoopbackSerial tests also cover the standalone client in both execution modes, with the same frame decoding and fences as the full server and shared endpoint below; its own ReadProperty to the peer completes while a Number send is held.
 
 The pre-1.0 Rust helper moved directly from `bacnet_objects::network_port::NetworkNumber` to `bacnet_types::network_number::NetworkNumber`, with no compatibility alias. Its default is UNKNOWN; `configured(number)` returns `None` for reserved 65535. Pure observation reports configured conflicts to the caller for logging. Shared nonrouter packet parsing and reply encoding live in `bacnet_network::network_number`; registered database authority remains in the server/object adapter.
 

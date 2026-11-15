@@ -174,13 +174,14 @@ pub trait TransportPort: Send + Sync {
     fn bip6_port(&self) -> Option<Bip6Port>; // the B/IPv6 counterpart: endpoint, VMAC, group, mode
     fn max_npdu(&self) -> NpduLimits; // longest NPDU sent, unicast and broadcast; default 1497
     fn max_npdu_changes(&self) -> Option<watch::Receiver<NpduLimits>>; // SC: its hub's limit; default None
+    fn link_returns(&self) -> Option<watch::Receiver<u64>>; // SC hub reconnects, B/IP(v6) foreign re-registration; default None
     fn prepare_for_routing(&mut self); // BACnetRouter calls it before start; MS/TP turns on extended frames
 }
 ```
 
 `TransportPort` owns data-link framing and link-specific controls. `NetworkLayer` owns NPDU addressing and APDU delivery forms. The private `bacnet-endpoint-core` runtime can own one network lifecycle and expose bounded ingress and network-service egress to application-role adapters; those role handles cannot start or stop the network or transport. The public `bacnet-endpoint` crate composes sibling requester and bounded responder roles on that private foundation. One `EndpointSession` owns one B/IP, SC or MS/TP transport; this is not a multi-link router or full `bacnet-server` responder replacement. See [endpoint scope](rust-api.md#bacnet-endpoint).
 
-Local nonrouter Number controls take a separate bounded path: one serial state owner per standalone client, full server or shared endpoint consumes eligible parsed controls without blocking independent APDU dispatch. Raw network controls remain available for other consumers, including routed Reject correlation. A client or unregistered owner starts UNKNOWN on an opted-in transport. Only an explicitly registered B/IP receiving-port object, in any B/IP mode, supplies configured number authority; an unrelated database declaration cannot supply it. The capability is separate from registration metadata and from multiport/router behavior. See [Number controls and lifecycle](rust-api.md#local-network-number-controls).
+Local nonrouter Number controls take a separate bounded path: one serial state owner per standalone client, full server or shared endpoint consumes eligible parsed controls without blocking independent APDU dispatch. Raw network controls remain available for other consumers, including routed Reject correlation. A client or unregistered owner starts UNKNOWN on an opted-in transport; the standalone client asks once, on first need (before its first Who-Is, or when it first stores a routed row), and again when the link reports coming back while the number is still unknown (#2572). Only an explicitly registered B/IP receiving-port object, in any B/IP mode, supplies configured number authority; an unrelated database declaration cannot supply it. The capability is separate from registration metadata and from multiport/router behavior. See [Number controls and lifecycle](rust-api.md#local-network-number-controls).
 
 MAC address format varies by transport:
 - **BIP**: 6 bytes (4-byte IPv4 + 2-byte port, big-endian)
