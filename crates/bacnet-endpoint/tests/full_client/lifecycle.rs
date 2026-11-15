@@ -64,7 +64,10 @@ async fn the_session_stopping_first_fails_open_requests_and_waits_for_the_client
         assert_eq!(lab.node_link.stops(), 0);
         assert!(!lab.session.is_running());
         assert!(lab.session.full_client().is_err());
-        // A request made now fails; it is not left waiting.
+        // From here the client sends nothing: a request, a Who-Is in any
+        // scope and a network message each fail at once, and no frame of
+        // theirs reaches the link, which is still up under the client.
+        let (sent, asked) = (lab.node_sent.len(), Instant::now());
         let late = client
             .read_property(
                 &Wire::mac(PEER),
@@ -74,6 +77,20 @@ async fn the_session_stopping_first_fails_open_requests_and_waits_for_the_client
             )
             .await;
         assert!(late.is_err());
+        assert!(client.who_is(None).await.is_err());
+        assert!(
+            client
+                .who_is_directed(&Wire::mac(PEER), None)
+                .await
+                .is_err()
+        );
+        assert!(client.who_is_network(7, None).await.is_err());
+        assert!(client.who_is_router_to_network(None, None).await.is_err());
+        assert!(client.what_is_network_number(None).await.is_err());
+        assert_eq!(asked.elapsed(), Duration::ZERO);
+        assert_eq!(lab.node_sent.len(), sent, "no frame went out");
+        // The link itself is still the client's to reach.
+        assert_eq!(client.transport().handle().stops(), 0);
 
         // The client's own stop succeeds and stops nothing of the node's.
         let mut client = Arc::try_unwrap(client).ok().expect("the only handle");
@@ -109,6 +126,10 @@ async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
         client.stop().await.unwrap();
         assert_eq!(lab.node_link.stops(), 0);
         drop(client);
+        // With the client dropped the session takes another at once, with
+        // no yield for the first one's aborted tasks to end.
+        let at_once = lab.session.full_client().expect("the seat is free");
+        drop(at_once);
         lab.wire.release(&Wire::mac(NODE));
         eventually(WAIT, "the stopped client's lease released", async || {
             lab.session.active_leases() == 0
@@ -202,7 +223,42 @@ async fn a_full_client_needs_a_running_session_with_no_source_audit() {
         .with_source_audit_reporter(oid(ObjectType::AUDIT_REPORTER, 1));
     let error = audited.full_client().err().expect("refused");
     assert!(error.to_string().contains("source Audit Reporter"));
-    assert!(audited.client_seat().is_err());
+}
+
+/// The session's stop must not wait on the full client's dispatch task: one
+/// stuck in the middle of a turn, here in a send the link never finishes,
+/// is aborted.
+#[tokio::test(start_paused = true)]
+async fn the_sessions_stop_does_not_wait_on_a_client_task_stuck_in_a_turn() {
+    let mut lab = lab(SessionRole::Both).await;
+    let client = lab.session.full_client().unwrap();
+    let peer = Wire::mac(PEER);
+    let mut notifications = client.cov_notifications();
+    client
+        .subscribe_cov(&peer, 9, ai1(), true, Some(600))
+        .await
+        .unwrap();
+    notifications.recv().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // The client's next acknowledgment never leaves the link's send.
+    lab.node_link.block_next_send();
+    lab.peer
+        .set_present_value_local(&ai1(), bacnet_types::primitives::PropertyValue::Real(30.0))
+        .await
+        .unwrap();
+    lab.node_link.wait_blocked().await;
+
+    let asked = Instant::now();
+    let stopped = tokio::time::timeout(WAIT, lab.session.stop())
+        .await
+        .expect("the stop doesn't wait on the stuck task");
+    assert!(stopped.is_err(), "the client still holds the link");
+    assert_eq!(asked.elapsed(), Duration::ZERO);
+    drop(client);
+    lab.node_link.release_sends(1);
+    lab.session.stop().await.unwrap();
+    assert_eq!(lab.node_link.stops(), 1);
+    lab.peer.stop().await.unwrap();
 }
 
 /// A frame from node [`OTHER`] that expects a reply, as MS/TP hands one up,

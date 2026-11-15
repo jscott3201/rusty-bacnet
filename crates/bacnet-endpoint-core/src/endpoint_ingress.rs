@@ -73,6 +73,7 @@ pub struct PolicyOutcome {
 }
 
 /// Single-consumer queues produced when endpoint ingress starts.
+#[non_exhaustive]
 pub struct IngressReceivers {
     /// Opted-in single-link local controls, currently NORMAL B/IP, B/IPv6 and SC;
     /// other links retain discard behavior.
@@ -324,6 +325,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     /// `coordinator` shared, and queues of `capacity` APDUs for what is the
     /// client's to take (see [`crate::seat`]). One client at a time. Fails
     /// before start and once the endpoint is stopping.
+    #[doc(hidden)]
     pub fn client_seat(
         &self,
         coordinator: Arc<crate::coordinator::OutboundTransactionCoordinator>,
@@ -351,6 +353,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
 
     /// Whether the last [`Self::stop`] failed because a full client still
     /// holds the link. Dropping that client lets the next stop finish.
+    #[doc(hidden)]
     pub fn link_held(&self) -> bool {
         self.held.is_some()
     }

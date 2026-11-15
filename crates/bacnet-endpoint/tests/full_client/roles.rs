@@ -274,10 +274,28 @@ async fn beside_a_server_role_the_node_answers_as_it_does_with_no_full_client() 
     // What the node sends with no full client.
     let alone = lab(SessionRole::Both).await;
     let expected = ask_the_node(&alone).await;
-    assert!(
-        matches!(expected.last(), Some(Apdu::ComplexAck(ack)) if ack.invoke_id == 3),
-        "the server role reads its Device: {expected:?}"
+    // The narrow server role rejects the file read and the event
+    // notification as services it doesn't know, and reads its Device. The
+    // Reject of the event notification is today's behaviour, pinned here:
+    // step 4 of #2617 puts the full server on a seat, which acknowledges
+    // it, and this expectation changes then.
+    let [
+        Apdu::Reject(file),
+        Apdu::Reject(event),
+        Apdu::ComplexAck(read),
+    ] = &expected[..]
+    else {
+        panic!("the narrow server role's answers: {expected:?}");
+    };
+    assert_eq!(
+        (file.invoke_id, file.reject_reason),
+        (1, RejectReason::UNRECOGNIZED_SERVICE)
     );
+    assert_eq!(
+        (event.invoke_id, event.reject_reason),
+        (2, RejectReason::UNRECOGNIZED_SERVICE)
+    );
+    assert_eq!(read.invoke_id, 3);
     stop(alone).await;
 
     // With one, the octets are the same: the client adds no reject and no
@@ -323,6 +341,33 @@ async fn with_no_server_role_the_full_client_answers_as_a_standalone_client_does
         (3, RejectReason::UNRECOGNIZED_SERVICE)
     );
     assert!(events.try_recv().is_ok());
+
+    // An Unconfirmed-Request still goes to the session itself, with a copy
+    // for the client. Today's narrow server role answers no Who-Is with an
+    // I-Am, so the session's own count of requests that found no server
+    // role is what shows it was handed one.
+    let before = (
+        lab.session.policy_counters().await.no_server_role,
+        lab.session.client_seat_counters().apdus,
+    );
+    let who_is = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
+        service_choice: bacnet_types::enums::UnconfirmedServiceChoice::WHO_IS,
+        service_request: Bytes::new(),
+    });
+    lab.wire
+        .broadcast(&Wire::mac(OTHER), npdu_of(&who_is, false));
+    eventually(
+        WAIT,
+        "the Who-Is at the session and at the seat",
+        async || {
+            let now = (
+                lab.session.policy_counters().await.no_server_role,
+                lab.session.client_seat_counters().apdus,
+            );
+            now == (before.0 + 1, before.1 + 1)
+        },
+    )
+    .await;
 
     drop(client);
     stop(lab).await;

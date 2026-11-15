@@ -590,6 +590,14 @@ impl Tsm {
         }
     }
 
+    /// End every open transaction and let go of the coordinator, so each
+    /// later registration is refused at once: the seat this TSM's client
+    /// ran on has closed (#2617).
+    pub(crate) fn close_coordinated(&mut self) {
+        self.cancel_all_transactions();
+        self.coordinator = None;
+    }
+
     #[cfg(test)]
     pub(crate) fn coordinated_active_count(&self) -> usize {
         self.coordinator

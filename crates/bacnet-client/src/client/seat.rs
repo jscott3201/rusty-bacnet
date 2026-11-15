@@ -11,7 +11,7 @@
 
 use std::task::{Context, Poll};
 
-use bacnet_endpoint_core::seat::{ClientSeat, SeatHold, SeatNumber};
+use bacnet_endpoint_core::seat::{ClientSeat, SeatHold, SeatHolds, SeatNumber};
 use bacnet_network::layer::{ApduReceiver, ReceivedApdu, ReceivedNetworkControl};
 use bacnet_network::network_number::NumberControl;
 
@@ -46,8 +46,13 @@ pub(super) trait Inbound<T: TransportPort + 'static>: Send + 'static {
     /// Start the task that takes the Number controls.
     fn spawn_number_owner(&self, owner: Owner) -> (mpsc::Sender<NumberControl>, JoinHandle<()>);
 
-    /// The APDU queue closed and the dispatch loop ended.
-    fn closed(&self, tsm: &SyncMutex<Tsm>);
+    /// Take the client's transaction state and discovery state, which a
+    /// seat closes when its queues end. Called once, before the dispatch
+    /// task starts.
+    fn bind(&mut self, tsm: &Arc<SyncMutex<Tsm>>, discovery: &Arc<network_number::Discovery>);
+
+    /// The seat's line back to its node, when the client runs on one.
+    fn seat(&self) -> Option<SeatHolds>;
 }
 
 /// A standalone client's own layer and its receivers.
@@ -111,7 +116,12 @@ impl<T: TransportPort + 'static> Inbound<T> for Own<T> {
     }
 
     #[inline(always)]
-    fn closed(&self, _tsm: &SyncMutex<Tsm>) {}
+    fn bind(&mut self, _: &Arc<SyncMutex<Tsm>>, _: &Arc<network_number::Discovery>) {}
+
+    #[inline(always)]
+    fn seat(&self) -> Option<SeatHolds> {
+        None
+    }
 }
 
 /// A node's layer with the seat's hold on it. The layer is the first field,
@@ -130,6 +140,24 @@ pub(super) struct Seated<T: TransportPort> {
     /// A server role answers for the device.
     server: bool,
     number: SeatNumber,
+    holds: SeatHolds,
+    /// What closes with the seat: see the `Drop`.
+    closing: Option<(Arc<SyncMutex<Tsm>>, Arc<network_number::Discovery>)>,
+}
+
+/// The seat's queues are gone, with the dispatch task that read them: the
+/// node stopped or dropped the seat, or aborted the task, or the client was
+/// stopped. Nothing can answer a request any more, so the open ones fail
+/// now, not at their timeouts, and no new one is sent: a confirmed request
+/// finds no coordinator, and the sends that keep no transaction find the
+/// seal. The client's `transport()` is left as it is.
+impl<T: TransportPort> Drop for Seated<T> {
+    fn drop(&mut self) {
+        if let Some((tsm, discovery)) = self.closing.take() {
+            discovery.asking.seal();
+            tsm.lock().close_coordinated();
+        }
+    }
 }
 
 impl<T: TransportPort + 'static> Inbound<T> for Seated<T> {
@@ -177,10 +205,25 @@ impl<T: TransportPort + 'static> Inbound<T> for Seated<T> {
         spawn_seated_number(held, owner, self.number.clone())
     }
 
-    /// The node stopped or dropped the seat: nothing can answer the open
-    /// requests any more, so they fail now, not at their timeouts.
-    fn closed(&self, tsm: &SyncMutex<Tsm>) {
-        tsm.lock().cancel_all_transactions();
+    fn bind(&mut self, tsm: &Arc<SyncMutex<Tsm>>, discovery: &Arc<network_number::Discovery>) {
+        self.closing = Some((Arc::clone(tsm), Arc::clone(discovery)));
+    }
+
+    fn seat(&self) -> Option<SeatHolds> {
+        Some(self.holds.clone())
+    }
+}
+
+impl<T: TransportPort> BACnetClient<T> {
+    /// Refuse a send that keeps no transaction once the client's seat has
+    /// closed. A client with a transport of its own has no seat to close.
+    pub(super) fn seat_open(&self) -> Result<(), Error> {
+        if self.device_table.asking.is_sealed() {
+            return Err(Error::Encoding(
+                "the client's seat has closed: its node stopped".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -287,15 +330,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///   It rejects no other Confirmed-Request, and a
     ///   ConfirmedEventNotification is published to
     ///   [`Self::event_notifications`] without an acknowledgment, which is
-    ///   the server role's to send. With no server role it answers as a
-    ///   standalone client does;
+    ///   the server role's to send. An endpoint's narrow server role doesn't
+    ///   execute that service and answers it with a Reject (unrecognized
+    ///   service), until a full server takes a seat (#2617 step 4). With no
+    ///   server role the client answers as a standalone client does;
     /// - the node has the one owner of the local network number. This
     ///   client still asks What-Is-Network-Number on first need, but it
     ///   never answers one, and it takes the number the node's owner
     ///   publishes;
     /// - [`Self::stop`] stops the client alone. The node stops the link,
     ///   which it can do once this client is dropped. When the node stops
-    ///   first, this client's open requests fail and its tasks end.
+    ///   first, this client's tasks end, its open requests fail, and it
+    ///   sends nothing more: every later request and unconfirmed send
+    ///   fails at once. [`Self::transport`] is the node's link for as long
+    ///   as the client lives, and a call made on it directly, such as a
+    ///   B/IP BVLC query, still goes out.
     ///
     /// Must be called within a Tokio runtime. Fails on settings
     /// [`Self::start_with_options`] refuses, and once the node is stopping.
@@ -322,7 +371,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             ..
         } = seat;
         let hold = holds
-            .take()
+            .hold()
             .ok_or_else(|| Error::Encoding("the seat's node is stopping".into()))?;
         let inbound = Seated {
             held: HeldNetwork {
@@ -333,6 +382,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             controls,
             server: roles.server,
             number,
+            holds,
+            closing: None,
         };
         Ok(Self::assemble(config, options, inbound, coordinator))
     }

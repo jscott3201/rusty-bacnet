@@ -41,6 +41,10 @@ pub(super) struct Asking {
     /// A question went out. A send that failed doesn't count, so the next
     /// need asks again.
     asked: AtomicBool,
+    /// The seat this client ran on has closed (#2617): its node stopped or
+    /// dropped it, or the client was stopped. Nothing more is sent. Never
+    /// set for a client with a transport of its own.
+    sealed: AtomicBool,
     /// Held across a send, so two needs at once ask once.
     sending: tokio::sync::Mutex<()>,
     /// Wakes the owner to ask for the dispatch task, which never waits on
@@ -54,6 +58,16 @@ impl Asking {
             numbers,
             ..Self::default()
         }
+    }
+
+    /// The client's seat closed: see the field.
+    pub(super) fn seal(&self) {
+        self.sealed.store(true, Ordering::Release);
+    }
+
+    /// Whether the client's seat has closed.
+    pub(super) fn is_sealed(&self) -> bool {
+        self.sealed.load(Ordering::Relaxed)
     }
 
     /// Wait until the dispatch task wants the number asked for.

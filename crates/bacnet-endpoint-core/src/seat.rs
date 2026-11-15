@@ -38,14 +38,17 @@
 //!
 //! # Lifetime
 //!
-//! The endpoint stops the link. Its stop closes the seat's queues, which
-//! ends the client's tasks, then waits for each task's [`SeatHold`] before
-//! it takes the layer back. A client that is still alive then keeps its own
-//! reference to the layer, so the endpoint cannot stop the transport until
-//! that client is dropped.
+//! The endpoint stops the link. Its stop closes the seat's queues and aborts
+//! the client's tasks, which the client names when it starts
+//! ([`SeatHolds::abort_on_stop`]), then waits for each task's [`SeatHold`]
+//! before it takes the layer back: a task in the middle of a turn can't hold
+//! the stop up. A client that is still alive then keeps its own reference to
+//! the layer, so the endpoint cannot stop the transport until that client is
+//! dropped.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::any::Any;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu, ReceivedNetworkControl};
 use bacnet_transport::port::TransportPort;
@@ -84,24 +87,58 @@ impl SeatRoles {
 /// it, so the endpoint's stop can wait for those tasks. Keep it in a field
 /// after the layer's `Arc`: fields drop in order, so the layer has been let
 /// go when the hold is seen to drop.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct SeatHold(#[allow(dead_code)] mpsc::Sender<()>);
 
-/// Makes the [`SeatHold`]s of one seat. It is not a hold itself, so a seat
-/// nobody started a client on doesn't keep the endpoint's stop waiting.
-#[derive(Clone, Debug)]
-pub struct SeatHolds(mpsc::WeakSender<()>);
+/// What the endpoint knows of the client on a seat.
+#[derive(Default)]
+struct SeatedClient {
+    /// The client's tasks, aborted when the endpoint stops.
+    tasks: Vec<tokio::task::AbortHandle>,
+    /// Dead once the client itself is dropped.
+    alive: Option<Weak<dyn Any + Send + Sync>>,
+}
+
+/// A seat's line back to its endpoint: the [`SeatHold`]s of the client's
+/// tasks, the tasks themselves, and whether the client still lives. It is
+/// not a hold itself, so a seat nobody started a client on doesn't keep the
+/// endpoint's stop waiting.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct SeatHolds {
+    holds: mpsc::WeakSender<()>,
+    client: Arc<Mutex<SeatedClient>>,
+}
 
 impl SeatHolds {
+    fn client(&self) -> std::sync::MutexGuard<'_, SeatedClient> {
+        self.client.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// A hold for one task, or `None` once the endpoint is stopping.
-    pub fn take(&self) -> Option<SeatHold> {
-        self.0.upgrade().map(SeatHold)
+    pub fn hold(&self) -> Option<SeatHold> {
+        self.holds.upgrade().map(SeatHold)
+    }
+
+    /// Have the endpoint's stop abort `task`, which keeps the layer: the
+    /// stop then never waits on that task's own progress.
+    pub fn abort_on_stop(&self, task: tokio::task::AbortHandle) {
+        self.client().tasks.push(task);
+    }
+
+    /// The client lives while `client` can be upgraded. Once it can't, the
+    /// endpoint takes another client at once, without waiting for the
+    /// dropped one's tasks to finish ending.
+    pub fn alive_while(&self, client: Weak<dyn Any + Send + Sync>) {
+        self.client().alive = Some(client);
     }
 }
 
 /// Tells a seated client that the node's Number owner may have changed the
 /// layer's local network number. The seated client runs no Number owner of
 /// its own; it folds its discovery table when this fires.
+#[doc(hidden)]
 #[derive(Clone, Debug, Default)]
 pub struct SeatNumber(Arc<Notify>);
 
@@ -118,22 +155,29 @@ impl SeatNumber {
 }
 
 /// What a full client is handed in place of a transport: see the
-/// [module docs](self).
+/// [module docs](self). Its parts are for the client that runs on it.
 #[non_exhaustive]
 pub struct ClientSeat<T: TransportPort> {
     /// The node's started network layer. The seat never stops it.
+    #[doc(hidden)]
     pub network: Arc<NetworkLayer<T>>,
     /// The node's one pool of invoke IDs.
+    #[doc(hidden)]
     pub coordinator: Arc<OutboundTransactionCoordinator>,
     /// The APDUs that are the client's.
+    #[doc(hidden)]
     pub apdus: mpsc::Receiver<ReceivedApdu>,
     /// A copy of every network control the node receives.
+    #[doc(hidden)]
     pub controls: mpsc::Receiver<ReceivedNetworkControl>,
     /// The other roles on the node.
+    #[doc(hidden)]
     pub roles: SeatRoles,
     /// Fires when the node's Number owner publishes the network number.
+    #[doc(hidden)]
     pub number: SeatNumber,
-    /// A hold for each task that keeps [`Self::network`].
+    /// The line back to the endpoint, for each task that keeps the layer.
+    #[doc(hidden)]
     pub holds: SeatHolds,
 }
 
@@ -164,6 +208,24 @@ pub(crate) struct Attached {
     pub(crate) controls: mpsc::Sender<ReceivedNetworkControl>,
     pub(crate) coordinator: Arc<OutboundTransactionCoordinator>,
     pub(crate) roles: SeatRoles,
+    client: Arc<Mutex<SeatedClient>>,
+}
+
+impl Attached {
+    fn client(&self) -> std::sync::MutexGuard<'_, SeatedClient> {
+        self.client.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the seat still has, or may still get, a client: its queue is
+    /// open, and the client that started on it has not been dropped.
+    fn occupied(&self) -> bool {
+        let dropped = self
+            .client()
+            .alive
+            .as_ref()
+            .is_some_and(|alive| alive.strong_count() == 0);
+        !self.apdus.is_closed() && !dropped
+    }
 }
 
 struct State {
@@ -176,6 +238,10 @@ struct State {
 /// attaches seats, and its ingress task, which routes to the one attached.
 pub(crate) struct SeatSlot {
     state: Mutex<State>,
+    /// Whether a seat is attached, so an endpoint with none takes no lock
+    /// for an APDU or a control. A seat counts from the next APDU after it
+    /// attaches.
+    attached: AtomicBool,
     number: SeatNumber,
     apdus: AtomicU64,
     full_drops: AtomicU64,
@@ -197,6 +263,7 @@ impl SeatSlot {
                 attached: None,
                 holds: Some(holds),
             }),
+            attached: AtomicBool::new(false),
             number: SeatNumber::default(),
             apdus: AtomicU64::new(0),
             full_drops: AtomicU64::new(0),
@@ -239,23 +306,22 @@ impl SeatSlot {
         let Some(holds) = state.holds.as_ref().map(mpsc::Sender::downgrade) else {
             return Err(Error::Encoding("endpoint shutdown".into()));
         };
-        if state
-            .attached
-            .as_ref()
-            .is_some_and(|attached| !attached.apdus.is_closed())
-        {
+        if state.attached.as_ref().is_some_and(Attached::occupied) {
             return Err(Error::Encoding(
                 "the endpoint already has a full client: drop it before making another".into(),
             ));
         }
         let (apdu_tx, apdus) = mpsc::channel(capacity);
         let (control_tx, controls) = mpsc::channel(CLIENT_SEAT_CONTROL_QUEUE);
+        let client = Arc::new(Mutex::new(SeatedClient::default()));
         state.attached = Some(Attached {
             apdus: apdu_tx,
             controls: control_tx,
             coordinator: Arc::clone(&coordinator),
             roles,
+            client: Arc::clone(&client),
         });
+        self.attached.store(true, Ordering::Relaxed);
         Ok(ClientSeat {
             network,
             coordinator,
@@ -263,20 +329,28 @@ impl SeatSlot {
             controls,
             roles,
             number: self.number.clone(),
-            holds: SeatHolds(holds),
+            holds: SeatHolds { holds, client },
         })
     }
 
-    /// Close the seat's queues and make no more seats: the endpoint is
-    /// stopping.
+    /// Close the seat's queues, abort its client's tasks and make no more
+    /// seats: the endpoint is stopping.
     pub(crate) fn close(&self) {
         let mut state = self.state();
-        state.attached = None;
+        self.attached.store(false, Ordering::Relaxed);
+        if let Some(attached) = state.attached.take() {
+            for task in attached.client().tasks.drain(..) {
+                task.abort();
+            }
+        }
         state.holds = None;
     }
 
     /// Run `route` with the attached seat, if a live one is attached.
     pub(crate) fn with<R>(&self, route: impl FnOnce(&Attached) -> R) -> Option<R> {
+        if !self.attached.load(Ordering::Relaxed) {
+            return None;
+        }
         let mut state = self.state();
         if state
             .attached
@@ -284,6 +358,7 @@ impl SeatSlot {
             .is_some_and(|attached| attached.apdus.is_closed())
         {
             state.attached = None;
+            self.attached.store(false, Ordering::Relaxed);
         }
         state.attached.as_ref().map(route)
     }

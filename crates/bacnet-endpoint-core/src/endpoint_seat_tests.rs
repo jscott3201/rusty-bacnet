@@ -295,15 +295,40 @@ async fn a_client_that_stops_reading_is_skipped_and_counted() {
         );
     }
     inject(&seated.link, READ_PROPERTY).await;
-    receive(&mut seated.ingress.inbound_requests).await;
-    // An APDU that is the seat's alone is dropped too, not handed back.
+    assert_eq!(
+        receive(&mut seated.ingress.inbound_requests)
+            .await
+            .apdu
+            .as_ref(),
+        READ_PROPERTY
+    );
+    // An APDU that is the seat's alone is dropped too, never handed to the
+    // endpoint in the client's place: not a notification, which the server
+    // role would answer, and not an answer to the client's request, which
+    // the endpoint's answer handling would claim for the wrong role.
+    let lease = seated.coordinator.reserve(requester(&PEER)).unwrap();
     inject(&seated.link, COV_NOTIFICATION).await;
+    inject(&seated.link, &[0x20, lease.invoke_id(), 0x0c]).await;
+    // The next request is the first thing the endpoint sees after them.
     inject(&seated.link, READ_PROPERTY).await;
-    receive(&mut seated.ingress.inbound_requests).await;
+    assert_eq!(
+        receive(&mut seated.ingress.inbound_requests)
+            .await
+            .apdu
+            .as_ref(),
+        READ_PROPERTY
+    );
+    assert!(seated.ingress.inbound_requests.try_recv().is_err());
+    assert!(seated.ingress.terminal_or_segment.try_recv().is_err());
+    assert!(seated.ingress.policy_outcomes.try_recv().is_err());
 
     let counters = seated.endpoint.client_seat_counters();
-    assert_eq!((counters.apdus, counters.full_drops), (2, 4));
-    assert!(seated.ingress.policy_outcomes.try_recv().is_err());
+    assert_eq!((counters.apdus, counters.full_drops), (2, 5));
+    // Only the two that fit are the client's.
+    for _ in 0..2 {
+        assert_eq!(receive(&mut seated.seat.apdus).await.apdu.as_ref(), WHO_IS);
+    }
+    assert!(seated.seat.apdus.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -415,7 +440,7 @@ async fn stop_ends_the_seat_and_waits_for_the_tasks_that_hold_the_layer() {
     } = seat;
     // A client's task: it keeps the layer and a hold until its queue closes,
     // and lets go of the layer first.
-    let hold = holds.take().expect("a hold while the endpoint runs");
+    let hold = holds.hold().expect("a hold while the endpoint runs");
     let released = Arc::new(Notify::new());
     let release = Arc::clone(&released);
     let task = tokio::spawn(async move {
@@ -435,7 +460,57 @@ async fn stop_ends_the_seat_and_waits_for_the_tasks_that_hold_the_layer() {
     assert!(matches!(stop.await.unwrap(), ClassifierExit::Cancelled));
     task.await.unwrap();
     assert_eq!(link.stops(), 1);
-    assert!(holds.take().is_none(), "no hold once the endpoint stopped");
+    assert!(holds.hold().is_none(), "no hold once the endpoint stopped");
+}
+
+#[tokio::test]
+async fn stop_aborts_a_seated_clients_task_that_would_never_end_by_itself() {
+    let Seated {
+        mut endpoint,
+        link,
+        seat,
+        ..
+    } = seated(true, 8).await;
+    let ClientSeat { network, holds, .. } = seat;
+    // A client's task stuck in the middle of a turn: it holds the layer and
+    // never looks at its queue again. The client named it to the endpoint.
+    let hold = holds.hold().unwrap();
+    let task = tokio::spawn(async move {
+        let _held = (network, hold);
+        std::future::pending::<()>().await;
+    });
+    holds.abort_on_stop(task.abort_handle());
+
+    let exit = timeout(WAIT, endpoint.stop())
+        .await
+        .expect("the stop doesn't wait on the stuck task");
+    assert!(matches!(exit.unwrap(), ClassifierExit::Cancelled));
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_eq!(link.stops(), 1);
+}
+
+#[tokio::test]
+async fn a_dropped_client_frees_the_seat_before_its_tasks_have_ended() {
+    let Seated {
+        endpoint,
+        coordinator,
+        seat,
+        ..
+    } = seated(true, 8).await;
+    // The client's task keeps the seat's queue, as an aborted task does
+    // until the runtime next runs it; the client itself is what `alive`
+    // stands for.
+    let alive: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+    seat.holds.alive_while(Arc::downgrade(&alive));
+    let again = |endpoint: &EndpointIngress<TestTransport>| {
+        endpoint.client_seat(Arc::clone(&coordinator), SeatRoles::new(true), 8)
+    };
+    assert!(again(&endpoint).is_err(), "the client lives");
+    drop(alive);
+    // No yield between the drop and the next seat.
+    let next = again(&endpoint).expect("the dropped client's seat is free");
+    assert!(again(&endpoint).is_err(), "and taken again");
+    drop((seat, next));
 }
 
 #[tokio::test]
@@ -453,7 +528,7 @@ async fn stop_fails_while_a_client_keeps_the_layer_and_finishes_once_it_is_dropp
     assert!(error.to_string().contains("full client still holds"));
     assert!(endpoint.link_held());
     assert_eq!(link.stops(), 0);
-    assert!(seat.holds.take().is_none());
+    assert!(seat.holds.hold().is_none());
     assert!(
         endpoint
             .client_seat(coordinator, SeatRoles::new(true), 8)

@@ -59,7 +59,6 @@ async fn who_is_fills_the_full_clients_table_in_each_scope() {
     .await;
     assert!(lab.session.is_running());
     assert_eq!(lab.session.client_seat_counters().full_drops, 0);
-
     drop((client, other));
     stop(lab).await;
 }

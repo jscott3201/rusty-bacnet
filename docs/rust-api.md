@@ -13108,6 +13108,46 @@ B/IPv6 has no endpoint builder: compose `EndpointSession::new` over a
 Ethernet has no endpoint builder: keep the standalone path there. Do not expect
 identical administration across data links.
 
+### Full client on an endpoint
+
+`EndpointSession::full_client()` returns a full `BACnetClient` on the
+session's one transport, beside its server role and its narrow client role
+(#2617). It has every call a client with its own transport has: discovery in
+every scope, segmented reads, files, COV, router discovery, and the link's own
+calls and frame tap through `transport()`. It shares the session's pool of
+invoke IDs, and `bacnet_ops::Client::over` takes it as it is.
+`full_client_with(options)` sets the client's startup options.
+
+```rust
+use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
+
+let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
+session.start().await?;
+let client = session.full_client()?;
+client.who_is(None).await?;
+drop(client); // before the session stops
+session.stop().await?;
+```
+
+- One full client at a time; another is refused until the first is dropped.
+- A session with a source Audit Reporter refuses a full client, whose
+  requests would not be audited.
+- Beside a server role the client answers only the COV notifications of its
+  own subscriptions. The narrow server role answers a
+  ConfirmedEventNotification with a Reject (unrecognized service) while the
+  client still publishes it; the full server will acknowledge it when it
+  takes a seat. A session with no server role leaves the client to answer as
+  a standalone client does.
+- The session has the one owner of the local network number: the client asks
+  What-Is-Network-Number on first need and never answers one.
+- Stopping: drop the client first. A `stop()` while it lives closes the
+  session's roles, ends the client's tasks, fails its open requests, and
+  returns an error naming the client; call `stop()` again once the client is
+  dropped. From the first `stop()` the client sends nothing more: requests
+  and unconfirmed sends fail at once. Only a call made directly on
+  `client.transport()`, such as a BVLC query, still reaches the link until
+  the client is dropped.
+
 ### Endpoint shutdown and the object database
 
 `EndpointSession::stop()` joins its request owners, removes source membership,

@@ -194,6 +194,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let tsm_dispatch = Arc::clone(&tsm);
         let device_table = Arc::new(network_number::Discovery::new(numbers, S::SEATED));
         let device_table_dispatch = Arc::clone(&device_table);
+        inbound.bind(&tsm, &device_table);
+        let seat = inbound.seat();
         let (cov_tx, _) =
             broadcast::channel::<ReceivedCOVNotification>(options.cov_channel_capacity);
         let cov_tx_dispatch = cov_tx.clone();
@@ -397,13 +399,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // The receive queue closed: no device can be heard from again,
             // so the purge ends with the loop, as it did inside it.
             device_purge.abort();
-            inbound.closed(&tsm_dispatch);
         });
 
         // Shared: each paced request's guard keeps the pacer it reports to.
         let pacer = Arc::new(pacing::RequestPacer::new(Duration::from_millis(
             config.min_request_interval_ms,
         )));
+        // On a seat, the node aborts these tasks when it stops, and takes
+        // another client as soon as this one, which alone keeps the pacer,
+        // is dropped (#2617).
+        if let Some(seat) = seat {
+            seat.abort_on_stop(dispatch_task.abort_handle());
+            if let Some(task) = &network_number_task {
+                seat.abort_on_stop(task.abort_handle());
+            }
+            let alive: Arc<dyn std::any::Any + Send + Sync> = pacer.clone();
+            seat.alive_while(Arc::downgrade(&alive));
+        }
         Self {
             config,
             network,

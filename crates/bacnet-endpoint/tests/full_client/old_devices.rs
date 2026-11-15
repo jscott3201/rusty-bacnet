@@ -72,9 +72,11 @@ async fn answers_nobody_asked_for_and_octets_that_are_no_apdu_are_counted_and_dr
     })
     .await;
 
-    // None reached the client, and the node said nothing back: a stray
-    // segment or Segment-ACK earns no Abort from a node whose client did
-    // not ask.
+    // None reached the client, and the node said nothing back. For a stray
+    // segment of a Complex-ACK or a stray Segment-ACK that is a known gap:
+    // Clause 5.4.4.1 has an idle client abort one, and a standalone client
+    // does. An answer no lease holds stays with the endpoint today; the gap
+    // closes when such answers are routed to the seat (#2617).
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert_eq!(lab.session.client_seat_counters().apdus, 0);
     assert_eq!(lab.node_sent.len(), sent);

@@ -143,8 +143,9 @@ pub enum LeaseHolder {
     /// A full client's request: every [`LeaseOwner::Requester`] lease that
     /// was not marked as the endpoint requester's.
     Client,
-    /// The narrow endpoint requester's request
-    /// ([`OutboundTransactionCoordinator::mark_endpoint_requester`]).
+    /// The narrow endpoint requester's request, which it marked as its own.
+    /// Goes when that requester does (#2617).
+    #[doc(hidden)]
     EndpointRequester,
     /// A request the server role started ([`LeaseOwner::Notification`]).
     Server,
@@ -579,6 +580,7 @@ impl OutboundTransactionCoordinator {
     /// the same coordinator (#2617). The requester calls this as it
     /// registers the transaction, before the request is sent. With no active
     /// lease nothing is marked.
+    #[doc(hidden)]
     pub fn mark_endpoint_requester(&self, invoke_id: u8) -> Result<(), CoordinatorError> {
         let mut state = self
             .state

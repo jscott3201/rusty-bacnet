@@ -109,6 +109,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: UnconfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<(), Error> {
+        self.seat_open()?;
         let apdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
             service_choice,
             service_request: Bytes::copy_from_slice(service_data),
