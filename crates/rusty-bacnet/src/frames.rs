@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use tokio::sync::{Notify, broadcast::error::RecvError};
 
-use crate::event_stream::{EventSource, LossyReceiver};
+use crate::event_stream::{EventSource, LossyReceiver, Lost};
 
 static EPOCH: OnceLock<Instant> = OnceLock::new();
 
@@ -29,7 +29,7 @@ pub(crate) fn capacity(capacity: usize) -> PyResult<usize> {
 pub(crate) struct PyFrame {
     frame: TappedFrame,
     local_address: String,
-    missed: u64,
+    missed_before: u64,
 }
 
 #[pymethods]
@@ -86,11 +86,12 @@ impl PyFrame {
         PyBytes::new(py, &self.frame.bytes)
     }
 
-    /// Cumulative queue overflow at the first delivery attempt. A cancelled
-    /// read's redelivery keeps this snapshot; use the iterator for a live count.
+    /// Frames this subscription missed just before this one: dropped by its
+    /// full queue, or lost on the way to Python with the gap such a frame
+    /// carried. A cancelled read's redelivery keeps the value.
     #[getter]
-    fn missed(&self) -> u64 {
-        self.missed
+    fn missed_before(&self) -> u64 {
+        self.missed_before
     }
 }
 
@@ -106,11 +107,43 @@ struct SourceState {
     closed: Notify,
     /// Preserve the final count after the receiver is released.
     final_missed: std::sync::atomic::AtomicU64,
+    /// What the last frame converted reported, for the next one.
+    carry: Mutex<Carry>,
+}
+
+/// The gap the last converted frame reported, and the stream's lost count
+/// when it was converted. A leaf lock: held only for the arithmetic.
+#[derive(Default)]
+struct Carry {
+    reported: u64,
+    lost: u64,
 }
 
 impl SourceState {
     fn receiver(&self) -> MutexGuard<'_, Option<FrameTapReceiver>> {
         self.receiver.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The `missed_before` of a fresh frame whose queue gap is `queue_gap`,
+    /// when the stream has lost `lost` deliveries so far.
+    ///
+    /// One delivery is in flight at a time, and a frame is converted only
+    /// once the delivery before it settled, so a loss counted since the
+    /// last conversion lost that last frame: the frame and the gap it
+    /// reported both fall in front of this one. The sum of `missed_before`
+    /// over the frames Python received, plus whatever was lost after the
+    /// last of them, is then the iterator's `missed`.
+    fn missed_before(&self, queue_gap: u64, lost: u64) -> u64 {
+        let mut carry = self.carry.lock().unwrap_or_else(PoisonError::into_inner);
+        let lost_since = lost.saturating_sub(carry.lost);
+        let carried = if lost_since == 0 {
+            0
+        } else {
+            lost_since.saturating_add(carry.reported)
+        };
+        let reported = queue_gap.saturating_add(carried);
+        *carry = Carry { reported, lost };
+        reported
     }
 
     fn close(&self) {
@@ -182,6 +215,7 @@ impl FrameSubscriptions {
             receiver: Mutex::new(Some(receiver)),
             closed: Notify::new(),
             final_missed: Default::default(),
+            carry: Mutex::default(),
         }));
         let subscription = Arc::new(Subscription {
             stream: LossyReceiver::from_source(source.clone()),
@@ -219,6 +253,39 @@ pub(crate) struct PyFrameIterator {
     local_address: String,
 }
 
+/// What a read's future needs to turn a tapped frame into a Python
+/// `Frame`. It holds the source and the stream's lost count, never the
+/// subscription, so a pending read doesn't keep a dropped iterator open.
+struct Converter {
+    source: FrameSource,
+    lost: Lost,
+    local_address: String,
+}
+
+impl Converter {
+    fn frame(&self, frame: TappedFrame) -> PyFrame {
+        let missed_before = self
+            .source
+            .0
+            .missed_before(frame.missed_before, self.lost.get());
+        PyFrame {
+            frame,
+            local_address: self.local_address.clone(),
+            missed_before,
+        }
+    }
+}
+
+impl PyFrameIterator {
+    fn converter(&self) -> Converter {
+        Converter {
+            source: self.subscription.source.clone(),
+            lost: self.subscription.stream.lost(),
+            local_address: self.local_address.clone(),
+        }
+    }
+}
+
 #[pymethods]
 impl PyFrameIterator {
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -227,27 +294,21 @@ impl PyFrameIterator {
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let (next, put_back) = self.subscription.stream.next();
-        let local_address = self.local_address.clone();
-        let source = self.subscription.source.clone();
+        let convert = self.converter();
         crate::py_async::future_into_py_or_put_back(
             py,
             async move {
                 next.await
-                    .map(|next| {
-                        next.map(|frame| PyFrame {
-                            frame,
-                            local_address,
-                            missed: source.0.missed(),
-                        })
-                    })
+                    .map(|next| next.map(|frame| convert.frame(frame)))
                     .ok_or_else(|| PyStopAsyncIteration::new_err("frame observation ended"))
             },
             put_back,
         )
     }
 
-    /// Frames lost to queue overflow or a failed delivery to Python.
-    /// Full queues drop new arrivals. The count remains readable after close.
+    /// Frames lost so far, live: dropped by the full queue (which keeps
+    /// the oldest frames) or lost on the way to Python, including any lost
+    /// after the last frame read. The count remains readable after close.
     #[getter]
     fn missed(&self) -> u64 {
         self.subscription.source.0.missed() + self.subscription.stream.missed()

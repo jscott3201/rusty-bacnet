@@ -58,7 +58,7 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(frame.link, "BACnet/IP")
             self.assertEqual(frame.local_address, await endpoint.local_address())
             self.assertEqual(frame.peer, await remote.local_address())
-            self.assertEqual(frame.missed, 0)
+            self.assertEqual(frame.missed_before, 0)
             with self.assertRaises(AttributeError):
                 frame.timestamp = 0
 
@@ -75,10 +75,21 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.octets, payload)
             self.assertEqual(event.peer, "%s:%d" % peer.getsockname())
             self.assertEqual(event.direction, "inbound")
+        # The full queue kept the oldest frame and lost the four after it:
+        # nothing has reported that trailing gap yet, but the total has it.
         self.assertEqual(slow.missed, 4)
         first = await self.next(slow)
         self.assertEqual(first.octets, b"malformed datagram \x00")
-        self.assertEqual(first.missed, 4)
+        self.assertEqual(first.missed_before, 0)
+        # The next frame queued reports the gap in front of it, once.
+        gaps = []
+        for payload in (b"after the gap", b"no gap"):
+            await self.send(peer, address, payload)
+            self.assertEqual((await self.next(witness)).octets, payload)
+            event = await self.next(slow)
+            self.assertEqual(event.octets, payload)
+            gaps.append(event.missed_before)
+        self.assertEqual(gaps, [4, 0])
         self.assertEqual(witness.missed, 0)
         await slow.aclose()
         self.assertEqual(slow.missed, 4)
