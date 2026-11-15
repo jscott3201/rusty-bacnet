@@ -174,6 +174,13 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         true
     }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        // A stop, before a start or after one, lets go of the hub sockets
+        // the transport was given (#2617).
+        if self.stop_gate.is_stopped() {
+            return Err(Error::Encoding(
+                "BACnet/SC transport was stopped: a stopped SC transport cannot start again".into(),
+            ));
+        }
         if let Some(config) = &self.reconnect_config {
             config.validate()?;
         }

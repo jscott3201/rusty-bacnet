@@ -581,11 +581,9 @@ impl NodeHandle {
                 Admission::Hold => state.held.push_back(copy()),
                 Admission::Send if waiting => {
                     if state.queued.len() >= usize::from(HELD_BROADCASTS) {
-                        if !state.stopped {
-                            let mut counters = NodeCounters::default();
-                            counters.broadcasts_hold_full = 1;
-                            self.record.absorb(&counters);
-                        }
+                        let mut counters = NodeCounters::default();
+                        counters.broadcasts_hold_full = 1;
+                        self.record.absorb(&counters);
                         return Err(self.refuse_send(SendRefusal::HoldFull));
                     }
                     state.queued.push(copy());

@@ -187,6 +187,14 @@ async fn sc_stop_through_a_shared_reference_fails_every_later_send() {
     other.stop().await.unwrap();
 }
 
+/// A start's error once the transport was stopped says so.
+fn stopped_start<T: std::fmt::Debug>(started: Result<T, Error>) -> bool {
+    let message = started
+        .expect_err("a stopped transport started")
+        .to_string();
+    message.contains("was stopped") && message.contains("cannot start again")
+}
+
 /// A stop before start lets go of the socket it was given, as a drop
 /// would, and a later start fails as one after a stop does (#2617).
 #[tokio::test]
@@ -198,5 +206,14 @@ async fn sc_stop_before_start_lets_go_of_the_socket() {
         .await
         .unwrap();
     assert!(closed.is_err(), "the socket closed");
-    assert!(transport.start().await.is_err());
+    assert!(stopped_start(transport.start().await));
+}
+
+/// A transport stopped after it ran doesn't start again either, and says
+/// why rather than that it is already running.
+#[tokio::test]
+async fn sc_start_after_a_stop_says_the_transport_was_stopped() {
+    let (mut transport, _ws_hub) = start_loopback_sc([0x01; 6], [0x10; 6]).await;
+    transport.stop().await.unwrap();
+    assert!(stopped_start(transport.start().await));
 }
