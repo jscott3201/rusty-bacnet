@@ -545,3 +545,6 @@ mod identity;
 
 #[path = "desk_place_tests.rs"]
 mod place;
+
+#[path = "desk_policy_tests.rs"]
+mod policy;

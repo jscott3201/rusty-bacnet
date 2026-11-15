@@ -38,6 +38,9 @@ use crate::class::Class;
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::octets::hex;
 
+/// What a write does to Present_Value: `bacnet-ops`' analysis, which the
+/// planner builds on.
+pub use bacnet_ops::write::Effect;
 pub use place::{Unsent, reach, revert_address, turn};
 pub use send::item_json;
 
@@ -253,7 +256,9 @@ pub struct WriteSpec {
     pub priority: Option<u8>,
 }
 
-/// Who holds the slot a commandable write goes to.
+/// Who holds the slot a commandable write goes to: `bacnet-ops`' answer
+/// ([`bacnet_ops::write::Occupancy`]) with the ledger's, which says whose
+/// command a held slot is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Occupancy {
     /// The property is not commandable.
@@ -265,26 +270,6 @@ pub enum Occupancy {
     /// It holds another commander's value, which the write replaces
     /// without telling them (Clause 19.2.1.5).
     Other,
-}
-
-/// What a write does to Present_Value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Effect {
-    /// It changes.
-    Changes {
-        /// Now.
-        from: String,
-        /// After the write.
-        to: String,
-    },
-    /// It stays, held by a numerically lower (stronger) priority when
-    /// there is one (Clause 19.2).
-    Unchanged {
-        /// The slot that keeps control.
-        held_by: Option<u8>,
-    },
-    /// The write is to some other property.
-    NotPresentValue,
 }
 
 /// One write, read and ready to confirm.

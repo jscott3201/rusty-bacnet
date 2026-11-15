@@ -11,10 +11,16 @@
 //! a paged read is [`OpsError::Paging`]. In a bulk read a property the
 //! device refused is its row's [`PropertyError`], and a device that stops
 //! answering part way is the [`Readings::stopped`](crate::Readings::stopped)
-//! of what was read.
+//! of what was read. A write the client's
+//! [`WritePolicy`](crate::WritePolicy) refuses is [`OpsError::Denied`],
+//! with nothing sent; a relinquish that went through but whose read after
+//! it failed is [`OpsError::ReadBack`]; and an object the device says has
+//! no Priority_Array is [`OpsError::NoPriorityArray`].
+//! [`OpsError::written`] says whether a write went through first.
 
 use std::fmt;
 
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -23,6 +29,7 @@ use crate::device::DeviceAddress;
 use crate::format::PropertyError;
 use crate::label::kebab;
 use crate::watch::WatchError;
+use crate::write::{WriteDenied, Written};
 
 /// Why a high-level call failed as a whole.
 ///
@@ -112,6 +119,32 @@ pub enum OpsError {
     /// an answer that doesn't decode, a request too long for the path, and
     /// the like.
     Client(Error),
+    /// The client's [`WritePolicy`](crate::WritePolicy) refuses the
+    /// priority a write or relinquish named. Nothing was sent.
+    Denied(WriteDenied),
+    /// A relinquish the device acknowledged, so it took effect, whose read
+    /// of the object's priorities after it failed. Don't send it again:
+    /// read them once the device answers
+    /// ([`Device::priority_array`](crate::Device::priority_array)).
+    ReadBack {
+        /// The relinquish, as sent.
+        written: Box<Written>,
+        /// Why the read after it failed.
+        source: Box<OpsError>,
+    },
+    /// The device says the object has no Priority_Array (an unknown
+    /// property), so its Present_Value isn't commandable: a value object
+    /// built without one, say. For a relinquish, the device took the NULL
+    /// first as a write to a property that isn't commandable, which
+    /// changes nothing (Clause 19.2.1), and `relinquished` holds it.
+    NoPriorityArray {
+        /// Where the read went.
+        device: DeviceAddress,
+        /// The object.
+        object: ObjectIdentifier,
+        /// The relinquish acknowledged before the read, if one was.
+        relinquished: Option<Box<Written>>,
+    },
 }
 
 impl OpsError {
@@ -151,7 +184,8 @@ impl OpsError {
     /// True when the device, or the way to it, isn't answering: a timeout
     /// or a link failure. Reading on would only fail the same way. Also
     /// true for a [`Client`](Self::Client) error of that kind, which a
-    /// conversion that names no device ([`From<Error>`]) leaves there.
+    /// conversion that names no device ([`From<Error>`]) leaves there. False
+    /// for a [`ReadBack`](Self::ReadBack), whose write went through.
     pub fn unreachable(&self) -> bool {
         match self {
             Self::Unreachable { .. } => true,
@@ -174,6 +208,23 @@ impl OpsError {
         match self {
             Self::Refused { error, .. } => Some(*error),
             Self::Client(error) => error.remote(),
+            Self::NoPriorityArray { .. } => Some(RemoteError::Error {
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The write the device acknowledged before the call failed, when one
+    /// was: it took effect, so it needs no second send. A
+    /// [`ReadBack`](Self::ReadBack)'s relinquish, whose view of the slots
+    /// after isn't known, and a [`NoPriorityArray`](Self::NoPriorityArray)
+    /// relinquish, which changed nothing.
+    pub fn written(&self) -> Option<&Written> {
+        match self {
+            Self::ReadBack { written, .. } => Some(written),
+            Self::NoPriorityArray { relinquished, .. } => relinquished.as_deref(),
             _ => None,
         }
     }
@@ -289,6 +340,39 @@ impl fmt::Display for OpsError {
             Self::Paging(fault) => write!(f, "{fault}"),
             Self::Watch(error) => write!(f, "{error}"),
             Self::Client(error) => write!(f, "{error}"),
+            Self::Denied(denied) => write!(f, "{denied}"),
+            Self::ReadBack { written, source } => {
+                let priority = written
+                    .priority
+                    .map(|p| format!(" at priority {p}"))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "the device acknowledged the relinquish of {} {}{priority}, \
+                     but reading its priorities back failed: {source}",
+                    crate::label::object_label(written.property.object),
+                    kebab(written.property.property),
+                )
+            }
+            Self::NoPriorityArray {
+                device,
+                object,
+                relinquished,
+            } => {
+                write!(
+                    f,
+                    "{} at {device} has no Priority_Array, the device says, so its \
+                     present-value isn't commandable",
+                    crate::label::object_label(*object)
+                )?;
+                match relinquished.as_ref().and_then(|w| w.priority) {
+                    Some(p) => write!(
+                        f,
+                        "; the NULL sent at priority {p} was acknowledged and changed nothing"
+                    ),
+                    None => Ok(()),
+                }
+            }
         }
     }
 }
@@ -300,8 +384,15 @@ impl std::error::Error for OpsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Unreachable { source: error, .. } | Self::Client(error) => error.source(),
+            Self::ReadBack { source, .. } => source.source(),
             _ => None,
         }
+    }
+}
+
+impl From<WriteDenied> for OpsError {
+    fn from(denied: WriteDenied) -> Self {
+        Self::Denied(denied)
     }
 }
 

@@ -37,9 +37,9 @@ mod words;
 
 use std::time::Duration;
 
-use bacnet_ops::DeviceAddress;
 use bacnet_ops::parse::{parse_object_specifier, parse_property, parse_value_for_with_priority};
 use bacnet_ops::target::{Target, parse_target};
+use bacnet_ops::{DeviceAddress, Priority};
 use bacnet_types::enums::{EnableDisable, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -343,15 +343,15 @@ fn value(
             Some(_) => word.text.rsplit_once('@').map_or(&*word.text, |(v, _)| v),
             None => &word.text,
         };
-        return Ok((text.to_string(), priority));
+        return Ok((text.to_string(), priority.map(Priority::get)));
     };
     let (text, priority) = match word.text[literal_to..].find('@') {
         Some(at) => {
             let (text, priority) = word.text.split_at(literal_to + at);
             let priority = &priority[1..];
-            match priority.parse::<u8>() {
-                Ok(p) if (1..=16).contains(&p) => (text, Some(p)),
-                _ => return Err(format!("invalid priority '{priority}': 1-16")),
+            match priority.parse::<Priority>() {
+                Ok(p) => (text, Some(p.get())),
+                Err(_) => return Err(format!("invalid priority '{priority}': 1-16")),
             }
         }
         None => (&*word.text, None),

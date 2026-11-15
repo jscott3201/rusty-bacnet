@@ -179,7 +179,8 @@ impl<T: TransportPort + 'static> Device<T> {
         sent!(self, |at| self.rows_at(at, object, wanted).await)
     }
 
-    async fn rows_at(
+    /// [`rows`](Self::rows) at `at`, as the low-level client fails.
+    pub(super) async fn rows_at(
         &self,
         at: &DeviceAddress,
         object: ObjectIdentifier,
@@ -272,7 +273,7 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 
     /// The path to `at`, and the device's turn there.
-    async fn turn_at(&self, at: &DeviceAddress) -> Result<(Path, Turn), Error> {
+    pub(super) async fn turn_at(&self, at: &DeviceAddress) -> Result<(Path, Turn), Error> {
         let path = Path::to(self.client.low_level(), at).await?;
         Ok((path, self.client.limits().turn(at).await))
     }
