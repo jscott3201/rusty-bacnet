@@ -1836,7 +1836,8 @@ valid protocol refusals. Service parameters are not exhaustively validated.
 original\_source is the originating address a BBMD wrote into a B/IP
 Forwarded-NPDU, or a B/IPv6 Forwarded-NPDU or Forwarded-Address-Resolution;
 Frame.peer is the actual transport peer. Neither field proves the sender's
-identity or its path. Summaries compare and hash by value.
+identity or its path. Summaries compare and hash by value; copy and pickle
+decode the same octets and link again.
 
 Properties:
 

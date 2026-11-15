@@ -15,10 +15,13 @@ async def print_frames(frames):
     async for frame in frames:
         summary = decode_frame(frame.octets, link=frame.link)
         print(json.dumps({
+            "monotonic": frame.monotonic,
             "timestamp": frame.timestamp,
             "direction": frame.direction,
+            "link": frame.link,
             "local_address": frame.local_address,
             "peer": frame.peer,
+            "link_message": summary.link_message,
             "original_source": summary.original_source,
             "routed_source": summary.routed_source,
             "routed_destination": summary.routed_destination,
@@ -27,7 +30,7 @@ async def print_frames(frames):
             "invoke_id": summary.invoke_id,
             "problem": summary.problem,
             "parse_error": summary.parse_error,
-            "missed": frames.missed,
+            "missed_before": frame.missed_before,
             "octets": frame.octets.hex(),
         }), flush=True)
 

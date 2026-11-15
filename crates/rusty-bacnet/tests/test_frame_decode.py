@@ -80,18 +80,25 @@ class FrameDecodeTests(unittest.TestCase):
             'service="read-property", invoke_id=1)',
         )
 
-    def test_iterator_link_names_and_explicit_names_select_the_same_decoder(self):
-        for canonical, display in (("bip", "BACnet/IP"), ("bip6", "BACnet/IPv6"),
-                                   ("sc", "BACnet/SC"), ("mstp", "MS/TP")):
-            with self.subTest(link=display):
-                expected = decode_frame(b"", link=canonical)
-                actual = decode_frame(b"", link=display)
-                self.assertEqual(actual.parse_error, expected.parse_error)
-                self.assertIsNotNone(actual.parse_error)
-        for unsupported in ("Ethernet", "BACnet Ethernet", "unknown", ""):
-            with self.assertRaises(ValueError):
-                decode_frame(REQUEST, link=unsupported)
-
+    def test_every_frame_link_token_but_other_decodes_and_names_are_refused(self):
+        # One valid frame per Frame.link token the decoder reads.
+        own = {
+            "bip": (REQUEST, "original-unicast-npdu"),
+            "ipv6": (bytes.fromhex("8202000b00010201001008"), "original-broadcast-npdu"),
+            "sc": (bytes.fromhex("0100000101001008"), "encapsulated-npdu"),
+            "mstp": (bytes.fromhex("55ff000201000073"), "token"),
+        }
+        for token, (octets, message) in own.items():
+            with self.subTest(link=token):
+                summary = decode_frame(octets, link=token)
+                self.assertEqual(summary.link_message, message)
+                self.assertIsNone(summary.parse_error)
+        refused = ("other", "bip6", "BIP", "Bip", "BACnet/IP", "BACnet/IPv6",
+                   "BACnet/SC", "MS/TP", "Ethernet", "BACnet Ethernet", "")
+        for link in refused:
+            with self.subTest(link=link), self.assertRaises(ValueError) as caught:
+                decode_frame(REQUEST, link=link)
+            self.assertIn('"bip", "ipv6", "sc", "mstp"', str(caught.exception))
 
 class TrapTranscriptTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_socket_records_responses_malformed_and_forwarded_frames(self):
@@ -110,6 +117,9 @@ class TrapTranscriptTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([row[1].pdu for row in transcript], ["Confirmed-Request", "Complex-ACK"])
                 self.assertEqual([row[0].direction for row in transcript], ["inbound", "outbound"])
                 self.assertEqual(transcript[0][1].invoke_id, transcript[1][1].invoke_id)
+                self.assertEqual([row[0].link for row in transcript], ["bip", "bip"])
+                self.assertEqual([row[0].missed_before for row in transcript], [0, 0])
+                self.assertLessEqual(transcript[0][0].monotonic, transcript[1][0].monotonic)
 
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
                     peer.bind(("127.0.0.1", 0))

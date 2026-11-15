@@ -6741,16 +6741,19 @@ async def transcript(endpoint):
         async for frame in frames:
             summary = decode_frame(frame.octets, link=frame.link)
             print({
-                "time": frame.timestamp,
+                "monotonic": frame.monotonic,
+                "timestamp": frame.timestamp,
                 "direction": frame.direction,
+                "link": frame.link,
                 "peer": frame.peer,
+                "link_message": summary.link_message,
                 "original_source": summary.original_source,
                 "routed_source": summary.routed_source,
                 "service": summary.service,
                 "invoke_id": summary.invoke_id,
                 "problem": summary.problem,
                 "parse_error": summary.parse_error,
-                "missed": frames.missed,
+                "missed_before": frame.missed_before,
                 "octets": frame.octets.hex(),
             })
     finally:
@@ -6783,12 +6786,13 @@ summary's routed addresses come from
 SNET/SADR and DNET/DADR. No field invents an intermediate router path or
 authenticates an encoded source.
 
-Supported `link` values are `bip`, `bip6` (also `ipv6`), `sc`, `mstp`, or their
-`Frame.link` names (`BACnet/IP`, `BACnet/IPv6`, `BACnet/SC`, `MS/TP`), ignoring
-case. Unsupported links, including Ethernet, raise `ValueError`. Octets
+`link` takes the `Frame.link` tokens exactly: `"bip"`, `"ipv6"`, `"sc"` and
+`"mstp"`. `"other"`, a link the decoder doesn't read, and any other text
+(a display name such as `"BACnet/IP"`, or `"bip6"`) raise `ValueError`. Octets
 decoded as the wrong link, B/IP octets as BACnet/SC say, come back with a
 `parse_error` rather than as another link's message. Summaries compare and
-hash by value, so they can key a dictionary or fill a set. The input
+hash by value, so they can key a dictionary or fill a set; `copy` and `pickle`
+rebuild one by decoding the same octets and link again. The input
 octets and `Frame.octets` remain unredacted, including any service parameters
 they contain; this API does not apply the CLI capture's password masking.
 

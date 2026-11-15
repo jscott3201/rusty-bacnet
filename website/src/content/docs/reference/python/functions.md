@@ -135,15 +135,17 @@ Same interpretation and input limits as inspect\_sc\_pem; no chmod or startup ga
 ## decode_frame
 
 ```python
-def decode_frame(octets: bytes, link: str) -> FrameSummary
+def decode_frame(
+    octets: bytes,
+    link: Literal["bip", "ipv6", "sc", "mstp"],
+) -> FrameSummary
 ```
 
 Decode link/NPDU/APDU headers with Rust, without sending traffic.
 
-link is required, by position or keyword: pass frame.link. It accepts bip,
-bip6 (or ipv6), sc, mstp and the corresponding Frame.link display names,
-case-insensitively. Unsupported links, including Ethernet, raise
-ValueError. Malformed octets, or octets of another link, return a partial
-summary with parse\_error. Raw input is not redacted, and service payloads
-are not fully validated.
+link is required, by position or keyword: pass frame.link. It takes the
+Frame.link tokens exactly; "other" (a link the decoder doesn't read) and
+any other text raise ValueError. Malformed octets, or octets of another
+link, return a partial summary with parse\_error. Raw input is not
+redacted, and service payloads are not fully validated.
 <!-- generated:end -->

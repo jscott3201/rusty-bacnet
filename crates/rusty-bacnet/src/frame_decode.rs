@@ -1,21 +1,51 @@
 //! Python access to the shared, offline Rust frame-summary decoder.
 
 use bacnet_ops::decode::frame::{FrameSummary, Framing, summarize_frame};
+use std::hash::{Hash, Hasher};
+
+use bacnet_types::data_link::DataLink;
 use pyo3::exceptions::PyValueError;
+use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
+
+use crate::frames::link_token;
 
 /// A frozen header summary; unavailable fields remain `None`. Two
 /// summaries are equal, and hash alike, when every field is.
 #[pyclass(name = "FrameSummary", module = "rusty_bacnet", frozen, eq, hash)]
-#[derive(PartialEq, Eq, Hash)]
-pub(crate) struct PyFrameSummary(FrameSummary);
+pub(crate) struct PyFrameSummary {
+    summary: FrameSummary,
+    /// The octets and `Frame.link` token it was decoded from, which `copy`
+    /// and `pickle` decode again; not part of its value.
+    octets: Box<[u8]>,
+    link: &'static str,
+}
+
+/// What [`PyFrameSummary::__reduce__`] gives `copy` and `pickle`:
+/// `decode_frame` and its arguments.
+type Reduce<'py> = (Bound<'py, PyAny>, (Bound<'py, PyBytes>, &'static str));
+
+impl PartialEq for PyFrameSummary {
+    fn eq(&self, other: &Self) -> bool {
+        self.summary == other.summary
+    }
+}
+
+impl Eq for PyFrameSummary {}
+
+impl Hash for PyFrameSummary {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.summary.hash(state);
+    }
+}
 
 #[pymethods]
 impl PyFrameSummary {
     /// The link message, then the PDU, service and invoke ID and the parse
     /// failure or problem, where the summary has them.
     fn __repr__(&self) -> String {
-        let summary = &self.0;
+        let summary = &self.summary;
         let mut parts = vec![format!("link_message={:?}", summary.link_message)];
         if let Some(pdu) = &summary.pdu {
             parts.push(format!("pdu={pdu:?}"));
@@ -34,26 +64,37 @@ impl PyFrameSummary {
         format!("FrameSummary({})", parts.join(", "))
     }
 
+    /// `copy` and `pickle` call `decode_frame` on the same octets and link
+    /// again, which gives an equal summary.
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<Reduce<'py>> {
+        let py = slf.py();
+        let this = slf.get();
+        let decode = py
+            .import(intern!(py, "rusty_bacnet"))?
+            .getattr(intern!(py, "decode_frame"))?;
+        Ok((decode, (PyBytes::new(py, &this.octets), this.link)))
+    }
+
     /// The link message, a BVLC function or MS/TP frame type such as
     /// `original-unicast-npdu` or `token`; not the data link (`Frame.link`).
     #[getter]
     fn link_message(&self) -> &str {
-        &self.0.link_message
+        &self.summary.link_message
     }
     /// Whether the headers identify a link or network broadcast.
     #[getter]
     fn broadcast(&self) -> bool {
-        self.0.broadcast
+        self.summary.broadcast
     }
     /// Source VMAC or MS/TP station encoded by the link header, if any.
     #[getter]
     fn link_source(&self) -> Option<&str> {
-        self.0.link_source.as_deref()
+        self.summary.link_source.as_deref()
     }
     /// Destination VMAC or MS/TP station encoded by the link header, if any.
     #[getter]
     fn link_destination(&self) -> Option<&str> {
-        self.0.link_destination.as_deref()
+        self.summary.link_destination.as_deref()
     }
     /// The originating node's IP address and UDP port a BBMD wrote into a
     /// B/IP Forwarded-NPDU, or a B/IPv6 Forwarded-NPDU or
@@ -61,87 +102,109 @@ impl PyFrameSummary {
     /// `Frame.peer`; it is not in the octets.
     #[getter]
     fn original_source(&self) -> Option<&str> {
-        self.0.original_source.as_deref()
+        self.summary.original_source.as_deref()
     }
     /// Routed source network number, if present.
     #[getter]
     fn snet(&self) -> Option<u16> {
-        self.0.snet
+        self.summary.snet
     }
     /// Destination network number, if present.
     #[getter]
     fn dnet(&self) -> Option<u16> {
-        self.0.dnet
+        self.summary.dnet
     }
     /// Routed source in target notation, such as `2:0x05`.
     #[getter]
     fn routed_source(&self) -> Option<&str> {
-        self.0.routed_source.as_deref()
+        self.summary.routed_source.as_deref()
     }
     /// Routed destination in target notation, or `2:*` for a broadcast.
     #[getter]
     fn routed_destination(&self) -> Option<&str> {
-        self.0.routed_destination.as_deref()
+        self.summary.routed_destination.as_deref()
     }
     /// Network-layer message name, if this is a network message.
     #[getter]
     fn network_message(&self) -> Option<&str> {
-        self.0.network_message.as_deref()
+        self.summary.network_message.as_deref()
     }
     /// Application PDU type, such as `Confirmed-Request`.
     #[getter]
     fn pdu(&self) -> Option<&str> {
-        self.0.pdu.as_deref()
+        self.summary.pdu.as_deref()
     }
     /// Application invoke identifier, when the PDU carries one.
     #[getter]
     fn invoke_id(&self) -> Option<u8> {
-        self.0.invoke_id
+        self.summary.invoke_id
     }
     /// Service name in kebab case, such as `read-property`.
     #[getter]
     fn service(&self) -> Option<&str> {
-        self.0.service.as_deref()
+        self.summary.service.as_deref()
     }
     /// Protocol refusal or malformed-header diagnostic; not a stable code.
     #[getter]
     fn problem(&self) -> Option<&str> {
-        self.0.problem.as_deref()
+        self.summary.problem.as_deref()
     }
     /// Header decode failure only. A valid Error, Reject, Abort or NAK
     /// has a `problem` but no `parse_error`. Service payloads are not fully validated.
     #[getter]
     fn parse_error(&self) -> Option<&str> {
-        self.0.parse_error.as_deref()
+        self.summary.parse_error.as_deref()
     }
     /// Device instance announced by an I-Am that could be decoded.
     #[getter]
     fn device(&self) -> Option<u32> {
-        self.0.device
+        self.summary.device
     }
 }
 
-fn framing(link: &str) -> PyResult<Framing> {
-    match link.to_ascii_lowercase().as_str() {
-        "bip" | "bacnet/ip" => Ok(Framing::Bip),
-        "bip6" | "ipv6" | "bacnet/ipv6" => Ok(Framing::Bip6),
-        "sc" | "bacnet/sc" => Ok(Framing::Sc),
-        "mstp" | "ms/tp" => Ok(Framing::Mstp),
-        _ => Err(PyValueError::new_err(
-            "link must be bip, bip6, sc or mstp, or the corresponding Frame.link name; Ethernet is not supported",
-        )),
-    }
+/// The links the decoder reads. Their tokens are `Frame.link`'s, from
+/// [`link_token`], the one place the bindings spell them.
+const DECODED: [(DataLink, Framing); 4] = [
+    (DataLink::Bip, Framing::Bip),
+    (DataLink::Bip6, Framing::Bip6),
+    (DataLink::Sc, Framing::Sc),
+    (DataLink::Mstp, Framing::Mstp),
+];
+
+/// The framing a `Frame.link` token names, exactly as `Frame.link` writes
+/// it. `"other"`, a display name or any other text is refused, with the
+/// tokens accepted.
+fn framing(token: &str) -> PyResult<(Framing, &'static str)> {
+    DECODED
+        .iter()
+        .find(|(link, _)| link_token(*link) == token)
+        .map(|(link, framing)| (*framing, link_token(*link)))
+        .ok_or_else(|| {
+            let accepted: Vec<String> = DECODED
+                .iter()
+                .map(|(link, _)| format!("{:?}", link_token(*link)))
+                .collect();
+            PyValueError::new_err(format!(
+                "link must be a Frame.link token the decoder reads, one of {}; got {token:?}",
+                accepted.join(", ")
+            ))
+        })
 }
 
 /// Decode link, NPDU and APDU headers without sending traffic. Malformed
 /// octets return a partial summary with `parse_error`, not a Python parser.
 /// `link` has no default: octets read as the wrong link come back as a
-/// parse failure, never as another link's message. `link=frame.link`
-/// accepts the observing iterator's link names.
+/// parse failure, never as another link's message. It takes `Frame.link`'s
+/// tokens (`"bip"`, `"ipv6"`, `"sc"`, `"mstp"`), so `link=frame.link` works.
 #[pyfunction]
 #[pyo3(signature = (octets, link))]
 fn decode_frame(octets: &[u8], link: &str) -> PyResult<PyFrameSummary> {
-    Ok(PyFrameSummary(summarize_frame(framing(link)?, octets)))
+    let (framing, link) = framing(link)?;
+    Ok(PyFrameSummary {
+        summary: summarize_frame(framing, octets),
+        octets: octets.into(),
+        link,
+    })
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -176,6 +239,16 @@ mod tests {
             let decode = module(py).getattr("decode_frame").unwrap();
             let error = decode.call1((REQUEST,)).unwrap_err();
             assert!(error.is_instance_of::<PyTypeError>(py), "{error}");
+            for refused in ["other", "bip6", "BIP", "BACnet/IP", "MS/TP", ""] {
+                let error = decode.call1((REQUEST, refused)).unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py), "{refused}");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(r#"one of "bip", "ipv6", "sc", "mstp""#),
+                    "{error}"
+                );
+            }
             let positional = decode.call1((REQUEST, "bip")).unwrap();
             let kwargs = PyDict::new(py);
             kwargs.set_item("link", "bip").unwrap();
@@ -184,6 +257,21 @@ mod tests {
             let message: String = keyword.getattr("link_message").unwrap().extract().unwrap();
             assert_eq!(message, "original-unicast-npdu");
         });
+    }
+
+    /// Every token `Frame.link` writes for a link the decoder reads selects
+    /// that link's framing; every other token is refused.
+    #[test]
+    fn frame_link_tokens_select_their_framing() {
+        for (link, framing) in DECODED {
+            let token = link_token(link);
+            assert_eq!(super::framing(token).unwrap(), (framing, token));
+        }
+        Python::initialize();
+        for link in [DataLink::Ethernet, DataLink::Loopback] {
+            assert_eq!(link_token(link), "other");
+            assert!(super::framing(link_token(link)).is_err());
+        }
     }
 
     /// Summaries compare and hash by value, and print in one short line.
