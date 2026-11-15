@@ -1,5 +1,6 @@
 //! A full `BACnetClient` on an endpoint session's link (#2617), on paused
-//! time over an in-memory link with broadcasts.
+//! time over an in-memory link with broadcasts; `stop_waits` alone runs on
+//! real time, and says why.
 //!
 //! The node under test is an endpoint session with its server role, its
 //! narrow client role and a full client on its seat. Its peers are a
@@ -23,6 +24,8 @@ mod old_devices;
 mod reads;
 #[path = "full_client/roles.rs"]
 mod roles;
+#[path = "full_client/stop_waits.rs"]
+mod stop_waits;
 
 use std::time::Duration;
 
