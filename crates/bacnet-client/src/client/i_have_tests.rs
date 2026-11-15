@@ -79,3 +79,74 @@ async fn delivery_reaches_subscribers_only() {
     tokio::time::advance(bacnet_transport::warn_throttle::WARNING_INTERVAL).await;
     assert_eq!(throttle.note(), Some(2), "the check above, and this one");
 }
+
+/// One answer per device, object and source (#2596): the same I-Have heard
+/// twice is kept once, but two devices sharing an instance at two
+/// addresses both come back. `keep` refuses what the caller doesn't want,
+/// and an answer to another question is never kept.
+#[tokio::test(start_paused = true)]
+async fn answers_are_kept_once_per_device_object_and_source() {
+    let (tx, mut rx) = broadcast::channel(16);
+    let from = |mac: u8, name: &str| ReceivedIHave {
+        source_mac: [mac].as_slice().into(),
+        ..reply(40, name)
+    };
+    for sent in [
+        from(5, "Zone"),
+        from(5, "Zone"),
+        from(6, "Zone"),
+        from(7, "Zone"),
+        from(8, "Other"),
+    ] {
+        tx.send(sent).unwrap();
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let name = WhoHasObject::Name("Zone".into());
+    let kept = collect_answers(&mut rx, deadline, &name, None, |reply| {
+        reply.source_mac.as_slice() != [7]
+    })
+    .await;
+    let macs: Vec<&[u8]> = kept.iter().map(|r| r.source_mac.as_slice()).collect();
+    assert_eq!(macs, [[5].as_slice(), &[6]]);
+}
+
+/// Collection stops at the cap, before the wait is over.
+#[tokio::test(start_paused = true)]
+async fn collection_stops_at_the_cap() {
+    let (tx, mut rx) = broadcast::channel(MAX_I_HAVE_REPLIES + 8);
+    for device in 0..MAX_I_HAVE_REPLIES as u32 + 4 {
+        tx.send(reply(device, "Zone")).unwrap();
+    }
+    let start = tokio::time::Instant::now();
+    let deadline = start + Duration::from_secs(5);
+    let name = WhoHasObject::Name("Zone".into());
+    let kept = collect_answers(&mut rx, deadline, &name, None, |_| true).await;
+    assert_eq!(kept.len(), MAX_I_HAVE_REPLIES);
+    assert_eq!(
+        tokio::time::Instant::now(),
+        start,
+        "it didn't wait out the deadline"
+    );
+}
+
+/// An answer `keep` refuses doesn't count toward the cap: past the cap's
+/// worth of refused ones, the answers kept still come.
+#[tokio::test(start_paused = true)]
+async fn refused_answers_do_not_count_toward_the_cap() {
+    let (tx, mut rx) = broadcast::channel(MAX_I_HAVE_REPLIES + 8);
+    for device in 0..MAX_I_HAVE_REPLIES as u32 + 3 {
+        tx.send(reply(device, "Zone")).unwrap();
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let name = WhoHasObject::Name("Zone".into());
+    let wanted = MAX_I_HAVE_REPLIES as u32;
+    let kept = collect_answers(&mut rx, deadline, &name, None, |reply| {
+        reply.i_have.device_identifier.instance_number() >= wanted
+    })
+    .await;
+    let devices: Vec<u32> = kept
+        .iter()
+        .map(|r| r.i_have.device_identifier.instance_number())
+        .collect();
+    assert_eq!(devices, [wanted, wanted + 1, wanted + 2]);
+}

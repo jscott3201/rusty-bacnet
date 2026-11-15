@@ -523,10 +523,22 @@ def who_has_by_id(
     object_id: ObjectIdentifier,
     low_limit: Optional[int] = None,
     high_limit: Optional[int] = None,
+    scope: Literal["local", "global"] | int = "local",
 ) -> Awaitable[None]
 ```
 
-Broadcast Who-Has by object identifier.
+Send a Who-Has by object identifier. Answers come through
+`i_have_events()`.
+
+`scope` says where it goes, as for `who_is()` (#2596):
+`"local"`, the default, is this network alone, which no router
+passes on; `"global"` is every network, where every device that
+hears it searches its objects; a number from 1 to 65534 is that
+remote network, through its router. Another name or number raises
+`ValueError`, and another type `TypeError`, before anything is
+sent. A client on `transport="router"` has no network of its own,
+so its Who-Has names one, or every one: a local one raises
+`ValueError` saying so.
 
 Give `low_limit` and `high_limit` together or not at all, each from
 0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit
@@ -540,14 +552,14 @@ def who_has_by_name(
     name: str,
     low_limit: Optional[int] = None,
     high_limit: Optional[int] = None,
+    scope: Literal["local", "global"] | int = "local",
 ) -> Awaitable[None]
 ```
 
-Broadcast Who-Has by object name.
-
-Give `low_limit` and `high_limit` together or not at all, each from
-0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit
-past 4194303 raises `ValueError` before anything is sent.
+Send a Who-Has by object name, compared exactly. The limits and
+`scope` follow `who_has_by_id()`'s rules: this network alone
+unless `scope` names every network (`"global"`) or one remote
+network by its number.
 
 ### BACnetClient.who_has_replies
 
@@ -558,15 +570,22 @@ def who_has_replies(
     low_limit: Optional[int] = None,
     high_limit: Optional[int] = None,
     timeout_ms: int = 3000,
+    scope: Literal["local", "global"] | int = "local",
 ) -> Awaitable[list[IHave]]
 ```
 
-Broadcast a Who-Has for `object` (an identifier, or a name) and
-collect the I-Haves that answer it for `timeout_ms`: one per device
-and object, in arrival order; an empty list when none answer. The
-limits follow `who_has_by_id()`'s rule (#1850). It holds the
-started client for the whole wait, so `stop()` waits up to
-`timeout_ms` for it.
+Send a Who-Has for `object` (an identifier, or a name) and
+collect the I-Haves that answer it from that scope for
+`timeout_ms`: one per device, object and station (a station's copy
+through a router on this client's own network is its local answer),
+in arrival order; an empty list when none answer. An I-Have heard
+from elsewhere during the wait is not an answer, and collection stops
+at 4096 answers, so a list of exactly that many may have been cut
+short. The limits and `scope`
+follow `who_has_by_id()`'s rules (#1850, #2596): with the default
+scope an empty list says only that nothing on this network has the
+object. It holds the started client for the whole wait, so `stop()`
+waits up to `timeout_ms` for it.
 
 ### BACnetClient.i_have_events
 
