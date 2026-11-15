@@ -99,24 +99,20 @@ pub(super) fn vmac_of(mac: &[u8]) -> Result<Bip6Vmac, Error> {
     })
 }
 
-/// Send `npdu` to `destination` at `addr` in an Original-Unicast-NPDU.
-async fn send_original_unicast(
-    socket: &impl DatagramSender,
+/// The Original-Unicast-NPDU that carries `npdu` from `source` to
+/// `destination`. Each send awaits the socket itself: one async layer
+/// fewer under every request future (the Python crate's deepest one sits
+/// at the compiler's default recursion limit).
+fn original_unicast(
     source: Bip6Vmac,
     destination: Bip6Vmac,
     npdu: &[u8],
-    addr: SocketAddrV6,
-) -> Result<(), Error> {
-    let frame = encoded(&Bvll6::OriginalUnicastNpdu {
+) -> Result<bytes::BytesMut, Error> {
+    encoded(&Bvll6::OriginalUnicastNpdu {
         source,
         destination,
         npdu,
-    })?;
-    socket
-        .send_to(&frame, addr)
-        .await
-        .map_err(Error::Transport)?;
-    Ok(())
+    })
 }
 
 impl Resolver {
@@ -241,7 +237,12 @@ impl Resolver {
             }
             Route::Closed(closed) => return Err(not_running(closed)),
         };
-        send_original_unicast(socket, source, destination, npdu, addr).await
+        let frame = original_unicast(source, destination, npdu)?;
+        socket
+            .send_to(&frame, addr)
+            .await
+            .map(drop)
+            .map_err(Error::Transport)
     }
 
     /// Find the VMAC of the node at `peer` with a Virtual-Address-Resolution,
@@ -386,9 +387,15 @@ impl<S: DatagramSender> Driver<S> {
                 self.resolver.counts.revalidation_sent();
             }
             for (addr, destination, npdu) in due.flush {
-                let sent =
-                    send_original_unicast(&*self.socket, self.source, destination, &npdu, addr)
-                        .await;
+                let sent = match original_unicast(self.source, destination, &npdu) {
+                    Ok(frame) => self
+                        .socket
+                        .send_to(&frame, addr)
+                        .await
+                        .map(drop)
+                        .map_err(Error::Transport),
+                    Err(error) => Err(error),
+                };
                 if let Err(error) = sent {
                     debug!(%error, to = %addr, "BIP6: failed to send a queued NPDU");
                 }

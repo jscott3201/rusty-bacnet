@@ -745,8 +745,8 @@ impl BipSocket {
         }
     }
 
-    /// Count one logical send, before its first try, for a
-    /// [`SendAttemptObserver`](super::SendAttemptObserver).
+    /// Count one logical send, before its first try, for a test's
+    /// `SendAttemptObserver`.
     pub(super) fn note_attempt(&self) {
         #[cfg(any(test, feature = "test-support"))]
         super::send_observer::attempted(&self.socket);
