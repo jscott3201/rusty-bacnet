@@ -99,32 +99,58 @@ fn field_schema() -> Value {
     })
 }
 
-fn output() -> Value {
+/// The summary's schema: every key [`summary_json`] writes, each required,
+/// and no other (a test holds the two together).
+fn summary_schema() -> Value {
     let text = json!({ "type": ["string", "null"] });
     let integer = json!({ "type": ["integer", "null"] });
+    let properties = json!({
+        "link_message": {
+            "type": "string",
+            "description": "The BVLC function or MS/TP frame type, or malformed; the data \
+                            link is the top-level link",
+        },
+        "broadcast": { "type": "boolean" },
+        "link_source": text,
+        "link_destination": text,
+        "original_source": {
+            "type": ["string", "null"],
+            "description": "The originating address a BBMD wrote into a forwarded B/IP \
+                            or B/IPv6 message; not the peer that sent it",
+        },
+        "snet": integer,
+        "dnet": integer,
+        "routed_source": text,
+        "routed_destination": text,
+        "network_message": text,
+        "pdu": text,
+        "invoke_id": integer,
+        "service": text,
+        "problem": text,
+        "parse_error": {
+            "type": ["string", "null"],
+            "description": "Set only when a link, NPDU or APDU header fails to decode; a \
+                            valid Error, Reject, Abort or NAK has a problem and no parse_error",
+        },
+        "device": integer,
+    });
+    let required: Vec<&String> = properties
+        .as_object()
+        .map_or(Vec::new(), |p| p.keys().collect());
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": false,
+    })
+}
+
+fn output() -> Value {
     schema::output(json!({
         "link": { "enum": ["bip", "bip6", "mstp", "sc", "npdu", "apdu"] },
         "octets": { "type": "integer" },
         "text": { "type": "string", "description": "One line: what the frame is" },
-        "summary": {
-            "type": "object",
-            "properties": {
-                "link_message": { "type": "string" },
-                "broadcast": { "type": "boolean" },
-                "link_source": text,
-                "link_destination": text,
-                "snet": integer,
-                "dnet": integer,
-                "routed_source": text,
-                "routed_destination": text,
-                "network_message": text,
-                "pdu": text,
-                "invoke_id": integer,
-                "service": text,
-                "problem": text,
-                "device": integer,
-            },
-        },
+        "summary": summary_schema(),
         "tree": { "type": "array", "items": field_schema() },
         "fields_cut": { "type": "boolean" },
     }))
@@ -381,6 +407,29 @@ mod tests {
             LABEL_CAP
         );
         assert!(json[1].get("truncated").is_none());
+    }
+
+    /// The output schema declares exactly the summary's keys, each required:
+    /// a key `summary_json` adds or drops fails here first.
+    #[test]
+    fn the_summary_schema_names_every_key_the_summary_writes() {
+        let keys = |value: &Value| -> Vec<String> {
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        let written = keys(&summary_json(&FrameSummary::default()));
+        let schema = &output()["properties"]["summary"];
+        assert_eq!(keys(&schema["properties"]), written);
+        let mut required: Vec<String> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| key.as_str().unwrap().to_string())
+            .collect();
+        required.sort();
+        assert_eq!(required, written);
+        assert_eq!(schema["additionalProperties"], json!(false));
     }
 
     #[test]
