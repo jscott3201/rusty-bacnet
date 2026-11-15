@@ -218,3 +218,60 @@ fn a_scope_covers_stations_by_where_they_are() {
         );
     }
 }
+
+/// A local broadcast the operating system refuses ("No route to host", as
+/// from a loopback interface with the limited broadcast address) says where
+/// it was going, the client's broadcast address, and keeps the system's
+/// error with its code and kind beneath it. A link with no such address
+/// reports the error as it came.
+#[tokio::test(start_paused = true)]
+async fn a_refused_local_broadcast_names_its_destination() {
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    use bacnet_transport::test_transport::TestTransport;
+    use bacnet_types::error::Error;
+
+    use super::test_bus::client_on;
+    // EHOSTUNREACH on macOS, where CI met it.
+    let no_route = || async { Err(Error::Transport(std::io::Error::from_raw_os_error(65))) };
+    let bip = TestTransport::builder()
+        .local_mac(&mac(1))
+        .on_send(move |frame| {
+            let refused = frame.broadcast;
+            async move { if refused { no_route().await } else { Ok(()) } }
+        })
+        .on_bip_broadcast_endpoint(|| Some(SocketAddrV4::new(Ipv4Addr::BROADCAST, 47808)))
+        .build();
+    let (client, _) = client_on(bip).await;
+    let quick = Discover::local().wait(Duration::ZERO);
+    for refused in [
+        client.discover(quick.clone()).await.unwrap_err(),
+        client.device(4000).await.map(drop).unwrap_err(),
+        client
+            .find(crate::Find::name("Zone").wait(Duration::ZERO))
+            .await
+            .map(drop)
+            .unwrap_err(),
+    ] {
+        let text = refused.to_string();
+        assert!(text.contains("255.255.255.255:47808"), "{text}");
+        assert!(text.contains("broadcast address"), "{text}");
+        let OpsError::Client(Error::Transport(io)) = &refused else {
+            panic!("{refused:?}");
+        };
+        let inner = io.get_ref().and_then(|wrapped| wrapped.source());
+        let system = inner.and_then(|source| source.downcast_ref::<std::io::Error>());
+        assert_eq!(system.and_then(std::io::Error::raw_os_error), Some(65));
+        assert_eq!(Some(io.kind()), system.map(std::io::Error::kind));
+    }
+    let plain = TestTransport::builder()
+        .local_mac(&mac(1))
+        .on_send(move |_| no_route())
+        .build();
+    let (client, _) = client_on(plain).await;
+    let refused = client.discover(quick).await.unwrap_err();
+    assert!(
+        !refused.to_string().contains("broadcast address"),
+        "{refused}"
+    );
+}

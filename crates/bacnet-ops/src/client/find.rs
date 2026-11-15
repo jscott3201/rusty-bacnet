@@ -146,7 +146,10 @@ impl Scope {
         .encode(&mut buf)?;
         let service = UnconfirmedServiceChoice::WHO_HAS;
         match (self, station) {
-            (Self::Local, _) => client.broadcast_unconfirmed(service, &buf).await,
+            (Self::Local, _) => client
+                .broadcast_unconfirmed(service, &buf)
+                .await
+                .map_err(|error| super::discover::to_local_broadcast(client, error)),
             (Self::Network(network), _) => {
                 client
                     .broadcast_network_unconfirmed(service, &buf, *network)

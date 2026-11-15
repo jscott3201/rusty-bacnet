@@ -226,12 +226,56 @@ impl Scope {
                 client
                     .broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
                     .await
+                    .map_err(|error| to_local_broadcast(client, error))
             }
             (Self::Network(network), _) => client.who_is_network(*network, range).await,
             (Self::Directed(_), Some(mac)) => client.who_is_directed(mac, range).await,
             (Self::Directed(_), None) => unreachable!("a directed Who-Is has its station"),
             (Self::Global, _) => client.who_is(range).await,
         }
+    }
+}
+
+/// A local broadcast the link failed to send, saying where it was going.
+/// The operating system's own text names no address ("No route to host"),
+/// and for a B/IP client the address is a setting the user can fix: the
+/// broadcast address the client was given.
+#[derive(Debug)]
+struct LocalBroadcastFailed {
+    to: std::net::SocketAddrV4,
+    source: std::io::Error,
+}
+
+impl std::fmt::Display for LocalBroadcastFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}, sending the local broadcast to {} (the client's broadcast address)",
+            self.source, self.to
+        )
+    }
+}
+
+impl std::error::Error for LocalBroadcastFailed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// `error`, from a local broadcast on `client`'s link: a transport error
+/// on a B/IP link names the broadcast address it was sent to and keeps the
+/// operating system's error as its source, with its kind. Any other error
+/// is as it came.
+pub(crate) fn to_local_broadcast<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    error: Error,
+) -> Error {
+    match (error, client.transport().bip_broadcast_endpoint()) {
+        (Error::Transport(source), Some(to)) => Error::Transport(std::io::Error::new(
+            source.kind(),
+            LocalBroadcastFailed { to, source },
+        )),
+        (error, _) => error,
     }
 }
 

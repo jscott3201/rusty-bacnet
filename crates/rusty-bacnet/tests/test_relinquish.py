@@ -166,7 +166,13 @@ def lab() -> BACnetServer:
 
 
 def client(**keywords) -> BACnetClient:
-    return BACnetClient(**{"interface": "127.0.0.1", "port": 0, "apdu_timeout_ms": 2000, **keywords})
+    """A client on loopback whose local broadcasts stay on loopback, as the
+    suite's other loopback clients' do: the default broadcast address,
+    255.255.255.255, has no route from 127.0.0.1 on some hosts (CI's macOS
+    runner), where a local Who-Is then fails with EHOSTUNREACH."""
+    defaults = {"interface": "127.0.0.1", "port": 0, "broadcast_address": "127.0.0.1",
+                "apdu_timeout_ms": 2000}
+    return BACnetClient(**{**defaults, **keywords})
 
 
 class Lab(unittest.IsolatedAsyncioTestCase):
