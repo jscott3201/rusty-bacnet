@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_ops::Client;
-use bacnet_ops::watch::{Hub, WatchOptions};
+use bacnet_ops::watch::hub::{Hub, WatchOptions};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde_json::{Value, json};
@@ -190,8 +190,9 @@ async fn a_point_watched_again_is_followed_on_its_new_watch() {
     let Ok(Uri::Point(point)) = uri::parse(AI1) else {
         panic!("a point URI");
     };
+    let point = point.at(bacnet_ops::DeviceAddress::local(&super::LAB_MAC).unwrap());
     let mut follow = Follow::new();
-    let first = hub.watch(point).unwrap();
+    let first = hub.watch(point.clone()).unwrap();
     let signals = crate::writes::notify::Signals::default();
     follow.set(
         Some(&client),

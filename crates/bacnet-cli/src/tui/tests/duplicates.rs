@@ -97,3 +97,30 @@ fn a_snapshot_rebuilds_the_duplicates() {
     assert!(app.duplicates.is_empty());
     assert!(app.duplicates.banner().is_empty());
 }
+
+/// A watch goes to the one address claiming its instance (#2560 slice 6):
+/// the command carries the row's address for the watch hub, and an
+/// instance two rows claim is refused, naming both, with no row added.
+#[test]
+fn a_watch_goes_to_the_one_address_claiming_its_instance() {
+    use crate::tui::watched::WatchCommand;
+    let mut app = connected_app();
+    let (a, b) = ("10.0.0.21:47808", "10.0.0.22:47808");
+    worker(&mut app, WorkerEvent::Discovered(row(7, a, 1, 0)));
+    let watch = |app: &mut App, line: &str| {
+        press(app, KeyCode::Char(':'));
+        type_text(app, line);
+        press(app, KeyCode::Enter)
+    };
+    let commands = watch(&mut app, "watch 7 ai:1");
+    let [Command::Watch(WatchCommand::Add { at, .. })] = commands.as_slice() else {
+        panic!("{commands:?}");
+    };
+    assert_eq!(at.as_ref(), Some(&address_of(a)));
+    worker(&mut app, WorkerEvent::Discovered(row(7, b, 1, 0)));
+    let commands = watch(&mut app, "watch 7 ai:2");
+    assert!(commands.is_empty(), "{commands:?}");
+    let flash = &app.flash.as_ref().unwrap().text;
+    assert!(flash.contains(a) && flash.contains(b), "{flash}");
+    assert_eq!(app.watch.rows().len(), 1, "no row for the contested one");
+}

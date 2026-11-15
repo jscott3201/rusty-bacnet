@@ -3,6 +3,7 @@
 
 use std::time::Instant;
 
+use bacnet_ops::DeviceAddress;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -54,6 +55,10 @@ pub(crate) enum WatchCommand {
         row: RowId,
         /// What it watches.
         point: Point,
+        /// Where its device answers, from the device table's one row
+        /// claiming its instance: what the watch hub keys on (#2560).
+        /// `None` when the table has no row for it.
+        at: Option<DeviceAddress>,
     },
     /// Stop watching row `row` and cancel its subscription, if it has one.
     Remove {

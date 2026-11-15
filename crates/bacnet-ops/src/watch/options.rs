@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bacnet_types::enums::PropertyIdentifier;
 
-use super::{Lifetime, POINT_PROPERTIES};
+use super::hub::{Lifetime, POINT_PROPERTIES};
 use crate::limits::TokenBucket;
 
 /// The default shortest time between two polls of a device, the MCP
@@ -63,7 +63,7 @@ impl Backoff {
 /// What a watch does when its device isn't in the discovery table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingDevice {
-    /// Give the point up: [`State::Gone`](super::State::Gone).
+    /// Give the point up: [`Phase::Gone`](super::hub::Phase::Gone).
     Fail,
     /// Report it unreachable and look again after the poll backoff.
     Poll,
@@ -138,7 +138,7 @@ pub struct WatchOptions {
     pub lifetime: Lifetime,
     /// How long before a lifetime ends the renewal goes. It covers a wait
     /// for the device's gate and the renewal's own request with retries
-    /// (see [`renewal_margin`](super::renewal_margin)).
+    /// (see [`renewal_margin`](super::hub::renewal_margin)).
     pub renewal_margin: Duration,
     /// Least time between two polls of a device, all its polled points
     /// read together; at least [`poll_floor`](Self::poll_floor).
@@ -160,7 +160,7 @@ pub struct WatchOptions {
     /// Changes to one point within this window make one signal; zero for
     /// a signal per change.
     pub coalesce: Duration,
-    /// Samples a lease's stream ([`Lease::samples`](super::Lease::samples))
+    /// Samples a lease's stream ([`Lease::samples`](super::hub::Lease::samples))
     /// holds at least before the oldest go (the channel rounds it up to a
     /// power of two).
     pub samples: usize,

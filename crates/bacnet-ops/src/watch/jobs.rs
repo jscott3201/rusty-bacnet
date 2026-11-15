@@ -1,6 +1,9 @@
 //! The requests a device's scheduler runs as jobs, one at a time: starting
 //! a point (a first read, then a managed COV subscription), cancelling
-//! one, and polling a batch.
+//! one, polling a batch, and asking where a device that stopped answering
+//! went. Every one goes to the point's address: a local station at its
+//! MAC, a routed one through the router its row in the discovery table
+//! names; none looks the device up by its instance.
 //!
 //! Every request takes its turn at the device's gate in the client's
 //! limits, so the hub, the browser and the writes never have more than one
@@ -20,13 +23,15 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 
-use super::first::first_read;
+use super::hub::Inner;
+use super::hub::first::first_read;
 use super::options::{Fallback, Reads};
 use super::shared::Shared;
-use super::{Inner, Point, Watched};
+use super::support::{CovSupport, fills_table, refuses_service};
+use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
 use crate::client::{device_error, unreachable};
-use crate::device::DeviceAddress;
+use crate::device::{DeviceAddress, Path};
 use crate::format::{PropertyError, RawRow};
 
 /// How long one cancel may take before it is given up.
@@ -34,17 +39,32 @@ const CANCEL_WAIT: Duration = Duration::from_secs(30);
 
 /// How a point's start went.
 pub(super) struct Started {
-    /// Where the device is; `None` when it isn't in the device table, or
-    /// two addresses claim its instance, and then nothing was sent.
+    /// Where the device is; `None` when no route to its address is known,
+    /// and then nothing was sent.
     pub(super) target: Option<CovTarget>,
-    /// The first read, unless the device is missing; the ambiguity error
-    /// when two addresses claim its instance.
+    /// The instance the discovery table, or a read by the wildcard
+    /// instance, names at the address once the start is answered, if
+    /// either does: not what it named when the start began, which a
+    /// device taking the address meanwhile can change.
+    pub(super) instance: Option<u32>,
+    /// The first read, unless no route is known.
     pub(super) first: Option<Result<Vec<RawRow>, Error>>,
     /// When the first read ended, for its sample.
     pub(super) read_at: Option<(Instant, SystemTime)>,
-    /// The subscription, or why there is none; `None` when it wasn't
-    /// asked for because the first read had no answer.
-    pub(super) outcome: Option<Result<ManagedCOVSubscription, Error>>,
+    /// The subscription, or why there is none.
+    pub(super) outcome: Outcome,
+    /// What is known of the point's COV now.
+    pub(super) cov: CovSupport,
+}
+
+/// Whether a start asked for its subscription, and how that went.
+pub(super) enum Outcome {
+    /// Not asked: the first read had no answer, or no route is known.
+    NotAsked,
+    /// Not asked: the device refused the service itself before.
+    Refused,
+    /// Asked: the subscription, or the device's refusal or silence.
+    Asked(Result<ManagedCOVSubscription, Error>),
 }
 
 /// The properties `point` reads, each with its element: for a poll, and
@@ -77,75 +97,79 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
     }
 }
 
-/// Where the device at the address `target` names is: the hub's points
-/// name a device by its instance, and its requests and its gate go to the
-/// address its row has (#2560; the hub keys on addresses in slice 6).
-fn address_of(target: &CovTarget) -> Option<DeviceAddress> {
-    match target {
-        CovTarget::Local { mac } => DeviceAddress::local(mac).ok(),
-        CovTarget::Routed {
-            network, address, ..
-        } => DeviceAddress::new(*network, address).ok(),
-        _ => None,
+/// Where a subscription along `path` goes: the station's MAC on this
+/// network, or its station behind the router on the way.
+fn target_of(path: &Path) -> CovTarget {
+    match path {
+        Path::Local(mac) => CovTarget::local(mac),
+        Path::Routed {
+            router,
+            network,
+            mac,
+        } => CovTarget::routed(router, *network, mac),
     }
 }
 
-/// The address of the device that claims `instance` in the discovery
-/// table: the one row, or why there is none to read.
-async fn find<T: TransportPort + 'static>(
-    inner: &Inner<T>,
-    instance: u32,
-) -> Result<DeviceAddress, Error> {
-    DeviceAddress::claiming(inner.client.low_level(), instance).await
-}
-
-/// Look `shared`'s device up and note where it is, read the point once,
-/// and subscribe unless the read had no answer.
+/// Note where `shared`'s device is, read the point once, and subscribe
+/// unless the read had no answer or the device refused the service before.
 pub(super) async fn start<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     shared: Arc<Shared>,
 ) -> Started {
-    let (process, point) = (shared.process, shared.point);
+    let (process, point) = (shared.process, &shared.point);
+    let address = &point.device;
     let client = &inner.client;
-    let found = client.low_level().get_device(point.device).await;
-    let device = match found {
-        Ok(Some(device)) if DeviceAddress::of(&device).is_some() => device,
-        found => {
-            // An instance two addresses claim fails as the first read
-            // would; polls by the instance work again once one is left.
-            return Started {
-                target: None,
-                first: found.err().map(Err),
-                read_at: None,
-                outcome: None,
-            };
-        }
+    let instance = client.instance_at(address).await;
+    let known = client.cov_known(address, &point.watched);
+    let Ok(path) = Path::to(client.low_level(), address).await else {
+        return Started {
+            target: None,
+            instance,
+            first: None,
+            read_at: None,
+            outcome: Outcome::NotAsked,
+            cov: known,
+        };
     };
-    let address = DeviceAddress::of(&device).expect("checked above");
-    let target = CovTarget::of_device(&device);
+    let target = target_of(&path);
     // Before anything is sent: the device may notify as soon as it takes
     // the subscription, before this job is back with the scheduler, and
     // the receiver only takes notifications from where the device is.
     shared.lock().target = Some(target.clone());
-    let first = read(&inner, &point, &address).await;
+    let first = read(&inner, point, address, instance).await;
     let read_at = Some((Instant::now(), SystemTime::now()));
-    if let Err(error) = &first
-        && unreachable(error)
-    {
+    let (outcome, cov) = if first.as_ref().is_err_and(unreachable) {
         // Subscribing would only time out too.
-        return Started {
-            target: Some(target),
-            first: Some(first),
-            read_at,
-            outcome: None,
+        (Outcome::NotAsked, known)
+    } else if known == CovSupport::Refused {
+        (Outcome::Refused, CovSupport::Refused)
+    } else {
+        let outcome = subscribe(&inner, (target.clone(), address), process, point).await;
+        let cov = match &outcome {
+            Ok(_) => {
+                client.cov_observed(address, &point.watched, true);
+                CovSupport::Accepted
+            }
+            // Not the device's last word: it is asked again.
+            Err(error) if unreachable(error) || fills_table(error) => known,
+            Err(error) => {
+                if refuses_service(error) {
+                    client.cov_observed(address, &point.watched, false);
+                }
+                CovSupport::Refused
+            }
         };
-    }
-    let outcome = subscribe(&inner, (target.clone(), &address), process, point).await;
+        (Outcome::Asked(outcome), cov)
+    };
+    // What the table names at the address now, once the start is answered.
+    let instance = client.instance_at(address).await;
     Started {
         target: Some(target),
+        instance,
         first: Some(first),
         read_at,
-        outcome: Some(outcome),
+        outcome,
+        cov,
     }
 }
 
@@ -156,11 +180,12 @@ async fn read<T: TransportPort + 'static>(
     inner: &Inner<T>,
     point: &Point,
     address: &DeviceAddress,
+    instance: Option<u32>,
 ) -> Result<Vec<RawRow>, Error> {
     let client = &inner.client;
     let reads = &inner.options.reads;
     let mut wanted = wanted(reads, point);
-    let mut reader = client.reader(address, Some(point.device));
+    let mut reader = client.reader(address, instance);
     let alone = wanted.len() == 1 && reads.first.is_empty() && !reads.name;
     if let Watched::Property { property, index } = point.watched
         && (alone || index.is_some())
@@ -196,7 +221,7 @@ async fn subscribe<T: TransportPort + 'static>(
     inner: &Inner<T>,
     (target, address): (CovTarget, &DeviceAddress),
     process: u32,
-    point: Point,
+    point: &Point,
 ) -> Result<ManagedCOVSubscription, Error> {
     let options = &inner.options;
     let client = inner.client.low_level();
@@ -258,25 +283,19 @@ impl Polled {
     }
 }
 
-/// Poll `rows` of `device` together, by RPM unless it refused it, at the
-/// address its row in the discovery table has now.
+/// Poll `rows` of the device at `address` together, by RPM unless it
+/// refused it.
 pub(super) async fn poll<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
-    device: u32,
+    address: DeviceAddress,
     rows: Vec<BatchRow<u32>>,
 ) -> Polled {
     let client = &inner.client;
-    let read = match find(&inner, device).await {
-        Ok(address) => {
-            let rpm = !client.refused_rpm(&address);
-            let read = batch::read(client.low_level(), client.limits(), &address, &rows, rpm).await;
-            if read.as_ref().is_ok_and(|read| read.refused_rpm) {
-                client.refuse_rpm(&address);
-            }
-            read
-        }
-        Err(error) => Err(error),
-    };
+    let rpm = !client.refused_rpm(&address);
+    let read = batch::read(client.low_level(), client.limits(), &address, &rows, rpm).await;
+    if read.as_ref().is_ok_and(|read| read.refused_rpm) {
+        client.refuse_rpm(&address);
+    }
     let (read_rows, stopped) = match read {
         Ok(read) => {
             let mut read_rows = read.rows;
@@ -305,21 +324,18 @@ pub(super) async fn poll<T: TransportPort + 'static>(
 /// flag, which the device takes as a cancellation, to `target`, the way
 /// the subscription went. It takes the device's turn first, so no renewal
 /// is in flight when the renewals stop. Not charged to the hub's bucket.
+/// False when the device didn't answer it.
 pub(super) async fn cancel<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     process: u32,
     point: Point,
     target: CovTarget,
     managed: Option<ManagedCOVSubscription>,
-) {
+) -> bool {
     let client = inner.client.low_level();
     let limits = inner.client.limits();
     let cancel = async {
-        let address = match address_of(&target) {
-            Some(address) => address,
-            None => find(&inner, point.device).await?,
-        };
-        let _turn = limits.turn(&address).await;
+        let _turn = limits.turn(&point.device).await;
         if let Some(managed) = managed {
             managed.stop().await;
         }
@@ -343,12 +359,33 @@ pub(super) async fn cancel<T: TransportPort + 'static>(
         }
     };
     match tokio::time::timeout(CANCEL_WAIT, cancel).await {
-        Ok(Ok(())) => tracing::debug!("watch of {point:?}: COV subscription cancelled"),
-        Ok(Err(error)) => tracing::debug!(
-            "watch of {point:?}: the cancel failed ({error}); it ends with its lifetime"
-        ),
-        Err(_) => tracing::debug!(
-            "watch of {point:?}: the cancel took too long; it ends with its lifetime"
-        ),
+        Ok(Ok(())) => {
+            tracing::debug!("watch of {point}: COV subscription cancelled");
+            true
+        }
+        Ok(Err(error)) => {
+            tracing::debug!(
+                "watch of {point}: the cancel failed ({error}); it ends with its lifetime"
+            );
+            !unreachable(&error)
+        }
+        Err(_) => {
+            tracing::debug!(
+                "watch of {point}: the cancel took too long; it ends with its lifetime"
+            );
+            false
+        }
     }
+}
+
+/// Where the device last at `address`, claiming `instance`, answers now,
+/// after a request there went unanswered (see
+/// [`Client::relocated`](crate::Client)); `None` while it may still be
+/// there.
+pub(super) async fn locate<T: TransportPort + 'static>(
+    inner: Arc<Inner<T>>,
+    address: DeviceAddress,
+    instance: u32,
+) -> Option<DeviceAddress> {
+    inner.client.relocated(instance, &address).await
 }

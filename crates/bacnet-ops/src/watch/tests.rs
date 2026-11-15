@@ -9,10 +9,14 @@ use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use super::hub::Phase;
+use super::hub::*;
 use super::shared::Registry;
-use super::test_lab::{LAB, Lab, ai, object, oid, settle};
+use super::test_lab::{LAB, Lab, ai, lab_at, object, oid, routed_at, settle};
 use super::*;
 use crate::format::decode_all;
+use std::time::Duration;
+use tokio::sync::watch;
 
 /// The Present_Value among a snapshot's rows.
 pub(super) fn present_value(snapshot: &Snapshot) -> Option<f32> {
@@ -42,7 +46,7 @@ async fn two_leases_share_one_subscription_until_the_last_goes() {
     assert_eq!(entry.monitored_property_reference.object_identifier, ai(1));
     let snapshot = first.snapshot();
     assert_eq!(snapshot.source, Some(Source::Cov));
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     assert_eq!(present_value(&snapshot), Some(10.0));
     assert_eq!(lab.hub.stats().points, 1);
     drop(first);
@@ -155,7 +159,7 @@ async fn a_silent_device_is_reported() {
     lab.quirks.muted.store(true, Ordering::Relaxed);
     tokio::time::sleep(Duration::from_secs(245)).await;
     let snapshot = lease.snapshot();
-    assert_eq!(snapshot.state, State::Unreachable, "{snapshot:?}");
+    assert_eq!(snapshot.state, Phase::Unreachable, "{snapshot:?}");
     assert_eq!(snapshot.source, Some(Source::Poll));
     // The poll that followed failed too: its error is the note, while the
     // reason the point is polled stays the renewal's.
@@ -171,7 +175,7 @@ async fn a_silent_device_is_reported() {
     tokio::time::sleep(Duration::from_secs(320)).await;
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.source, Some(Source::Cov), "{snapshot:?}");
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     lab.stop().await;
 }
 
@@ -180,7 +184,7 @@ async fn a_silent_device_is_reported() {
 async fn a_property_watch_subscribes_to_the_property() {
     let lab = Lab::start(WatchOptions::default()).await;
     let point = Point {
-        device: LAB,
+        device: lab_at(),
         object: ai(3),
         watched: Watched::Property {
             property: PropertyIdentifier::PRESENT_VALUE,
@@ -249,7 +253,7 @@ async fn shutdown_cancels_every_subscription() {
     assert_eq!(lab.table().await.len(), 2);
     assert!(lab.hub.shutdown(Duration::from_secs(30)).await);
     assert!(lab.table().await.is_empty());
-    assert_eq!(a.snapshot().state, State::Stopped);
+    assert_eq!(a.snapshot().state, Phase::Stopped);
     assert_eq!(lab.hub.watch(object(ai(3))).unwrap_err(), WatchError::Shut);
     drop((a, b));
     lab.stop().await;
@@ -340,7 +344,7 @@ fn notifications_cannot_grow_the_rows() {
     assert!(rows.len() <= MAX_ROWS);
 
     let element = Point {
-        device: LAB,
+        device: lab_at(),
         object: oid(ObjectType::ANALOG_OUTPUT, 1),
         watched: Watched::Property {
             property: PropertyIdentifier::PRIORITY_ARRAY,
@@ -384,7 +388,7 @@ fn notifications_cannot_grow_the_rows() {
             property: PropertyIdentifier::PRIORITY_ARRAY,
             index: None,
         },
-        ..element
+        ..element.clone()
     };
     assert!(!dispatch::belongs(&whole, Some(&target), &mine));
 }
@@ -395,7 +399,7 @@ fn notifications_cannot_grow_the_rows() {
 #[test]
 fn a_property_watch_takes_its_property_whatever_the_order() {
     let point = Point {
-        device: LAB,
+        device: lab_at(),
         object: ai(1),
         watched: Watched::Property {
             property: PropertyIdentifier::PRESENT_VALUE,
@@ -428,35 +432,77 @@ async fn lagged_notifications_are_counted() {
         sender.send(notification(ai(1), &[])).unwrap();
     }
     let (stop, stopped) = watch::channel(false);
-    let task = tokio::spawn(dispatch::run(Arc::clone(&registry), receiver, stopped));
+    let (_events, events) = tokio::sync::broadcast::channel(1);
+    let (_devices, devices) = tokio::sync::broadcast::channel(1);
+    let heard = dispatch::Heard {
+        events,
+        devices,
+        own: Box::new(|| None),
+    };
+    let task = tokio::spawn(dispatch::run(
+        Arc::clone(&registry),
+        receiver,
+        heard,
+        stopped,
+    ));
     settle().await;
     assert_eq!(registry.lagged.load(Ordering::Relaxed), 3);
     stop.send_replace(true);
     task.await.unwrap();
 }
 
-/// A point whose device isn't in the table yet is reported so, and is
-/// subscribed once the device appears.
+/// A remote point with no route known is reported so and sends nothing;
+/// once the discovery table holds a router for its network, it is read
+/// through that router.
 #[tokio::test(start_paused = true)]
-async fn a_device_that_appears_later_is_subscribed() {
+async fn a_route_that_appears_later_is_used() {
     let lab = Lab::start(WatchOptions::default()).await;
     let point = Point {
-        device: 2002,
-        object: ai(1),
-        watched: Watched::Object,
+        device: routed_at(),
+        ..object(ai(1))
     };
     let lease = lab.hub.watch(point).unwrap();
     settle().await;
     let snapshot = lease.snapshot();
-    assert_eq!(snapshot.state, State::Unreachable);
-    assert!(snapshot.note.as_deref().unwrap().contains("device table"));
-    lab.client.low_level().add_device(2002, &[2]).await.unwrap();
+    assert_eq!(snapshot.state, Phase::Unreachable);
+    assert_eq!(snapshot.why, Some(Why::Missing));
+    assert!(snapshot.note.as_deref().unwrap().contains("no route"));
+    assert!(lab.services().is_empty(), "{:?}", lab.services());
+    lab.route().await;
     tokio::time::sleep(Duration::from_secs(30)).await;
-    let snapshot = lease.snapshot();
-    assert_eq!(snapshot.source, Some(Source::Cov), "{snapshot:?}");
-    assert_eq!(snapshot.state, State::Live);
-    assert_eq!(snapshot.note, None);
-    assert_eq!(present_value(&snapshot), Some(10.0));
-    assert_eq!(lab.table().await.len(), 1);
+    assert!(
+        lab.services().first() == Some(&super::test_lab::RPM),
+        "read through the router: {:?}",
+        lab.services()
+    );
+    drop(lease);
     lab.stop().await;
+}
+
+/// A notification carrying the watched property clears the error a read
+/// left for the whole object; one carrying only another property doesn't.
+#[tokio::test(start_paused = true)]
+async fn a_notified_value_clears_the_whole_objects_error() {
+    let registry = Arc::new(Registry::new(
+        PROCESS_BASE,
+        Duration::ZERO,
+        POINT_PROPERTIES.to_vec(),
+        false,
+    ));
+    let shared = Arc::new(super::shared::Shared::new(object(ai(1)), PROCESS_BASE, 4));
+    registry
+        .table()
+        .by_process
+        .insert(PROCESS_BASE, Arc::clone(&shared));
+    {
+        let mut entry = shared.lock();
+        entry.target = Some(CovTarget::local(&[2]));
+        entry.failure = Some(crate::format::PropertyError::NoValue);
+    }
+    let flags = notification(ai(1), &[(PropertyIdentifier::STATUS_FLAGS, None)]);
+    registry.deliver(&flags);
+    assert!(shared.lock().failure.is_some(), "not the watched property");
+    let value = notification(ai(1), &[(PropertyIdentifier::PRESENT_VALUE, None)]);
+    registry.deliver(&value);
+    assert!(shared.lock().failure.is_none(), "a value of the property");
 }

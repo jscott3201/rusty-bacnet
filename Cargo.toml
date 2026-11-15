@@ -134,6 +134,7 @@ pyo3 = { version = "0.29", features = ["multiple-pymethods"] }
 tokio-tungstenite = "0.29"
 tokio-rustls = "0.26"
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "logging", "std"] }
+futures-core = "0.3"
 futures-util = "0.3"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 smallvec = "1"
