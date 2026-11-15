@@ -55,8 +55,8 @@ impl Sample {
     }
 }
 
-/// A lease's samples since it asked ([`Lease::samples`](super::Lease::samples)).
-/// It holds at least [`WatchOptions::samples`](super::WatchOptions::samples); a
+/// A lease's samples since it asked ([`Lease::samples`](super::hub::Lease::samples)).
+/// It holds at least [`WatchOptions::samples`](super::hub::WatchOptions::samples); a
 /// reader that falls behind loses the oldest, counted in
 /// [`dropped`](Self::dropped).
 #[derive(Debug)]

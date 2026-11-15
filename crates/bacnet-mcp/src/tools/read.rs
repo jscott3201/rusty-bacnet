@@ -37,7 +37,7 @@ pub(super) const SPEC: Spec = Spec {
 /// The properties `preset: "point"` reads: what an agent needs to reason
 /// about a point, and what a write preview reads. A point resource and
 /// its watch read the same.
-const POINT: [PropertyIdentifier; 10] = bacnet_ops::watch::POINT_PROPERTIES;
+const POINT: [PropertyIdentifier; 10] = bacnet_ops::watch::hub::POINT_PROPERTIES;
 
 /// Objects one call may list.
 const MAX_READS: usize = 100;

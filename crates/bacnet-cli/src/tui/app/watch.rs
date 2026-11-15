@@ -201,7 +201,22 @@ impl App {
             self.flash("Not connected.", FLASH_FOR);
             return;
         }
+        let claims = self.devices.claims(point.device);
+        if let [_, _, ..] = claims.as_slice() {
+            // The watch goes to one address: the instance names none.
+            let at: Vec<&str> = claims.iter().map(|row| row.address.as_str()).collect();
+            let notice = format!(
+                "Device {} is claimed by {} devices ({}); the watch list names a device by its \
+                 instance.",
+                point.device,
+                claims.len(),
+                at.join(", ")
+            );
+            self.flash(notice, FLASH_FOR);
+            return;
+        }
         let mut moved = None;
+        let mut at = None;
         if let Some(device) = self.devices.get(point.device) {
             if let Some(typed) = point.network.filter(|&n| device.network != Some(n)) {
                 let actual = match device.network {
@@ -211,10 +226,11 @@ impl App {
                 moved = Some(format!("{} is on {actual}, not {typed}. ", point.device));
             }
             point.network = device.network;
+            at = Some(device.at.clone());
         }
         let notice = match self.watch.add(point) {
             Ok(row) => {
-                out.push(Command::Watch(WatchCommand::Add { row, point }));
+                out.push(Command::Watch(WatchCommand::Add { row, point, at }));
                 format!(
                     "Watching {} on device {}. Press 3 for the watch list.",
                     object_label(point.object),

@@ -175,12 +175,11 @@ async fn a_revert_sends_no_who_is_to_find_its_device() {
     lab.stop().await;
 }
 
-/// The watch list's check of who claims an instance reads the discovery
-/// table, not the server's copy of it, which can lag: with a second claim
-/// in the table that the copy hasn't heard of yet, a watch on the lab
-/// device by its address is refused as ambiguous, naming both claimants.
+/// Two devices sharing an instance, each named by its address, are
+/// watched there (#2560): the hub keys points on the address, so neither
+/// claim makes the other ambiguous, and each row carries its address.
 #[tokio::test(start_paused = true)]
-async fn a_watch_reads_the_claims_from_the_table() {
+async fn a_watch_by_address_ignores_another_claim_to_the_instance() {
     let mut lab = Lab::start(Policy::default()).await;
     lab.agent.initialize().await;
     let elsewhere = NpduAddress {
@@ -193,22 +192,22 @@ async fn a_watch_reads_the_claims_from_the_table() {
         known.values().filter(|instance| **instance == LAB).count()
     };
     until(&lab, |lab| claims(lab) == 2, "both claims are known").await;
-    // The copy lags: it hasn't heard of the routed claim.
-    lab.mcp
-        .ctx()
-        .known
-        .lock()
-        .unwrap()
-        .retain(|address, _| address.network() == 0);
-    let points = json!({ "points": [{ "device": "10.0.0.2:47808", "object": "ai:1" }] });
+    let points = json!({ "points": [
+        { "device": "10.0.0.2:47808", "object": "ai:1" },
+        { "device": "2001:0x33", "object": "ai:1" },
+    ] });
     let watch = lab.agent.call("bacnet_watch", points).await;
-    let error = &watch["structuredContent"]["points"][0]["error"];
-    assert_eq!(error["reason"], json!("ambiguous-device"), "{watch}");
-    let message = error["message"].as_str().unwrap();
-    assert!(
-        message.starts_with("device 1201 is claimed by 10.0.0.2:47808 and 2001:0x33"),
-        "{message}"
-    );
+    let rows = &watch["structuredContent"]["points"];
+    for (row, address) in [(&rows[0], "10.0.0.2:47808"), (&rows[1], "2001:0x33")] {
+        assert!(row.get("error").is_none(), "{watch}");
+        assert_eq!(row["watched"], json!(true), "{watch}");
+        assert_eq!(row["device"], json!(LAB));
+        // Each row says which device it is; the instance's URI names
+        // neither, and the row says so.
+        assert_eq!(row["address"], json!(address), "{watch}");
+        assert_eq!(row["uri_ambiguous"], json!(true), "{watch}");
+    }
+    assert_eq!(rows[0]["uri"], rows[1]["uri"]);
     lab.stop().await;
 }
 

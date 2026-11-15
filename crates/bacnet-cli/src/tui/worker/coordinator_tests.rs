@@ -275,6 +275,7 @@ async fn a_watch_command_waits_for_room_in_a_full_session_queue() {
             object: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             property: PropertyIdentifier::PRESENT_VALUE,
         },
+        at: None,
     };
     forward_watch(Some(&active), add, 7, &sink).await;
     let WorkerEvent::Session { generation, event } = events.recv().await.unwrap() else {
