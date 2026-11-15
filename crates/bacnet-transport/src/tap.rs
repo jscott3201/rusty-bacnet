@@ -57,7 +57,10 @@
 //! [`FrameTap::subscribe_with_capacity`]). The transport never waits for a
 //! receiver: a frame that finds a receiver's queue full is dropped for that
 //! receiver and counted, in [`FrameTapReceiver::dropped`] and in the
-//! tap-wide [`FrameTapCounters::dropped`].
+//! tap-wide [`FrameTapCounters::dropped`]. The next frame queued to that
+//! receiver carries the size of the gap in front of it, in
+//! [`TappedFrame::missed_before`], so a reader can tell where frames went
+//! missing; the queue keeps the oldest frames and loses the newest.
 //!
 //! ```
 //! use bacnet_transport::tap::FrameTap;
@@ -74,7 +77,8 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::time::SystemTime;
+use std::task::{Context, Poll};
+use std::time::{Instant, SystemTime};
 
 use bacnet_types::data_link::DataLink;
 use bytes::Bytes;
@@ -116,7 +120,9 @@ pub enum TapPeer {
     Ethernet([u8; 6]),
 }
 
-/// One link-layer frame a transport sent or received.
+/// One link-layer frame a transport sent or received, as one receiver got
+/// it: every receiver gets its own copy, which differs from the others'
+/// only in [`missed_before`](Self::missed_before).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TappedFrame {
@@ -124,6 +130,9 @@ pub struct TappedFrame {
     /// before the socket write for a sent frame (on MS/TP, just after it),
     /// just after the read for a received one. See [Order](crate::tap#order).
     pub timestamp: SystemTime,
+    /// Monotonic time at the same capture point as [`Self::timestamp`].
+    /// Use this for elapsed times: wall-clock adjustments cannot reorder it.
+    pub monotonic_timestamp: Instant,
     /// Sent or received.
     pub direction: TapDirection,
     /// The data link the frame is on.
@@ -134,6 +143,13 @@ pub struct TappedFrame {
     /// B/IPv6, a BVLC-SC message for BACnet/SC, a whole frame for MS/TP,
     /// and a whole 802.3 frame, headers and padding, for Ethernet.
     pub bytes: Bytes,
+    /// Frames this receiver lost to its full queue since the frame queued
+    /// to it before this one (since it subscribed, for its first frame):
+    /// the gap just ahead of this frame. Frames lost after the last one
+    /// queued show only in [`FrameTapReceiver::dropped`] until another
+    /// frame is queued, so `dropped` is the sum of this over the frames
+    /// queued so far plus that trailing gap.
+    pub missed_before: u64,
 }
 
 /// A snapshot of a tap's counts.
@@ -153,6 +169,10 @@ pub struct FrameTapCounters {
 struct Sink {
     tx: mpsc::Sender<TappedFrame>,
     dropped: Arc<AtomicU64>,
+    /// Frames dropped for this receiver since the last one queued to it,
+    /// for the next frame's [`TappedFrame::missed_before`]. Read and written
+    /// only under the sinks lock, in [`FrameTap::publish`].
+    gap: u64,
 }
 
 #[derive(Default)]
@@ -199,6 +219,7 @@ impl FrameTap {
         sinks.push(Sink {
             tx,
             dropped: dropped.clone(),
+            gap: 0,
         });
         drop(sinks);
         self.shared.subscribers.fetch_add(1, Ordering::Release);
@@ -239,6 +260,20 @@ impl FrameTap {
         }
     }
 
+    /// Hand a frame to the receivers as a transport would: for tests in
+    /// other crates (feature `test-support`), which can't build a
+    /// [`TappedFrame`] or reach a transport's own calls.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn record_for_test(
+        &self,
+        direction: TapDirection,
+        link: DataLink,
+        peer: TapPeer,
+        bytes: &[u8],
+    ) {
+        self.record(direction, link, || peer, bytes);
+    }
+
     #[cold]
     #[inline(never)]
     fn publish(&self, direction: TapDirection, link: DataLink, peer: TapPeer, bytes: &[u8]) {
@@ -248,23 +283,33 @@ impl FrameTap {
         // are queued in the order of their timestamps.
         let frame = TappedFrame {
             timestamp: SystemTime::now(),
+            monotonic_timestamp: Instant::now(),
             direction,
             link,
             peer,
             bytes,
+            missed_before: 0,
         };
-        sinks.retain(|sink| match sink.tx.try_send(frame.clone()) {
-            Ok(()) => {
-                self.shared.delivered.fetch_add(1, Ordering::Relaxed);
-                true
+        sinks.retain_mut(|sink| {
+            // Each receiver gets its own copy (the octets are shared), with
+            // the gap in front of it.
+            let mut copy = frame.clone();
+            copy.missed_before = sink.gap;
+            match sink.tx.try_send(copy) {
+                Ok(()) => {
+                    sink.gap = 0;
+                    self.shared.delivered.fetch_add(1, Ordering::Relaxed);
+                    true
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    sink.gap = sink.gap.saturating_add(1);
+                    sink.dropped.fetch_add(1, Ordering::Relaxed);
+                    self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+                    true
+                }
+                // The receiver is gone; its drop already counted it out.
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
             }
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                sink.dropped.fetch_add(1, Ordering::Relaxed);
-                self.shared.dropped.fetch_add(1, Ordering::Relaxed);
-                true
-            }
-            // The receiver is gone; its drop already counted it out.
-            Err(mpsc::error::TrySendError::Closed(_)) => false,
         });
     }
 
@@ -295,6 +340,12 @@ impl std::fmt::Debug for FrameTapReceiver {
 }
 
 impl FrameTapReceiver {
+    /// Poll for the next frame without keeping a mutable borrow across an
+    /// await. Like [`Self::recv`], cancellation before readiness loses no frame.
+    pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<TappedFrame>> {
+        self.rx.poll_recv(cx)
+    }
+
     /// The next frame, waiting for one. After the transport stops this
     /// keeps waiting, since it may start again; it returns `None` once the
     /// transport that owns the tap is dropped and the queue is empty.
@@ -307,7 +358,9 @@ impl FrameTapReceiver {
         self.rx.try_recv().ok()
     }
 
-    /// Frames dropped for this receiver because its queue was full.
+    /// Frames dropped for this receiver because its queue was full, so far:
+    /// the gaps the queued frames' [`TappedFrame::missed_before`] report,
+    /// and any frames lost after the last one queued.
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
