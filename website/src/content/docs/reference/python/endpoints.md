@@ -37,15 +37,6 @@ Properties:
 - `device_instance: int`
 - `vendor_id: int`
 
-### BipEndpoint.frames
-
-```python
-def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]
-```
-
-Observe raw frames on the running owner; capacity is 1–65536.
-Owner shutdown ends this subscription; a restart needs a new one.
-
 ### BipEndpoint.__init__
 
 ```python
@@ -367,6 +358,17 @@ def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]
 
 How the foreign-device registration is going (#938), as for
 `BACnetClient`. RuntimeError before start and after close.
+
+### BipEndpoint.frames
+
+```python
+def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]
+```
+
+Observe the raw frames on the endpoint's own socket from now on,
+beside both roles' traffic, `capacity` frames queued at most (1 to
+65536, else ValueError). RuntimeError before start and after close.
+Close ends the iterator; a restart needs a new one.
 
 ### BipEndpoint.read_bdt
 
