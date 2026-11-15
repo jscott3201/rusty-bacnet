@@ -155,8 +155,9 @@ pub enum ScTlsConfigError {
         source: io::Error,
     },
     /// A file is larger than [`MAX_PEM_FILE_BYTES`](super::MAX_PEM_FILE_BYTES).
-    /// Reading stopped at the limit, so a device or a pipe that never ends
-    /// is refused this way too.
+    /// Reading stopped at the limit, so a stream that never ends stops there
+    /// and is refused this way too (a read can still block, as on a FIFO no
+    /// writer has opened).
     #[non_exhaustive]
     TooLarge {
         /// The input the file holds.
@@ -306,15 +307,19 @@ impl fmt::Display for ScTlsConfigError {
     }
 }
 
-/// A path as text, with control characters escaped: a file name can't move
-/// the cursor or start a new line in a message.
+/// A path as text, with control characters, bidirectional formatting
+/// characters (U+202A to U+202E, U+2066 to U+2069) and the line and
+/// paragraph separators (U+2028, U+2029) escaped: a file name can't move the
+/// cursor, start a new line or reorder the text of a message.
 struct Shown<'a>(&'a std::path::Path);
 
 impl fmt::Display for Shown<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use fmt::Write;
         for c in self.0.display().to_string().chars() {
-            if c.is_control() {
+            let hidden = matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+                || matches!(c, '\u{2028}' | '\u{2029}');
+            if c.is_control() || hidden {
                 write!(f, "{}", c.escape_default())?;
             } else {
                 f.write_char(c)?;

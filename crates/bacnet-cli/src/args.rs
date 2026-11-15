@@ -185,17 +185,17 @@ pub(crate) struct Cli {
           value_parser = crate::transport::parse_sc_connect_timeout_arg)]
     pub(crate) sc_connect_timeout: Option<u64>,
 
-    /// SC trusted site CA PEM file (required for SC; no system-root fallback).
+    /// SC trusted site CA PEM file (required for SC; no system-root fallback; read up to 1 MiB).
     // Validate emptiness only when constructing an SC client, not for discovery
     // or a feature-disabled build. Preserve native OS path bytes.
     #[arg(long, global = true, value_name = "FILE", value_parser = OsStringValueParser::new().map(PathBuf::from))]
     pub(crate) sc_ca: Option<PathBuf>,
 
-    /// SC TLS certificate PEM file.
+    /// SC TLS certificate PEM file (read up to 1 MiB).
     #[arg(long, global = true)]
     pub(crate) sc_cert: Option<PathBuf>,
 
-    /// SC TLS private key PEM file.
+    /// SC TLS private key PEM file: one unencrypted key (read up to 1 MiB).
     #[arg(long, global = true)]
     pub(crate) sc_key: Option<PathBuf>,
 

@@ -180,6 +180,16 @@ fn key_input_follows_the_tls_configurations_one_key_rule() {
     for (name, input, expected) in [
         ("two keys", two, ScInputErrorKind::MultiplePrivateKeys),
         (
+            "a key and a legacy encrypted key",
+            [key.as_slice(), legacy.as_slice()].concat(),
+            ScInputErrorKind::MultiplePrivateKeys,
+        ),
+        (
+            "a legacy encrypted key and a key",
+            [legacy.as_slice(), key.as_slice()].concat(),
+            ScInputErrorKind::MultiplePrivateKeys,
+        ),
+        (
             "encrypted PKCS#8",
             pem("ENCRYPTED PRIVATE KEY", b"sealed"),
             ScInputErrorKind::UnsupportedPrivateKey,

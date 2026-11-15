@@ -82,9 +82,9 @@ These options go before or after the command. Each command also takes `-h` or `-
 - `--sc-failover-url <URL>`: SC failover hub WebSocket URL, used when the primary hub can't be reached or its reconnects run out. Turns on --sc-reconnect. Needs the `sc-tls` feature.
 - `--sc-reconnect`: Redial a lost SC hub connection with backoff (10 s doubling to 10 min, 10 attempts). A TUI profile does this unless it sets reconnect = false. Needs the `sc-tls` feature.
 - `--sc-connect-timeout <MS>`: SC connect timeout in milliseconds, for each hub dial and handshake (1 to 600000; default 10000). Needs the `sc-tls` feature.
-- `--sc-ca <FILE>`: SC trusted site CA PEM file (required for SC; no system-root fallback). Needs the `sc-tls` feature.
-- `--sc-cert <SC_CERT>`: SC TLS certificate PEM file. Needs the `sc-tls` feature.
-- `--sc-key <SC_KEY>`: SC TLS private key PEM file. Needs the `sc-tls` feature.
+- `--sc-ca <FILE>`: SC trusted site CA PEM file (required for SC; no system-root fallback; read up to 1 MiB). Needs the `sc-tls` feature.
+- `--sc-cert <SC_CERT>`: SC TLS certificate PEM file (read up to 1 MiB). Needs the `sc-tls` feature.
+- `--sc-key <SC_KEY>`: SC TLS private key PEM file: one unencrypted key (read up to 1 MiB). Needs the `sc-tls` feature.
 - `--sc-vmac <SC_VMAC>`: BACnet/SC local VMAC as 12 hex digits or colon-separated bytes. Needs the `sc-tls` feature.
 - `--sc-device-uuid <SC_DEVICE_UUID>`: BACnet/SC device UUID as 32 hex digits or RFC 4122 hyphenated text. Needs the `sc-tls` feature.
 - `--mstp <PORT>`: Join an MS/TP trunk as a master station on this serial port (see `bacnet mstp-ports`); needs --mstp-mac and the `serial` feature. B/IP, B/IPv6 and SC flags are refused with it.

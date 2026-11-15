@@ -68,9 +68,9 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `--sc-failover-url <URL>` | | SC failover hub, used when the primary can't be reached or its reconnects run out; turns on `--sc-reconnect` |
 | `--sc-reconnect` | off (a profile: on) | Redial a lost SC hub with backoff: 10 s doubling to 10 min, 10 attempts |
 | `--sc-connect-timeout <MS>` | 10000 | Bound on each SC hub dial and handshake, 1 to 600000 ms |
-| `--sc-ca <FILE>` | required for SC | Trusted site CA certificate(s) in PEM; no system-root fallback |
-| `--sc-cert <FILE>` | | SC TLS certificate PEM |
-| `--sc-key <FILE>` | | SC TLS private key PEM |
+| `--sc-ca <FILE>` | required for SC | Trusted site CA certificate(s) in PEM; no system-root fallback; read up to 1 MiB |
+| `--sc-cert <FILE>` | | SC TLS certificate PEM (read up to 1 MiB) |
+| `--sc-key <FILE>` | | SC TLS private key PEM: one unencrypted key (read up to 1 MiB) |
 | `--sc-vmac <HEX>` | | SC local VMAC as 12 hex digits or separated bytes |
 | `--sc-device-uuid <UUID>` | | SC device UUID as 32 hex digits or hyphenated text |
 | `--mstp <PORT>` | | Join an MS/TP trunk as a master station on this serial port; needs `--mstp-mac` and the `serial` feature. See [MS/TP](#mstp) |

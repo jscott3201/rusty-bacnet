@@ -2360,7 +2360,7 @@ match ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key") {
 | `ScTlsConfigError` | When |
 |---|---|
 | `Read { input, path, source }` | a file can't be read (missing, a directory, no permission) |
-| `TooLarge { input, path, limit }` | a file is larger than `MAX_PEM_FILE_BYTES`; reading stops at the limit, so a device or pipe that never ends is refused too |
+| `TooLarge { input, path, limit }` | a file is larger than `MAX_PEM_FILE_BYTES`; reading stops at the limit, so a stream that never ends stops there and is refused too (the read can still block, as when opening a FIFO no writer has opened) |
 | `MalformedPem { input, fault }` | not well-formed PEM; `ScPemFault` says how (no `END` line, a bad `BEGIN` line, a body that isn't base64, a section too large) |
 | `NoCertificate { input }` | the CA bundle (an empty bundle: nothing would be trusted) or the chain holds no certificate |
 | `UnsupportedCertificate { input, form }` | its only certificates are OpenSSL `TRUSTED CERTIFICATE` (`ScCertificateForm::Trusted`) or PKCS#7 (`Pkcs7`) sections |

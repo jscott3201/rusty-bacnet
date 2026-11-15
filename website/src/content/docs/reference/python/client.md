@@ -22,8 +22,9 @@ BACnet/SC (`"sc"`), and BACnet MS/TP (`"mstp"`) transports, and a
 For SC, sc\_ca\_cert, sc\_client\_cert, and sc\_client\_key must be nonempty
 paths; omission, None, or empty strings raise ValueError at construction.
 Their None defaults preserve non-SC use and positional layout only.
-Async entry loads the explicit site CA and operational cert/key; invalid
-TLS configuration raises RuntimeError before dialing. No system-root or
+Async entry loads the explicit site CA and operational cert/key, each file
+read up to 1 MiB; invalid TLS configuration, a larger file included, raises
+RuntimeError before dialing. No system-root or
 unauthenticated-client fallback is available.
 
 SC also requires keyword-only sc\_device\_uuid: exactly 16 bytes, not all zero,

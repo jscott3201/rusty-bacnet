@@ -7190,7 +7190,9 @@ certificate-less mode, or insecure flag. The `None` defaults and positional slot
 unchanged for non-SC use and argument-layout compatibility only.
 
 File I/O remains at startup: client async entry and server `start()` load and
-validate the files before TCP/DNS connection attempts. Unreadable, empty, malformed
+validate the files before TCP/DNS connection attempts. Each file is read up to
+1 MiB; a larger one is refused (`TLS config error: the CA bundle file ... is
+larger than 1048576 bytes`), as is a stream that never ends. Unreadable, empty, malformed
 credentials and cert/key mismatch raise `RuntimeError` with `TLS config error:`.
 Server **local TLS configuration** failures leave pending object registrations
 intact; repair files at the same paths and retry `start()`. The client also reloads

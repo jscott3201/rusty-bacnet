@@ -1,150 +1,22 @@
 //! The PEM constructors of both SC TLS configurations (#2600): the key forms
 //! they read, the text around PEM they ignore, each typed error, the order
-//! inputs are checked in, no key material in any error, and a real hub
-//! connect through intermediates built from PEM files.
+//! inputs are checked in, and no key material in any error. Reading files
+//! and a real connect are in `sc_tls_pem_files.rs`.
 #![cfg(feature = "sc-tls")]
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-use bacnet_transport::port::TransportPort;
-use bacnet_transport::sc::ScTransport;
-use bacnet_transport::sc_hub::{ScHub, ScHubTlsConfig};
 use bacnet_transport::sc_tls::{
-    MAX_PEM_FILE_BYTES, ScCertificateForm, ScKeyForm, ScNodeTlsConfig, ScPemFault,
-    ScTlsConfigError, ScTlsInput, TlsWebSocket,
+    ScCertificateForm, ScKeyForm, ScNodeTlsConfig, ScPemFault, ScTlsConfigError, ScTlsInput,
 };
-use rcgen::{CertificateParams, Issuer, KeyPair};
+use rcgen::KeyPair;
 
 #[allow(dead_code)]
 #[path = "support/sc_pem_materials.rs"]
 mod fixture;
 use fixture::pem;
-
-/// A root CA, an intermediate it issued, and leaves the intermediate issued.
-struct Site {
-    root: String,
-    intermediate: String,
-    issuer: Issuer<'static, KeyPair>,
-}
-
-/// A leaf's certificate PEM, its chain (leaf then intermediate) and its key.
-struct Leaf {
-    chain: String,
-    key: KeyPair,
-}
-
-impl Site {
-    fn new() -> Self {
-        let mut root = CertificateParams::new(Vec::<String>::new()).unwrap();
-        root.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        root.distinguished_name
-            .push(rcgen::DnType::CommonName, "PEM root");
-        let root_key = KeyPair::generate().unwrap();
-        let root_pem = root.self_signed(&root_key).unwrap().pem();
-        let root_issuer = Issuer::from_params(&root, &root_key);
-        let mut middle = CertificateParams::new(Vec::<String>::new()).unwrap();
-        middle.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        middle
-            .distinguished_name
-            .push(rcgen::DnType::CommonName, "PEM intermediate");
-        let middle_key = KeyPair::generate().unwrap();
-        let intermediate = middle.signed_by(&middle_key, &root_issuer).unwrap().pem();
-        Self {
-            root: root_pem,
-            intermediate,
-            issuer: Issuer::new(middle, middle_key),
-        }
-    }
-
-    fn leaf_with(&self, key: KeyPair) -> Leaf {
-        let params = CertificateParams::new(vec!["localhost".into()]).unwrap();
-        let cert = params.signed_by(&key, &self.issuer).unwrap().pem();
-        Leaf {
-            chain: format!("{cert}{}", self.intermediate),
-            key,
-        }
-    }
-
-    fn leaf(&self) -> Leaf {
-        self.leaf_with(KeyPair::generate().unwrap())
-    }
-}
-
-/// The key a PKCS#8 PrivateKeyInfo wraps (its privateKey OCTET STRING): a
-/// SEC1 ECPrivateKey for an EC key, a PKCS#1 RSAPrivateKey for an RSA key.
-fn unwrap_pkcs8(der: &[u8]) -> Vec<u8> {
-    fn tlv(input: &[u8]) -> (u8, &[u8], &[u8]) {
-        let (len, header) = match input[1] {
-            n if n < 0x80 => (usize::from(n), 2),
-            0x81 => (usize::from(input[2]), 3),
-            0x82 => ((usize::from(input[2]) << 8) | usize::from(input[3]), 4),
-            other => panic!("unexpected DER length form {other:#x}"),
-        };
-        (
-            input[0],
-            &input[header..header + len],
-            &input[header + len..],
-        )
-    }
-    let (_, info, _) = tlv(der);
-    let (_, _, rest) = tlv(info); // version
-    let (_, _, rest) = tlv(rest); // privateKeyAlgorithm
-    let (tag, key, _) = tlv(rest);
-    assert_eq!(tag, 0x04, "privateKey is an OCTET STRING");
-    key.to_vec()
-}
-
-fn text(bytes: Vec<u8>) -> String {
-    String::from_utf8(bytes).unwrap()
-}
-
-fn crlf(pem: &str) -> String {
-    pem.replace("\r\n", "\n").replace('\n', "\r\n")
-}
-
-fn node(ca: &str, chain: &str, key: &str) -> Result<ScNodeTlsConfig, ScTlsConfigError> {
-    ScNodeTlsConfig::from_pem(ca.as_bytes(), chain.as_bytes(), key.as_bytes())
-}
-
-fn hub(ca: &str, chain: &str, key: &str) -> Result<ScHubTlsConfig, ScTlsConfigError> {
-    ScHubTlsConfig::from_pem(ca.as_bytes(), chain.as_bytes(), key.as_bytes())
-}
-
-/// Both configurations' verdict on the same PEM, with the node's error.
-fn both(ca: &str, chain: &str, key: &str) -> Result<(), ScTlsConfigError> {
-    let node = node(ca, chain, key).map(drop);
-    let hub = hub(ca, chain, key).map(drop);
-    assert_eq!(
-        node.as_ref().map_err(ToString::to_string),
-        hub.as_ref().map_err(ToString::to_string),
-        "the node and hub configurations disagree"
-    );
-    node
-}
-
-/// A directory of files, removed on drop.
-struct Dir(PathBuf);
-
-impl Dir {
-    fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("sc-tls-pem-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-
-    fn write(&self, name: &str, contents: &str) -> PathBuf {
-        let path = self.0.join(name);
-        std::fs::write(&path, contents).unwrap();
-        path
-    }
-}
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
+#[allow(dead_code)]
+#[path = "support/sc_tls_site.rs"]
+mod site;
+use site::{Site, both, crlf, hub, node, text, unwrap_pkcs8};
 
 #[test]
 fn pem_constructors_read_pkcs8_sec1_and_pkcs1_keys_with_an_intermediate() {
@@ -235,6 +107,45 @@ fn legacy_encrypted_keys_are_named_encrypted() {
             );
         }
     }
+    // Beside a readable key, in either order, it is a second key.
+    let legacy = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+        DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF\n\nbm90IGEga2V5\n\
+        -----END RSA PRIVATE KEY-----\n";
+    let key = leaf.key.serialize_pem();
+    for both_keys in [format!("{key}{legacy}"), format!("{legacy}{key}")] {
+        let error = both(&site.root, &leaf.chain, &both_keys).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ScTlsConfigError::MultiplePrivateKeys { count: 2, .. }
+            ),
+            "{error:?}"
+        );
+    }
+    // The header counts only as a key section's first line: in leading
+    // text, or opening a corrupt certificate beside a good key, it leaves
+    // that certificate malformed PEM.
+    let header = "Proc-Type: 4,ENCRYPTED\n";
+    let corrupt = "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n";
+    let in_certificate =
+        format!("-----BEGIN CERTIFICATE-----\n{header}AQID\n-----END CERTIFICATE-----\n");
+    for key_file in [
+        format!("{header}{corrupt}{key}"),
+        format!("{in_certificate}{key}"),
+    ] {
+        let error = both(&site.root, &leaf.chain, &key_file).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ScTlsConfigError::MalformedPem {
+                    input: ScTlsInput::PrivateKey,
+                    fault: ScPemFault::Base64,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+    }
     // Without the header, the same bad body is malformed PEM.
     let bad = "-----BEGIN RSA PRIVATE KEY-----\nDEK-Info: x\n-----END RSA PRIVATE KEY-----\n";
     let error = both(&site.root, &leaf.chain, bad).unwrap_err();
@@ -259,6 +170,7 @@ fn trusted_certificate_and_pkcs7_only_inputs_name_their_form() {
     let key = leaf.key.serialize_pem();
     let trusted = text(pem("TRUSTED CERTIFICATE", b"cert and trust"));
     let pkcs7 = text(pem("PKCS7", b"signed data"));
+    let cms = text(pem("CMS", b"signed data"));
     for (ca, chain, input, form) in [
         (
             trusted.as_str(),
@@ -270,6 +182,12 @@ fn trusted_certificate_and_pkcs7_only_inputs_name_their_form() {
             site.root.as_str(),
             pkcs7.as_str(),
             ScTlsInput::CertificateChain,
+            ScCertificateForm::Pkcs7,
+        ),
+        (
+            cms.as_str(),
+            leaf.chain.as_str(),
+            ScTlsInput::CaBundle,
             ScCertificateForm::Pkcs7,
         ),
     ] {
@@ -541,125 +459,6 @@ fn inputs_are_checked_ca_first_then_decoded_before_der_checks() {
     );
 }
 
-#[test]
-fn files_are_read_ca_first_and_an_unreadable_one_names_its_path() {
-    let site = Site::new();
-    let leaf = site.leaf();
-    let dir = Dir::new("files");
-    let ca = dir.write("site ca é.pem", &crlf(&site.root));
-    let chain = dir.write("node.pem", &leaf.chain);
-    let key = dir.write("node.key", &leaf.key.serialize_pem());
-    ScNodeTlsConfig::from_pem_files(&ca, &chain, &key).unwrap();
-    ScHubTlsConfig::from_pem_files(&ca, &chain, &key).unwrap();
-    let missing = dir.0.join("missing.pem");
-    let read = |error: ScTlsConfigError, input: ScTlsInput, path: &Path| match error {
-        ScTlsConfigError::Read {
-            input: i,
-            path: p,
-            source,
-            ..
-        } => {
-            assert_eq!((i, p.as_path()), (input, path));
-            source
-        }
-        other => panic!("expected a read error, got {other:?}"),
-    };
-    for (paths, input) in [
-        ([&missing, &chain, &key], ScTlsInput::CaBundle),
-        ([&ca, &missing, &key], ScTlsInput::CertificateChain),
-        ([&ca, &chain, &missing], ScTlsInput::PrivateKey),
-    ] {
-        let error = ScNodeTlsConfig::from_pem_files(paths[0], paths[1], paths[2]).unwrap_err();
-        assert!(error.to_string().contains("missing.pem"), "{error}");
-        let source = read(error, input, &missing);
-        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
-        let error = ScHubTlsConfig::from_pem_files(paths[0], paths[1], paths[2]).unwrap_err();
-        read(error, input, &missing);
-    }
-    // A directory is not a readable file, and the CA bundle is checked
-    // before the identity files are opened at all.
-    let error = ScNodeTlsConfig::from_pem_files(&dir.0, &missing, &missing).unwrap_err();
-    read(error, ScTlsInput::CaBundle, &dir.0);
-    let bad = dir.write(
-        "bad.pem",
-        "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n",
-    );
-    let error = ScNodeTlsConfig::from_pem_files(&bad, &missing, &missing).unwrap_err();
-    assert!(
-        matches!(
-            error,
-            ScTlsConfigError::UnusableCertificate {
-                input: ScTlsInput::CaBundle,
-                ..
-            }
-        ),
-        "{error:?}"
-    );
-}
-
-/// A file is read up to the limit: one at it loads, one a byte over is
-/// refused naming it, and an endless device ends at the limit.
-#[test]
-fn files_are_read_up_to_the_limit() {
-    let site = Site::new();
-    let leaf = site.leaf();
-    let dir = Dir::new("limit");
-    let chain = dir.write("node.pem", &leaf.chain);
-    let key = dir.write("node.key", &leaf.key.serialize_pem());
-    let mut padded = site.root.clone();
-    padded.push_str(&" ".repeat(MAX_PEM_FILE_BYTES - padded.len()));
-    let at_limit = dir.write("at-limit.pem", &padded);
-    ScNodeTlsConfig::from_pem_files(&at_limit, &chain, &key).unwrap();
-    padded.push(' ');
-    let over = dir.write("over.pem", &padded);
-    let too_large = |error: ScTlsConfigError, input: ScTlsInput, path: &Path| {
-        assert!(
-            matches!(&error, ScTlsConfigError::TooLarge { input: i, path: p, limit, .. }
-                if *i == input && p == path && *limit == MAX_PEM_FILE_BYTES),
-            "{error:?}"
-        );
-        assert!(
-            error.to_string().contains("larger than 1048576 bytes"),
-            "{error}"
-        );
-    };
-    too_large(
-        ScNodeTlsConfig::from_pem_files(&over, &chain, &key).unwrap_err(),
-        ScTlsInput::CaBundle,
-        &over,
-    );
-    let ca = dir.write("ca.pem", &site.root);
-    too_large(
-        ScHubTlsConfig::from_pem_files(&ca, &chain, &over).unwrap_err(),
-        ScTlsInput::PrivateKey,
-        &over,
-    );
-    #[cfg(unix)]
-    {
-        let zero = Path::new("/dev/zero");
-        too_large(
-            ScNodeTlsConfig::from_pem_files(&ca, zero, &key).unwrap_err(),
-            ScTlsInput::CertificateChain,
-            zero,
-        );
-    }
-}
-
-/// A file name's control characters are escaped in the message.
-#[test]
-fn read_errors_escape_control_characters_in_paths() {
-    let dir = Dir::new("escape");
-    let odd = dir.0.join("site\nca\u{1b}[2J.pem");
-    let error = ScNodeTlsConfig::from_pem_files(&odd, &odd, &odd).unwrap_err();
-    let shown = error.to_string();
-    assert!(matches!(error, ScTlsConfigError::Read { .. }), "{error:?}");
-    assert!(
-        !shown.contains('\n') && !shown.contains('\u{1b}'),
-        "{shown:?}"
-    );
-    assert!(shown.contains("site\\nca\\u{1b}[2J.pem"), "{shown}");
-}
-
 /// No error and no configuration shows key material: neither the key's
 /// base64 nor its PEM label, in `Debug` or `Display`, whatever is wrong.
 #[test]
@@ -704,44 +503,4 @@ fn no_error_or_configuration_shows_key_material() {
     assert_eq!(format!("{config:?}"), "ScNodeTlsConfig { .. }");
     let config = hub(&site.root, &leaf.chain, &key).unwrap();
     assert_eq!(format!("{config:?}"), "ScHubTlsConfig { .. }");
-}
-
-/// A hub and a node built from PEM files, each with an intermediate in its
-/// chain, complete TLS 1.3 mutual authentication and the BACnet/SC connect.
-#[tokio::test]
-async fn hub_and_node_from_pem_files_connect_through_intermediates() {
-    let site = Site::new();
-    let dir = Dir::new("connect");
-    let ca = dir.write("ca.pem", &site.root);
-    let files = |name: &str| {
-        let leaf = site.leaf();
-        (
-            dir.write(&format!("{name}.pem"), &crlf(&leaf.chain)),
-            dir.write(&format!("{name}.key"), &leaf.key.serialize_pem()),
-        )
-    };
-    let (hub_chain, hub_key) = files("hub");
-    let (node_chain, node_key) = files("node");
-    let hub_tls = ScHubTlsConfig::from_pem_files(&ca, &hub_chain, &hub_key).unwrap();
-    let node_tls = ScNodeTlsConfig::from_pem_files(&ca, &node_chain, &node_key).unwrap();
-    let mut hub = ScHub::start("127.0.0.1:0", hub_tls, [0x10; 6], [0x10; 16])
-        .await
-        .unwrap();
-    let url = format!("wss://localhost:{}", hub.local_addr().unwrap().port());
-    let connect = async {
-        let ws = TlsWebSocket::connect(&url, node_tls).await.unwrap();
-        assert_eq!(
-            ws.peer_info().certificates().len(),
-            2,
-            "the hub sent its intermediate"
-        );
-        let mut transport = ScTransport::new(ws, [0x22; 6]).with_device_uuid([0x22; 16]);
-        let _rx = transport.start().await.unwrap();
-        assert!(transport.hub_peer_info().await.is_some());
-        transport.stop().await.unwrap();
-    };
-    tokio::time::timeout(Duration::from_secs(10), connect)
-        .await
-        .expect("the PEM-built node connects to the PEM-built hub");
-    hub.stop().await;
 }

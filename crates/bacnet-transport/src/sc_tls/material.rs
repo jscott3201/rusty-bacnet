@@ -22,8 +22,9 @@ use super::config_error::{ScCertificateForm, ScKeyForm, ScPemFault, ScTlsConfigE
 
 /// The largest file the `from_pem_files` constructors read, in bytes:
 /// 1 MiB, several times a public CA bundle of every root. Reading stops at
-/// the limit, so a device or pipe that never ends is refused rather than
-/// read forever.
+/// the limit, so a stream that never ends stops there and is refused. The
+/// read can still block: opening a FIFO that no writer has opened waits for
+/// one, and a writer that stops writing stalls the read.
 pub const MAX_PEM_FILE_BYTES: usize = 1024 * 1024;
 
 /// Material every check passed: explicit trust, a leaf-first chain rustls
@@ -244,11 +245,17 @@ pub(crate) fn single_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>, ScTlsConf
         let (kind, der) = section.map_err(|error| {
             // OpenSSL's older encrypted keys keep the SEC1 or PKCS#1 label
             // and put RFC 1421 headers before the body, which then isn't
-            // base64.
+            // base64. Beside another key it is still a second key.
             let fault = ScPemFault::of(&error);
             if fault == ScPemFault::Base64 && legacy_encrypted(pem) {
-                return ScTlsConfigError::UnsupportedKey {
-                    form: ScKeyForm::Encrypted,
+                let count = labels(pem)
+                    .filter(|label| label.ends_with(b"PRIVATE KEY"))
+                    .count();
+                return match count {
+                    0 | 1 => ScTlsConfigError::UnsupportedKey {
+                        form: ScKeyForm::Encrypted,
+                    },
+                    count => ScTlsConfigError::MultiplePrivateKeys { count },
                 };
             }
             ScTlsConfigError::MalformedPem {
@@ -288,23 +295,39 @@ fn unreadable_keys(pem: &[u8]) -> impl Iterator<Item = ScKeyForm> + '_ {
     })
 }
 
-/// Whether a `Proc-Type` header marks a section encrypted (RFC 1421).
+/// Whether a SEC1 or PKCS#1 key section starts with a `Proc-Type` header
+/// that marks it encrypted (RFC 1421): the header must be the first
+/// non-empty line after that section's `BEGIN` line, so the same text in
+/// leading prose or in another kind of section doesn't count.
 fn legacy_encrypted(pem: &[u8]) -> bool {
-    lines(pem).any(|line| {
-        line.strip_prefix(b"Proc-Type:")
-            .is_some_and(|value| value.windows(9).any(|w| w == b"ENCRYPTED"))
-    })
+    let mut lines = lines(pem).filter(|line| !line.is_empty()).peekable();
+    while let Some(line) = lines.next() {
+        let key_begin = label(line)
+            .is_some_and(|label| matches!(label, b"EC PRIVATE KEY" | b"RSA PRIVATE KEY"));
+        if key_begin
+            && lines.peek().is_some_and(|next| {
+                next.strip_prefix(b"Proc-Type:")
+                    .is_some_and(|value| value.windows(9).any(|w| w == b"ENCRYPTED"))
+            })
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The labels of the `BEGIN` lines, as the PEM parser reads them. These
 /// scans read `BEGIN` and header lines only, never a section's body, and
 /// keep nothing of what they read.
 fn labels(pem: &[u8]) -> impl Iterator<Item = &[u8]> {
-    lines(pem).filter_map(|line| {
-        line.strip_prefix(b"-----BEGIN ")?
-            .trim_ascii_end()
-            .strip_suffix(b"-----")
-    })
+    lines(pem).filter_map(label)
+}
+
+/// The label of a `BEGIN` line, if `line` is one.
+fn label(line: &[u8]) -> Option<&[u8]> {
+    line.strip_prefix(b"-----BEGIN ")?
+        .trim_ascii_end()
+        .strip_suffix(b"-----")
 }
 
 fn lines(pem: &[u8]) -> impl Iterator<Item = &[u8]> {
