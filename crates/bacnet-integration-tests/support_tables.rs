@@ -76,8 +76,10 @@ const PYTHON_METHOD_SUFFIXES: &[&str] = &[
 /// count for none. Some send a service another method already names
 /// (`discover` and `who_is`, `unsubscribe_cov` and `subscribe_cov`,
 /// `read_log_page` and `read_range`, `export_223_experimental` and the
-/// ReadProperty and ReadPropertyMultiple readers); the rest send none: lifecycle,
-/// accessors, event streams, and BVLL or network-layer messages. Generation
+/// ReadProperty and ReadPropertyMultiple readers, `relinquish` and
+/// `priority_array` and WriteProperty and ReadPropertyMultiple); the rest
+/// send none: lifecycle, accessors (`write_policy`), event streams, and BVLL
+/// or network-layer messages. Generation
 /// fails on a method that is neither here nor named after a service, and on
 /// an entry here the stub no longer has.
 const PYTHON_OTHER_METHODS: &[&str] = &[
@@ -89,6 +91,9 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "unsubscribe_cov",
     "read_log_page",
     "export_223_experimental",
+    "relinquish",
+    "priority_array",
+    "write_policy",
     "i_have_events",
     "cov_notifications",
     "network_reports",
