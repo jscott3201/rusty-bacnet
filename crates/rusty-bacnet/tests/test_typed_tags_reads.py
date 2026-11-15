@@ -150,11 +150,16 @@ class TypedTagsReadTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((value.tag, value.value), (tag, expected))
 
     async def test_failed_typed_decode_keeps_complete_raw_value(self):
-        for raw, index in [(EXHAUST + b"\x0a\x00\xff", None), (b"\x0a\x03a", None),
-                           (b"\x0a\x00a\xd0", None), (DATE + TIME[3:], None),
-                           (EXHAUST + FLOOR, 1), (EXHAUST + b"\x1a\x00a", None)]:
+        # Context-tagged content reads as its tags (#2618); a reserved
+        # application tag (13) keeps the octets as application_data.
+        for raw, index, tag in [(EXHAUST + b"\x0a\x00\xff", None, "tagged"),
+                                (b"\x0a\x03a", None, "tagged"),
+                                (b"\x0a\x00a\xd0", None, "application_data"),
+                                (DATE + TIME[3:], None, "tagged"),
+                                (EXHAUST + FLOOR, 1, "tagged"),
+                                (EXHAUST + b"\x1a\x00a", None, "tagged")]:
             for rpm in (False, True):
                 with self.subTest(raw=raw, index=index, rpm=rpm):
                     value = await self.read(raw, index, rpm=rpm)
-                    self.assertEqual(value.tag, "application_data")
-                    self.assertEqual(value.value, raw)
+                    self.assertEqual(value.tag, tag)
+                    self.assertEqual(value.octets, raw)

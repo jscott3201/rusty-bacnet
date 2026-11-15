@@ -1,11 +1,12 @@
 use super::*;
+use crate::types::property_value::Form;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
 const AI: ObjectType = ObjectType::ANALOG_INPUT;
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 
-/// [`decode_read_value`] for a value with no typed constructed form: the
-/// value it carries.
+/// [`decode_read_value`] for a value with no typed constructed form and no
+/// context tag: the value it carries.
 fn decode(
     object_type: ObjectType,
     property: PropertyIdentifier,
@@ -13,9 +14,23 @@ fn decode(
     octets: &[u8],
 ) -> Result<PropertyValue, Error> {
     decode_read_value(object_type, property, array_index, octets).map(|value| {
-        assert_eq!(value.element, None, "{octets:02X?}");
+        assert_eq!(value.element(), None, "{octets:02X?}");
+        assert_ne!(value.form, Form::Tagged, "{octets:02X?}");
         value.inner
     })
+}
+
+/// Whether [`decode_read_value`] reads `octets` as their tags (#2618),
+/// keeping them as they are.
+fn tagged(object_type: ObjectType, property: PropertyIdentifier, octets: &[u8]) -> bool {
+    let value = decode_read_value(object_type, property, None, octets).unwrap();
+    assert_eq!(value.element(), None, "{octets:02X?}");
+    assert_eq!(
+        value.inner,
+        PropertyValue::ApplicationData(octets.to_vec()),
+        "{octets:02X?}"
+    );
+    value.form == Form::Tagged
 }
 
 fn oid(instance: u32) -> PropertyValue {
@@ -114,20 +129,15 @@ fn a_whole_array_or_list_is_a_list_at_every_length() {
 }
 
 #[test]
-fn context_tagged_content_without_a_typed_form_keeps_every_octet() {
+fn context_tagged_content_without_a_typed_form_reads_as_its_tags() {
     // A property with no typed form: a Lighting Output's Lighting_Command,
     // a context-tagged SEQUENCE (operation [0]). Load Control's shed levels,
     // the example here before, read typed since #1499.
-    assert_eq!(
-        decode(
-            ObjectType::LIGHTING_OUTPUT,
-            PropertyIdentifier::LIGHTING_COMMAND,
-            None,
-            &[0x09, 0x02]
-        )
-        .unwrap(),
-        PropertyValue::ApplicationData(vec![0x09, 0x02])
-    );
+    assert!(tagged(
+        ObjectType::LIGHTING_OUTPUT,
+        PropertyIdentifier::LIGHTING_COMMAND,
+        &[0x09, 0x02]
+    ));
     // Elements a typed read would split, read from a property on an object
     // type with no typed form for it: two BACnetPortPermission elements, a
     // BACnetDestination (application fields around a context-tagged
@@ -148,11 +158,13 @@ fn context_tagged_content_without_a_typed_form_keeps_every_octet() {
         (vendor, PropertyIdentifier::RECIPIENT_LIST, &destination[..]),
         (AI, PV, &group[..]),
     ] {
-        assert_eq!(
-            decode(object_type, property, None, octets).unwrap(),
-            PropertyValue::ApplicationData(octets.to_vec())
-        );
+        assert!(tagged(object_type, property, octets), "{octets:02X?}");
     }
+    // A vendor property: context fields around application values, nested.
+    let fields = [
+        0x09, 0x02, 0x1E, 0x44, 0x3F, 0xC0, 0, 0, 0x2E, 0x11, 0x2F, 0x1F, 0x21, 7,
+    ];
+    assert!(tagged(vendor, PropertyIdentifier::from_raw(1000), &fields));
 }
 
 #[test]
@@ -178,18 +190,41 @@ fn well_framed_content_the_model_cannot_hold_comes_back_as_octets() {
     ];
     let object_list = PropertyIdentifier::OBJECT_LIST;
     for element in unrepresentable {
-        // Alone, after an application value, and after a context element.
-        for prefix in [&[][..], &[0x21, 0x01][..], &[0x09, 0x01][..]] {
-            let octets = [prefix, element].concat();
+        // Alone, after an application value, after a context element, and
+        // inside one: the tree would hold a value the model can't.
+        let framed = [&[0x0E][..], element, &[0x0F]].concat();
+        for octets in [
+            element.to_vec(),
+            [&[0x21, 0x01][..], element].concat(),
+            [&[0x09, 0x01][..], element].concat(),
+            framed,
+        ] {
             for (object_type, property) in [(AI, PV), (ObjectType::DEVICE, object_list)] {
+                let value = decode_read_value(object_type, property, None, &octets).unwrap();
                 assert_eq!(
-                    decode(object_type, property, None, &octets).unwrap(),
-                    PropertyValue::ApplicationData(octets.clone()),
+                    (value.inner, value.form),
+                    (PropertyValue::ApplicationData(octets.clone()), Form::Plain),
                     "{octets:02X?}"
                 );
             }
         }
     }
+}
+
+#[test]
+fn a_tree_past_the_decoders_bound_keeps_its_octets() {
+    // One context element, then MAX_TAG_TREE_NODES NULLs: one past the bound.
+    let mut octets = vec![0x09, 0x01];
+    octets.extend(std::iter::repeat_n(
+        0x00,
+        bacnet_encoding::tags::tree::MAX_TAG_TREE_NODES,
+    ));
+    let value = decode_read_value(AI, PV, None, &octets).unwrap();
+    assert_eq!(value.form, Form::Plain);
+    assert_eq!(value.inner, PropertyValue::ApplicationData(octets.clone()));
+    // At the bound, it reads as its tags.
+    octets.pop();
+    assert!(tagged(AI, PV, &octets));
 }
 
 #[test]
@@ -203,4 +238,123 @@ fn only_broken_framing_is_an_error() {
     ] {
         assert!(decode(AI, PV, None, octets).is_err(), "{octets:02X?}");
     }
+}
+
+/// Every application datatype, its octets and its value (#2618 pins these
+/// before the tag-tree decoder takes over the framing walk).
+pub(super) fn application_values() -> Vec<(Vec<u8>, PropertyValue)> {
+    let mut object = vec![0xC4];
+    object.extend_from_slice(&((AI.to_raw() << 22) | 7).to_be_bytes());
+    vec![
+        (vec![0x00], PropertyValue::Null),
+        (vec![0x10], PropertyValue::Boolean(false)),
+        (vec![0x11], PropertyValue::Boolean(true)),
+        (vec![0x21, 0x48], PropertyValue::Unsigned(72)),
+        (vec![0x31, 0xB8], PropertyValue::Signed(-72)),
+        (vec![0x44, 0x42, 0x90, 0, 0], PropertyValue::Real(72.0)),
+        (
+            vec![0x55, 0x08, 0x40, 0x52, 0, 0, 0, 0, 0, 0],
+            PropertyValue::Double(72.0),
+        ),
+        (
+            vec![0x63, 0x12, 0x34, 0xFF],
+            PropertyValue::OctetString(vec![0x12, 0x34, 0xFF]),
+        ),
+        (
+            vec![0x73, 0x00, b'h', b'i'],
+            PropertyValue::CharacterString("hi".into()),
+        ),
+        (
+            vec![0x73, 0x05, b'A', 0xE9],
+            PropertyValue::CharacterString("A\u{e9}".into()),
+        ),
+        (
+            vec![0x75, 0x05, 0x04, 0x00, b'A', 0x00, b'B'],
+            PropertyValue::CharacterString("AB".into()),
+        ),
+        (
+            vec![0x82, 0x05, 0xE0],
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0xE0],
+            },
+        ),
+        (vec![0x91, 0x03], PropertyValue::Enumerated(3)),
+        (
+            vec![0xA4, 126, 10, 3, 6],
+            PropertyValue::Date(Date {
+                year: 126,
+                month: 10,
+                day: 3,
+                day_of_week: 6,
+            }),
+        ),
+        (
+            vec![0xB4, 12, 30, 0, 0],
+            PropertyValue::Time(Time {
+                hour: 12,
+                minute: 30,
+                second: 0,
+                hundredths: 0,
+            }),
+        ),
+        (object, oid(7)),
+    ]
+}
+
+#[test]
+fn application_values_keep_their_typed_form() {
+    let device = ObjectType::DEVICE;
+    let object_list = PropertyIdentifier::OBJECT_LIST;
+    for (octets, value) in application_values() {
+        // Alone: the bare value.
+        assert_eq!(
+            decode(AI, PV, None, &octets).unwrap(),
+            value,
+            "{octets:02X?}"
+        );
+        // After another value: a list in wire order.
+        let pair = [&[0x21, 0x01][..], &octets].concat();
+        assert_eq!(
+            decode(AI, PV, None, &pair).unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(1), value.clone()]),
+            "{pair:02X?}"
+        );
+        // A whole array: a list at every length.
+        assert_eq!(
+            decode(device, object_list, None, &octets).unwrap(),
+            PropertyValue::List(vec![value.clone()]),
+            "{octets:02X?}"
+        );
+        // An indexed element: the bare value.
+        assert_eq!(
+            decode(device, object_list, Some(3), &octets).unwrap(),
+            value,
+            "{octets:02X?}"
+        );
+    }
+}
+
+#[test]
+fn a_date_time_priority_array_splits_into_its_slots() {
+    // A DateTime Value's Priority_Array (#2098): slot 2 is the date-time
+    // choice under context tag 1, the rest NULL.
+    let slot = [0x1E, 0xA4, 126, 10, 3, 6, 0xB4, 12, 30, 0, 0, 0x1F];
+    let mut octets = vec![0x00];
+    octets.extend_from_slice(&slot);
+    octets.extend(std::iter::repeat_n(0x00, 14));
+    let value = decode(
+        ObjectType::DATETIME_VALUE,
+        PropertyIdentifier::PRIORITY_ARRAY,
+        None,
+        &octets,
+    )
+    .unwrap();
+    let PropertyValue::List(slots) = value else {
+        panic!("a whole Priority_Array is a list: {value:?}");
+    };
+    assert_eq!(slots.len(), 16);
+    assert_eq!(slots[0], PropertyValue::Null);
+    assert_eq!(slots[1], PropertyValue::ApplicationData(slot.to_vec()));
+    assert_eq!(slots[15], PropertyValue::Null);
 }

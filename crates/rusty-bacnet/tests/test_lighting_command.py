@@ -1,7 +1,7 @@
 """Installed-artifact tests for Lighting Output's Lighting_Command (#1263, #1384).
 
-Lighting_Command reads as ``application_data`` holding the context-tagged
-BACnetLightingCommand, operation NONE until written. It takes writes in that
+Lighting_Command reads as a ``tagged`` value holding the context-tagged
+BACnetLightingCommand (#2618), operation NONE until written. It takes writes in that
 encoding, locally, over the network and from a Channel. An ``octet_string``,
 the form it used to take, is refused with INVALID_DATA_TYPE, and a command its
 operation can't take with VALUE_OUT_OF_RANGE. A command taken is carried out:
@@ -88,20 +88,20 @@ class LightingCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reads_none_until_written(self) -> None:
         for value in await self.read_both():
-            self.assertEqual(value, PropertyValue.application_data(NONE))
+            self.assertEqual(value, PropertyValue.tagged(NONE))
 
     async def test_commands_write_and_read_in_their_encoding(self) -> None:
         await self.client.write_property(
             self.address, LO, LC, PropertyValue.application_data(FADE)
         )
         for value in await self.read_both():
-            self.assertEqual(value.tag, "application_data")
-            self.assertEqual(value.value, FADE)
+            self.assertEqual(value.tag, "tagged")
+            self.assertEqual(value.octets, FADE)
         await self.server.write_property_local(
             LO, LC, PropertyValue.application_data(STOP), source_object=None
         )
         for value in await self.read_both():
-            self.assertEqual(value.value, STOP)
+            self.assertEqual(value.octets, STOP)
         # The value read writes back locally unchanged.
         value = await self.server.read_property(LO, LC)
         await self.server.write_property_local(LO, LC, value, source_object=None)
@@ -119,7 +119,7 @@ class LightingCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_octet_string_is_refused_and_changes_nothing(self) -> None:
         await self.assert_refused(PropertyValue.octet_string(FADE), ErrorCode.INVALID_DATA_TYPE)
         self.assertEqual(
-            await self.server.read_property(LO, LC), PropertyValue.application_data(NONE)
+            await self.server.read_property(LO, LC), PropertyValue.tagged(NONE)
         )
 
     async def test_command_its_operation_cannot_take_is_out_of_range(self) -> None:
@@ -130,7 +130,7 @@ class LightingCommandTests(unittest.IsolatedAsyncioTestCase):
                     PropertyValue.application_data(octets), ErrorCode.VALUE_OUT_OF_RANGE
                 )
         self.assertEqual(
-            await self.server.read_property(LO, LC), PropertyValue.application_data(NONE)
+            await self.server.read_property(LO, LC), PropertyValue.tagged(NONE)
         )
 
     async def test_a_fade_written_over_the_network_runs_to_its_level(self) -> None:
@@ -179,7 +179,7 @@ class LightingCommandTests(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("the distribution never succeeded")
             await asyncio.sleep(0.01)
         self.assertEqual(
-            await self.server.read_property(LO, LC), PropertyValue.application_data(FADE)
+            await self.server.read_property(LO, LC), PropertyValue.tagged(FADE)
         )
 
 

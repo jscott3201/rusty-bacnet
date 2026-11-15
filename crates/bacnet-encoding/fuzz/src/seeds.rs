@@ -58,6 +58,7 @@ fn directory(target: &str) -> PathBuf {
 fn generated() -> Vec<Seed> {
     let mut seeds = apdu_seeds();
     seeds.extend(value_seeds());
+    seeds.extend(tag_tree_seeds());
     seeds.extend(constructed::seeds());
     seeds.extend(service::seeds());
     seeds
@@ -287,6 +288,48 @@ fn value_seeds() -> Vec<Seed> {
     seeds
 }
 
+/// Tagged values with no typed form, as a vendor's property might hold
+/// them: context fields around application values, nested frames, extended
+/// tag numbers and lengths, and elements past the tree's bounds.
+fn tag_tree_seeds() -> Vec<Seed> {
+    // [0] 2, [1] ( REAL 1.5, "hi", [2] ( TRUE, object ) ), Unsigned 7.
+    let mut vendor = vec![0x09, 0x02, 0x1E, 0x44, 0x3F, 0xC0, 0x00, 0x00];
+    vendor.extend_from_slice(&[0x73, 0x00, b'h', b'i', 0x2E, 0x11]);
+    vendor.extend(encoded(|buf| {
+        encode_property_value(
+            buf,
+            &PropertyValue::ObjectIdentifier(object(ObjectType::DEVICE, 9)),
+        )
+        .unwrap()
+    }));
+    vendor.extend_from_slice(&[0x2F, 0x1F, 0x21, 0x07]);
+    // [200] ( [20] of 300 octets ), past the one-octet length form.
+    let mut extended = vec![0xFE, 200, 0xFD, 20, 254, 0x01, 0x2C];
+    extended.extend(vec![0x5A; 300]);
+    extended.extend_from_slice(&[0xFF, 200]);
+    // Opening tags 40 deep, past the 32 the walk takes.
+    let mut nested = vec![0x1E; 40];
+    nested.extend(vec![0x1F; 40]);
+    // 10,001 NULLs, one past the tree's bound; and the bound reached
+    // inside an element that never closes.
+    let many = vec![0x00; 10_001];
+    let mut unclosed = vec![0x1E];
+    unclosed.extend(vec![0x00; 10_000]);
+    // Well framed application values that don't decode, between good ones.
+    let invalid = vec![0x21, 0x01, 0x43, 1, 2, 3, 0xD1, 9, 0x12, 0x00];
+    [
+        ("vendor-fields", vendor),
+        ("extended-tags-and-lengths", extended),
+        ("nested-40-opening-tags", nested),
+        ("one-past-the-node-bound", many),
+        ("node-bound-inside-an-unclosed-element", unclosed),
+        ("invalid-application-values", invalid),
+    ]
+    .into_iter()
+    .map(|(name, octets)| Seed::new("tag_tree_decode", name, octets))
+    .collect()
+}
+
 /// The saved files hold exactly the generated seeds (with `SEEDS_WRITE`
 /// set, writes them first), and each generated service and constructed
 /// seed decodes, so it reaches past its codec's parser.
@@ -329,6 +372,7 @@ fn every_seed_passes() {
     for (target, check) in [
         ("apdu_decode", crate::apdu::check as fn(&[u8])),
         ("value_decode", crate::value::check),
+        ("tag_tree_decode", crate::tag_tree::check),
         ("constructed_decode", crate::constructed::check),
         ("service_decode", crate::service::check),
     ] {

@@ -44,6 +44,8 @@ pub use wire::format_property_value;
 
 use bacnet_encoding::constructed::{ConstructedElement, ElementShape, property_element};
 use bacnet_encoding::primitives::{decode_application_value, decode_priority_date_time};
+use bacnet_encoding::tags::TagClass;
+use bacnet_encoding::tags::tree::decode_tag_tree;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
 };
@@ -389,7 +391,11 @@ impl<'a> ValueFormat<'a> {
                 _ => self.list(texts, constructed::separator(element)),
             };
         }
-        let Some(values) = decode_all(data) else {
+        let values = decode_all(data);
+        if self.holds_tags(property, data, values.as_deref()) {
+            return tagged::tagged(data, self.floats).0;
+        }
+        let Some(values) = values else {
             return primitive::raw(data);
         };
         match values.as_slice() {
@@ -456,6 +462,29 @@ impl<'a> ValueFormat<'a> {
             return primitive::date_time(&date, &time);
         }
         primitive::text(property, value, self.floats)
+    }
+
+    /// Whether `data`, a read of `property` with no constructed form whose
+    /// application values are `values` (`None` when one doesn't decode),
+    /// holds a context-tagged element the formatter has no form for: any
+    /// but a DateTime Value's date-time priority slot. Such a value is
+    /// shown as its tags (#2618), and so is one whose framing reads but
+    /// holds an application value that doesn't decode beside a context
+    /// tag. Octets that don't frame stay hex.
+    fn holds_tags(
+        &self,
+        property: PropertyIdentifier,
+        data: &[u8],
+        values: Option<&[PropertyValue]>,
+    ) -> bool {
+        match values {
+            Some(values) => values.iter().any(|value| {
+                matches!(value, PropertyValue::ApplicationData(_))
+                    && self.priority_date_time(property, value).is_none()
+            }),
+            None => decode_tag_tree(data)
+                .is_ok_and(|nodes| nodes.iter().any(|node| node.class == TagClass::Context)),
+        }
     }
 
     /// A DateTime Value's priority slot holding a date-time: the

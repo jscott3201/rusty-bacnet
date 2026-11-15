@@ -18,7 +18,7 @@ type P = PropertyIdentifier;
 /// and that it encodes back to `octets`, and return its tag and value.
 fn read_single(py: Python<'_>, property: PropertyIdentifier, octets: &[u8]) -> (String, Py<PyAny>) {
     let value = decode_read_value(O::ACCUMULATOR, property, None, octets).unwrap();
-    assert!(value.element.is_some(), "{octets:02X?}");
+    assert!(value.element().is_some(), "{octets:02X?}");
     let mut encoded = BytesMut::new();
     encode_property_value(&mut encoded, &value.inner).unwrap();
     assert_eq!(encoded.to_vec(), octets);
@@ -117,7 +117,7 @@ fn the_old_application_tagged_forms_are_not_typed() {
         assert_eq!(
             decode_read_value(O::ACCUMULATOR, property, None, octets)
                 .unwrap()
-                .element,
+                .element(),
             None
         );
     }
@@ -125,7 +125,7 @@ fn the_old_application_tagged_forms_are_not_typed() {
     assert_eq!(
         decode_read_value(O::ANALOG_INPUT, P::SCALE, None, &[0x19, 0x02])
             .unwrap()
-            .element,
+            .element(),
         None
     );
 }

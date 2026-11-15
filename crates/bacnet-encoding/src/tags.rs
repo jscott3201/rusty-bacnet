@@ -8,6 +8,7 @@
 
 use bacnet_types::error::{DecodeError, DecodingKind, Error};
 mod encode;
+pub mod tree;
 
 #[cfg(feature = "alloc")]
 pub use encode::{encode_closing_tag, encode_opening_tag, encode_tag};

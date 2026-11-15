@@ -1205,9 +1205,13 @@ class AuditContractArtifactTests(unittest.TestCase):
                     value = await server.read_property(
                         ObjectIdentifier(ObjectType.AUDIT_LOG, 1), PropertyIdentifier.MEMBER_OF,
                     )
-                    self.assertEqual(value.tag, "application_data")
+                    self.assertEqual(value.tag, "tagged")
                     # Independent context [0] Device:9, context [1] AuditLog:7.
-                    self.assertEqual(value.value, bytes.fromhex("0c 02000009 1c 0f400007"))
+                    self.assertEqual(value.octets, bytes.fromhex("0c 02000009 1c 0f400007"))
+                    self.assertEqual(
+                        [(node.tag_number, node.value) for node in value.value],
+                        [(0, bytes.fromhex("02000009")), (1, bytes.fromhex("0f400007"))],
+                    )
                     # No binding is inferred: the existing Rust health behavior remains visible.
                     reliability = await server.read_property(
                         ObjectIdentifier(ObjectType.AUDIT_LOG, 1), PropertyIdentifier.RELIABILITY,
@@ -1309,7 +1313,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                 try:
                     oid = ObjectIdentifier(ObjectType.AUDIT_LOG, 1)
                     member = await child.read_property(oid, PropertyIdentifier.MEMBER_OF)
-                    self.assertEqual(member.value, bytes.fromhex("0c 02000009 1c 0f400007"))
+                    self.assertEqual(member.octets, bytes.fromhex("0c 02000009 1c 0f400007"))
                     for property_id, expected in (
                         (PropertyIdentifier.DELETE_ON_FORWARD, False),
                         (PropertyIdentifier.ISSUE_CONFIRMED_NOTIFICATIONS, True),

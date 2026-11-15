@@ -263,6 +263,68 @@ fn a_constructed_value_is_a_list() {
     assert_eq!(array.to_string(), array.text);
 }
 
+/// Each application datatype as octets, the text and the typed data the
+/// formatter gives it on an Analog Input's Present_Value (#2618 pins these
+/// before the tag-tree decoder takes over the generic view).
+fn application_cases() -> Vec<(Vec<u8>, &'static str, serde_json::Value)> {
+    use serde_json::json;
+    let mut object = vec![0xC4];
+    object.extend_from_slice(&((ObjectType::ANALOG_INPUT.to_raw() << 22) | 7).to_be_bytes());
+    vec![
+        (vec![0x00], "null", json!(null)),
+        (vec![0x10], "false", json!(false)),
+        (vec![0x11], "true", json!(true)),
+        (vec![0x21, 0x48], "72", json!(72)),
+        (vec![0x31, 0xB8], "-72", json!(-72)),
+        (vec![0x44, 0x42, 0x91, 0, 0], "72.5", json!(72.5)),
+        (
+            vec![0x55, 0x08, 0x40, 0x52, 0x20, 0, 0, 0, 0, 0],
+            "72.5",
+            json!(72.5),
+        ),
+        (
+            vec![0x63, 0x12, 0x34, 0xFF],
+            "0x1234ff",
+            json!({"octets": "1234ff"}),
+        ),
+        (vec![0x60], "(no octets)", json!({"octets": ""})),
+        (vec![0x73, 0x00, b'h', b'i'], "\"hi\"", json!("hi")),
+        (vec![0x82, 0x05, 0xE0], "bits(111)", json!({"bits": "111"})),
+        (vec![0x91, 0x03], "3", json!({"value": 3})),
+        (
+            vec![0xA4, 126, 10, 3, 6],
+            "2026-10-03 Sat",
+            json!({"date": "2026-10-03 Sat"}),
+        ),
+        (vec![0xB4, 12, 30, 0, 0], "12:30", json!({"time": "12:30"})),
+        (
+            object,
+            "analog-input 7",
+            json!({"type": "analog-input", "type_number": 0, "instance": 7}),
+        ),
+    ]
+}
+
+#[test]
+fn application_values_keep_their_text_and_data() {
+    let texts = StateTexts::default();
+    let format = ValueFormat::new(ObjectType::ANALOG_INPUT, &texts, Floats::Exact);
+    for (octets, text, data) in application_cases() {
+        let value = Value::new(&format, P::PRESENT_VALUE, None, octets.clone(), None);
+        assert_eq!(value.text, text, "{octets:02x?}");
+        assert_eq!(serde_json::to_value(&value.data).unwrap(), data);
+        assert!(!value.may_hold_device_text() || text.starts_with('"'));
+        // Two of them: a list of both, in wire order.
+        let pair = [&[0x21, 0x01][..], &octets].concat();
+        let value = Value::new(&format, P::PRESENT_VALUE, None, pair, None);
+        assert_eq!(value.text, format!("[1, {text}]"));
+        assert_eq!(
+            serde_json::to_value(&value.data).unwrap(),
+            serde_json::json!([1, data])
+        );
+    }
+}
+
 /// Octets that aren't application values (an Unsigned whose octet is
 /// missing): raw data, and a decoding error.
 #[test]
