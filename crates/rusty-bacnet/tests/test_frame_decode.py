@@ -16,7 +16,7 @@ ROUTED = bytes.fromhex("810a001e01280008010600070105ff1000c40200007b2205c4910322
 
 class FrameDecodeTests(unittest.TestCase):
     def test_request_summary_is_frozen_and_preserves_header_metadata(self):
-        summary = decode_frame(REQUEST)
+        summary = decode_frame(REQUEST, "bip")
         self.assertIsInstance(summary, FrameSummary)
         self.assertEqual(summary.link_message, "original-unicast-npdu")
         self.assertEqual(summary.pdu, "Confirmed-Request")
@@ -29,12 +29,12 @@ class FrameDecodeTests(unittest.TestCase):
             summary.invoke_id = 3
 
     def test_forwarded_source_and_routed_addresses_have_distinct_fields(self):
-        forwarded = decode_frame(FORWARDED)
+        forwarded = decode_frame(FORWARDED, "bip")
         self.assertEqual(forwarded.original_source, "192.0.2.3:47808")
         self.assertIsNone(forwarded.link_source)
         self.assertEqual(forwarded.device, 123)
         self.assertTrue(forwarded.broadcast)
-        routed = decode_frame(ROUTED)
+        routed = decode_frame(ROUTED, "bip")
         self.assertEqual((routed.snet, routed.dnet), (7, 8))
         self.assertEqual((routed.routed_source, routed.routed_destination), ("7:0x05", "8:0x06"))
         self.assertIsNone(routed.original_source)
@@ -48,16 +48,37 @@ class FrameDecodeTests(unittest.TestCase):
             ("810000060030", None),
         ):
             with self.subTest(pdu=pdu):
-                summary = decode_frame(bytes.fromhex(octets))
+                summary = decode_frame(bytes.fromhex(octets), "bip")
                 self.assertEqual(summary.pdu, pdu)
                 self.assertIsNotNone(summary.problem)
                 self.assertIsNone(summary.parse_error)
 
     def test_malformed_link_npdu_and_apdu_return_partial_summaries(self):
         for octets in (b"\x81", bytes.fromhex("810a000500"), bytes.fromhex("810a00070100ff")):
-            summary = decode_frame(octets)
+            summary = decode_frame(octets, link="bip")
             self.assertIsNotNone(summary.parse_error)
             self.assertEqual(summary.parse_error, summary.problem)
+
+    def test_link_is_required_and_a_wrong_link_is_a_parse_error(self):
+        with self.assertRaises(TypeError):
+            decode_frame(REQUEST)
+        # B/IP octets read as BACnet/SC: 0x81 is no SC function.
+        wrong = decode_frame(REQUEST, link="sc")
+        self.assertEqual(wrong.link_message, "malformed")
+        self.assertIsNotNone(wrong.parse_error)
+        self.assertEqual(wrong.problem, wrong.parse_error)
+
+    def test_summaries_compare_hash_and_print_by_value(self):
+        one, again = decode_frame(REQUEST, "bip"), decode_frame(REQUEST, link="bip")
+        self.assertEqual(one, again)
+        self.assertEqual(hash(one), hash(again))
+        self.assertEqual(len({one, again, decode_frame(b"\x81", "bip")}), 2)
+        self.assertNotEqual(one, decode_frame(FORWARDED, "bip"))
+        self.assertEqual(
+            repr(one),
+            'FrameSummary(link_message="original-unicast-npdu", pdu="Confirmed-Request", '
+            'service="read-property", invoke_id=1)',
+        )
 
     def test_iterator_link_names_and_explicit_names_select_the_same_decoder(self):
         for canonical, display in (("bip", "BACnet/IP"), ("bip6", "BACnet/IPv6"),

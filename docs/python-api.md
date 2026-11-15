@@ -6690,9 +6690,10 @@ constructed stacks into one endpoint.
 
 ### Decoded frame summaries and trap transcripts
 
-`decode_frame(octets, link="bip")` decodes link, NPDU and APDU headers through
+`decode_frame(octets, link)` decodes link, NPDU and APDU headers through
 the stack's Rust decoder. It sends no traffic and returns a frozen
-`FrameSummary`, including for malformed input. Use the observed link directly:
+`FrameSummary`, including for malformed input. `link` has no default; pass
+the observed link directly:
 
 ```python
 from rusty_bacnet import decode_frame
@@ -6726,8 +6727,8 @@ The runnable [frame transcript example](../examples/python/frame_transcript.py)
 accepts a local bind address and an optional peer to read on that socket.
 
 The summary exposes `link_message` (the BVLC function or MS/TP frame type,
-such as `original-unicast-npdu`; the data link itself is `Frame.link`), `broadcast`,
-`link_source`, `link_destination`, `original_source`, `snet`, `dnet`,
+such as `original-unicast-npdu`; the data link itself is `Frame.link`),
+`broadcast`, `link_source`, `link_destination`, `original_source`, `snet`, `dnet`,
 `routed_source`, `routed_destination`, `network_message`, `pdu`, `invoke_id`,
 `service`, `problem`, `parse_error` and `device` (an I-Am device instance).
 Fields not available in the decoded headers are `None`. A valid protocol
@@ -6736,16 +6737,21 @@ Header decoding failures set `parse_error` and also remain visible in `problem`;
 their text is diagnostic, not a stable error code. This is a header summary,
 not exhaustive validation or decoding of every service payload.
 
-For a B/IP Forwarded-NPDU, `original_source` is its encoded original IP address
-and UDP port; for B/IPv6 it is the encoded original IPv6 endpoint, while
-`link_source` preserves the original VMAC. `Frame.peer` remains the actual
-UDP peer observed by the socket. The summary's routed addresses come from
+`original_source` is the originating node's address that a BBMD wrote into a
+message it forwarded: an IPv4 `address:port` in a B/IP Forwarded-NPDU, an
+IPv6 `[address]:port` in a B/IPv6 Forwarded-NPDU or
+Forwarded-Address-Resolution, whose `link_source` is the originating VMAC.
+`Frame.peer` remains the actual UDP peer observed by the socket. The
+summary's routed addresses come from
 SNET/SADR and DNET/DADR. No field invents an intermediate router path or
 authenticates an encoded source.
 
 Supported `link` values are `bip`, `bip6` (also `ipv6`), `sc`, `mstp`, or their
 `Frame.link` names (`BACnet/IP`, `BACnet/IPv6`, `BACnet/SC`, `MS/TP`), ignoring
-case. Unsupported links, including Ethernet, raise `ValueError`. The input
+case. Unsupported links, including Ethernet, raise `ValueError`. Octets
+decoded as the wrong link, B/IP octets as BACnet/SC say, come back with a
+`parse_error` rather than as another link's message. Summaries compare and
+hash by value, so they can key a dictionary or fill a set. The input
 octets and `Frame.octets` remain unredacted, including any service parameters
 they contain; this API does not apply the CLI capture's password masking.
 

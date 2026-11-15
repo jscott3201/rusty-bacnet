@@ -4575,9 +4575,14 @@ class FrameSummary:
 
     parse_error reports header decoding failures, while problem also reports
     valid protocol refusals. Service parameters are not exhaustively validated.
-    original_source is encoded in a forwarded message; Frame.peer is the actual
-    transport peer. Neither field proves the sender's identity or its path.
+    original_source is the originating address a BBMD wrote into a B/IP
+    Forwarded-NPDU, or a B/IPv6 Forwarded-NPDU or Forwarded-Address-Resolution;
+    Frame.peer is the actual transport peer. Neither field proves the sender's
+    identity or its path. Summaries compare and hash by value.
     """
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
     @property
     def link_message(self) -> str:
         """BVLC function or MS/TP frame type, such as original-unicast-npdu.
@@ -4615,13 +4620,15 @@ class FrameSummary:
     @property
     def device(self) -> int | None: ...
 
-def decode_frame(octets: bytes, link: str = "bip") -> FrameSummary:
+def decode_frame(octets: bytes, link: str) -> FrameSummary:
     """Decode link/NPDU/APDU headers with Rust, without sending traffic.
 
-    link accepts bip, bip6 (or ipv6), sc, mstp and the corresponding Frame.link
-    display names, case-insensitively. Unsupported links, including Ethernet,
-    raise ValueError. Malformed octets return a partial summary with parse_error.
-    Raw input is not redacted, and service payloads are not fully validated.
+    link is required, by position or keyword: pass frame.link. It accepts bip,
+    bip6 (or ipv6), sc, mstp and the corresponding Frame.link display names,
+    case-insensitively. Unsupported links, including Ethernet, raise
+    ValueError. Malformed octets, or octets of another link, return a partial
+    summary with parse_error. Raw input is not redacted, and service payloads
+    are not fully validated.
     """
     ...
 
