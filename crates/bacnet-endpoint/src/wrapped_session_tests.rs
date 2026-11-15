@@ -1,0 +1,50 @@
+//! A session built over a wrapped transport (#2617): the builders'
+//! `*_wrapped` forms hand the one transport they build to the caller's
+//! wrapper first, as a binding does to give the full client the type its
+//! other clients have, and the session's link calls keep working.
+
+use std::net::Ipv4Addr;
+
+use bacnet_transport::any::AnyTransport;
+use bacnet_transport::mstp::LoopbackSerial;
+use bacnet_transport::port::TransportPort;
+
+use crate::bip::BipEndpointBuilder;
+use crate::mstp::MstpEndpointBuilder;
+use crate::session::SessionRole;
+
+/// A B/IP session over `AnyTransport` keeps its BBMD table reader, its
+/// frame tap and its local address, and its full client sends from the
+/// session's one socket. Real UDP on loopback, so real time.
+#[tokio::test]
+async fn a_wrapped_bip_session_keeps_its_link_calls_and_one_socket() {
+    let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST)
+        .role(SessionRole::Both)
+        .build_session_wrapped(AnyTransport::from)
+        .unwrap();
+    assert!(session.bvlc_tables().is_some(), "taken before the wrap");
+    session.start().await.unwrap();
+    let local = session.bip_local_address().expect("running");
+    assert!(
+        session.frames(4).is_some(),
+        "the tap, taken before the wrap"
+    );
+    let client = session.full_client().unwrap();
+    let (ip, port) =
+        bacnet_transport::bvll::decode_bip_mac(client.transport().local_mac()).unwrap();
+    assert_eq!((Ipv4Addr::from(ip), port), (*local.ip(), local.port()));
+    assert!(client.transport().bip_transport().is_some());
+    drop(client);
+    session.stop().await.unwrap();
+}
+
+/// An MS/TP session over `AnyTransport`, its serial port boxed, keeps its
+/// diagnostics, which are readable in any state.
+#[test]
+fn a_wrapped_mstp_session_keeps_its_diagnostics() {
+    let (serial, _peer) = LoopbackSerial::pair();
+    let session = MstpEndpointBuilder::new(serial, 3)
+        .build_session_wrapped(AnyTransport::from)
+        .unwrap();
+    assert!(session.mstp_diagnostics().is_some());
+}

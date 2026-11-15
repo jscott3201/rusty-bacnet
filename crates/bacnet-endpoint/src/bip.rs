@@ -385,6 +385,22 @@ impl BipEndpointBuilder {
     /// in [`EndpointSession`]. Bind-count proofs use a counting test double
     /// plus real-socket corroboration (single nonzero local MAC/port).
     pub fn build_session(self) -> Result<EndpointSession<BipTransport>, Error> {
+        self.build_session_wrapped(std::convert::identity)
+    }
+
+    /// Builds the session [`build_session`](Self::build_session) would, with
+    /// its one B/IP transport passed through `wrap` first (#2617): for an
+    /// owner that keeps several kinds of link in one type, such as a
+    /// binding's enum over [`AnyTransport`](bacnet_transport::any::AnyTransport),
+    /// so a [`full_client`](EndpointSession::full_client) has the type its
+    /// other clients have. The transport's BVLC status, table reader and
+    /// frame tap are taken before `wrap`, so the session's B/IP calls keep
+    /// working. `wrap` must pass every [`TransportPort`](bacnet_transport::port::TransportPort)
+    /// call through to the transport it is given.
+    pub fn build_session_wrapped<U: bacnet_transport::port::TransportPort + 'static>(
+        self,
+        wrap: impl FnOnce(BipTransport) -> U,
+    ) -> Result<EndpointSession<U>, Error> {
         let mut handles = None;
         let mut endpoint = self.compose(|builder| {
             let transport = builder.build_transport()?;
@@ -393,7 +409,7 @@ impl BipEndpointBuilder {
                 transport.bvlc_table_reader(),
                 transport.frame_tap().clone(),
             ));
-            Ok(transport)
+            Ok(wrap(transport))
         })?;
         if let Some((status, tables, frame_tap)) = handles {
             endpoint.bip_status = Some(status);
