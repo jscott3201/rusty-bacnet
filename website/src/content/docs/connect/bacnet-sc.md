@@ -67,7 +67,7 @@ Python `BACnetClient` and `BACnetServer` with `transport="sc"` require nonempty 
 
 The [Python credential example](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md#required-operational-credentials) and [UUID migration](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md#sc-device-uuid-migration) are the signature authority. Local TLS configuration errors can be repaired at the same paths and retried within the documented boundary; this does not promise rollback after every later peer/dial failure.
 
-Rust uses `ScNodeTlsConfig` and the transport's configured device identity. Raw `ScTransport::new(ws, vmac)` is initially unconfigured; set a valid UUID before start. Because the caller can dial `ws` first, transport validation cannot undo that earlier connection. A shared endpoint uses `ScEndpointBuilder` with a caller-dialed TLS WebSocket; see [shared endpoints](/rusty-bacnet/integrate/shared-endpoints/).
+Rust builds an `ScNodeTlsConfig` from the same three PEM files with `ScNodeTlsConfig::from_pem_files(ca, cert, key)` (an error names the file at fault) and uses the transport's configured device identity. Raw `ScTransport::new(ws, vmac)` is initially unconfigured; set a valid UUID before start. Because the caller can dial `ws` first, transport validation cannot undo that earlier connection. A shared endpoint uses `ScEndpointBuilder` with a caller-dialed TLS WebSocket; see [shared endpoints](/rusty-bacnet/integrate/shared-endpoints/).
 
 ## Know how idle links stay up
 

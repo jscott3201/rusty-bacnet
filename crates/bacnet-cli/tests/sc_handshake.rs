@@ -77,9 +77,12 @@ async fn explicit_site_ca_read_property_and_untrusted_ca_rejection() {
         for (contents, expected) in [
             (
                 format!("{bad_der}{bad_pem}"),
-                "unusable certificate in --sc-ca PEM",
+                "--sc-ca: certificate 0 of the CA bundle can't be used",
             ),
-            (format!("{bad_pem}{bad_der}"), "failed to parse --sc-ca PEM"),
+            (
+                format!("{bad_pem}{bad_der}"),
+                "--sc-ca: the CA bundle is not valid PEM",
+            ),
         ] {
             let path = files.write("ordered-invalid-ca.pem", contents);
             let mut cmd = cli(&files, &fixture.url, &leaf);

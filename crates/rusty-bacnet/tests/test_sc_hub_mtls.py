@@ -229,14 +229,17 @@ class HubMtlsTests(MtlsFixture):
                               ("invalid.pem", "-----BEGIN CERTIFICATE-----\nYQ==\n-----END CERTIFICATE-----\n")]:
             (self.root / name).write_text(content)
         cases = [({"ca_cert": self.path(name)}, message) for name, message in [
-            ("empty.pem", "no CA certificates"), ("garbage.pem", "no CA certificates"),
-            ("invalid.pem", "failed to add CA cert"), ("missing.pem", "failed to read CA cert")]]
-        cases += [({"ca_cert": str(self.root)}, "failed to read CA cert"),
-                  ({"cert": self.path("empty.pem")}, "no server certificates"),
-                  ({"cert": self.path("missing.pem")}, "failed to read server cert"),
-                  ({"key": self.path("garbage.pem")}, "failed to parse server key"),
-                  ({"key": self.path("missing.pem")}, "failed to read server key"),
-                  ({"key": self.path("client.key")}, "TLS server config error")]
+            ("empty.pem", "the CA bundle holds no certificate"),
+            ("garbage.pem", "the CA bundle holds no certificate"),
+            ("invalid.pem", "certificate 0 of the CA bundle can't be used"),
+            ("missing.pem", "can't read the CA bundle file")]]
+        cases += [({"ca_cert": str(self.root)}, "can't read the CA bundle file"),
+                  ({"cert": self.path("empty.pem")}, "the certificate chain holds no certificate"),
+                  ({"cert": self.path("missing.pem")}, "can't read the certificate chain file"),
+                  ({"key": self.path("garbage.pem")}, "no PKCS#8, SEC1 or PKCS#1 private key found"),
+                  ({"key": self.path("missing.pem")}, "can't read the private key file"),
+                  ({"key": self.path("client.key")},
+                   "the private key doesn't belong to the chain's leaf certificate")]
         for overrides, message in cases:
             with self.subTest(overrides=overrides):
                 # Holding an already-bound port proves TLS validation precedes
@@ -345,9 +348,9 @@ class NodeMtlsTests(MtlsFixture):
     async def test_invalid_local_files_do_not_dial_or_drain(self):
         cases = []
         for field, label, read_error in [
-            ("sc_ca_cert", "CERTIFICATE", "CA cert"),
-            ("sc_client_cert", "CERTIFICATE", "client cert"),
-            ("sc_client_key", "PRIVATE KEY", "client key"),
+            ("sc_ca_cert", "CERTIFICATE", "the CA bundle"),
+            ("sc_client_cert", "CERTIFICATE", "the certificate chain"),
+            ("sc_client_key", "PRIVATE KEY", "the private key"),
         ]:
             for kind, contents in [("empty", ""), ("garbage", "not PEM"),
                                    ("bad-base64", f"-----BEGIN {label}-----\n%%%\n-----END {label}-----\n"),
@@ -355,9 +358,10 @@ class NodeMtlsTests(MtlsFixture):
                 name = f"{field}-{kind}.pem"
                 (self.root / name).write_text(contents)
                 cases.append(({field: self.path(name)}, "TLS config error:"))
-            cases.extend([({field: self.path("does-not-exist.pem")}, f"failed to read {read_error}"),
-                          ({field: str(self.root)}, f"failed to read {read_error}")])
-        cases.append(({"sc_client_key": self.path("client.key")}, "TLS client auth error"))
+            cases.extend([({field: self.path("does-not-exist.pem")}, f"can't read {read_error} file"),
+                          ({field: str(self.root)}, f"can't read {read_error} file")])
+        cases.append(({"sc_client_key": self.path("client.key")},
+                      "the private key doesn't belong to the chain's leaf certificate"))
         for api in (BACnetClient, BACnetServer):
             for overrides, message in cases:
                 with self.subTest(api=api.__name__, overrides=overrides), socket.socket() as listener:
@@ -404,7 +408,7 @@ class NodeMtlsTests(MtlsFixture):
                 await self.start_node(node)
             self.assertEqual(pending_count(), 1)
             Path(paths[field]).write_bytes((self.root / source).read_bytes())
-        with self.assertRaisesRegex(RuntimeError, "TLS client auth error"):
+        with self.assertRaisesRegex(RuntimeError, "private key doesn't belong"):
             await self.start_node(node)
         self.assertEqual(pending_count(), 1)
         node.add_binary_input(1, "Added after failure")

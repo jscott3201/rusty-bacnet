@@ -1617,7 +1617,8 @@ intentional exclusion from normal test runs are documented in
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 
-let tls_config = ScNodeTlsConfig::from_der(ca_certs, node_cert_chain, node_key)?;
+// The site CA bundle, this node's chain (leaf first) and its private key, as PEM files.
+let tls_config = ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")?;
 let ws = TlsWebSocket::connect("wss://hub:1234", tls_config).await?;
 let transport = ScTransport::new(ws, vmac)
     .with_device_uuid(device_uuid) // caller's already-provisioned, durable [u8; 16]
@@ -2071,9 +2072,9 @@ distinct real same-CA leaves, native registration/relay and joined shutdown.
 ```rust
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 
-// Owned, already loaded DER: Vec<CertificateDer<'static>> for both lists,
-// and PrivateKeyDer<'static> for hub_key. File loading belongs to the caller.
-let tls = ScHubTlsConfig::from_der(ca_certs, hub_cert_chain, hub_key)?;
+// The site CA bundle, the hub's chain (leaf first) and its key, as PEM files;
+// from_pem takes PEM already in memory, and from_der owned DER.
+let tls = ScHubTlsConfig::from_pem_files("site-ca.pem", "hub.pem", "hub.key")?;
 let mut hub = ScHub::start_with_tls_config(
     listen_addr, tls, hub_vmac, hub_uuid, ScHubHandshakeTimeouts::default(),
 ).await?;
@@ -2214,16 +2215,19 @@ config owns fresh counters.
 
 With `sc-tls`, every public hub startup requires `ScHubTlsConfig`:
 explicit nonempty CA trust anchors, mandatory WebPKI client verification, and
-TLS 1.3-only local policy. Its fallible `from_der` constructor performs no file or
-network I/O. Empty CA/chain, malformed DER (including a bad entry in an otherwise
-valid list), unusable keys, and certificate/key mismatch return `Error::Encoding`
-before startup can bind. The hub chain is leaf first. Configuration is private;
+TLS 1.3-only local policy. Its fallible constructors take PEM files
+(`from_pem_files`), PEM in memory (`from_pem`) or owned DER (`from_der`); only
+`from_pem_files` reads files, and none uses the network. Empty CA/chain, malformed
+PEM or DER (including a bad entry in an otherwise valid list), a key file without
+exactly one usable key, and certificate/key mismatch return a typed
+`ScTlsConfigError` before startup can bind; see
+[PEM loading and its errors](#sc-tls-material-from-pem). The hub chain is leaf first. Configuration is private;
 clones share the same policy, with no mutable/raw accessor or unchecked conversion.
 The constructor uses the built-in aws-lc provider, not a caller-installed provider.
 
 **Rust source-breaking migration:** the second parameter of `start`,
 `start_with_uuid`, and `start_with_uuid_and_timeouts` is now `ScHubTlsConfig`, not
-`TlsAcceptor`. Construct it with `from_der`; raw hub injection, including custom
+`TlsAcceptor`. Construct it with `from_pem_files`, `from_pem` or `from_der`; raw hub injection, including custom
 verifiers/providers, TLS-version selection and arbitrary configuration knobs, is
 retired with no public unchecked escape.
 
@@ -2280,11 +2284,11 @@ mTLS targets remain, with current results in [Benchmarks](../Benchmarks.md#4-tra
 `ScClientBuilder::tls_config(config)`, and `ScServerBuilder::tls_config(config)`
 now require `bacnet_transport::sc_tls::ScNodeTlsConfig`, not
 `Arc<rustls::ClientConfig>`. Names, argument order, return types, identity defaults,
-and lifecycle behavior are unchanged. Load owned DER at your application boundary:
+and lifecycle behavior are unchanged. Build it from the site's PEM files:
 
 ```rust
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
-let tls = ScNodeTlsConfig::from_der(ca_certs, node_cert_chain, node_private_key)?;
+let tls = ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")?;
 let ws = TlsWebSocket::connect(hub_url, tls.clone()).await?;
 // Or pass tls to BACnetClient::sc_builder().tls_config(tls), or
 // BACnetServer::sc_builder().tls_config(tls), then finish that builder.
@@ -2310,6 +2314,96 @@ other WebSocket implementations are outside this built-in driver guarantee.
 Python constructors, CLI flags, file-I/O/error phases, and Docker provisioning stay
 compatible; their existing node policy is consolidated internally. The local raw
 configuration gap is closed, not the full Annex AB profile or issue #513.
+
+#### SC TLS material from PEM
+
+`ScNodeTlsConfig` and `ScHubTlsConfig` each take the site's material three ways,
+with the same arguments in the same order (CA bundle, chain, key) and one error,
+`bacnet_transport::sc_tls::ScTlsConfigError` (#2600):
+
+| Constructor | Takes |
+|---|---|
+| `from_pem_files(ca_bundle, cert_chain, private_key)` | three paths (`impl AsRef<Path>`), each read once, up to `MAX_PEM_FILE_BYTES` (1 MiB) |
+| `from_pem(ca_bundle, cert_chain, private_key)` | PEM text as `&[u8]` |
+| `from_der(ca_certs, cert_chain, key)` | owned `CertificateDer` lists and a `PrivateKeyDer` |
+
+From PEM, the CA bundle and chain take every `CERTIFICATE` section in order; the key
+input must hold exactly one unencrypted PKCS#8 (`PRIVATE KEY`), SEC1
+(`EC PRIVATE KEY`) or PKCS#1 (`RSA PRIVATE KEY`) key, in PEM that is well formed
+throughout. Text outside the sections (such as openssl's "Bag Attributes") is
+ignored, CRLF line ends are taken, and sections of other kinds are skipped: a key
+or an `X509 CRL` in the CA bundle or chain (no revocation list is applied), and
+certificates or `EC PARAMETERS` beside the key. The chain may carry intermediates
+after the leaf. Keys load through the fixed aws-lc provider: ECDSA on P-256, P-384
+and P-521, RSA, and Ed25519 (PKCS#8 only). `bacnet sc-check` and the CLI's pre-dial
+lint decode the key by the same rule.
+
+The CA bundle is checked first, certificate by certificate as it is decoded, and
+`from_pem_files` reads the identity files only after the whole bundle passed. The
+chain and key are both decoded before either is checked as DER, so a file that
+can't be read or decoded is reported before a certificate or key that decodes but
+can't be used.
+
+```rust
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError};
+
+match ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key") {
+    Ok(tls) => { /* BACnetClient::sc_builder().tls_config(tls) ... */ }
+    Err(ScTlsConfigError::Read { input, path, source, .. }) => {
+        eprintln!("can't read the {input} file {}: {source}", path.display());
+    }
+    Err(ScTlsConfigError::KeyMismatch) => eprintln!("node.key is not node.pem's key"),
+    Err(other) => eprintln!("{:?}: {other}", other.input()),
+}
+```
+
+| `ScTlsConfigError` | When |
+|---|---|
+| `Read { input, path, source }` | a file can't be read (missing, a directory, no permission) |
+| `TooLarge { input, path, limit }` | a file is larger than `MAX_PEM_FILE_BYTES`; reading stops at the limit, so a stream that never ends stops there and is refused too (the read can still block, as when opening a FIFO no writer has opened) |
+| `MalformedPem { input, fault }` | not well-formed PEM; `ScPemFault` says how (no `END` line, a bad `BEGIN` line, a body that isn't base64, a section too large) |
+| `NoCertificate { input }` | the CA bundle (an empty bundle: nothing would be trusted) or the chain holds no certificate |
+| `UnsupportedCertificate { input, form }` | its only certificates are OpenSSL `TRUSTED CERTIFICATE` (`ScCertificateForm::Trusted`) or PKCS#7 (`Pkcs7`) sections |
+| `UnusableCertificate { input, index, source }` | certificate `index` of the CA bundle or chain decoded but rustls can't use it |
+| `NoPrivateKey` | the key input holds no PKCS#8, SEC1 or PKCS#1 key |
+| `MultiplePrivateKeys { count }` | it holds more than one |
+| `UnsupportedKey { form }` | the key is in a form the stack can't read: `ScKeyForm::Encrypted` (an `ENCRYPTED PRIVATE KEY`, or OpenSSL's older key with a `Proc-Type: 4,ENCRYPTED` header; decrypt it with `openssl pkcs8 -topk8 -nocrypt`), `OpenSsh` (convert it to PKCS#8), or `Other` (such as DSA) |
+| `UnusableKey { source }` | the key decoded but the provider can't load it: an algorithm or curve it lacks, or malformed DER |
+| `KeyMismatch` | the key is not the chain leaf's |
+| `Tls { source }` | rustls refused the assembled configuration for another reason |
+
+`ScTlsConfigError::input()` names the input at fault (`ScTlsInput::CaBundle`,
+`CertificateChain` or `PrivateKey`). No variant carries key bytes or the key file's
+text, in `Debug` or `Display`, and a path's control characters are escaped in the
+text; the key and its PEM text are not zeroized, as with DER.
+`From<ScTlsConfigError>` is implemented for `bacnet_types::error::Error` (as
+`Error::Encoding` with the text) and, with `sc-tls`, for `bacnet_ops::OpsError` (as
+the typed `OpsError::Tls`), so `?` works in functions returning either.
+`bacnet_ops` re-exports `ScNodeTlsConfig`, `ScTlsConfigError` and the types its
+variants name, so an application on `bacnet_ops` alone loads the files:
+
+```rust
+use bacnet_ops::{Client, OpsError, ScNodeTlsConfig};
+
+async fn connect() -> Result<Client, OpsError> {
+    // A file that can't be used fails here as OpsError::Tls, naming it.
+    let tls = ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key")?;
+    Client::sc("wss://hub.example.com/bacnet", tls)
+        .vmac([0x02, 0, 0, 0, 0, 0x01])
+        .device_uuid([0x42; 16])
+        .connect()
+        .await
+}
+```
+
+**Rust source-breaking migration:** `from_der` on both configurations returns
+`ScTlsConfigError` instead of `Error::Encoding(String)`: match its variants instead
+of the text, or convert it with `?`/`Error::from`. The `bacnet_transport::sc_tls::pem`
+module is no longer public: load PEM with the constructors above, or decode DER with
+`rustls::pki_types::pem::PemObject` (`CertificateDer::pem_slice_iter`,
+`PrivateKeyDer::from_pem_slice`). A key file must hold exactly one key, in PEM well
+formed throughout, for `bacnet sc-check` and the inspection API too
+(`ScInputErrorKind::MultiplePrivateKeys`, `UnsupportedPrivateKey`).
 
 ### MS/TP (Serial RS-485)
 
@@ -11890,7 +11984,9 @@ over B/IP without naming a transport type (`.interface(ip)`, `.port(..)`,
 `Client::mstp(port, mac)` with `serial` (`.baud(..)`, `.max_master(..)`,
 `.max_info_frames(..)`): each forwards to the low-level builder and gives a
 `Client` over `AnyTransport`, the type's default, and `connect()` fails with
-`OpsError`.
+`OpsError`. For SC, `tls` is `bacnet_ops::ScNodeTlsConfig::from_pem_files(ca,
+cert, key)?`, whose refusal is `OpsError::Tls(ScTlsConfigError)` (see
+[SC TLS material from PEM](#sc-tls-material-from-pem)).
 `Client::over(low)` wraps a `BACnetClient<T>` already built, and
 `Client::new(client, limits)` an `Arc<BACnetClient<T>>` and an
 `Arc<RequestLimits>` (`RequestLimits::new(per_second)`, 0 for no cap); a
@@ -12639,17 +12735,17 @@ open/partial; closed #517 identity acceptance and lifetime exclusions remain val
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 
-// Start the hub with already loaded site CA, hub chain, and matching key DER.
-let hub_tls = ScHubTlsConfig::from_der(ca_certs, hub_cert_chain, hub_key)?;
+// Start the hub with the site CA, the hub chain, and its matching key, as PEM files.
+let hub_tls = ScHubTlsConfig::from_pem_files("site-ca.pem", "hub.pem", "hub.key")?;
 let mut hub = ScHub::start_with_tls_config(
     listen_addr, hub_tls, [0xFF, 0, 0, 0, 0, 1], hub_uuid,
     ScHubHandshakeTimeouts::default(),
 ).await?;
 let hub_addr = hub.local_addr().expect("started hub has a bound address");
 
-// Build the node policy from separately loaded site trust and operational DER.
-let tls_config = bacnet_transport::sc_tls::ScNodeTlsConfig::from_der(
-    node_ca_certs, node_cert_chain, node_key,
+// Build the node policy from the site trust and this node's operational PEM files.
+let tls_config = bacnet_transport::sc_tls::ScNodeTlsConfig::from_pem_files(
+    "site-ca.pem", "node.pem", "node.key",
 )?;
 // Use a persistent nonzero client_uuid, distinct from hub_uuid and every other peer.
 let mut client = BACnetClient::sc_builder()

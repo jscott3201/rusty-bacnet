@@ -127,7 +127,10 @@ The error object contains string `category` (`input`, `io`, `feature_unavailable
 nullable string `role`, nullable integer `index`, nullable string `kind`, nullable
 integer `os_code`, and bounded string `message`. Input kinds are `input_too_large`,
 `certificate_too_large`, `too_many_certificates`, `empty_certificates`,
-`malformed_pem`, `missing_private_key`, `clock_out_of_range`. Input errors retain
+`malformed_pem`, `missing_private_key`, `multiple_private_keys`,
+`unsupported_private_key`, `clock_out_of_range`. The key file is decoded as a
+BACnet/SC connect decodes it: exactly one unencrypted PKCS#8, SEC1 or PKCS#1
+key, in PEM that is well formed throughout (#2600). Input errors retain
 role/index when available and have null `os_code`. I/O errors retain role and
 native OS code when available, with null `index`/`kind`. Feature errors have
 null role/index/kind/OS code. Supplied paths, source-error text and credentials

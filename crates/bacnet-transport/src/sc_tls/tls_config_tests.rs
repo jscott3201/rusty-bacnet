@@ -1,4 +1,5 @@
 use super::*;
+use crate::sc_tls::ScTlsInput;
 use rcgen::{CertificateParams, Issuer, KeyPair};
 use rustls::pki_types::{PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer};
 
@@ -40,25 +41,41 @@ impl Material {
     }
 }
 
-fn encoding(result: Result<ScNodeTlsConfig, Error>, prefix: &str) {
+/// The configuration error `result` holds, which shows no key material.
+fn refused(result: Result<ScNodeTlsConfig, ScTlsConfigError>) -> ScTlsConfigError {
     let error = result.unwrap_err();
-    assert!(
-        matches!(&error, Error::Encoding(m) if m.starts_with(prefix)),
-        "{error:?}"
-    );
     assert!(!error.to_string().contains("PRIVATE KEY"));
+    error
 }
 
 #[test]
 fn node_tls_factory_requires_nonempty_ca_and_identity() {
     let m = Material::new(None);
-    encoding(
-        ScNodeTlsConfig::from_der(vec![], vec![m.leaf.clone()], m.key.clone_key()),
-        "no CA certificates",
+    let error = refused(ScNodeTlsConfig::from_der(
+        vec![],
+        vec![m.leaf.clone()],
+        m.key.clone_key(),
+    ));
+    assert!(
+        matches!(
+            error,
+            ScTlsConfigError::NoCertificate {
+                input: ScTlsInput::CaBundle,
+                ..
+            }
+        ),
+        "{error:?}"
     );
-    encoding(
-        ScNodeTlsConfig::from_der(vec![m.ca], vec![], m.key),
-        "no client certificates",
+    let error = refused(ScNodeTlsConfig::from_der(vec![m.ca], vec![], m.key));
+    assert!(
+        matches!(
+            error,
+            ScTlsConfigError::NoCertificate {
+                input: ScTlsInput::CertificateChain,
+                ..
+            }
+        ),
+        "{error:?}"
     );
 }
 
@@ -68,15 +85,25 @@ fn node_tls_factory_rejects_malformed_der_in_every_position() {
     for position in 0..3 {
         let mut ca = vec![m.ca.clone(); 3];
         ca[position] = CertificateDer::from(vec![1, 2, 3]);
-        encoding(
-            ScNodeTlsConfig::from_der(ca, vec![m.leaf.clone()], m.key.clone_key()),
-            "failed to add CA cert:",
+        let error = refused(ScNodeTlsConfig::from_der(
+            ca,
+            vec![m.leaf.clone()],
+            m.key.clone_key(),
+        ));
+        assert!(
+            matches!(error, ScTlsConfigError::UnusableCertificate { input: ScTlsInput::CaBundle, index, .. } if index == position),
+            "{error:?}"
         );
         let mut chain = vec![m.leaf.clone(), m.ca.clone(), m.ca.clone()];
         chain[position] = CertificateDer::from(vec![1, 2, 3]);
-        encoding(
-            ScNodeTlsConfig::from_der(vec![m.ca.clone()], chain, m.key.clone_key()),
-            "TLS client auth error:",
+        let error = refused(ScNodeTlsConfig::from_der(
+            vec![m.ca.clone()],
+            chain,
+            m.key.clone_key(),
+        ));
+        assert!(
+            matches!(error, ScTlsConfigError::UnusableCertificate { input: ScTlsInput::CertificateChain, index, .. } if index == position),
+            "{error:?}"
         );
     }
 }
@@ -89,15 +116,22 @@ fn node_tls_factory_rejects_unusable_and_mismatched_keys() {
         PrivatePkcs1KeyDer::from(vec![1, 2, 3]).into(),
         PrivateSec1KeyDer::from(vec![1, 2, 3]).into(),
     ] {
-        encoding(
-            ScNodeTlsConfig::from_der(vec![m.ca.clone()], vec![m.leaf.clone()], key),
-            "TLS client auth error:",
+        let error = refused(ScNodeTlsConfig::from_der(
+            vec![m.ca.clone()],
+            vec![m.leaf.clone()],
+            key,
+        ));
+        assert!(
+            matches!(error, ScTlsConfigError::UnusableKey { .. }),
+            "{error:?}"
         );
     }
-    encoding(
-        ScNodeTlsConfig::from_der(vec![m.ca], vec![m.leaf], Material::new(None).key),
-        "TLS client auth error: keys may not be consistent: KeyMismatch",
-    );
+    let error = refused(ScNodeTlsConfig::from_der(
+        vec![m.ca],
+        vec![m.leaf],
+        Material::new(None).key,
+    ));
+    assert!(matches!(error, ScTlsConfigError::KeyMismatch), "{error:?}");
 }
 
 #[test]

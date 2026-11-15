@@ -4340,7 +4340,9 @@ def inspect_sc_pem(
 ) -> ScPemInspection:
     """Inspect bounded PEM bytes synchronously. Time is a signed 64-bit integer second.
 
-    ValueError: malformed/empty/oversized supplied PEM. TypeError: wrong input type,
+    ValueError: malformed/empty/oversized supplied PEM, a private key input holding
+    more than one key, or a key in a form a connect can't use (encrypted, OpenSSH),
+    as SC startup refuses them. TypeError: wrong input type,
     including bool time. OverflowError: time outside the signed 64-bit range.
     DER defects and key/date observations are returned in the report.
     """
@@ -4539,8 +4541,9 @@ class BACnetClient:
     For SC, sc_ca_cert, sc_client_cert, and sc_client_key must be nonempty
     paths; omission, None, or empty strings raise ValueError at construction.
     Their None defaults preserve non-SC use and positional layout only.
-    Async entry loads the explicit site CA and operational cert/key; invalid
-    TLS configuration raises RuntimeError before dialing. No system-root or
+    Async entry loads the explicit site CA and operational cert/key, each file
+    read up to 1 MiB; invalid TLS configuration, a larger file included, raises
+    RuntimeError before dialing. No system-root or
     unauthenticated-client fallback is available.
 
     SC also requires keyword-only sc_device_uuid: exactly 16 bytes, not all zero,
@@ -6238,8 +6241,9 @@ class BACnetServer:
     For SC, sc_ca_cert, sc_client_cert, and sc_client_key must be nonempty
     paths; omission, None, or empty strings raise ValueError at construction.
     Their None defaults preserve non-SC use and positional layout only.
-    start() loads the explicit site CA and operational cert/key before dialing
-    or draining registrations. Local TLS configuration errors raise RuntimeError;
+    start() loads the explicit site CA and operational cert/key, each file read
+    up to 1 MiB, before dialing or draining registrations. Local TLS
+    configuration errors, a larger file included, raise RuntimeError;
     repair the files and retry on the same server. Later startup failures do not
     have a general registration rollback guarantee.
 
@@ -8585,8 +8589,8 @@ class ScHub:
     ``ca_cert`` must name trusted issuer CA PEM certificates for mutual TLS.
     Omitted, None, or empty values raise ValueError at construction. The None
     default retains the existing positional layout only; there is no insecure
-    mode. Invalid/unreadable credentials raise BacnetError from start(), before
-    binding. Connections require TLS 1.3 and a valid trusted client certificate.
+    mode. Invalid/unreadable credentials, or a file over 1 MiB, raise BacnetError
+    from start(), before binding. Connections require TLS 1.3 and a valid trusted client certificate.
 
     ``device_uuid`` is required, keyword-only and copied from bytes/bytearray into
     owned storage. Missing/None, wrong length or all-zero UUID raises ValueError

@@ -111,6 +111,8 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
         // RuntimeError ("client not started").
         OpsError::Watch(_) => PyRuntimeError::new_err(message),
         OpsError::Denied(denied) => write_denied(&denied),
+        // As the binding's own SC startup reports TLS material it refused.
+        OpsError::Tls(_) => PyRuntimeError::new_err(format!("TLS config error: {message}")),
         OpsError::ReadBack { written, source } => {
             let error = BacnetReadBackError::new_err(message);
             let cause = ops_err(*source, style);
