@@ -207,7 +207,7 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                 for prop, expected in (
                     (P.BACNET_IPV6_MODE, V.enumerated(1)),
                     (P.FD_SUBSCRIPTION_LIFETIME, V.unsigned(60)),
-                    (P.FD_BBMD_ADDRESS, V.application_data(self.bbmd.host_n_port())),
+                    (P.FD_BBMD_ADDRESS, V.tagged(self.bbmd.host_n_port())),
                 ):
                     with self.subTest(property=prop):
                         read = await asyncio.wait_for(

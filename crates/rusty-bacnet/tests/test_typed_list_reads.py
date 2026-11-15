@@ -9,7 +9,7 @@ ReadPropertyMultiple, and the local BACnetServer.read_property as a list of
 those same values, and an indexed read as one of them. A Group's
 Present_Value reads as the read_property_multiple results of its members. A
 COV notification value decodes the same way, and a value that isn't the
-expected production stays application_data.
+expected production reads as its tags (``tagged``, #2618).
 """
 
 from __future__ import annotations
@@ -363,7 +363,7 @@ class FallbackTests(unittest.IsolatedAsyncioTestCase):
             async with BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000) as client:
                 for octets in not_destinations:
                     with self.subTest(octets=octets):
-                        expected = PropertyValue.application_data(octets)
+                        expected = PropertyValue.tagged(octets)
                         read = asyncio.ensure_future(
                             client.read_property(address, NF_1, P.RECIPIENT_LIST))
                         wire, remote = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 2)

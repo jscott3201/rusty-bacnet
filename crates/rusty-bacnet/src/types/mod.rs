@@ -50,6 +50,7 @@ mod routed_target;
 mod rpm_wpm;
 mod schedule;
 mod shed_level;
+mod tag_tree;
 mod timestamp;
 
 pub(crate) use access_credential::{
@@ -163,6 +164,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Composite types
     m.add_class::<PyObjectIdentifier>()?;
     m.add_class::<PyPropertyValue>()?;
+    m.add_class::<tag_tree::PyTagNode>()?;
     m.add_class::<PyBitString>()?;
     m.add_function(wrap_pyfunction!(bit_string::enum_name, m)?)?;
     m.add_class::<PyBACnetTimeStamp>()?;

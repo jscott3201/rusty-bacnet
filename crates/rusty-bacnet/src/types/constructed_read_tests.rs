@@ -477,7 +477,7 @@ fn empty_values_and_other_properties_keep_the_generic_shape() {
         PyPropertyValue::from_rust(PropertyValue::List(vec![]))
     );
     // The same octets on an object type without the property, or on a
-    // property with no typed form, keep the octets.
+    // property with no typed form, keep the octets and read as their tags.
     for (object_type, property) in [
         (
             ObjectType::from_raw(200),
@@ -491,7 +491,7 @@ fn empty_values_and_other_properties_keep_the_generic_shape() {
     ] {
         assert_eq!(
             read(object_type, property, None, &DESTINATION),
-            PyPropertyValue::from_rust(PropertyValue::ApplicationData(DESTINATION.to_vec()))
+            PyPropertyValue::tree(DESTINATION.to_vec())
         );
     }
     // An indexed read of a list property is one element when it decodes as
@@ -509,7 +509,7 @@ fn empty_values_and_other_properties_keep_the_generic_shape() {
     let two = [DESTINATION, DESTINATION].concat();
     assert_eq!(
         read(NF, PropertyIdentifier::RECIPIENT_LIST, Some(1), &two),
-        PyPropertyValue::from_rust(PropertyValue::ApplicationData(two.clone()))
+        PyPropertyValue::tree(two.clone())
     );
 }
 

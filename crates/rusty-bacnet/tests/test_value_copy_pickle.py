@@ -31,6 +31,7 @@ from rusty_bacnet import (
     PropertyIdentifier,
     PropertyValue,
     RoutedTarget,
+    TagNode,
     Value,
     WritePolicy,
 )
@@ -57,6 +58,9 @@ def value_classes() -> dict[str, type]:
         and "__eq__" in vars(cls)
         and not callable(getattr(cls, "from_raw", None))
     }
+
+
+TAGGED = PropertyValue.tagged(bytes.fromhex("0902" "1e443fc000001f"))
 
 
 def samples() -> dict[type, list[Any]]:
@@ -91,11 +95,16 @@ def samples() -> dict[type, list[Any]]:
             PropertyValue.time(255, 255, 255, 255),
             PropertyValue.bit_string(3, b"\xa0"),
             PropertyValue.application_data(b"\x0e\x21\x01\x0f"),
+            # A value read as its tags (#2618): [0] 2, [1] ( REAL 1.5 ).
+            TAGGED,
             PropertyValue.list([]),
             # Equal as Python values, unequal as BACnet ones: the copy keeps
             # each item's tag.
             PropertyValue.list([*one, PropertyValue.list(one)]),
         ],
+        # Each kind of node: context, constructed, and an application
+        # value inside one (#2618).
+        TagNode: [*TAGGED.value, TAGGED.value[1].value[0]],
         BitString: [
             BitString(0, b""),
             BitString(3, b"\xa0"),

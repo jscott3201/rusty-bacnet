@@ -48,11 +48,15 @@ pub struct PyPropertyValue {
     /// enumerated value (`name`) and its bit string's bits (`value`). Not part
     /// of the value: it doesn't take part in equality, hashing or pickling.
     pub(crate) property: Option<bacnet_types::enums::PropertyIdentifier>,
+    /// Set on a read value with no typed form that holds a context tag
+    /// (#2618): `inner` is one `ApplicationData` holding its octets, and
+    /// `tag` and `value` give it as its tags (see `tag_tree`).
+    pub(crate) tagged: bool,
 }
 
 impl PartialEq for PyPropertyValue {
     fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner && self.element == other.element
+        self.inner == other.inner && self.element == other.element && self.tagged == other.tagged
     }
 }
 
@@ -66,6 +70,16 @@ impl PyPropertyValue {
             inner: value,
             element: None,
             property: None,
+            tagged: false,
+        }
+    }
+
+    /// A read value with no typed form, read as its tags (#2618): `octets`
+    /// must be what [`super::tag_tree::is_tree`] accepts.
+    pub(crate) fn tree(octets: Vec<u8>) -> Self {
+        Self {
+            tagged: true,
+            ..Self::from_rust(primitives::PropertyValue::ApplicationData(octets))
         }
     }
 
@@ -82,6 +96,7 @@ impl PyPropertyValue {
             inner: value,
             element: Some(element),
             property: None,
+            tagged: false,
         }
     }
 }
@@ -304,6 +319,7 @@ impl PyPropertyValue {
     #[getter]
     fn tag(&self) -> &str {
         match (&self.inner, self.element) {
+            _ if self.tagged => TAGGED,
             (primitives::PropertyValue::ApplicationData(_), Some(element)) => element.tag(),
             (inner, _) => tag(inner),
         }
@@ -315,6 +331,9 @@ impl PyPropertyValue {
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match (&self.inner, self.element) {
+            (primitives::PropertyValue::ApplicationData(octets), _) if self.tagged => {
+                super::tag_tree::nodes_to_py(py, octets)
+            }
             (primitives::PropertyValue::ApplicationData(octets), Some(element)) => {
                 element.to_py(py, octets)
             }
@@ -362,6 +381,9 @@ impl PyPropertyValue {
 
     fn __repr__(&self) -> String {
         match (&self.inner, self.element) {
+            (primitives::PropertyValue::ApplicationData(octets), _) if self.tagged => {
+                format!("PropertyValue.{TAGGED}(<{} bytes>)", octets.len())
+            }
             (primitives::PropertyValue::ApplicationData(octets), Some(element)) => {
                 format!("PropertyValue.{}(<{} bytes>)", element.tag(), octets.len())
             }
@@ -387,6 +409,7 @@ impl PyPropertyValue {
         let mut state = DefaultHasher::new();
         hash_value(&self.inner, &mut state);
         self.element.hash(&mut state);
+        self.tagged.hash(&mut state);
         state.finish()
     }
 
@@ -410,6 +433,10 @@ impl PyPropertyValue {
             value.property = None;
             let arguments = (value, PyPropertyIdentifier { inner: property }).into_pyobject(py)?;
             return Ok((slf.get_type().getattr("_read_from")?, arguments));
+        }
+        if let (true, V::ApplicationData(octets)) = (this.tagged, &this.inner) {
+            let arguments = (PyBytes::new(py, octets),).into_pyobject(py)?;
+            return Ok((slf.get_type().getattr(TAGGED)?, arguments));
         }
         let constructor = match (&this.inner, this.element) {
             (V::ApplicationData(_), Some(_)) => "_typed_element",
@@ -461,6 +488,21 @@ impl PyPropertyValue {
     #[staticmethod]
     fn _read_from(value: Self, property: PyPropertyIdentifier) -> Self {
         value.read_from(property.to_rust())
+    }
+
+    /// A value as its tags, from its octets (#2618), as a read of a value
+    /// with no typed form gives it: `value` is a list of `TagNode`, and the
+    /// octets are kept as given, so a write sends them unchanged. Octets
+    /// that don't read as tagged elements, each application value one this
+    /// type holds, raise ValueError.
+    #[staticmethod]
+    fn tagged(octets: Vec<u8>) -> PyResult<Self> {
+        if !super::tag_tree::is_tree(&octets) {
+            return Err(PyValueError::new_err(
+                "octets don't read as tagged elements",
+            ));
+        }
+        Ok(Self::tree(octets))
     }
 
     /// One typed constructed element, tagged `tag`, from the octets a read
@@ -536,6 +578,9 @@ fn hash_value(value: &primitives::PropertyValue, state: &mut impl Hasher) {
         }
     }
 }
+
+/// The `tag` of a value read as its tags (#2618).
+const TAGGED: &str = "tagged";
 
 /// The tag of a value with no typed constructed form.
 fn tag(value: &primitives::PropertyValue) -> &'static str {

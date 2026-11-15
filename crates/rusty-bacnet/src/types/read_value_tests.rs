@@ -4,8 +4,8 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 const AI: ObjectType = ObjectType::ANALOG_INPUT;
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 
-/// [`decode_read_value`] for a value with no typed constructed form: the
-/// value it carries.
+/// [`decode_read_value`] for a value with no typed constructed form and no
+/// context tag: the value it carries.
 fn decode(
     object_type: ObjectType,
     property: PropertyIdentifier,
@@ -14,8 +14,22 @@ fn decode(
 ) -> Result<PropertyValue, Error> {
     decode_read_value(object_type, property, array_index, octets).map(|value| {
         assert_eq!(value.element, None, "{octets:02X?}");
+        assert!(!value.tagged, "{octets:02X?}");
         value.inner
     })
+}
+
+/// Whether [`decode_read_value`] reads `octets` as their tags (#2618),
+/// keeping them as they are.
+fn tagged(object_type: ObjectType, property: PropertyIdentifier, octets: &[u8]) -> bool {
+    let value = decode_read_value(object_type, property, None, octets).unwrap();
+    assert_eq!(value.element, None, "{octets:02X?}");
+    assert_eq!(
+        value.inner,
+        PropertyValue::ApplicationData(octets.to_vec()),
+        "{octets:02X?}"
+    );
+    value.tagged
 }
 
 fn oid(instance: u32) -> PropertyValue {
@@ -114,20 +128,15 @@ fn a_whole_array_or_list_is_a_list_at_every_length() {
 }
 
 #[test]
-fn context_tagged_content_without_a_typed_form_keeps_every_octet() {
+fn context_tagged_content_without_a_typed_form_reads_as_its_tags() {
     // A property with no typed form: a Lighting Output's Lighting_Command,
     // a context-tagged SEQUENCE (operation [0]). Load Control's shed levels,
     // the example here before, read typed since #1499.
-    assert_eq!(
-        decode(
-            ObjectType::LIGHTING_OUTPUT,
-            PropertyIdentifier::LIGHTING_COMMAND,
-            None,
-            &[0x09, 0x02]
-        )
-        .unwrap(),
-        PropertyValue::ApplicationData(vec![0x09, 0x02])
-    );
+    assert!(tagged(
+        ObjectType::LIGHTING_OUTPUT,
+        PropertyIdentifier::LIGHTING_COMMAND,
+        &[0x09, 0x02]
+    ));
     // Elements a typed read would split, read from a property on an object
     // type with no typed form for it: two BACnetPortPermission elements, a
     // BACnetDestination (application fields around a context-tagged
@@ -148,11 +157,13 @@ fn context_tagged_content_without_a_typed_form_keeps_every_octet() {
         (vendor, PropertyIdentifier::RECIPIENT_LIST, &destination[..]),
         (AI, PV, &group[..]),
     ] {
-        assert_eq!(
-            decode(object_type, property, None, octets).unwrap(),
-            PropertyValue::ApplicationData(octets.to_vec())
-        );
+        assert!(tagged(object_type, property, octets), "{octets:02X?}");
     }
+    // A vendor property: context fields around application values, nested.
+    let fields = [
+        0x09, 0x02, 0x1E, 0x44, 0x3F, 0xC0, 0, 0, 0x2E, 0x11, 0x2F, 0x1F, 0x21, 7,
+    ];
+    assert!(tagged(vendor, PropertyIdentifier::from_raw(1000), &fields));
 }
 
 #[test]
@@ -178,18 +189,41 @@ fn well_framed_content_the_model_cannot_hold_comes_back_as_octets() {
     ];
     let object_list = PropertyIdentifier::OBJECT_LIST;
     for element in unrepresentable {
-        // Alone, after an application value, and after a context element.
-        for prefix in [&[][..], &[0x21, 0x01][..], &[0x09, 0x01][..]] {
-            let octets = [prefix, element].concat();
+        // Alone, after an application value, after a context element, and
+        // inside one: the tree would hold a value the model can't.
+        let framed = [&[0x0E][..], element, &[0x0F]].concat();
+        for octets in [
+            element.to_vec(),
+            [&[0x21, 0x01][..], element].concat(),
+            [&[0x09, 0x01][..], element].concat(),
+            framed,
+        ] {
             for (object_type, property) in [(AI, PV), (ObjectType::DEVICE, object_list)] {
+                let value = decode_read_value(object_type, property, None, &octets).unwrap();
                 assert_eq!(
-                    decode(object_type, property, None, &octets).unwrap(),
-                    PropertyValue::ApplicationData(octets.clone()),
+                    (value.inner, value.element, value.tagged),
+                    (PropertyValue::ApplicationData(octets.clone()), None, false),
                     "{octets:02X?}"
                 );
             }
         }
     }
+}
+
+#[test]
+fn a_tree_past_the_decoders_bound_keeps_its_octets() {
+    // One context element, then MAX_TAG_TREE_NODES NULLs: one past the bound.
+    let mut octets = vec![0x09, 0x01];
+    octets.extend(std::iter::repeat_n(
+        0x00,
+        bacnet_encoding::tags::tree::MAX_TAG_TREE_NODES,
+    ));
+    let value = decode_read_value(AI, PV, None, &octets).unwrap();
+    assert!(!value.tagged);
+    assert_eq!(value.inner, PropertyValue::ApplicationData(octets.clone()));
+    // At the bound, it reads as its tags.
+    octets.pop();
+    assert!(tagged(AI, PV, &octets));
 }
 
 #[test]

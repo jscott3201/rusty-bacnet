@@ -160,7 +160,8 @@ class PeerSingleReadTests(unittest.IsolatedAsyncioTestCase):
             for malformed in (raw + raw, raw + b"\x21\x07"):
                 with self.subTest(prop=target.prop, raw=malformed.hex()):
                     value = await ReferencePeer(self, target).read(malformed)
-                    self.assertEqual((value.tag, value.value), ("application_data", malformed))
+                    # Not one element: the generic value, read as its tags.
+                    self.assertEqual((value.tag, value.octets), ("tagged", malformed))
             value = await ReferencePeer(self, target).read(b"\x21\x07")
             self.assertEqual((value.tag, value.value), ("unsigned", 7))
         # An application octet string, the legacy form older servers gave an
