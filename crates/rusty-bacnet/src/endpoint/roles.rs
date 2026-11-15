@@ -13,19 +13,71 @@
 //! `device_write_policy` runs with no lock held
 //! (see [`crate::mutation_policy`]).
 
+use bacnet_endpoint::roles::EndpointApduDestination;
+use bacnet_types::MacAddr;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyString};
 
 use crate::errors::to_py_err;
 use crate::types::{
-    PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue, PyReadAccessSpec, parse_address,
+    PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue, PyReadAccessSpec, PyRoutedTarget,
+    parse_address,
 };
+
+/// Where one of the client role's reads goes (#2612): a `str` names a
+/// station on the local link, parsed when the read runs, as it always was;
+/// a `RoutedTarget` names one behind a router.
+enum Target {
+    Direct(String),
+    Routed(EndpointApduDestination),
+}
+
+impl Target {
+    /// `address` as a read's target. A `RoutedTarget` must name its router:
+    /// the client role learns no routes, and sending a confirmed request to
+    /// the link's broadcast address for the routers to pick up is not done
+    /// silently.
+    fn of(address: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(text) = address.cast::<PyString>() {
+            return Ok(Self::Direct(text.to_cow()?.into_owned()));
+        }
+        let Ok(target) = address.cast::<PyRoutedTarget>() else {
+            return Err(PyTypeError::new_err(format!(
+                "address must be a str or a RoutedTarget, not {}",
+                address.get_type().name()?
+            )));
+        };
+        let (network, station, router) = target.get().parts();
+        let router = router.ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "the endpoint client learns no routes: give the RoutedTarget a router, the \
+                 address on this link of a router to network {network}"
+            ))
+        })?;
+        Ok(Self::Routed(EndpointApduDestination::Routed {
+            destination_network: network,
+            destination_mac: MacAddr::from_slice(station),
+            router_mac: MacAddr::from_slice(router),
+        }))
+    }
+
+    /// The destination the read goes to.
+    fn destination(self) -> PyResult<EndpointApduDestination> {
+        match self {
+            Self::Direct(address) => Ok(EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&parse_address(&address)?),
+            }),
+            Self::Routed(destination) => Ok(destination),
+        }
+    }
+}
 
 /// Client role: initiates ReadProperty/ReadRange/ReadPropertyMultiple/WriteProperty over the owner's single transport.
 ///
 /// Cloned out of a running endpoint via `await endpoint.client()`. No
 /// lifecycle methods; survives the owner as a value but fails closed after
-/// close.
+/// close. The reads take a direct address or a `RoutedTarget`.
 #[pyclass(
     name = "EndpointClient",
     module = "rusty_bacnet",
@@ -49,7 +101,8 @@ impl PyEndpointClient {
     ///
     /// Args:
     ///     address: Target as "ip:port" (BIP), "aa:bb:cc:dd:ee:ff" hex VMAC
-    ///         (SC), or "N" / "mstp:N" station (MS/TP).
+    ///         (SC), or "N" / "mstp:N" station (MS/TP) on the local link, or
+    ///         a `RoutedTarget` with its router for a station behind one.
     ///     object_id: Target object identifier.
     ///     property_id: Property to read.
     ///     array_index: Optional array index.
@@ -60,18 +113,24 @@ impl PyEndpointClient {
     fn read_property<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         object_id: PyObjectIdentifier,
         property_id: PyPropertyIdentifier,
         array_index: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let target = Target::of(address)?;
         let handle = self.inner.clone();
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
             let ack = handle
-                .read_property(&mac, oid, pid, array_index)
+                .read_property_with_destination(
+                    target.destination()?,
+                    Vec::new(),
+                    oid,
+                    pid,
+                    array_index,
+                )
                 .await
                 .map_err(to_py_err)?;
             let value = crate::types::decode_read_ack(&ack).map_err(to_py_err)?;
@@ -134,11 +193,12 @@ impl PyEndpointClient {
 
     /// Read 1–64 explicit references on concrete objects, preserving ordered
     /// values and inline errors. Uses the standalone RPM dictionary conversion.
+    /// `address` is a direct address or a `RoutedTarget`, as for `read_property`.
     #[pyo3(signature = (address, specs))]
     fn read_property_multiple<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         specs: Vec<PyReadAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let specs = crate::types::py_to_rpm_specs(specs);
@@ -154,11 +214,11 @@ impl PyEndpointClient {
             unreachable!()
         };
         let specs = request.list_of_read_access_specs;
+        let target = Target::of(address)?;
         let handle = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
             let ack = handle
-                .read_property_multiple(&mac, specs)
+                .read_property_multiple_with_destination(target.destination()?, Vec::new(), specs)
                 .await
                 .map_err(to_py_err)?;
             crate::py_async::attach(|py| crate::types::rpm_ack_to_py(py, ack))
@@ -168,11 +228,12 @@ impl PyEndpointClient {
     /// Read a list/log range; supports all-items, position, sequence and time
     /// forms, checked strictly or leniently. Returns raw item_data bytes, the
     /// result_flags as a BitString and the rules a lenient read kept.
+    /// `address` is a direct address or a `RoutedTarget`, as for `read_property`.
     #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None, *, reference_time=None, validation="strict"))]
     fn read_range<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         object_id: PyObjectIdentifier,
         property_id: PyPropertyIdentifier,
         array_index: Option<u32>,
@@ -194,11 +255,11 @@ impl PyEndpointClient {
             reference_time.as_ref(),
         )?;
         let validation = crate::read_range::validation(validation)?;
+        let target = Target::of(address)?;
         let handle = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
             let reply = handle
-                .read_range_with(&mac, &request, validation)
+                .read_range_with_destination(target.destination()?, Vec::new(), request, validation)
                 .await
                 .map_err(to_py_err)?;
             crate::py_async::attach(|py| crate::read_range::reply_to_dict(py, reply))
@@ -207,21 +268,29 @@ impl PyEndpointClient {
 
     /// Read one page of a log's Log_Buffer from `cursor` (None for the
     /// oldest record), up to `page_size` records; each request is audited.
+    /// `address` is a direct address or a `RoutedTarget`, as for
+    /// `read_property`; every request of the page goes there.
     #[pyo3(signature = (address, object_id, cursor=None, page_size=100))]
     fn read_log_page<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         object_id: PyObjectIdentifier,
         cursor: Option<Bound<'py, PyAny>>,
         #[pyo3(from_py_with = crate::log_records::page_size_arg)] page_size: u16,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (log, cursor) = crate::log_records::page_request(&object_id, cursor.as_ref())?;
+        let target = Target::of(address)?;
         let handle = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
             let page = handle
-                .read_log_page(&mac, log, cursor, page_size)
+                .read_log_page_with_destination(
+                    target.destination()?,
+                    Vec::new(),
+                    log,
+                    cursor,
+                    page_size,
+                )
                 .await
                 .map_err(to_py_err)?;
             crate::py_async::attach(|py| crate::log_records::page_to_py(py, page))
@@ -230,8 +299,8 @@ impl PyEndpointClient {
 
     /// Narrow service scope: the endpoint client initiates ReadProperty, ReadRange, ReadPropertyMultiple and direct B/IP WriteProperty.
     ///
-    /// Snapshot accessor with no I/O; documents the proven subset
-    /// (direct read here; routed variants stay on the Rust handle).
+    /// Snapshot accessor with no I/O; documents the proven subset. The
+    /// reads go direct or to a `RoutedTarget`; WriteProperty goes direct.
     fn service_scope<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item(

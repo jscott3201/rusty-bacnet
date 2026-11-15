@@ -12812,7 +12812,12 @@ validation succeeds. ClientOnly creates no
 responder and retains its services vector as a local declaration.
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 registration) stay on `BipTransport` and on `BACnetClient` over B/IP (see
-[Transport access and BBMD helpers](#transport-access-and-bbmd-helpers));
+[Transport access and BBMD helpers](#transport-access-and-bbmd-helpers)),
+and a session `BipEndpointBuilder` built reads a BBMD's tables through its
+own socket with `EndpointSession::bvlc_tables()` (#2612): a
+`BvlcTableReader`, which `BipTransport::bvlc_table_reader()` hands out
+before a transport goes to an owner, sends the transport's `read_bdt` and
+`read_fdt` and fails as they do;
 `BipEndpointBuilder::mode` sets the B/IP mode as on the
 standalone builders (see [B/IP modes on the builders](#bip-modes-on-the-builders)),
 and `EndpointSession::foreign_registration()` reports a foreign device's
@@ -13244,11 +13249,16 @@ operation. Error-only Device results establish none; conflicting successful
 Device IDs retain Address attribution without rejecting the otherwise valid ACK.
 This is operation-local knowledge, with no discovery cache.
 
-The initiating role supports `read_property`, `read_range`, `read_property_multiple`
-and direct B/IP `write_property`, plus explicit
-endpoint destinations. ReadRange returns a correlated `ReadRangeAck` with raw
+The initiating role supports `read_property`, `read_range`, `read_property_multiple`,
+`read_log_page` and direct B/IP `write_property`, plus explicit
+endpoint destinations: `read_property_with_destination`,
+`read_property_multiple_with_destination`, `read_range_with_destination` and
+`read_log_page_with_destination` take an `EndpointApduDestination`, such as
+`Routed { destination_network, destination_mac, router_mac }` for a station
+behind a router (#2612). ReadRange returns a correlated `ReadRangeAck` with raw
 item bytes; empty and multiple-item ACKs each produce one value-free source READ
-record. `read_range_with` takes a `ReadRangeValidation`: a lenient read keeps
+record. `read_range_with` and `read_range_with_destination` take a
+`ReadRangeRequest` and a `ReadRangeValidation`: a lenient read keeps
 a page that breaks a rule and is audited as a success. Request encoding validates before output/transaction admission: ALL,
 REQUIRED, OPTIONAL, array index zero, zero/non-INTEGER16 counts, and nonconcrete
 ByTime components are rejected. Zero position/sequence references are valid and

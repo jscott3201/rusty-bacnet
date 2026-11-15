@@ -199,7 +199,7 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
 | Data link | Endpoint builder | Evidence |
 |-----------|------------------|----------|
 | B/IP IPv4 unicast + local broadcast | [`bip::BipEndpointBuilder`] | Real loopback UDP proof (RB-16) |
-| B/IP BBMD / foreign-device mode | [`bip::BipEndpointBuilder::mode`] | The standalone builders' transport and modes; loopback Network Number wire coverage; [`session::EndpointSession::foreign_registration`] reports a registration; live BVLC queries stay on [`BipTransport`](bacnet_transport::bip::BipTransport) |
+| B/IP BBMD / foreign-device mode | [`bip::BipEndpointBuilder::mode`] | The standalone builders' transport and modes; loopback Network Number wire coverage; [`session::EndpointSession::foreign_registration`] reports a registration; [`session::EndpointSession::bvlc_tables`] reads a BBMD's tables through the session's socket; the BVLC writes stay on [`BipTransport`](bacnet_transport::bip::BipTransport) |
 | BACnet/SC via hub | [`sc::ScEndpointBuilder`] | Real constrained-TLS hub proof (RB-16, `sc-tls`); loopback composition for unit validation |
 | MS/TP | [`mstp::MstpEndpointBuilder`] | **Simulator evidence only** (`LoopbackSerial` ownership + frame sequencing); no bench or on-wire conformance; timing is RB-26 |
 | BIPv6 | None: compose [`EndpointSession::new`](session::EndpointSession::new) over a `Bip6Transport` | Real loopback UDP: a registered Network Port in NORMAL and FOREIGN mode (#1940) |

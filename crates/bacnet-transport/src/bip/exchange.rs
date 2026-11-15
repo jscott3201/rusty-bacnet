@@ -242,26 +242,20 @@ impl BipTransport {
         BvlcClientStatus(Arc::clone(&self.client_record))
     }
 
+    /// A handle that sends [`Self::read_bdt`] and [`Self::read_fdt`] through
+    /// this transport after it is handed to an owner that keeps it out of
+    /// reach, as an endpoint session does (#2612).
+    pub fn bvlc_table_reader(&self) -> BvlcTableReader {
+        BvlcTableReader(Arc::clone(&self.client_record))
+    }
+
     /// Send Read-Broadcast-Distribution-Table and return the response entries.
     ///
     /// A peer that refuses the read, as one that is no BBMD does, fails it
     /// with [`BvlcExchangeError::Nak`]; one that stays silent, with
     /// [`BvlcExchangeError::NoReply`].
     pub async fn read_bdt(&self, target: &[u8]) -> Result<Vec<BdtEntry>, BvlcExchangeError> {
-        let msg = self
-            .bvlc_request(target, Bvll::ReadBroadcastDistributionTable)
-            .await?;
-        match msg.message()? {
-            Bvll::ReadBroadcastDistributionTableAck(table) => Ok(bbmd::bdt_from_wire(table)?),
-            Bvll::BvlcResult(code) => Err(result_error(
-                code,
-                BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
-            )),
-            other => Err(unexpected_response(
-                BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
-                other.function(),
-            )),
-        }
+        read_bdt(self.require_node()?, target).await
     }
 
     /// Send Write-Broadcast-Distribution-Table; `Ok` when the peer answers
@@ -289,20 +283,7 @@ impl BipTransport {
     ///
     /// It fails as [`read_bdt`](Self::read_bdt) does.
     pub async fn read_fdt(&self, target: &[u8]) -> Result<Vec<FdtEntryWire>, BvlcExchangeError> {
-        let msg = self
-            .bvlc_request(target, Bvll::ReadForeignDeviceTable)
-            .await?;
-        match msg.message()? {
-            Bvll::ReadForeignDeviceTableAck(table) => Ok(bbmd::fdt_from_wire(table)?),
-            Bvll::BvlcResult(code) => Err(result_error(
-                code,
-                BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
-            )),
-            other => Err(unexpected_response(
-                BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
-                other.function(),
-            )),
-        }
+        read_fdt(self.require_node()?, target).await
     }
 
     /// Send Delete-Foreign-Device-Table-Entry for `ip`:`port` to `target`;
@@ -338,6 +319,88 @@ impl BipTransport {
             .bvlc_request(target, Bvll::RegisterForeignDevice { ttl })
             .await?;
         acknowledged(&msg)
+    }
+}
+
+/// Reads a BBMD's two tables, its BDT and its FDT, through one B/IP
+/// transport wherever the transport went, for an owner that takes it over,
+/// as an endpoint session does (#2612).
+///
+/// It sends what [`BipTransport::read_bdt`] and [`BipTransport::read_fdt`]
+/// send, through the transport's own socket and node, beside the transport's
+/// other traffic, and each read fails as theirs does, counted in the same
+/// [`BvlcClientSnapshot`]. While the transport is stopped, a read fails as
+/// one before start does. It only reads: the table writes and the
+/// registration stay on the transport. Cloning it is cheap.
+#[derive(Clone, Debug)]
+pub struct BvlcTableReader(Arc<super::ClientRecord>);
+
+impl BvlcTableReader {
+    /// Send Read-Broadcast-Distribution-Table to the B/IP MAC `target`, as
+    /// [`BipTransport::read_bdt`] does.
+    pub async fn read_bdt(&self, target: &[u8]) -> Result<Vec<BdtEntry>, BvlcExchangeError> {
+        read_bdt(&self.node()?, target).await
+    }
+
+    /// Send Read-Foreign-Device-Table to the B/IP MAC `target`, as
+    /// [`BipTransport::read_fdt`] does.
+    pub async fn read_fdt(&self, target: &[u8]) -> Result<Vec<FdtEntryWire>, BvlcExchangeError> {
+        read_fdt(&self.node()?, target).await
+    }
+
+    /// The transport's running node.
+    fn node(&self) -> Result<Arc<NodeHandle>, Error> {
+        self.0.node().ok_or_else(super::not_started)
+    }
+}
+
+/// One Read-Broadcast-Distribution-Table exchange through `node`.
+async fn read_bdt(
+    node: &Arc<NodeHandle>,
+    target: &[u8],
+) -> Result<Vec<BdtEntry>, BvlcExchangeError> {
+    let msg = node
+        .request(
+            target,
+            Bvll::ReadBroadcastDistributionTable,
+            BipTransport::BVLC_RESPONSE_TIMEOUT,
+        )
+        .await?;
+    match msg.message()? {
+        Bvll::ReadBroadcastDistributionTableAck(table) => Ok(bbmd::bdt_from_wire(table)?),
+        Bvll::BvlcResult(code) => Err(result_error(
+            code,
+            BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
+        )),
+        other => Err(unexpected_response(
+            BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
+            other.function(),
+        )),
+    }
+}
+
+/// One Read-Foreign-Device-Table exchange through `node`.
+async fn read_fdt(
+    node: &Arc<NodeHandle>,
+    target: &[u8],
+) -> Result<Vec<FdtEntryWire>, BvlcExchangeError> {
+    let msg = node
+        .request(
+            target,
+            Bvll::ReadForeignDeviceTable,
+            BipTransport::BVLC_RESPONSE_TIMEOUT,
+        )
+        .await?;
+    match msg.message()? {
+        Bvll::ReadForeignDeviceTableAck(table) => Ok(bbmd::fdt_from_wire(table)?),
+        Bvll::BvlcResult(code) => Err(result_error(
+            code,
+            BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
+        )),
+        other => Err(unexpected_response(
+            BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
+            other.function(),
+        )),
     }
 }
 

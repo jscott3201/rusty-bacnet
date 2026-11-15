@@ -137,3 +137,59 @@ async fn the_same_request_or_a_second_one_a_success_answers_is_busy() {
     held.pop();
     held.push(begin(at(7), Bvll::ReadBroadcastDistributionTable).unwrap());
 }
+
+/// A table reader taken before start reads through the transport's own
+/// socket while it runs, keeps a NAK's code, is counted in the transport's
+/// snapshot, fails as a read before start does while the transport is
+/// stopped, and reads again after a restart (#2612).
+#[tokio::test]
+async fn a_table_reader_reads_through_the_running_transport() {
+    let (peer, mac) = peer().await;
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let reader = transport.bvlc_table_reader();
+    let not_started = |error: BvlcExchangeError| match error {
+        BvlcExchangeError::Transport(Error::Transport(io)) => {
+            assert_eq!(io.kind(), std::io::ErrorKind::NotConnected);
+        }
+        other => panic!("not the not-started error: {other}"),
+    };
+    not_started(reader.read_bdt(&mac).await.unwrap_err());
+    // One BDT row: 127.0.0.2:47808, mask 255.255.255.255.
+    let row = [127, 0, 0, 2, 0xBA, 0xC0, 255, 255, 255, 255];
+    let mut ack = vec![0x81, 3, 0, 14];
+    ack.extend_from_slice(&row);
+    for round in 1..=2u64 {
+        let _rx = transport.start().await.unwrap();
+        let local = transport.local_mac().to_vec();
+        let answer = async {
+            let (request, source) = received(&peer).await;
+            assert_eq!(request, [0x81, 2, 0, 4]);
+            peer.send_to(&ack, source).await.unwrap();
+            source
+        };
+        let (rows, source) = tokio::join!(reader.read_bdt(&mac), answer);
+        let rows = rows.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].ip, rows[0].port), ([127, 0, 0, 2], 47808));
+        // The request left from the transport's own socket.
+        assert_eq!(source.port(), u16::from_be_bytes([local[4], local[5]]));
+        // A Read-FDT NAK keeps its result code.
+        let answer = async {
+            let (request, source) = received(&peer).await;
+            assert_eq!(request, [0x81, 6, 0, 4]);
+            peer.send_to(&[0x81, 0, 0, 6, 0x00, 0x40], source)
+                .await
+                .unwrap();
+        };
+        let (refused, ()) = tokio::join!(reader.read_fdt(&mac), answer);
+        assert_eq!(
+            refused.unwrap_err().nak().map(|code| code.to_raw()),
+            Some(0x0040)
+        );
+        let snapshot = transport.bvlc_client_snapshot();
+        assert_eq!(snapshot.read_bdt.acknowledgements, round);
+        assert_eq!(snapshot.read_fdt.results, round);
+        transport.stop().await.unwrap();
+        not_started(reader.read_fdt(&mac).await.unwrap_err());
+    }
+}

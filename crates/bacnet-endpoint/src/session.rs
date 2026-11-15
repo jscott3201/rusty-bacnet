@@ -338,6 +338,8 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
     /// The B/IP transport's own exchanges, when the B/IP builder built it.
     pub(crate) bip_status: Option<bacnet_transport::bip::BvlcClientStatus>,
+    /// The B/IP transport's BBMD table reads, when the B/IP builder built it.
+    pub(crate) bip_tables: Option<bacnet_transport::bip::BvlcTableReader>,
     /// The MS/TP transport's counters, when the MS/TP builder built it.
     pub(crate) mstp_diagnostics: Option<bacnet_transport::mstp::MstpDiagnostics>,
     /// The SC transport's events and link status, when the SC builder built it.
@@ -439,6 +441,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             reinit_password: None,
             egress: None,
             bip_status: None,
+            bip_tables: None,
             mstp_diagnostics: None,
             sc_link: None,
             cov: cov::CovRole::default(),
@@ -805,6 +808,21 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ) -> Option<bacnet_transport::bip::ForeignRegistrationSnapshot> {
         let status = self.bip_status.as_ref()?;
         Some(status.snapshot().foreign_registration)
+    }
+
+    /// Reads a BBMD's two tables, its BDT and its FDT, through this
+    /// session's own B/IP socket (#2612), as
+    /// [`BipTransport::read_bdt`](bacnet_transport::bip::BipTransport::read_bdt)
+    /// and [`read_fdt`](bacnet_transport::bip::BipTransport::read_fdt) do,
+    /// beside the roles' traffic. A read fails as one before start does
+    /// while the session is stopped. It is there for a session
+    /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder) built, and
+    /// `None` for any other: take a
+    /// [`BipTransport::bvlc_table_reader`](bacnet_transport::bip::BipTransport::bvlc_table_reader)
+    /// before handing a transport to [`Self::new`]. It only reads; the
+    /// table writes stay on the transport.
+    pub fn bvlc_tables(&self) -> Option<bacnet_transport::bip::BvlcTableReader> {
+        self.bip_tables.clone()
     }
 
     /// The MS/TP transport's counters (#958): a handle to the same

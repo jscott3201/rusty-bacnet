@@ -359,6 +359,32 @@ def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]
 How the foreign-device registration is going (#938), as for
 `BACnetClient`. RuntimeError before start and after close.
 
+### BipEndpoint.read_bdt
+
+```python
+def read_bdt(self, address: str) -> Awaitable[list[tuple[str, str]]]
+```
+
+Read the Broadcast Distribution Table of the BBMD at `address`
+(`"ip"` or `"ip:port"`) through this endpoint's own socket, beside
+the roles' traffic (#2612), as `BACnetClient.read_bdt` does: the
+same `("ip:port", "mask")` rows, and the same errors: a NAK raises
+BacnetBvlcNakError with its `result_code` (0x0020 from a node that
+is no BBMD), no answer within 3 seconds BacnetTimeoutError. A bad
+address raises ValueError before I/O; RuntimeError before start and
+after close.
+
+### BipEndpoint.read_fdt
+
+```python
+def read_fdt(self, address: str) -> Awaitable[list[FdtEntry]]
+```
+
+Read the Foreign Device Table of the BBMD at `address` through
+this endpoint's own socket (#2612), as `BACnetClient.read_fdt`
+does, with the errors of `read_bdt`. The BVLC writes stay on
+`BACnetClient`.
+
 ### BipEndpoint.broadcast_i_am
 
 ```python
@@ -1129,14 +1155,17 @@ so Event\_State stays as it is. RuntimeError before `start()`.
 Client role cloned from a running endpoint (no lifecycle).
 
 Initiates `read_property`, `read_range`, `read_property_multiple` and direct B/IP `write_property` through the owner's single transport.
-After the owner closes, calls fail closed with `BacnetError`.
+The reads take a `str` address on the local link or a `RoutedTarget`
+with its `router` for a station behind one (#2612); a `RoutedTarget`
+without a router raises ValueError before any I/O, since the endpoint
+learns no routes. After the owner closes, calls fail closed with `BacnetError`.
 
 ### EndpointClient.read_property
 
 ```python
 def read_property(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     property_id: PropertyIdentifier,
     array_index: Optional[int] = None,
@@ -1148,7 +1177,10 @@ Read a property through the shared transport.
 ACK object/property/index must match. Device/Network Port instance 4194303
 requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
 BacnetError; this method returns the property value, not ACK metadata,
-shaped as `PropertyValue` describes for read results.
+shaped as `PropertyValue` describes for read results. A routed
+read goes to the router with the station's network and MAC as its
+destination, is answered through it, and is audited and paced as a
+direct one is.
 
 ### EndpointClient.write_property
 
@@ -1166,7 +1198,8 @@ def write_property(
 ) -> Awaitable[None]
 ```
 
-Write to a direct IPv4 B/IP peer through the shared requester.
+Write to a direct IPv4 B/IP peer through the shared requester; it
+takes no `RoutedTarget`.
 
 Commandability is required even without a source Reporter. It controls
 Audit filtering, never the wire priority. Omitted commandable priority
@@ -1181,7 +1214,7 @@ After source admission, caller cancellation does not cancel the attempt.
 ```python
 def read_property_multiple(
     self,
-    address: str,
+    address: str | RoutedTarget,
     specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]],
 ) -> Awaitable[list[ReadAccessResult]]
 ```
@@ -1199,7 +1232,7 @@ BacnetError. Returned dictionaries share standalone RPM conversion.
 ```python
 def read_range(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     property_id: PropertyIdentifier,
     array_index: Optional[int] = None,
@@ -1237,7 +1270,7 @@ Decode a log's records with `decode_log_records`.
 ```python
 def read_log_page(
     self,
-    address: str,
+    address: str | RoutedTarget,
     object_id: ObjectIdentifier,
     cursor: LogCursor = None,
     page_size: int = 100,
@@ -1262,7 +1295,8 @@ records don't decode raises BacnetError, dropping the records before
 the failing one; an answer that breaks a rule the reader can't
 tolerate, such as an echo that doesn't match, raises
 BacnetReadRangeViolationError. A non-log object or a `page_size`
-outside 1..=32767 raises ValueError before I/O.
+outside 1..=32767 raises ValueError before I/O. Every request of a
+page, the count reads included, goes to `address`.
 
 ### EndpointClient.service_scope
 
@@ -1270,7 +1304,8 @@ outside 1..=32767 raises ValueError before I/O.
 def service_scope(self) -> dict[str, Any]
 ```
 
-Narrow scope: initiates reads and direct B/IP `write_property`.
+Narrow scope: initiates reads, direct or routed, and direct B/IP
+`write_property`.
 
 ## EndpointServer
 
@@ -1309,6 +1344,46 @@ when the owner has `device_write_policy`, `reinitialize_device`
 when it has `on_reinitialize`, and `subscribe_cov`,
 `subscribe_cov_property` and `subscribe_cov_property_multiple`
 when it has `cov`.
+
+## RoutedTarget
+
+A station on another BACnet network (#2612), where a read takes an
+`address`: `RoutedTarget(network, address, router=None)`, in that
+order. A `str` address always names a station on the local link.
+
+`network` is the station's network number, 1 to 65534 (ValueError
+outside it, OverflowError outside 0 to 65535). `address` is the
+station's MAC on that network, 1 to 18 octets: `bytes` as given, such
+as a `DiscoveredDevice`'s `source_address`, or a string in the
+binding's address forms: `"ip:port"` (a B/IP station's MAC is its IPv4
+address and UDP port on any B/IP network, local or not), `"bip6:N"` or
+`"bip6:0x..."` (a B/IPv6 VMAC), two or more hex octets `"aa:bb:..."`,
+or one octet as `"N"` or `"mstp:N"` (0 to 254). `router` is the
+next hop's address on the local link, in the same forms or as
+`bytes`, such as a routed `DiscoveredDevice`'s `mac_address`; the
+endpoint client learns no routes, so its reads need it. Other values
+raise ValueError, a type other than `str` or `bytes` TypeError, and
+so does a call in another order, since `network` takes an `int`.
+
+Frozen; compares and hashes by its network and octets, however they were
+written; copies and pickles.
+
+Properties:
+
+- `network: int`
+- `address: bytes`: The station's MAC on its network.
+- `router: bytes | None`: The router's MAC on the local link, or None.
+
+### RoutedTarget.__init__
+
+```python
+def __init__(
+    self,
+    network: int,
+    address: str | bytes,
+    router: str | bytes | None = None,
+) -> None
+```
 
 ## EndpointCov
 

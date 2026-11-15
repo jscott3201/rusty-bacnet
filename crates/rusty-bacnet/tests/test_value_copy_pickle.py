@@ -30,6 +30,7 @@ from rusty_bacnet import (
     ObjectType,
     PropertyIdentifier,
     PropertyValue,
+    RoutedTarget,
     WritePolicy,
 )
 
@@ -102,6 +103,13 @@ def samples() -> dict[type, list[Any]]:
         Multicast: [
             Multicast("239.255.66.1"),
             Multicast("224.0.1.0", ttl=255, port=47809),
+        ],
+        # The edges of the network and MAC ranges, with and without a
+        # router (#2612).
+        RoutedTarget: [
+            RoutedTarget(1, b"\x0a"),
+            RoutedTarget(65534, "127.0.0.1:47808", router="10.0.0.1:47808"),
+            RoutedTarget(5, bytes(range(18)), router=b"\x07"),
         ],
         # The default, and policies allowing some or all of what it refuses
         # (#2561).
