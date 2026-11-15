@@ -6,7 +6,7 @@
 //! string inside: those come back as untrusted envelopes, like any device
 //! text.
 
-use bacnet_tool::decode::frame::{FrameSummary, Framing, summarize_frame, summarize_npdu};
+use bacnet_ops::decode::frame::{FrameSummary, Framing, summarize_frame, summarize_npdu};
 use bacnet_tool::decode::tree::{Field, decode_apdu_tree, decode_npdu_tree, decode_tree};
 use bacnet_transport::port::TransportPort;
 use serde::Deserialize;
@@ -254,6 +254,7 @@ fn summary_json(summary: &FrameSummary) -> Value {
         "broadcast": summary.broadcast,
         "link_source": summary.link_source,
         "link_destination": summary.link_destination,
+        "original_source": summary.original_source,
         "snet": summary.snet,
         "dnet": summary.dnet,
         "routed_source": summary.routed_source,
@@ -263,6 +264,7 @@ fn summary_json(summary: &FrameSummary) -> Value {
         "invoke_id": summary.invoke_id,
         "service": summary.service,
         "problem": summary.problem,
+        "parse_error": summary.parse_error,
         "device": summary.device,
     })
 }

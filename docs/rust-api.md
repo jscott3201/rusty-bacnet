@@ -12462,17 +12462,21 @@ Object_Name instead of saying its read failed. An Object_List read
 element by element that fails part way is an error now, where the export
 used to return an inventory with `stopped` set and no objects.
 
-### Moved to bacnet-tool
+### Tool modules and shared frame summaries
 
-The tool-only modules left `bacnet-ops` in #2560, with no re-exports left
-behind. Add a `bacnet-tool` dependency and change the paths:
+The tool-only modules left `bacnet-ops` in #2560. Shared frame summaries
+returned to `bacnet-ops` for Python observation in #2614; detailed field
+trees remain in `bacnet-tool`. There are no re-exports at the old paths.
+Update dependencies and imports according to this table:
 
 | Was | Now |
 |---|---|
 | `bacnet_ops::safety` and its modules (`audit`, `desk`, `file`, `ledger`, `lock`, `plan`) | `bacnet_tool::safety` |
 | `bacnet_ops::class` | `bacnet_tool::class` |
-| `bacnet_ops::decode` (`frame`, `tree`, `decode_npdu_layer`) | `bacnet_tool::decode` |
-| `bacnet_ops::decode::testing` (feature `test-support`) | `bacnet_tool::decode::testing` (`bacnet-tool`'s `test-support`) |
+| `bacnet_ops::decode::tree` | `bacnet_tool::decode::tree` |
+| `bacnet_tool::decode::frame` | `bacnet_ops::decode::frame` (header summaries returned in #2614) |
+| `bacnet_tool::decode::{DecodedNpdu, DecodedApdu, decode_npdu_layer}` | `bacnet_ops::decode::{DecodedNpdu, DecodedApdu, decode_npdu_layer}` |
+| `bacnet_tool::decode::testing` (`bacnet-tool/test-support`) | `bacnet_ops::decode::testing` (`bacnet-ops/test-support`); tool feature retains filesystem test hooks |
 | `bacnet_ops::bbmd` (rows, `survey`, `matrix`) | `bacnet_tool::bbmd` |
 | `engine.bip()`, `engine.registration_bbmd()` | `bacnet_tool::bbmd::bip(&client)`, `bacnet_tool::bbmd::registration_bbmd(&client)` |
 | `engine.read_bdt(bbmd)`, `engine.read_fdt(bbmd)` | `bacnet_tool::bbmd::read_bdt(&client, bbmd)`, `bacnet_tool::bbmd::read_fdt(&client, bbmd)` |

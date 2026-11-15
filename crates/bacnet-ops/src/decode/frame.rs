@@ -8,8 +8,8 @@
 
 use std::ops::Range;
 
-use bacnet_ops::octets::hex_sep;
-use bacnet_ops::target::routed_station;
+use crate::octets::hex_sep;
+use crate::target::routed_station;
 use bacnet_transport::bip6::{Bvll6, decode_bvll6, format_vmac_text};
 use bacnet_transport::bvll::{self, BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_transport::mstp::codec::{FrameType, decode_frame, decode_frame_in_place};
@@ -66,6 +66,9 @@ pub struct FrameSummary {
     pub link_source: Option<String>,
     /// See [`link_source`](Self::link_source).
     pub link_destination: Option<String>,
+    /// Original IP address and UDP port encoded by a forwarded B/IP or
+    /// B/IPv6 message. The physical forwarding peer is not in these octets.
+    pub original_source: Option<String>,
     /// SNET, when a router added one.
     pub snet: Option<u16>,
     /// DNET, for a routed or globally broadcast NPDU.
@@ -81,6 +84,10 @@ pub struct FrameSummary {
     /// What went wrong: an Error, Reject or Abort, a NAK, a frame that
     /// doesn't decode.
     pub problem: Option<String>,
+    /// A link, NPDU or APDU header decode failure. Unlike [`Self::problem`],
+    /// this is absent for a successfully decoded protocol refusal.
+    /// Service payloads are not exhaustively validated by this summary.
+    pub parse_error: Option<String>,
     /// The device instance an I-Am announces.
     pub device: Option<u32>,
     /// SNET and SADR as a routed target, `2:0x7F000001C335`.
@@ -118,6 +125,8 @@ pub struct Link {
     pub source: Option<String>,
     /// The link's destination, where the frame names one.
     pub destination: Option<String>,
+    /// Original IP address and UDP port encoded in a forwarded message.
+    pub original_source: Option<String>,
     /// A NAK, or why the header doesn't decode.
     pub problem: Option<String>,
     /// Whether the link header refused to decode, so `npdu` is unknown
@@ -153,6 +162,7 @@ pub fn link(framing: Framing, frame: &[u8]) -> Link {
         broadcast: false,
         source: None,
         destination: None,
+        original_source: None,
         problem: None,
         malformed: false,
         npdu: None,
@@ -187,6 +197,7 @@ fn bip(frame: &[u8], link: &mut Link) -> Result<(), String> {
             link.problem = Some(format!("NAK {}", kebab(code)));
         }
         parsed => {
+            link.original_source = parsed.origin().map(|address| address.to_string());
             if let Some(npdu) = parsed.npdu() {
                 let start = 4 + offset_in(&message.payload, npdu);
                 link.npdu = Some(Npdu::At(start..start + npdu.len()));
@@ -201,6 +212,7 @@ fn bip6(frame: &[u8], link: &mut Link) -> Result<(), String> {
     link.name = kebab(message.function());
     link.source = Some(format_vmac_text(message.source_vmac()));
     link.destination = message.destination_vmac().map(format_vmac_text);
+    link.original_source = message.origin().map(|address| address.to_string());
     link.broadcast = matches!(
         message,
         Bvll6::OriginalBroadcastNpdu { .. }
@@ -233,7 +245,9 @@ fn sc(frame: &[u8], link: &mut Link) -> Result<(), String> {
             link.npdu = Some(Npdu::At(start..frame.len()));
         }
         ScFunction::Result => {
-            if let Ok(ScBvlcResult::Nak { error_code, .. }) = decode_sc_bvlc_result(&message) {
+            if let ScBvlcResult::Nak { error_code, .. } =
+                decode_sc_bvlc_result(&message).map_err(|error| error.to_string())?
+            {
                 // Named in kebab case like the B/IP NAKs; an unnamed code
                 // stays a number.
                 let code = ErrorCode::from_raw(error_code);
@@ -283,15 +297,18 @@ fn mstp(frame: &[u8], link: &mut Link) -> Result<(), String> {
 }
 
 /// Summarise a frame for the capture list. Decodes the headers only; the
-/// service's own parameters are left for [`super::tree`].
+/// service's own parameters are not decoded here.
 pub fn summarize_frame(framing: Framing, frame: &[u8]) -> FrameSummary {
     let link = link(framing, frame);
+    let parse_error = link.malformed.then(|| link.problem.clone()).flatten();
     let mut summary = FrameSummary {
         link: link.name,
         broadcast: link.broadcast,
         link_source: link.source,
         link_destination: link.destination,
+        original_source: link.original_source,
         problem: link.problem,
+        parse_error,
         ..FrameSummary::default()
     };
     let npdu = match link.npdu {
@@ -314,6 +331,11 @@ pub fn summarize_npdu(npdu: &[u8]) -> FrameSummary {
 /// What the network layer and the APDU's header add to a summary.
 fn network_layer(summary: &mut FrameSummary, npdu: Bytes) {
     if let Ok(view) = bacnet_npdu::Npdu::decode(&npdu) {
+        summary.snet = view.source.map(|address| address.network);
+        summary.dnet = view.destination.map(|address| address.network);
+        summary.broadcast |= view
+            .destination
+            .is_some_and(|address| address.mac.is_empty());
         summary.routed_source = view.source.map(|a| routed(a.network, a.mac));
         summary.routed_destination = view.destination.map(|a| routed(a.network, a.mac));
     }
@@ -333,10 +355,18 @@ fn network_layer(summary: &mut FrameSummary, npdu: Bytes) {
                 summary.device = apdu.device;
             }
         }
-        Err(error) => summary.problem = Some(format!("malformed: {error}")),
+        Err(error) => {
+            let error = format!("malformed: {error}");
+            summary.parse_error = Some(error.clone());
+            summary.problem = Some(error);
+        }
     }
 }
 
 #[cfg(test)]
 #[path = "frame_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "provenance_tests.rs"]
+mod provenance_tests;

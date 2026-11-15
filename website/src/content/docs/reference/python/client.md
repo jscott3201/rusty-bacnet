@@ -1807,7 +1807,7 @@ def __anext__(self) -> Awaitable[ScEvent]
 
 ## Frame
 
-Frozen raw frame; no decoded summary or forwarding provenance yet.
+Frozen raw frame. Pass octets and link to decode\_frame for a summary.
 
 Properties:
 
@@ -1818,6 +1818,34 @@ Properties:
 - `peer: str`: UDP peer, SC hub name, MS/TP station or Ethernet MAC. This is the next hop, not a forwarded frame's original source.
 - `octets: bytes`: Raw link octets, including malformed received datagrams.
 - `missed: int`: Cumulative queue overflow at the first delivery attempt. Redelivery after cancellation keeps this snapshot; iterator.missed is live.
+
+## FrameSummary
+
+Frozen offline header summary. Missing fields are None.
+
+parse\_error reports header decoding failures, while problem also reports
+valid protocol refusals. Service parameters are not exhaustively validated.
+original\_source is encoded in a forwarded message; Frame.peer is the actual
+transport peer. Neither field proves the sender's identity or its path.
+
+Properties:
+
+- `link: str`
+- `broadcast: bool`
+- `link_source: str | None`
+- `link_destination: str | None`
+- `original_source: str | None`
+- `snet: int | None`
+- `dnet: int | None`
+- `routed_source: str | None`
+- `routed_destination: str | None`
+- `network_message: str | None`
+- `pdu: str | None`
+- `invoke_id: int | None`
+- `service: str | None`
+- `problem: str | None`
+- `parse_error: str | None`
+- `device: int | None`
 
 ## FrameIterator
 

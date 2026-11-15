@@ -3950,7 +3950,7 @@ class ScEventIterator:
         ...
 
 class Frame:
-    """Frozen raw frame; no decoded summary or forwarding provenance yet."""
+    """Frozen raw frame. Pass octets and link to decode_frame for a summary."""
     @property
     def timestamp(self) -> float:
         """Monotonic capture seconds from the first subscription in this module.
@@ -3982,6 +3982,57 @@ class Frame:
         """Cumulative queue overflow at the first delivery attempt.
         Redelivery after cancellation keeps this snapshot; iterator.missed is live."""
         ...
+
+class FrameSummary:
+    """Frozen offline header summary. Missing fields are None.
+
+    parse_error reports header decoding failures, while problem also reports
+    valid protocol refusals. Service parameters are not exhaustively validated.
+    original_source is encoded in a forwarded message; Frame.peer is the actual
+    transport peer. Neither field proves the sender's identity or its path.
+    """
+    @property
+    def link(self) -> str: ...
+    @property
+    def broadcast(self) -> bool: ...
+    @property
+    def link_source(self) -> str | None: ...
+    @property
+    def link_destination(self) -> str | None: ...
+    @property
+    def original_source(self) -> str | None: ...
+    @property
+    def snet(self) -> int | None: ...
+    @property
+    def dnet(self) -> int | None: ...
+    @property
+    def routed_source(self) -> str | None: ...
+    @property
+    def routed_destination(self) -> str | None: ...
+    @property
+    def network_message(self) -> str | None: ...
+    @property
+    def pdu(self) -> str | None: ...
+    @property
+    def invoke_id(self) -> int | None: ...
+    @property
+    def service(self) -> str | None: ...
+    @property
+    def problem(self) -> str | None: ...
+    @property
+    def parse_error(self) -> str | None: ...
+    @property
+    def device(self) -> int | None: ...
+
+def decode_frame(octets: bytes, link: str = "bip") -> FrameSummary:
+    """Decode link/NPDU/APDU headers with Rust, without sending traffic.
+
+    link accepts bip, bip6 (or ipv6), sc, mstp and the corresponding Frame.link
+    display names, case-insensitively. Unsupported links, including Ethernet,
+    raise ValueError. Malformed octets return a partial summary with parse_error.
+    Raw input is not redacted, and service payloads are not fully validated.
+    """
+    ...
 
 class FrameIterator:
     """Bounded raw-frame subscription. A full queue drops new arrivals.

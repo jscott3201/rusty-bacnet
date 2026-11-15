@@ -1,7 +1,7 @@
 use bacnet_transport::mstp::codec::FrameType;
 
 use super::{Field, Framing, Range, decode_tree};
-use crate::decode::testing::*;
+use bacnet_ops::decode::testing::*;
 
 /// Every field's label, depth first, with its range.
 fn flat(fields: &[Field]) -> Vec<(String, Range<usize>)> {
@@ -165,6 +165,6 @@ fn a_character_string_is_marked_and_bare_layers_decode() {
     let apdu_octets = &data[2..];
     let tree = super::decode_apdu_tree(apdu_octets);
     assert_eq!(tree.range, 0..apdu_octets.len());
-    let summary = super::super::frame::summarize_npdu(&data);
+    let summary = bacnet_ops::decode::frame::summarize_npdu(&data);
     assert_eq!(summary.pdu.as_deref(), Some("Unconfirmed-Request"));
 }

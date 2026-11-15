@@ -37,14 +37,14 @@ tracing.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+bacnet-ops = { workspace = true, features = ["test-support"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-transport = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = "3"
 
 [features]
-# Frame builders for decode tests (`decode::testing`), for the CLI's
-# capture tests. Not a stable API.
+# Fault-injection seams for safety filesystem tests. Not a stable API.
 test-support = []
 
 [lints]

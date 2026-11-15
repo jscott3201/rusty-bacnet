@@ -129,4 +129,17 @@ Read selected files once and inspect them without network I/O; OSError retains e
 
 None time samples the clock once. A later connection may read changed files.
 Same interpretation and input limits as inspect\_sc\_pem; no chmod or startup gate.
+
+## decode_frame
+
+```python
+def decode_frame(octets: bytes, link: str = "bip") -> FrameSummary
+```
+
+Decode link/NPDU/APDU headers with Rust, without sending traffic.
+
+link accepts bip, bip6 (or ipv6), sc, mstp and the corresponding Frame.link
+display names, case-insensitively. Unsupported links, including Ethernet,
+raise ValueError. Malformed octets return a partial summary with parse\_error.
+Raw input is not redacted, and service payloads are not fully validated.
 <!-- generated:end -->

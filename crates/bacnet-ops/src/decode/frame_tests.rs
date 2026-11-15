@@ -13,6 +13,7 @@ fn a_bip_request_shows_its_function_pdu_invoke_id_and_service() {
     assert_eq!(summary.invoke_id, Some(7));
     assert_eq!(summary.service.as_deref(), Some("read-property"));
     assert_eq!(summary.problem, None);
+    assert_eq!(summary.parse_error, None);
     assert!(!summary.broadcast);
 }
 
@@ -25,6 +26,7 @@ fn errors_naks_and_bad_frames_carry_a_problem() {
     let summary = summarize_frame(Framing::Bip, &frame);
     assert_eq!(summary.pdu.as_deref(), Some("Error"));
     assert_eq!(summary.service.as_deref(), Some("read-property"));
+    assert_eq!(summary.parse_error, None);
     assert_eq!(
         summary.problem.as_deref(),
         Some("property:unknown-property")
@@ -32,10 +34,12 @@ fn errors_naks_and_bad_frames_carry_a_problem() {
 
     let summary = summarize_frame(Framing::Bip, &bip_nak());
     assert_eq!(summary.link, "bvlc-result");
+    assert_eq!(summary.parse_error, None);
     assert!(summary.problem.unwrap().starts_with("NAK"));
     assert_eq!(summary.pdu, None);
 
     let summary = summarize_frame(Framing::Bip, &[0x81, 0x0A, 0x00]);
+    assert!(summary.parse_error.is_some());
     assert!(summary.problem.unwrap().starts_with("malformed"));
 }
 
@@ -90,6 +94,7 @@ fn an_sc_nak_names_its_error_code() {
     // A BACnet/SC connection code (#2434) and an older one, by name.
     let summary = summarize_frame(Framing::Sc, &sc_nak(169));
     assert_eq!(summary.link, "result");
+    assert_eq!(summary.parse_error, None);
     assert_eq!(
         summary.problem.as_deref(),
         Some("NAK websocket-closed-by-peer")

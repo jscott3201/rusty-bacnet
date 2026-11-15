@@ -6306,8 +6306,7 @@ redelivery, as on the existing event iterators; explicit close ends that wait.
 
 This first observation API exposes raw frames on B/IP endpoints and standalone
 clients. Router application clients have no link of their own and are refused.
-Server and other endpoint entry points, Rust-decoded summaries, parse failures
-and forwarding/router provenance are follow-up work for #2614.
+Server and other endpoint entry points remain follow-up work for #2614.
 
 `interface` for B/IP is an IPv4 address, not an OS interface name.
 `ipv6_interface` is an IPv6 address, also not an OS interface name; `None` and
@@ -6315,6 +6314,66 @@ and forwarding/router provenance are follow-up work for #2614.
 socket and changes no port-sharing behavior: Linux/macOS sharing options remain
 those documented under transport configuration. It does not make two separately
 constructed stacks into one endpoint.
+
+### Decoded frame summaries and trap transcripts
+
+`decode_frame(octets, link="bip")` decodes link, NPDU and APDU headers through
+the stack's Rust decoder. It sends no traffic and returns a frozen
+`FrameSummary`, including for malformed input. Use the observed link directly:
+
+```python
+from rusty_bacnet import decode_frame
+
+async def transcript(endpoint):
+    frames = await endpoint.frames(capacity=256)
+    try:
+        async for frame in frames:
+            summary = decode_frame(frame.octets, link=frame.link)
+            print({
+                "time": frame.timestamp,
+                "direction": frame.direction,
+                "peer": frame.peer,
+                "original_source": summary.original_source,
+                "routed_source": summary.routed_source,
+                "service": summary.service,
+                "invoke_id": summary.invoke_id,
+                "problem": summary.problem,
+                "parse_error": summary.parse_error,
+                "missed": frames.missed,
+                "octets": frame.octets.hex(),
+            })
+    finally:
+        await frames.aclose()
+```
+
+Run `transcript(endpoint)` as an asyncio task beside the endpoint's client
+reads. The virtual device keeps answering on that same socket. Cancel and await
+the task to finish its `finally` block before closing the endpoint.
+The runnable [frame transcript example](../examples/python/frame_transcript.py)
+accepts a local bind address and an optional peer to read on that socket.
+
+The summary exposes `link` (the decoded message name), `broadcast`,
+`link_source`, `link_destination`, `original_source`, `snet`, `dnet`,
+`routed_source`, `routed_destination`, `network_message`, `pdu`, `invoke_id`,
+`service`, `problem`, `parse_error` and `device` (an I-Am device instance).
+Fields not available in the decoded headers are `None`. A valid protocol
+Error, Reject, Abort or NAK sets `problem` without setting `parse_error`.
+Header decoding failures set `parse_error` and also remain visible in `problem`;
+their text is diagnostic, not a stable error code. This is a header summary,
+not exhaustive validation or decoding of every service payload.
+
+For a B/IP Forwarded-NPDU, `original_source` is its encoded original IP address
+and UDP port; for B/IPv6 it is the encoded original IPv6 endpoint, while
+`link_source` preserves the original VMAC. `Frame.peer` remains the actual
+UDP peer observed by the socket. The summary's routed addresses come from
+SNET/SADR and DNET/DADR. No field invents an intermediate router path or
+authenticates an encoded source.
+
+Supported `link` values are `bip`, `bip6` (also `ipv6`), `sc`, `mstp`, or their
+`Frame.link` names (`BACnet/IP`, `BACnet/IPv6`, `BACnet/SC`, `MS/TP`), ignoring
+case. Unsupported links, including Ethernet, raise `ValueError`. The input
+octets and `Frame.octets` remain unredacted, including any service parameters
+they contain; this API does not apply the CLI capture's password masking.
 
 ## Endpoint (one transport, both roles)
 

@@ -22,7 +22,7 @@ use bytes::Bytes;
 
 use bacnet_ops::octets::hex_upper;
 
-use super::frame::{Framing, Link, Npdu, kebab, link};
+use bacnet_ops::decode::frame::{Framing, Link, Npdu, kebab, link};
 
 #[path = "service.rs"]
 mod service;

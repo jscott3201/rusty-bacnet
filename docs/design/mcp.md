@@ -150,7 +150,9 @@ From `bacnet-cli` into `bacnet-ops`, without behaviour changes (#2065):
 
 Phase 1 moved the capture screen's decoder the same way, for
 `bacnet_decode`: `decode/frame.rs`, `decode/tree.rs` and the network and
-application layer reader became `bacnet_ops::decode` (`bacnet_tool::decode` since #2560), and
+application layer reader became `bacnet_ops::decode`. After the #2560 move,
+#2614 places header summaries and their test builders back in `bacnet_ops::decode`;
+detailed field trees remain in `bacnet_tool::decode::tree`. Also,
 `output::format_property_value` became `bacnet_ops::format::format_property_value`.
 
 Every item the CLI or MCP needs is `pub` and documented; helpers private to

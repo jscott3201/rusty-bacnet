@@ -20,8 +20,8 @@ use crate::tui::capture::pcap::{
 use crate::tui::capture::{CaptureEvent, CaptureFrame, Direction, ExportJob, Framing};
 use crate::tui::worker::session::SessionOptions;
 use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, coordinator};
-use bacnet_tool::decode::frame::summarize_frame;
-use bacnet_tool::decode::testing;
+use bacnet_ops::decode::frame::summarize_frame;
+use bacnet_ops::decode::testing;
 
 fn u32_at(file: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(file[at..at + 4].try_into().unwrap())
@@ -304,7 +304,13 @@ fn tshark_reads_the_exports_without_malformed_packets() {
         let path = dir.path().join(format!("{i}.pcap"));
         std::fs::write(&path, file).unwrap();
         let fields = tshark(&path, &["-T", "fields", "-e", "frame.protocols"]);
-        assert!(fields.lines().all(|l| l.starts_with(first)), "{fields}");
+        // TShark can expose a raw-packet wrapper before the IPv4 protocol.
+        assert!(
+            fields
+                .lines()
+                .all(|line| line.strip_prefix("raw:").unwrap_or(line).starts_with(first)),
+            "{fields}"
+        );
         for protocol in *protocols {
             assert!(fields.contains(protocol), "{protocol} in {fields}");
         }
