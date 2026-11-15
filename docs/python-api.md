@@ -1082,11 +1082,13 @@ port.tag, port.value  # ("port_permission", (1, False))
 #### Unknown and proprietary values
 
 A value the binding has no typed form for still reads (#2618). A vendor's
-property holds its own datatype, but proprietary datatypes are built from
-the standard application datatypes (Clause 23.4.2), and BACnet's tags can
-be walked without knowing the datatype (Clause 20.2.1.6). So a value with a
-context tag reads as the tree of its tags, `tag == "tagged"`; one with
-application tags only reads as those values, as any other read does.
+property holds its own datatype, but the properties of a proprietary object
+type have datatypes built from the standard application datatypes (Clause
+23.4.2), a vendor's property on a standard object travels in the same
+services as a standard one (Clause 23.3), and BACnet's tags can be walked
+without knowing the datatype (Clause 20.2.1.6). So a value with a context
+tag reads as the tree of its tags, `tag == "tagged"`; one with application
+tags only reads as those values, as any other read does.
 
 `.value` of a `tagged` value is a list of `TagNode`, frozen records in wire
 order:
@@ -1122,12 +1124,27 @@ value.octets   # every octet as served
 Nothing is lost. `.octets` of the value (and of each node) are the octets
 exactly as served, never re-encoded, so a `tagged` value writes back
 unchanged, and `PropertyValue.tagged(octets)` makes the same value from
-saved octets. When the octets don't read as tags the binding can show (an
-application value it has no form for, more than 10,000 elements), the value
-is `application_data` holding them instead; broken framing still raises as
-for any read. Two `tagged` values are equal when their octets are, and they
-are not equal to `application_data` of the same octets: compare `.octets`
-to compare across the two.
+saved octets (it raises `ValueError` for octets that don't read as tags,
+or hold more than 10,000 elements). Two `tagged` values are equal when
+their octets are, and a `PropertyValue.list` of them keeps its items
+tagged.
+
+Code that handled `application_data` reads should expect:
+
+- **Both tags.** A value with a context tag is still `application_data`,
+  its octets in `.value`, when the octets don't read as tags the binding
+  can show: an application value it has no form for (a UCS-4, DBCS or JIS
+  string, bad UTF-8, an ENUMERATED past 32 bits, a reserved application
+  tag) anywhere in it, or more than 10,000 elements. Accept `"tagged"` and
+  `"application_data"`, and read the octets from `.octets`, which both
+  give. Broken framing still raises as for any read.
+- **Failed typed reads.** A typed constructed property whose octets don't
+  decode as its elements (a malformed Recipient_List, say) falls back to
+  `tagged` too.
+- **Values written as `application_data`.** A value written with
+  `PropertyValue.application_data(octets)` reads back `tagged`, and the two
+  are not equal: compare `.octets`, or compare with
+  `PropertyValue.tagged(octets)`.
 
 The value doesn't say which object, property or vendor it came from: keep
 the object and property you read, and the device's `vendor_id` from

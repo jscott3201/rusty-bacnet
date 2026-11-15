@@ -389,9 +389,10 @@ The value `octets` encode, as their tags: what a read of a value
 with no typed form and a context tag gives (#2618). `value` is a
 list of `TagNode`; the octets are kept as given, so a write sends
 them unchanged. Octets that don't read as tagged elements (cut short,
-a closing tag that closes nothing, opening tags nested past 32), or
-hold an application value this type has no form for, raise
-ValueError.
+a closing tag that closes nothing, opening tags nested past 32, more
+than 10,000 elements), or hold an application value this type has no
+form for, raise ValueError. A `list` of tagged values keeps its
+items tagged.
 
 ## TagNode
 

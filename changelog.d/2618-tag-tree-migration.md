@@ -1,9 +1,9 @@
 ---
 section: Migration notes
 ---
-- **Tagged values (Python API, #2618):** where a read with a context tag gave
-  `application_data`, expect `tag == "tagged"`: read the octets from
-  `.octets`, not `.value`, and compare with `PropertyValue.tagged(octets)` or
-  by `.octets`, since a tagged value doesn't equal `application_data` of the
-  same octets. CLI JSON scripts read a value shown as its tags from
-  `decoded.fields.data.raw`.
+- **Tagged values (Python API, #2618):** a read with a context tag may be
+  `"tagged"` or, holding something `PropertyValue` can't or over 10,000
+  elements, still `"application_data"`: accept both, read octets from
+  `.octets`, and compare by `.octets`, since a value written as
+  `application_data` reads back `tagged` and unequal. A failed typed read
+  is `tagged`. CLI JSON scripts read `decoded.fields.data.raw`.
