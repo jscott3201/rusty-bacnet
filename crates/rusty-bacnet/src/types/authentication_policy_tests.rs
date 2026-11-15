@@ -190,13 +190,13 @@ fn a_policy_list_reads_back_as_the_keyword_takes_it() {
             &octets,
         )
         .unwrap();
-        assert_eq!(other.element, None);
+        assert_eq!(other.element(), None);
         let cut = decode_read_value(
             ObjectType::ACCESS_POINT,
             PropertyIdentifier::AUTHENTICATION_POLICY_LIST,
             None,
             &octets[..octets.len() - 1],
         );
-        assert!(cut.is_err() || cut.unwrap().element.is_none());
+        assert!(cut.is_err() || cut.unwrap().element().is_none());
     });
 }

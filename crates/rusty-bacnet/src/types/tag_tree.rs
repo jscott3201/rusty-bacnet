@@ -153,23 +153,38 @@ impl PyTagNode {
         PyBytes::new(py, &self.octets)
     }
 
-    /// `TagNode.application(PropertyValue.real(1.5))`,
-    /// `TagNode.context(0, b'\x02')` or `TagNode.constructed(1, <2 members>)`.
+    /// A short description, not code: `<TagNode application 4 real 1.5>`,
+    /// `<TagNode context 0, 1 octet>` or `<TagNode context 1 constructed, 3
+    /// members>`. A long value is cut short, and contents are counted, not
+    /// shown.
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let plural = |count: usize, one: &str| match count {
+            1 => format!("1 {one}"),
+            count => format!("{count} {one}s"),
+        };
         Ok(match &self.held {
-            Held::Application(value) => format!(
-                "TagNode.application({})",
-                Py::new(py, value.clone())?.bind(py).repr()?
-            ),
+            Held::Application(value) => {
+                let shown = Py::new(py, value.clone())?
+                    .bind(py)
+                    .getattr("value")?
+                    .repr()?
+                    .to_string();
+                format!(
+                    "<TagNode application {} {} {}>",
+                    self.number,
+                    value.tag_name(),
+                    shorten(&shown)
+                )
+            }
             Held::Context(contents) => format!(
-                "TagNode.context({}, {})",
+                "<TagNode context {}, {}>",
                 self.number,
-                PyBytes::new(py, contents).repr()?
+                plural(contents.len(), "octet")
             ),
             Held::Constructed(members) => format!(
-                "TagNode.constructed({}, <{} members>)",
+                "<TagNode context {} constructed, {}>",
                 self.number,
-                members.len()
+                plural(members.len(), "member")
             ),
         })
     }
@@ -206,6 +221,14 @@ impl PyTagNode {
                 "octets are not exactly one tagged element",
             )),
         }
+    }
+}
+
+/// `text` cut to at most 32 characters, an ellipsis marking the cut.
+fn shorten(text: &str) -> String {
+    match text.char_indices().nth(31) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
     }
 }
 

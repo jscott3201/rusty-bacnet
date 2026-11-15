@@ -8,9 +8,12 @@
 //! and a closing tag of the same number (Clause 20.2.1.3.2). What a walk
 //! can't learn is a context tag's meaning: the datatype of a context-tagged
 //! primitive is the field's, known only from the production (Clauses 20.2
-//! and 20.2.1.5), so its contents stay octets. A vendor's property datatypes
-//! are built from the application datatypes (Clause 23.4.2), so a
-//! well-formed proprietary value always reads this way, its meaning aside.
+//! and 20.2.1.5), so its contents stay octets. The datatypes of a
+//! proprietary object type's properties are built from the application
+//! datatypes (Clause 23.4.2), and a vendor's property on a standard object
+//! travels in the same services as a standard one (Clause 23.3), so its
+//! value is tagged the same way: a well-formed proprietary value reads as
+//! its tags, its meaning aside.
 //!
 //! Two layers:
 //!
@@ -49,10 +52,11 @@ pub use node::{TagBody, TagNode, decode_tag_tree};
 pub const MAX_TAG_TREE_DEPTH: usize = MAX_CONTEXT_NESTING_DEPTH;
 
 /// How many elements one tree may hold, a constructed one counting once: the
-/// bound the crate puts on a decoded list, as `bacnet-services` does on its
-/// sequences. Only the tree (`decode_tag_tree`, with `alloc`) counts, since
-/// its size grows with them; past it is [`TagTreeFault::TooManyNodes`].
-pub const MAX_TAG_TREE_NODES: usize = 10_000;
+/// bound the crate's constructed decoders put on a decoded list (10,000), as
+/// `bacnet-services` does on its sequences. Only the tree (`decode_tag_tree`,
+/// with `alloc`) counts, since its size grows with them; past it is
+/// [`TagTreeFault::TooManyNodes`].
+pub const MAX_TAG_TREE_NODES: usize = crate::constructed::MAX_FRAMED_ITEMS;
 
 /// One tag [`TagReader`] read, borrowed from the octets it was read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -47,7 +47,7 @@ class TaggedValueTests(unittest.TestCase):
             (first.tag_class, first.tag_number, first.constructed, first.value, first.octets),
             ("context", 0, False, b"\x02", b"\x09\x02"),
         )
-        self.assertEqual(repr(first), "TagNode.context(0, b'\\x02')")
+        self.assertEqual(repr(first), "<TagNode context 0, 1 octet>")
         self.assertTrue(second.constructed)
         self.assertEqual(second.octets, VENDOR[2:16])
         real, text, inner = second.value
@@ -55,7 +55,15 @@ class TaggedValueTests(unittest.TestCase):
         self.assertEqual(real.value, PropertyValue.real(1.5))
         self.assertEqual(text.value.value, "hi")
         self.assertEqual(inner.value[0].value, PropertyValue.boolean(True))
-        self.assertEqual(repr(second), "TagNode.constructed(1, <3 members>)")
+        self.assertEqual(repr(second), "<TagNode context 1 constructed, 3 members>")
+        self.assertEqual(repr(real), "<TagNode application 4 real 1.5>")
+        self.assertEqual(repr(text), "<TagNode application 7 character_string 'hi'>")
+        # A long value is cut short; contents are counted, never shown.
+        long = PropertyValue.tagged(b"\x0e\x75\x29\x00" + b"x" * 40 + b"\x0f\x0d\x28" + bytes(40))
+        constructed, context = long.value
+        self.assertEqual(repr(constructed.value[0]),
+                         "<TagNode application 7 character_string 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…>")
+        self.assertEqual(repr(context), "<TagNode context 0, 40 octets>")
         self.assertEqual(third.value, PropertyValue.unsigned(7))
         # Each node's octets are the value's, end to end.
         self.assertEqual(b"".join(node.octets for node in value.value), VENDOR)
@@ -75,6 +83,24 @@ class TaggedValueTests(unittest.TestCase):
             self.assertEqual(pickle.loads(pickle.dumps(node)), node)
             self.assertEqual(hash(copy.deepcopy(node)), hash(node))
 
+    def test_tagged_items_of_a_list_stay_tagged(self) -> None:
+        tagged = PropertyValue.tagged(VENDOR)
+        for items in ([tagged], [tagged, PropertyValue.unsigned(1)]):
+            with self.subTest(items=items):
+                listed = PropertyValue.list(items)
+                self.assertEqual(listed.tag, "list")
+                self.assertEqual(listed.value[0], tagged.value)
+                self.assertEqual(listed.octets, b"".join(item.octets for item in items))
+                for copied in (copy.deepcopy(listed), pickle.loads(pickle.dumps(listed))):
+                    self.assertEqual(copied, listed)
+                    self.assertEqual(copied.value[0], tagged.value)
+        # Beside plain application data the items can't say which they are:
+        # all read as octets.
+        plain = PropertyValue.list([tagged, PropertyValue.application_data(b"\x09\x01")])
+        self.assertEqual(plain.value, [VENDOR, b"\x09\x01"])
+        self.assertNotEqual(PropertyValue.list([tagged]),
+                            PropertyValue.list([PropertyValue.application_data(VENDOR)]))
+
     def test_octets_that_dont_read_as_tags_raise(self) -> None:
         for octets in (
             b"\x1e\x21\x01",  # never closed
@@ -82,6 +108,7 @@ class TaggedValueTests(unittest.TestCase):
             b"\x0e" * 33 + b"\x0f" * 33,  # nested past 32
             b"\x09\x01\x75\x05\x03\x00\x00\x00\x41",  # a UCS-4 string
             b"\x44\x3f",  # cut short
+            b"\x00" * 10_001,  # past the 10,000-element bound
         ):
             with self.subTest(octets=octets.hex()), self.assertRaises(ValueError):
                 PropertyValue.tagged(octets)

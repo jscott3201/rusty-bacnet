@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::property_value::Form;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
 const AI: ObjectType = ObjectType::ANALOG_INPUT;
@@ -13,8 +14,8 @@ fn decode(
     octets: &[u8],
 ) -> Result<PropertyValue, Error> {
     decode_read_value(object_type, property, array_index, octets).map(|value| {
-        assert_eq!(value.element, None, "{octets:02X?}");
-        assert!(!value.tagged, "{octets:02X?}");
+        assert_eq!(value.element(), None, "{octets:02X?}");
+        assert_ne!(value.form, Form::Tagged, "{octets:02X?}");
         value.inner
     })
 }
@@ -23,13 +24,13 @@ fn decode(
 /// keeping them as they are.
 fn tagged(object_type: ObjectType, property: PropertyIdentifier, octets: &[u8]) -> bool {
     let value = decode_read_value(object_type, property, None, octets).unwrap();
-    assert_eq!(value.element, None, "{octets:02X?}");
+    assert_eq!(value.element(), None, "{octets:02X?}");
     assert_eq!(
         value.inner,
         PropertyValue::ApplicationData(octets.to_vec()),
         "{octets:02X?}"
     );
-    value.tagged
+    value.form == Form::Tagged
 }
 
 fn oid(instance: u32) -> PropertyValue {
@@ -201,8 +202,8 @@ fn well_framed_content_the_model_cannot_hold_comes_back_as_octets() {
             for (object_type, property) in [(AI, PV), (ObjectType::DEVICE, object_list)] {
                 let value = decode_read_value(object_type, property, None, &octets).unwrap();
                 assert_eq!(
-                    (value.inner, value.element, value.tagged),
-                    (PropertyValue::ApplicationData(octets.clone()), None, false),
+                    (value.inner, value.form),
+                    (PropertyValue::ApplicationData(octets.clone()), Form::Plain),
                     "{octets:02X?}"
                 );
             }
@@ -219,7 +220,7 @@ fn a_tree_past_the_decoders_bound_keeps_its_octets() {
         bacnet_encoding::tags::tree::MAX_TAG_TREE_NODES,
     ));
     let value = decode_read_value(AI, PV, None, &octets).unwrap();
-    assert!(!value.tagged);
+    assert_eq!(value.form, Form::Plain);
     assert_eq!(value.inner, PropertyValue::ApplicationData(octets.clone()));
     // At the bound, it reads as its tags.
     octets.pop();

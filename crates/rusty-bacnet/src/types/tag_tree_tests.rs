@@ -50,14 +50,14 @@ fn a_value_with_context_tags_reads_as_tag_nodes() {
         assert_eq!(attr::<Vec<u8>>(&nodes[0], "octets"), [0x09, 0x02]);
         assert_eq!(
             nodes[0].repr().unwrap().to_string(),
-            "TagNode.context(0, b'\\x02')"
+            "<TagNode context 0, 1 octet>"
         );
         // [1] ( ... ): its members, each with its exact octets.
         assert!(attr::<bool>(&nodes[1], "constructed"));
         assert_eq!(attr::<Vec<u8>>(&nodes[1], "octets"), &FIELDS[2..12]);
         assert_eq!(
             nodes[1].repr().unwrap().to_string(),
-            "TagNode.constructed(1, <2 members>)"
+            "<TagNode context 1 constructed, 2 members>"
         );
         let members: Vec<Bound<'_, PyAny>> = attr(&nodes[1], "value");
         let real = members[0].getattr("value").unwrap();
@@ -67,7 +67,7 @@ fn a_value_with_context_tags_reads_as_tag_nodes() {
         assert_eq!(attr::<u8>(&members[0], "tag_number"), 4);
         assert_eq!(
             members[0].repr().unwrap().to_string(),
-            "TagNode.application(PropertyValue.real(1.5))"
+            "<TagNode application 4 real 1.5>"
         );
         let inner: Vec<Bound<'_, PyAny>> = attr(&members[1], "value");
         assert!(attr::<bool>(&inner[0].getattr("value").unwrap(), "value"));
@@ -124,5 +124,31 @@ fn tagged_values_and_nodes_compare_hash_and_rebuild_from_octets() {
                 .unwrap_err();
             assert!(error.is_instance_of::<PyValueError>(py));
         }
+    });
+}
+
+#[test]
+fn a_list_of_tagged_values_keeps_them_tagged() {
+    use crate::types::property_value::Form;
+    Python::initialize();
+    Python::attach(|py| {
+        let class = py.get_type::<PyPropertyValue>();
+        let list = |items: Vec<PyPropertyValue>| {
+            let listed = class.call_method1("list", (items,)).unwrap();
+            let form = listed.extract::<PyPropertyValue>().unwrap().form;
+            (listed, form)
+        };
+        let tagged = PyPropertyValue::tree(FIELDS.to_vec());
+        let one = PyPropertyValue::from_rust(PropertyValue::Unsigned(1));
+        let plain = PyPropertyValue::from_rust(PropertyValue::ApplicationData(vec![0x09, 0x01]));
+        let (listed, form) = list(vec![tagged.clone()]);
+        assert_eq!(form, Form::Tagged);
+        assert_eq!(list(vec![tagged.clone(), one]).1, Form::Tagged);
+        // Beside plain application data nothing says which item is which.
+        assert_eq!(list(vec![tagged, plain]).1, Form::Plain);
+        let items: Vec<Bound<'_, PyAny>> = attr(&listed, "value");
+        let nodes: Vec<Bound<'_, PyAny>> = items[0].extract().unwrap();
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(attr::<u8>(&nodes[1], "tag_number"), 1);
     });
 }

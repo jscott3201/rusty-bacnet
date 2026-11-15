@@ -11,6 +11,11 @@ use crate::tags::TagClass;
 
 /// One element of tagged octets, borrowed from them: a tag and what it
 /// holds.
+///
+/// A [`TagItem`] carries the whole decoded [`Tag`](crate::tags::Tag), since
+/// an opening or closing tag is an item of its own there; a node joins such
+/// a pair into one element, whose length and opening or closing flags no
+/// longer apply, so it keeps the class and number that name it.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct TagNode<'a> {

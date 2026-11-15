@@ -98,7 +98,7 @@ fn assert_read(
     expected: &Bound<'_, PyAny>,
 ) {
     let value = read(object_type, property, array_index, octets);
-    assert_eq!(value.element, Some(element), "{object_type} {property}");
+    assert_eq!(value.element(), Some(element), "{object_type} {property}");
     let mut encoded = BytesMut::new();
     encode_property_value(&mut encoded, &value.inner).unwrap();
     assert_eq!(encoded.to_vec(), octets);
@@ -635,7 +635,7 @@ fn a_single_value_that_is_not_one_element_falls_back() {
         PyPropertyValue::tree(two.to_vec())
     );
     assert_eq!(
-        read(O::ANALOG_VALUE, P::VALUE_SOURCE, Some(1), &[0x08]).element,
+        read(O::ANALOG_VALUE, P::VALUE_SOURCE, Some(1), &[0x08]).element(),
         None
     );
     // An access rule whose specifiers disagree with its references, either
@@ -676,7 +676,7 @@ fn a_single_value_that_is_not_one_element_falls_back() {
     // An Effective_Period of one date stays the generic date.
     let one_date = [0xA4, 0x7E, 0x01, 0x01, 0x04];
     assert_eq!(
-        read(O::SCHEDULE, P::EFFECTIVE_PERIOD, None, &one_date).element,
+        read(O::SCHEDULE, P::EFFECTIVE_PERIOD, None, &one_date).element(),
         None
     );
 }
