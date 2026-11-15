@@ -178,4 +178,45 @@ mod tests {
             "[0] [raw 1e], [raw 1a 01]"
         );
     }
+
+    /// Pinned before the walk moved to the shared tag-tree decoder (#2618).
+    #[test]
+    fn fields_keep_their_text() {
+        // Every application datatype inside [3] ( ... ).
+        let mut data = vec![0x3E, 0x00, 0x11, 0x21, 72, 0x31, 0xB8];
+        data.extend_from_slice(&[0x44, 0x42, 0x91, 0, 0]);
+        data.extend_from_slice(&[0x55, 0x08, 0x40, 0x52, 0x20, 0, 0, 0, 0, 0]);
+        data.extend_from_slice(&[0x62, 0x12, 0x34, 0x73, 0x00, b'h', b'i']);
+        data.extend_from_slice(&[0x82, 0x05, 0xE0, 0x91, 0x03]);
+        data.extend_from_slice(&[0xA4, 126, 10, 3, 6, 0xB4, 12, 30, 0, 0]);
+        data.extend_from_slice(&[0xC4, 0x00, 0x00, 0x00, 0x07, 0x3F]);
+        assert_eq!(
+            fields_text(&data, Floats::Exact),
+            "[3] (null, true, 72, -72, 72.5, 72.5, 0x1234, \"hi\", bits(111), 3, \
+             2026-10-03 Sat, 12:30, analog-input 7)"
+        );
+        // Extended tag numbers (Clause 20.2.1.2): [20] primitive, [200]
+        // constructed, an empty context primitive.
+        assert_eq!(
+            fields_text(&[0xF9, 20, 0x05, 0xFE, 200, 0x28, 0xFF, 200], Floats::Exact),
+            "[20] [raw 05], [200] ([2])"
+        );
+        // A closing tag with no opening tag, and a closing tag of another
+        // number: the rest is raw.
+        assert_eq!(
+            fields_text(&[0x21, 0x01, 0x1F, 0x21, 0x02], Floats::Exact),
+            "1, [raw 1f 21 02]"
+        );
+        assert_eq!(
+            fields_text(&[0x09, 0x01, 0x1E, 0x21, 0x02, 0x2F], Floats::Exact),
+            "[0] [raw 01], [raw 1e 21 02 2f]"
+        );
+        // An opening tag that never closes.
+        assert_eq!(
+            fields_text(&[0x09, 0x01, 0x1E, 0x21, 0x02], Floats::Exact),
+            "[0] [raw 01], [raw 1e 21 02]"
+        );
+        // Nothing at all.
+        assert_eq!(fields_text(&[], Floats::Exact), "");
+    }
 }

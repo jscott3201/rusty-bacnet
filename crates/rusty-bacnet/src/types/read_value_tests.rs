@@ -204,3 +204,122 @@ fn only_broken_framing_is_an_error() {
         assert!(decode(AI, PV, None, octets).is_err(), "{octets:02X?}");
     }
 }
+
+/// Every application datatype, its octets and its value (#2618 pins these
+/// before the tag-tree decoder takes over the framing walk).
+pub(super) fn application_values() -> Vec<(Vec<u8>, PropertyValue)> {
+    let mut object = vec![0xC4];
+    object.extend_from_slice(&((AI.to_raw() << 22) | 7).to_be_bytes());
+    vec![
+        (vec![0x00], PropertyValue::Null),
+        (vec![0x10], PropertyValue::Boolean(false)),
+        (vec![0x11], PropertyValue::Boolean(true)),
+        (vec![0x21, 0x48], PropertyValue::Unsigned(72)),
+        (vec![0x31, 0xB8], PropertyValue::Signed(-72)),
+        (vec![0x44, 0x42, 0x90, 0, 0], PropertyValue::Real(72.0)),
+        (
+            vec![0x55, 0x08, 0x40, 0x52, 0, 0, 0, 0, 0, 0],
+            PropertyValue::Double(72.0),
+        ),
+        (
+            vec![0x63, 0x12, 0x34, 0xFF],
+            PropertyValue::OctetString(vec![0x12, 0x34, 0xFF]),
+        ),
+        (
+            vec![0x73, 0x00, b'h', b'i'],
+            PropertyValue::CharacterString("hi".into()),
+        ),
+        (
+            vec![0x73, 0x05, b'A', 0xE9],
+            PropertyValue::CharacterString("A\u{e9}".into()),
+        ),
+        (
+            vec![0x75, 0x05, 0x04, 0x00, b'A', 0x00, b'B'],
+            PropertyValue::CharacterString("AB".into()),
+        ),
+        (
+            vec![0x82, 0x05, 0xE0],
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0xE0],
+            },
+        ),
+        (vec![0x91, 0x03], PropertyValue::Enumerated(3)),
+        (
+            vec![0xA4, 126, 10, 3, 6],
+            PropertyValue::Date(Date {
+                year: 126,
+                month: 10,
+                day: 3,
+                day_of_week: 6,
+            }),
+        ),
+        (
+            vec![0xB4, 12, 30, 0, 0],
+            PropertyValue::Time(Time {
+                hour: 12,
+                minute: 30,
+                second: 0,
+                hundredths: 0,
+            }),
+        ),
+        (object, oid(7)),
+    ]
+}
+
+#[test]
+fn application_values_keep_their_typed_form() {
+    let device = ObjectType::DEVICE;
+    let object_list = PropertyIdentifier::OBJECT_LIST;
+    for (octets, value) in application_values() {
+        // Alone: the bare value.
+        assert_eq!(
+            decode(AI, PV, None, &octets).unwrap(),
+            value,
+            "{octets:02X?}"
+        );
+        // After another value: a list in wire order.
+        let pair = [&[0x21, 0x01][..], &octets].concat();
+        assert_eq!(
+            decode(AI, PV, None, &pair).unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(1), value.clone()]),
+            "{pair:02X?}"
+        );
+        // A whole array: a list at every length.
+        assert_eq!(
+            decode(device, object_list, None, &octets).unwrap(),
+            PropertyValue::List(vec![value.clone()]),
+            "{octets:02X?}"
+        );
+        // An indexed element: the bare value.
+        assert_eq!(
+            decode(device, object_list, Some(3), &octets).unwrap(),
+            value,
+            "{octets:02X?}"
+        );
+    }
+}
+
+#[test]
+fn a_date_time_priority_array_splits_into_its_slots() {
+    // A DateTime Value's Priority_Array (#2098): slot 2 is the date-time
+    // choice under context tag 1, the rest NULL.
+    let slot = [0x1E, 0xA4, 126, 10, 3, 6, 0xB4, 12, 30, 0, 0, 0x1F];
+    let mut octets = vec![0x00];
+    octets.extend_from_slice(&slot);
+    octets.extend(std::iter::repeat_n(0x00, 14));
+    let value = decode(
+        ObjectType::DATETIME_VALUE,
+        PropertyIdentifier::PRIORITY_ARRAY,
+        None,
+        &octets,
+    )
+    .unwrap();
+    let PropertyValue::List(slots) = value else {
+        panic!("a whole Priority_Array is a list: {value:?}");
+    };
+    assert_eq!(slots.len(), 16);
+    assert_eq!(slots[0], PropertyValue::Null);
+    assert_eq!(slots[1], PropertyValue::ApplicationData(slot.to_vec()));
+    assert_eq!(slots[15], PropertyValue::Null);
+}
