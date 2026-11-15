@@ -34,6 +34,10 @@ pub(super) struct Asking {
     /// The link takes the local Number controls: without them nothing is
     /// asked, and no owner runs.
     numbers: bool,
+    /// The client runs on a seat (#2617): the node owns the network layer,
+    /// so the client's stop leaves it running. Kept here, beside the other
+    /// flag, so neither the client nor this allocation grows for it.
+    pub(super) seated: bool,
     /// A question went out. A send that failed doesn't count, so the next
     /// need asks again.
     asked: AtomicBool,
@@ -50,6 +54,11 @@ impl Asking {
             numbers,
             ..Self::default()
         }
+    }
+
+    /// Wait until the dispatch task wants the number asked for.
+    pub(super) async fn wanted(&self) {
+        self.wanted.notified().await;
     }
 
     /// Ask now, unless the link takes no Number controls, the number is
@@ -88,7 +97,7 @@ impl Asking {
     /// It never waits on the send lock, so the owner's controls keep
     /// moving: a busy lock means a question is going out already, and one
     /// that fails is asked again at the next need.
-    async fn owner_need<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
+    pub(super) async fn owner_need<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
         let needed = || {
             !self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none()
         };
@@ -103,7 +112,7 @@ impl Asking {
     /// The link is back: ask again if a question went out before and the
     /// number is still unknown. A link return never starts the asking, and
     /// the owner doesn't wait for a question already going out.
-    async fn again<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
+    pub(super) async fn again<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
         let needed =
             || self.asked.load(Ordering::Acquire) && network.local_network_number().get().is_none();
         if !needed() {
@@ -131,10 +140,13 @@ pub(super) struct Discovery {
 }
 
 impl Discovery {
-    pub(super) fn new(numbers: bool) -> Self {
+    pub(super) fn new(numbers: bool, seated: bool) -> Self {
         Self {
             table: SyncMutex::new(DeviceTable::new()),
-            asking: Asking::new(numbers),
+            asking: Asking {
+                seated,
+                ..Asking::new(numbers)
+            },
         }
     }
 }
@@ -183,7 +195,7 @@ async fn announce<T: TransportPort + 'static>(network: &NetworkLayer<T>, state: 
 
 /// Wait for the link to come back; forever once the transport has no more
 /// returns to report, or never had any.
-async fn link_returned(returns: &mut Option<watch::Receiver<u64>>) {
+pub(super) async fn link_returned(returns: &mut Option<watch::Receiver<u64>>) {
     let back = match returns.as_mut() {
         Some(returns) => returns.changed().await.is_ok(),
         None => false,

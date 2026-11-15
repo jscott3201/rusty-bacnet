@@ -507,3 +507,7 @@ async fn full_policy_route_returns_the_unrouted_envelope_on_reclaim() {
 
 #[path = "endpoint_ingress_lifecycle_tests.rs"]
 mod lifecycle;
+
+/// The client seat: who receives what, and how the link stops (#2617).
+#[path = "endpoint_seat_tests.rs"]
+mod seat;

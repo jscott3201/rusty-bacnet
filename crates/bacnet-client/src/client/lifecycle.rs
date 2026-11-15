@@ -1,5 +1,6 @@
 use super::dispatch_context::{DispatchContext, InboundApdu};
 use super::dispatch_turn::{Turn, TurnOrder};
+use super::seat::{Inbound, Own};
 use super::*;
 use bacnet_network::layer::ReceivedNetworkControl;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -153,11 +154,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let mut network = NetworkLayer::new(transport);
         let network_control_rx = network.enable_network_control_receiver()?;
-        let mut apdu_rx = network.start().await?;
+        let apdu_rx = network.start().await?;
         let _bucket = cap_max_apdu_to_transport(
             config.max_apdu_length,
             network.transport().egress_apdu_limit(),
         )?;
+        let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+        let inbound = Own::new(Arc::new(network), apdu_rx, network_control_rx);
+        Ok(Self::assemble(config, options, inbound, coordinator))
+    }
+
+    /// Build the client on a started network layer: its state, its dispatch
+    /// task and its Number work. `inbound` is where its APDUs and controls
+    /// come from: its own layer's receivers, or a seat's queues (#2617).
+    /// Nothing here waits, and the caller has checked `config` and `options`.
+    pub(super) fn assemble<S: Inbound<T>>(
+        config: ClientConfig,
+        options: ClientOptions,
+        mut inbound: S,
+        coordinator: Arc<OutboundTransactionCoordinator>,
+    ) -> Self {
+        let network = Arc::clone(inbound.network());
         let local_mac = MacAddr::from_slice(network.local_mac());
         // On a link that takes the local Number controls, the client asks
         // this network's number on first need, and again when the link comes
@@ -173,13 +190,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 returns
             });
 
-        let network = Arc::new(network);
-        let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let tsm = Arc::new(SyncMutex::new(new_coordinated_tsm(&config, coordinator)));
         let tsm_dispatch = Arc::clone(&tsm);
-        let device_table = Arc::new(network_number::Discovery::new(numbers));
+        let device_table = Arc::new(network_number::Discovery::new(numbers, S::SEATED));
         let device_table_dispatch = Arc::clone(&device_table);
-        let network_dispatch = Arc::clone(&network);
         let (cov_tx, _) =
             broadcast::channel::<ReceivedCOVNotification>(options.cov_channel_capacity);
         let cov_tx_dispatch = cov_tx.clone();
@@ -199,7 +213,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 collision_tx: device_collision_tx.clone(),
                 link_returns,
             };
-            let (tx, task) = network_number::spawn(&network, owner);
+            let (tx, task) = inbound.spawn_number_owner(owner);
             (Some(tx), Some(task))
         } else {
             (None, None)
@@ -241,20 +255,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let device_purge = device_purge_task.abort_handle();
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
-            let mut controls = Controls::new(
-                network_control_rx,
-                network_dispatch.network_control_ingress_sequence(),
-            );
             let mut order = TurnOrder::default();
 
             loop {
                 let turn = std::future::poll_fn(|cx| {
-                    order.poll_turn(
-                        cx,
-                        || controls.take(network_dispatch.network_control_ingress_sequence()),
-                        |cx| apdu_rx.poll_recv(cx),
-                        |cx| cleanup_rx.poll_recv(cx),
-                    )
+                    inbound.poll_turn(&mut order, cx, |cx| cleanup_rx.poll_recv(cx))
                 })
                 .await;
                 match turn {
@@ -322,6 +327,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         let Some(received) = received else {
                             break;
                         };
+                        let network_dispatch = inbound.network();
                         match apdu::decode_apdu(received.apdu.clone()) {
                             // Its answer would go back to a group address,
                             // to every node there (#1504).
@@ -333,12 +339,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 group_source_drops_dispatch.fetch_add(1, Ordering::Relaxed);
                                 debug!("Ignoring a ConfirmedRequest from a group address");
                             }
+                            // Beside a server role, which answers for the
+                            // device, only a ConfirmedCOVNotification is the
+                            // client's to answer (#2617).
+                            Ok(Apdu::ConfirmedRequest(request))
+                                if !inbound.answers_for_device()
+                                    && !dispatch::seated_client_answers(&request) =>
+                            {
+                                dispatch::heard_for_the_server(
+                                    &event_tx_dispatch,
+                                    &received,
+                                    &request,
+                                    &decode_warning,
+                                );
+                            }
                             Ok(decoded) => {
                                 Self::dispatch_apdu(
                                     DispatchContext {
                                         tsm: &tsm_dispatch,
                                         device_table: &device_table_dispatch,
-                                        network: &network_dispatch,
+                                        network: network_dispatch,
                                         cov_tx: &cov_tx_dispatch,
                                         event_tx: &event_tx_dispatch,
                                         confirmed_cov_ack_policy: &confirmed_cov_ack_policy,
@@ -377,13 +397,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // The receive queue closed: no device can be heard from again,
             // so the purge ends with the loop, as it did inside it.
             device_purge.abort();
+            inbound.closed(&tsm_dispatch);
         });
 
         // Shared: each paced request's guard keeps the pacer it reports to.
         let pacer = Arc::new(pacing::RequestPacer::new(Duration::from_millis(
             config.min_request_interval_ms,
         )));
-        Ok(Self {
+        Self {
             config,
             network,
             tsm,
@@ -411,7 +432,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             routed_path_limits,
             group_source_request_drops,
             pacer,
-        })
+        }
     }
 
     /// Confirmed requests ignored since start because the link-layer address
@@ -453,7 +474,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Stop the client, aborting and joining dispatch, the device purge and
-    /// local Number work.
+    /// local Number work. A client on a seat ([`Self::start_on_seat`]) stops
+    /// only itself: the node that owns the link stops the transport, once
+    /// this client is dropped.
     /// Canceling this waiter retains task joins for a subsequent stop.
     pub async fn stop(&mut self) -> Result<(), Error> {
         self.abort_owned_tasks();
@@ -461,6 +484,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         join_owned_task(&mut self.dispatch_task).await;
         join_owned_task(&mut self.device_purge_task).await;
         self.tsm.lock().cancel_all_transactions();
+        // On a seat the node owns the network layer and stops it (#2617).
+        if self.device_table.asking.seated {
+            return Ok(());
+        }
         let network = Arc::get_mut(&mut self.network).ok_or_else(|| {
             Error::Encoding("cannot stop BACnetClient while network references remain".into())
         })?;

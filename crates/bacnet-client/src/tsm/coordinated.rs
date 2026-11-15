@@ -169,6 +169,15 @@ impl Tsm {
         }
     }
 
+    /// Mark the transaction just registered under `invoke_id` as the narrow
+    /// endpoint requester's, which shares its coordinator with a full
+    /// client on the endpoint's seat (#2617).
+    pub(crate) fn mark_endpoint_requester(&self, invoke_id: u8) {
+        if let Some(coordinator) = self.coordinator.as_ref() {
+            let _ = coordinator.mark_endpoint_requester(invoke_id);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn complete_pre_admitted_terminal_response(
         &mut self,

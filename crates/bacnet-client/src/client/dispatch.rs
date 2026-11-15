@@ -7,6 +7,7 @@ use super::response_admission::{
 use super::segmentation_context::InboundSegmentSource;
 use super::*;
 use crate::tsm::{CompletionOutcome, CoordinatedCompletion};
+use bacnet_network::layer::ReceivedApdu;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Dispatch a received APDU to the appropriate handler.
@@ -691,6 +692,51 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .send_apdu(buf, reply_mac, false, NetworkPriority::Normal)
                     .await
             }
+        }
+    }
+}
+
+/// Whether a seated client beside a server role answers `request` itself:
+/// only a ConfirmedCOVNotification, which is about its own subscription
+/// (#2617). Every other Confirmed-Request is the server role's.
+pub(super) fn seated_client_answers(request: &ConfirmedRequestPdu) -> bool {
+    request.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
+}
+
+/// A confirmed request that reached a seated client beside a server role and
+/// is the server's to answer. A ConfirmedEventNotification is published to
+/// the client's subscribers; the client sends nothing either way.
+pub(super) fn heard_for_the_server(
+    event_tx: &broadcast::Sender<ReceivedEventNotification>,
+    received: &ReceivedApdu,
+    request: &ConfirmedRequestPdu,
+    decode_warning: &WarnThrottle,
+) {
+    if request.service_choice != ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
+        || request.segmented
+        || received.is_group
+    {
+        debug!(
+            service = request.service_choice.to_raw(),
+            "Leaving a ConfirmedRequest to the node's server role"
+        );
+        return;
+    }
+    match ReceivedEventNotification::decode(
+        &request.service_request,
+        &received.source_mac,
+        &received.source_network,
+        EventNotificationDelivery::Confirmed,
+    ) {
+        Ok(notification) => {
+            let _ = event_tx.send(notification);
+        }
+        Err(error) => {
+            warn_throttled!(
+                decode_warning,
+                %error,
+                "Failed to decode ConfirmedEventNotification"
+            );
         }
     }
 }

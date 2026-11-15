@@ -84,6 +84,17 @@ crate's ingress and asynchronous notification facilities still depend on Tokio.
 classification; it does not provide the endpoint's application lifecycle or
 full standalone-server service dispatch.
 
+## A client seat
+
+[`seat::ClientSeat`] shares the endpoint's started network layer and its
+coordinator with a full client, which `bacnet-client` runs on it in place of
+a transport of its own. Ingress hands the seat what is the client's: a copy
+of each Unconfirmed-Request, each ConfirmedCOVNotification, the answers whose
+lease [`coordinator::OutboundTransactionCoordinator::holder_of`] reads as a
+full client's, and the network controls. It never waits for the seat: a full
+queue is skipped and counted. The module's documentation has the whole rule
+and how the link stops around a seat.
+
 The example establishes local lease and duplicate-terminal behavior. It does
 not exercise network delivery, transport security, firmware, or a physical
 device, and does not establish BACnet conformance.

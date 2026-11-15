@@ -136,6 +136,20 @@ pub enum LeaseOwner {
     Notification,
 }
 
+/// Which role an answer goes to, as [`OutboundTransactionCoordinator::holder_of`]
+/// reads a lease without claiming it (#2617).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaseHolder {
+    /// A full client's request: every [`LeaseOwner::Requester`] lease that
+    /// was not marked as the endpoint requester's.
+    Client,
+    /// The narrow endpoint requester's request
+    /// ([`OutboundTransactionCoordinator::mark_endpoint_requester`]).
+    EndpointRequester,
+    /// A request the server role started ([`LeaseOwner::Notification`]).
+    Server,
+}
+
 /// Successful acknowledgment shape accepted for a lease.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalPolicy {
@@ -394,6 +408,11 @@ struct CoordinatorState {
     next_invoke_id: usize,
     last_generation: u64,
     active_count: usize,
+    /// Per invoke ID, the generation of the lease the endpoint requester
+    /// marked as its own, or 0 (no lease has generation 0). A mark is
+    /// compared with the active lease's generation and never cleared, so
+    /// reserving and releasing a lease do no work for it (#2617).
+    endpoint_requester: Box<[u64]>,
 }
 
 impl CoordinatorState {
@@ -404,6 +423,7 @@ impl CoordinatorState {
             next_invoke_id: 0,
             last_generation: 0,
             active_count: 0,
+            endpoint_requester: vec![0; INVOKE_ID_COUNT].into_boxed_slice(),
         }
     }
 
@@ -552,6 +572,64 @@ impl OutboundTransactionCoordinator {
             }
             outcome => Ok(outcome),
         }
+    }
+
+    /// Mark the active lease of `invoke_id` as the narrow endpoint
+    /// requester's, so [`Self::holder_of`] tells it from a full client's on
+    /// the same coordinator (#2617). The requester calls this as it
+    /// registers the transaction, before the request is sent. With no active
+    /// lease nothing is marked.
+    pub fn mark_endpoint_requester(&self, invoke_id: u8) -> Result<(), CoordinatorError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| CoordinatorError::StatePoisoned)?;
+        let index = usize::from(invoke_id);
+        if let Some(generation) = state.slots[index].as_ref().map(|active| active.generation) {
+            state.endpoint_requester[index] = generation;
+        }
+        Ok(())
+    }
+
+    /// The role that holds the active lease of `invoke_id` for `peer`, or
+    /// `None` when no lease is active for that pair. Nothing is claimed or
+    /// changed: the role [`admits`](Self::admit) the answer itself. A
+    /// poisoned coordinator reads as no holder.
+    pub fn holder_of(&self, peer: &CanonicalPeer, invoke_id: u8) -> Option<LeaseHolder> {
+        let state = self.state.lock().ok()?;
+        let index = usize::from(invoke_id);
+        let active = state.slots[index].as_ref()?;
+        if active.metadata.peer != *peer {
+            return None;
+        }
+        Some(match active.metadata.owner {
+            LeaseOwner::Notification => LeaseHolder::Server,
+            LeaseOwner::Requester if state.endpoint_requester[index] == active.generation => {
+                LeaseHolder::EndpointRequester
+            }
+            LeaseOwner::Requester => LeaseHolder::Client,
+        })
+    }
+
+    /// [`Self::holder_of`] for an answer, by its envelope, matched as
+    /// [`Self::admit_from_source`] matches it: the peer
+    /// [`CanonicalPeer::from_source`] reads, then its routed or direct
+    /// alias.
+    pub fn holder_of_source(
+        &self,
+        immediate_mac: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+        invoke_id: u8,
+    ) -> Option<LeaseHolder> {
+        let peer = CanonicalPeer::from_source(immediate_mac, routed_source, local_network);
+        self.holder_of(&peer, invoke_id).or_else(|| {
+            let alias =
+                CanonicalPeer::routed_alias(routed_source, local_network).or_else(|| {
+                    CanonicalPeer::direct_alias(immediate_mac, routed_source, local_network)
+                })?;
+            self.holder_of(&alias, invoke_id)
+        })
     }
 
     /// Releases a lease after its admitted terminal has been delivered.
