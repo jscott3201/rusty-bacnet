@@ -76,8 +76,18 @@ pub(crate) fn subscribe<T: TransportPort + 'static>(
         return Err(refusal(&too_many(ctx)));
     }
     let hold = match parsed {
-        Uri::Point(point) => {
-            ctx.reach_check(point.device).map_err(|e| refusal(&e))?;
+        Uri::Point(uri) => {
+            ctx.reach_check(uri.device).map_err(|e| refusal(&e))?;
+            // The one address its instance names now; gone since the check,
+            // it is unknown again.
+            let changed = || ToolError::UnknownDevice {
+                device: uri.device.to_string(),
+                hint: "the discovery table changed meanwhile; subscribe again".into(),
+            };
+            let point = ctx
+                .known_at(uri.device)
+                .map(|at| uri.at(at))
+                .ok_or_else(|| refusal(&changed()))?;
             let hold = ctx
                 .subs
                 .hold(ctx, point)

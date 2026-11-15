@@ -579,6 +579,8 @@ dependencies = [
  "bacnet-transport",
  "bacnet-types",
  "bytes",
+ "futures-core",
+ "futures-util",
  "proptest",
  "serde",
  "serde_json",

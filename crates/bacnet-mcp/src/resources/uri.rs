@@ -2,6 +2,7 @@
 //! device instance, an object type and instance, a property. A device-list
 //! page is named by the row it follows: an instance at an address.
 
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::label::kebab;
 use bacnet_ops::octets::hex;
 use bacnet_ops::parse::{parse_object_specifier, parse_property};
@@ -90,7 +91,7 @@ pub(crate) enum Uri {
     /// One device's summary.
     Device(u32),
     /// An object's point facts, or one property.
-    Point(Point),
+    Point(PointUri),
     /// Active and unacknowledged alarms of every device in reach.
     Alarms,
     /// One device's active and unacknowledged alarms.
@@ -99,6 +100,30 @@ pub(crate) enum Uri {
     Session,
     /// This principal's ledger entries in effect.
     Ledger,
+}
+
+/// A point as a resource names it: by its device's instance, which the one
+/// address claiming it in the discovery table stands for when it is read
+/// or watched ([`at`](Self::at)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PointUri {
+    /// The device instance.
+    pub(crate) device: u32,
+    /// The object.
+    pub(crate) object: ObjectIdentifier,
+    /// The object or one property.
+    pub(crate) watched: Watched,
+}
+
+impl PointUri {
+    /// The point of the device at `address`, as the watch hub keys it.
+    pub(crate) fn at(self, address: DeviceAddress) -> Point {
+        Point {
+            device: address,
+            object: self.object,
+            watched: self.watched,
+        }
+    }
 }
 
 /// Parse `uri`, accepting `[` `]` and `:` percent-encoded.
@@ -120,14 +145,14 @@ pub(crate) fn parse(uri: &str) -> Result<Uri, String> {
     match parts[1..] {
         [] => Ok(Uri::Device(device)),
         ["alarms"] => Ok(Uri::DeviceAlarms(device)),
-        ["object", object] => Ok(Uri::Point(Point {
+        ["object", object] => Ok(Uri::Point(PointUri {
             device,
             object: object_of(object)?,
             watched: Watched::Object,
         })),
         ["object", object, "property", property] => {
             let (property, index) = parse_property(&decode(property)?)?;
-            Ok(Uri::Point(Point {
+            Ok(Uri::Point(PointUri {
                 device,
                 object: object_of(object)?,
                 watched: Watched::Property { property, index },
@@ -177,7 +202,7 @@ pub(crate) fn devices_after(cursor: &DeviceCursor) -> String {
 }
 
 /// A point's canonical URI.
-pub(crate) fn of_point(point: &Point) -> String {
+pub(crate) fn of_point(point: &PointUri) -> String {
     let object = object_text(point.object.object_type(), point.object.instance_number());
     let base = format!("bacnet://device/{}/object/{object}", point.device);
     match point.watched {

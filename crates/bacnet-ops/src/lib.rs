@@ -38,8 +38,11 @@
 //!   own request jobs, failing with the low-level client's errors;
 //! - [`export`]: a device's objects in another model's terms, so far an
 //!   experimental Standard 223 point list in Turtle (#2436);
-//! - [`watch`]: the watch hub, one managed COV subscription or poller per
-//!   point however many listeners share it, holding the latest values.
+//! - [`watch`]: watching points: [`Client::watch`] gives a [`Watch`], a
+//!   stream of each point's [`Update`]s (its latest value, how it came, and
+//!   how its watch goes, [`CovSupport`] included), over the watch hub, one
+//!   managed COV subscription or poller per point however many listeners
+//!   share it.
 //!
 //! The parts only the `bacnet` tool uses (the write-safety core, command
 //! classes, frame decoding and the BBMD survey) are the `bacnet-tool`
@@ -67,6 +70,7 @@ pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};
 pub use reading::{IntoObject, IntoProperty, ObjectRead, PropertyRef, Reading, Readings};
+pub use watch::{CovSupport, Update, Watch};
 pub use write::{
     IntoWriteValue, Priority, PriorityView, WriteDenied, WritePolicy, WritePreview, Written,
 };

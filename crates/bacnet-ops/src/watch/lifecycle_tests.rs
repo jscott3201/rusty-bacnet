@@ -10,7 +10,9 @@ use std::time::Duration;
 use bacnet_types::primitives::PropertyValue;
 use tokio::time::Instant;
 
-use super::test_lab::{Lab, RP, RPM, SUBSCRIBE_COV, ai, lab_at, nc, object, settle};
+use super::hub::Phase;
+use super::hub::*;
+use super::test_lab::{Lab, RP, RPM, SUBSCRIBE_COV, ai, lab_at, nc, object, routed_at, settle};
 use super::*;
 
 /// The device notifies as soon as it takes a subscription, which can be
@@ -68,7 +70,7 @@ async fn an_arrival_as_the_scheduler_ends_is_served() {
     let late = late.lock().unwrap().take().expect("the hook ran");
     let snapshot = late.snapshot();
     assert_eq!(snapshot.source, Some(Source::Cov), "{snapshot:?}");
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     assert_eq!(lab.table().await.len(), 1);
     drop(late);
     lab.stop().await;
@@ -87,14 +89,14 @@ async fn a_row_too_large_alone_is_read_property_by_property() {
     assert_eq!(lab.sent(RPM, from), 1);
     assert_eq!(lab.sent(RP, from), POINT_PROPERTIES.len());
     let snapshot = lease.snapshot();
-    assert_eq!((snapshot.polls, snapshot.state), (1, State::Live));
+    assert_eq!((snapshot.polls, snapshot.state), (1, Phase::Live));
     lab.stop().await;
 }
 
-/// Under [`MissingDevice::Fail`], a point whose device leaves the table
-/// between attempts is given up, and the subscription an earlier attempt
-/// may have made is cancelled. A shutdown inside that cancel's window
-/// waits for it: the cancel is still sent.
+/// Under [`MissingDevice::Fail`], a remote point whose route leaves the
+/// discovery table between attempts is given up, and the subscription an
+/// earlier attempt may have made is cancelled, the way it went. A shutdown
+/// inside that cancel's window waits for it: the cancel is still sent.
 #[tokio::test(start_paused = true)]
 async fn shutdown_waits_for_the_cancel_of_a_point_given_up() {
     let options = WatchOptions {
@@ -104,15 +106,20 @@ async fn shutdown_waits_for_the_cancel_of_a_point_given_up() {
         ..WatchOptions::default()
     };
     let lab = Lab::start(options).await;
+    lab.route().await;
     lab.quirks.swallow_cov.store(1, Ordering::Relaxed);
-    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    let point = Point {
+        device: routed_at(),
+        ..object(ai(1))
+    };
+    let lease = lab.hub.watch(point).unwrap();
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     assert_eq!(lab.services(), [RPM, SUBSCRIBE_COV], "unanswered");
     lab.client.low_level().clear_devices().await;
     // Another request holds the device's gate, so the cancel waits.
-    let held = lab.client.limits().turn(&lab_at()).await;
+    let held = lab.client.limits().turn(&routed_at()).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    assert_eq!(lease.snapshot().state, State::Gone);
+    assert_eq!(lease.snapshot().state, Phase::Gone);
     assert_eq!(lease.snapshot().why, Some(Why::Missing));
     assert_eq!(lab.hub.stats().cancelling, 1);
     let hub = lab.hub.clone();
@@ -120,11 +127,13 @@ async fn shutdown_waits_for_the_cancel_of_a_point_given_up() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     drop(held);
     assert!(shutdown.await.unwrap());
+    let services = lab.services();
     assert_eq!(
-        lab.services(),
-        [RPM, SUBSCRIBE_COV, SUBSCRIBE_COV],
-        "the cancel went"
+        services.iter().filter(|s| **s == SUBSCRIBE_COV).count(),
+        2,
+        "the cancel went: {services:?}"
     );
+    assert_eq!(services.last(), Some(&SUBSCRIBE_COV));
     assert_eq!(lab.hub.stats().cancelling, 0);
     drop(lease);
     lab.stop().await;
@@ -180,12 +189,12 @@ async fn a_first_read_folded_late_keeps_the_newer_notification() {
     tokio::time::sleep(Duration::from_millis(10)).await;
     let early = lease.snapshot();
     assert!(early.notifications > 0, "the notification overtook the ack");
-    assert_eq!(early.state, State::Starting, "the first read waits");
+    assert_eq!(early.state, Phase::Starting, "the first read waits");
     assert_eq!(super::tests::present_value(&early), Some(99.0));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let snapshot = lease.snapshot();
     assert_eq!(super::tests::present_value(&snapshot), Some(99.0));
-    assert_eq!(snapshot.state, State::Live);
+    assert_eq!(snapshot.state, Phase::Live);
     drop(lease);
     lab.stop().await;
 }

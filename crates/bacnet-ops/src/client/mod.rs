@@ -167,6 +167,12 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
+    /// The client's own hub, which its [`watch`](Client::watch)es share
+    /// while any holds a point, and its range of process identifiers.
+    pub(crate) hub: Mutex<crate::watch::OwnHub<T>>,
+    /// What each address's device declared and did of COV
+    /// ([`CovSupport`](crate::watch::CovSupport)).
+    pub(crate) cov: Mutex<HashMap<DeviceAddress, crate::watch::CovMemory>>,
     /// Where each instance a handle follows is reached now, and when its
     /// handles last asked where it went, while one does (at most
     /// `device::follow::REMEMBERED`).
@@ -210,11 +216,25 @@ impl<T: TransportPort + 'static> Client<T> {
                 limits,
                 no_rpm: Mutex::new(HashSet::new()),
                 hubs: AtomicU32::new(0),
+                hub: Mutex::new(crate::watch::OwnHub::new()),
+                cov: Mutex::new(HashMap::new()),
                 follows: Mutex::new(HashMap::new()),
                 instances: Mutex::new(HashMap::new()),
                 changes,
                 events: broadcast::channel(64).0,
             }),
+            resolve_wait: Some(RESOLVE_WAIT),
+            resolve_scope: ResolveScope::default(),
+            write_policy: WritePolicy::default(),
+        }
+    }
+
+    /// A clone with the settings [`new`](Self::new) gives, whichever clone
+    /// this is: what the client's own watch hub works with (it never
+    /// writes).
+    pub(crate) fn base(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
             resolve_wait: Some(RESOLVE_WAIT),
             resolve_scope: ResolveScope::default(),
             write_policy: WritePolicy::default(),
