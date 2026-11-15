@@ -24,8 +24,8 @@ fn who_has_object(object: &Bound<'_, PyAny>) -> PyResult<WhoHasObject> {
 impl BACnetClient {
     /// Send a Who-Has for `object` (an `ObjectIdentifier`, or a name as
     /// `str`) and collect the I-Haves that answer it from that scope for
-    /// `timeout_ms`: one per device, object and source address, in the
-    /// order they came, at most 4096. No answer is an empty
+    /// `timeout_ms`: one per device, object and station, in the order they
+    /// came, at most 4096. No answer is an empty
     /// list. The limits and `scope` follow `who_has_by_id()`'s rules: this
     /// network alone by default (#2596). It holds the started client for the
     /// whole wait, so `stop()` (or leaving `async with`) waits up to

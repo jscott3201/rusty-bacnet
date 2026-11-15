@@ -178,6 +178,18 @@ impl Scope {
     }
 }
 
+/// The key two answers from one station share: the device, the object,
+/// and the station, localized with `own`.
+type StationKey = (ObjectIdentifier, ObjectIdentifier, Option<DeviceAddress>);
+
+fn station_key(reply: &ReceivedIHave, own: Option<u16>) -> StationKey {
+    (
+        reply.i_have.device_identifier,
+        reply.i_have.object_identifier,
+        source(reply, own),
+    )
+}
+
 /// Send one Who-Has for `object` in `range` to `scope` over `client`, once
 /// [`station`] has checked the scope, then collect for `wait` the I-Haves
 /// that answer it from that scope ([`Scope::answered_by`]): one per device,
@@ -185,6 +197,11 @@ impl Scope {
 /// [`MAX_I_HAVE_REPLIES`](bacnet_client::client::MAX_I_HAVE_REPLIES) ([`collect_answers`]).
 /// The low-level half of [`Client::find`] and
 /// [`raw::who_has_replies`](crate::raw::who_has_replies).
+///
+/// A station is localized with the client's network number as it stands
+/// when each answer comes, so its routed copy and its local answer count
+/// once against the cap; the list is folded again with the number known
+/// at the end, for a number learned between the two.
 pub(crate) async fn replies<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     scope: &Scope,
@@ -203,15 +220,15 @@ pub(crate) async fn replies<T: TransportPort + 'static>(
     let mut stations = HashSet::new();
     let keep = |reply: &ReceivedIHave| {
         let own = client.network_number();
-        let station = source(reply, own);
-        let key = (
-            reply.i_have.device_identifier,
-            reply.i_have.object_identifier,
-            station,
-        );
-        scope.answered_by(reply, own) && stations.insert(key)
+        scope.answered_by(reply, own) && stations.insert(station_key(reply, own))
     };
-    Ok(collect_answers(&mut rx, deadline, object, range, keep).await)
+    let mut heard = collect_answers(&mut rx, deadline, object, range, keep).await;
+    // A routed copy heard before the number was learned, and the local
+    // answer after, are one answer too.
+    let own = client.network_number();
+    let mut stations = HashSet::new();
+    heard.retain(|reply| stations.insert(station_key(reply, own)));
+    Ok(heard)
 }
 
 /// Check `scope` for a Who-Has before anything is sent: the station's MAC
@@ -233,8 +250,8 @@ impl<T: TransportPort + 'static> Client<T> {
     /// list says only that nothing on the scope asked has the object.
     /// Collection stops at
     /// [`MAX_I_HAVE_REPLIES`](bacnet_client::client::MAX_I_HAVE_REPLIES)
-    /// answers, so a list that long was cut short: ask a narrower scope or
-    /// range.
+    /// answers, so a list of exactly that many may have been cut short: ask
+    /// a narrower scope or range.
     ///
     /// ```no_run
     /// use bacnet_ops::{Client, Find, Scope};
@@ -276,7 +293,10 @@ impl<T: TransportPort + 'static> Client<T> {
         if heard.is_err() {
             crate::limits::refund();
         }
+        // Mapped with the number as known now, and folded on it: a station
+        // localized differently while the answers came is one row.
         let own = client.network_number();
+        let mut rows = HashSet::new();
         Ok(heard
             .map_err(OpsError::from)?
             .into_iter()
@@ -288,6 +308,7 @@ impl<T: TransportPort + 'static> Client<T> {
                     name: reply.i_have.object_name,
                 })
             })
+            .filter(|found| rows.insert((found.device, found.object, found.address.clone())))
             .collect())
     }
 }

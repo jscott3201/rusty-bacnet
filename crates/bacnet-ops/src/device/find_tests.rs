@@ -13,7 +13,7 @@ use bacnet_types::enums::{ObjectType, UnconfirmedServiceChoice};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::discover_tests::remote;
-use super::test_bus::{Bus, N, at, client, mac, server, stop};
+use super::test_bus::{Bus, N, at, client, client_on, mac, server, settle, stop};
 use crate::OpsError;
 use crate::client::{FIND_WAIT, Find, FoundObject, Scope};
 
@@ -280,4 +280,56 @@ async fn a_network_search_lists_only_that_network() {
     // Every network takes them all.
     let found = found_within(&client, &bus, Scope::Global, &heard).await;
     assert_eq!(found.len(), 3, "{found:?}");
+}
+
+/// What a search within `scope` finds of the object named "near" when a
+/// router's copy of station 2's answer (SNET 1) comes before the client
+/// learns that this network is 1, and the station's own answer after:
+/// through [`Client::find`](crate::Client::find), the stations it lists;
+/// with `raw`, through `raw::who_has_replies`, as many stations, one per
+/// answer it returns.
+async fn learned_mid_wait(scope: Scope, raw: bool) -> Vec<super::DeviceAddress> {
+    let bus = Bus::new();
+    let (client, _sent) = client_on(bus.numbered_port(1)).await;
+    let low = client.low_level();
+    let wait = Duration::from_millis(2000);
+    let search = async {
+        if raw {
+            let name = WhoHasObject::Name("near".into());
+            let heard = crate::raw::who_has_replies(low, &scope, &name, None, wait).await;
+            return heard.unwrap().iter().map(|_| at(2)).collect();
+        }
+        let found = client.find(Find::name("near").within(scope.clone()).wait(wait));
+        found
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|f| f.address)
+            .collect()
+    };
+    let (found, ()) = tokio::join!(search, async {
+        settle().await;
+        assert_eq!(low.network_number(), None, "the premise: not learned yet");
+        bus.i_have(254, Some((1, &mac(2))), 2002, "near");
+        settle().await;
+        bus.number_is(254, 1);
+        settle().await;
+        assert_eq!(low.network_number(), Some(1), "the router said");
+        bus.i_have(2, None, 2002, "near");
+    });
+    found
+}
+
+/// The two copies are one answer at the local station, whether the
+/// search asked every network or network 1 by its number, and through the
+/// low-level collector too (#2596): the list is folded on the number known
+/// at the end, not only as each answer came.
+#[tokio::test(start_paused = true)]
+async fn a_number_learned_mid_wait_folds_the_routed_copy() {
+    for scope in [Scope::Global, Scope::Network(1)] {
+        for raw in [false, true] {
+            let found = learned_mid_wait(scope.clone(), raw).await;
+            assert_eq!(found, [at(2)], "{scope:?}, raw {raw}");
+        }
+    }
 }

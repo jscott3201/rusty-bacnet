@@ -236,6 +236,16 @@ impl Bus {
         self.deliver(&MacAddr::from_slice(&mac(n)), &npdu, None);
     }
 
+    /// Broadcast a Network-Number-Is from station `n`: this network is
+    /// `number`, as configured there.
+    pub(super) fn number_is(&self, n: u8, number: u16) {
+        let [high, low] = number.to_be_bytes();
+        // NPDU version 1, a network message, Network-Number-Is (0x13), the
+        // number, and 1 for configured.
+        let npdu = [0x01, 0x80, 0x13, high, low, 1];
+        self.deliver(&MacAddr::from_slice(&mac(n)), &npdu, None);
+    }
+
     fn deliver(&self, from: &MacAddr, npdu: &[u8], to: Option<&[u8]>) {
         for port in self.ports.lock().unwrap().iter() {
             let reaches = to.is_none_or(|to| port.mac.as_slice() == to);

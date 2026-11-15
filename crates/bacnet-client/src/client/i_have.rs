@@ -17,8 +17,8 @@ use tokio::sync::broadcast::error::RecvError;
 pub const I_HAVE_CHANNEL_CAPACITY: usize = 256;
 
 /// The most answers one Who-Has collects ([`collect_answers`]). Collection
-/// stops there, before its wait is over, and logs a warning, so a list
-/// this long was cut short. Each answer holds an object name, and a Who-Has
+/// stops there, before its wait is over, and logs a warning, so a list of
+/// exactly this many may have been cut short. Each answer holds an object name, and a Who-Has
 /// to every network of a large site can draw one from every device.
 pub const MAX_I_HAVE_REPLIES: usize = 4096;
 
@@ -108,9 +108,9 @@ pub(super) async fn collect_until<T: Clone>(
 /// for `object` in `range` ([`ReceivedIHave::answers`]) and that `keep`
 /// takes: one per device, object and source, so two devices sharing an
 /// instance both come back, in the order they came, and at most
-/// [`MAX_I_HAVE_REPLIES`]. `keep` sees each answer not kept already, once.
-/// A receiver that falls behind loses the oldest, which is logged, and
-/// collection goes on.
+/// [`MAX_I_HAVE_REPLIES`]; one `keep` refuses doesn't count toward it.
+/// `keep` sees each answer not kept already. A receiver that falls behind
+/// loses the oldest, which is logged, and collection goes on.
 pub async fn collect_answers(
     rx: &mut broadcast::Receiver<ReceivedIHave>,
     deadline: tokio::time::Instant,

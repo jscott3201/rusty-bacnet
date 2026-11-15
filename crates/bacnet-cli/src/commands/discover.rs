@@ -88,15 +88,21 @@ pub struct FoundObject {
 
 impl FoundObject {
     /// What `reply` reports, its source written in `style`, as
-    /// [`device_info`] writes a discovered device's.
-    fn of(reply: &ReceivedIHave, style: AddressStyle) -> Self {
+    /// [`device_info`] writes a discovered device's. With `own`, the
+    /// client's network number once learned, a copy a router passed on from
+    /// that network is the local station's, as the discovery table keeps it
+    /// (#2572).
+    fn of(reply: &ReceivedIHave, style: AddressStyle, own: Option<u16>) -> Self {
         let object = reply.i_have.object_identifier;
-        let routed = reply.source_network.as_ref();
+        let (mac, routed) = match &reply.source_network {
+            Some(routed) if Some(routed.network) == own => (&routed.mac_address, None),
+            routed => (&reply.source_mac, routed.as_ref()),
+        };
         Self {
             device: reply.i_have.device_identifier.instance_number(),
             object: format!("{}:{}", object.object_type(), object.instance_number()),
             name: reply.i_have.object_name.clone(),
-            address: style.format(&reply.source_mac),
+            address: style.format(mac),
             network: routed.map(|routed| routed.network),
             station: routed
                 .and_then(|routed| target::routed_station(routed.network, &routed.mac_address)),
@@ -105,7 +111,7 @@ impl FoundObject {
 }
 
 /// What `find` says on stderr when it stopped collecting at the cap: the
-/// list is cut short.
+/// list may be cut short.
 pub(crate) fn full_note() -> String {
     format!(
         "Note: stopped at {MAX_I_HAVE_REPLIES} answers, so more devices may have the object: \
@@ -148,7 +154,11 @@ pub async fn find_by_name<T: TransportPort + 'static>(
     )
     .await?;
     let style = AddressStyle::of(client.transport());
-    let found: Vec<FoundObject> = replies.iter().map(|r| FoundObject::of(r, style)).collect();
+    let own = client.network_number();
+    let found: Vec<FoundObject> = replies
+        .iter()
+        .map(|r| FoundObject::of(r, style, own))
+        .collect();
     print_found(&found, format);
     if let Some(note) = miss_note(scope, &found) {
         eprintln!("{note}");
@@ -366,7 +376,8 @@ mod tests {
 
     /// A row carries where its I-Have came from as `discover` writes a
     /// device (#2596): the station's address, or for a routed answer the
-    /// router's, with the network and the routed station.
+    /// router's, with the network and the routed station; a routed answer
+    /// from this client's own network is the local station's.
     #[test]
     fn a_found_row_carries_its_address() {
         use bacnet_encoding::npdu::NpduAddress;
@@ -385,7 +396,7 @@ mod tests {
             source_mac: MacAddr::from_slice(&[10, 0, 0, 9, 0xBA, 0xC0]),
             source_network: routed,
         };
-        let local = FoundObject::of(&reply(None), AddressStyle::Bip);
+        let local = FoundObject::of(&reply(None), AddressStyle::Bip, None);
         assert_eq!(
             serde_json::to_value(&local).unwrap(),
             serde_json::json!({ "device": 7, "object": "ANALOG_INPUT:1",
@@ -395,11 +406,20 @@ mod tests {
             network: 2,
             mac_address: MacAddr::from_slice(&[5]),
         }));
-        let routed = FoundObject::of(&routed, AddressStyle::Bip);
+        let routed = FoundObject::of(&routed, AddressStyle::Bip, Some(1));
         assert_eq!(routed.address, "10.0.0.9:47808", "the router");
         assert_eq!(
             (routed.network, routed.station.as_deref()),
             (Some(2), Some("2:0x05"))
         );
+        // A router's copy from this client's own network, once the client
+        // knows its number, is the local station's, as `discover` shows it.
+        let own = reply(Some(NpduAddress {
+            network: 1,
+            mac_address: MacAddr::from_slice(&[10, 0, 0, 7, 0xBA, 0xC0]),
+        }));
+        let own = FoundObject::of(&own, AddressStyle::Bip, Some(1));
+        assert_eq!(own.address, "10.0.0.7:47808", "the station, not the router");
+        assert_eq!((own.network, own.station), (None, None));
     }
 }

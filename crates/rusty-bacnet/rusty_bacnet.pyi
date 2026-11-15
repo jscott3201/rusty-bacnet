@@ -4195,10 +4195,12 @@ class BACnetClient:
     ) -> Awaitable[list[IHave]]:
         """Send a Who-Has for ``object`` (an identifier, or a name) and
         collect the I-Haves that answer it from that scope for
-        ``timeout_ms``: one per device, object and source address, in arrival
-        order; an empty list when none answer. An I-Have heard from elsewhere
-        during the wait is not an answer, and collection stops at 4096
-        answers, so a list that long was cut short. The limits and ``scope``
+        ``timeout_ms``: one per device, object and station (a station's copy
+        through a router on this client's own network is its local answer),
+        in arrival order; an empty list when none answer. An I-Have heard
+        from elsewhere during the wait is not an answer, and collection stops
+        at 4096 answers, so a list of exactly that many may have been cut
+        short. The limits and ``scope``
         follow ``who_has_by_id()``'s rules (#1850, #2596): with the default
         scope an empty list says only that nothing on this network has the
         object. It holds the started client for the whole wait, so ``stop()``

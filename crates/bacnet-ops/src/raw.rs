@@ -100,10 +100,11 @@ pub async fn who_has<T: TransportPort + 'static>(
 /// I-Haves that answer it ([`ReceivedIHave::answers`]) from the scope asked:
 /// an I-Have from elsewhere during the wait is no answer. One per device,
 /// object and station (a station's routed copy is its local answer once
-/// the client knows its network's number), in the order they came, and at
-/// most [`MAX_I_HAVE_REPLIES`](bacnet_client::client::MAX_I_HAVE_REPLIES),
-/// where collection stops: a list that long was cut short. No answer is an
-/// empty list.
+/// the client knows its network's number, by the end of the wait), in the
+/// order they came, and at most
+/// [`MAX_I_HAVE_REPLIES`](bacnet_client::client::MAX_I_HAVE_REPLIES), where
+/// collection stops: a list of exactly that many may have been cut short.
+/// No answer is an empty list.
 ///
 /// # Errors
 ///
