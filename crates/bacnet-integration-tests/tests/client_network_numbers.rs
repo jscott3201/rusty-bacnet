@@ -79,10 +79,9 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
             .await
             .unwrap();
         expect(&observer, local, 77).await;
-        peer.send_to(&frame(11, &[1, 0x80, 0x12]), group)
-            .await
-            .unwrap();
-        expect(&observer, local, 77).await;
+        // No broadcast question once the number is known: its answer
+        // waits up to ten seconds (Clause 6.4.19, #2597), which is tested
+        // on paused time, not on this wall clock.
         // Unicast NNI cannot replace the learned number; the next reply is its fence.
         peer.send_to(&frame(10, &[1, 0x80, 0x13, 0, 99, 1]), local)
             .await

@@ -106,7 +106,7 @@ impl NetworkReport {
                     network: number,
                     configured: flag == NetworkNumberIs::CONFIGURED,
                 },
-                NumberControl::WhatIs => return None,
+                NumberControl::WhatIs { .. } => return None,
             },
             NetworkMessageType::REJECT_MESSAGE_TO_NETWORK => NetworkReport::RejectMessageToNetwork(
                 RejectMessageToNetwork::decode(&npdu.payload).ok()?,

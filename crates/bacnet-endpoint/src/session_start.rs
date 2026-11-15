@@ -159,7 +159,22 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             let database = self.database.as_ref().map(Arc::downgrade);
             tokio::spawn(async move {
                 let _registration_lease = registration_lease;
-                while let Some(control) = controls.recv().await {
+                use bacnet_server::network_number::NumberTurn;
+                loop {
+                    // A control, or the answer a broadcast question left
+                    // waiting (#2597).
+                    let control = match owner.next(&mut controls).await {
+                        NumberTurn::Closed => break,
+                        NumberTurn::Control(control) => control,
+                        NumberTurn::Answer(answer) => {
+                            if let Some(npdu) = answer
+                                && let Err(error) = egress.send_network_number_is(npdu).await
+                            {
+                                tracing::debug!(%error, "Network-Number-Is broadcast failed");
+                            }
+                            continue;
+                        }
+                    };
                     if let Some(routers) = &routers {
                         routers.observe_control(&control);
                     }
