@@ -51,7 +51,7 @@ async fn barrier(ws: &LoopbackWebSocket) {
 
 #[tokio::test(start_paused = true)]
 async fn mu_liveness_rejected_burst_preserves_pending_probe_and_matching_ack() {
-    let (mut transport, mut rx, ws) = start_timed().await;
+    let (transport, mut rx, ws) = start_timed().await;
     let probe = recv(&ws).await;
     assert_eq!(probe[0], 0x0A);
     for &(options, marker) in OPTIONS {
@@ -190,7 +190,7 @@ async fn mu_liveness_rejected_traffic_keeps_original_idle_timeout_and_reconnects
 // the last refresh, so on real time a runner stall could let a probe in (#1017).
 #[tokio::test(start_paused = true)]
 async fn mu_liveness_valid_npdu_data_options_and_heartbeat_request_restore_activity() {
-    let (mut transport, mut rx, ws) = start_timed().await;
+    let (transport, mut rx, ws) = start_timed().await;
     for heartbeat_request in [false, true] {
         let probe = recv(&ws).await;
         assert_eq!(probe[0], 0x0A);
@@ -236,7 +236,7 @@ async fn mu_liveness_valid_npdu_data_options_and_heartbeat_request_restore_activ
 
 #[tokio::test]
 async fn mu_liveness_source_and_control_admission_still_precede_mu() {
-    let (mut transport, mut rx, ws) = super::start_transport().await;
+    let (transport, mut rx, ws) = super::start_transport().await;
     for broadcast in [false, true] {
         for source in [None, Some([0; 6]), Some([0xFF; 6])] {
             let mut invalid = wire(&[0xE2, 0, 0, 0x1F], broadcast);

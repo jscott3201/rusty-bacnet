@@ -47,7 +47,7 @@ fn running(transport: &BipTransport) -> (bool, Option<SocketAddrV4>, SocketAddrV
 async fn nat_turned_on_over_the_network_survives_a_restart() {
     let dir = TempDir::new("nat-on");
     let path = dir.file("bdt.bin");
-    let mut transport = bbmd(&path, false, Vec::new()).await;
+    let transport = bbmd(&path, false, Vec::new()).await;
     let mut changes = BbmdChanges::default();
     changes.nat_traversal = Some(true);
     changes.global_address = Some(BACnetHostNPort::from_socket_addr(GLOBAL.into()));
@@ -60,7 +60,7 @@ async fn nat_turned_on_over_the_network_survives_a_restart() {
     transport.stop().await.unwrap();
 
     // The configuration still says no NAT; the activated setting wins.
-    let mut restarted = bbmd(&path, false, Vec::new()).await;
+    let restarted = bbmd(&path, false, Vec::new()).await;
     assert_eq!(
         running(&restarted),
         (
@@ -78,7 +78,7 @@ async fn nat_turned_off_over_the_network_survives_a_restart() {
     let dir = TempDir::new("nat-off");
     let path = dir.file("bdt.bin");
     let config = vec![two_hop(GLOBAL), two_hop(PEER)];
-    let mut transport = bbmd(&path, true, config.clone()).await;
+    let transport = bbmd(&path, true, config.clone()).await;
     assert!(running(&transport).0);
     let mut changes = BbmdChanges::default();
     changes.nat_traversal = Some(false);
@@ -89,7 +89,7 @@ async fn nat_turned_off_over_the_network_survives_a_restart() {
 
     // The configuration still says NAT; the activated setting wins, and the
     // old global row went with it.
-    let mut restarted = bbmd(&path, true, config).await;
+    let restarted = bbmd(&path, true, config).await;
     let (nat, global, own, rows) = running(&restarted);
     assert!(!nat);
     assert_eq!(global, Some(GLOBAL), "the address is kept for later");
@@ -109,7 +109,7 @@ async fn a_file_without_the_trailer_keeps_the_configured_nat() {
     let mut rows = BytesMut::new();
     bbmd::encode_bdt_entries(&[two_hop(GLOBAL), two_hop(PEER)], &mut rows);
     fs::write(&path, &rows).unwrap();
-    let mut transport = bbmd(&path, true, Vec::new()).await;
+    let transport = bbmd(&path, true, Vec::new()).await;
     assert_eq!(
         running(&transport),
         (
@@ -134,7 +134,7 @@ async fn a_persisted_set_that_breaks_the_nat_rules_falls_back_to_the_config() {
     octets.extend_from_slice(&GLOBAL.ip().octets());
     octets.extend_from_slice(&GLOBAL.port().to_be_bytes());
     fs::write(&path, &octets).unwrap();
-    let mut transport = bbmd(&path, false, Vec::new()).await;
+    let transport = bbmd(&path, false, Vec::new()).await;
     let (nat, global, own, rows) = running(&transport);
     assert!(!nat);
     assert_eq!(global, None);
@@ -149,7 +149,7 @@ async fn a_persisted_set_that_breaks_the_nat_rules_falls_back_to_the_config() {
 async fn a_bdt_only_activation_leaves_the_nat_setting_to_the_config() {
     let dir = TempDir::new("nat-bdt-only");
     let path = dir.file("bdt.bin");
-    let mut transport = bbmd(&path, false, Vec::new()).await;
+    let transport = bbmd(&path, false, Vec::new()).await;
     let mut changes = BbmdChanges::default();
     changes.broadcast_distribution_table = Some(vec![
         row(GLOBAL.ip().octets(), GLOBAL.port()),
@@ -160,7 +160,7 @@ async fn a_bdt_only_activation_leaves_the_nat_setting_to_the_config() {
     transport.stop().await.unwrap();
     assert_eq!(fs::read(&path).unwrap().len(), 20, "rows only");
 
-    let mut restarted = bbmd(&path, true, Vec::new()).await;
+    let restarted = bbmd(&path, true, Vec::new()).await;
     assert_eq!(
         running(&restarted),
         (
@@ -179,7 +179,7 @@ async fn a_bdt_only_activation_leaves_the_nat_setting_to_the_config() {
 async fn a_loaded_nat_setting_is_carried_by_later_saves() {
     let dir = TempDir::new("nat-carried");
     let path = dir.file("bdt.bin");
-    let mut transport = bbmd(&path, false, Vec::new()).await;
+    let transport = bbmd(&path, false, Vec::new()).await;
     let mut on = BbmdChanges::default();
     on.nat_traversal = Some(true);
     on.global_address = Some(BACnetHostNPort::from_socket_addr(GLOBAL.into()));
@@ -188,7 +188,7 @@ async fn a_loaded_nat_setting_is_carried_by_later_saves() {
     saved(&transport, 1).await;
     transport.stop().await.unwrap();
 
-    let mut restarted = bbmd(&path, false, Vec::new()).await;
+    let restarted = bbmd(&path, false, Vec::new()).await;
     let mut bdt = BbmdChanges::default();
     bdt.broadcast_distribution_table = Some(vec![
         row(GLOBAL.ip().octets(), GLOBAL.port()),

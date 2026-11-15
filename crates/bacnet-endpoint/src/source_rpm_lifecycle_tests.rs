@@ -2,8 +2,8 @@ use super::*;
 
 #[tokio::test(start_paused = true)]
 async fn endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut received) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut received) = network().await;
     for source in [false, true] {
         let mut session = if source {
             let mut db = database(false);
@@ -117,8 +117,8 @@ async fn endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source() 
 
 #[tokio::test(start_paused = true)]
 async fn source_rpm_raw_ack_bound_and_segmented_terminal_fanout() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut received) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut received) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     for segmented in [false, true] {
@@ -158,9 +158,9 @@ async fn source_rpm_raw_ack_bound_and_segmented_terminal_fanout() {
 
 #[tokio::test(start_paused = true)]
 async fn source_rpm_cancelled_retry_retains_one_snapshot_and_stop_joins() {
-    let (mut peer, mut requests) = network().await;
-    let (mut old, mut old_records) = network().await;
-    let (mut new, mut new_records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (old, mut old_records) = network().await;
+    let (new, mut new_records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &old);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
@@ -214,8 +214,8 @@ async fn source_rpm_cancelled_retry_retains_one_snapshot_and_stop_joins() {
 
 #[tokio::test(start_paused = true)]
 async fn source_rpm_drop_releases_pending_operation_and_database() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, _) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, _) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let db = Arc::clone(session.database.as_ref().unwrap());
@@ -245,8 +245,8 @@ async fn source_rpm_drop_releases_pending_operation_and_database() {
 
 #[tokio::test(start_paused = true)]
 async fn source_rpm_partial_notification_admission_counts_only_dropped_occurrences() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut received) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut received) = network().await;
     let mut db = database(false);
     let mut flags = AuditOperationFlags::empty();
     flags.insert(AuditOperation::READ);

@@ -430,12 +430,7 @@ async fn bvlc_encode_and_send_errors_release_slot_without_fabricated_timeouts() 
     ));
     // A broadcast without socket permission fails locally; UDP port zero
     // does not provide the same send-error behavior on every platform.
-    transport
-        .socket
-        .as_ref()
-        .unwrap()
-        .set_broadcast(false)
-        .unwrap();
+    transport.socket().unwrap().set_broadcast(false).unwrap();
     let denied_broadcast = encode_bip_mac(
         Ipv4Addr::BROADCAST.octets(),
         peer.local_addr().unwrap().port(),
@@ -673,7 +668,7 @@ async fn a_call_racing_stop_leaves_the_status_clear() {
             pending.last_outcome,
             Some(ForeignRegistrationOutcome::Pending)
         );
-        transport.between_stops = Some(Box::new(move || match race {
+        *transport.between_stops.get_mut().unwrap() = Some(Box::new(move || match race {
             Race::GiveUp => drop(exchange),
             Race::Answer => {
                 use bacnet_bip_core::node::{Addressed, Datagram, Permissive, Received};

@@ -50,8 +50,8 @@ fn value_free(record: &BACnetAuditNotification) {
 
 #[tokio::test(start_paused = true)]
 async fn source_read_alias_success_records_peer_concrete_object_both_roles_modes() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         for confirmed in [false, true] {
             let mut session = session(database(confirmed), role, &sink);
@@ -118,8 +118,8 @@ async fn source_read_alias_success_records_peer_concrete_object_both_roles_modes
 
 #[tokio::test(start_paused = true)]
 async fn source_read_alias_failure_keeps_requested_identity_without_trusting_bad_ack() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let mut sequence = 0;
@@ -194,9 +194,9 @@ async fn source_read_alias_failure_keeps_requested_identity_without_trusting_bad
 
 #[tokio::test(start_paused = true)]
 async fn source_read_alias_cancelled_retry_resolves_identity_on_original_recipient_snapshot() {
-    let (mut peer, mut requests) = network().await;
-    let (mut old, mut old_records) = network().await;
-    let (mut new, mut new_records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (old, mut old_records) = network().await;
+    let (new, mut new_records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &old);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
@@ -268,8 +268,8 @@ async fn source_read_alias_cancelled_retry_resolves_identity_on_original_recipie
 #[tokio::test(start_paused = true)]
 async fn source_read_range_concrete_device_ack_establishes_target_device_for_this_record() {
     use bacnet_services::read_range::{ReadRangeAck, ReadRangeRequest};
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let client = session.cloned_client_handle().unwrap();

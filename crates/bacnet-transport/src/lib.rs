@@ -100,6 +100,7 @@ mod sc_limits;
 #[cfg(feature = "sc-tls")]
 #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
 pub mod sc_tls;
+pub(crate) mod stopping;
 mod sys;
 pub mod tap;
 #[cfg(feature = "sc-tls")]

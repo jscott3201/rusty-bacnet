@@ -146,12 +146,12 @@ ConfirmedEventNotification: the node answers one with a Reject (unrecognized
 service) while the full client still publishes it, until the full server
 takes a seat and acknowledges it. The session has the one owner of the local
 network number. A session with a source Audit Reporter refuses a full client, whose
-requests would not be audited. Drop the client before stopping the session:
-the client keeps the link alive, so a stop while it lives fails, and finishes
-when called again once the client is gone. From that first stop the client
-sends nothing more (its requests and unconfirmed sends fail at once); only a
-call made directly on its `transport()`, such as a BVLC query, still reaches
-the link until the client is dropped.
+requests would not be audited. One stop stops the session with the client
+still alive (#2617): its tasks end, its open requests fail and the link stops.
+From then on the client sends nothing more: its requests and unconfirmed sends
+fail at once, and a call made directly on its `transport()`, such as a BVLC
+query, fails with the transport's stopped error. Dropping the client afterwards
+changes nothing.
 
 ## What is proven
 

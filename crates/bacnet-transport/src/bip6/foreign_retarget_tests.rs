@@ -117,7 +117,7 @@ fn code(error: Error) -> ErrorCode {
 async fn activation_sends_the_next_registration_to_the_new_bbmd_with_the_new_ttl() {
     let old = bbmd().await;
     let new = bbmd().await;
-    let (mut transport, lent) = started(&old, 300).await;
+    let (transport, lent) = started(&old, 300).await;
     let moved = changes(Some(address_of(&new)), Some(120));
     lent.check(&moved).unwrap();
     lent.activate(&moved).unwrap();
@@ -144,7 +144,7 @@ async fn activation_sends_the_next_registration_to_the_new_bbmd_with_the_new_ttl
 #[tokio::test]
 async fn a_refused_value_leaves_the_registration_untouched() {
     let peer = bbmd().await;
-    let (mut transport, lent) = started(&peer, 300).await;
+    let (transport, lent) = started(&peer, 300).await;
     let own = transport.local_address().unwrap();
     let port = peer.local_addr().unwrap().port();
     let at = |ip: Ipv6Addr, port: u16| BACnetHostNPort {
@@ -270,7 +270,7 @@ async fn forwarded_npdus_are_trusted_from_the_new_bbmd_only() {
 #[tokio::test]
 async fn a_bbmd_the_bound_socket_cannot_reach_is_refused() {
     let peer = bbmd().await;
-    let (mut transport, lent) = started(&peer, 300).await;
+    let (transport, lent) = started(&peer, 300).await;
     let unreachable = BACnetHostNPort {
         host: BACnetHostAddress::Ip(Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 1).into()),
         port: 47808,
@@ -296,7 +296,7 @@ async fn a_bbmd_the_bound_socket_cannot_reach_is_refused() {
 async fn an_activation_during_a_renewal_in_flight_registers_the_new_target() {
     let old = bbmd().await;
     let new = bbmd().await;
-    let (mut transport, lent) = started(&old, 300).await;
+    let (transport, lent) = started(&old, 300).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     target
         .gate
@@ -335,7 +335,7 @@ async fn an_activation_during_a_renewal_in_flight_registers_the_new_target() {
 #[tokio::test(start_paused = true)]
 async fn a_new_ttl_changes_the_renewal_period() {
     let peer = bbmd().await;
-    let (mut transport, lent) = started(&peer, 300).await;
+    let (transport, lent) = started(&peer, 300).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     let reached = || target.reached.notified();
     reached().await;
@@ -420,7 +420,7 @@ async fn a_host_name_moves_the_running_transport() {
     let new = bbmd().await;
     let names = Arc::new(Names::default());
     names.answer("bbmd.test", Answer::addresses([Ipv6Addr::LOCALHOST]));
-    let (mut transport, lent) = started_with(&old, Some(names.clone())).await;
+    let (transport, lent) = started_with(&old, Some(names.clone())).await;
     let named = BACnetHostNPort {
         host: BACnetHostAddress::Name("bbmd.test".into()),
         port: new.local_addr().unwrap().port(),
@@ -444,7 +444,7 @@ async fn a_host_name_moves_the_running_transport() {
 async fn a_host_name_resolves_through_the_system_resolver() {
     let old = bbmd().await;
     let new = bbmd().await;
-    let (mut transport, lent) = started_with(&old, None).await;
+    let (transport, lent) = started_with(&old, None).await;
     let port = new.local_addr().unwrap().port();
     let named = BACnetHostNPort {
         host: BACnetHostAddress::Name("localhost".into()),

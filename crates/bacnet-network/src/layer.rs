@@ -115,7 +115,6 @@ use bytes::{Bytes, BytesMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 
 #[path = "layer_issuance.rs"]
 mod issuance;
@@ -361,7 +360,9 @@ pub struct RoutedTarget<'a> {
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
-    dispatch_task: Option<JoinHandle<()>>,
+    /// The dispatch task, from a start on: a stop through `&self` aborts it
+    /// and waits for it to end (#2617). No send or receive touches it.
+    dispatch: Option<Dispatch>,
     /// Whether [`Self::start`] or [`Self::start_with_admission`] has run.
     started: bool,
     /// The [`ApduReceiver`]'s transport queue, which [`Self::stop`] and
@@ -381,6 +382,13 @@ pub struct NetworkLayer<T: TransportPort> {
     local_broadcasts: GroupDestinations,
 }
 
+/// A started layer's dispatch task: how to end it, and how to see it end.
+pub(crate) struct Dispatch {
+    pub(crate) abort: tokio::task::AbortHandle,
+    /// Its sender lives in the task's future, so every clone ends with it.
+    pub(crate) ended: tokio::sync::watch::Receiver<()>,
+}
+
 impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// Create a new network layer wrapping the given transport.
     pub fn new(transport: T) -> Self {
@@ -388,7 +396,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             local_broadcasts: transport.local_broadcast_destinations(),
             transport,
             response_scope: Default::default(),
-            dispatch_task: None,
+            dispatch: None,
             started: false,
             receiver_queue: std::sync::Weak::new(),
             network_control_tx: None,
@@ -857,7 +865,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         Ok(buf)
     }
 
-    /// Stop the network layer and underlying transport.
+    /// Stop the network layer and underlying transport, through a shared
+    /// reference, so the owner of an `Arc<NetworkLayer>` can stop it while a
+    /// client or another holder still has it (#2617).
     ///
     /// After start, aborts and awaits dispatch before stopping the transport;
     /// it does not wait for consumers, even with full APDU/control queues.
@@ -866,12 +876,19 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// consumed or the receiver is dropped. Stop does not count as an admission
     /// drop or clear depth/high-water/drop totals. See the
     /// [receive-queue contract](self#receive-queue-admission).
-    pub async fn stop(&mut self) -> Result<(), Error> {
+    ///
+    /// Once it returns, every send through the layer fails with the
+    /// transport's stopped error ([`TransportPort::stop`]). A second stop
+    /// waits, as the first does, for the dispatch task to end and for the
+    /// transport to stop.
+    pub async fn stop(&self) -> Result<(), Error> {
         self.seal_responses();
         // The raw receiver drains what the transport queued, then ends.
         ingress::close_queue(&self.receiver_queue);
-        if let Some(task) = self.abort_dispatch_task() {
-            let _ = task.await;
+        if let Some(dispatch) = &self.dispatch {
+            dispatch.abort.abort();
+            // Ends, with an error, once the task's future has gone.
+            let _ = dispatch.ended.clone().changed().await;
         }
         self.transport.stop().await
     }
@@ -889,10 +906,10 @@ pub(crate) fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
 }
 
 impl<T: TransportPort> NetworkLayer<T> {
-    fn abort_dispatch_task(&mut self) -> Option<JoinHandle<()>> {
-        let task = self.dispatch_task.take()?;
-        task.abort();
-        Some(task)
+    fn abort_dispatch_task(&self) {
+        if let Some(dispatch) = &self.dispatch {
+            dispatch.abort.abort();
+        }
     }
 }
 
@@ -900,7 +917,7 @@ impl<T: TransportPort> Drop for NetworkLayer<T> {
     fn drop(&mut self) {
         self.response_scope.seal();
         ingress::close_queue(&self.receiver_queue);
-        let _ = self.abort_dispatch_task();
+        self.abort_dispatch_task();
         self.transport.abort();
     }
 }
@@ -1115,6 +1132,10 @@ mod delivery_tests;
 #[cfg(test)]
 #[path = "layer_admission_tests.rs"]
 mod admission_tests;
+
+#[cfg(test)]
+#[path = "layer_stop_tests.rs"]
+mod stop_tests;
 
 #[cfg(test)]
 #[path = "layer_sc_data_options_tests.rs"]

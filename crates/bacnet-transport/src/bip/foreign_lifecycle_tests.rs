@@ -59,7 +59,7 @@ async fn foreign_mode_validation_precedes_interface_or_socket_io() {
         let error = transport.start().await.unwrap_err();
         assert!(matches!(error, Error::Encoding(_)), "{error:?}");
         assert!(error.to_string().contains("renewal interval"));
-        assert!(transport.socket.is_none());
+        assert!(transport.socket().is_none());
         assert!(!transport.bvlc_client_snapshot().running);
         assert_eq!(
             transport
@@ -119,7 +119,7 @@ async fn foreign_attempt_results_renewal_and_restart_are_observable() {
     assert!(accepted.foreign_registration.registered);
     let left = accepted.foreign_registration.lease_remaining.unwrap();
     assert!(left <= Duration::from_secs(2), "{left:?}");
-    let worker = transport.node_task.as_ref().unwrap().abort_handle();
+    let worker = transport.tasks.last_abort_handle();
     transport.stop().await.unwrap();
     assert!(worker.is_finished());
     let stopped = transport.bvlc_client_snapshot();
@@ -219,7 +219,7 @@ async fn foreign_mode_refuses_a_bbmd_no_device_could_register_with() {
         let mut transport = BipTransport::new(Ipv4Addr::new(192, 0, 2, 1), 0, subnet);
         transport.register_as_foreign_device(foreign(bbmd_ip, bbmd_port));
         refused(transport.start().await.unwrap_err());
-        assert!(transport.socket.is_none());
+        assert!(transport.socket().is_none());
         assert!(!transport.bvlc_client_snapshot().running);
     }
 
@@ -240,7 +240,7 @@ async fn foreign_mode_refuses_a_bbmd_no_device_could_register_with() {
             Err(Error::Transport(ref e)) if lost_port(attempt, e) => continue,
             started => refused(started.unwrap_err()),
         }
-        assert!(transport.socket.is_none());
+        assert!(transport.socket().is_none());
         assert!(!transport.bvlc_client_snapshot().running);
         // Nothing it bound stays: the port is free again.
         match std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, own_port)) {
@@ -329,7 +329,7 @@ async fn foreign_stop_during_pending_request_resets_status_and_drop_aborts_worke
     assert_eq!(management.snapshot().register_foreign_device.timeouts, 0);
     let _rx = transport.start().await.unwrap();
     registration(&peer).await;
-    let worker = transport.node_task.as_ref().unwrap().abort_handle();
+    let worker = transport.tasks.last_abort_handle();
     drop(transport);
     assert_eq!(
         management.snapshot().foreign_registration.next_attempt_in,

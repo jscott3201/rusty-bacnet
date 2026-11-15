@@ -627,10 +627,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// shutdown and fail closed.
     ///
     /// With an attached database, waits for its lock and for queued durable save
-    /// attempts, including corrections for abandoned staged writes. With a
-    /// [`full_client`](Self::full_client) still alive the link cannot be
-    /// stopped: the call fails, and one made after that client is dropped
-    /// finishes. Release any
+    /// attempts, including corrections for abandoned staged writes. A
+    /// [`full_client`](Self::full_client) still alive doesn't hold the stop
+    /// up (#2617): its tasks end, the link stops, and its requests after
+    /// that fail with the transport's stopped error; dropping it later
+    /// changes nothing. Release any
     /// application-held database guard so shutdown can progress. A stalled backend
     /// keeps this call pending; completion does not certify backend success or
     /// power-loss durability. The database remains attached after termination.
@@ -680,16 +681,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if !self.ingress_stopped {
             if let Some(ingress) = self.ingress.as_mut()
                 && let Err(error) = ingress.stop().await
+                && self.stop_exit.as_ref().is_some_and(Result::is_ok)
             {
-                // A full client still holds the link (#2617). Everything
-                // above is done and stays done; the session stays stopping,
-                // and a stop after that client is dropped finishes here.
-                if ingress.link_held() {
-                    return Err(error);
-                }
-                if self.stop_exit.as_ref().is_some_and(Result::is_ok) {
-                    self.stop_exit = Some(Err(error));
-                }
+                self.stop_exit = Some(Err(error));
             }
             self.ingress_stopped = true;
         }

@@ -42,7 +42,7 @@ fn result_code(reply: Option<BvllMessage>) -> BvlcResultCode {
 /// Delete.
 #[tokio::test]
 async fn table_reads_with_a_payload_draw_a_nak_from_a_bbmd() {
-    let (mut transport, mac, _rx) = start_bbmd().await;
+    let (transport, mac, _rx) = start_bbmd().await;
     let cases = [
         (
             BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
@@ -69,7 +69,7 @@ async fn table_reads_with_a_payload_draw_a_nak_from_a_bbmd() {
 /// registered a foreign device; now it is dropped unanswered.
 #[tokio::test]
 async fn a_datagram_longer_than_its_length_field_is_dropped() {
-    let (mut transport, mac, _rx) = start_bbmd().await;
+    let (transport, mac, _rx) = start_bbmd().await;
     let register = [0x81, 0x05, 0x00, 0x06, 0x00, 0x3C, 0xFF];
     assert!(exchange(&mac, &register).await.is_none());
     assert!(bbmd::lock(transport.bbmd_state().unwrap()).fdt().is_empty());
@@ -113,7 +113,7 @@ async fn an_npdu_with_trailing_octets_is_not_delivered() {
 /// it was before, and an unknown function draws no reply.
 #[tokio::test]
 async fn short_forwarded_npdus_and_unknown_functions_draw_nothing() {
-    let (mut transport, mac, _rx) = start_bbmd().await;
+    let (transport, mac, _rx) = start_bbmd().await;
     let short = raw_frame(BvlcFunction::FORWARDED_NPDU, &[127, 0, 0, 1, 0xBA]);
     assert!(exchange(&mac, &short).await.is_none());
     let unknown = raw_frame(BvlcFunction::from_raw(0x0C), &[0x01, 0x00]);

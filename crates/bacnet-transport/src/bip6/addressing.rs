@@ -15,7 +15,7 @@ impl Bip6Transport {
     /// before start and after stop. [`local_mac`](crate::port::TransportPort::local_mac)
     /// holds the same three octets.
     pub fn local_vmac(&self) -> Option<Bip6Vmac> {
-        self.local_address.map(|_| self.source_vmac)
+        self.local_address().map(|_| self.source_vmac)
     }
 
     /// This node's B/IPv6 address while the transport runs: the selected
@@ -24,7 +24,19 @@ impl Bip6Transport {
     /// knows this address can find this node's VMAC with
     /// [`resolve_virtual_address`](Self::resolve_virtual_address).
     pub fn local_address(&self) -> Option<SocketAddrV6> {
-        self.local_address
+        self.local_address.filter(|_| self.socket.is_some())
+    }
+
+    /// The error for a send while the transport isn't running: the one for
+    /// a stopped transport after a stop (#2617), else the one before start.
+    pub(super) fn not_running(&self) -> Error {
+        if self.stop_gate.is_stopped() {
+            return crate::port::stopped();
+        }
+        Error::Transport(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "Transport not started",
+        ))
     }
 
     /// The B/IPv6 address the transport has learned for `vmac`, if any. The
@@ -54,7 +66,7 @@ impl Bip6Transport {
     /// lookups are already running. This is the only place the transport
     /// turns an IPv6 address into a VMAC: `send_unicast` never does.
     pub async fn resolve_virtual_address(&self, peer: SocketAddrV6) -> Result<Bip6Vmac, Error> {
-        let Some(local) = self.local_address else {
+        let Some(local) = self.local_address() else {
             return Err(Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "Transport not started",

@@ -67,7 +67,7 @@ pub(super) async fn start_transport() -> (
 
 #[tokio::test]
 async fn unsupported_must_understand_destination_option_unicast_returns_nak() {
-    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let (transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 2,
         must_understand: true,
@@ -112,7 +112,7 @@ async fn unsupported_must_understand_destination_option_unicast_returns_nak() {
 
 #[tokio::test]
 async fn unsupported_destination_option_preserves_empty_header_data_marker() {
-    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let (transport, mut rx, ws_hub) = start_transport().await;
     let msg = encapsulated_npdu_with_options(
         0x2244,
         None,
@@ -154,7 +154,7 @@ async fn unsupported_destination_option_preserves_empty_header_data_marker() {
 
 #[tokio::test]
 async fn unsupported_must_understand_destination_option_broadcast_drops_without_nak() {
-    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let (transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 31,
         must_understand: true,
@@ -180,7 +180,7 @@ async fn unsupported_must_understand_destination_option_broadcast_drops_without_
 
 #[tokio::test]
 async fn must_understand_data_option_is_preserved() {
-    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let (transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 2,
         must_understand: true,
@@ -214,7 +214,7 @@ async fn must_understand_data_option_is_preserved() {
 
 #[tokio::test]
 async fn non_must_understand_destination_option_allows_delivery() {
-    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let (transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 31,
         must_understand: false,
@@ -310,7 +310,7 @@ async fn invalid_secure_path_options_are_rejected_before_websocket_emission() {
     ];
 
     for (attribute, expected_message) in cases {
-        let (mut transport, _rx, ws_hub) = start_transport().await;
+        let (transport, _rx, ws_hub) = start_transport().await;
 
         let err = transport
             .send_unicast_with_data_attributes(&[0x01, 0x02], &[0x02; 6], &[attribute])

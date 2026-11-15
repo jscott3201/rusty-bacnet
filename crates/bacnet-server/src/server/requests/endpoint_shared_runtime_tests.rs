@@ -236,7 +236,7 @@ async fn loopback_shared_runtime_routes_same_invoke_id_by_admitted_role() {
     notification_transactions.close();
     responder.close();
     assert!(responder_task.await.unwrap());
-    let (requester_invoke_id, responder_invoke_id, mut peer) = peer_task.await.unwrap();
+    let (requester_invoke_id, responder_invoke_id, peer) = peer_task.await.unwrap();
     assert_eq!((requester_invoke_id, responder_invoke_id), (0, 0));
 
     assert!(matches!(

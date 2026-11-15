@@ -53,8 +53,8 @@ fn encoded(recipient: &BACnetRecipient) -> Vec<u8> {
 
 #[tokio::test]
 async fn client_only_public_recipient_write_delivers_old_and_new_and_preserves_noops() {
-    let (mut old, mut old_rx, old_addr) = logger().await;
-    let (mut new, mut new_rx, new_addr) = logger().await;
+    let (old, mut old_rx, old_addr) = logger().await;
+    let (new, mut new_rx, new_addr) = logger().await;
     let mut db = DeviceIdentity::new(123, 42)
         .unwrap()
         .build_database()

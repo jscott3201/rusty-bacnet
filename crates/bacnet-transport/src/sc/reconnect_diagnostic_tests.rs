@@ -57,12 +57,12 @@ async fn wait_connected(transport: &ScTransport<LoopbackWebSocket>) {
 async fn wait_exhausted(transport: &mut ScTransport<LoopbackWebSocket>) {
     tokio::time::timeout(
         Duration::from_secs(10),
-        transport.recv_task.as_mut().unwrap(),
+        transport.recv_task.get_mut().unwrap().as_mut().unwrap(),
     )
     .await
     .expect("recovery must exhaust its budget")
     .unwrap();
-    let _ = transport.recv_task.take();
+    let _ = transport.recv_task.get_mut().unwrap().take();
     assert_eq!(
         transport.connection().unwrap().lock().await.state,
         ScConnectionState::Disconnected
@@ -277,7 +277,7 @@ async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
             let ws = Arc::new(client);
             let conn = Arc::new(Mutex::new(ScConnection::new([0x22; 6], [1; 16])));
             conn.lock().await.connect_retry_allowed = eligible;
-            let active_ws = Arc::new(Mutex::new(ws.clone()));
+            let active_ws = Arc::new(Mutex::new(Some(ws.clone())));
             let (state_tx, _) = watch::channel(ScConnectionState::Disconnected);
             let mut throttle = diagnostic_throttle::DiagnosticThrottle::new();
             if already_emitted {

@@ -47,7 +47,7 @@ async fn answered(transport: &Bip6Transport, want: Option<Bip6RegistrationAnswer
 #[tokio::test]
 async fn the_bbmds_answers_mark_the_registration_held_or_refused() {
     let a = bbmd().await;
-    let (mut transport, lent) = started(&a, 300).await;
+    let (transport, lent) = started(&a, 300).await;
     assert_eq!(status(&transport).last_answer, None);
     result(&a, &transport, Bvlc6ResultCode::SUCCESSFUL_COMPLETION).await;
     answered(&transport, Some(Bip6RegistrationAnswer::Held)).await;
@@ -83,7 +83,7 @@ async fn the_bbmds_answers_mark_the_registration_held_or_refused() {
 #[tokio::test]
 async fn an_answer_that_beats_the_send_still_counts() {
     let a = bbmd().await;
-    let (mut transport, lent) = started(&a, 300).await;
+    let (transport, lent) = started(&a, 300).await;
     result(&a, &transport, Bvlc6ResultCode::REGISTER_FOREIGN_DEVICE_NAK).await;
     answered(&transport, Some(Bip6RegistrationAnswer::Refused)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
@@ -116,7 +116,7 @@ async fn an_answer_that_beats_the_send_still_counts() {
 #[tokio::test]
 async fn an_activation_supersedes_a_registration_rather_than_leave_it_unanswered() {
     let a = bbmd().await;
-    let (mut transport, lent) = started(&a, 300).await;
+    let (transport, lent) = started(&a, 300).await;
     lent.activate(&changes(None, Some(120))).unwrap();
     assert_eq!(registration(&a).await, 120);
     let superseded = status(&transport);
@@ -169,7 +169,7 @@ async fn a_success_for_the_release_of_the_bbmd_left_is_not_counted() {
 #[tokio::test(start_paused = true)]
 async fn a_refusal_keeps_the_schedule_and_silence_is_unanswered() {
     let peer = bbmd().await;
-    let (mut transport, _lent) = in_real_time(started(&peer, 60)).await;
+    let (transport, _lent) = in_real_time(started(&peer, 60)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     let reached = || target.reached.notified();
     result(
@@ -211,7 +211,7 @@ async fn a_refusal_keeps_the_schedule_and_silence_is_unanswered() {
 #[tokio::test(start_paused = true)]
 async fn activations_against_a_silent_bbmd_reach_no_answer() {
     let peer = bbmd().await;
-    let (mut transport, lent) = in_real_time(started(&peer, 300)).await;
+    let (transport, lent) = in_real_time(started(&peer, 300)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     for second in 1..=3 {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -230,7 +230,7 @@ async fn activations_against_a_silent_bbmd_reach_no_answer() {
 #[tokio::test(start_paused = true)]
 async fn a_failed_send_counts_nothing_and_keeps_the_one_before() {
     let peer = bbmd().await;
-    let (mut transport, _lent) = in_real_time(started(&peer, 60)).await;
+    let (transport, _lent) = in_real_time(started(&peer, 60)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     target
         .fail_send
@@ -263,7 +263,7 @@ async fn a_success_after_an_unproven_broadcast_is_a_return_of_the_link() {
     let held = Some(Bip6RegistrationAnswer::Held);
     let refused = Some(Bip6RegistrationAnswer::Refused);
     let a = bbmd().await;
-    let (mut transport, lent) = started(&a, 300).await;
+    let (transport, lent) = started(&a, 300).await;
     let returns = transport.link_returns().expect("a foreign device's");
     transport.send_broadcast(&[1, 0x80, 0x12]).await.unwrap();
     result(&a, &transport, Bvlc6ResultCode::SUCCESSFUL_COMPLETION).await;

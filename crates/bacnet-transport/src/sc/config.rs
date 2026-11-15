@@ -26,7 +26,7 @@ impl<W: WebSocketPort> ScTransport<W> {
     pub fn new(ws: W, local_vmac: Vmac) -> Self {
         let (state_tx, _) = watch::channel(ScConnectionState::Disconnected);
         Self {
-            ws: Some(ws),
+            ws: StdMutex::new(Some(ws)),
             ws_shared: None,
             local_vmac,
             device_uuid: [0u8; 16],
@@ -37,11 +37,12 @@ impl<W: WebSocketPort> ScTransport<W> {
             connection: None,
             hub_limits: Arc::new(HubLimits::new()),
             state_tx,
-            recv_task: None,
+            recv_task: StdMutex::new(None),
+            stop_gate: crate::stopping::StopGate::default(),
             connect_timeout_ms: 10_000,
             heartbeat_interval_ms: heartbeat::DEFAULT_HEARTBEAT_INTERVAL_MS,
             heartbeat_timeout_ms: heartbeat::DEFAULT_HEARTBEAT_TIMEOUT_MS,
-            failover_ws: None,
+            failover_ws: StdMutex::new(None),
             initial_hub: ScActiveHub::Primary,
             primary_connector: None,
             failover_connector: None,
@@ -120,7 +121,10 @@ impl<W: WebSocketPort> ScTransport<W> {
 
     /// Set a failover WebSocket to try if the primary connection fails (builder-style).
     pub fn with_failover(mut self, ws: W) -> Self {
-        self.failover_ws = Some(ws);
+        *self
+            .failover_ws
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ws);
         self
     }
 

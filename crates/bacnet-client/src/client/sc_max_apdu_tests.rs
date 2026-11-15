@@ -450,7 +450,7 @@ async fn limited_client(
 async fn client_follows_a_rising_transport_limit_up_to_the_configured_maximum() {
     // (configured, raised limit, advertised and segment APDU size after)
     for (configured, raised, expected) in [(1476, 1024, 1024), (480, 1476, 480)] {
-        let (mut client, limit, mut peer, mut peer_rx) = limited_client(configured, 206).await;
+        let (mut client, limit, peer, mut peer_rx) = limited_client(configured, 206).await;
         assert_eq!(client.max_apdu_length(), 206);
         limit.set_egress_limit(raised);
         assert_eq!(client.max_apdu_length(), expected);
@@ -472,7 +472,7 @@ async fn client_follows_a_rising_transport_limit_up_to_the_configured_maximum() 
 /// A limit that falls after start still lowers both, as before #2086.
 #[tokio::test(start_paused = true)]
 async fn client_follows_a_falling_transport_limit() {
-    let (mut client, limit, mut peer, mut peer_rx) = limited_client(1476, 1476).await;
+    let (mut client, limit, peer, mut peer_rx) = limited_client(1476, 1476).await;
     assert_eq!(client.max_apdu_length(), 1476);
     let seen = write_to_unknown_peer(&client, &peer, &mut peer_rx, 900).await;
     assert_eq!(seen.len(), 1);

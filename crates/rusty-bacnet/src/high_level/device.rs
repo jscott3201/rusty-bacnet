@@ -138,7 +138,12 @@ impl PyDevice {
     {
         let core = Arc::clone(&self.core);
         future_into_py(py, async move {
-            let (held, style) = core.hold().await?;
+            // Boxed, as the deepest async chain in this crate runs through
+            // here: a station lookup down to a link's send. Unboxed, the
+            // crate needs rustc's full default recursion limit, 128 (127
+            // fails); boxed, 109 (108 fails). One allocation per Python
+            // Device call, off the Rust request path.
+            let (held, style) = Box::pin(core.hold()).await?;
             // The call's own clone goes before the lease does: `held`
             // outlives the call's future.
             let result = call(held.device.clone(), style).await;

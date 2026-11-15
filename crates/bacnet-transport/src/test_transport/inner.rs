@@ -25,7 +25,7 @@ pub(super) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// test transport.
 pub(super) trait InnerPort: Send + Sync {
     fn start(&mut self) -> BoxFuture<'_, Result<mpsc::Receiver<ReceivedNpdu>, Error>>;
-    fn stop(&mut self) -> BoxFuture<'_, Result<(), Error>>;
+    fn stop(&self) -> BoxFuture<'_, Result<(), Error>>;
     fn abort(&mut self);
     fn prepare_for_routing(&mut self);
     fn send_unicast<'a>(
@@ -64,7 +64,7 @@ impl<T: TransportPort + 'static> InnerPort for T {
     fn start(&mut self) -> BoxFuture<'_, Result<mpsc::Receiver<ReceivedNpdu>, Error>> {
         Box::pin(TransportPort::start(self))
     }
-    fn stop(&mut self) -> BoxFuture<'_, Result<(), Error>> {
+    fn stop(&self) -> BoxFuture<'_, Result<(), Error>> {
         Box::pin(TransportPort::stop(self))
     }
     fn abort(&mut self) {

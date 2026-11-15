@@ -33,6 +33,10 @@ pub(super) struct RecvContext {
     /// The node: its link decides each datagram, and it matches responses
     /// to its own requests.
     pub(super) node: Arc<NodeHandle>,
+    /// The socket the loop's own sends leave from (BVLC-Results, table
+    /// ACKs, a BBMD's forwards): the loop's own reference, which goes with
+    /// the task a stop joins (#2617).
+    pub(super) socket: Arc<BipSocket>,
     pub(super) npdu_tx: mpsc::Sender<ReceivedNpdu>,
     pub(super) bbmd: Option<Arc<std::sync::Mutex<BbmdState>>>,
     pub(super) management_limiter: Arc<std::sync::Mutex<ManagementRateLimiter>>,
@@ -48,9 +52,9 @@ pub(super) struct RecvContext {
 }
 
 impl RecvContext {
-    /// The socket every send leaves from.
+    /// The socket the loop's own sends leave from.
     pub(super) fn socket(&self) -> &BipSocket {
-        self.node.socket()
+        &self.socket
     }
 
     /// This subnet's B/IP broadcast address, where a BBMD rebroadcasts.

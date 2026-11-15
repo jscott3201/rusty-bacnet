@@ -48,7 +48,7 @@ async fn ports() -> (
 
 #[tokio::test]
 async fn one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver() {
-    let (ports, [(mut peer_a, _), (mut peer_b, _)]) = ports().await;
+    let (ports, [(peer_a, _), (peer_b, _)]) = ports().await;
     // Hardened, with an authorizer that admits rejects and nothing else.
     let reject = NetworkMessageType::REJECT_MESSAGE_TO_NETWORK;
     let options = RouterOptions::new()
@@ -102,7 +102,7 @@ async fn one_start_combines_admission_tracking_a_control_policy_and_the_control_
 
 #[tokio::test]
 async fn plain_options_start_a_permissive_router_without_a_control_receiver() {
-    let (ports, [(mut peer_a, mut from_router_a), (mut peer_b, _)]) = ports().await;
+    let (ports, [(peer_a, mut from_router_a), (peer_b, _)]) = ports().await;
     let StartedRouter {
         mut router,
         apdus: _apdus,
@@ -152,13 +152,7 @@ async fn rejects_to_the_router(
 
 #[tokio::test]
 async fn tracked_network_control_receiver_counts_its_high_water_mark_and_drops() {
-    let (
-        ports,
-        [
-            (mut peer_a, _from_router_a),
-            (mut peer_b, mut from_router_b),
-        ],
-    ) = ports().await;
+    let (ports, [(peer_a, _from_router_a), (peer_b, mut from_router_b)]) = ports().await;
     let options = RouterOptions::new().network_control_receiver_with_admission();
     let StartedRouter {
         mut router,

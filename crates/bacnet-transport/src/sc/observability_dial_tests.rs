@@ -20,7 +20,7 @@ async fn a_stalled_redial_reports_the_step_it_reached() {
             std::future::pending().await
         })
     };
-    let (mut transport, _rx, hub, mut events) = started(reconnect, stalls).await;
+    let (transport, _rx, hub, mut events) = started(reconnect, stalls).await;
     hub_closes(hub, &mut events).await;
     assert!(matches!(
         next(&mut events).await,

@@ -77,7 +77,7 @@ async fn client_with_peer_advertising(
 #[tokio::test]
 async fn peer_max_apdu_too_small_for_an_unsegmented_apdu_sends_nothing() {
     for advertised in [0u32, 1, 2, 3] {
-        let (mut client, remote_mac, mut remote_network, mut remote_rx) =
+        let (mut client, remote_mac, remote_network, mut remote_rx) =
             client_with_peer_advertising(advertised).await;
 
         let result = client
@@ -113,7 +113,7 @@ async fn peer_max_apdu_too_small_for_an_unsegmented_apdu_sends_nothing() {
 #[tokio::test]
 async fn peer_max_apdu_below_the_floor_but_above_the_apdu_size_is_also_refused() {
     for advertised in [4u32, 6, 49] {
-        let (mut client, remote_mac, mut remote_network, mut remote_rx) =
+        let (mut client, remote_mac, remote_network, mut remote_rx) =
             client_with_peer_advertising(advertised).await;
 
         let result = client
@@ -145,7 +145,7 @@ async fn peer_max_apdu_below_the_floor_but_above_the_apdu_size_is_also_refused()
 /// changing whether it is refused.
 #[tokio::test]
 async fn nonempty_request_to_peer_below_minimum_message_size_sends_nothing() {
-    let (mut client, remote_mac, mut remote_network, mut remote_rx) =
+    let (mut client, remote_mac, remote_network, mut remote_rx) =
         client_with_peer_advertising(3).await;
 
     let result = client
@@ -177,7 +177,7 @@ async fn nonempty_request_to_peer_below_minimum_message_size_sends_nothing() {
 /// closed would satisfy those alone.
 #[tokio::test]
 async fn confirmed_request_at_minimum_message_size_is_sent_unsegmented() {
-    let (mut client, remote_mac, mut remote_network, mut remote_rx) =
+    let (mut client, remote_mac, remote_network, mut remote_rx) =
         client_with_peer_advertising(50).await;
 
     let responder = tokio::spawn(async move {

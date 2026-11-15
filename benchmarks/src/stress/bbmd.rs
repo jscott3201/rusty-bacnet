@@ -230,7 +230,7 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
         });
 
         // Cleanup
-        for mut fd in fds {
+        for fd in fds {
             let _ = fd.stop().await;
         }
         for d in drains {

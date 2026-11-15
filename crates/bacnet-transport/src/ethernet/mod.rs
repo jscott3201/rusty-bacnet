@@ -283,15 +283,15 @@ mod transport {
     use socket2::{Domain, Protocol, SockFilter, Socket, Type};
     use std::io::Read;
     use std::os::fd::AsRawFd;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, PoisonError, RwLock};
     use tokio::sync::mpsc;
-    use tokio::task::JoinHandle;
     use tracing::{debug, warn};
 
     use super::egress::{ReplyFailures, send_tapped};
     use super::ingress::{npdu_channel_full, receive_frame};
     use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+    use crate::stopping::{StopGate, Tasks};
     use crate::sys::packet_socket::AsyncSocket;
     use crate::tap::FrameTap;
     use crate::warn_throttle::WarnThrottle;
@@ -314,9 +314,15 @@ mod transport {
     pub struct EthernetTransport {
         interface_name: String,
         local_mac: [u8; 6],
-        /// The raw socket, bound to the interface once started.
-        socket: Option<Arc<Socket>>,
-        recv_task: Option<JoinHandle<()>>,
+        /// The raw socket, bound to the interface once started. A send holds
+        /// the read lock only over its synchronous write, and a stop takes
+        /// the socket out under the write lock, so no send holds the socket
+        /// once a stop returns (#2617).
+        socket: RwLock<Option<Arc<Socket>>>,
+        /// The receive task, which a stop through `&self` aborts and joins.
+        tasks: Tasks,
+        /// One stop at a time (#2617).
+        stop_gate: StopGate,
         /// See [`Self::group_source_drops`].
         group_source_drops: Arc<AtomicU64>,
         /// See [`Self::reply_send_failures`].
@@ -332,8 +338,9 @@ mod transport {
             Self {
                 interface_name: interface_name.to_string(),
                 local_mac: [0; 6],
-                socket: None,
-                recv_task: None,
+                socket: RwLock::new(None),
+                tasks: Tasks::default(),
+                stop_gate: StopGate::default(),
                 group_source_drops: Arc::default(),
                 reply_failures: Arc::default(),
                 frame_tap: FrameTap::new(),
@@ -527,14 +534,17 @@ mod transport {
         }
 
         fn abort(&mut self) {
-            if let Some(task) = &self.recv_task {
-                task.abort();
-            }
-            self.socket = None;
+            // The handle stays, as before: a start after an abort alone
+            // refuses, and a stop still joins the task.
+            self.tasks.abort();
+            *self
+                .socket
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner) = None;
         }
 
         async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-            if self.recv_task.is_some() {
+            if self.tasks.is_running() {
                 return Err(Error::Transport(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
                     "Ethernet transport already started",
@@ -578,7 +588,10 @@ mod transport {
             }
 
             let socket = Arc::new(socket);
-            self.socket = Some(Arc::clone(&socket));
+            *self
+                .socket
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&socket));
 
             /// NPDU receive channel capacity for high-throughput raw socket transports.
             const NPDU_CHANNEL_CAPACITY: usize = 256;
@@ -663,24 +676,40 @@ mod transport {
                 }
             });
 
-            self.recv_task = Some(recv_task);
+            self.tasks.push(recv_task);
+            self.stop_gate.open();
             Ok(rx)
         }
 
-        async fn stop(&mut self) -> Result<(), Error> {
-            self.abort();
-            // Retain the join across cancellation so a resumed stop waits for
-            // every receive-task raw-fd reference before reporting completion.
-            if let Some(task) = self.recv_task.as_mut() {
-                let _ = task.await;
-            }
-            self.recv_task = None;
+        /// Stop through a shared reference (#2617): the socket comes out of
+        /// the send slot, after which every send fails with
+        /// [`crate::port::stopped`]'s error, and the receive task is aborted
+        /// and joined. The join survives cancellation, so a resumed stop
+        /// waits for every receive-task raw-fd reference before reporting
+        /// completion. The transport can start again.
+        async fn stop(&self) -> Result<(), Error> {
+            let Some(stopping) = self.stop_gate.enter().await else {
+                return Ok(());
+            };
+            let socket = self
+                .socket
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            drop(socket);
+            self.tasks.stop().await;
             debug!("Ethernet transport stopped");
+            stopping.finish();
             Ok(())
         }
 
         async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-            let socket = self.socket.as_ref().ok_or_else(|| {
+            // Held over the synchronous send only: there is no await here.
+            let socket = self.socket.read().unwrap_or_else(PoisonError::into_inner);
+            let socket = socket.as_ref().ok_or_else(|| {
+                if self.stop_gate.is_stopped() {
+                    return crate::port::stopped();
+                }
                 Error::Transport(std::io::Error::new(
                     std::io::ErrorKind::NotConnected,
                     "Transport not started",

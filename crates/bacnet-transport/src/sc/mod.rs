@@ -93,6 +93,11 @@ pub use reconnect::ScReconnectConfig;
 const DEFAULT_MAX_APDU_LENGTH: u16 = 1476;
 use egress_limits::HubLimits;
 
+/// Where the active hub socket is published: the receive loop swaps it on a
+/// reconnect, failover or restore, the send methods take it under the
+/// lock, and a stop takes it out for good (#2617).
+pub(super) type HubSlot<W> = Arc<Mutex<Option<Arc<W>>>>;
+
 // ---------------------------------------------------------------------------
 // WebSocket abstraction
 // ---------------------------------------------------------------------------
@@ -118,8 +123,12 @@ pub(crate) use websocket::{CLOSE_GRACE, CLOSE_NORMAL, close_within_grace};
 /// rolled back. References (including the send slot until stop/drop or fresh
 /// publication) may retain the socket; retirement is not immediate OS closure.
 pub struct ScTransport<W: WebSocketPort> {
-    ws: Option<W>,
-    ws_shared: Option<Arc<Mutex<Arc<TappedSocket<W>>>>>, // current active WebSocket for send methods
+    /// The primary WebSocket until start takes it; a stop before start lets
+    /// go of it, as the failover's.
+    ws: StdMutex<Option<W>>,
+    /// The active hub WebSocket for the send methods, from start on. A stop
+    /// takes the socket out, which fails every later send (#2617).
+    ws_shared: Option<HubSlot<TappedSocket<W>>>,
     local_vmac: Vmac,
     /// Device UUID (16 bytes, RFC 4122).
     device_uuid: [u8; 16],
@@ -132,11 +141,14 @@ pub struct ScTransport<W: WebSocketPort> {
     /// What the hub connection lets this node send (#1665, #1696).
     hub_limits: Arc<HubLimits>,
     state_tx: watch::Sender<ScConnectionState>,
-    recv_task: Option<JoinHandle<()>>,
+    /// The receive task, which a stop through `&self` takes and joins.
+    recv_task: StdMutex<Option<JoinHandle<()>>>,
+    /// One stop at a time (#2617).
+    stop_gate: crate::stopping::StopGate,
     connect_timeout_ms: u64,
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
-    failover_ws: Option<W>,
+    failover_ws: StdMutex<Option<W>>,
     initial_hub: ScActiveHub,
     primary_connector: Option<WebSocketConnector<W>>,
     failover_connector: Option<WebSocketConnector<W>>,
@@ -162,6 +174,13 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         true
     }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        // A stop, before a start or after one, lets go of the hub sockets
+        // the transport was given (#2617).
+        if self.stop_gate.is_stopped() {
+            return Err(Error::Encoding(
+                "BACnet/SC transport was stopped: a stopped SC transport cannot start again".into(),
+            ));
+        }
         if let Some(config) = &self.reconnect_config {
             config.validate()?;
         }
@@ -199,14 +218,20 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
         let primary_ws = self
             .ws
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .ok_or_else(|| Error::Encoding("BACnet/SC transport already started".into()))?;
 
         // Every hub socket goes through the frame tap (tap.rs).
         let tap = &self.frame_tap;
         let primary_ws = Arc::new(TappedSocket::new(primary_ws, tap, self.initial_hub));
-        let mut failover_ws = (self.failover_ws.take())
-            .map(|ws| Arc::new(TappedSocket::new(ws, tap, ScActiveHub::Failover)));
+        let mut failover_ws = (self
+            .failover_ws
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take())
+        .map(|ws| Arc::new(TappedSocket::new(ws, tap, ScActiveHub::Failover)));
         let primary_connector = (self.primary_connector.as_ref())
             .map(|dial| tapped_connector(dial, tap, ScActiveHub::Primary));
         let failover_connector = (self.failover_connector.as_ref())
@@ -236,7 +261,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         if let Some(direct) = &self.direct {
             direct.set_intake(npdu_tx.clone(), npdu_admission.clone());
         }
-        let active_ws = Arc::new(Mutex::new(ws.clone()));
+        let active_ws = Arc::new(Mutex::new(Some(ws.clone())));
         self.ws_shared = Some(active_ws.clone());
 
         // Receive loop (handshake already done — no ConnectAccept handling needed)
@@ -680,21 +705,33 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             }
         });
 
-        self.recv_task = Some(task);
+        *self
+            .recv_task
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
+        self.stop_gate.open();
         Ok(npdu_rx)
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.stop_owned().await
+    /// Stop through a shared reference (#2617): the hub hears a
+    /// Disconnect-Request and a close, within the stop's budget, the direct
+    /// links end, the receive task is joined, and the hub socket is taken
+    /// out, after which every send fails with [`crate::port::stopped`]'s
+    /// error. The transport does not start again.
+    async fn stop(&self) -> Result<(), Error> {
+        let Some(stopping) = self.stop_gate.enter().await else {
+            return Ok(());
+        };
+        let stopped = self.stop_owned().await;
+        stopping.finish();
+        stopped
     }
 
     /// Unlike `stop()`, abort (and drop) cannot join the receive task, so a
     /// reconnect finishing on another worker may still report `Connected`
     /// after the `LocalClose` this sends.
     fn abort(&mut self) {
-        self.seal_direct_listener();
-        self.direct_intake = advertisement::DirectIntake::default();
-        let _ = self.abort_background_task_and_drop_sockets();
+        self.abort_background_task_and_drop_sockets();
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {

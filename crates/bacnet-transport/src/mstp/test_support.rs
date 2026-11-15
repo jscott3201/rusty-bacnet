@@ -274,7 +274,7 @@ impl Bus {
     }
 
     /// Stop the station.
-    pub(super) async fn stop(mut self) {
+    pub(super) async fn stop(self) {
         self.transport.stop().await.expect("the station stops");
     }
 }

@@ -40,7 +40,7 @@ async fn direct_response_network_stop_and_server_drop_seal_retained_routes() {
     let mut a = f.peer(ca.tls("a")).await;
     let envelope = f.capture(&mut a, &read_name(11)).await;
     let route = ResponseRoute::new(envelope.provenance, envelope.direct_response.clone());
-    let mut net = idle_network();
+    let net = idle_network();
     issue(&net, &route, 11).await.unwrap();
     assert!(matches!(f.response().await, Apdu::SimpleAck(ack) if ack.invoke_id == 11));
     net.stop().await.unwrap();

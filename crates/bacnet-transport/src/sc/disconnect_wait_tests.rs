@@ -81,7 +81,7 @@ async fn connected(
 /// close, not anything the hub then does.
 #[tokio::test(start_paused = true)]
 async fn stop_waits_for_the_disconnect_ack_and_reports_a_local_close() {
-    let (mut transport, probe, mut events) = connected([0x10; 6]).await;
+    let (transport, probe, mut events) = connected([0x10; 6]).await;
     let hub = probe.hub;
     let closes = probe.closes;
     let answer = tokio::spawn(async move {
@@ -107,7 +107,7 @@ async fn stop_waits_for_the_disconnect_ack_and_reports_a_local_close() {
 /// Disconnect-Request still leaves a local close as the cause.
 #[tokio::test(start_paused = true)]
 async fn a_hub_that_hangs_up_on_the_disconnect_request_reads_as_a_local_close() {
-    let (mut transport, probe, mut events) = connected([0x10; 6]).await;
+    let (transport, probe, mut events) = connected([0x10; 6]).await;
     let hub = probe.hub;
     let hang_up = tokio::spawn(async move {
         disconnect_request(&hub).await;
@@ -336,7 +336,7 @@ async fn no_heartbeat_runs_while_stop_waits_for_the_ack() {
 #[tokio::test(start_paused = true)]
 async fn a_refused_disconnect_request_is_not_a_fatal_result() {
     let (logs, _guard) = crate::log_capture::LogCapture::start();
-    let (mut transport, probe, mut events) = connected([0x10; 6]).await;
+    let (transport, probe, mut events) = connected([0x10; 6]).await;
     let hub = probe.hub;
     let refuse = tokio::spawn(async move {
         let request = disconnect_request(&hub).await;
