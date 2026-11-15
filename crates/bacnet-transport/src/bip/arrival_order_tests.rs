@@ -217,7 +217,7 @@ async fn a_broadcast_then_a_unicast_come_up_in_that_order() {
             Err(e) => panic!("start {ip}:{port}: {e}"),
         }
     }
-    let (mut transport, mut rx, port) = started.expect("the last attempt panics instead");
+    let (transport, mut rx, port) = started.expect("the last attempt panics instead");
     let peer = UdpSocket::bind((ip, 0)).await.unwrap();
     peer.set_broadcast(true).unwrap();
     for run in 0..RUNS {
