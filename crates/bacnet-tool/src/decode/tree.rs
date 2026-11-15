@@ -22,7 +22,10 @@ use bytes::Bytes;
 
 use bacnet_ops::octets::hex_upper;
 
-use super::frame::{Framing, Link, Npdu, kebab, link};
+use bacnet_ops::decode::frame::{Framing, Link, Npdu, kebab, link};
+use bacnet_transport::bip6::Bvlc6Function;
+use bacnet_transport::bvll::BvlcFunction;
+use bacnet_transport::sc_frame::ScFunction;
 
 #[path = "service.rs"]
 mod service;
@@ -86,6 +89,13 @@ pub fn decode_tree(framing: Framing, frame: &[u8]) -> Vec<Field> {
         Framing::Bip6 => bvll6(frame, npdu_start, &link),
         Framing::Sc => sc(frame, npdu_start, &link),
         Framing::Mstp => mstp(frame, &link),
+        // A link the tree doesn't lay out yet: its name and problem only.
+        _ => header(
+            format!("Link: {}", link.name),
+            0..npdu_start,
+            Vec::new(),
+            &link,
+        ),
     }];
     match link.npdu {
         Some(Npdu::At(range)) => fields.extend(npdu(&frame[range.clone()], range.start)),
@@ -114,6 +124,23 @@ pub fn decode_apdu_tree(apdu_octets: &[u8]) -> Field {
     apdu(apdu_octets, 0)
 }
 
+/// What a function octet is called: the link's name for an assigned code;
+/// otherwise `unassigned`, or `withdrawn` for a code the 2020 standard once
+/// gave a function and has since removed. The summary's `parse_error` keeps
+/// the number either way.
+///
+/// The withdrawn ones: B/IPv6 0x0B, which Table U-1 lists as removed, and
+/// B/IP 0x0C, the code of Annex J.2.13, now a deleted clause (J.2.1 to
+/// J.2.12 define 0x00 to 0x0B in order; the 2020 text doesn't print the
+/// deleted clause's code). BACnet/SC's Table AB-1 has none.
+fn function(link: &Link, assigned: bool, withdrawn: bool) -> &str {
+    match (assigned, withdrawn) {
+        (true, _) => &link.name,
+        (false, true) => "withdrawn",
+        (false, false) => "unassigned",
+    }
+}
+
 /// The link header's node, with the problem the link reported last.
 fn header(name: String, range: Range<usize>, mut kids: Vec<Field>, link: &Link) -> Field {
     if let Some(problem) = &link.problem {
@@ -130,7 +157,15 @@ fn bvll(frame: &[u8], npdu_start: usize, link: &Link) -> Field {
             0..1,
         ));
         kids.push(Field::leaf(
-            format!("Function: {} (0x{:02X})", link.name, frame[1]),
+            format!(
+                "Function: {} (0x{:02X})",
+                function(
+                    link,
+                    BvlcFunction::from_raw(frame[1]).is_defined(),
+                    frame[1] == 0x0C
+                ),
+                frame[1]
+            ),
             1..2,
         ));
         let length = u16::from_be_bytes([frame[2], frame[3]]);
@@ -176,7 +211,15 @@ fn bvll6(frame: &[u8], npdu_start: usize, link: &Link) -> Field {
             0..1,
         ));
         kids.push(Field::leaf(
-            format!("Function: {} (0x{:02X})", link.name, frame[1]),
+            format!(
+                "Function: {} (0x{:02X})",
+                function(
+                    link,
+                    Bvlc6Function::from_raw(frame[1]).is_defined(),
+                    frame[1] == 0x0B
+                ),
+                frame[1]
+            ),
             1..2,
         ));
         let length = u16::from_be_bytes([frame[2], frame[3]]);
@@ -205,7 +248,15 @@ fn sc(frame: &[u8], npdu_start: usize, link: &Link) -> Field {
     let mut kids = Vec::new();
     if frame.len() >= 4 {
         kids.push(Field::leaf(
-            format!("Function: {} (0x{:02X})", link.name, frame[0]),
+            format!(
+                "Function: {} (0x{:02X})",
+                function(
+                    link,
+                    !matches!(ScFunction::from_raw(frame[0]), ScFunction::Unknown(_)),
+                    false
+                ),
+                frame[0]
+            ),
             0..1,
         ));
         let control = frame[1];

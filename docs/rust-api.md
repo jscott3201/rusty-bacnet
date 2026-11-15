@@ -418,6 +418,50 @@ let (value, bytes_consumed) = decode_application_value(&bytes, 0)?;
 assert_eq!(value, PropertyValue::Real(72.5));
 ```
 
+### Values of unknown datatype: the tag tree
+
+`tags::tree` (#2618) reads any well-formed value as its tags, without its
+datatype: a vendor's property, or a standard one the caller has no codec
+for. BACnet's tags can be walked that way (Clause 20.2.1.6); only a context
+tag's meaning needs the production, so a context-tagged primitive keeps its
+octets.
+
+- `TagReader` (no allocator) yields each tag in wire order as a `TagItem`:
+  the header, its offset and depth, and its exact octets and contents.
+  It checks the framing (headers, contents within the input, each closing
+  tag against the innermost opening tag, nothing left open) and nesting up
+  to `MAX_TAG_TREE_DEPTH` (32, the crate's `MAX_CONTEXT_NESTING_DEPTH`).
+  `TagItem::application_value` types an application primitive on request.
+- `decode_tag_tree` (with `alloc`) builds `Vec<TagNode>`, each node
+  borrowing the input: `class`, `number`, `offset`, `octets` (exact, header
+  through contents or closing tag), `contents()`, and a `TagBody`:
+  `Application(ApplicationValueRef)`, `Invalid { contents, error }` for a
+  well-framed application value that doesn't decode, `Context(&[u8])`, or
+  `Constructed(Vec<TagNode>)`. At most `MAX_TAG_TREE_NODES` (10,000)
+  elements.
+- A fault is a `TagTreeError`: `fault` (`TagTreeFault::Header`,
+  `Truncated`, `Unclosed`, `UnmatchedClosing`, `TooDeep`, `TooManyNodes`),
+  `offset`, and `valid_up_to`, the end of the complete top-level elements
+  before it, which read again on their own; keep the rest as octets. It
+  converts to `Error`. Neither layer panics on any input.
+- An application node's owned `PropertyValue` is `decode_application_value`
+  of its `octets`.
+
+```rust
+use bacnet_encoding::primitives::ApplicationValueRef;
+use bacnet_encoding::tags::tree::{TagBody, decode_tag_tree};
+
+// [0] 2, then [1] ( REAL 1.5 ).
+let octets = [0x09, 0x02, 0x1E, 0x44, 0x3F, 0xC0, 0x00, 0x00, 0x1F];
+let tree = decode_tag_tree(&octets)?;
+assert_eq!(tree[0].body, TagBody::Context(&[0x02]));
+assert_eq!(tree[1].children()[0].body, TagBody::Application(ApplicationValueRef::Real(1.5)));
+assert_eq!(tree[1].octets, &octets[2..]);
+```
+
+The `bacnet-ops` formatter and the Python binding show values this way; the
+typed read paths don't use it.
+
 ### Object identifiers
 
 `ObjectIdentifier::new` validates the 10-bit object type (0..=1023) and 22-bit
@@ -12023,7 +12067,9 @@ terminal UI and its MCP server share: no terminal or MCP dependency, just a
 request limits (`limits`: the global rate cap, the one request per device
 gate and per-caller accounts), watching points (`watch`: `Client::watch`
 and the hub under it, [watching points](#watching-points)), the high-level
-client (`client`) and device identity (`device`). `Client::bip()` connects
+client (`client`), device identity (`device`) and offline frame summaries
+(`decode`: a B/IP, B/IPv6, BACnet/SC or MS/TP frame's headers, with the
+parse failure apart from a protocol refusal). `Client::bip()` connects
 over B/IP without naming a transport type (`.interface(ip)`, `.port(..)`,
 `.broadcast_address(..)`, `.foreign_device(..)`, `.apdu_timeout(..)`,
 `.apdu_retries(..)`, `.limits(..)`, then `.connect().await?`), as do
@@ -12102,9 +12148,9 @@ by the I-Am times.
 `bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
 `bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,
 previews, the ledger and the audit log, #2068), the command classes
-(`class`), frame decoding with no traffic (`decode`), and B/IP BBMD table
-reads through a `Client` and the checks over them (`bbmd`). An application
-on `bacnet-ops` doesn't need it.
+(`class`), frames decoded into field trees with no traffic
+(`decode::tree`), and B/IP BBMD table reads through a `Client` and the
+checks over them (`bbmd`). An application on `bacnet-ops` doesn't need it.
 
 ### Engine becomes Client
 
@@ -12629,8 +12675,7 @@ behind. Add a `bacnet-tool` dependency and change the paths:
 |---|---|
 | `bacnet_ops::safety` and its modules (`audit`, `desk`, `file`, `ledger`, `lock`, `plan`) | `bacnet_tool::safety` |
 | `bacnet_ops::class` | `bacnet_tool::class` |
-| `bacnet_ops::decode` (`frame`, `tree`, `decode_npdu_layer`) | `bacnet_tool::decode` |
-| `bacnet_ops::decode::testing` (feature `test-support`) | `bacnet_tool::decode::testing` (`bacnet-tool`'s `test-support`) |
+| `bacnet_ops::decode::tree` | `bacnet_tool::decode::tree` |
 | `bacnet_ops::bbmd` (rows, `survey`, `matrix`) | `bacnet_tool::bbmd` |
 | `engine.bip()`, `engine.registration_bbmd()` | `bacnet_tool::bbmd::bip(&client)`, `bacnet_tool::bbmd::registration_bbmd(&client)` |
 | `engine.read_bdt(bbmd)`, `engine.read_fdt(bbmd)` | `bacnet_tool::bbmd::read_bdt(&client, bbmd)`, `bacnet_tool::bbmd::read_fdt(&client, bbmd)` |
@@ -12638,6 +12683,10 @@ behind. Add a `bacnet-tool` dependency and change the paths:
 
 `bacnet-ops` itself gains three public items the moved code reads:
 `client::rpm_rows`, `format::timestamp_text` and `format::alarms::cell`.
+The rest of `bacnet_ops::decode` stays where it was: the frame summaries
+(`decode::frame`), the network and application layer reader
+(`decode_npdu_layer`) and the test frame builders (`decode::testing`,
+feature `test-support`).
 
 `bacnet-mcp` (#2066, experimental) is a Model Context Protocol server over
 that client, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).

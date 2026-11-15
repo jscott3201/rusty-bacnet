@@ -98,7 +98,7 @@ fn assert_read(
     expected: &Bound<'_, PyAny>,
 ) {
     let value = read(object_type, property, array_index, octets);
-    assert_eq!(value.element, Some(element), "{object_type} {property}");
+    assert_eq!(value.element(), Some(element), "{object_type} {property}");
     let mut encoded = BytesMut::new();
     encode_property_value(&mut encoded, &value.inner).unwrap();
     assert_eq!(encoded.to_vec(), octets);
@@ -240,10 +240,10 @@ fn object_reference_lists_and_accompaniment_read_as_written() {
                 &references.get_item(index).unwrap(),
             );
         }
-        // Two references aren't one: the generic octets.
+        // Two references aren't one: the generic value, read as its tags.
         assert_eq!(
             read(O::ACCESS_RIGHTS, P::ACCOMPANIMENT, None, &octets),
-            PyPropertyValue::from_rust(PropertyValue::ApplicationData(octets.clone()))
+            PyPropertyValue::tree(octets.clone())
         );
     });
 }
@@ -628,18 +628,19 @@ fn value_sources_read_as_none_references_or_addresses() {
 #[test]
 fn a_single_value_that_is_not_one_element_falls_back() {
     // A Value_Source of two sources, or one read by index, isn't a single
-    // value: the generic octets.
+    // value: the generic value, read as its tags.
     let two = [0x08, 0x08];
     assert_eq!(
         read(O::ANALOG_VALUE, P::VALUE_SOURCE, None, &two),
-        PyPropertyValue::from_rust(PropertyValue::ApplicationData(two.to_vec()))
+        PyPropertyValue::tree(two.to_vec())
     );
     assert_eq!(
-        read(O::ANALOG_VALUE, P::VALUE_SOURCE, Some(1), &[0x08]).element,
+        read(O::ANALOG_VALUE, P::VALUE_SOURCE, Some(1), &[0x08]).element(),
         None
     );
     // An access rule whose specifiers disagree with its references, either
-    // way, and a date list entry of the wrong length, keep their octets.
+    // way, and a date list entry of the wrong length, keep their octets and
+    // read as their tags.
     for (object_type, property, octets) in [
         // SPECIFIED with no time range.
         (
@@ -668,14 +669,14 @@ fn a_single_value_that_is_not_one_element_falls_back() {
     ] {
         assert_eq!(
             read(object_type, property, None, octets),
-            PyPropertyValue::from_rust(PropertyValue::ApplicationData(octets.to_vec())),
+            PyPropertyValue::tree(octets.to_vec()),
             "{object_type} {property}"
         );
     }
     // An Effective_Period of one date stays the generic date.
     let one_date = [0xA4, 0x7E, 0x01, 0x01, 0x04];
     assert_eq!(
-        read(O::SCHEDULE, P::EFFECTIVE_PERIOD, None, &one_date).element,
+        read(O::SCHEDULE, P::EFFECTIVE_PERIOD, None, &one_date).element(),
         None
     );
 }

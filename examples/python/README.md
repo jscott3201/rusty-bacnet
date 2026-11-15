@@ -19,6 +19,7 @@ accepts configured baud rates of 9600, 19200, 38400, 57600, 76800, or 115200.
 |---------|-------------|
 | [`bip_client_server.py`](bip_client_server.py) | BACnet/IP client and server — read, write, RPM, discovery |
 | [`endpoint_bip.py`](endpoint_bip.py) | B/IP endpoint — one transport receives + initiates (migration from two connections) |
+| [`frame_transcript.py`](frame_transcript.py) | Raw frames and Rust-decoded summaries while a virtual device answers and reads on one socket (development API) |
 | [`mstp_mini_device.py`](mstp_mini_device.py) | BACnet MS/TP mini-device over USB RS-485 (`transport="mstp"`) |
 | [`cov_subscriptions.py`](cov_subscriptions.py) | COV subscription and real-time notifications |
 | [`sc_secure_connect.py`](sc_secure_connect.py) | BACnet/SC with hub, TLS, and VMAC addressing |
@@ -34,6 +35,9 @@ python bip_client_server.py
 
 # Endpoint example (one transport, both roles)
 python endpoint_bip.py
+
+# Same-socket trap transcript; requires a build with the frame-observation API
+python frame_transcript.py --interface 127.0.0.1 --port 0
 
 # Standalone MS/TP mini-device (serial-enabled package and USB RS-485 adapter required)
 python mstp_mini_device.py --serial /dev/serial/by-id/usb-... --mac 3

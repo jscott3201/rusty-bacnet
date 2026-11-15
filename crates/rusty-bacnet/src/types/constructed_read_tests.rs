@@ -102,7 +102,7 @@ fn assert_typed(
     expected: &Bound<'_, PyAny>,
 ) {
     let value = read(object_type, property, None, octets);
-    assert_eq!(value.element, Some(element));
+    assert_eq!(value.element(), Some(element));
     let mut encoded = BytesMut::new();
     encode_property_value(&mut encoded, &value.inner).unwrap();
     assert_eq!(encoded.to_vec(), octets);
@@ -416,7 +416,7 @@ const DESTINATION: [u8; 24] = [
 fn a_value_that_is_not_the_expected_production_falls_back() {
     let generic = |object_type, property, octets: &[u8]| {
         let value = read(object_type, property, None, octets);
-        assert_eq!(value.element, None, "{octets:02X?}");
+        assert_eq!(value.element(), None, "{octets:02X?}");
         value.inner
     };
     let recipient_list = PropertyIdentifier::RECIPIENT_LIST;
@@ -477,7 +477,7 @@ fn empty_values_and_other_properties_keep_the_generic_shape() {
         PyPropertyValue::from_rust(PropertyValue::List(vec![]))
     );
     // The same octets on an object type without the property, or on a
-    // property with no typed form, keep the octets.
+    // property with no typed form, keep the octets and read as their tags.
     for (object_type, property) in [
         (
             ObjectType::from_raw(200),
@@ -491,7 +491,7 @@ fn empty_values_and_other_properties_keep_the_generic_shape() {
     ] {
         assert_eq!(
             read(object_type, property, None, &DESTINATION),
-            PyPropertyValue::from_rust(PropertyValue::ApplicationData(DESTINATION.to_vec()))
+            PyPropertyValue::tree(DESTINATION.to_vec())
         );
     }
     // An indexed read of a list property is one element when it decodes as
@@ -503,13 +503,13 @@ fn empty_values_and_other_properties_keep_the_generic_shape() {
             Some(1),
             &DESTINATION
         )
-        .element,
+        .element(),
         Some(Element::Destination)
     );
     let two = [DESTINATION, DESTINATION].concat();
     assert_eq!(
         read(NF, PropertyIdentifier::RECIPIENT_LIST, Some(1), &two),
-        PyPropertyValue::from_rust(PropertyValue::ApplicationData(two.clone()))
+        PyPropertyValue::tree(two.clone())
     );
 }
 
@@ -590,9 +590,9 @@ fn a_list_of_one_productions_elements_is_that_typed_collection() {
         )
         .unwrap();
         assert_eq!(
-            list(vec![element(0..4).into_any(), octets.into_any()]).element,
+            list(vec![element(0..4).into_any(), octets.into_any()]).element(),
             None
         );
-        assert_eq!(list(vec![]).element, None);
+        assert_eq!(list(vec![]).element(), None);
     });
 }

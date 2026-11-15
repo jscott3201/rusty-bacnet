@@ -25,14 +25,17 @@ from rusty_bacnet import (
     BACnetServer,
     BACnetTimeStamp,
     BitString,
+    FrameSummary,
     Multicast,
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
     PropertyValue,
     RoutedTarget,
+    TagNode,
     Value,
     WritePolicy,
+    decode_frame,
 )
 
 P = PropertyIdentifier
@@ -57,6 +60,9 @@ def value_classes() -> dict[str, type]:
         and "__eq__" in vars(cls)
         and not callable(getattr(cls, "from_raw", None))
     }
+
+
+TAGGED = PropertyValue.tagged(bytes.fromhex("0902" "1e443fc000001f"))
 
 
 def samples() -> dict[type, list[Any]]:
@@ -91,15 +97,36 @@ def samples() -> dict[type, list[Any]]:
             PropertyValue.time(255, 255, 255, 255),
             PropertyValue.bit_string(3, b"\xa0"),
             PropertyValue.application_data(b"\x0e\x21\x01\x0f"),
+            # A value read as its tags (#2618): [0] 2, [1] ( REAL 1.5 ).
+            TAGGED,
             PropertyValue.list([]),
             # Equal as Python values, unequal as BACnet ones: the copy keeps
             # each item's tag.
             PropertyValue.list([*one, PropertyValue.list(one)]),
         ],
+        # Each kind of node: context, constructed, and an application
+        # value inside one (#2618).
+        TagNode: [*TAGGED.value, TAGGED.value[1].value[0]],
         BitString: [
             BitString(0, b""),
             BitString(3, b"\xa0"),
             BitString(4, b"\x40", PropertyIdentifier.STATUS_FLAGS),
+        ],
+        # Copied by its fields (#2614): a request, a NAK, a malformed
+        # frame, a B/IPv6 broadcast, an MS/TP token, and every field set
+        # at the edge of its range.
+        FrameSummary: [
+            FrameSummary._rebuild(  # type: ignore[attr-defined]
+                "forwarded-npdu", True, "bip6:0xFFFFFF", "bip6:0x000000",
+                "[2001:db8::1]:65535", 65535, 65535, "65535:0xFF", "65535:*",
+                "i-am-router-to-network", "Abort", 255, "read-property",
+                "abort other", "malformed: APDU decode error: x", 4194303,
+            ),
+            decode_frame(bytes.fromhex("810a001101000005010c0c02000312194b"), "bip"),
+            decode_frame(bytes.fromhex("810000060030"), "bip"),
+            decode_frame(b"\x81", "bip"),
+            decode_frame(bytes.fromhex("8202000b00010201001008"), "ipv6"),
+            decode_frame(bytes.fromhex("55ff000201000073"), "mstp"),
         ],
         Multicast: [
             Multicast("239.255.66.1"),

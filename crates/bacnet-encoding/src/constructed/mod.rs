@@ -191,9 +191,10 @@ alloc_only! {
 
 /// Upper bound on decoded SEQUENCE OF / list lengths, mirroring the socket-
 /// facing posture of `bacnet-services`' `MAX_DECODED_ITEMS`. Prevents memory
-/// exhaustion from malformed framed payloads.
-#[cfg(feature = "alloc")]
-const MAX_FRAMED_ITEMS: usize = 10_000;
+/// exhaustion from malformed framed payloads. The tag tree's element bound,
+/// `tags::tree::MAX_TAG_TREE_NODES`, is this one too; a constant links no
+/// code, so it is in every profile.
+pub(crate) const MAX_FRAMED_ITEMS: usize = 10_000;
 
 // ---------------------------------------------------------------------------
 // BACnetPropertyStates (Clause 21 CHOICE) — spec-tagged framing

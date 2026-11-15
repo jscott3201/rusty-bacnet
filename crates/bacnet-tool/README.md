@@ -14,17 +14,16 @@ doesn't need it.
   stale preview, record, send, settle, revert).
 - `class`: what each command does to a device (read, write or device
   management), the table the front ends' safety levels share.
-- `decode`: frames of the tapped links (B/IP, B/IPv6, BACnet/SC, MS/TP),
-  NPDUs and APDUs as one-line summaries and trees of fields with their
-  octet ranges, with no traffic.
+- `decode::tree`: frames, NPDUs and APDUs as trees of fields with their
+  octet ranges, with no traffic. Header summaries are in `bacnet_ops::decode`.
 - `bbmd`: B/IP broadcast management tables as plain data, the BDT and FDT
   reads through the `bacnet-ops` client and its limits, the survey that
   follows each BDT to the BBMDs it lists, and the consistency matrix over
   them (one-way entries, missing own entries, mismatched masks).
 
 It is a hosted crate: it needs `std` and Tokio, and has no terminal or MCP
-dependency. Its `test-support` feature adds frame builders for the CLI's
-decode tests and is not a stable API.
+dependency. Shared decode-test builders use `bacnet-ops/test-support`;
+the tool's own `test-support` feature retains its filesystem fault hooks.
 
 The API follows the needs of the `bacnet` tool and changes with it before
 1.0.

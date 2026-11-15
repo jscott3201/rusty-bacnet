@@ -51,16 +51,16 @@ const CASES: [(ObjectType, PropertyIdentifier, Element, &[u8]); 6] = [
 fn six_single_reference_mappings_keep_exact_octets_and_outer_index_boundaries() {
     for (object, property, element, octets) in CASES {
         let value = decode_read_value(object, property, None, octets).unwrap();
-        assert_eq!(value.element, Some(element));
+        assert_eq!(value.element(), Some(element));
         assert_eq!(value.inner, PropertyValue::ApplicationData(octets.to_vec()));
         for index in [Some(0), Some(1)] {
             let value = decode_read_value(object, property, index, octets).unwrap();
-            assert_eq!(value.element, None);
+            assert_eq!(value.element(), None);
             assert_eq!(value.inner, PropertyValue::ApplicationData(octets.to_vec()));
         }
         let twice = [octets, octets].concat();
         let value = decode_read_value(object, property, None, &twice).unwrap();
-        assert_eq!(value.element, None);
+        assert_eq!(value.element(), None);
         assert_eq!(value.inner, PropertyValue::ApplicationData(twice));
     }
     // Same property on an object outside the six pairings is not reclassified.
@@ -88,11 +88,11 @@ fn malformed_references_preserve_context_primitive_and_framing_fallbacks() {
     for (object, property, _, _) in CASES {
         for bytes in [&[0x2c, 0, 0, 0, 7][..], &[0x72, 0, 0xff][..]] {
             let value = decode_read_value(object, property, None, bytes).unwrap();
-            assert_eq!(value.element, None);
+            assert_eq!(value.element(), None);
             assert_eq!(value.inner, PropertyValue::ApplicationData(bytes.to_vec()));
         }
         let primitive = decode_read_value(object, property, None, &[0x21, 7]).unwrap();
-        assert_eq!(primitive.element, None);
+        assert_eq!(primitive.element(), None);
         assert_eq!(primitive.inner, PropertyValue::Unsigned(7));
         for broken in [&[0x0c, 0, 0][..], &[0x0e, 0x1f][..]] {
             assert!(decode_read_value(object, property, None, broken).is_err());
@@ -138,7 +138,7 @@ fn rpm_converter_keeps_typed_raw_value_raw_bytes_and_embedded_error_distinct() {
             let row = row.cast::<PyDict>().unwrap();
             let value = row.get_item("value").unwrap().unwrap();
             let value = value.extract::<PyRef<'_, PyPropertyValue>>().unwrap();
-            assert_eq!(value.element, expected);
+            assert_eq!(value.element(), expected);
             assert_eq!(
                 value.inner,
                 PropertyValue::ApplicationData(if index == 0 {

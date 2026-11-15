@@ -25,7 +25,7 @@ type P = PropertyIdentifier;
 /// Present_Value.
 fn assert_single((object_type, property): (O, P), octets: &[u8], element: Element, expected: &str) {
     let value = decode_read_value(object_type, property, None, octets).unwrap();
-    assert_eq!(value.element, Some(element), "{property:?} {octets:02x?}");
+    assert_eq!(value.element(), Some(element), "{property:?} {octets:02x?}");
     let mut encoded = BytesMut::new();
     encode_property_value(&mut encoded, &value.inner).unwrap();
     assert_eq!(encoded.as_ref(), octets);
@@ -55,7 +55,7 @@ fn assert_single((object_type, property): (O, P), octets: &[u8], element: Elemen
 
 fn generic(object_type: O, property: P, octets: &[u8]) -> PyPropertyValue {
     let value = decode_read_value(object_type, property, None, octets).unwrap();
-    assert_eq!(value.element, None, "{property:?} {octets:02x?}");
+    assert_eq!(value.element(), None, "{property:?} {octets:02x?}");
     value
 }
 
@@ -123,7 +123,7 @@ fn single_timestamps_and_the_subordinate_list_reuse_their_forms() {
         (O::DEVICE, P::LAST_RESTORE_TIME),
     ] {
         let value = decode_read_value(target.0, target.1, None, sequence).unwrap();
-        assert_eq!(value.element, Some(Element::TimeStamp));
+        assert_eq!(value.element(), Some(Element::TimeStamp));
         assert_eq!(
             value.inner,
             PropertyValue::ApplicationData(sequence.to_vec())
@@ -134,10 +134,10 @@ fn single_timestamps_and_the_subordinate_list_reuse_their_forms() {
         0x1c, 0, 0x80, 0, 7, 0x0c, 2, 0, 0, 0x63, 0x1c, 0, 0x80, 0, 7,
     ];
     let value = decode_read_value(view.0, view.1, None, &two).unwrap();
-    assert_eq!(value.element, Some(Element::DeviceObjectReference));
+    assert_eq!(value.element(), Some(Element::DeviceObjectReference));
     assert!(matches!(&value.inner, PropertyValue::List(items) if items.len() == 2));
     let value = decode_read_value(view.0, view.1, Some(2), &two[5..]).unwrap();
-    assert_eq!(value.element, Some(Element::DeviceObjectReference));
+    assert_eq!(value.element(), Some(Element::DeviceObjectReference));
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn the_event_algorithm_inhibit_reference_reads_as_an_object_property_reference()
             let value =
                 decode_read_value(object_type, P::EVENT_ALGORITHM_INHIBIT_REF, None, octets)
                     .unwrap();
-            assert_eq!(value.element, Some(Element::ObjectPropertyReference));
+            assert_eq!(value.element(), Some(Element::ObjectPropertyReference));
             assert_eq!(value.inner, PropertyValue::ApplicationData(octets.to_vec()));
         }
     }
@@ -164,7 +164,7 @@ fn the_event_algorithm_inhibit_reference_reads_as_an_object_property_reference()
         &with_device,
     )
     .unwrap();
-    assert_eq!(value.element, None);
+    assert_eq!(value.element(), None);
 }
 
 fn parameter_octets(parameter: &BACnetEventParameter) -> Vec<u8> {

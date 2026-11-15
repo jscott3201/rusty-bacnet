@@ -226,9 +226,56 @@ fn a_date_time_priority_slot_reads_as_a_date_time() {
         ])
     );
     assert_eq!(items[0], Datum::Null);
-    // Not a date-time value type: the octets are shown as they came.
+    // Not a date-time value type: the slot is shown as its tags (#2618).
     assert!(matches!(
         data(O::ANALOG_VALUE, P::PRIORITY_ARRAY, slot),
-        Datum::Raw { .. }
+        Datum::Constructed { element, text, .. }
+            if element == "tagged" && text == "[1] (2026-10-25, 07:30)"
     ));
+}
+
+/// #2618: a value with no decoded form that holds a context tag (a vendor
+/// property, a Lighting_Command) is shown as its tags, its application
+/// values decoded; its data is a `tagged` element keeping the octets.
+#[test]
+fn a_value_with_context_tags_shows_its_tags() {
+    // [0] 2, [1] ( REAL 1.5, "hi", [2] ( TRUE ) ), Unsigned 7.
+    let octets = [
+        0x09, 0x02, 0x1E, 0x44, 0x3F, 0xC0, 0, 0, 0x73, 0x00, b'h', b'i', 0x2E, 0x11, 0x2F, 0x1F,
+        0x21, 7,
+    ];
+    let texts = StateTexts::default();
+    let format = ValueFormat::new(O::from_raw(200), &texts, Floats::Exact);
+    let vendor = P::from_raw(1000);
+    let shown = "[0] [raw 02], [1] (1.5, \"hi\", [2] (true)), 7";
+    assert_eq!(format.value(vendor, &octets), shown);
+    let value = Value::new(&format, vendor, None, octets.to_vec(), None);
+    assert_eq!(value.text, shown);
+    assert_eq!(
+        serde_json::to_value(&value.data).unwrap(),
+        serde_json::json!({
+            "element": "tagged",
+            "text": shown,
+            "fields": {"data": {"raw": "09021e443fc00000730068692e112f1f2107"}},
+        })
+    );
+    // It may quote a device's string.
+    assert!(value.may_hold_device_text());
+    // A standard property without a decoded form reads the same way.
+    let command = [0x09, 0x02];
+    let lighting = ValueFormat::new(O::LIGHTING_OUTPUT, &texts, Floats::Exact);
+    assert_eq!(
+        lighting.value(P::LIGHTING_COMMAND, &command),
+        "[0] [raw 02]"
+    );
+    // Octets whose framing breaks stay hex, whole; an application value
+    // that doesn't decode beside a context tag, as its own octets.
+    assert_eq!(
+        format.value(vendor, &[0x09, 0x02, 0x2E, 0x21]),
+        "[raw 09 02 2e 21]"
+    );
+    assert_eq!(
+        format.value(vendor, &[0x09, 0x02, 0x43, 1, 2, 3, 0x2E, 0x2F]),
+        "[0] [raw 02], [raw 43 01 02 03], [2] ()"
+    );
 }

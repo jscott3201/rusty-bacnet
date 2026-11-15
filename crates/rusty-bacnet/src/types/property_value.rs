@@ -38,21 +38,42 @@ use super::*;
 pub struct PyPropertyValue {
     /// The value as it travels: what a write of this value encodes.
     pub(crate) inner: primitives::PropertyValue,
-    /// Set on a typed read of a constructed collection (#1310), naming its
-    /// elements' production. With `inner` one `ApplicationData`, the value
-    /// is one element; with `inner` a `List` of them, the whole collection.
-    /// `tag` and `value` follow it, while `inner` keeps each element's
-    /// octets as read.
-    pub(crate) element: Option<Element>,
+    /// How `tag` and `value` read `inner`'s application data.
+    pub(crate) form: Form,
     /// The property a read took the value from (#2080), which names its
     /// enumerated value (`name`) and its bit string's bits (`value`). Not part
     /// of the value: it doesn't take part in equality, hashing or pickling.
     pub(crate) property: Option<bacnet_types::enums::PropertyIdentifier>,
 }
 
+/// How a value's application data reads: its `inner` is one
+/// `ApplicationData`, or a `List` whose `ApplicationData` items read that
+/// way. `tag` and `value` follow it, while `inner` keeps the octets as read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Form {
+    /// As its octets: `application_data`, and any value that has none.
+    Plain,
+    /// A typed read of a constructed collection (#1310): one element of
+    /// this production, or the whole collection of them.
+    Typed(Element),
+    /// A value with no typed form read as its tags (#2618; see `tag_tree`).
+    Tagged,
+}
+
+impl Form {
+    /// The Python form of application data `octets` read this way.
+    fn octets_to_py(self, py: Python<'_>, octets: &[u8]) -> PyResult<Py<PyAny>> {
+        match self {
+            Self::Typed(element) => element.to_py(py, octets),
+            Self::Tagged => super::tag_tree::nodes_to_py(py, octets),
+            Self::Plain => Ok(PyBytes::new(py, octets).into_any().unbind()),
+        }
+    }
+}
+
 impl PartialEq for PyPropertyValue {
     fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner && self.element == other.element
+        self.inner == other.inner && self.form == other.form
     }
 }
 
@@ -64,8 +85,31 @@ impl PyPropertyValue {
     pub fn from_rust(value: primitives::PropertyValue) -> Self {
         Self {
             inner: value,
-            element: None,
+            form: Form::Plain,
             property: None,
+        }
+    }
+
+    /// The `tag` Python reads, for Rust code.
+    pub(crate) fn tag_name(&self) -> &str {
+        self.tag()
+    }
+
+    /// A read value with no typed form, read as its tags (#2618): `octets`
+    /// must be what [`super::tag_tree::is_tree`] accepts.
+    pub(crate) fn tree(octets: Vec<u8>) -> Self {
+        Self {
+            form: Form::Tagged,
+            ..Self::from_rust(primitives::PropertyValue::ApplicationData(octets))
+        }
+    }
+
+    /// The production of a typed constructed read, if this is one.
+    #[cfg(test)]
+    pub(crate) fn element(&self) -> Option<Element> {
+        match self.form {
+            Form::Typed(element) => Some(element),
+            _ => None,
         }
     }
 
@@ -76,12 +120,11 @@ impl PyPropertyValue {
         self
     }
 
-    /// A typed read of constructed elements; see [`Self::element`].
+    /// A typed read of constructed elements; see [`Form::Typed`].
     pub(crate) fn constructed(value: primitives::PropertyValue, element: Element) -> Self {
         Self {
-            inner: value,
-            element: Some(element),
-            property: None,
+            form: Form::Typed(element),
+            ..Self::from_rust(value)
         }
     }
 }
@@ -253,7 +296,9 @@ impl PyPropertyValue {
 
     /// Create a List (array) property value from a list of PropertyValue items.
     /// Items that are all elements of one typed constructed read (#1310)
-    /// make that typed collection, as a whole read of them would.
+    /// make that typed collection, as a whole read of them would; tagged
+    /// items (#2618) stay tagged unless the list also holds application data
+    /// or typed elements.
     ///
     /// Lists nest at most 32 deep, the decoder's nesting limit
     /// (`MAX_CONTEXT_NESTING_DEPTH`), and a deeper one raises ValueError
@@ -272,19 +317,26 @@ impl PyPropertyValue {
                 "lists nest at most {MAX_CONTEXT_NESTING_DEPTH} deep"
             )));
         }
-        let element = items
-            .first()
-            .and_then(|first| first.element)
-            .filter(|&element| {
-                items.iter().all(|item| {
-                    item.element == Some(element)
-                        && matches!(item.inner, primitives::PropertyValue::ApplicationData(_))
-                })
-            });
+        let data =
+            |item: &Self| matches!(item.inner, primitives::PropertyValue::ApplicationData(_));
+        let all = |form: Form| items.iter().all(|item| !data(item) || item.form == form);
+        let form = match items.first().map(|first| first.form) {
+            Some(Form::Typed(element)) if items.iter().all(data) && all(Form::Typed(element)) => {
+                Form::Typed(element)
+            }
+            _ if items
+                .iter()
+                .any(|item| data(item) && item.form == Form::Tagged)
+                && all(Form::Tagged) =>
+            {
+                Form::Tagged
+            }
+            _ => Form::Plain,
+        };
         let list = primitives::PropertyValue::List(items.into_iter().map(|pv| pv.inner).collect());
-        Ok(match element {
-            Some(element) => Self::constructed(list, element),
-            None => Self::from_rust(list),
+        Ok(Self {
+            form,
+            ..Self::from_rust(list)
         })
     }
 
@@ -303,8 +355,9 @@ impl PyPropertyValue {
     /// ("destination", "port_permission", ...); a whole one is a "list".
     #[getter]
     fn tag(&self) -> &str {
-        match (&self.inner, self.element) {
-            (primitives::PropertyValue::ApplicationData(_), Some(element)) => element.tag(),
+        match (&self.inner, self.form) {
+            (primitives::PropertyValue::ApplicationData(_), Form::Tagged) => TAGGED,
+            (primitives::PropertyValue::ApplicationData(_), Form::Typed(element)) => element.tag(),
             (inner, _) => tag(inner),
         }
     }
@@ -314,16 +367,17 @@ impl PyPropertyValue {
     /// takes, and a whole typed collection a list of them.
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        match (&self.inner, self.element) {
-            (primitives::PropertyValue::ApplicationData(octets), Some(element)) => {
-                element.to_py(py, octets)
-            }
-            (primitives::PropertyValue::List(items), Some(element)) => {
+        match (&self.inner, self.form) {
+            (
+                primitives::PropertyValue::ApplicationData(octets),
+                form @ (Form::Typed(_) | Form::Tagged),
+            ) => form.octets_to_py(py, octets),
+            (primitives::PropertyValue::List(items), form @ (Form::Typed(_) | Form::Tagged)) => {
                 let list = pyo3::types::PyList::empty(py);
                 for item in items {
                     list.append(match item {
                         primitives::PropertyValue::ApplicationData(octets) => {
-                            element.to_py(py, octets)?
+                            form.octets_to_py(py, octets)?
                         }
                         item => property_value_to_py(py, item, self.property)?,
                     })?;
@@ -361,11 +415,14 @@ impl PyPropertyValue {
     }
 
     fn __repr__(&self) -> String {
-        match (&self.inner, self.element) {
-            (primitives::PropertyValue::ApplicationData(octets), Some(element)) => {
+        match (&self.inner, self.form) {
+            (primitives::PropertyValue::ApplicationData(octets), Form::Tagged) => {
+                format!("PropertyValue.{TAGGED}(<{} bytes>)", octets.len())
+            }
+            (primitives::PropertyValue::ApplicationData(octets), Form::Typed(element)) => {
                 format!("PropertyValue.{}(<{} bytes>)", element.tag(), octets.len())
             }
-            (primitives::PropertyValue::List(items), Some(element)) => format!(
+            (primitives::PropertyValue::List(items), Form::Typed(element)) => format!(
                 "PropertyValue.list(<{} {} elements>)",
                 items.len(),
                 element.tag()
@@ -386,7 +443,7 @@ impl PyPropertyValue {
     fn __hash__(&self) -> u64 {
         let mut state = DefaultHasher::new();
         hash_value(&self.inner, &mut state);
-        self.element.hash(&mut state);
+        self.form.hash(&mut state);
         state.finish()
     }
 
@@ -411,23 +468,28 @@ impl PyPropertyValue {
             let arguments = (value, PyPropertyIdentifier { inner: property }).into_pyobject(py)?;
             return Ok((slf.get_type().getattr("_read_from")?, arguments));
         }
-        let constructor = match (&this.inner, this.element) {
-            (V::ApplicationData(_), Some(_)) => "_typed_element",
+        if let (V::ApplicationData(octets), Form::Tagged) = (&this.inner, this.form) {
+            let arguments = (PyBytes::new(py, octets),).into_pyobject(py)?;
+            return Ok((slf.get_type().getattr(TAGGED)?, arguments));
+        }
+        let constructor = match (&this.inner, this.form) {
+            (V::ApplicationData(_), Form::Typed(_)) => "_typed_element",
             (inner, _) => tag(inner),
         };
-        let arguments = match (&this.inner, this.element) {
-            (V::ApplicationData(octets), Some(element)) => {
+        let arguments = match (&this.inner, this.form) {
+            (V::ApplicationData(octets), Form::Typed(element)) => {
                 (element.tag(), PyBytes::new(py, octets)).into_pyobject(py)?
             }
-            (V::List(items), element) => {
-                // A typed collection's items are all typed elements.
+            (V::List(items), form) => {
+                // A list's application data items are read in its form.
                 let items: Vec<Self> = items
                     .iter()
-                    .map(|item| match (item, element) {
-                        (V::ApplicationData(_), Some(element)) => {
-                            Self::constructed(item.clone(), element)
-                        }
-                        _ => Self::from_rust(item.clone()),
+                    .map(|item| Self {
+                        form: match item {
+                            V::ApplicationData(_) => form,
+                            _ => Form::Plain,
+                        },
+                        ..Self::from_rust(item.clone())
                     })
                     .collect();
                 (items,).into_pyobject(py)?
@@ -461,6 +523,21 @@ impl PyPropertyValue {
     #[staticmethod]
     fn _read_from(value: Self, property: PyPropertyIdentifier) -> Self {
         value.read_from(property.to_rust())
+    }
+
+    /// A value as its tags, from its octets (#2618), as a read of a value
+    /// with no typed form gives it: `value` is a list of `TagNode`, and the
+    /// octets are kept as given, so a write sends them unchanged. Octets
+    /// that don't read as tagged elements, each application value one this
+    /// type holds, raise ValueError.
+    #[staticmethod]
+    fn tagged(octets: Vec<u8>) -> PyResult<Self> {
+        if !super::tag_tree::is_tree(&octets) {
+            return Err(PyValueError::new_err(
+                "octets don't read as tagged elements",
+            ));
+        }
+        Ok(Self::tree(octets))
     }
 
     /// One typed constructed element, tagged `tag`, from the octets a read
@@ -536,6 +613,9 @@ fn hash_value(value: &primitives::PropertyValue, state: &mut impl Hasher) {
         }
     }
 }
+
+/// The `tag` of a value read as its tags (#2618).
+const TAGGED: &str = "tagged";
 
 /// The tag of a value with no typed constructed form.
 fn tag(value: &primitives::PropertyValue) -> &'static str {
