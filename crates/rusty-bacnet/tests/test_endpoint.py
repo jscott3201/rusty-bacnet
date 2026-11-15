@@ -401,6 +401,10 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     "no_client_role",
                     "unclaimed_terminal",
                     "responder_declined",
+                    "unconfirmed_full_drops",
+                    "confirmed_full_drops",
+                    "answer_full_drops",
+                    "policy_full_drops",
                 },
             )
             self.assertTrue(status["is_running"])

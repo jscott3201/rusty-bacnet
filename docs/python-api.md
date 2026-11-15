@@ -6966,7 +6966,15 @@ object: a tracked object's Value_Source reads null.
 
 `await endpoint.status()` returns a redacted snapshot (`is_running`,
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
-`active_leases`, plus policy counters). `BipEndpoint` also takes `bbmd=` and
+`active_leases`, plus policy counters). A full queue never ends the
+endpoint (#2635): what it has no room for is dropped, counted by class in
+`unconfirmed_full_drops` (unconfirmed requests such as the I-Ams a global
+Who-Is brings, past their share of the request queue, which keeps a quarter
+for confirmed requests), `confirmed_full_drops` (confirmed requests left
+unanswered, which their requesters send again after their APDU timeout),
+`answer_full_drops` and `policy_full_drops` (malformed or refused APDUs),
+and logged at most once every 10 seconds. `queue_capacity` (default 256)
+sizes each queue. `BipEndpoint` also takes `bbmd=` and
 `foreign_device=`, reports a registration with `foreign_registration()`
 (see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)), and
 reads a BBMD's tables with `read_bdt()` and `read_fdt()` (see

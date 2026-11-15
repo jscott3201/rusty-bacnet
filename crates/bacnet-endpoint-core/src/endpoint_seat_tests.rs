@@ -279,6 +279,45 @@ async fn a_malformed_apdu_never_reaches_the_seat() {
     assert_eq!(seated.endpoint.client_seat_counters().apdus, 0);
 }
 
+/// A burst of Unconfirmed-Requests fills the seat only down to the quarter
+/// kept for answers (#2635): the client's own answers and notifications
+/// still get in while it is behind on I-Ams.
+#[tokio::test]
+async fn unconfirmed_copies_leave_the_seat_room_for_the_clients_answers() {
+    let mut seated = seated(true, 8).await;
+    for _ in 0..10 {
+        inject(&seated.link, WHO_IS).await;
+        receive(&mut seated.ingress.inbound_requests).await;
+    }
+    let counters = seated.endpoint.client_seat_counters();
+    assert_eq!((counters.apdus, counters.full_drops), (6, 4));
+
+    // The two slots left are for what is the client's alone.
+    let lease = seated.coordinator.reserve(requester(&PEER)).unwrap();
+    let answer = [0x20, lease.invoke_id(), 0x0c];
+    inject(&seated.link, &answer).await;
+    let _reply = inject_expecting_reply(&seated.link, COV_NOTIFICATION).await;
+    // A third finds the queue full, as any APDU does.
+    inject(&seated.link, &answer).await;
+    inject(&seated.link, READ_PROPERTY).await;
+    receive(&mut seated.ingress.inbound_requests).await;
+    let counters = seated.endpoint.client_seat_counters();
+    assert_eq!((counters.apdus, counters.full_drops), (8, 5));
+
+    let queued: Vec<Bytes> = std::iter::from_fn(|| seated.seat.apdus.try_recv().ok())
+        .map(|received| received.apdu)
+        .collect();
+    assert_eq!(queued.len(), 8);
+    assert!(queued[..6].iter().all(|apdu| apdu.as_ref() == WHO_IS));
+    assert_eq!(queued[6].as_ref(), answer);
+    assert_eq!(queued[7].as_ref(), COV_NOTIFICATION);
+    // The endpoint's own counts are untouched: none of its queues was full.
+    assert_eq!(
+        seated.endpoint.full_drop_counters(),
+        IngressDropCounters::default()
+    );
+}
+
 #[tokio::test]
 async fn a_client_that_stops_reading_is_skipped_and_counted() {
     let mut seated = seated(true, 2).await;

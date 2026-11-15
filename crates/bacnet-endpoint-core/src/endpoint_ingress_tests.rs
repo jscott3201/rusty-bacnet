@@ -447,12 +447,6 @@ async fn full_and_closed_role_routes_are_explicit_and_stop_does_not_block() {
 
     inject(&handle, &[0x00, 0x05, 0x01, 0x0c]).await;
     inject(&handle, &[0x00, 0x05, 0x02, 0x0c]).await;
-    let full = receive(&mut policies).await;
-    assert_eq!(
-        full.reason,
-        PolicyReason::RouteFull(IngressRoute::InboundRequest)
-    );
-    assert_eq!(full.received.apdu[2], 2);
 
     drop(terminal);
     inject(&handle, &[0x20, 0x03, 0x0c]).await;
@@ -462,6 +456,10 @@ async fn full_and_closed_role_routes_are_explicit_and_stop_does_not_block() {
         PolicyReason::RouteClosed(IngressRoute::TerminalOrSegment)
     );
     assert_eq!(closed.received.apdu[1], 3);
+    // The request the full queue had no room for was dropped and counted,
+    // and never handed to policy.
+    assert_eq!(endpoint.full_drop_counters().confirmed_full_drops, 1);
+    assert!(policies.try_recv().is_err());
 
     timeout(WAIT, endpoint.stop())
         .await
@@ -473,36 +471,130 @@ async fn full_and_closed_role_routes_are_explicit_and_stop_does_not_block() {
     assert!(policies.recv().await.is_none());
 }
 
-#[tokio::test]
-async fn full_policy_route_returns_the_unrouted_envelope_on_reclaim() {
+/// Waits on paused time, 1 ms at a time, until `ready` holds; panics with
+/// `what` after [`WAIT`].
+async fn until(what: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while !ready() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "not within {WAIT:?}: {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+/// `apdu` with a one-use reply sender, as MS/TP hands up a request whose
+/// sender waits for the reply.
+async fn inject_expecting_reply(handle: &Link, apdu: &[u8]) -> oneshot::Receiver<Bytes> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let mut received = received_npdu(apdu);
+    received.reply_tx = Some(reply_tx);
+    handle.sender.send(received).await.unwrap();
+    reply_rx
+}
+
+/// A flood of drops logs one line per [`DROP_LOG_INTERVAL`], carrying the
+/// count since the line before, so the report can't become a flood itself.
+#[tokio::test(start_paused = true)]
+async fn full_queue_drops_log_at_most_once_per_interval_with_a_count() {
+    use super::routing::{Dropped, IngressDrops};
+    let drops = IngressDrops::default();
+    assert_eq!(drops.add(Dropped::Unconfirmed), Some(1));
+    for _ in 0..1_000 {
+        assert_eq!(drops.add(Dropped::Unconfirmed), None);
+    }
+    tokio::time::sleep(DROP_LOG_INTERVAL - Duration::from_millis(1)).await;
+    assert_eq!(drops.add(Dropped::Answer), None);
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!(drops.add(Dropped::Policy), Some(1_002));
+    let counters = drops.counters();
+    assert_eq!(counters.unconfirmed_full_drops, 1_001);
+    assert_eq!(counters.answer_full_drops, 1);
+    assert_eq!(counters.policy_full_drops, 1);
+    assert_eq!(counters.confirmed_full_drops, 0);
+}
+
+/// Nothing reads the endpoint's queues: each class that finds its queue
+/// full is dropped and counted, an Unconfirmed-Request already at the
+/// quarter kept for confirmed ones, and classification goes on (#2635).
+#[tokio::test(start_paused = true)]
+async fn full_queues_drop_and_count_by_class_and_never_end_classification() {
+    const WHO_IS: &[u8] = &[0x10, 0x08];
     let (transport, handle) = test_transport();
-    let mut endpoint = EndpointIngress::new(transport, 1);
+    let mut endpoint = EndpointIngress::new(transport, 4);
     let mut ingress = endpoint.start().await.unwrap();
 
-    inject(&handle, &[0x00, 0x05, 0x01, 0x0c]).await;
-    inject(&handle, &[0x00, 0x05, 0x02, 0x0c]).await;
-    inject(&handle, &[0x00, 0x05, 0x03, 0x0c]).await;
-
-    assert!(
-        timeout(WAIT, ingress.terminal_or_segment.recv())
-            .await
-            .expect("classifier did not stop when its policy route filled")
-            .is_none()
-    );
-
-    let exit = timeout(WAIT, endpoint.stop()).await.unwrap().unwrap();
-    match exit {
-        ClassifierExit::PolicyRouteFull(outcome) => {
-            assert_eq!(
-                outcome.reason,
-                PolicyReason::RouteFull(IngressRoute::InboundRequest)
-            );
-            assert_eq!(outcome.received.apdu[2], 3);
-        }
-        other => panic!("unexpected classifier exit: {other:?}"),
+    // Three of four slots are the Who-Is share; the fourth is kept.
+    for _ in 0..6 {
+        inject(&handle, WHO_IS).await;
     }
-    assert_eq!(handle.stops(), 1);
-    drop(ingress);
+    // The kept slot takes a confirmed request; the next finds the queue
+    // full, and its reply sender goes with it: on MS/TP the MAC then sends
+    // Reply Postponed at once.
+    let mut kept = inject_expecting_reply(&handle, &[0x00, 0x05, 0x01, 0x0c]).await;
+    let dropped = inject_expecting_reply(&handle, &[0x00, 0x05, 0x02, 0x0c]).await;
+    // Answers no lease holds, and APDUs of a PDU type nothing defines.
+    for invoke_id in 0..6 {
+        inject(&handle, &[0x20, invoke_id, 0x0c]).await;
+    }
+    for _ in 0..6 {
+        inject(&handle, &[0x80]).await;
+    }
+
+    until("every class counted", || {
+        endpoint.full_drop_counters().policy_full_drops == 2
+    })
+    .await;
+    let counters = endpoint.full_drop_counters();
+    assert_eq!(counters.unconfirmed_full_drops, 3);
+    assert_eq!(counters.confirmed_full_drops, 1);
+    assert_eq!(counters.answer_full_drops, 2);
+    assert!(
+        dropped.await.is_err(),
+        "a dropped request's reply sender is released"
+    );
+    assert!(matches!(
+        kept.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+
+    // What fit is queued in order, the kept request with its reply sender.
+    for _ in 0..3 {
+        assert_eq!(
+            ingress.inbound_requests.recv().await.unwrap().apdu.as_ref(),
+            WHO_IS
+        );
+    }
+    let request = ingress.inbound_requests.recv().await.unwrap();
+    assert_eq!(request.apdu[2], 1);
+    assert!(request.reply_tx.is_some());
+    for invoke_id in 0..4 {
+        assert_eq!(
+            ingress.terminal_or_segment.recv().await.unwrap().apdu[1],
+            invoke_id
+        );
+    }
+    for _ in 0..4 {
+        let outcome = ingress.policy_outcomes.recv().await.unwrap();
+        assert_eq!(outcome.reason, PolicyReason::UnsupportedPduType(8));
+    }
+
+    // Classification went on throughout.
+    inject(&handle, &[0x00, 0x05, 0x03, 0x0c]).await;
+    inject(&handle, WHO_IS).await;
+    assert_eq!(receive(&mut ingress.inbound_requests).await.apdu[2], 3);
+    assert_eq!(
+        receive(&mut ingress.inbound_requests).await.apdu.as_ref(),
+        WHO_IS
+    );
+    assert_eq!(endpoint.full_drop_counters(), counters);
+    assert!(matches!(
+        endpoint.stop().await.unwrap(),
+        ClassifierExit::Cancelled
+    ));
+    // The counts outlive the stop.
+    assert_eq!(endpoint.full_drop_counters(), counters);
 }
 
 #[path = "endpoint_ingress_lifecycle_tests.rs"]

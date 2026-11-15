@@ -187,7 +187,9 @@ impl PyScEndpoint {
     ///     max_apdu / segmentation / services / device name: Identity knobs
     ///         (same narrow defaults as BIP). The raw receive ceiling resolves
     ///         against the SC link before Device construction or dialing.
-    ///     queue_capacity: Bounded queue capacity (must be >0). Client timers
+    ///     queue_capacity: Bounded queue capacity (must be >0, default 256;
+    ///         a full queue drops and counts, see `status()`'s
+    ///         `*_full_drops`). Client timers
     ///         stay at the session default; the SC builder exposes no timer
     ///         override by design.
     ///     read_work_limit: Result rows one ReadProperty served by the server
@@ -250,7 +252,7 @@ impl PyScEndpoint {
         max_apdu=1476,
         segmentation=None,
         services=None,
-        queue_capacity=16,
+        queue_capacity=256,
         read_work_limit=256,
         min_request_interval_ms=0,
         on_reinitialize=None,
@@ -577,6 +579,10 @@ impl PyScEndpoint {
                 dict.set_item("no_client_role", snapshot.0.no_client_role)?;
                 dict.set_item("unclaimed_terminal", snapshot.0.unclaimed_terminal)?;
                 dict.set_item("responder_declined", snapshot.0.responder_declined)?;
+                dict.set_item("unconfirmed_full_drops", snapshot.0.unconfirmed_full_drops)?;
+                dict.set_item("confirmed_full_drops", snapshot.0.confirmed_full_drops)?;
+                dict.set_item("answer_full_drops", snapshot.0.answer_full_drops)?;
+                dict.set_item("policy_full_drops", snapshot.0.policy_full_drops)?;
                 Ok(dict.into_any().unbind())
             })
         })

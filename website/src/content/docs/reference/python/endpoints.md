@@ -54,7 +54,7 @@ def __init__(
     segmentation: Optional[Segmentation] = None,
     services: Optional[list[int]] = None,
     device_uuid: Optional[Union[bytes, bytearray]] = None,
-    queue_capacity: int = 16,
+    queue_capacity: int = 256,
     apdu_timeout_ms: int = 6000,
     apdu_retries: int = 0,
     registered_network_port: Optional[int] = None,
@@ -489,7 +489,7 @@ def __init__(
     max_apdu: int = 1476,
     segmentation: Optional[Segmentation] = None,
     services: Optional[list[int]] = None,
-    queue_capacity: int = 16,
+    queue_capacity: int = 256,
     read_work_limit: int = 256,
     min_request_interval_ms: int = 0,
     on_reinitialize: Optional[ReinitializeHandler] = None,
@@ -847,7 +847,7 @@ def __init__(
     segmentation: Optional[Segmentation] = None,
     services: Optional[list[int]] = None,
     device_uuid: Optional[Union[bytes, bytearray]] = None,
-    queue_capacity: int = 16,
+    queue_capacity: int = 256,
     apdu_timeout_ms: int = 6000,
     apdu_retries: int = 0,
     *,
@@ -1397,6 +1397,15 @@ Keys:
 
 Bounded endpoint snapshot: liveness, identity, transport, leases, policy counts.
 
+The `*_full_drops` keys count what a full queue had no room for, by
+class; a full queue never ends the session (#2635).
+`unconfirmed_full_drops` counts unconfirmed requests (I-Am, Who-Is,
+notifications) past their share of the request queue, which keeps a
+quarter for confirmed requests; `confirmed_full_drops` confirmed
+requests dropped unanswered, which their requesters send again;
+`answer_full_drops` answers and segments; `policy_full_drops`
+refused APDUs (malformed, an unknown PDU type).
+
 Keys:
 
 - `is_running: bool`
@@ -1411,6 +1420,10 @@ Keys:
 - `no_client_role: int`
 - `unclaimed_terminal: int`
 - `responder_declined: int`
+- `unconfirmed_full_drops: int`
+- `confirmed_full_drops: int`
+- `answer_full_drops: int`
+- `policy_full_drops: int`
 
 ## ReadRangeResult
 

@@ -213,7 +213,9 @@ impl PyMstpEndpoint {
     ///         use the largest supported code that does not exceed it.
     ///     segmentation / services / device_uuid: Identity knobs (UUID zeros
     ///         allowed; stored into DEVICE_UUID).
-    ///     queue_capacity / apdu_timeout_ms / apdu_retries: Session tuning.
+    ///     queue_capacity / apdu_timeout_ms / apdu_retries: Session tuning
+    ///         (queue_capacity default 256; a full queue drops and counts,
+    ///         see `status()`'s `*_full_drops`).
     ///     read_work_limit: Keyword-only. Result rows one ReadProperty served
     ///         by the server role may expand (must be >0, default 256): its
     ///         own row plus, for a Group's Present_Value, one per member
@@ -277,7 +279,7 @@ impl PyMstpEndpoint {
         segmentation=None,
         services=None,
         device_uuid=None,
-        queue_capacity=16,
+        queue_capacity=256,
         apdu_timeout_ms=6000,
         apdu_retries=0,
         *,
@@ -589,6 +591,10 @@ impl PyMstpEndpoint {
                 dict.set_item("no_client_role", snapshot.0.no_client_role)?;
                 dict.set_item("unclaimed_terminal", snapshot.0.unclaimed_terminal)?;
                 dict.set_item("responder_declined", snapshot.0.responder_declined)?;
+                dict.set_item("unconfirmed_full_drops", snapshot.0.unconfirmed_full_drops)?;
+                dict.set_item("confirmed_full_drops", snapshot.0.confirmed_full_drops)?;
+                dict.set_item("answer_full_drops", snapshot.0.answer_full_drops)?;
+                dict.set_item("policy_full_drops", snapshot.0.policy_full_drops)?;
                 Ok(dict.into_any().unbind())
             })
         })

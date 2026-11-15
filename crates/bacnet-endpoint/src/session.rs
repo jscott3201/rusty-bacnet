@@ -151,14 +151,27 @@ pub enum SessionRole {
 /// use bacnet_endpoint::session::SessionConfig;
 ///
 /// let config = SessionConfig::default();
-/// assert!(config.queue_capacity > 0);
+/// assert_eq!(config.queue_capacity, 256);
 /// assert_eq!(config.max_apdu_length, 480);
 /// assert_eq!(config.read_work_limit, 256);
 /// assert_eq!(config.min_request_interval_ms, 0);
 /// ```
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
-    /// Bounded capacity for each ingress queue + egress channel.
+    /// Bounded capacity for each ingress queue (requests, answers, policy
+    /// outcomes) and the egress channel (default 256, as deep as the
+    /// network layer's own receive queue in front of them).
+    ///
+    /// What finds a queue full is dropped and counted by class in
+    /// [`policy_counters`](EndpointSession::policy_counters); a full queue
+    /// never ends the session (#2635). Unconfirmed requests may fill the
+    /// request queue only down to a quarter of it, which stays for
+    /// confirmed requests. A queued APDU takes a 208-octet slot plus its
+    /// NPDU (B/IP copies each to its own size; at most about 1.5 KB): a
+    /// request queue full of I-Ams holds about 60 KB, and the three ingress
+    /// queues at the default hold at most about 1.3 MB together. Tokio
+    /// allocates slots in blocks of 32 as a queue first fills, so an idle
+    /// session holds next to none of it.
     ///
     /// Must be greater than zero; [`EndpointSession::new`] returns
     /// [`Error::Encoding`] otherwise.
@@ -230,7 +243,7 @@ impl SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            queue_capacity: 16,
+            queue_capacity: 256,
             apdu_timeout_ms: 1_000,
             apdu_retries: 0,
             max_apdu_length: 480,
@@ -244,8 +257,10 @@ impl Default for SessionConfig {
 /// Snapshot of policy-outcome ownership (session-owned, bounded).
 ///
 /// The session counts every classifier/policy outcome instead of dropping it
-/// silently. Sampled via [`policy_counters`](EndpointSession::policy_counters).
+/// silently, and ingress counts by class what a full queue had no room for
+/// (#2635). Sampled via [`policy_counters`](EndpointSession::policy_counters).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PolicyCountersSnapshot {
     /// Ingress classifier outcomes owned by the session.
     pub ingress_policy: u64,
@@ -257,6 +272,18 @@ pub struct PolicyCountersSnapshot {
     pub unclaimed_terminal: u64,
     /// Responder declined (group/unsupported/closed).
     pub responder_declined: u64,
+    /// Unconfirmed requests past their share of the full request queue
+    /// (see [`SessionConfig::queue_capacity`]).
+    pub unconfirmed_full_drops: u64,
+    /// Confirmed requests the full request queue had no room for; none was
+    /// answered, and the requester's retry is its recovery.
+    pub confirmed_full_drops: u64,
+    /// Answers and segments the full answer queue had no room for; an
+    /// answer to the session's own request then ends by its timeout.
+    pub answer_full_drops: u64,
+    /// Refused APDUs (malformed, unknown PDU type, a confirmed request from
+    /// a group address) the full policy queue had no room for.
+    pub policy_full_drops: u64,
 }
 
 struct PolicyCounters {
@@ -360,7 +387,7 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
 pub enum SessionExit {
     /// Explicit `stop()` won the race.
     Cancelled,
-    /// Ingress classifier exited (input closed / policy route full/closed).
+    /// Ingress classifier exited (input closed / policy route closed).
     Ingress(ClassifierExit),
     /// Dispatch receivers all closed.
     ReceiversClosed,
@@ -767,8 +794,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     /// Samples policy-outcome ownership counters.
     ///
-    /// Every classifier/policy outcome is counted, never silently dropped.
+    /// Every classifier/policy outcome is counted, never silently dropped,
+    /// and so is every APDU a full queue had no room for.
     pub async fn policy_counters(&self) -> PolicyCountersSnapshot {
+        let drops = self
+            .ingress
+            .as_ref()
+            .map(EndpointIngress::full_drop_counters)
+            .unwrap_or_default();
         let counters = self.shared.counters.lock().await;
         PolicyCountersSnapshot {
             ingress_policy: counters.ingress_policy,
@@ -776,6 +809,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             no_client_role: counters.no_client_role,
             unclaimed_terminal: counters.unclaimed_terminal,
             responder_declined: counters.responder_declined,
+            unconfirmed_full_drops: drops.unconfirmed_full_drops,
+            confirmed_full_drops: drops.confirmed_full_drops,
+            answer_full_drops: drops.answer_full_drops,
+            policy_full_drops: drops.policy_full_drops,
         }
     }
 

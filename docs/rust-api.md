@@ -13207,6 +13207,35 @@ B/IPv6 has no endpoint builder: compose `EndpointSession::new` over a
 Ethernet has no endpoint builder: keep the standalone path there. Do not expect
 identical administration across data links.
 
+### Endpoint queues under a burst
+
+The session's ingress never waits for its queues, and a full one never ends
+the session (#2635). What finds no room is dropped and counted by class in
+`policy_counters()` (`unconfirmed_full_drops`, `confirmed_full_drops`,
+`answer_full_drops`, `policy_full_drops`; `EndpointIngress::full_drop_counters`
+underneath), and logged at most once per `DROP_LOG_INTERVAL` (10 s).
+
+- An Unconfirmed-Request opens no transaction and is answered by nobody, so
+  it may fill the request queue only down to a quarter of its capacity. The
+  rest stays for confirmed requests: a global Who-Is's I-Ams, or a device
+  that floods them, can't crowd out a peer's read.
+- A Confirmed-Request that finds no room gets no answer. Its requester sends
+  it again after its APDU timeout (Clause 5.3.1), which recovers a passing
+  burst where an Abort (OUT_OF_RESOURCES, Clause 18.10) would end the
+  transaction. On MS/TP the dropped request's reply sender is released, so
+  the MAC sends Reply Postponed at once.
+- An answer finds a queue only answers use. If even that is full, the answer
+  is dropped and its request ends by its timeout and retries, as if the link
+  had lost it; a source-audited operation then records TIMEOUT.
+- A full client's seat keeps the same quarter of its 256 slots for answers
+  and its own notifications, and counts its drops in `client_seat_counters()`.
+
+`SessionConfig::queue_capacity` (default 256, as deep as the network layer's
+receive queue) sizes each queue. A queued APDU takes a 208-octet slot plus its
+NPDU, so the three ingress queues hold at most about 1.3 MB together, and a
+request queue full of I-Ams about 60 KB. Standalone `BACnetClient` and
+`BACnetServer` don't use this classifier.
+
 ### Full client on an endpoint
 
 `EndpointSession::full_client()` returns a full `BACnetClient` on the

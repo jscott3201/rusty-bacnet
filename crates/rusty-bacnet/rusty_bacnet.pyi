@@ -9150,7 +9150,16 @@ class EndpointCov(TypedDict, total=False):
     confirmed_retries: int
 
 class EndpointStatus(TypedDict):
-    """Bounded endpoint snapshot: liveness, identity, transport, leases, policy counts."""
+    """Bounded endpoint snapshot: liveness, identity, transport, leases, policy counts.
+
+    The ``*_full_drops`` keys count what a full queue had no room for, by
+    class; a full queue never ends the session (#2635).
+    ``unconfirmed_full_drops`` counts unconfirmed requests (I-Am, Who-Is,
+    notifications) past their share of the request queue, which keeps a
+    quarter for confirmed requests; ``confirmed_full_drops`` confirmed
+    requests dropped unanswered, which their requesters send again;
+    ``answer_full_drops`` answers and segments; ``policy_full_drops``
+    refused APDUs (malformed, an unknown PDU type)."""
     is_running: bool
     device_instance: int
     vendor_id: int
@@ -9163,6 +9172,10 @@ class EndpointStatus(TypedDict):
     no_client_role: int
     unclaimed_terminal: int
     responder_declined: int
+    unconfirmed_full_drops: int
+    confirmed_full_drops: int
+    answer_full_drops: int
+    policy_full_drops: int
 
 class ReadRangeResult(TypedDict):
     object_id: ObjectIdentifier
@@ -9435,7 +9448,7 @@ class BipEndpoint:
         segmentation: Optional[Segmentation] = None,
         services: Optional[list[int]] = None,
         device_uuid: Optional[Union[bytes, bytearray]] = None,
-        queue_capacity: int = 16,
+        queue_capacity: int = 256,
         apdu_timeout_ms: int = 6000,
         apdu_retries: int = 0,
         registered_network_port: Optional[int] = None,
@@ -9703,7 +9716,7 @@ class ScEndpoint:
         max_apdu: int = 1476,
         segmentation: Optional[Segmentation] = None,
         services: Optional[list[int]] = None,
-        queue_capacity: int = 16,
+        queue_capacity: int = 256,
         read_work_limit: int = 256,
         min_request_interval_ms: int = 0,
         on_reinitialize: Optional[ReinitializeHandler] = None,
@@ -9902,7 +9915,7 @@ class MstpEndpoint:
         segmentation: Optional[Segmentation] = None,
         services: Optional[list[int]] = None,
         device_uuid: Optional[Union[bytes, bytearray]] = None,
-        queue_capacity: int = 16,
+        queue_capacity: int = 256,
         apdu_timeout_ms: int = 6000,
         apdu_retries: int = 0,
         *,

@@ -47,7 +47,11 @@ async fn congestion(mode: u8) {
     let mut session = EndpointSession::new(
         gated(transport, entered.clone(), gate.clone()),
         SessionRole::ClientOnly,
-        SessionConfig::default(),
+        // Sixteen slots, the default before #2635, so the queue fills below.
+        SessionConfig {
+            queue_capacity: 16,
+            ..SessionConfig::default()
+        },
     )
     .unwrap()
     .with_database(db)
@@ -73,7 +77,7 @@ async fn congestion(mode: u8) {
     let env = receive(&mut received).await;
     let (invoke, rpm) = request(&env);
     entered.notified().await; // consume the request's transport-entry marker
-    // Fill the default16-slot queue behind one held unrelated transport send.
+    // Fill the 16-slot queue behind one held unrelated transport send.
     // This deterministically forces the summary itself to encounter QueueFull.
     let egress = session.egress.as_ref().unwrap();
     let enqueue = || {
