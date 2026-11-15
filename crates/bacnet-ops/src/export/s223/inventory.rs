@@ -79,7 +79,7 @@ impl From<&Inventory> for Model {
     /// Device's name is the summary's, exactly as sent, and its
     /// Description the Device object's own record's, when the inventory
     /// read it. An inventory that stopped early says where: the first
-    /// object not read, or the Object_List.
+    /// object not read.
     fn from(inventory: &Inventory) -> Self {
         let mut device = DeviceInfo::new(inventory.device.device);
         device.name = inventory
@@ -107,7 +107,8 @@ impl From<&Inventory> for Model {
             };
             match inventory.unread.first() {
                 Some(object) => format!("{}: {why}", object_label(*object)),
-                None => format!("Object_List: {why}"),
+                // A hand-built inventory that names no unread object.
+                None => why,
             }
         });
         Self {

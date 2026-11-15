@@ -62,6 +62,22 @@ pub(crate) struct Faults {
     /// than this many octets with an Abort (BUFFER_OVERFLOW), as a device
     /// does whose answer would not fit.
     pub(crate) abort_longer: Option<usize>,
+    /// Answer each ReadPropertyMultiple of several objects from a script
+    /// instead of the device.
+    pub(crate) scripted: Option<Scripted>,
+    /// Answer a ReadProperty of the whole Object_List with these objects.
+    pub(crate) listed: Option<Vec<ObjectIdentifier>>,
+}
+
+/// How a scripted ReadPropertyMultiple answer differs from the request:
+/// each object's Object_Name is its label (`analog-input 1`) and every
+/// other property an unknown-property error.
+#[derive(Clone, Copy)]
+pub(crate) enum Scripted {
+    /// The objects in the reverse of the order asked.
+    Reversed,
+    /// The answer leaves this object out.
+    Without(ObjectIdentifier),
 }
 
 impl Default for Faults {
@@ -74,6 +90,8 @@ impl Default for Faults {
             cancel: None,
             unknown_object: None,
             abort_longer: None,
+            scripted: None,
+            listed: None,
         }
     }
 }
@@ -111,11 +129,80 @@ fn refusal(faults: &Faults, npdu: &[u8]) -> Option<Vec<u8>> {
         // An Abort PDU from the server: BUFFER_OVERFLOW (1).
         return Some(vec![0x01, 0x00, 0x71, invoke_id, 1]);
     }
+    if let Some(script) = faults.scripted
+        && service == 14
+        && let Some(answer) = scripted(script, rest)
+    {
+        // A ComplexACK PDU.
+        return Some([&[0x01, 0x00, 0x30, invoke_id, 14][..], &answer].concat());
+    }
+    if let Some(objects) = &faults.listed
+        && service == 12
+        && matches!(rest, [0x0C, _, _, _, _, 0x19, 0x4C])
+    {
+        // A ComplexACK PDU: the request's object and property, then the
+        // list between the tags of the value.
+        let mut answer = vec![0x01, 0x00, 0x30, invoke_id, 12];
+        answer.extend_from_slice(rest);
+        answer.push(0x3E);
+        for object in objects {
+            answer.push(0xC4);
+            answer.extend(object_octets(*object));
+        }
+        answer.push(0x3F);
+        return Some(answer);
+    }
     let rpm = faults.reject_rpm && service == 14;
     let whole_list =
         faults.reject_whole_list && service == 12 && matches!(rest, [0x0C, _, _, _, _, 0x19, 0x4C]);
     // A Reject PDU for UNRECOGNIZED_SERVICE (9).
     (rpm || whole_list).then(|| vec![0x01, 0x00, 0x60, invoke_id, 9])
+}
+
+/// The scripted answer to the ReadPropertyMultiple request `rest`, when
+/// it asks for several objects.
+fn scripted(script: Scripted, rest: &[u8]) -> Option<Vec<u8>> {
+    use bacnet_services::rpm::{
+        ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
+    };
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    let request = ReadPropertyMultipleRequest::decode(rest).ok()?;
+    if request.list_of_read_access_specs.len() < 2 {
+        return None;
+    }
+    let mut results: Vec<ReadAccessResult> = request
+        .list_of_read_access_specs
+        .into_iter()
+        .filter(|spec| !matches!(script, Scripted::Without(gone) if gone == spec.object_identifier))
+        .map(|spec| ReadAccessResult {
+            object_identifier: spec.object_identifier,
+            list_of_results: spec
+                .list_of_property_references
+                .into_iter()
+                .map(|reference| {
+                    let name = reference.property_identifier == PropertyIdentifier::OBJECT_NAME;
+                    let label = crate::label::object_label(spec.object_identifier);
+                    ReadResultElement {
+                        property_identifier: reference.property_identifier,
+                        property_array_index: None,
+                        property_value: name
+                            .then(|| row(reference.property_identifier, text(&label)).1.unwrap()),
+                        error: (!name)
+                            .then_some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+    if matches!(script, Scripted::Reversed) {
+        results.reverse();
+    }
+    let mut out = bytes::BytesMut::new();
+    let ack = ReadPropertyMultipleACK {
+        list_of_read_access_results: results,
+    };
+    ack.encode(&mut out).ok()?;
+    Some(out.to_vec())
 }
 
 /// `object` as an object identifier's four octets.

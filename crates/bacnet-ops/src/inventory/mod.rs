@@ -14,22 +14,26 @@
 //! # What it costs
 //!
 //! By ReadPropertyMultiple: one request for the summary, one for the
-//! Object_List, then one for each batch of objects. A batch holds up to 16
-//! objects and 32 properties, so its size follows from how many properties
-//! each object's type reads ([`properties`]): 16 objects of a type that
-//! reads two, 10 analog inputs, 8 binary inputs or analog values, 6
-//! multi-state values. With values each object reads two more, and a
-//! batch holds 4 to 8; with settings as well, 3 to 8. An inventory of N
-//! objects is about N/8 + 2 requests, N/5 + 2 with values. A handle made
-//! from an address whose instance isn't known yet costs one more, a read
-//! of the Device object by the wildcard instance.
+//! Object_List, then one for each batch of objects. A batch is filled, in
+//! Object_List order, up to 16 objects or 32 properties, whichever comes
+//! first, so its size follows from how many properties each object's type
+//! reads ([`properties`]): 16 objects of a type that reads two, 10 analog
+//! inputs, 8 binary inputs or analog values, 6 multi-state values. With
+//! values each object reads two more, and a batch holds 4 to 8; with
+//! settings as well, 3 to 8. N objects that each read p properties take
+//! the larger of N/16 and N×p/32 requests, rounded up, when all are one
+//! type, and at most one or two more for a mix: about N/8 + 2 for a
+//! typical controller, N/5 + 2 with values. A handle made from an address
+//! whose instance isn't known yet costs one more, a read of the Device
+//! object by the wildcard instance.
 //!
 //! - A batch whose answer the device can't send for its size (it doesn't
 //!   segment, or its buffer is small) is asked again an object at a time,
-//!   and the calls after it ask for half as many objects each, down to one:
-//!   at most four such refusals an inventory. An answer that arrives in
-//!   segments costs no more requests. One object too large for an answer
-//!   is read a property at a time.
+//!   and the batches after it hold at most half as many objects as it did,
+//!   down to one: at most four such refused batches an inventory. An
+//!   answer that arrives in segments costs no more requests. A single
+//!   object whose answer is too large costs its refused request and then
+//!   a ReadProperty for each property.
 //! - A batch the device fails as a whole for another reason is read by
 //!   ReadProperty, a property a request, so one bad object can't put
 //!   errors on its neighbours.
@@ -48,33 +52,44 @@
 //! # What it holds while reading
 //!
 //! The Object_List (eight octets an object), the records built so far, and
-//! the answers of one call's objects, 16 at most: each call's answers
-//! become records before the next is sent. A device at the 10,000-object
-//! cap never has more than those 16 objects' raw answers held at once.
+//! the answers of one batch, 16 objects at most: each batch's answers
+//! become records before the next is sent, however many objects the device
+//! has. The list itself is as long as the device sends it; only a list
+//! read element by element is bounded, at
+//! [`MAX_OBJECTS`](crate::client::MAX_OBJECTS) elements. An object the
+//! list names twice is read once.
 //!
 //! # Errors and partial results
 //!
 //! Whatever is decided before a request is sent is an error with nothing
 //! sent: a device that can't be placed, an instance two addresses claim, a
 //! routed address with no route. So is a device that doesn't answer the
-//! summary or the whole Object_List, or refuses the list: nothing was read
-//! that a caller could keep. After that the inventory is `Ok`: a property
-//! or an object the device refuses is data on its record
-//! ([`PointRecord::problems`]), and a device that stops answering part way
-//! leaves the records read so far, the objects not read
-//! ([`Inventory::unread`]) and why ([`Inventory::stopped`]).
+//! summary or the Object_List, or refuses the list, an element of a list
+//! read element by element included: no record was read that a caller
+//! could keep. After that the inventory is `Ok`: a property or an object
+//! the device refuses is data on its record ([`PointRecord::problems`]),
+//! and a device that goes silent while the objects are read, or whose
+//! route is lost then, leaves the records read so far, the objects not
+//! read ([`Inventory::unread`]) and why ([`Inventory::stopped`]).
+//!
+//! [`raw::read_inventory`](crate::raw::read_inventory) is the layer under
+//! [`Device::inventory`], for a caller that owns a low-level client and a
+//! [`raw::Reader`](crate::raw::Reader).
 //!
 //! # JSON and CSV
 //!
 //! [`Inventory`] and [`PointRecord`] serialize with serde to the JSON the
 //! `bacnet inventory` command prints ([`Inventory::to_json`]); the field
 //! names are stable. [`Inventory::to_csv`] writes the records as CSV under
-//! [`CSV_HEADER`]. Both keep device text exactly as the device sent it.
+//! [`CSV_HEADER`]. The JSON keeps device text exactly as the device sent
+//! it; the CSV does too, except that a cell of device text a spreadsheet
+//! would run as a formula is written behind an apostrophe unless
+//! [`CsvOptions::exact`] says otherwise.
 //!
 //! [`RequestLimits`]: crate::limits::RequestLimits
 
 mod plan;
-mod read;
+pub(crate) mod read;
 mod record;
 mod write;
 
@@ -84,10 +99,10 @@ use bacnet_types::primitives::ObjectIdentifier;
 use serde::Serialize;
 
 pub use self::plan::properties;
-pub use self::read::{read_inventory, read_point_record};
+use self::read::{read_inventory, read_point_record};
 #[cfg(test)]
 pub(crate) use self::record::record as record_of;
-pub use self::write::CSV_HEADER;
+pub use self::write::{CSV_HEADER, CsvOptions};
 use crate::client::{DeviceSummary, device_error};
 use crate::device::{Device, DeviceAddress, sent};
 use crate::error::OpsError;
@@ -221,7 +236,9 @@ pub struct PointRecord {
     /// Whether its Present_Value takes command priorities: what
     /// [`Commandability::of`](crate::write::Commandability::of) says of
     /// its type, and for a type that may or may not (a value object, a
-    /// vendor's type) whether the object has a Priority_Array.
+    /// vendor's type) whether the object has a Priority_Array. For such a
+    /// type, `false` beside a [`problem`](Self::problem) with
+    /// Priority_Array means unknown: the device wouldn't say.
     pub commandable: bool,
     /// Its Relinquish_Default, read with
     /// [`settings`](InventoryOptions::settings).
@@ -314,15 +331,13 @@ pub struct Inventory {
     /// The objects read, in Object_List order.
     pub points: Vec<PointRecord>,
     /// The objects of the selected types not read because the reading
-    /// stopped, in Object_List order; empty when it didn't, and when it
-    /// stopped inside the Object_List.
+    /// stopped, in Object_List order; empty when it didn't.
     #[serde(serialize_with = "write::objects")]
     pub unread: Vec<ObjectIdentifier>,
-    /// Why the reading stopped early: the device stopped answering
-    /// ([`OpsError::unreachable`]) during the objects, or an element of an
-    /// Object_List read element by element failed, and then no object was
-    /// asked for. `points` keeps what was read before it. JSON: the
-    /// error's text, or `null`.
+    /// Why the reading stopped early: the device went silent
+    /// ([`OpsError::unreachable`]) while its objects were being read, or
+    /// the route to it was lost then. `points` keeps what was read before
+    /// it. JSON: the error's text, or `null`.
     #[serde(serialize_with = "write::stopped")]
     pub stopped: Option<OpsError>,
 }
@@ -360,9 +375,9 @@ impl<T: TransportPort + 'static> Device<T> {
     /// With nothing sent: a device that can't be placed, an instance two
     /// addresses claim, or a routed address with no route
     /// ([`OpsError::UnknownDevice`], [`OpsError::Ambiguous`]). And a
-    /// device that doesn't answer the summary or the whole Object_List, or
-    /// refuses the list. A device that stops answering after that is not
-    /// an error: see [`Inventory::stopped`].
+    /// device that doesn't answer the summary or the Object_List, or
+    /// refuses the list or one of its elements. A device that goes silent
+    /// after that is not an error: see [`Inventory::stopped`].
     pub async fn inventory(&self, options: &InventoryOptions) -> Result<Inventory, OpsError> {
         let instance = self.resolve_instance().await?;
         let mut inventory = sent!(self, |at| {

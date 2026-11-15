@@ -195,12 +195,14 @@ async fn execute_command<T: TransportPort + 'static>(
             types,
             values,
             settings,
+            csv_exact,
         } => {
             let args = commands::inventory::InventoryArgs {
                 target,
                 types,
                 values: *values,
                 settings: *settings,
+                csv_exact: *csv_exact,
                 layout: commands::inventory::Layout::of(csv, format),
             };
             commands::inventory::inventory_cmd(client, args).await?;

@@ -1554,6 +1554,7 @@ included.
 | `--values` | Also read each object's Present_Value and Status_Flags |
 | `--settings` | Also read each object's COV_Increment, Min_Pres_Value, Max_Pres_Value and Relinquish_Default, where its type has them |
 | `--format table\|json\|csv`, `--json` | How to print; a table at a terminal and JSON through a pipe unless given |
+| `--csv-exact` | With `--format csv`: write device text exactly, without the formula guard |
 
 - **What is read.** Object_Name and Description of every object; Units of
   the analog and integer types, Accumulator and Pulse Converter; a binary
@@ -1566,12 +1567,16 @@ included.
   problems and never fails the command; an object the device refuses is a
   row whose properties are all problems.
 - **What it costs.** The device summary, the Object_List, then one
-  ReadPropertyMultiple for each batch of up to 16 objects and 32
-  properties: about N/8 + 2 requests for N objects, N/5 + 2 with
-  `--values`, one at a time. A target given by address costs one more, a
-  read of the Device object by the wildcard instance. A device that can't
-  send a batch's answer for its size is asked for that batch an object at a
-  time, and for half as many objects a call from then on. A device that
+  ReadPropertyMultiple for each batch, filled in Object_List order up to
+  16 objects or 32 properties, whichever comes first: 10 analog inputs, 8
+  binary inputs or analog values, 6 multi-state values, 16 objects of a
+  type that reads only its name and description. That is about N/8 + 2
+  requests for N objects, N/5 + 2 with `--values`, one at a time. A target
+  given by address costs one more, a read of the Device object by the
+  wildcard instance. A device that can't send a batch's answer for its
+  size is asked for that batch an object at a time, and for at most half
+  as many objects a batch from then on, down to one: at most four such
+  refused batches. A device that
   refuses ReadPropertyMultiple costs one refused request, then a
   ReadProperty a property: 13 for the summary, one for the Object_List, and
   two to five an object (two more with `--values`).
@@ -1579,12 +1584,14 @@ included.
   stderr in every format. The table cleans device text for the screen
   (control characters as spaces), and shows the values' and settings'
   columns when they were read and a problems column when any object has
-  one. JSON and CSV keep device text exactly as the device sent it.
+  one. JSON keeps device text exactly as the device sent it, and so does
+  CSV but for its formula guard (below).
 - **Exit status.** 0 when every object was read, also when the device has
   none of the selected types (stderr says so). 1 when the device doesn't
-  answer or refuses its Object_List, with nothing on stdout; and 1 when it
-  stops answering partway: what was read is still printed, and stderr says
-  how many objects were not read.
+  answer or refuses its Object_List, or an Object_List read element by
+  element fails partway, with nothing on stdout; and 1 when it goes silent
+  while its objects are read: what was read is still printed, and stderr
+  says how many objects were not read.
 
 `--json` prints one document. `device.properties` holds the summary by
 property name; each value is its text under `value` and its typed form under
@@ -1629,6 +1636,8 @@ error's text, is set:
 
 Every record has every field, `null` where there is nothing to say. A
 problem is `{"property": "units", "error": "PROPERTY:UNKNOWN_PROPERTY"}`.
+Property names, in `problems` and as the keys of `device.properties`, are
+in kebab case (`units`, `vendor-name`).
 The field names are stable.
 
 `--format csv` prints a header and one row an object, the columns always
@@ -1649,8 +1658,15 @@ device,device_instance,object,name,description,units,state_texts,number_of_state
 - A field holding a comma, a double quote or a line break is put in double
   quotes with its quotes doubled (RFC 4180); other fields are bare, and an
   empty field means nothing to say. Rows end with a line feed.
-- Device text is not altered, so import the columns as text: a spreadsheet
-  may read a name that starts with `=`, `+`, `-` or `@` as a formula.
+- A spreadsheet runs a cell that starts with `=`, `+`, `-`, `@`, a tab or
+  a carriage return as a formula. So a `name`, `description` or
+  `state_texts` cell that starts with one (for `state_texts`, the joined
+  cell) gets an apostrophe before it, which a spreadsheet shows as text:
+  `=1+1` is written `'=1+1`. A value cell holding device text is guarded
+  the same way, though a string value prints in double quotes and so
+  never starts with one. Numbers (`-40`), addresses, objects, units and
+  `problems` are never changed. `--csv-exact` turns the guard off and
+  writes device text exactly; JSON is always exact.
 
 ### Standard 223 export (experimental)
 

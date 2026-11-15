@@ -134,7 +134,7 @@ async fn the_model_derives_from_an_inventory() {
 
 /// A device that stops answering part way gives a model that says where:
 /// the first object not read, with the client's error, as the Turtle's
-/// header repeats. A list that stopped names the Object_List.
+/// header repeats. A list that failed part way gives no model at all.
 #[tokio::test(start_paused = true)]
 async fn a_stopped_inventory_says_where() {
     // The summary, the Object_List and the first batch of eight pass.
@@ -152,17 +152,16 @@ async fn a_stopped_inventory_says_where() {
     );
     stop(client, server).await;
 
+    // A list read element by element that fails part way is no inventory.
     let faults = Faults {
         pass: 5,
         reject_whole_list: true,
         ..Faults::default()
     };
     let (client, server) = lab(faults).await;
-    let inventory = lab_device(&client).await.inventory(&options).await.unwrap();
-    let model = Model::from(&inventory);
-    assert!(model.entries.is_empty(), "{model:?}");
-    let stopped = model.stopped.as_deref().unwrap();
-    assert!(stopped.starts_with("Object_List: "), "{stopped}");
+    let device = lab_device(&client).await;
+    assert!(device.inventory(&options).await.is_err());
+    drop(device);
     stop(client, server).await;
 }
 

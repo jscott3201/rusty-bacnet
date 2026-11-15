@@ -145,3 +145,60 @@ fn texts_are_exact_and_values_are_named() {
     assert_eq!(value.as_bool(), Some(true));
     assert_eq!(value.text, "active (On )", "cleaned for display");
 }
+
+/// Relinquish_Default is a problem when an output lacks it, and absent
+/// without one when a value does; Present_Value and Status_Flags are
+/// problems when a type whose table requires them lacks them, and absent
+/// without one on a type that needn't have them.
+#[test]
+fn required_settings_and_values_are_problems_when_lacking() {
+    let lacking = || {
+        vec![
+            row(P::OBJECT_NAME, text("Zone")),
+            refused(P::RELINQUISH_DEFAULT),
+            refused(P::PRESENT_VALUE),
+            refused(P::STATUS_FLAGS),
+        ]
+    };
+    let problems = |object_type| -> Vec<P> {
+        let read = of(object_type, lacking());
+        read.problems
+            .iter()
+            .map(|problem| problem.property)
+            .collect()
+    };
+    let all = [P::RELINQUISH_DEFAULT, P::PRESENT_VALUE, P::STATUS_FLAGS];
+    for output in [
+        ObjectType::ANALOG_OUTPUT,
+        ObjectType::BINARY_OUTPUT,
+        ObjectType::MULTI_STATE_OUTPUT,
+        ObjectType::ACCESS_DOOR,
+        ObjectType::LIGHTING_OUTPUT,
+        ObjectType::BINARY_LIGHTING_OUTPUT,
+    ] {
+        assert_eq!(problems(output), all, "{output}");
+    }
+    // A value's Relinquish_Default comes with its Priority_Array; an
+    // input has none.
+    let values = [P::PRESENT_VALUE, P::STATUS_FLAGS];
+    for other in [
+        ObjectType::ANALOG_VALUE,
+        ObjectType::BINARY_INPUT,
+        ObjectType::MULTI_STATE_VALUE,
+        ObjectType::CHARACTERSTRING_VALUE,
+        ObjectType::DATEPATTERN_VALUE,
+        ObjectType::ACCUMULATOR,
+    ] {
+        assert_eq!(problems(other), values, "{other}");
+    }
+    // A Channel passes commands on and keeps no Relinquish_Default; a
+    // trend log, a Device and a vendor's type needn't have any of them.
+    for none in [
+        ObjectType::CHANNEL,
+        ObjectType::TREND_LOG,
+        ObjectType::DEVICE,
+        ObjectType::from_raw(700),
+    ] {
+        assert!(problems(none).is_empty(), "{none}");
+    }
+}

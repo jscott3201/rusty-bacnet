@@ -15,6 +15,7 @@
 //! [`Device::read_many`]: crate::Device::read_many
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bacnet_client::client::BACnetClient;
 use bacnet_services::rpm::ReadAccessResult;
@@ -74,6 +75,10 @@ pub(crate) struct Batched<K> {
     /// batch was asked again a row at a time: a caller with more to read
     /// asks for fewer rows a call.
     pub(crate) too_large: bool,
+    /// The caller's stop flag went up while a row was read property by
+    /// property: the rows after `rows` weren't read, and the last of `rows`
+    /// may be `partial`.
+    pub(crate) cancelled: bool,
     /// Some rows were read by ReadPropertyMultiple.
     by_rpm: bool,
     /// Some rows were read by ReadProperty.
@@ -104,7 +109,25 @@ pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
     limits: &RequestLimits,
     device: &DeviceAddress,
     rows: &[BatchRow<K>],
+    rpm: bool,
+) -> Result<Batched<K>, Error> {
+    read_until(client, limits, device, rows, rpm, &super::NEVER_STOPPED).await
+}
+
+/// [`read`], ending before the next ReadProperty of a row read property
+/// by property once `stop` is set ([`Batched::cancelled`]): a batch that
+/// falls back to ReadProperty can be a hundred requests.
+///
+/// # Errors
+///
+/// As [`read`].
+pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    limits: &RequestLimits,
+    device: &DeviceAddress,
+    rows: &[BatchRow<K>],
     mut rpm: bool,
+    stop: &AtomicBool,
 ) -> Result<Batched<K>, Error> {
     let started_rpm = rpm;
     let path = Path::to(client, device).await?;
@@ -115,6 +138,7 @@ pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
         stopped: None,
         partial: false,
         too_large: false,
+        cancelled: false,
         by_rpm: false,
         by_rp: false,
     };
@@ -155,17 +179,25 @@ pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
             }
         }
         for row in batch {
-            let (rows, stopped) = one_by_one(client, limits, (device, path), row).await;
+            let (rows, end) = one_by_one(client, limits, (device, path), row, stop).await;
             let some = !rows.is_empty();
             if some {
                 read.by_rp = true;
                 read.rows.push((row.key, Ok(rows)));
             }
-            if let Some(error) = stopped {
+            match end {
+                None => {}
                 // Some of this row's properties, never all: it stopped on one.
-                read.partial = some;
-                read.stopped = Some(error);
-                break 'batches;
+                Some(End::Silent(error)) => {
+                    read.partial = some;
+                    read.stopped = Some(error);
+                    break 'batches;
+                }
+                Some(End::Cancelled) => {
+                    read.partial = some;
+                    read.cancelled = true;
+                    break 'batches;
+                }
             }
         }
     }
@@ -209,16 +241,29 @@ fn batches<K>(rows: &[BatchRow<K>]) -> impl Iterator<Item = &[BatchRow<K>]> {
     })
 }
 
-/// `row`'s first [`BatchRow::one_by_one`] properties by ReadProperty each,
-/// those read before a device that stopped answering, and its error.
+/// Why a row read property by property ended before its last property.
+enum End {
+    /// The device stopped answering.
+    Silent(Error),
+    /// The caller's stop flag went up.
+    Cancelled,
+}
+
+/// `row`'s first [`BatchRow::one_by_one`] properties by ReadProperty each:
+/// those read before the device stopped answering or `stop` was set, and
+/// which of the two ended it.
 async fn one_by_one<K, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
     (device, path): (&DeviceAddress, &Path),
     row: &BatchRow<K>,
-) -> (Vec<RawRow>, Option<Error>) {
+    stop: &AtomicBool,
+) -> (Vec<RawRow>, Option<End>) {
     let mut rows = Vec::with_capacity(row.one_by_one);
     for &(property, index) in row.wanted.iter().take(row.one_by_one.max(1)) {
+        if stop.load(Ordering::Relaxed) {
+            return (rows, Some(End::Cancelled));
+        }
         let turn = limits.turn(device).await;
         let read = path
             .read_property(client, row.object, property, index)
@@ -226,7 +271,7 @@ async fn one_by_one<K, T: TransportPort + 'static>(
         drop(turn);
         let value = match read {
             Ok(ack) => Ok(ack.property_value),
-            Err(error) if unreachable(&error) => return (rows, Some(error)),
+            Err(error) if unreachable(&error) => return (rows, Some(End::Silent(error))),
             Err(error) => Err(PropertyError::from(error)),
         };
         rows.push((property, value));
@@ -261,14 +306,25 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
     let ack = path.read_property_multiple(client, specs).await;
     drop(turn);
     let ack = ack?;
-    // The answer lists the objects in the order they were asked for; a row
-    // whose object isn't next in it, left out, is missing, and the rows
-    // after it still find theirs.
-    let mut results = ack.list_of_read_access_results.into_iter().peekable();
+    // Each row takes the first result not yet taken that names its object,
+    // wherever the answer put it: a device may answer out of order. A row
+    // with none is missing, and the rows after it still find theirs.
+    let mut results: Vec<Option<ReadAccessResult>> = ack
+        .list_of_read_access_results
+        .into_iter()
+        .map(Some)
+        .collect();
     Ok(batch
         .iter()
         .map(|row| {
-            let Some(result) = results.next_if(|result| answers(row.object, result)) else {
+            let found = results
+                .iter_mut()
+                .find(|slot| {
+                    slot.as_ref()
+                        .is_some_and(|result| answers(row.object, result))
+                })
+                .and_then(Option::take);
+            let Some(result) = found else {
                 return (row.key, Err(Missing));
             };
             let rows: Vec<RawRow> = result

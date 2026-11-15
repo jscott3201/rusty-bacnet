@@ -51,6 +51,9 @@ class Relay(asyncio.DatagramProtocol):
         self.passing = passing
         self.passed: set[int] = set()
         self.dropped: set[int] = set()
+        # Answer a ReadProperty of the whole Object_List with a Reject, so
+        # the client reads the list element by element.
+        self.reject_whole_list = False
         self.client: tuple[str, int] | None = None
         self.front: asyncio.DatagramTransport | None = None
         self.back: asyncio.DatagramTransport | None = None
@@ -67,6 +70,14 @@ class Relay(asyncio.DatagramProtocol):
                     self.dropped.add(invoke_id)
                     return
                 self.passed.add(invoke_id)
+            # ReadProperty (12) of Object_List (76) with no array index.
+            if self.reject_whole_list and data[9] == 12 and data[-2:] == b"\x19\x4c":
+                assert self.front is not None
+                # A Reject PDU for an unrecognized service (9).
+                reject = bytes([0x01, 0x00, 0x60, invoke_id, 9])
+                frame = b"\x81\x0a" + (len(reject) + 4).to_bytes(2, "big") + reject
+                self.front.sendto(frame, addr)
+                return
         assert self.back is not None
         self.back.sendto(data, self.server)
 
@@ -378,6 +389,23 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
                     await client.export_223_experimental(DEVICE)
         finally:
             close(relay)
+
+    async def test_a_list_that_fails_part_way_raises(self) -> None:
+        # The summary, the refused whole list, its size and two elements
+        # pass; the third element goes unanswered. Part of a list is no
+        # inventory: the call raises, and no object is asked for.
+        relay = await relay_to(self.address, passing=5)
+        relay.reject_whole_list = True
+        try:
+            async with BACnetClient(
+                interface="127.0.0.1", port=0, apdu_timeout_ms=300
+            ) as client:
+                await client.add_device(DEVICE, relay_address(relay))
+                with self.assertRaises(BacnetError):
+                    await client.export_223_experimental(DEVICE)
+        finally:
+            close(relay)
+        self.assertEqual(relay.requests, 6)
 
 
 class RefusalTests(unittest.IsolatedAsyncioTestCase):

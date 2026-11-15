@@ -80,6 +80,26 @@ fn sample() -> Inventory {
         row(P::MAX_PRES_VALUE, PropertyValue::Real(120.0)),
     ];
     let vendor = vec![row(P::OBJECT_NAME, text("Caf\u{e9} \u{1F525}"))];
+    // Device text a spreadsheet would run: a name and a description, a
+    // state text that leads its cell, and a string value. The numbers
+    // beside them start with a minus sign and are left alone.
+    let formula = vec![
+        row(P::OBJECT_NAME, text("+SUM(A1)")),
+        row(P::DESCRIPTION, text("-2+3")),
+        row(P::UNITS, PropertyValue::Enumerated(62)),
+        row(P::MIN_PRES_VALUE, PropertyValue::Real(-40.0)),
+        row(P::PRESENT_VALUE, PropertyValue::Real(-12.5)),
+    ];
+    let at_sign = vec![
+        row(P::OBJECT_NAME, text("@cmd")),
+        row(P::DESCRIPTION, text("\tindented")),
+        row(P::INACTIVE_TEXT, text("=off")),
+        row(P::ACTIVE_TEXT, text("on")),
+    ];
+    let string = vec![
+        row(P::OBJECT_NAME, text("Note")),
+        row(P::PRESENT_VALUE, text("=HYPERLINK(\"x\")")),
+    ];
     Inventory {
         address: address(),
         device: DeviceSummary {
@@ -95,6 +115,9 @@ fn sample() -> Inventory {
             point(ObjectType::ANALOG_VALUE, 9, setpoint),
             point(ObjectType::from_raw(700), 1, vendor),
             point(ObjectType::TREND_LOG, 1, Vec::new()),
+            point(ObjectType::ANALOG_VALUE, 10, formula),
+            point(ObjectType::BINARY_INPUT, 4, at_sign),
+            point(ObjectType::CHARACTERSTRING_VALUE, 1, string),
         ],
         unread: vec![oid(ObjectType::ANALOG_INPUT, 2)],
         stopped: Some(OpsError::at(
@@ -117,7 +140,10 @@ fn golden_files_match() {
     let bless = std::env::var_os("BACNET_INVENTORY_BLESS").is_some_and(|v| v == "1");
     let inventory = sample();
     let json = format!("{}\n", inventory.to_json());
-    for (name, text) in [("sample.json", json), ("sample.csv", inventory.to_csv())] {
+    for (name, text) in [
+        ("sample.json", json),
+        ("sample.csv", inventory.to_csv(&CsvOptions::new())),
+    ] {
         let path = golden(name);
         if bless {
             std::fs::write(&path, &text).unwrap();
@@ -221,13 +247,13 @@ fn the_json_holds_typed_fields() {
 /// with its quotes doubled; a bar inside a state text is escaped.
 #[test]
 fn the_csv_quotes_what_it_must() {
-    let csv = sample().to_csv();
+    let csv = sample().to_csv(&CsvOptions::new());
     let mut lines = csv.split('\n');
     assert_eq!(lines.next(), Some(CSV_HEADER));
     assert_eq!(CSV_HEADER.split(',').count(), 16);
     assert!(csv.ends_with('\n'));
     let rows = parse(&csv);
-    assert_eq!(rows.len(), 1 + 6);
+    assert_eq!(rows.len(), 1 + 9);
     assert!(rows.iter().all(|row| row.len() == 16), "{rows:?}");
     let zone = &rows[1];
     assert_eq!(zone[..3], ["192.168.1.10:47808", "1234", "analog-input:1"]);
@@ -247,7 +273,8 @@ fn the_csv_quotes_what_it_must() {
     assert_eq!(mode[6], "Off|Low, slow|High\\\\er");
     assert_eq!(mode[7], "3");
     let setpoint = &rows[4];
-    assert_eq!(setpoint[3], "=Setpoint", "device text is not altered");
+    assert_eq!(setpoint[3], "'=Setpoint", "guarded");
+    assert_eq!(setpoint[11], "-40", "a number is left alone");
     assert_eq!(setpoint[15], "units: PROPERTY:UNKNOWN_PROPERTY");
     assert_eq!(rows[6][3..8], ["", "", "", "", ""], "nothing read: empty");
 
@@ -255,7 +282,7 @@ fn the_csv_quotes_what_it_must() {
     let rows = vec![row(P::OBJECT_NAME, text("a\r\nb"))];
     let mut out = String::new();
     point(ObjectType::TREND_LOG, 1, rows)
-        .write_csv(&mut out)
+        .write_csv(&mut out, &CsvOptions::new())
         .unwrap();
     assert!(out.contains(",\"a\r\nb\","), "{out:?}");
 }
@@ -285,4 +312,70 @@ fn parse(csv: &str) -> Vec<Vec<String>> {
         }
     }
     rows
+}
+
+/// A cell of device text that a spreadsheet would run as a formula (it
+/// starts with `=`, `+`, `-`, `@`, a tab or a carriage return) is written
+/// behind an apostrophe: names, descriptions and the state texts' cell.
+/// Numbers and the cells of our own wording are not, and
+/// [`CsvOptions::exact`] writes everything as the device sent it. The
+/// JSON is always exact.
+#[test]
+fn the_csv_guards_device_text_that_reads_as_a_formula() {
+    let inventory = sample();
+    let guarded = parse(&inventory.to_csv(&CsvOptions::new()));
+    let exact = parse(&inventory.to_csv(&CsvOptions::new().with_exact(true)));
+    assert_ne!(guarded, exact);
+    let (formula, at_sign, string) = (7, 8, 9);
+    assert_eq!(guarded[formula][3..5], ["'+SUM(A1)", "'-2+3"]);
+    assert_eq!(exact[formula][3..5], ["+SUM(A1)", "-2+3"]);
+    for rows in [&guarded, &exact] {
+        assert_eq!(rows[formula][11], "-40 °C", "Min_Pres_Value");
+        assert_eq!(rows[formula][13], "-12.5 °C", "Present_Value");
+        assert_eq!(rows[formula][2], "analog-value:10");
+    }
+    assert_eq!(guarded[at_sign][3..5], ["'@cmd", "'\tindented"]);
+    assert_eq!(
+        guarded[at_sign][6], "'=off|on",
+        "the joined cell's first character"
+    );
+    assert_eq!(exact[at_sign][6], "=off|on");
+    // A string value's text is written in quotes, so its cell starts with
+    // one and reads as text either way.
+    for rows in [&guarded, &exact] {
+        assert_eq!(rows[string][13], "\"=HYPERLINK(\"x\")\"", "a string value");
+    }
+    // Each guarded character, and an ordinary one beside them.
+    for (lead, guard) in [
+        ('=', true),
+        ('+', true),
+        ('-', true),
+        ('@', true),
+        ('\t', true),
+        ('\r', true),
+        ('A', false),
+        ('\'', false),
+    ] {
+        let name = format!("{lead}x");
+        let record = point(
+            ObjectType::TREND_LOG,
+            1,
+            vec![row(P::OBJECT_NAME, text(&name))],
+        );
+        let mut out = String::new();
+        record.write_csv(&mut out, &CsvOptions::new()).unwrap();
+        let cell = parse(&out)[0][3].clone();
+        let expected = if guard {
+            format!("'{name}")
+        } else {
+            name.clone()
+        };
+        assert_eq!(cell, expected, "{lead:?}");
+        let mut out = String::new();
+        let exact = CsvOptions::new().with_exact(true);
+        record.write_csv(&mut out, &exact).unwrap();
+        assert_eq!(parse(&out)[0][3], name, "{lead:?} exact");
+    }
+    let json: serde_json::Value = serde_json::from_str(&inventory.to_json()).unwrap();
+    assert_eq!(json["points"][formula - 1]["name"], "+SUM(A1)");
 }

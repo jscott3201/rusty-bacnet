@@ -14,7 +14,7 @@ use bacnet_types::enums::{
 };
 
 use super::test_lab::{
-    Faults, LAB, count, lab, lab_at, lab_device, lab_logged, oid, passing, refusing_rpm,
+    Faults, LAB, Scripted, count, lab, lab_at, lab_device, lab_logged, oid, passing, refusing_rpm,
     serve_logged, services, stop,
 };
 use super::*;
@@ -374,10 +374,10 @@ async fn a_refused_object_is_a_record_of_problems() {
     stop(client, server).await;
 }
 
-/// An Object_List read element by element that stops early ends the
-/// reading there: no object is asked for, and `stopped` says why.
+/// An Object_List read element by element that fails part way fails the
+/// call: part of a list is not the device, and no object is asked for.
 #[tokio::test(start_paused = true)]
-async fn a_list_that_stops_early_ends_the_reading() {
+async fn a_list_that_fails_part_way_is_an_error() {
     // The summary, the refused whole list, element 0, elements 1 and 2;
     // then element 3 goes unanswered.
     let faults = Faults {
@@ -386,18 +386,88 @@ async fn a_list_that_stops_early_ends_the_reading() {
         ..Faults::default()
     };
     let (client, server, log) = lab_logged(faults).await;
+    let device = lab_device(&client).await;
+    let error = device
+        .inventory(&InventoryOptions::new())
+        .await
+        .unwrap_err();
+    assert!(error.unreachable(), "{error}");
+    // The handle, following its instance, asks once where it went.
+    assert_eq!(services(&log).len(), 6, "no object asked for");
+    drop(device);
+    stop(client, server).await;
+}
+
+/// An Object_List that names an object twice gives it one record, at its
+/// first place.
+#[tokio::test(start_paused = true)]
+async fn a_list_naming_an_object_twice_reads_it_once() {
+    let (ai, ao) = (
+        oid(ObjectType::ANALOG_INPUT, 1),
+        oid(ObjectType::ANALOG_OUTPUT, 1),
+    );
+    let faults = Faults {
+        listed: Some(vec![ai, ai, ao, ai]),
+        ..Faults::default()
+    };
+    let (client, server, log) = lab_logged(faults).await;
     let inventory = lab_device(&client)
         .await
         .inventory(&InventoryOptions::new())
         .await
         .unwrap();
-    assert!(inventory.points.is_empty() && inventory.unread.is_empty());
-    assert!(inventory.stopped.as_ref().unwrap().unreachable());
-    assert_eq!(services(&log).len(), 6, "no object asked for");
+    let objects: Vec<_> = inventory.points.iter().map(|point| point.object).collect();
+    assert_eq!(objects, [ai, ao]);
+    assert_eq!(services(&log), [RPM, RP, RPM]);
     stop(client, server).await;
 }
 
-/// A reader whose stop flag goes up is cancelled, between calls.
+/// An answer that gives the objects in another order than asked still
+/// pairs each with its own record; one that leaves an object out gives
+/// that object a record whose properties all have no value, and the
+/// others theirs.
+#[tokio::test(start_paused = true)]
+async fn answers_pair_with_their_objects() {
+    let types = [
+        ObjectType::ANALOG_INPUT,
+        ObjectType::ANALOG_OUTPUT,
+        ObjectType::ANALOG_VALUE,
+    ];
+    let options = InventoryOptions::new().with_types(types);
+    let gone = oid(ObjectType::ANALOG_OUTPUT, 1);
+    for script in [Scripted::Reversed, Scripted::Without(gone)] {
+        let faults = Faults {
+            scripted: Some(script),
+            ..Faults::default()
+        };
+        let (client, server, log) = lab_logged(faults).await;
+        let inventory = lab_device(&client).await.inventory(&options).await.unwrap();
+        assert_eq!(services(&log), [RPM, RP, RPM], "one batch of four");
+        assert_eq!(inventory.points.len(), 4);
+        for point in &inventory.points {
+            if matches!(script, Scripted::Without(left_out) if left_out == point.object) {
+                assert!(point.name.is_none(), "{point:?}");
+                let asked = properties(point.object.object_type(), &options);
+                let problems: Vec<_> = point.problems.iter().map(|p| p.property).collect();
+                assert_eq!(problems, asked);
+                assert!(
+                    point
+                        .problems
+                        .iter()
+                        .all(|p| p.error == PropertyError::NoValue)
+                );
+            } else {
+                let label = crate::label::object_label(point.object);
+                assert_eq!(point.name.as_deref(), Some(label.as_str()));
+            }
+        }
+        stop(client, server).await;
+    }
+}
+
+/// A reader whose stop flag goes up is cancelled: before the next batch,
+/// and before the next ReadProperty of a batch read property by property,
+/// so a stop doesn't wait out the batch.
 #[tokio::test(start_paused = true)]
 async fn a_stop_flag_cancels_the_reading() {
     let flag = Arc::new(AtomicBool::new(false));
@@ -415,9 +485,31 @@ async fn a_stop_flag_cancels_the_reading() {
         rpm: true,
     };
     // The flag goes up as the Object_List's request leaves.
-    let read = read_inventory(&mut reader, &InventoryOptions::new()).await;
+    let read = crate::raw::read_inventory(&mut reader, &InventoryOptions::new()).await;
     assert!(matches!(read, Err(Halt::Cancelled)), "{read:?}");
     assert_eq!(services(&log), [RPM, RP], "no object asked for");
+    stop(client, server).await;
+
+    // By ReadProperty: the refused RPM, 13 + 1, the Device's Description,
+    // and the flag goes up as the input's second property is asked for.
+    let last = 1 + 14 + 1 + 2;
+    let flag = Arc::new(AtomicBool::new(false));
+    let faults = Faults {
+        cancel: Some((last, Arc::clone(&flag))),
+        ..refusing_rpm()
+    };
+    let (client, server, log) = lab_logged(faults).await;
+    let mut reader = Reader {
+        client: client.low_level(),
+        device: lab_at(),
+        instance: Some(LAB),
+        rate: client.limits(),
+        cancel: &flag,
+        rpm: true,
+    };
+    let read = crate::raw::read_inventory(&mut reader, &InventoryOptions::new()).await;
+    assert!(matches!(read, Err(Halt::Cancelled)), "{read:?}");
+    assert_eq!(services(&log).len(), last, "none of the batch's other 30");
     stop(client, server).await;
 }
 
@@ -458,9 +550,9 @@ async fn one_record_reads_as_the_inventory_does() {
     stop(client, server).await;
 }
 
-/// Forty analog inputs, each `name` a few characters.
-fn inputs() -> Vec<Box<dyn BACnetObject>> {
-    (1..=40)
+/// `count` analog inputs, each `name` a few characters.
+fn inputs(count: u32) -> Vec<Box<dyn BACnetObject>> {
+    (1..=count)
         .map(|n| {
             let units = EngineeringUnits::DEGREES_CELSIUS;
             let input = AnalogInputObject::new(n, format!("T{n}"), units).unwrap();
@@ -469,39 +561,64 @@ fn inputs() -> Vec<Box<dyn BACnetObject>> {
         .collect()
 }
 
-/// A device that can't send a large answer: the batch is asked again an
-/// object at a time, and the calls after it ask for half as many objects,
-/// until one fits. Forty-one objects cost three refused batches, not one
-/// for every batch of the inventory.
-#[tokio::test(start_paused = true)]
-async fn a_device_with_small_answers_gets_smaller_batches() {
-    // A request for one object's three properties is 13 octets: four
-    // objects fit under 60, eight don't.
+/// The inventory of a device of `count` analog inputs whose answers to a
+/// ReadPropertyMultiple request longer than `most` octets don't fit, and
+/// the requests it took.
+async fn small_answers(count: u32, most: usize) -> (Inventory, Vec<Vec<u8>>, Vec<u8>) {
     let faults = Faults {
-        abort_longer: Some(60),
+        abort_longer: Some(most),
         ..Faults::default()
     };
     let identity = DeviceIdentity::new(LAB, 42).unwrap();
-    let database = build_database_with_extra(&identity, inputs()).unwrap();
+    let database = build_database_with_extra(&identity, inputs(count)).unwrap();
     let (client, server, log) = serve_logged(faults, identity, database).await;
     let inventory = lab_device(&client)
         .await
         .inventory(&InventoryOptions::new())
         .await
         .unwrap();
+    assert!(!client.refused_rpm(&lab_at()));
+    let sent = services(&log);
+    let requests = (0..sent.len()).map(|n| request_octets(&log, n)).collect();
+    stop(client, server).await;
+    (inventory, requests, sent)
+}
+
+/// A device that can't send a large answer: the batch is asked again an
+/// object at a time, and the batches after it hold half as many objects as
+/// it did, until one fits. Each call is one batch, so no call ends in a
+/// short one.
+#[tokio::test(start_paused = true)]
+async fn a_device_with_small_answers_gets_smaller_batches() {
+    // A request for one input's three properties is 13 octets: four
+    // inputs fit under 60, five don't.
+    let (inventory, _, sent) = small_answers(40, 60).await;
     assert_eq!(inventory.points.len(), 41, "{:?}", inventory.stopped);
     assert!(inventory.points.iter().all(|p| p.problems.is_empty()));
-    // The first call's sixteen objects: two batches (eleven and five) refused,
-    // then sixteen requests. The second's eight: one refused, then eight.
-    // From then on four a call, each one request: the seventeen left take
-    // five.
-    let objects = (2 + 16) + (1 + 8) + 5;
-    assert_eq!(
-        services(&log).len(),
-        1 + 1 + objects,
-        "{:?}",
-        services(&log)
-    );
-    assert!(!client.refused_rpm(&lab_at()));
-    stop(client, server).await;
+    // The Device and ten inputs: refused, then eleven requests. Five
+    // inputs: refused, then five. From then on two a batch: the 25 left
+    // take thirteen.
+    let objects = (1 + 11) + (1 + 5) + 13;
+    assert_eq!(sent.len(), 1 + 1 + objects, "{sent:?}");
+}
+
+/// A device that answers one object at a time costs three refused batches
+/// (eleven objects, five, two), then one request an object: never more
+/// than four, however many objects it has.
+#[tokio::test(start_paused = true)]
+async fn a_device_answering_one_object_at_a_time_refuses_three_batches() {
+    // Two inputs' request is 26 octets; one's is 13.
+    let (inventory, requests, sent) = small_answers(41, 20).await;
+    assert_eq!(inventory.points.len(), 42, "{:?}", inventory.stopped);
+    assert!(inventory.points.iter().all(|p| p.problems.is_empty()));
+    // The summary's own RPM is too long as well, and is read by
+    // ReadProperty: its 13 properties, then the Object_List.
+    let after_list = 1 + 13 + 1;
+    let refused = requests[after_list..]
+        .iter()
+        .filter(|request| request.len() > 20)
+        .count();
+    assert_eq!(refused, 3, "{sent:?}");
+    assert!(sent[after_list..].iter().all(|&service| service == RPM));
+    assert_eq!(sent.len(), after_list + 3 + 42);
 }

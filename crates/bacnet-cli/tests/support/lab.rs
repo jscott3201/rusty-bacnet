@@ -120,3 +120,16 @@ pub fn large_database(instance: u32, count: u32) -> ObjectDatabase {
         .collect();
     database(instance, points)
 }
+
+/// A device with one analog value for each of `names`, from instance 1,
+/// besides its Device object.
+pub fn named_database(instance: u32, names: &[&str]) -> ObjectDatabase {
+    let points = (1u32..)
+        .zip(names)
+        .map(|(n, name)| {
+            Box::new(AnalogValueObject::new(n, *name, EngineeringUnits::NO_UNITS).unwrap())
+                as Box<dyn BACnetObject>
+        })
+        .collect();
+    database(instance, points)
+}

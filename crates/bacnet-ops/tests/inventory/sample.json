@@ -226,6 +226,97 @@
       "present_value": null,
       "status_flags": null,
       "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "analog-value",
+        "type_number": 2,
+        "instance": 10
+      },
+      "name": "+SUM(A1)",
+      "description": "-2+3",
+      "units": {
+        "value": 62,
+        "name": "degrees-celsius",
+        "symbol": "°C"
+      },
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": {
+        "value": "-40 °C",
+        "decoded": -40.0
+      },
+      "max_present_value": null,
+      "present_value": {
+        "value": "-12.5 °C",
+        "decoded": -12.5
+      },
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "binary-input",
+        "type_number": 3,
+        "instance": 4
+      },
+      "name": "@cmd",
+      "description": "\tindented",
+      "units": null,
+      "state_texts": {
+        "active": "on",
+        "inactive": "=off",
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": null,
+      "status_flags": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "characterstring-value",
+        "type_number": 40,
+        "instance": 1
+      },
+      "name": "Note",
+      "description": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": {
+        "value": "\"=HYPERLINK(\"x\")\"",
+        "decoded": "=HYPERLINK(\"x\")"
+      },
+      "status_flags": null,
+      "problems": []
     }
   ],
   "unread": [

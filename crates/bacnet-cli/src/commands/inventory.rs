@@ -5,11 +5,11 @@
 use std::sync::atomic::AtomicBool;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::inventory::{Inventory, InventoryOptions, PointRecord, read_inventory};
+use bacnet_ops::inventory::{CsvOptions, Inventory, InventoryOptions, PointRecord};
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::parse::parse_object_type;
-use bacnet_ops::raw::{Halt, Reader};
+use bacnet_ops::raw::{Halt, Reader, read_inventory};
 use bacnet_ops::{OpsError, Value};
 use bacnet_transport::port::TransportPort;
 
@@ -52,6 +52,8 @@ pub struct InventoryArgs<'a> {
     pub values: bool,
     /// `--settings`.
     pub settings: bool,
+    /// `--csv-exact`: the CSV without its formula guard.
+    pub csv_exact: bool,
     /// How to print.
     pub layout: Layout,
 }
@@ -97,7 +99,10 @@ pub async fn inventory_cmd<T: TransportPort + 'static>(
     // Stdout carries only the data; the notes go to stderr in every format.
     match args.layout {
         Layout::Json => println!("{}", inventory.to_json()),
-        Layout::Csv => print!("{}", inventory.to_csv()),
+        Layout::Csv => {
+            let options = CsvOptions::new().with_exact(args.csv_exact);
+            print!("{}", inventory.to_csv(&options));
+        }
         Layout::Table => {
             if !inventory.points.is_empty() {
                 println!("{}", table(&inventory, &options));
@@ -144,13 +149,10 @@ fn note(inventory: &Inventory) -> String {
 /// Why the command fails after printing what was read.
 fn stopped(inventory: &Inventory, why: &OpsError) -> String {
     let device = inventory.device.device;
-    let rest = match inventory.unread.len() {
-        0 => "its Object_List was not read to the end".to_string(),
-        unread => format!("{unread} objects were not read"),
-    };
     format!(
-        "the inventory of device {device} stopped early ({}); {rest}",
-        screen(&why.to_string())
+        "the inventory of device {device} stopped early ({}); {} objects were not read",
+        screen(&why.to_string()),
+        inventory.unread.len()
     )
 }
 

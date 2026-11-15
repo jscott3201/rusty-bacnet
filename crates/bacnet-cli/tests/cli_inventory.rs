@@ -7,7 +7,7 @@ mod support;
 use std::process::Output;
 
 use serde_json::Value;
-use support::lab::large_database;
+use support::lab::{large_database, named_database};
 use support::relay::{relay, server, serving};
 
 async fn inventory(args: &[&str]) -> Output {
@@ -263,6 +263,40 @@ async fn no_object_and_bad_options() {
     assert_eq!(seen.lock().unwrap().len(), 3, "refused before sending");
     let usage = inventory(&[]).await;
     assert_eq!(usage.status.code(), Some(2));
+    relay.abort();
+    server.stop().await.unwrap();
+}
+
+/// CSV guards device text a spreadsheet would run as a formula with an
+/// apostrophe; `--csv-exact` writes it as the device sent it, and JSON is
+/// always exact.
+#[tokio::test]
+async fn the_csv_guards_formulas_unless_exact() {
+    let names = ["=1+1", "-Offset", "Plain"];
+    let (mut server, device) = serving(named_database(1234, &names)).await;
+    let (target, _, relay) = relay(device, usize::MAX).await;
+    let name = |csv: &str, row: usize| -> String {
+        let line = csv.lines().nth(row).unwrap_or_else(|| panic!("{csv}"));
+        line.split(',').nth(3).unwrap().to_string()
+    };
+    let guarded = stdout(&inventory(&[&target, "--types", "av", "--format", "csv"]).await);
+    assert_eq!(name(&guarded, 1), "'=1+1", "{guarded}");
+    assert_eq!(name(&guarded, 2), "'-Offset");
+    assert_eq!(name(&guarded, 3), "Plain");
+    let args = [
+        target.as_str(),
+        "--types",
+        "av",
+        "--format",
+        "csv",
+        "--csv-exact",
+    ];
+    let exact = stdout(&inventory(&args).await);
+    assert_eq!(name(&exact, 1), "=1+1", "{exact}");
+    assert_eq!(name(&exact, 2), "-Offset");
+    let json = stdout(&inventory(&[&target, "--types", "av", "--json"]).await);
+    let json: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(json["points"][0]["name"], "=1+1");
     relay.abort();
     server.stop().await.unwrap();
 }

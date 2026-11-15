@@ -9,9 +9,8 @@ use bacnet_ops::export::s223::{
     Access, DEFAULT_BASE_IRI, Model, Point, PointKind, Skipped, TurtleOptions, inventory_options,
     to_turtle,
 };
-use bacnet_ops::inventory::read_inventory;
 use bacnet_ops::limits::RequestLimits;
-use bacnet_ops::raw::{Halt, Reader};
+use bacnet_ops::raw::{Halt, Reader, read_inventory};
 use bacnet_ops::{DeviceAddress, InventoryOptions, Priority};
 use bacnet_types::enums::EngineeringUnits;
 use pyo3::exceptions::PyValueError;
@@ -108,10 +107,9 @@ impl PyInventory223 {
         self.objects.clone_ref(py)
     }
 
-    /// Why the reading stopped early, None when it didn't. A request to the
-    /// device timed out or its link failed, so the objects after that point
-    /// are missing; or a read of the Object_List element by element failed
-    /// partway (an error or no answer), and then `objects` is empty.
+    /// Why the reading stopped early, None when it didn't: a request to the
+    /// device timed out or its link failed while its objects were being
+    /// read, so the objects after that point are missing.
     #[getter]
     fn stopped(&self) -> Option<&str> {
         self.inventory.stopped.as_deref()

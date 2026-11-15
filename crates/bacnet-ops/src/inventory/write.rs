@@ -14,9 +14,20 @@
 //! Rows end with a line feed. The device summary and
 //! [`Inventory::stopped`] are not in it.
 //!
-//! Both keep device text exactly as the device sent it, control
-//! characters included. A spreadsheet may take a field that starts with
-//! `=`, `+`, `-` or `@` for a formula: import the columns as text.
+//! The JSON keeps device text exactly as the device sent it, control
+//! characters included. So does the CSV, but for one guard, on unless
+//! [`CsvOptions::exact`] turns it off: a spreadsheet takes a cell that
+//! starts with `=`, `+`, `-`, `@`, a tab or a carriage return for a
+//! formula, so a cell of device text that starts with one gets an
+//! apostrophe before it, which a spreadsheet shows as text. The guarded
+//! cells are `name`, `description` and `state_texts` (the joined cell).
+//! A value cell is guarded too when its value may hold device text
+//! ([`Value::may_hold_device_text`]), though none starts with one of those
+//! characters as values are written today: a character string's text is
+//! in double quotes, and a state named by the object's own text follows
+//! its number. A number is never touched (`-40` stays `-40`), nor are the
+//! cells this crate words itself: addresses, objects, units and
+//! `problems`, which starts with a property's name.
 
 use std::fmt::{self, Write};
 
@@ -37,7 +48,8 @@ use crate::label;
 ///   `2:0x05`);
 /// - `device_instance`;
 /// - `object`: `analog-input:1`, the type in kebab case;
-/// - `name`, `description`: exactly as the device sent them;
+/// - `name`, `description`: as the device sent them, behind an apostrophe
+///   when they would read as a formula ([`CsvOptions`]);
 /// - `units`: the unit's name in kebab case (`degrees-fahrenheit`);
 /// - `state_texts`: a binary object's Inactive_Text then Active_Text, or
 ///   a multi-state object's State_Text from state 1, joined with `|`; a
@@ -65,29 +77,81 @@ impl Inventory {
     }
 
     /// The records as CSV under [`CSV_HEADER`], as `bacnet inventory
-    /// --format csv` prints it.
-    pub fn to_csv(&self) -> String {
+    /// --format csv` prints it; `options` says whether device text that
+    /// would read as a formula is guarded (`&CsvOptions::new()`: it is).
+    pub fn to_csv(&self, options: &CsvOptions) -> String {
         let mut out = String::new();
         // Writing to a String can't fail.
-        let _ = self.write_csv(&mut out);
+        let _ = self.write_csv(&mut out, options);
         out
     }
 
     /// Write the records as CSV to `out`: [`CSV_HEADER`], then one row a
     /// record.
-    pub fn write_csv(&self, out: &mut impl Write) -> fmt::Result {
+    pub fn write_csv(&self, out: &mut impl Write, options: &CsvOptions) -> fmt::Result {
         writeln!(out, "{CSV_HEADER}")?;
         self.points
             .iter()
-            .try_for_each(|point| point.write_csv(out))
+            .try_for_each(|point| point.write_csv(out, options))
+    }
+}
+
+/// How the inventory's CSV is written.
+///
+/// ```
+/// use bacnet_ops::inventory::CsvOptions;
+///
+/// assert!(!CsvOptions::new().exact);
+/// assert!(CsvOptions::new().with_exact(true).exact);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CsvOptions {
+    /// Write device text exactly, with no guard. Off by default: a cell
+    /// of device text that starts with `=`, `+`, `-`, `@`, a tab or a
+    /// carriage return, which a spreadsheet would run as a formula, is
+    /// written behind an apostrophe.
+    pub exact: bool,
+}
+
+impl CsvOptions {
+    /// The guard on.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The same options, writing device text exactly or not.
+    pub fn with_exact(mut self, exact: bool) -> Self {
+        self.exact = exact;
+        self
+    }
+
+    /// `text`, a cell of device text, as these options write it.
+    fn device_text(self, text: String) -> String {
+        if !self.exact && text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+            format!("'{text}")
+        } else {
+            text
+        }
     }
 }
 
 impl PointRecord {
     /// Write the record as one CSV row to `out`, its fields in
     /// [`CSV_HEADER`]'s order.
-    pub fn write_csv(&self, out: &mut impl Write) -> fmt::Result {
-        let text = |value: &Option<Value>| value.as_ref().map(|value| value.text.clone());
+    pub fn write_csv(&self, out: &mut impl Write, options: &CsvOptions) -> fmt::Result {
+        let device_text = |text: String| options.device_text(text);
+        // A value's text may quote device text when the value is a string
+        // or names a state by the object's own text; a number never does.
+        let text = |value: &Option<Value>| {
+            value.as_ref().map(|value| {
+                if value.may_hold_device_text() {
+                    device_text(value.text.clone())
+                } else {
+                    value.text.clone()
+                }
+            })
+        };
         let number = self.number_of_states.map(|states| states.to_string());
         let problems: Vec<String> = self
             .problems
@@ -103,10 +167,10 @@ impl PointRecord {
             Some(self.device.to_string()),
             Some(self.device_instance.to_string()),
             Some(object),
-            self.name.clone(),
-            self.description.clone(),
+            self.name.clone().map(device_text),
+            self.description.clone().map(device_text),
             self.units.map(label::kebab),
-            csv_state_texts(self),
+            csv_state_texts(self).map(device_text),
             number,
             Some(self.commandable.to_string()),
             text(&self.relinquish_default),

@@ -24,12 +24,17 @@ use crate::write::Commandability;
 /// description and whether it has a Priority_Array, and with values
 /// whatever Present_Value and Status_Flags it has.
 ///
-/// Object_Name, the Units of the types listed with it and a multi-state
-/// object's Number_Of_States are properties every object of the type has:
-/// one the device can't give is a [`problem`](super::PointRecord::problems)
-/// whatever its error. Any other is optional: an object that lacks it
-/// (the device answers that the property is unknown) reads as `None`
-/// with no problem.
+/// Some of these every object of the type has, and one the device can't
+/// give is a [`problem`](super::PointRecord::problems) whatever its error:
+/// Object_Name; the Units of the types listed with it; a multi-state
+/// object's Number_Of_States; the Relinquish_Default of a type whose
+/// Present_Value is always commandable; and the Present_Value and
+/// Status_Flags of the analog, binary and multi-state inputs, outputs and
+/// values, Access Door, the twelve value types from CharacterString Value
+/// to Date Pattern Value, Lighting Output, Binary Lighting Output and
+/// Accumulator. Any other is optional: an object that lacks it (the
+/// device answers that the property is unknown) reads as `None` with no
+/// problem.
 ///
 /// ```
 /// use bacnet_ops::inventory::{InventoryOptions, properties};
@@ -86,11 +91,68 @@ pub fn properties(object_type: ObjectType, options: &InventoryOptions) -> Vec<P>
 
 /// Whether every object of `object_type` has `property`, among those
 /// [`properties`] lists: one the device can't give is a problem whatever
-/// its error.
+/// its error. From the conformance codes of the object types' property
+/// tables in Clause 12, where a row is required (read-only or writable)
+/// with no condition attached:
+///
+/// - Object_Name, in every table;
+/// - Units, in the tables of [`has_units`]'s types;
+/// - Number_Of_States, in the multi-state tables (Clauses 12.18 to 12.20);
+/// - Relinquish_Default, in the tables of the types whose Present_Value is
+///   always commandable and kept in a Priority_Array: Analog, Binary and
+///   Multi-state Output (Clauses 12.3, 12.7, 12.19), Access Door (Table
+///   12-30), Lighting Output (Table 12-64) and Binary Lighting Output
+///   (Table 12-69). In the value types' tables it is conditional on the
+///   object being commandable, so it stays optional there;
+/// - Present_Value and Status_Flags, in the tables of
+///   [`has_value_and_flags`]'s types.
 pub(super) fn required(object_type: ObjectType, property: P) -> bool {
-    property == P::OBJECT_NAME
-        || (property == P::UNITS && has_units(object_type))
-        || (property == P::NUMBER_OF_STATES && is_multistate(object_type))
+    match property {
+        P::OBJECT_NAME => true,
+        P::UNITS => has_units(object_type),
+        P::NUMBER_OF_STATES => is_multistate(object_type),
+        P::RELINQUISH_DEFAULT => {
+            Commandability::of(object_type, P::PRESENT_VALUE) == Commandability::Always
+                && crate::write::keeps_priorities(object_type)
+        }
+        P::PRESENT_VALUE | P::STATUS_FLAGS => has_value_and_flags(object_type),
+        _ => false,
+    }
+}
+
+/// The types whose tables require both Present_Value and Status_Flags, as
+/// far as this list was checked against them: the analog, binary and
+/// multi-state inputs, outputs and values (Clauses 12.2 to 12.4, 12.6 to
+/// 12.8 and 12.18 to 12.20), Access Door (Table 12-30), the value types of
+/// Clauses 12.37 to 12.48 (Table 12-44 and the tables shaped like it),
+/// Lighting Output (Table 12-64), Binary Lighting Output (Table 12-69) and
+/// Accumulator (Table 12-79). A type not listed is treated as optional.
+fn has_value_and_flags(object_type: ObjectType) -> bool {
+    type O = ObjectType;
+    is_binary(object_type)
+        || is_multistate(object_type)
+        || [
+            O::ANALOG_INPUT,
+            O::ANALOG_OUTPUT,
+            O::ANALOG_VALUE,
+            O::ACCESS_DOOR,
+            O::CHARACTERSTRING_VALUE,
+            O::DATETIME_VALUE,
+            O::LARGE_ANALOG_VALUE,
+            O::BITSTRING_VALUE,
+            O::OCTETSTRING_VALUE,
+            O::TIME_VALUE,
+            O::INTEGER_VALUE,
+            O::POSITIVE_INTEGER_VALUE,
+            O::DATE_VALUE,
+            O::DATETIMEPATTERN_VALUE,
+            O::TIMEPATTERN_VALUE,
+            O::DATEPATTERN_VALUE,
+            O::LIGHTING_OUTPUT,
+            O::BINARY_LIGHTING_OUTPUT,
+            O::ACCUMULATOR,
+        ]
+        .contains(&object_type)
 }
 
 /// The types whose objects all have Units.

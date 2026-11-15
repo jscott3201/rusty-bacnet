@@ -2244,16 +2244,17 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
   anything is sent.
 - It costs the device summary, its Object_List and one
   ReadPropertyMultiple for each batch of exported objects (six to ten
-  objects a request), one at a time; a device that refuses
-  ReadPropertyMultiple is read a property at a time, as the CLI section
-  counts. Present_Value is never read.
+  objects a request, each request filled to 32 properties), one at a
+  time; a device that refuses ReadPropertyMultiple is read a property at a
+  time, 13 for the summary, as the CLI section counts. Present_Value is
+  never read.
 - A device that doesn't answer the summary read, or a failed read of the
-  whole Object_List, raises the usual error. A device that can't send the
-  list whole is read element by element; an element that fails there (an
-  error or no answer) ends the reading with `stopped` set (a reason string)
-  and no objects. A device that stops answering once the list is in gives
-  an inventory with `stopped` set and the objects read before it. Either
-  way the Turtle's header says it is incomplete.
+  Object_List, raises the usual error. A device that can't send the list
+  whole is read element by element, and an element that fails there (an
+  error or no answer) raises too: part of a list is no inventory. A device
+  that goes silent while its objects are read gives an inventory with
+  `stopped` set (a reason string naming the first object not read) and the
+  objects read before it, and the Turtle's header says it is incomplete.
 - `stop()`, and leaving `async with`, wait for a running export to finish;
   cancelling the awaitable stops it before its next request.
 - `Inventory223Experimental` has `device_instance`, `device_name`
@@ -2262,9 +2263,10 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
   `name`, `description`, `units` (`EngineeringUnits | None`, analog
   objects and integer values), `number_of_states` and `state_texts`
   (multi-state objects), `commandable` (it has a Priority_Array) and
-  `error` (its read failed, or it couldn't give its Object_Name, the Units
-  of an analog object or an integer value, or a multi-state object's
-  Number_Of_States, named in the error; the Turtle
+  `error` (it couldn't give its Object_Name, the Units of an analog
+  object or an integer value, or a multi-state object's Number_Of_States,
+  named in the error; an object the device refuses altogether reports
+  `object-name: ...`; the Turtle
   skips it, and its other fields are `None` or empty). Device text is kept
   exactly as the device sent it.
 - `to_turtle(base_iri=None, write_priority=None)` takes the base the CLI's

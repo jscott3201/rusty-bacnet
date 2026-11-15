@@ -11968,7 +11968,7 @@ with no aliases left behind:
 | the module `bacnet_ops::engine` (`Reader`, `Wanted`, `ReadVia`, `unreachable`, ...) | `bacnet_ops::client`; `Reader`, `Halt` and the error classifiers in `bacnet_ops::raw` |
 | `WhoIsScope` (`Local`, `Network`, `Directed(&str)`, `Global`) and `engine.who_is(scope, range)` | `Scope` (`Directed` takes a `DeviceAddress`; `client.station_mac(text)` checks an address first), sent by `client.discover(Discover::from(scope).range(low..=high))`; `Discover::default()` is local. `bacnet_ops::raw::who_is(low_level, &scope, range)` sends one on a low-level client, with no rate cap |
 | `engine.client()` | `client.low_level()` |
-| `engine.read(device, object, wanted)` and `read_property`, `list_objects`, `describe_device`, `read_trend`, `alarms`, `alarm_summary`, `enrollment_summary`, `log_columns`, `log_state_texts`, `inventory`, `inventory_device`, `inventory_object` with the instance first | the same method on `client.device(device).await?`, without it |
+| `engine.read(device, object, wanted)` and `read_property`, `list_objects`, `describe_device`, `read_trend`, `alarms`, `alarm_summary`, `enrollment_summary`, `log_columns`, `log_state_texts`, `inventory` with the instance first | the same method on `client.device(device).await?`, without it |
 | `engine.device(instance)`, the discovery table's row | `client.low_level().get_device(instance)` |
 | `engine.refused_rpm(instance)` | `client.refused_rpm(&address)` |
 | `RequestLimits::turn(u32)`, `turn_on(u32, Option<u16>)`, `gate(u32)`, `wait_device_free(u32)` | `turn`, `gate` and `wait_device_free` with a `&DeviceAddress`, whose network paces the request |
@@ -12344,37 +12344,48 @@ std::fs::write("inputs.csv", inputs.to_csv()).ok();
   no request of its own; whether one point reports changes is known only
   once a watch has asked it. `Inventory::point(object)` finds a record.
 - **What it costs.** By ReadPropertyMultiple: the summary, the Object_List,
-  then one request for each batch of up to 16 objects and 32 properties: 16
-  objects of a type that reads two properties, 10 analog inputs, 8 binary
-  inputs or analog values, 6 multi-state values. That is about N/8 + 2
-  requests for N objects, N/5 + 2 with values. A handle made from an
-  address whose instance isn't known yet costs one more. A batch whose
-  answer the device can't send for its size is asked again an object at a
-  time, and the calls after it ask for half as many objects, down to one:
-  at most four such refusals an inventory. An answer in segments costs no
-  more requests. A device that refuses ReadPropertyMultiple costs that one
+  then one request for each batch, filled in Object_List order up to 16
+  objects or 32 properties, whichever comes first: 16 objects of a type
+  that reads two properties, 10 analog inputs, 8 binary inputs or analog
+  values, 6 multi-state values. N objects of one type that each read p
+  properties take the larger of N/16 and N×p/32 requests, rounded up, and
+  a mix one or two more: about N/8 + 2 requests for a typical controller,
+  N/5 + 2 with values. A handle made from an address whose instance isn't
+  known yet costs one more. A batch whose answer the device can't send for
+  its size is asked again an object at a time, and the batches after it
+  hold at most half as many objects as it did, down to one: at most four
+  such refused batches an inventory (a device that answers one object at
+  a time costs three, then a request an object). A single object whose
+  answer is too large costs its refused request and a ReadProperty for
+  each property. An answer in segments costs no more requests. A device
+  that refuses ReadPropertyMultiple costs that one
   refused request, then a ReadProperty for each property: 13 for the
   summary, one for the Object_List, and each object's own count. No
   property is read twice, and every request waits at the device's gate
   under the client's `RequestLimits`.
 - **What it holds.** The Object_List, the records built so far, and the
-  answers of one call's objects, 16 at most: each call's answers become
-  records before the next is sent, so a device at the 10,000-object cap
-  never has more than 16 objects' raw answers held at once.
+  answers of one batch, 16 objects at most: each batch's answers become
+  records before the next is sent, however many objects the device has.
+  The client sets no cap on a list the device sends whole; a list read
+  element by element stops at `client::MAX_OBJECTS` (100,000) elements. An
+  object the list names twice is read once.
 - **Errors.** `Err` is whatever is decided before a request is sent (a
   device that can't be placed, an ambiguous instance, no route), and a
-  device that doesn't answer the summary or the whole Object_List, or
-  refuses the list: nothing was read to keep. After that the call is `Ok`.
-  A device that stops answering part way leaves the records read,
-  `unread` (the objects not read) and `stopped` (why, always
-  `unreachable()` then). An Object_List read element by element that fails
-  part way sets `stopped` too, with no object asked for.
+  device that doesn't answer the summary or the Object_List, or refuses
+  the list, an element of a list read element by element included: no
+  record was read to keep. After that the call is `Ok`. A device that goes
+  silent while its objects are read, or whose route is lost then, leaves
+  the records read, `unread` (the objects not read) and `stopped` (why).
 - **One object.** `Device::point_record(object, &options)` reads one
   record the same way in one request, for a front end that pages a
   device's objects itself, as the MCP export does.
-- **Without a `Client`.** `bacnet_ops::inventory::read_inventory(&mut
-  reader, &options)` and `read_point_record` read the same over a
-  `raw::Reader`, failing with `Halt`; the `bacnet` CLI uses them.
+- **Without a `Client`.** `bacnet_ops::raw::read_inventory(&mut reader,
+  &options)` and `raw::read_point_record` are the layer under
+  `Device::inventory`, for a caller that owns a low-level client and a
+  `raw::Reader`; they fail with `Halt`, and the `bacnet` CLI uses them. A
+  reader's stop flag is checked before each batch and before each
+  ReadProperty of a batch read property by property; a stopped read is
+  `Halt::Cancelled` and what it had read is dropped.
 - **JSON and CSV.** `Inventory` and `PointRecord` implement
   `serde::Serialize` with stable field names, and `Inventory::to_json()`
   is the indented document `bacnet inventory --json` prints: `address`,
@@ -12382,7 +12393,8 @@ std::fs::write("inputs.csv", inputs.to_csv()).ok();
   and `stopped`. A value is `{"value": text, "decoded": data}`, the typed
   form the CLI's other JSON uses; an object is `{"type", "type_number",
   "instance"}`; units are `{"value", "name", "symbol"}`; a problem is
-  `{"property", "error"}`. `Inventory::to_csv()` (and `write_csv`) writes
+  `{"property", "error"}`; property names are in kebab case.
+  `Inventory::to_csv(&CsvOptions::new())` (and `write_csv`) writes
   one row a record under `inventory::CSV_HEADER`: `device`,
   `device_instance`, `object` (`analog-input:1`), `name`, `description`,
   `units` (the kebab name), `state_texts` (joined with `|`, a `|` or `\`
@@ -12390,9 +12402,16 @@ std::fs::write("inputs.csv", inputs.to_csv()).ok();
   `relinquish_default`, `cov_increment`, `min_present_value`,
   `max_present_value`, `present_value`, `status_flags` (each value's text)
   and `problems`. A field holding a comma, a double quote or a line break
-  is quoted, its quotes doubled; rows end with a line feed. Both keep
-  device text exactly, so import the CSV's columns as text: a spreadsheet
-  may read a name that starts with `=` as a formula.
+  is quoted, its quotes doubled; rows end with a line feed. The JSON keeps
+  device text exactly. The CSV guards it by default: a `name`,
+  `description` or `state_texts` cell that starts with `=`, `+`, `-`, `@`,
+  a tab or a carriage return, which a spreadsheet would run as a formula,
+  gets an apostrophe before it (for `state_texts`, the joined cell). A
+  value cell is guarded the same way when its value may hold device text,
+  though a string value's text is in quotes and so never starts with one;
+  a number (`-40`) is never touched, nor are the address, object, units
+  and `problems` cells. `CsvOptions::new().with_exact(true)` writes device
+  text exactly.
 
 The Standard 223 export derives from the same records.
 `bacnet_ops::export::s223::inventory_options(types)` gives the options of
@@ -12410,7 +12429,7 @@ export's terms, a `bacnet_types::points::Point` an object
 | `Entry::object()`, `point()`, `error()` | match on the `Result` |
 | `InventoryOptions::default()`, `InventoryOptions::new(types)?` | `s223::inventory_options(None)?`, `s223::inventory_options(Some(types))?`, which give a `bacnet_ops::InventoryOptions` |
 | `Detail::Export`, `Detail::Full`, `InventoryOptions::with_detail` | `InventoryOptions::with_settings(bool)`; `s223::point_list_options()` for everything a `PointList` holds |
-| `read_inventory(&mut reader, &options)` | `bacnet_ops::inventory::read_inventory(&mut reader, &options)`, then `Model::from(&inventory)` |
+| `read_inventory(&mut reader, &options)` | `bacnet_ops::raw::read_inventory(&mut reader, &options)`, then `Model::from(&inventory)` |
 | `Device::inventory(&options) -> s223::Inventory` | `Device::inventory(&options) -> bacnet_ops::Inventory` |
 | `Device::inventory_device(detail)` | `Device::describe_device()`, or `device.read((device_object, OBJECT_NAME))` for the name alone |
 | `Device::inventory_object(object, detail)` | `Device::point_record(object, &options)`, then `s223::exported(&record)` |
@@ -12423,7 +12442,9 @@ device summary and the objects in batches, so a device of N exported
 objects takes about N/8 + 2 requests instead of N + 2. A binary object's
 Active_Text and Inactive_Text are always read. An object the device fails
 is reported a property at a time, so the Turtle's skip comment names its
-Object_Name instead of saying its read failed.
+Object_Name instead of saying its read failed. An Object_List read
+element by element that fails part way is an error now, where the export
+used to return an inventory with `stopped` set and no objects.
 
 ### Moved to bacnet-tool
 

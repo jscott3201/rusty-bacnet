@@ -15,12 +15,11 @@ impl BACnetClient {
     /// raises ValueError before anything is sent.
     ///
     /// A device that doesn't answer the summary read, or a failed read of the
-    /// whole Object_List, raises the usual error. A device that can't send
-    /// the list whole is read element by element; an element that fails
-    /// there ends the reading with `stopped` set and no objects. A device
-    /// that stops answering once the list is in gives an inventory with
-    /// `stopped` set and the objects read before it. `stop()`, and leaving
-    /// `async with`, wait for a running export to finish.
+    /// Object_List, raises the usual error; so does a device that can't send
+    /// the list whole, is read element by element, and fails an element. A
+    /// device that goes silent while its objects are read gives an inventory
+    /// with `stopped` set and the objects read before it. `stop()`, and
+    /// leaving `async with`, wait for a running export to finish.
     #[pyo3(signature = (device_instance, *, types=None))]
     fn export_223_experimental<'py>(
         &self,
