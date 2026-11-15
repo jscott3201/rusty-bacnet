@@ -381,6 +381,15 @@ impl Lab {
             .await
             .unwrap();
         }
+        assert_eq!(
+            sent.lock()
+                .unwrap()
+                .drain(..)
+                .map(|(_, to)| to)
+                .collect::<Vec<_>>(),
+            [Vec::<u8>::new()],
+            "one broadcast: the What-Is-Network-Number the routed rows asked (#2572)"
+        );
         let limits = Arc::new(policy.request_limits());
         let client = Client::new(Arc::clone(&low), Arc::clone(&limits));
         let mcp = McpServer::new(Some(client), policy, "tester").unwrap();

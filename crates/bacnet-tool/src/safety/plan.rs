@@ -1,6 +1,11 @@
 //! A requested write turned into a preview, from the properties read just
 //! before it: the value to send, the pre-image, the slot's occupancy, what
-//! Present_Value will do, and the confirmation tier. Pure: no I/O.
+//! Present_Value will do, and the confirmation tier. Pure: no I/O. What a
+//! write at a priority does is `bacnet-ops`' analysis
+//! ([`bacnet_ops::write::commands`], [`bacnet_ops::write::effect`]), the
+//! one [`Device::preview_write`](bacnet_ops::Device::preview_write) makes;
+//! the ledger's part (whose command a slot holds) and the tiers are the
+//! tool's.
 //!
 //! Tiers (`docs/design/tui.md` section 5):
 //!
@@ -11,10 +16,10 @@
 //! | priorities 1, 2 and 5 (life safety and critical equipment, Table 19-1) | T3 |
 //! | priority 6, kept for minimum on and off times (Clause 19.2.3) | blocked, or T3 with `dangerous = true` |
 
-use bacnet_encoding::primitives::{decode_priority_date_time, encode_property_value};
-use bacnet_ops::DeviceAddress;
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_ops::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all};
-use bacnet_ops::label::PRIORITIES;
+use bacnet_ops::write::{commands, effect};
+use bacnet_ops::{DeviceAddress, Priority};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
@@ -53,9 +58,6 @@ impl From<Vec<RawRow>> for PreRead {
 /// Why a write to an array's length (index 0) has no pre-image.
 #[doc(hidden)]
 pub const RESIZE: &str = "a resize can't be reverted";
-
-/// The priority a commandable write without one gets (Clause 19.2.1).
-pub(crate) const DEFAULT_PRIORITY: u8 = 16;
 
 /// Why priority 6 is refused.
 pub(crate) const PRIORITY_6: &str = "priority 6 is reserved for minimum on and off times \
@@ -221,30 +223,6 @@ fn first(data: &[u8]) -> Option<PropertyValue> {
     decode_all(data)?.into_iter().next()
 }
 
-/// A priority slot as the value a Present_Value write carries. A DateTime
-/// Value's set slot is the BACnetPriorityValue date-time choice under
-/// context tag 1 (#2098); its Present_Value is the bare Date and Time, which
-/// is what a revert writes back and what the ledger compares.
-fn slot_value(slot: PropertyValue) -> PropertyValue {
-    if let PropertyValue::ApplicationData(octets) = &slot
-        && let Ok(((date, time), end)) = decode_priority_date_time(octets, 0)
-        && end == octets.len()
-    {
-        return PropertyValue::List(vec![PropertyValue::Date(date), PropertyValue::Time(time)]);
-    }
-    slot
-}
-
-/// The value a write's octets carry, as a priority slot holds it: one
-/// application value, or a BACnetDateTime's Date and Time together.
-fn written(data: &[u8]) -> PropertyValue {
-    match decode_all(data) {
-        Some(values) if values.len() == 1 => values.into_iter().next().expect("one value"),
-        Some(values) if !values.is_empty() => PropertyValue::List(values),
-        _ => PropertyValue::Null,
-    }
-}
-
 /// Give a typed number the datatype the property already holds:
 /// `parse_value_for` reads `42` as Unsigned, which an analog Present_Value
 /// would refuse as the wrong datatype.
@@ -279,23 +257,6 @@ fn stored(
     })
 }
 
-/// The slot in control and Present_Value's text for `slots`, falling back
-/// to Relinquish_Default when every slot is NULL (Clause 19.2).
-fn effective(
-    format: &ValueFormat<'_>,
-    slots: &[PropertyValue],
-    default: Option<&str>,
-) -> (Option<u8>, String) {
-    match slots.iter().position(|v| *v != PropertyValue::Null) {
-        Some(i) => {
-            let text = stored(format, PropertyIdentifier::PRESENT_VALUE, &slots[i])
-                .map_or_else(|e| e, |s| s.text);
-            (Some(i as u8 + 1), text)
-        }
-        None => (None, default.unwrap_or("?").to_string()),
-    }
-}
-
 /// One write's preview.
 fn plan(
     spec: &WriteSpec,
@@ -311,11 +272,9 @@ fn plan(
     // that was read but isn't 16 values can't be previewed honestly.
     let slots = match raw(rows, PropertyIdentifier::PRIORITY_ARRAY) {
         None => None,
-        Some(bytes) => match decode_all(bytes) {
-            Some(values) if values.len() == PRIORITIES => {
-                Some(values.into_iter().map(slot_value).collect::<Vec<_>>())
-            }
-            _ if present_value => {
+        Some(bytes) => match commands(bytes) {
+            Some(slots) => Some(slots),
+            None if present_value => {
                 return Err(
                     "the Priority_Array was read but isn't 16 values; refusing to write".into(),
                 );
@@ -374,36 +333,22 @@ fn plan(
     let default_text = default.map(|d| format.value(PropertyIdentifier::RELINQUISH_DEFAULT, d));
     let (priority, before, occupancy, effect) = match slots {
         Some(slots) if commandable => {
-            let priority = spec.priority.unwrap_or(DEFAULT_PRIORITY);
-            if !(1..=16).contains(&priority) {
-                return Err(format!("priority must be 1-16, got {priority}"));
-            }
-            let slot = &slots[usize::from(priority) - 1];
-            let before = match slot {
+            let priority = match spec.priority {
+                Some(level) => Priority::new(level).map_err(|refused| refused.to_string())?,
+                None => Priority::LOWEST,
+            };
+            let before = match &slots[priority.index()] {
                 PropertyValue::Null => None,
                 held => Some(stored(&format, PropertyIdentifier::PRESENT_VALUE, held)?),
             };
             let occupancy = match &before {
                 None => Occupancy::Empty,
-                Some(held) if ours(spec, Some(priority), &held.bytes) => Occupancy::Ours,
+                Some(held) if ours(spec, Some(priority.get()), &held.bytes) => Occupancy::Ours,
                 Some(_) => Occupancy::Other,
             };
-            let (held_by, now) = effective(&format, &slots, default_text.as_deref());
-            let mut after = slots.clone();
-            let new = written(&value.bytes);
-            after[usize::from(priority) - 1] = new;
-            let (_, then) = effective(&format, &after, default_text.as_deref());
-            let effect = if now == then {
-                Effect::Unchanged {
-                    held_by: held_by.filter(|slot| *slot < priority),
-                }
-            } else {
-                Effect::Changes {
-                    from: now,
-                    to: then,
-                }
-            };
-            (Some(priority), before, occupancy, effect)
+            let default = default_text.as_deref();
+            let effect = effect(&format, &slots, priority, &value.bytes, default);
+            (Some(priority.get()), before, occupancy, effect)
         }
         _ => {
             if spec.priority.is_some() {

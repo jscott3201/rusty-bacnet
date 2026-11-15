@@ -4,7 +4,9 @@ With no scope the Who-Is is a local broadcast, which no router passes on:
 its NPDU names no destination network. scope="global" and a network number
 are the explicit choices. The client is a foreign device of a raw BBMD
 peer, so each broadcast reaches the peer as Distribute-Broadcast-To-Network
-(Annex J.5) carrying the NPDU as sent.
+(Annex J.5) carrying the NPDU as sent. A client's first Who-Is goes right
+after the What-Is-Network-Number it asks on that first need (#2572), a
+local broadcast whatever the Who-Is's scope; later ones go alone.
 """
 import ast
 import asyncio
@@ -25,6 +27,9 @@ LOCAL = bytes([0x01, 0x00]) + WHO_IS
 GLOBAL = bytes([0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF]) + WHO_IS
 # The same with DNET 5.
 NETWORK_5 = bytes([0x01, 0x20, 0x00, 0x05, 0x00, 0xFF]) + WHO_IS
+# What-Is-Network-Number: a network message (control 0x80), type 0x12, with
+# no destination network.
+ASK = bytes([0x01, 0x80, 0x12])
 
 REGISTER_FOREIGN_DEVICE = 0x05
 DISTRIBUTE_BROADCAST = 0x09
@@ -50,33 +55,38 @@ class DiscoveryScopeTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(stop)
         await accepted_registration(self.client)
 
-    async def broadcast_npdus(self, call):
-        """The NPDUs the BBMD is handed to broadcast while ``call`` runs."""
+    async def broadcast_npdus(self, call, count=1):
+        """The NPDUs the BBMD is handed to broadcast while ``call`` runs,
+        once ``count`` have come or 3 s have passed."""
         self.peer.received.clear()
         await call()
         deadline = asyncio.get_running_loop().time() + 3
         while True:
             npdus = [data[4:] for data, _ in self.peer.received
                      if data[:2] == bytes([0x81, DISTRIBUTE_BROADCAST])]
-            if npdus or asyncio.get_running_loop().time() > deadline:
+            if len(npdus) >= count or asyncio.get_running_loop().time() > deadline:
                 return npdus
             await asyncio.sleep(0.02)
 
     async def test_no_scope_is_a_local_broadcast(self):
         client = self.client
-        for name, call in (("who_is", client.who_is),
-                           ("discover", lambda: client.discover(timeout_ms=0)),
-                           ("who_is local", lambda: client.who_is(scope="local"))):
+        for name, call, sent in (("who_is", client.who_is, [ASK, LOCAL]),
+                                 ("discover", lambda: client.discover(timeout_ms=0), [LOCAL]),
+                                 ("who_is local", lambda: client.who_is(scope="local"), [LOCAL])):
             with self.subTest(call=name):
-                self.assertEqual(await self.broadcast_npdus(call), [LOCAL])
+                self.assertEqual(await self.broadcast_npdus(call, len(sent)), sent)
 
     async def test_global_and_a_network_are_explicit(self):
         client = self.client
+        first = True
         for scope, npdu in (("global", GLOBAL), (5, NETWORK_5)):
             for name, call in (("who_is", lambda: client.who_is(scope=scope)),
                                ("discover", lambda: client.discover(timeout_ms=0, scope=scope))):
+                # Only the client's first Who-Is is asked before.
+                sent = [ASK, npdu] if first else [npdu]
+                first = False
                 with self.subTest(call=name, scope=scope):
-                    self.assertEqual(await self.broadcast_npdus(call), [npdu])
+                    self.assertEqual(await self.broadcast_npdus(call, len(sent)), sent)
 
     async def test_a_bad_scope_raises_before_anything_is_sent(self):
         client = self.client
