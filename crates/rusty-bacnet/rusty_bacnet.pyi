@@ -9121,8 +9121,10 @@ class RoutedTarget:
     ``BACnetClient.device()`` does. A station that doesn't answer raises
     ``BacnetLookupError``, and for 30 seconds a call to it with no router
     raises at once without asking again, unless an I-Am from it arrives
-    first. A station that never announces itself, such as an MS/TP slave,
-    needs ``router``: ``BACnetClient.discover_routers()`` finds them. A station on the client's own network, once it knows the number,
+    first; calls made together for one station share one Who-Is. To scan
+    stations that never announce themselves, such as MS/TP slaves, pass
+    ``router`` from ``BACnetClient.discover_routers()``: without it each
+    costs one 3-second Who-Is wait. A station on the client's own network, once it knows the number,
     is sent to directly either way. Other values raise ValueError, a type
     other than ``str`` or ``bytes`` TypeError, and so does a call in another
     order, since ``network`` takes an ``int``.
@@ -9472,9 +9474,10 @@ class BipEndpoint:
         standalone class, with all its calls, on the endpoint's one address.
         While it runs, each call returns the same object; once its ``stop()``
         has finished, a fresh one. Its ``stop()`` and ``async with`` exit end
-        the client role alone; the endpoint's close stops it first, and calls
+        the client role alone; the endpoint's close stops it too, and calls
         in flight end as a stopping client's do. RuntimeError before start,
-        after close, and while the last client is still stopping;
+        after close, and while the last client is still stopping or its stop
+        failed (the error names the cause);
         NotImplementedError on an endpoint built with
         ``source_audit_reporter``, whose client arrives when source Audit
         moves to the full client (#2617 step 3)."""
@@ -9702,9 +9705,10 @@ class ScEndpoint:
         standalone class, with all its calls, on the endpoint's one address.
         While it runs, each call returns the same object; once its ``stop()``
         has finished, a fresh one. Its ``stop()`` and ``async with`` exit end
-        the client role alone; the endpoint's close stops it first, and calls
+        the client role alone; the endpoint's close stops it too, and calls
         in flight end as a stopping client's do. RuntimeError before start,
-        after close, and while the last client is still stopping;
+        after close, and while the last client is still stopping or its stop
+        failed (the error names the cause);
         NotImplementedError on an endpoint built with
         ``source_audit_reporter``, whose client arrives when source Audit
         moves to the full client (#2617 step 3).
@@ -9930,9 +9934,10 @@ class MstpEndpoint:
         standalone class, with all its calls, on the endpoint's one address.
         While it runs, each call returns the same object; once its ``stop()``
         has finished, a fresh one. Its ``stop()`` and ``async with`` exit end
-        the client role alone; the endpoint's close stops it first, and calls
+        the client role alone; the endpoint's close stops it too, and calls
         in flight end as a stopping client's do. RuntimeError before start,
-        after close, and while the last client is still stopping;
+        after close, and while the last client is still stopping or its stop
+        failed (the error names the cause);
         NotImplementedError on an endpoint built with
         ``source_audit_reporter``, whose client arrives when source Audit
         moves to the full client (#2617 step 3).

@@ -2,7 +2,7 @@
 //! `await endpoint.client()` returns. It is the standalone class, running
 //! on the endpoint session's full client, so every method works the same;
 //! only its lifetime differs. The endpoint starts it, its `stop()` ends the
-//! client role alone, and the endpoint's close stops it first.
+//! client role alone, and the endpoint's close stops it too.
 
 use super::*;
 

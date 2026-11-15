@@ -73,9 +73,10 @@ pub(crate) const DETAIL_ATTRIBUTES: [&str; 7] = [
 /// transaction ended before an answer came: the client stopped under it.
 const TSM_CHANNEL_CLOSED: &str = "TSM response channel closed";
 
-/// The message a request cut off that way raises (#2617).
+/// The message a request cut off that way raises (#2617): the client's
+/// stop() ran, or the endpoint it runs on closed, which stops it.
 const REQUEST_CUT_OFF: &str = "the request ended without an answer: the client stopped while \
-     it waited (its endpoint closed, or its stop() ran)";
+     it waited";
 
 /// Convert a Rust `Error` into a Python exception.
 ///
@@ -190,8 +191,8 @@ pub fn to_py_err(err: Error) -> PyErr {
             lookup_error(err.to_string(), Lookup::unknown(device.clone()))
         }
         // The request's transaction was ended under it: the client stopped
-        // while it waited, as an endpoint's close stops the client on its
-        // link (#2617). The client names it by this text alone until #1833
+        // while it waited, by its own stop() or, on an endpoint's link, by
+        // the endpoint's close (#2617). The client names it by this text alone until #1833
         // gives client errors their types.
         Error::Encoding(ref message) if message == TSM_CHANNEL_CLOSED => {
             BacnetError::new_err(REQUEST_CUT_OFF)

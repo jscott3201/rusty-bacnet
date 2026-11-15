@@ -190,3 +190,29 @@ async fn a_dropped_tie_forgets_its_handle_while_the_client_runs() {
     close(Arc::clone(&state)).await.unwrap();
     assert!(other.peek(|_| ()).is_none(), "a stop drops the rest");
 }
+
+/// A native stop that fails is recorded by the stop itself, so a stop()
+/// whose waiter went away still leaves the cause (#2617); a later stop,
+/// once the stray reference is gone, finishes.
+#[tokio::test]
+async fn a_failed_native_stop_is_recorded_without_a_waiter() {
+    let state = running_client().await;
+    let held = state.hold_core_for_test().await.expect("started");
+    state.closing.store(true, Ordering::Release);
+    let task = tokio::spawn(stop_native(Arc::clone(&state)));
+    let error = timeout(Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("references remain"), "{error}");
+    assert!(
+        matches!(state.liveness(), Liveness::Failed(cause) if cause.contains("references remain"))
+    );
+    drop(held);
+    timeout(Duration::from_secs(3), close(Arc::clone(&state)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.liveness(), Liveness::Stopped);
+}

@@ -328,9 +328,10 @@ The `BACnetClient` on this endpoint's socket (#2617): the
 standalone class, with all its calls, on the endpoint's one address.
 While it runs, each call returns the same object; once its `stop()`
 has finished, a fresh one. Its `stop()` and `async with` exit end
-the client role alone; the endpoint's close stops it first, and calls
+the client role alone; the endpoint's close stops it too, and calls
 in flight end as a stopping client's do. RuntimeError before start,
-after close, and while the last client is still stopping;
+after close, and while the last client is still stopping or its stop
+failed (the error names the cause);
 NotImplementedError on an endpoint built with
 `source_audit_reporter`, whose client arrives when source Audit
 moves to the full client (#2617 step 3).
@@ -725,9 +726,10 @@ The `BACnetClient` on this endpoint's hub connection (#2617): the
 standalone class, with all its calls, on the endpoint's one address.
 While it runs, each call returns the same object; once its `stop()`
 has finished, a fresh one. Its `stop()` and `async with` exit end
-the client role alone; the endpoint's close stops it first, and calls
+the client role alone; the endpoint's close stops it too, and calls
 in flight end as a stopping client's do. RuntimeError before start,
-after close, and while the last client is still stopping;
+after close, and while the last client is still stopping or its stop
+failed (the error names the cause);
 NotImplementedError on an endpoint built with
 `source_audit_reporter`, whose client arrives when source Audit
 moves to the full client (#2617 step 3).
@@ -1112,9 +1114,10 @@ The `BACnetClient` on this endpoint's serial link (#2617): the
 standalone class, with all its calls, on the endpoint's one address.
 While it runs, each call returns the same object; once its `stop()`
 has finished, a fresh one. Its `stop()` and `async with` exit end
-the client role alone; the endpoint's close stops it first, and calls
+the client role alone; the endpoint's close stops it too, and calls
 in flight end as a stopping client's do. RuntimeError before start,
-after close, and while the last client is still stopping;
+after close, and while the last client is still stopping or its stop
+failed (the error names the cause);
 NotImplementedError on an endpoint built with
 `source_audit_reporter`, whose client arrives when source Audit
 moves to the full client (#2617 step 3).

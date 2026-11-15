@@ -461,6 +461,31 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.who_is), 1)
 
 
+    async def test_calls_made_together_share_one_who_is(self):
+        silent = rb.RoutedTarget(5, b"\x0c")
+        results = await asyncio.wait_for(asyncio.gather(
+            *[self.role.read_property(silent, AI_1, P.PRESENT_VALUE) for _ in range(20)],
+            return_exceptions=True), 10)
+        self.assertEqual(len(self.who_is), 1)
+        self.assertTrue(all(isinstance(result, rb.BacnetLookupError) for result in results), results)
+        self.assertEqual(len({str(result) for result in results}), 1)
+
+    async def test_cancelling_the_call_that_asked_strands_no_other(self):
+        silent = rb.RoutedTarget(5, b"\x0d")
+        first = asyncio.ensure_future(self.role.read_property(silent, AI_1, P.PRESENT_VALUE))
+        async with asyncio.timeout(5):
+            while not self.who_is:
+                await asyncio.sleep(0.01)
+        rest = [asyncio.ensure_future(self.role.read_property(silent, AI_1, P.PRESENT_VALUE))
+                for _ in range(5)]
+        await asyncio.sleep(0.05)
+        first.cancel()
+        results = await asyncio.wait_for(asyncio.gather(*rest, return_exceptions=True), 10)
+        self.assertTrue(all(isinstance(result, rb.BacnetLookupError) for result in results), results)
+        self.assertIn(len(self.who_is), (1, 2))  # a cancelled asker may hand the asking on
+        await asyncio.gather(first, return_exceptions=True)
+
+
 class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):
     """Through a real BACnetRouter to a real server on network 5. Both
     ports are BBMDs that take foreign devices, so a foreign device's

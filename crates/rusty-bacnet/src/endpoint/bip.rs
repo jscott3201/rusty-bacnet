@@ -546,8 +546,9 @@ impl PyBipEndpoint {
     /// class, with all its calls, on the endpoint's one address. While it
     /// runs, each call returns the same object; once its `stop()` has
     /// finished, a fresh one. Its `stop()` ends the client role alone, and
-    /// the endpoint's close stops it first. Raises RuntimeError before start,
-    /// after close, and while the last client is still stopping, and
+    /// the endpoint's close stops it too. Raises RuntimeError before start,
+    /// after close, and while the last client is still stopping or its stop
+    /// failed (naming the cause), and
     /// NotImplementedError on an endpoint with `source_audit_reporter`
     /// (its client arrives with #2617 step 3).
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

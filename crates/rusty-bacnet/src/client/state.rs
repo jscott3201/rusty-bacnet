@@ -18,6 +18,16 @@ use tokio::task::JoinHandle;
 #[path = "state_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+impl ClientState {
+    /// Another reference to the started low-level client, so a test can
+    /// make its stop fail as a stray reference would.
+    pub(crate) async fn hold_core_for_test(&self) -> Option<Arc<CoreClient>> {
+        let slot = self.client.read().await;
+        slot.as_ref().map(|started| Arc::clone(&started.core))
+    }
+}
+
 /// A started client: the low-level client, and the high-level client over
 /// it that the priority calls go through (#2561), which shares it, its
 /// discovery table and one set of request limits.
@@ -352,6 +362,8 @@ pub(crate) async fn close(inner: ClientInner) -> PyResult<()> {
             inner.closing.store(false, Ordering::Release);
             Ok(())
         }
+        // stop_native records its failure itself, waiter or not; this
+        // covers a shutdown task that isn't one.
         Ok(Err(error)) => {
             inner.set_stop_failure(Some(error.to_string()));
             Err(to_py_err(error))
@@ -372,8 +384,13 @@ async fn stop_native(state: ClientInner) -> Result<(), Error> {
     state.frames.close();
     // The handles hold the high-level client: they go first.
     state.drop_handles();
-    if let Some(started) = client.as_mut() {
-        started.stop().await?;
+    if let Some(started) = client.as_mut()
+        && let Err(error) = started.stop().await
+    {
+        // Recorded here, so a stop() whose waiter was cancelled still
+        // leaves the cause for an endpoint asked for a client (#2617).
+        state.set_stop_failure(Some(error.to_string()));
+        return Err(error);
     }
     *client = None;
     // A receiver nobody took ends with the client; a restart subscribes anew.

@@ -31,6 +31,7 @@ use bytes::Bytes;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyString;
+use tokio::sync::watch;
 
 use super::CoreClient;
 use crate::errors::to_py_err;
@@ -125,25 +126,47 @@ impl Routed {
         // A row, from a Who-Is or an I-Am the station sent on its own, is the
         // route at once, whatever an earlier miss said.
         if !at.is_local() && at.row(core).await.is_none() {
-            if misses.recent(&key, Instant::now()) {
-                return Err(no_route(&at, self.network, Asked::Recently));
-            }
-            // Asks the network with a Who-Is, as device() does.
-            match client.device(address.clone()).await {
-                Ok(device) => {
-                    drop(device);
-                    misses.forget(&key);
+            // One lookup per station at a time: calls that find one in
+            // flight wait for what it finds instead of asking again.
+            loop {
+                if misses.recent(&key, Instant::now()) {
+                    return Err(no_route(&at, self.network, Asked::Recently));
                 }
-                Err(OpsError::UnknownDevice { asked, .. }) => {
-                    let asked = if asked.is_some() {
-                        misses.remember(key, Instant::now());
-                        Asked::Now
-                    } else {
-                        Asked::Never
-                    };
-                    return Err(no_route(&at, self.network, asked));
+                match misses.turn(&key) {
+                    Turn::Wait(mut answer) => {
+                        let found = answer.wait_for(Option::is_some).await.map(|found| *found);
+                        match found {
+                            Ok(Some(Found::Row)) => break,
+                            Ok(Some(Found::Missed(asked))) => {
+                                return Err(no_route(&at, self.network, asked));
+                            }
+                            // The call that asked went away before it
+                            // knew: ask again.
+                            Ok(None) | Err(_) => continue,
+                        }
+                    }
+                    // Asks the network with a Who-Is, as device() does.
+                    Turn::Ask(asking) => match client.device(address.clone()).await {
+                        Ok(device) => {
+                            drop(device);
+                            misses.forget(&key);
+                            asking.finish(Found::Row);
+                            break;
+                        }
+                        Err(OpsError::UnknownDevice { asked, .. }) => {
+                            let asked = if asked.is_some() {
+                                misses.remember(key.clone(), Instant::now());
+                                Asked::Now
+                            } else {
+                                Asked::Never
+                            };
+                            asking.finish(Found::Missed(asked));
+                            return Err(no_route(&at, self.network, asked));
+                        }
+                        // The waiters ask again for themselves.
+                        Err(error) => return Err(crate::high_level::ops_err(error, style)),
+                    },
                 }
-                Err(error) => return Err(crate::high_level::ops_err(error, style)),
             }
         } else if at.is_local() {
             // Checks the MAC against the link and sends nothing.
@@ -177,16 +200,82 @@ pub(crate) const MISS_MEMORY: Duration = Duration::from_secs(30);
 /// The most stations remembered at once; past it the oldest is forgotten.
 const MISS_ROWS: usize = 256;
 
-/// Stations behind a router, by network and MAC, that didn't answer the
-/// client's Who-Is, and when (#2617). A std mutex, held only to look up,
-/// add or remove.
+/// A station behind a router: its network and its MAC there.
+type Station = (u16, Vec<u8>);
+
+/// Stations behind a router that didn't answer the client's Who-Is, and
+/// when, and the lookups in flight (#2617). Std mutexes, held only to look
+/// up, add or remove, never across an await.
 #[derive(Default)]
-pub(super) struct RecentMisses(Mutex<HashMap<(u16, Vec<u8>), Instant>>);
+pub(super) struct RecentMisses {
+    missed: Mutex<HashMap<Station, Instant>>,
+    /// One lookup per station: a call that finds one here waits for what
+    /// it finds.
+    asking: Mutex<HashMap<Station, watch::Receiver<Option<Found>>>>,
+}
+
+/// What one lookup found, for the calls that waited on it.
+#[derive(Clone, Copy)]
+enum Found {
+    /// A row: the route.
+    Row,
+    /// No answer.
+    Missed(Asked),
+}
+
+/// A call's part in a station's lookup.
+enum Turn<'a> {
+    /// Ask: no lookup is in flight.
+    Ask(Asking<'a>),
+    /// Wait for the one in flight.
+    Wait(watch::Receiver<Option<Found>>),
+}
+
+/// The one lookup in flight for a station. Dropped, finished or not, it
+/// leaves the map; a call that waited on an unfinished one asks itself.
+struct Asking<'a> {
+    misses: &'a RecentMisses,
+    station: Station,
+    found: watch::Sender<Option<Found>>,
+}
+
+impl Asking<'_> {
+    /// Tell the calls waiting what this lookup found.
+    fn finish(&self, found: Found) {
+        self.found.send_replace(Some(found));
+    }
+}
+
+impl Drop for Asking<'_> {
+    fn drop(&mut self) {
+        // Only this lookup inserts the station's entry, so it is its own.
+        self.misses
+            .asking
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.station);
+    }
+}
 
 impl RecentMisses {
+    /// Join the lookup in flight for `station`, or start it.
+    fn turn(&self, station: &Station) -> Turn<'_> {
+        let mut asking = self.asking.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(answer) = asking.get(station) {
+            return Turn::Wait(answer.clone());
+        }
+        let (found, answer) = watch::channel(None);
+        asking.insert(station.clone(), answer);
+        Turn::Ask(Asking {
+            misses: self,
+            station: station.clone(),
+            found,
+        })
+    }
+
     /// Whether `station` missed within [`MISS_MEMORY`] of `now`.
-    fn recent(&self, station: &(u16, Vec<u8>), now: Instant) -> bool {
-        let misses = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+    fn recent(&self, station: &Station, now: Instant) -> bool {
+        let misses = self.missed.lock().unwrap_or_else(PoisonError::into_inner);
         misses
             .get(station)
             .is_some_and(|&missed| now.saturating_duration_since(missed) < MISS_MEMORY)
@@ -194,8 +283,8 @@ impl RecentMisses {
 
     /// Keep `station` as missed at `now`, dropping misses past
     /// [`MISS_MEMORY`] and, at [`MISS_ROWS`], the oldest.
-    fn remember(&self, station: (u16, Vec<u8>), now: Instant) {
-        let mut misses = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+    fn remember(&self, station: Station, now: Instant) {
+        let mut misses = self.missed.lock().unwrap_or_else(PoisonError::into_inner);
         misses.retain(|_, &mut missed| now.saturating_duration_since(missed) < MISS_MEMORY);
         if misses.len() >= MISS_ROWS
             && let Some(oldest) = misses
@@ -209,8 +298,8 @@ impl RecentMisses {
     }
 
     /// Forget `station`: it answered.
-    fn forget(&self, station: &(u16, Vec<u8>)) {
-        self.0
+    fn forget(&self, station: &Station) {
+        self.missed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(station);
@@ -355,6 +444,43 @@ mod tests {
         assert!(misses.recent(&(7, vec![0xff, 0xff, 0xff]), newest));
         // Expired misses go before the oldest live one.
         misses.remember((8, vec![1]), start + MISS_MEMORY + Duration::from_secs(2));
-        assert_eq!(misses.0.lock().unwrap().len(), 1);
+        assert_eq!(misses.missed.lock().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    /// One lookup per station: a second call waits on the first, which
+    /// leaves the map when it ends, finished or dropped.
+    #[tokio::test]
+    async fn one_lookup_per_station_and_a_dropped_one_lets_the_next_ask() {
+        let misses = RecentMisses::default();
+        let station = (5, vec![0x0a]);
+        let Turn::Ask(first) = misses.turn(&station) else {
+            panic!("the first call asks");
+        };
+        let Turn::Wait(mut waiting) = misses.turn(&station) else {
+            panic!("the second waits");
+        };
+        assert!(
+            matches!(misses.turn(&(6, vec![0x0a])), Turn::Ask(_)),
+            "another station asks"
+        );
+        first.finish(Found::Missed(Asked::Now));
+        let found = waiting.wait_for(Option::is_some).await.map(|found| *found);
+        assert!(matches!(found, Ok(Some(Found::Missed(Asked::Now)))));
+        drop(first);
+        // Dropped unfinished, a lookup wakes its waiters with nothing.
+        let Turn::Ask(second) = misses.turn(&station) else {
+            panic!("a finished lookup left the map");
+        };
+        let Turn::Wait(mut waiting) = misses.turn(&station) else {
+            panic!("waits on the second");
+        };
+        drop(second);
+        assert!(waiting.wait_for(Option::is_some).await.is_err());
+        assert!(matches!(misses.turn(&station), Turn::Ask(_)));
     }
 }

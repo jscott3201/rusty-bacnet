@@ -7010,7 +7010,8 @@ async with BipEndpoint(1001, interface="192.168.1.10", broadcast_address="192.16
   flight holds its stop) raises `RuntimeError`; await its `stop()` first. A
   client from the endpoint is started already: `async with client` only
   enters it, and once stopped it stays stopped.
-- **Close.** The endpoint's `close()` stops its client first: open requests
+- **Close.** The endpoint's `close()` stops the session and its link with the
+  client on it, then the client: open requests
   fail at once with `BacnetError`, and a call that listens, such as
   `discover`, ends at its `wait`, as on a standalone client's `stop()`.
   Afterwards the client's calls raise `RuntimeError` naming the endpoint.
@@ -7339,6 +7340,11 @@ endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
 a `str`, which always names a station on the client's own link and is never
 read as `net:mac`, or a `RoutedTarget` naming one behind a router (#2612,
 #2617), on a standalone client and an endpoint's alike.
+
+**To scan stations that don't announce themselves (MS/TP slaves), pass
+`router` from `discover_routers()`.** Without it each such station costs one
+Who-Is and its 3-second wait before the call fails; the remembered miss
+below only spares repeat calls.
 `RoutedTarget(network, address, router=None)` takes its arguments in that
 order, positionally or by keyword:
 
@@ -7370,7 +7376,8 @@ async with endpoint:
 With a `router`, each request goes to that router with the station's
 network and MAC as its destination. Without one, the client uses the route
 it knows, as `device()` does: the router its discovery table names for the
-station, after one Who-Is to the station's network when it has no row. A
+station, after one Who-Is to the station's network when it has no row.
+Calls made together for one station share that Who-Is and its answer. A
 station that doesn't answer raises `BacnetLookupError`, and for 30 seconds
 a call to it with no router raises at once, without asking again, unless an
 I-Am from it gives the client a row first. **A station that never announces
@@ -7422,7 +7429,7 @@ on the endpoint's link. Its calls keep their names and result shapes:
 
 | `EndpointClient` | `BACnetClient` from `endpoint.client()` |
 |---|---|
-| `read_property(address, ...)`, a `str` or a `RoutedTarget` | the same call; a `RoutedTarget` with no `router` now takes the route the client learns, not a broadcast per request |
+| `read_property(address, ...)`, a `str` or a `RoutedTarget` | the same call; a `RoutedTarget` with no `router` now takes the route the client learns, not a broadcast per request. To scan stations that don't announce themselves (MS/TP slaves), pass `router` from `discover_routers()`: without it each costs a 3-second Who-Is wait |
 | `read_property_multiple` checked its arguments at the call (`ValueError`) | a bad address raises `ValueError`, and an empty list `BacnetError`, when awaited |
 | `read_property_multiple(address, specs)` | the same call, with the standalone profile: selectors and wildcard instances are taken, an empty list raises `BacnetError` when awaited, and the answer comes back as the device gave it, each result naming its object, property and index, for you to compare with what you asked |
 | `read_range(address, ..., validation=...)` | the same call |
@@ -7430,7 +7437,7 @@ on the endpoint's link. Its calls keep their names and result shapes:
 | `write_property(address, ..., *, commandability=...)` | `write_property(address, ...)` without `commandability=`; it takes a `RoutedTarget` too, and sends a raw value as given |
 | `service_scope()` | gone: the client initiates every service it has a call for |
 | a request no one answered: `BacnetTimeoutError` | `BacnetAbortError` for the transaction's timeout, as a typed call raises it |
-| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the endpoint closed |
+| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the client stopped while it waited |
 | an endpoint with `source_audit_reporter`: audited reads | `NotImplementedError` until source Audit moves to the full client (#2617 step 3) |
 
 Not yet routed on the full client: `atomic_read_file`, `atomic_write_file`,

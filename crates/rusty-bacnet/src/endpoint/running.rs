@@ -7,8 +7,8 @@
 //!
 //! One client per session: while it runs, `endpoint.client()` returns the
 //! same object; once its `stop()` has finished, a fresh one. The session
-//! lock orders `client()` against close, and close stops the client first
-//! (the `stop` of its lifecycle `Session` impl).
+//! lock orders `client()` against close, and close stops the session, then
+//! the client (the `stop` of its lifecycle `Session` impl).
 
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
@@ -21,6 +21,10 @@ use pyo3::prelude::*;
 use crate::app_transport::AppTransport;
 use crate::client::{BACnetClient, ClientInner, Liveness};
 use crate::errors::to_py_err;
+
+#[cfg(test)]
+#[path = "running_tests.rs"]
+mod tests;
 
 /// An endpoint's session: over [`AppTransport`], so its full client is a
 /// Python `BACnetClient`'s.
@@ -117,25 +121,23 @@ impl super::lifecycle::Session for Running {
         Ok(())
     }
 
-    /// Stop the client on the link, then the session.
+    /// Stop the session, then close the client on its link.
     ///
-    /// The stop order lives here alone. Until a transport's stop works
-    /// through a shared reference (`refactor/transport-shared-stop`), a
-    /// session can't stop a link its full client still holds: the first
-    /// stop closes the roles, ends the client's tasks and fails its open
-    /// requests, then fails. Closing the Python client then drops the Rust
-    /// one, and a second stop finishes. Once a stop works with the client
-    /// alive, this is: stop the session, then close the client, and the
-    /// second stop goes.
+    /// The session stops with its full client alive (#2617): its one stop
+    /// closes the roles, ends the client's tasks, fails its open requests
+    /// and stops the link. Closing the Python client then ends its
+    /// iterators and handles and drops the Rust client. A client whose own
+    /// stop fails keeps its state; the error says the link is released.
     async fn stop(&mut self) -> PyResult<()> {
-        let first = self.session.stop().await;
-        let Some(seated) = self.client.take() else {
-            return first.map(drop).map_err(to_py_err);
-        };
-        let closed = crate::client::close(seated.state).await;
-        let stopped = match first {
-            Ok(_) => Ok(()),
-            Err(_) => self.session.stop().await.map(drop).map_err(to_py_err),
+        let stopped = self.session.stop().await.map(drop).map_err(to_py_err);
+        let closed = match self.client.take() {
+            Some(seated) => crate::client::close(seated.state).await.map_err(|error| {
+                PyRuntimeError::new_err(format!(
+                    "the endpoint stopped and released its link, but its client failed to \
+                     stop ({error}); that client keeps its own state until its stop() succeeds"
+                ))
+            }),
+            None => Ok(()),
         };
         stopped.and(closed)
     }
