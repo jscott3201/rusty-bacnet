@@ -2,7 +2,7 @@
 
 use std::net::Ipv4Addr;
 
-use bacnet_client::client::{BACnetClient, DiscoveredRouter};
+use bacnet_client::client::{BACnetClient, DiscoveredRouter, RoutingTable, RoutingTableWait};
 use bacnet_ops::target::AddressStyle;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
@@ -58,6 +58,106 @@ pub async fn whois_router_cmd<T: TransportPort + 'static>(
         OutputFormat::Json => println!(
             "{}",
             serde_json::to_string_pretty(&routers).expect("serialize routers")
+        ),
+    }
+    Ok(())
+}
+
+/// A router's table as `routing-table` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RoutingTableInfo {
+    /// The router's address on the local network, in the form a target
+    /// takes.
+    pub router: String,
+    /// What it listed, in its order.
+    pub entries: Vec<RoutingEntryInfo>,
+    /// Whether a bound cut the answer short, so the list may be incomplete.
+    pub truncated: bool,
+}
+
+/// One entry of a router's table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RoutingEntryInfo {
+    /// The network.
+    pub network: u16,
+    /// The router's identifier for the port that reaches it.
+    pub port_id: u8,
+    /// The port information octets (the standard defines only an octet
+    /// string, typically dial-up details) as hex, the one form they have
+    /// here; `None` when the entry has none.
+    pub port_info: Option<String>,
+}
+
+impl RoutingTableInfo {
+    fn of(router: String, table: &RoutingTable) -> Self {
+        Self {
+            router,
+            entries: table
+                .entries
+                .iter()
+                .map(|entry| RoutingEntryInfo {
+                    network: entry.network,
+                    port_id: entry.port_id,
+                    port_info: (!entry.port_info.is_empty()).then(|| {
+                        entry
+                            .port_info
+                            .iter()
+                            .map(|octet| format!("{octet:02x}"))
+                            .collect()
+                    }),
+                })
+                .collect(),
+            truncated: table.truncated,
+        }
+    }
+}
+
+/// Read the routing table of the router at `mac` on the local network
+/// without changing it, waiting `wait_secs` for its first answer, and
+/// print it: a JSON object with the router, its `entries` and `truncated`.
+/// A router that does not answer, or rejects the query, is an error.
+pub async fn routing_table_cmd<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    mac: &[u8],
+    wait_secs: u64,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    output::print_waiting(wait_secs);
+    let first_answer = std::time::Duration::from_secs(wait_secs);
+    let default = RoutingTableWait::default();
+    // `--wait` is the first answer's wait, so the total grows to cover it
+    // plus the default total's room for the rest of a long table.
+    let wait = RoutingTableWait {
+        first_answer,
+        total: first_answer + default.total,
+        ..default
+    };
+    let table = client.routing_table(mac, wait).await?;
+    let style = AddressStyle::of(client.transport());
+    let info = RoutingTableInfo::of(style.format(mac), &table);
+    match format {
+        OutputFormat::Table => {
+            if info.entries.is_empty() {
+                println!("The routing table is empty.");
+            } else {
+                let mut table = comfy_table::Table::new();
+                table.set_header(vec!["Network", "Port", "Port info"]);
+                for entry in &info.entries {
+                    table.add_row(vec![
+                        entry.network.to_string(),
+                        entry.port_id.to_string(),
+                        entry.port_info.clone().unwrap_or_default(),
+                    ]);
+                }
+                println!("{table}");
+            }
+            if info.truncated {
+                println!("The answer was cut short: the table may be incomplete.");
+            }
+        }
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&info).expect("serialize routing table")
         ),
     }
     Ok(())
