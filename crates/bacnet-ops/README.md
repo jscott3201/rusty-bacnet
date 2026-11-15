@@ -29,11 +29,14 @@ targets, values and devices the same way and obey the same request limits.
   by a bulk read, which keeps a refused property's error in its row and
   what was read when the device stops answering; and `OpsError`, why a
   call failed.
-- `export`: a device's objects in another model's terms. So far
-  `export::s223`, an experimental point list in the terms of proposed
-  ASHRAE Standard 223, as Turtle: an inventory read through the client
-  into the point-list types of `bacnet_types::points`, then a writer with
-  no I/O.
+- `inventory`: a device's objects as point records
+  (`Device::inventory`): each object's name, units, state texts and
+  whether it takes commands, with its value when asked, read in batches of
+  a few objects a request and written as JSON or CSV.
+- `export`: an inventory in another model's terms. So far `export::s223`,
+  an experimental point list in the terms of proposed ASHRAE Standard 223,
+  as Turtle: the inventory's records as the point-list types of
+  `bacnet_types::points`, then a writer with no I/O.
 - `watch`: the watch hub. One managed COV subscription per point (finite
   lifetime, renewed, cancelled when the last listener leaves) or a poll
   every 10 s or slower when the device refuses COV, however many listeners

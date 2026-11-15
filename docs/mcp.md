@@ -15,7 +15,7 @@ page. Experimental in 0.15.
 | Piece | Where | What it does |
 |---|---|---|
 | `bacnet-mcp` | `crates/bacnet-mcp` | `McpServer<T>`: the tool surface, prompts, policy, untrusted-text envelope, signed cursors. Out of `default-members`; publishable, because the CLI depends on it. Default feature `stdio`. |
-| Client extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn` and `slot`, gates keyed by `DeviceAddress` (#2560); per-caller `Account` and `TokenBucket` through `limits::charged`; `Client::who_is`, `discover_routers`, `devices`, `device` (a `Device` handle, #2560), `address_style`; `Device::read_trend` charged per request; `alarm_summary` and `enrollment_summary`; `inventory_device` and `inventory_object`, the 223 export's reads a page at a time (#2436) |
+| Client extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn` and `slot`, gates keyed by `DeviceAddress` (#2560); per-caller `Account` and `TokenBucket` through `limits::charged`; `Client::who_is`, `discover_routers`, `devices`, `device` (a `Device` handle, #2560), `address_style`; `Device::read_trend` charged per request; `alarm_summary` and `enrollment_summary`; `point_record`, the 223 export's read of one object, a page of them a call (#2436) |
 | Decoder | `bacnet-tool::decode` | The capture screen's frame summary and field tree, moved from the CLI for `bacnet_decode`: any tapped link (B/IP, B/IPv6, BACnet/SC, MS/TP), or a bare NPDU or APDU; a field quoting a character string is marked as device text |
 | Watch hub | `bacnet-ops::watch` | `Hub`: one managed COV subscription or poller per point, shared by every listener, holding the latest values (phase 2); `Client::device_events` |
 | `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]`, `connect [--profile NAME]` (#2185) and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles; the release binaries include it from 0.15.0, and a source build enables it with `--features mcp`). Classified `Read` in `bacnet_tool::class`. |
@@ -94,7 +94,8 @@ passive mode.
   while it is incomplete a page holds no object and its cursor goes on
   reading the list), reads the device's name, then reads the objects of
   the selected types in Object_List order, one at a time from the cursor's
-  place, through `Device::inventory_object`. A page's Turtle stays under
+  place, each as the inventory's point record (`Device::point_record`).
+  A page's Turtle stays under
   24,000 bytes: the page ends before an object likely to pass that (judged
   by its largest point so far), and an object that passes it anyway goes
   back to the next page, where it is read again. A point larger than that

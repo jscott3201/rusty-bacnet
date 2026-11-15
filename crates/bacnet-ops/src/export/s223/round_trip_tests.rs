@@ -1,16 +1,16 @@
 //! The round trip from a point list (#2445): a database built from the
 //! list by `bacnet_objects::points::build_database`, served over the lab
-//! link and read back by `Client::inventory` at [`Detail::Full`], gives the
-//! list again; an absent field reads back as the object's default; and
-//! what `Full` costs, by RPM and by ReadProperty.
+//! link and read back by `Device::inventory` under [`point_list_options`],
+//! gives the list again; an absent field reads back as the object's
+//! default; and what that reading costs, by RPM and by ReadProperty.
 
 use bacnet_objects::device_identity::DeviceIdentity;
 use bacnet_objects::points::build_database;
 use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType};
 
-use super::inventory_tests::{Faults, LAB, lab_device, refusing_rpm, serve, stop};
 use super::tests::oid;
 use super::*;
+use crate::inventory::test_lab::{Faults, LAB, lab_device, refusing_rpm, serve, stop};
 
 fn identity() -> DeviceIdentity {
     DeviceIdentity::new(LAB, 42).unwrap()
@@ -176,57 +176,43 @@ fn as_read(mut list: PointList) -> PointList {
 
 /// `list` built, served over a link with `faults`, and read back at
 /// `options`; with the requests it took.
-async fn read_back(
-    list: PointList,
-    faults: Faults,
-    options: &InventoryOptions,
-) -> (Inventory, usize) {
+async fn read_back(list: PointList, faults: Faults, options: &InventoryOptions) -> (Model, usize) {
     let database = build_database(list, &identity()).unwrap();
     let (client, server) = serve(faults, identity(), database).await;
     let inventory = lab_device(&client).await.inventory(options).await.unwrap();
     let requests = client.limits().recent();
     stop(client, server).await;
-    (inventory, requests)
+    assert!(inventory.stopped.is_none(), "{inventory:?}");
+    (Model::from(&inventory), requests)
 }
 
 fn full() -> InventoryOptions {
-    InventoryOptions::default().with_detail(Detail::Full)
+    point_list_options()
 }
 
-/// A list built into a database, served and read back at `Full` is the
-/// list again, by RPM and by ReadProperty alike: the Device's name and
-/// Description, and every point's every field, a Writable value reading
-/// as ReadOnly. By RPM it costs N + 2, as the export does.
+/// A list built into a database, served and read back with the point
+/// list's options is the list again, by RPM and by ReadProperty alike: the
+/// Device's name and Description, and every point's every field, a
+/// Writable value reading as ReadOnly. By RPM its fourteen objects (the
+/// Device object among them) take far fewer requests than one each.
 #[tokio::test(start_paused = true)]
 async fn a_full_list_reads_back_as_built() {
     let list = full_list();
     for (faults, by_rpm) in [(Faults::default(), true), (refusing_rpm(), false)] {
-        let (inventory, requests) = read_back(list.clone(), faults, &full()).await;
-        assert_eq!(inventory.stopped, None);
-        assert!(
-            inventory
-                .entries
-                .iter()
-                .all(|entry| entry.error().is_none()),
-            "{inventory:?}"
-        );
-        assert_eq!(inventory.point_list(), as_read(list.clone()));
+        let (model, requests) = read_back(list.clone(), faults, &full()).await;
+        assert!(model.entries.iter().all(Result::is_ok), "{model:?}");
+        assert_eq!(model.point_list(), as_read(list.clone()));
         if by_rpm {
-            assert_eq!(requests, list.points.len() + 2);
+            assert!(requests < list.points.len(), "{requests}");
         }
     }
-    // At Export the same device reads as the export has always read it:
-    // none of the settings Full adds.
-    let (inventory, requests) = read_back(
-        list.clone(),
-        Faults::default(),
-        &InventoryOptions::default(),
-    )
-    .await;
-    assert_eq!(requests, list.points.len() + 2);
-    assert_eq!(inventory.device.description, None);
-    let PointKind::Analog(av) = &inventory.points().nth(2).unwrap().kind else {
-        panic!("{inventory:?}");
+    // With the export's own options the same device reads as the export
+    // reads it: none of the settings, and no Description for the Device.
+    let export = inventory_options(None).unwrap();
+    let (model, _) = read_back(list.clone(), Faults::default(), &export).await;
+    assert_eq!(model.device.description, None);
+    let PointKind::Analog(av) = &model.points().nth(2).unwrap().kind else {
+        panic!("{model:?}");
     };
     let expected = Analog::new(EngineeringUnits::DEGREES_CELSIUS, commanded(None));
     assert_eq!(av, &expected);
@@ -298,7 +284,7 @@ async fn an_absent_field_reads_back_as_the_objects_default() {
             ),
         ],
     );
-    let (inventory, _) = read_back(list.clone(), Faults::default(), &full()).await;
+    let (model, _) = read_back(list.clone(), Faults::default(), &full()).await;
 
     let analog = |access| Analog::new(units, access).with_cov_increment(0.0);
     let binary = |access| {
@@ -333,12 +319,13 @@ async fn an_absent_field_reads_back_as_the_objects_default() {
     let device = DeviceInfo::new(LAB)
         .with_name(identity().name())
         .with_description("");
-    assert_eq!(inventory.point_list(), PointList::new(device, points));
+    assert_eq!(model.point_list(), PointList::new(device, points));
 }
 
-/// What `Full` costs from a device that refuses RPM, each type read alone:
-/// the refused RPM (the Device's, now), the Device's name and Description,
-/// the Object_List, then a ReadProperty a property, by type.
+/// What a point list's reading costs from a device that refuses RPM, each
+/// type read alone: the refused RPM (the summary's), the summary's
+/// thirteen properties, the Object_List, then a ReadProperty a property,
+/// by type.
 #[tokio::test(start_paused = true)]
 async fn full_by_read_property() {
     let costs = [
@@ -355,16 +342,16 @@ async fn full_by_read_property() {
     ];
     let list = full_list();
     for (object_type, cost) in costs {
-        let options = InventoryOptions::new(vec![object_type])
-            .unwrap()
-            .with_detail(Detail::Full);
-        let (inventory, requests) = read_back(list.clone(), refusing_rpm(), &options).await;
+        let options = InventoryOptions::new()
+            .with_types([object_type])
+            .with_settings(true);
+        let (model, requests) = read_back(list.clone(), refusing_rpm(), &options).await;
         let objects = list
             .points
             .iter()
             .filter(|point| point.object.object_type() == object_type)
             .count();
-        assert_eq!(inventory.points().count(), objects, "{object_type}");
-        assert_eq!(requests, 1 + 2 + 1 + objects * cost, "{object_type}");
+        assert_eq!(model.points().count(), objects, "{object_type}");
+        assert_eq!(requests, 1 + 13 + 1 + objects * cost, "{object_type}");
     }
 }

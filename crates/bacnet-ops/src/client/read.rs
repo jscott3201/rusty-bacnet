@@ -201,7 +201,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
 
     /// The address the device's gate keys on: an address on the client's
     /// own network, once it knows the number, is the local station's.
-    fn gate(&self) -> DeviceAddress {
+    pub(crate) fn gate(&self) -> DeviceAddress {
         self.device.clone().localized(self.client.network_number())
     }
 
@@ -415,16 +415,29 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
 
     /// The device's Object_List. `progress` hears `(done, total)` along an
     /// element-by-element read.
-    pub async fn object_list(&self, mut progress: impl FnMut(u32, u32)) -> Result<ListRead, Halt> {
+    pub async fn object_list(&self, progress: impl FnMut(u32, u32)) -> Result<ListRead, Halt> {
+        let (mut list, stopped) = self.object_list_until(progress).await?;
+        list.stopped = stopped.map(|stop| stop.to_string());
+        Ok(list)
+    }
+
+    /// [`object_list`](Self::object_list), with the error an
+    /// element-by-element read stopped on beside the list, whose `stopped`
+    /// is left `None`.
+    pub(crate) async fn object_list_until(
+        &self,
+        mut progress: impl FnMut(u32, u32),
+    ) -> Result<(ListRead, Option<ListStop>), Halt> {
         let device = self.device_object()?;
         let list = PropertyIdentifier::OBJECT_LIST;
         let whole = match self.rp(device, list, None).await {
             Ok(data) => {
-                return Ok(ListRead {
+                let read = ListRead {
                     objects: identifiers(&data),
                     indexed: false,
                     stopped: None,
-                });
+                };
+                return Ok((read, None));
             }
             // Element 0 would only time out too.
             Err(Halt::Device(error)) if unreachable(&error) => return Err(Halt::Device(error)),
@@ -453,18 +466,46 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
                 Ok(data) => objects.extend(identifiers(&data)),
                 // Keep what was read rather than lose the whole list.
                 Err(Halt::Device(error)) => {
-                    stopped = Some(format!("element {index} of {total}: {error}"));
+                    stopped = Some(ListStop {
+                        index,
+                        total,
+                        error,
+                    });
                     break;
                 }
                 Err(Halt::Cancelled) => return Err(Halt::Cancelled),
             }
             progress(index, total);
         }
-        Ok(ListRead {
+        let read = ListRead {
             objects,
             indexed: true,
-            stopped,
-        })
+            stopped: None,
+        };
+        Ok((read, stopped))
+    }
+}
+
+/// Where an element-by-element read of an Object_List stopped, and on
+/// what. Written `element 3 of 40: ` and the error.
+#[derive(Debug)]
+pub struct ListStop {
+    /// The element whose read failed, from 1.
+    pub index: u32,
+    /// How many elements the list said it has.
+    pub total: u32,
+    /// The failure.
+    pub error: Error,
+}
+
+impl std::fmt::Display for ListStop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            index,
+            total,
+            error,
+        } = self;
+        write!(f, "element {index} of {total}: {error}")
     }
 }
 

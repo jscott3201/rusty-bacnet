@@ -19,7 +19,11 @@ use crate::device::DeviceAddress;
 /// point's watch sends. What the device did outranks what it declared:
 /// its Protocol_Services_Supported is noted when
 /// [`Device::describe_device`](crate::Device::describe_device) reads it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Serialized as its name in kebab case: `"unknown"`, `"not-offered"`,
+/// `"offered"`, `"accepted"`, `"refused"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum CovSupport {
     /// Nothing yet: the device's Protocol_Services_Supported wasn't read

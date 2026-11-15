@@ -80,7 +80,7 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `--mstp-max-info-frames <N>` | `1` | Frames this station sends each time it holds the token (Max_Info_Frames), 1 to 255 |
 | `--mstp-rt-priority <N>` | | Linux only: run the station's token handling under `SCHED_FIFO` at priority N, 1 to 99. See [MS/TP](#mstp) |
 | `--mstp-cpus <CPUS>` | | Linux only: pin the station's token handling to these CPUs, such as `2,3` |
-| `--format <FMT>` | auto | Output format: `table` or `json` |
+| `--format <FMT>` | auto | Output format: `table` or `json`; `csv` too for [`inventory`](#device-inventory) |
 | `--json` | | JSON output shorthand |
 | `-v` | | Verbosity (`-v`, `-vv`, `-vvv`) |
 | `--allow-write` | | Let a command that changes a device run; see [Write guard](#write-guard) |
@@ -1531,6 +1531,151 @@ anything that doesn't decode ends the list as `[raw ..]`.
 
 **Aliases:** `rp` = read, `rpm` = readm, `rr` = read-range
 
+### Device inventory
+
+```bash
+bacnet inventory 192.168.1.100                           # every object: name, units, states
+bacnet inventory 1234 --values                           # with each Present_Value and Status_Flags
+bacnet inventory 2:1234 --types ai,ao,msv --values       # some object types only
+bacnet inventory 192.168.1.100 --format csv > ahu1.csv   # one row an object
+bacnet inventory 192.168.1.100 --values --json > ahu1.json
+```
+
+`inventory` lists a device's objects as point records: for each object its
+name, description, units, state texts and whether it takes commands. It
+reads every object the device's Object_List names, of any type, a vendor's
+included.
+
+**Inventory flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--types <TYPES>` | Only these object types, comma-separated, by the target grammar's names (`ai`, `msv`, `trend-log` and so on) |
+| `--values` | Also read each object's Present_Value and Status_Flags |
+| `--settings` | Also read each object's COV_Increment, Min_Pres_Value, Max_Pres_Value and Relinquish_Default, where its type has them |
+| `--format table\|json\|csv`, `--json` | How to print; a table at a terminal and JSON through a pipe unless given |
+| `--csv-exact` | With `--format csv`: write device text exactly, without the formula guard |
+
+- **What is read.** Object_Name and Description of every object; Units of
+  the analog and integer types, Accumulator and Pulse Converter; a binary
+  object's Active_Text and Inactive_Text; a multi-state object's
+  Number_Of_States and State_Text. An output is commandable by its type; a
+  value object, or an object of a type this release doesn't know, is
+  commandable when it has a Priority_Array, which is read to find out. An
+  optional property an object lacks is left empty. A property that should
+  have read and didn't is listed with the device's error under the object's
+  problems and never fails the command; an object the device refuses is a
+  row whose properties are all problems.
+- **What it costs.** The device summary, the Object_List, then one
+  ReadPropertyMultiple for each batch, filled in Object_List order up to
+  16 objects or 32 properties, whichever comes first: 10 analog inputs, 8
+  binary inputs or analog values, 6 multi-state values, 16 objects of a
+  type that reads only its name and description. N objects of one type
+  that each read p properties take N divided by the batch's size, rounded
+  up, where the size is the smaller of 16 and 32/p rounded down: 31 analog
+  inputs, at three properties each, take 4 requests. That is about N/8 + 2
+  requests for a typical controller, N/5 + 2 with `--values`, one at a
+  time. A target
+  given by address costs one more, a read of the Device object by the
+  wildcard instance. A device that can't send a batch's answer for its
+  size is asked for that batch an object at a time, and for at most half
+  as many objects a batch from then on, down to one: at most four such
+  refused batches. A device that
+  refuses ReadPropertyMultiple costs one refused request, then a
+  ReadProperty a property: 13 for the summary, one for the Object_List, and
+  two to five an object (two more with `--values`).
+- **Output.** Stdout carries only the data, and a one-line summary goes to
+  stderr in every format. The table cleans device text for the screen
+  (control characters as spaces), and shows the values' and settings'
+  columns when they were read and a problems column when any object has
+  one. JSON keeps device text exactly as the device sent it, and so does
+  CSV but for its formula guard (below).
+- **Exit status.** 0 when every object was read, also when the device has
+  none of the selected types (stderr says so). 1 when the device doesn't
+  answer or refuses its Object_List, or an Object_List read element by
+  element fails partway (the error names the element: `Object_List element
+  3 of 40: ...`), with nothing on stdout; and 1 when it goes silent
+  while its objects are read: what was read is still printed, and stderr
+  says how many objects were not read.
+
+`--json` prints one document. `device.properties` holds the summary by
+property name; each value is its text under `value` and its typed form under
+`decoded`, as in [value output](#value-output). `cov` is what is known of
+SubscribeCOV at the device (`unknown`, `not-offered`, `offered`, `accepted`
+or `refused`). `unread` lists the objects not read when `stopped`, the
+error's text, is set:
+
+```json
+{
+  "address": "192.168.1.100:47808",
+  "device": {
+    "instance": 1234,
+    "name": "AHU-1",
+    "properties": { "vendor-name": { "value": "\"Acme\"", "decoded": "Acme" } }
+  },
+  "cov": "offered",
+  "points": [
+    {
+      "device": "192.168.1.100:47808",
+      "device_instance": 1234,
+      "object": { "type": "analog-input", "type_number": 0, "instance": 1 },
+      "name": "Zone Temp",
+      "description": "Room 101",
+      "units": { "value": 64, "name": "degrees-fahrenheit", "symbol": "°F" },
+      "state_texts": { "active": null, "inactive": null, "states": [] },
+      "number_of_states": null,
+      "commandable": false,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "present_value": { "value": "72.5 °F", "decoded": 72.5 },
+      "status_flags": { "value": "none", "decoded": { "bits": "0000", "names": [] } },
+      "problems": []
+    }
+  ],
+  "unread": [],
+  "stopped": null
+}
+```
+
+Every record has every field, `null` where there is nothing to say. A
+problem is `{"property": "units", "error": "PROPERTY:UNKNOWN_PROPERTY"}`.
+Property names, in `problems` and as the keys of `device.properties`, are
+in kebab case (`units`, `vendor-name`).
+The field names are stable.
+
+`--format csv` prints a header and one row an object, the columns always
+these and in this order:
+
+```text
+device,device_instance,object,name,description,units,state_texts,number_of_states,commandable,relinquish_default,cov_increment,min_present_value,max_present_value,present_value,status_flags,problems
+192.168.1.100:47808,1234,analog-input:1,Zone Temp,"Room 101, east",degrees-fahrenheit,,,false,,,,,72.5 °F,none,
+192.168.1.100:47808,1234,multi-state-value:1,Mode,,,Off|Low|High,3,true,,,,,2 (Low),none,
+```
+
+- `object` is `type:instance`, the form the other commands take; `units` is
+  the unit's name; the values are their text, as the table shows them.
+- `state_texts` joins a binary object's Inactive_Text and Active_Text, or a
+  multi-state object's State_Text from state 1, with `|`. A `|` or a `\`
+  inside a text is written `\|` or `\\`.
+- `problems` joins each `property: error` with `; `.
+- A field holding a comma, a double quote or a line break is put in double
+  quotes with its quotes doubled (RFC 4180); other fields are bare, and an
+  empty field means nothing to say. Rows end with a line feed.
+- A spreadsheet runs a cell that starts with `=`, `+`, `-`, `@`, a tab or
+  a carriage return as a formula. So a `name`, `description` or
+  `state_texts` cell that starts with one (for `state_texts`, the joined
+  cell) gets an apostrophe before it, which a spreadsheet shows as text:
+  `=1+1` is written `'=1+1`. Leading spaces and line breaks before such a
+  character don't hide it. A program that reads the CSV back sees the
+  apostrophe in guarded cells: use `--csv-exact` or JSON for machine use.
+  A value cell holding device text is guarded
+  the same way, though a string value prints in double quotes and so
+  never starts with one. Numbers (`-40`), addresses, objects, units and
+  `problems` are never changed. `--csv-exact` turns the guard off and
+  writes device text exactly; JSON is always exact.
+
 ### Standard 223 export (experimental)
 
 ```bash
@@ -1575,15 +1720,18 @@ types.
   way; `--format` and `--json` don't apply. When the device has no object
   of the selected types, the model is empty, the header and stderr say so,
   and the exit status is 0.
-- It costs the device name, its Object_List and one request per exported
-  object, by ReadPropertyMultiple, one at a time. A device that refuses
+- It reads as [`inventory`](#device-inventory) does, the ten exported
+  types only: the device summary, its Object_List and one
+  ReadPropertyMultiple for each batch of exported objects, six to ten
+  objects a request, one at a time. A device that refuses
   ReadPropertyMultiple costs one refused request, then a ReadProperty a
-  property: 2 per binary input or output, 3 per analog input or output or
-  binary value, 4 per analog value, integer value or multi-state input or
-  output, and 5 per multi-state value. A target given by address costs one
-  more: a read of its Device object by the wildcard instance, to learn the
-  device's instance number. If the device stops answering partway, the
-  export writes what was read, says so in its header, and exits 1.
+  property: 13 for the summary, and 3 per analog input or output, 4 per
+  analog value, integer value, binary input or output or multi-state input
+  or output, and 5 per binary or multi-state value. A target given by
+  address costs one more: a read of its Device object by the wildcard
+  instance, to learn the device's instance number. If the device stops
+  answering partway, the export writes what was read, says so in its
+  header, and exits 1.
 
 **Limits.** The draft and this export can change between releases, which
 is why the command name says experimental.
@@ -1600,10 +1748,10 @@ is why the command name says experimental.
   kind and no unit, since the draft requires a quantity kind on every
   quantifiable property, plus a comment naming the BACnet unit. The header
   counts these points.
-- An object whose read the device refuses is skipped, with a comment where
-  it would have been, and so is one that can't give its Object_Name, the
-  Units of an analog object or an integer value, or a multi-state object's
-  Number_Of_States. The header counts the skipped objects.
+- An object that can't give its Object_Name (one the device refuses
+  altogether, say), the Units of an analog object or an integer value, or
+  a multi-state object's Number_Of_States is skipped, with a comment where
+  it would have been. The header counts the skipped objects.
 - Device text (names, descriptions, state texts) is kept exactly, escaped
   so the file stays ASCII, except U+0000, which a string literal can't
   hold: it becomes U+FFFD, and the header counts each one.

@@ -68,7 +68,7 @@ const SYMBOLS: [(U, &str); 44] = [
 
 /// `units` as the compact places show it: its symbol, or its kebab-case
 /// name when the table has none.
-pub(super) fn unit_symbol(units: U) -> String {
+pub(crate) fn unit_symbol(units: U) -> String {
     SYMBOLS
         .iter()
         .find(|(unit, _)| *unit == units)

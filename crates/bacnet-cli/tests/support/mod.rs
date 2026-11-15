@@ -9,6 +9,7 @@ use std::time::Duration;
 pub mod alarm;
 pub mod lab;
 pub mod paused;
+pub mod relay;
 #[cfg(feature = "sc-tls")]
 pub mod sc;
 

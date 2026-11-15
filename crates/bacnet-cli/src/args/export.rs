@@ -16,9 +16,9 @@ pub(crate) enum ExportFormat {
     /// (device, object, name, property), QUDT units where they map, and the
     /// states of multi-state objects. A point list only: no equipment,
     /// connections or sensors. The 223 draft and this output can change
-    /// between releases. Reads the device name, its object list, then one
-    /// request per exported object; a target given by address costs one
-    /// more, a read of its Device object to learn the instance. Stdout
+    /// between releases. Reads the device summary, its object list, then
+    /// the exported objects a few a request; a target given by address
+    /// costs one more, a read of its Device object to learn the instance. Stdout
     /// carries only the Turtle; a summary goes to stderr. --format and
     /// --json don't apply.
     #[command(name = "223-experimental")]

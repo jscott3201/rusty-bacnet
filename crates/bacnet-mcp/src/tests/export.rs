@@ -9,8 +9,9 @@ use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::binary::BinaryOutputObject;
 use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_ops::Priority;
 use bacnet_ops::export::s223::testing::check_structure;
-use bacnet_ops::export::s223::{InventoryOptions, TurtleOptions, WritePriority, to_turtle};
+use bacnet_ops::export::s223::{Model, TurtleOptions, inventory_options, to_turtle};
 use bacnet_ops::parse::parse_object_type;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -223,12 +224,13 @@ async fn a_large_device_comes_in_pages() {
         .device(LAB)
         .await
         .unwrap()
-        .inventory(&InventoryOptions::default())
+        .inventory(&inventory_options(None).unwrap())
         .await
         .unwrap();
+    let model = Model::from(&inventory);
     assert_eq!(
         joined,
-        points(&to_turtle(&inventory, &TurtleOptions::default()))
+        points(&to_turtle(&model, &TurtleOptions::default()))
     );
     lab.stop().await;
 }
@@ -275,7 +277,7 @@ async fn refuses_bad_options_before_sending() {
     lab.agent.initialize().await;
     let before = lab.sends().len();
     let base = |iri: &str| TurtleOptions::new(iri, None).unwrap_err();
-    let priority = |n| WritePriority::new(n).unwrap_err();
+    let priority = |n| Priority::new(n).unwrap_err().to_string();
     let cases = [
         (
             json!({ "base_iri": "example.org/bacnet/" }),
@@ -300,7 +302,7 @@ async fn refuses_bad_options_before_sending() {
         (
             json!({ "types": ["trend-log"] }),
             "types",
-            InventoryOptions::new(vec![ObjectType::TREND_LOG]).unwrap_err(),
+            inventory_options(Some(vec![ObjectType::TREND_LOG])).unwrap_err(),
         ),
         (
             json!({ "types": ["ai", "nope"] }),
@@ -310,7 +312,7 @@ async fn refuses_bad_options_before_sending() {
         (
             json!({ "types": [] }),
             "types",
-            InventoryOptions::new(Vec::new()).unwrap_err(),
+            inventory_options(Some(Vec::new())).unwrap_err(),
         ),
     ];
     for (mut args, field, message) in cases {
