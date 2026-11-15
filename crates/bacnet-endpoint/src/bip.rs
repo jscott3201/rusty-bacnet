@@ -383,12 +383,15 @@ impl BipEndpointBuilder {
     /// plus real-socket corroboration (single nonzero local MAC/port).
     pub fn build_session(self) -> Result<EndpointSession<BipTransport>, Error> {
         let mut bip_status = None;
+        let mut frame_tap = None;
         let mut endpoint = self.compose(|builder| {
             let transport = builder.build_transport()?;
             bip_status = Some(transport.bvlc_client_status());
+            frame_tap = Some(transport.frame_tap().clone());
             Ok(transport)
         })?;
         endpoint.bip_status = bip_status;
+        endpoint.frame_tap = frame_tap;
         Ok(endpoint)
     }
 

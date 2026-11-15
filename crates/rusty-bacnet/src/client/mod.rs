@@ -258,6 +258,7 @@ mod client_methods {
     mod export_223;
     mod file_list_private_text_life;
     mod foreign_registration;
+    mod frames;
     mod lifecycle;
     mod log_read;
     mod object_device_alarm;

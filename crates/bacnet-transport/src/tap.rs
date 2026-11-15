@@ -74,7 +74,8 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::time::SystemTime;
+use std::task::{Context, Poll};
+use std::time::{Instant, SystemTime};
 
 use bacnet_types::data_link::DataLink;
 use bytes::Bytes;
@@ -124,6 +125,9 @@ pub struct TappedFrame {
     /// before the socket write for a sent frame (on MS/TP, just after it),
     /// just after the read for a received one. See [Order](crate::tap#order).
     pub timestamp: SystemTime,
+    /// Monotonic time at the same capture point as [`Self::timestamp`].
+    /// Use this for elapsed times: wall-clock adjustments cannot reorder it.
+    pub monotonic_timestamp: Instant,
     /// Sent or received.
     pub direction: TapDirection,
     /// The data link the frame is on.
@@ -248,6 +252,7 @@ impl FrameTap {
         // are queued in the order of their timestamps.
         let frame = TappedFrame {
             timestamp: SystemTime::now(),
+            monotonic_timestamp: Instant::now(),
             direction,
             link,
             peer,
@@ -295,6 +300,12 @@ impl std::fmt::Debug for FrameTapReceiver {
 }
 
 impl FrameTapReceiver {
+    /// Poll for the next frame without keeping a mutable borrow across an
+    /// await. Like [`Self::recv`], cancellation before readiness loses no frame.
+    pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<TappedFrame>> {
+        self.rx.poll_recv(cx)
+    }
+
     /// The next frame, waiting for one. After the transport stops this
     /// keeps waiting, since it may start again; it returns `None` once the
     /// transport that owns the tap is dropped and the queue is empty.

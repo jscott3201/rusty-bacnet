@@ -54,6 +54,7 @@ impl Started {
 /// One binding owner, including an independently owned shutdown task.
 #[derive(Default)]
 pub(super) struct ClientState {
+    pub(super) frames: crate::frames::FrameSubscriptions,
     client: RwLock<Option<Started>>,
     closing: AtomicBool,
     /// Woken when close is admitted, so an operation or entry queued behind
@@ -156,6 +157,7 @@ pub(super) async fn close(inner: ClientInner) -> PyResult<()> {
         // cancelled before this mutex is acquired cannot leave a closing flag.
         inner.closing.store(true, Ordering::Release);
         inner.closing_admitted.notify_waiters();
+        inner.frames.close();
         let state = Arc::clone(&inner);
         *shutdown = Some(tokio::spawn(stop_native(state)));
     }
@@ -177,6 +179,9 @@ pub(super) async fn close(inner: ClientInner) -> PyResult<()> {
 /// Keep the native client present until its teardown successfully completes.
 async fn stop_native(state: ClientInner) -> Result<(), Error> {
     let mut client = state.client.write().await;
+    // A frame subscription admitted before close may have finished while
+    // close waited for its read lease. End those subscriptions too.
+    state.frames.close();
     if let Some(started) = client.as_mut() {
         started.stop().await?;
     }

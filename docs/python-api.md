@@ -6257,6 +6257,63 @@ asyncio.run(client_example())
 
 ---
 
+## Raw frame observation
+
+`BipEndpoint.frames(capacity=1024)` and `BACnetClient.frames(capacity=1024)`
+return an awaitable for a `FrameIterator` on the owner's existing transport.
+Subscribe after starting the owner. The endpoint continues answering requests
+and its client role can issue reads while observation runs:
+
+```python
+async with BipEndpoint(1001, interface="127.0.0.1", port=0) as endpoint:
+    frames = await endpoint.frames(capacity=256)
+    try:
+        async for frame in frames:
+            print(frame.timestamp, frame.direction, frame.peer, frame.octets.hex())
+    finally:
+        await frames.aclose()
+```
+
+Each frozen `Frame` holds `timestamp`, `direction`, `link`, `local_address`,
+`peer`, `octets` and `missed`. The timestamp is captured in Rust when the
+transport observes the frame; it is monotonic seconds from this module's first
+subscription, comparable across subscriptions but not to wall time or Python's
+clock origin. `local_address` is the local IPv4 address and port for B/IP;
+other client transports report their local MAC in colon-separated hex.
+`peer` is the datagram source or destination, the SC hub name (`primary` or
+`failover`), the MS/TP station number, or an Ethernet MAC. It identifies the
+link peer, not a forwarded packet's original sender.
+
+The queue holds 1–65536 frames. A full queue drops **new** arrivals without
+delaying the transport. `Frame.missed` samples that subscription's cumulative
+overflow count when read; `FrameIterator.missed` also counts failed deliveries
+to Python and remains readable after close. Received datagrams rejected by the
+protocol decoder still appear as raw octets; failed operating-system reads do
+not. Outgoing B/IP, B/IPv6 and SC frames appear before the socket write, even
+if the write subsequently fails. This observes this process's own traffic,
+not all traffic on the network. SC observations are plaintext from inside TLS.
+
+Cancelling `anext(frames)` leaves the subscription usable and preserves a frame
+being delivered for the next read. `await frames.aclose()` discards queued
+frames, wakes pending reads with `StopAsyncIteration` and releases the
+subscription. Closing or dropping the owner does the same. A frame already
+delivered to an asyncio Future remains that Future's result. Restarting an
+owner needs a new iterator. Read each iterator from one running event loop;
+concurrent reads keep arrival order. A slow or closed event loop can delay
+redelivery, as on the existing event iterators; explicit close ends that wait.
+
+This first observation API exposes raw frames on B/IP endpoints and standalone
+clients. Router application clients have no link of their own and are refused.
+Server and other endpoint entry points, Rust-decoded summaries, parse failures
+and forwarding/router provenance are follow-up work for #2614.
+
+`interface` for B/IP is an IPv4 address, not an OS interface name.
+`ipv6_interface` is an IPv6 address, also not an OS interface name; `None` and
+`"::"` use the existing automatic selection rules. Observation opens no additional
+socket and changes no port-sharing behavior: Linux/macOS sharing options remain
+those documented under transport configuration. It does not make two separately
+constructed stacks into one endpoint.
+
 ## Endpoint (one transport, both roles)
 
 `BipEndpoint`, `ScEndpoint`, and `MstpEndpoint` own one transport above both

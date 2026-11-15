@@ -142,6 +142,7 @@ impl BipEndpointConfig {
 #[pyclass(name = "BipEndpoint", module = "rusty_bacnet")]
 pub struct PyBipEndpoint {
     lifecycle: Lifecycle<BipSession, PendingObject>,
+    frames: std::sync::Arc<crate::frames::FrameSubscriptions>,
     config: BipEndpointConfig,
 }
 
@@ -375,8 +376,11 @@ impl PyBipEndpoint {
             interface_ip,
             port,
         )?;
+        let frames = std::sync::Arc::new(crate::frames::FrameSubscriptions::default());
+        let observer = frames.clone();
         Ok(Self {
-            lifecycle: Lifecycle::new(),
+            lifecycle: Lifecycle::new().with_close_observer(move || observer.close()),
+            frames,
             config: BipEndpointConfig {
                 interface: interface_ip,
                 port,
@@ -476,6 +480,29 @@ impl PyBipEndpoint {
         _exc_tb: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         self.close(py)
+    }
+
+    /// Subscribe to raw frames on the endpoint's existing socket, including
+    /// malformed received datagrams. Full queues drop new frames and count
+    /// them in `missed`. Close ends every subscription, waking pending reads.
+    #[pyo3(signature = (capacity=1024))]
+    fn frames<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
+        let capacity = crate::frames::capacity(capacity)?;
+        let lifecycle = self.lifecycle.clone();
+        let frames = self.frames.clone();
+        crate::py_async::future_into_py(py, async move {
+            let guard = lifecycle.session.lock().await;
+            let session = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+            let receiver = session
+                .frames(capacity)
+                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+            let address = session
+                .bip_local_address()
+                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+            Ok(frames.subscribe(receiver, address.to_string()))
+        })
     }
 
     /// Clone the client role (fails with RuntimeError before start/after close).

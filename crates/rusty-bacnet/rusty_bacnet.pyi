@@ -3949,6 +3949,58 @@ class ScEventIterator:
         connector, or dropped on the way to a read, as when its event loop closed first."""
         ...
 
+class Frame:
+    """Frozen raw frame; no decoded summary or forwarding provenance yet."""
+    @property
+    def timestamp(self) -> float:
+        """Monotonic capture seconds from the first subscription in this module.
+        Comparable across subscriptions, not to wall time or Python's clock origin."""
+        ...
+    @property
+    def direction(self) -> str:
+        """'inbound' or 'outbound'."""
+        ...
+    @property
+    def link(self) -> str:
+        """Link display name, such as 'BACnet/IP'."""
+        ...
+    @property
+    def local_address(self) -> str:
+        """Local address at subscription: IPv4 ip:port, otherwise a hex MAC."""
+        ...
+    @property
+    def peer(self) -> str:
+        """UDP peer, SC hub name, MS/TP station or Ethernet MAC.
+        This is the next hop, not a forwarded frame's original source."""
+        ...
+    @property
+    def octets(self) -> bytes:
+        """Raw link octets, including malformed received datagrams."""
+        ...
+    @property
+    def missed(self) -> int:
+        """Cumulative subscription queue-overflow count sampled at read time."""
+        ...
+
+class FrameIterator:
+    """Bounded raw-frame subscription. A full queue drops new arrivals.
+
+    Cancelling a read preserves the next frame and the subscription. Explicit
+    close or owner shutdown discards queued frames and wakes pending reads.
+    A frame already delivered to an asyncio Future remains that Future's result.
+    Each subscription is independent and never keeps the owner's socket alive.
+    Read from one running event loop; concurrent reads keep arrival order.
+    """
+    def __aiter__(self) -> FrameIterator: ...
+    def __anext__(self) -> Awaitable[Frame]: ...
+    def aclose(self) -> Awaitable[None]:
+        """Idempotently stop this subscription, without stopping its owner."""
+        ...
+    @property
+    def missed(self) -> int:
+        """Frames lost to overflow or failed delivery; readable after close."""
+        ...
+
 class BACnetClient:
     """Async BACnet client for reading/writing properties on remote devices.
 
@@ -4004,6 +4056,11 @@ class BACnetClient:
     VMAC), or an MS/TP station. ``"[ip]:port"`` raises ValueError: use
     ``resolve_vmac``. So does a ``bip6:`` address on any other transport.
     """
+
+    def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]:
+        """Observe raw frames on the running owner; capacity is 1–65536.
+        Owner shutdown ends this subscription; a restart needs a new one."""
+        ...
 
     def __init__(
         self,
@@ -8396,6 +8453,11 @@ class BipEndpoint:
     # foreign_device= or bbmd=). None stays unbound. Each mode answers/learns
     # local Network Number controls. Only explicit
     # registration supplies configured provenance; an unregistered owner starts unknown.
+
+    def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]:
+        """Observe raw frames on the running owner; capacity is 1–65536.
+        Owner shutdown ends this subscription; a restart needs a new one."""
+        ...
 
     def __init__(
         self,

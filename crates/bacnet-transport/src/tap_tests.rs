@@ -35,6 +35,7 @@ fn each_receiver_gets_each_frame_in_order() {
             (TapDirection::Outbound, DataLink::Mstp, peer(), &[1][..])
         );
         let received = receiver.try_recv().unwrap();
+        assert!(sent.monotonic_timestamp <= received.monotonic_timestamp);
         assert_eq!(received.direction, TapDirection::Inbound);
         assert_eq!(&received.bytes[..], [2]);
         assert!(receiver.try_recv().is_none());

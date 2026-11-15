@@ -20,6 +20,39 @@ fn in_flight<T>(stream: &LossyReceiver<T>) -> usize {
     stream.slot.in_flight.load(Ordering::Acquire)
 }
 
+#[tokio::test(start_paused = true)]
+async fn close_interrupts_an_unsettled_delivery_and_refuses_late_put_back() {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    Python::initialize();
+    let (tx, rx) = broadcast::channel(4);
+    let stream = LossyReceiver::new(rx);
+    tx.send(1u32).unwrap();
+    let (first, first_hook) = stream.next();
+    assert!(matches!(first.await, Some(Next::Fresh(1))));
+    let (second, _second_hook) = stream.next();
+    tokio::pin!(second);
+    assert!(
+        second
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    stream.close();
+    assert!(matches!(
+        second
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(None)
+    ));
+    Python::attach(|py| first_hook.put_back(py, 1u32.into_py_any(py).unwrap(), Via::OnLoop));
+    first_hook.settled();
+    assert!(stream.slot.take().is_none());
+    assert_eq!(in_flight(&stream), 0);
+    assert!(stream.next().0.await.is_none());
+}
+
 #[tokio::test]
 async fn a_lagging_receiver_counts_the_gap_and_never_holds_up_the_sender() {
     let (tx, rx) = broadcast::channel(4);

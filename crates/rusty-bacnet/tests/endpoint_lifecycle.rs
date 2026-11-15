@@ -58,6 +58,36 @@ impl Session for Resource {
 
 type Owner = Lifecycle<Resource, usize>;
 
+#[tokio::test(start_paused = true)]
+async fn observations_end_at_close_admission_before_joining_teardown() {
+    let closed = Arc::new(AtomicUsize::new(0));
+    let observer = closed.clone();
+    let owner = Owner::new().with_close_observer(move || {
+        observer.fetch_add(1, Ordering::SeqCst);
+    });
+    let live = Arc::new(AtomicUsize::new(0));
+    let (entered, stopping) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    owner
+        .start(false, move |_| async move {
+            let mut resource = Resource::new(live);
+            resource.stop_entered = Some(entered);
+            resource.stop_release = Some(held);
+            Ok(resource)
+        })
+        .await
+        .unwrap();
+    let close = tokio::spawn({
+        let owner = owner.clone();
+        async move { owner.close().await }
+    });
+    stopping.await.unwrap();
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
+    assert!(!close.is_finished());
+    release.send(()).unwrap();
+    close.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn close_waits_for_admitted_start_then_drops_resource() {
     let owner = Owner::new();

@@ -25,6 +25,7 @@
 //! conversion, a closed exit gate or a closed loop that dropped the queued
 //! callback).
 
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -50,9 +51,21 @@ mod tests;
 /// A broadcast receiver shared by one Python iterator's pending
 /// `__anext__` futures, with its redelivery slot and a running count of
 /// the items lost.
-pub(crate) struct LossyReceiver<T> {
-    rx: Arc<Mutex<broadcast::Receiver<T>>>,
+pub(crate) struct LossyReceiver<T, R = broadcast::Receiver<T>> {
+    rx: Arc<Mutex<R>>,
     slot: Arc<Redelivery>,
+    item: PhantomData<fn() -> T>,
+}
+
+/// A cancel-safe event source, including the transport's bounded frame tap.
+pub(crate) trait EventSource<T>: Send {
+    fn recv(&mut self) -> impl std::future::Future<Output = Result<T, RecvError>> + Send;
+}
+
+impl<T: Clone + Send> EventSource<T> for broadcast::Receiver<T> {
+    async fn recv(&mut self) -> Result<T, RecvError> {
+        broadcast::Receiver::recv(self).await
+    }
 }
 
 /// The one-item slot for an item a cancelled `__anext__` could not take.
@@ -69,6 +82,8 @@ pub(crate) struct Redelivery {
     in_flight: AtomicUsize,
     /// Set once the stall warning has gone out, so it goes out once.
     warned: AtomicBool,
+    /// Explicit close interrupts pending delivery and receive waits.
+    closed: AtomicBool,
     /// Which put-back and settle paths ran, for the tests.
     #[cfg(test)]
     trace: Trace,
@@ -124,6 +139,9 @@ impl Redelivery {
     fn put_back(&self, value: Py<PyAny>) {
         let refused = {
             let mut item = self.item();
+            if self.closed.load(Ordering::Acquire) {
+                return;
+            }
             match *item {
                 None => {
                     *item = Some(value);
@@ -250,10 +268,25 @@ impl<'py, T: IntoPyObject<'py>> IntoPyObject<'py> for Next<T> {
 
 impl<T: Clone + Send + 'static> LossyReceiver<T> {
     pub(crate) fn new(rx: broadcast::Receiver<T>) -> Self {
+        Self::from_source(rx)
+    }
+}
+
+impl<T: Send + 'static, R: EventSource<T> + 'static> LossyReceiver<T, R> {
+    pub(crate) fn from_source(rx: R) -> Self {
         Self {
             rx: Arc::new(Mutex::new(rx)),
             slot: Arc::default(),
+            item: PhantomData,
         }
+    }
+
+    /// End this iterator and wake reads waiting for redelivery. The source's
+    /// own close must also wake a read currently waiting on its receiver.
+    pub(crate) fn close(&self) {
+        self.slot.closed.store(true, Ordering::Release);
+        self.slot.take();
+        self.slot.filled.notify_waiters();
     }
 
     /// Items lost so far: to lag, or dropped on the way to a read.
@@ -279,7 +312,7 @@ impl<T: Clone + Send + 'static> LossyReceiver<T> {
     pub(crate) fn next(
         &self,
     ) -> (
-        impl std::future::Future<Output = Option<Next<T>>> + Send + 'static + use<T>,
+        impl std::future::Future<Output = Option<Next<T>>> + Send + 'static + use<T, R>,
         Arc<dyn PutBack>,
     ) {
         let rx = Arc::clone(&self.rx);
@@ -299,6 +332,9 @@ impl<T: Clone + Send + 'static> LossyReceiver<T> {
                 let wake = slot.filled.notified();
                 tokio::pin!(wake);
                 wake.as_mut().enable();
+                if slot.closed.load(Ordering::Acquire) {
+                    return None;
+                }
                 if slot.in_flight.load(Ordering::Acquire) > 0 {
                     // Bounded only to warn: the item ahead must come first.
                     if tokio::time::timeout(STALL_WARNING, wake.as_mut())

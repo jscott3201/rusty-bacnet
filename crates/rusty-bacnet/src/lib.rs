@@ -17,6 +17,7 @@ mod endpoint;
 mod errors;
 mod event_stream;
 mod export_223;
+mod frames;
 mod group_members;
 mod high_level;
 mod hub;
@@ -81,6 +82,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<sc_reconnect::PyScReconnect>()?;
     sc_peer::register(m)?;
     sc_events::register(m)?;
+    frames::register(m)?;
     discovery::register(m)?;
     export_223::register(m)?;
     high_level::register(m)?;
