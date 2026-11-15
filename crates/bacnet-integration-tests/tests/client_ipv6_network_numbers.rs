@@ -123,27 +123,29 @@ async fn normal_client_network_number_wire() {
         receive_fence(&peer, local).await;
         send(&peer, group, true, QUERY).await; // UNKNOWN broadcast is silent too.
         send(&peer, group, true, &number(77, 0)).await;
-        send(&peer, group, true, QUERY).await;
-        expect_number(observer.number(), local, observation_index, false, 77).await;
+        // Every exact reply is asked for by unicast, which is answered at
+        // once. A broadcast question's answer waits up to ten seconds
+        // (Clause 6.4.19, #2597), which is tested on paused time, not on
+        // this wall clock.
         send(&peer, local, false, QUERY).await;
         expect_number(observer.number(), local, observation_index, false, 77).await;
         for (value, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {
             send(&peer, group, true, &number(value, flag)).await;
-            send(&peer, group, true, QUERY).await;
+            send(&peer, local, false, QUERY).await;
             expect_number(observer.number(), local, observation_index, false, expected).await;
         }
         send(&peer, local, false, &number(200, 1)).await;
         receive_fence(&peer, local).await;
         for invalid in invalid_announcements() {
             send(&peer, group, true, &invalid).await;
-            send(&peer, group, true, QUERY).await;
+            send(&peer, local, false, QUERY).await;
             expect_number(observer.number(), local, observation_index, false, 81).await;
         }
         for (i, invalid) in invalid_queries().iter().enumerate() {
             send(&peer, local, false, invalid).await;
             receive_fence(&peer, local).await;
             send(&peer, group, true, &number(82 + i as u16, 1)).await;
-            send(&peer, group, true, QUERY).await;
+            send(&peer, local, false, QUERY).await;
             // A forbidden response to the preceding query would carry the old
             // number and fail here, before the positive marker on the control FIFO.
             expect_number(
@@ -158,7 +160,7 @@ async fn normal_client_network_number_wire() {
         // OriginalBroadcast delivered to local unicast must not teach either.
         send(&peer, local, true, &number(200, 1)).await;
         receive_fence(&peer, local).await;
-        send(&peer, group, true, QUERY).await;
+        send(&peer, local, false, QUERY).await;
         expect_number(observer.number(), local, observation_index, false, 84).await;
         let mut wrong_vmac_query = vec![0x12, 0x34, 0x57];
         wrong_vmac_query.extend_from_slice(QUERY);
@@ -167,7 +169,7 @@ async fn normal_client_network_number_wire() {
             .unwrap();
         receive_fence(&peer, local).await;
         send(&peer, group, true, &number(85, 1)).await;
-        send(&peer, group, true, QUERY).await;
+        send(&peer, local, false, QUERY).await;
         expect_number(observer.number(), local, observation_index, false, 85).await;
         drop(observer);
         stop_and_reuse(&mut client, local).await?;
@@ -178,7 +180,7 @@ async fn normal_client_network_number_wire() {
         send(&peer, local, false, QUERY).await;
         receive_fence(&peer, local).await;
         send(&peer, group, true, &number(90, 0)).await;
-        send(&peer, group, true, QUERY).await;
+        send(&peer, local, false, QUERY).await;
         expect_number(observer.number(), local, observation_index, false, 90).await;
         drop(observer);
         drop_and_reuse(restarted, local).await
@@ -255,9 +257,6 @@ async fn foreign_client_network_number_wire() {
         send(&bbmd, local, false, QUERY).await; // No configured client number authority.
         forward(&bbmd, local, &number(77, 1)).await;
         send(&bbmd, local, false, QUERY).await;
-        expect_number(local_number(&bbmd), local, index, true, 77).await;
-        // Actual UDP unicast delivery of Forwarded-NPDU still represents a group.
-        forward(&bbmd, local, QUERY).await;
         expect_number(local_number(&bbmd), local, index, true, 77).await;
         for (value, flag, expected) in [(78, 0, 77), (79, 1, 79)] {
             forward(&bbmd, local, &number(value, flag)).await;
