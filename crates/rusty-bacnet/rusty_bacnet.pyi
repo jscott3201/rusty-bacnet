@@ -4579,7 +4579,11 @@ class FrameSummary:
     transport peer. Neither field proves the sender's identity or its path.
     """
     @property
-    def link(self) -> str: ...
+    def link_message(self) -> str:
+        """BVLC function or MS/TP frame type, such as original-unicast-npdu.
+
+        Not the data link; that is Frame.link."""
+        ...
     @property
     def broadcast(self) -> bool: ...
     @property

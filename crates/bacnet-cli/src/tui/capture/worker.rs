@@ -235,7 +235,7 @@ fn from_record(record: MonitorRecord, epoch: SystemTime) -> CaptureFrame {
     // abort never were a frame, so they carry a problem only.
     let line = |link: &str, problem: String, destination: Option<u8>, refused: bool| {
         let summary = FrameSummary {
-            link: link.into(),
+            link_message: link.into(),
             parse_error: refused.then(|| problem.clone()),
             problem: Some(problem),
             link_destination: destination.map(|d| AddressStyle::Mstp.format(&[d])),

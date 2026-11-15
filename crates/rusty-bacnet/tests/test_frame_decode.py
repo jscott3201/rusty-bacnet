@@ -18,7 +18,7 @@ class FrameDecodeTests(unittest.TestCase):
     def test_request_summary_is_frozen_and_preserves_header_metadata(self):
         summary = decode_frame(REQUEST)
         self.assertIsInstance(summary, FrameSummary)
-        self.assertEqual(summary.link, "original-unicast-npdu")
+        self.assertEqual(summary.link_message, "original-unicast-npdu")
         self.assertEqual(summary.pdu, "Confirmed-Request")
         self.assertEqual(summary.invoke_id, 1)
         self.assertEqual(summary.service, "read-property")

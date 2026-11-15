@@ -8,7 +8,7 @@ use crate::decode::testing::*;
 fn a_bip_request_shows_its_function_pdu_invoke_id_and_service() {
     let frame = bip(&npdu(&rp_request(7), true), false);
     let summary = summarize_frame(Framing::Bip, &frame);
-    assert_eq!(summary.link, "original-unicast-npdu");
+    assert_eq!(summary.link_message, "original-unicast-npdu");
     assert_eq!(summary.pdu.as_deref(), Some("Confirmed-Request"));
     assert_eq!(summary.invoke_id, Some(7));
     assert_eq!(summary.service.as_deref(), Some("read-property"));
@@ -33,7 +33,7 @@ fn errors_naks_and_bad_frames_carry_a_problem() {
     );
 
     let summary = summarize_frame(Framing::Bip, &bip_nak());
-    assert_eq!(summary.link, "bvlc-result");
+    assert_eq!(summary.link_message, "bvlc-result");
     assert_eq!(summary.parse_error, None);
     assert!(summary.problem.unwrap().starts_with("NAK"));
     assert_eq!(summary.pdu, None);
@@ -56,7 +56,7 @@ fn an_i_am_names_its_device_and_a_broadcast_is_marked() {
 fn mstp_frames_name_their_stations_and_carry_their_npdu() {
     let token = mstp(FrameType::TOKEN, 2, 1, &[]);
     let summary = summarize_frame(Framing::Mstp, &token);
-    assert_eq!(summary.link, "token");
+    assert_eq!(summary.link_message, "token");
     assert_eq!(summary.link_source.as_deref(), Some("mstp:1"));
     assert_eq!(summary.link_destination.as_deref(), Some("mstp:2"));
     assert_eq!(summary.pdu, None);
@@ -78,7 +78,7 @@ fn mstp_frames_name_their_stations_and_carry_their_npdu() {
 fn sc_and_bip6_frames_give_their_vmacs() {
     let data = npdu(&rp_request(3), true);
     let summary = summarize_frame(Framing::Sc, &sc_npdu(&data, Some([0xFF; 6])));
-    assert_eq!(summary.link, "encapsulated-npdu");
+    assert_eq!(summary.link_message, "encapsulated-npdu");
     assert_eq!(summary.link_source.as_deref(), Some("02:00:00:00:00:01"));
     assert!(summary.broadcast);
     assert_eq!(summary.invoke_id, Some(3));
@@ -93,7 +93,7 @@ fn sc_and_bip6_frames_give_their_vmacs() {
 fn an_sc_nak_names_its_error_code() {
     // A BACnet/SC connection code (#2434) and an older one, by name.
     let summary = summarize_frame(Framing::Sc, &sc_nak(169));
-    assert_eq!(summary.link, "result");
+    assert_eq!(summary.link_message, "result");
     assert_eq!(summary.parse_error, None);
     assert_eq!(
         summary.problem.as_deref(),
@@ -127,12 +127,12 @@ fn an_unassigned_bvlc_function_is_a_parse_error_on_every_link() {
             .unwrap_or_else(|| panic!("{framing:?} {frame:02X?}: {summary:?}"));
         assert!(error.contains("unknown"), "{framing:?}: {error}");
         assert_eq!(summary.problem, summary.parse_error);
-        assert_eq!(summary.link, "malformed", "{framing:?}");
+        assert_eq!(summary.link_message, "malformed", "{framing:?}");
     }
     // The last assigned function of each still reads.
     let last = summarize_frame(Framing::Sc, &[0x0C, 0x00, 0x00, 0x01]);
     assert_eq!(
-        (last.link.as_str(), last.parse_error),
+        (last.link_message.as_str(), last.parse_error),
         ("proprietary-message", None)
     );
 }

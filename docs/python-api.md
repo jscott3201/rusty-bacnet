@@ -6725,7 +6725,8 @@ the task to finish its `finally` block before closing the endpoint.
 The runnable [frame transcript example](../examples/python/frame_transcript.py)
 accepts a local bind address and an optional peer to read on that socket.
 
-The summary exposes `link` (the decoded message name), `broadcast`,
+The summary exposes `link_message` (the BVLC function or MS/TP frame type,
+such as `original-unicast-npdu`; the data link itself is `Frame.link`), `broadcast`,
 `link_source`, `link_destination`, `original_source`, `snet`, `dnet`,
 `routed_source`, `routed_destination`, `network_message`, `pdu`, `invoke_id`,
 `service`, `problem`, `parse_error` and `device` (an I-Am device instance).

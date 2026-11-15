@@ -10,10 +10,11 @@ pub(crate) struct PyFrameSummary(FrameSummary);
 
 #[pymethods]
 impl PyFrameSummary {
-    /// Link message name, such as `original-unicast-npdu` or `token`.
+    /// The link message, a BVLC function or MS/TP frame type such as
+    /// `original-unicast-npdu` or `token`; not the data link (`Frame.link`).
     #[getter]
-    fn link(&self) -> &str {
-        &self.0.link
+    fn link_message(&self) -> &str {
+        &self.0.link_message
     }
     /// Whether the headers identify a link or network broadcast.
     #[getter]

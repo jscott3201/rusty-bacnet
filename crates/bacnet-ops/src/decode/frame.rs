@@ -62,8 +62,10 @@ impl Framing {
 /// What the capture list shows of a frame, read from its headers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct FrameSummary {
-    /// The link message: a BVLC function, an MS/TP frame type.
-    pub link: String,
+    /// The link message: a BVLC function or an MS/TP frame type, in kebab
+    /// case (`original-unicast-npdu`, `token`), or `malformed`. Not the data
+    /// link itself, which the caller names with [`Framing`].
+    pub link_message: String,
     /// A link or network broadcast.
     pub broadcast: bool,
     /// The link's own source and destination, where the frame names them
@@ -320,7 +322,7 @@ pub fn summarize_frame(framing: Framing, frame: &[u8]) -> FrameSummary {
     let link = link(framing, frame);
     let parse_error = link.malformed.then(|| link.problem.clone()).flatten();
     let mut summary = FrameSummary {
-        link: link.name,
+        link_message: link.name,
         broadcast: link.broadcast,
         link_source: link.source,
         link_destination: link.destination,

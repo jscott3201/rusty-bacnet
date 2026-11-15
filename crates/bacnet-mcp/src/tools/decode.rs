@@ -109,7 +109,7 @@ fn output() -> Value {
         "summary": {
             "type": "object",
             "properties": {
-                "link": { "type": "string" },
+                "link_message": { "type": "string" },
                 "broadcast": { "type": "boolean" },
                 "link_source": text,
                 "link_destination": text,
@@ -251,7 +251,7 @@ fn fields_json(fields: &[Field], budget: &mut usize, cap: usize) -> Vec<Value> {
 /// The summary as JSON.
 fn summary_json(summary: &FrameSummary) -> Value {
     json!({
-        "link": summary.link,
+        "link_message": summary.link_message,
         "broadcast": summary.broadcast,
         "link_source": summary.link_source,
         "link_destination": summary.link_destination,
@@ -274,8 +274,8 @@ fn summary_json(summary: &FrameSummary) -> Value {
 /// or PDU and service, invoke ID, device and problem.
 fn one_line(link: Link, summary: &FrameSummary) -> String {
     let mut parts = vec![link.name().to_string()];
-    if !summary.link.is_empty() {
-        parts.push(summary.link.clone());
+    if !summary.link_message.is_empty() {
+        parts.push(summary.link_message.clone());
     }
     if let Some(message) = &summary.network_message {
         parts.push(format!("network message {message}"));
