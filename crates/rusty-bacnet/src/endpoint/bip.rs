@@ -15,6 +15,7 @@ use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::session::{EndpointSession, SessionRole};
 use bacnet_transport::bip::{BipMode, BipTransport};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::data_link::DataLink;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -169,6 +170,7 @@ impl BipEndpointConfig {
 #[pyclass(name = "BipEndpoint", module = "rusty_bacnet")]
 pub struct PyBipEndpoint {
     lifecycle: Lifecycle<BipSession, PendingObject>,
+    frames: std::sync::Arc<crate::frames::FrameSubscriptions>,
     config: BipEndpointConfig,
     /// The BBMD table reads started, for `read_bdt` and `read_fdt` (#2612).
     table_reads: super::table_reads::TableReads,
@@ -404,8 +406,11 @@ impl PyBipEndpoint {
             interface_ip,
             port,
         )?;
+        let frames = std::sync::Arc::new(crate::frames::FrameSubscriptions::default());
+        let observer = frames.clone();
         Ok(Self {
-            lifecycle: Lifecycle::new(),
+            lifecycle: Lifecycle::new().with_close_observer(move || observer.close()),
+            frames,
             table_reads: super::table_reads::TableReads::default(),
             config: BipEndpointConfig {
                 interface: interface_ip,
@@ -506,6 +511,34 @@ impl PyBipEndpoint {
         _exc_tb: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         self.close(py)
+    }
+
+    /// Subscribe to raw frames on the endpoint's existing socket, including
+    /// malformed received datagrams. A full queue drops new frames; the next
+    /// frame queued reports the gap in `Frame.missed_before`. Close ends
+    /// every subscription, waking pending reads.
+    #[pyo3(signature = (capacity=1024))]
+    fn frames<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
+        let capacity = crate::frames::capacity(capacity)?;
+        let clock = crate::frames::Clock::get(py)?;
+        let lifecycle = self.lifecycle.clone();
+        let frames = self.frames.clone();
+        crate::py_async::future_into_py(py, async move {
+            let guard = lifecycle.session.lock().await;
+            let session = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+            let receiver = session
+                .frames(capacity)
+                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+            let address = session
+                .bip_local_address()
+                .and_then(|socket| {
+                    crate::frames::local_address(DataLink::Bip, &[], Some(socket.into()))
+                })
+                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+            Ok(frames.subscribe(receiver, address, clock))
+        })
     }
 
     /// Clone the client role (fails with RuntimeError before start/after close).

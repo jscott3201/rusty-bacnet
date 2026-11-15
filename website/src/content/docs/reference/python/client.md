@@ -693,6 +693,19 @@ Reject-Message-To-Network and Initialize-Routing-Table-Ack (query
 answers, #2612) messages the client receives from now on (#1850).
 RuntimeError before start and after stop.
 
+### BACnetClient.frames
+
+```python
+def frames(self, capacity: int = 1024) -> Awaitable[FrameIterator]
+```
+
+Observe the raw frames this client's own transport sends and
+receives from now on (B/IP, B/IPv6, SC or MS/TP), `capacity`
+frames queued at most (1 to 65536, else ValueError). RuntimeError
+before start and after stop; a router application client
+(`transport="router"`) has no link of its own and raises
+ValueError. Stop ends the iterator; a restart needs a new one.
+
 ### BACnetClient.discovered_devices
 
 ```python
@@ -1847,6 +1860,59 @@ def __aiter__(self) -> ScEventIterator
 ```python
 def __anext__(self) -> Awaitable[ScEvent]
 ```
+
+## Frame
+
+One frame the owner's transport sent or received, frozen at capture.
+
+The octets are raw: no decoded summary or forwarding provenance yet.
+`local_address` and `peer` use one form per link (see "Raw frame
+observation" in docs/python-api.md).
+
+Properties:
+
+- `monotonic: float`: Capture time in seconds on the clock and origin of `time.monotonic()`, so `time.monotonic() - frame.monotonic` is the frame's age. It never decreases within a subscription. The first `frames()` call in the process pairs the capture clock with `time.monotonic()` once, and each capture converts by its offset from that pair. Both read the same OS clock on Linux (`CLOCK_MONOTONIC`), on macOS (`mach_absolute_time`) and on Windows from Python 3.13 (`QueryPerformanceCounter`); neither counts system sleep on Linux or macOS, both count it on Windows. On Windows with Python 3.11 or 3.12, `time.monotonic()` reads `GetTickCount64` instead: it also counts sleep, but moves in 10-16 ms steps, so a value can sit up to one step away from it, and the two counters are not guaranteed to stay in step over a long run.
+- `timestamp: float`: Capture time as POSIX seconds from the wall clock, as `time.time()`: comparable with other machines' clocks, but a clock adjustment can move it either way, so order frames by `monotonic`.
+- `direction: Literal["inbound", "outbound", "other"]`: `"inbound"` or `"outbound"` (`"other"` only for a direction a later release adds).
+- `link: Literal["bip", "ipv6", "sc", "mstp", "other"]`: The link, as the `transport=` argument spells it; `"other"` for a link no Python owner runs.
+- `local_address: str`: This node's address on the link when the subscription began, in the form `peer` uses for that link: `"ip:port"` on B/IP, `"[ip]:port"` on B/IPv6 (the UDP socket, not the VMAC), the VMAC in colon hex on SC, the station in decimal on MS/TP.
+- `peer: str`: The other end on the link: the datagram's source or destination on B/IP (`"ip:port"`) and B/IPv6 (`"[ip]:port"`, the form `resolve_vmac` takes), the hub connection on SC (`"primary"` or `"failover"`, as `ScEvent.hub`), the station in decimal on MS/TP (`"255"` for a broadcast). The next hop, not a forwarded frame's original source.
+- `octets: bytes`: The frame as the link carries it, malformed received datagrams included.
+- `missed_before: int`: Frames this subscription missed just before this one: dropped by its full queue (which keeps the oldest frames and drops the newest), or lost on the way to Python together with the gap such a frame carried. A frame redelivered after a cancelled read keeps its value. Summed over the frames received, plus any lost after the last one, it is `FrameIterator.missed`.
+
+## FrameIterator
+
+Bounded raw-frame subscription. A full queue drops new arrivals.
+
+Cancelling a read preserves the next frame and the subscription. Explicit
+close or owner shutdown discards queued frames and wakes pending reads.
+A native delivery admitted before close may still complete its asyncio Future.
+Each subscription is independent and never keeps the owner's socket alive.
+Read from one running event loop; concurrent reads keep arrival order.
+
+Properties:
+
+- `missed: int`: Frames lost so far, live: dropped by the full queue or lost on the way to Python, including any lost after the last frame read, which no `missed_before` has reported yet. Readable after close.
+
+### FrameIterator.__aiter__
+
+```python
+def __aiter__(self) -> FrameIterator
+```
+
+### FrameIterator.__anext__
+
+```python
+def __anext__(self) -> Awaitable[Frame]
+```
+
+### FrameIterator.aclose
+
+```python
+def aclose(self) -> Awaitable[None]
+```
+
+Idempotently stop this subscription, without stopping its owner.
 
 ## _DeviceReadBatchResult
 

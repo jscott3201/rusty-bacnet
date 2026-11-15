@@ -47,6 +47,7 @@ impl Drop for CloseRequest {
 
 pub(crate) struct Lifecycle<S, P> {
     pub(crate) session: Arc<Mutex<Option<S>>>,
+    on_close: Option<Arc<dyn Fn() + Send + Sync>>,
     pending: Arc<StdMutex<Pending<P>>>,
     preparing: Arc<StdMutex<Preparation>>,
 }
@@ -55,6 +56,7 @@ impl<S, P> Clone for Lifecycle<S, P> {
     fn clone(&self) -> Self {
         Self {
             session: self.session.clone(),
+            on_close: self.on_close.clone(),
             pending: self.pending.clone(),
             preparing: self.preparing.clone(),
         }
@@ -65,6 +67,7 @@ impl<S, P> Lifecycle<S, P> {
     pub(crate) fn new() -> Self {
         Self {
             session: Arc::new(Mutex::new(None)),
+            on_close: None,
             preparing: Arc::new(StdMutex::new(Preparation::default())),
             pending: Arc::new(StdMutex::new(Pending {
                 sealed: false,
@@ -80,6 +83,16 @@ impl<S, P> Lifecycle<S, P> {
         }
         pending.objects.push(object);
         Ok(())
+    }
+
+    /// End an owner's observations at close admission, while the session
+    /// lock excludes subscriptions and startup of a later generation.
+    pub(crate) fn with_close_observer(
+        mut self,
+        observer: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        self.on_close = Some(Arc::new(observer));
+        self
     }
 
     pub(crate) fn pending_count(&self) -> usize {
@@ -186,6 +199,9 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
         };
         let mut session = self.session.clone().lock_owned().await;
         drop(request);
+        if let Some(observer) = &self.on_close {
+            observer();
+        }
         let pending = self.pending.clone();
         let (result, waiter) = oneshot::channel();
         tokio::spawn(async move {

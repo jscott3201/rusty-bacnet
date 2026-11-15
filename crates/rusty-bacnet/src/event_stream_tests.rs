@@ -20,6 +20,76 @@ fn in_flight<T>(stream: &LossyReceiver<T>) -> usize {
     stream.slot.in_flight.load(Ordering::Acquire)
 }
 
+#[tokio::test(start_paused = true)]
+async fn an_item_returned_by_the_source_after_close_is_not_admitted() {
+    // Close exactly inside the ready receive poll, after next() checked
+    // closed at the top of its loop but before it can admit the delivery.
+    struct CloseOnReceive(Arc<Redelivery>);
+    impl EventSource<u32> for CloseOnReceive {
+        async fn recv(&mut self) -> Result<u32, RecvError> {
+            self.0.close();
+            Ok(7)
+        }
+    }
+    let slot = Arc::new(Redelivery::default());
+    let mut stream = LossyReceiver::from_source(CloseOnReceive(slot.clone()));
+    stream.slot = slot;
+    let (next, hook) = stream.next();
+    assert!(next.await.is_none());
+    assert_eq!(stream.slot.in_flight.load(Ordering::Acquire), 0);
+    hook.settled();
+    assert_eq!(stream.missed(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_admitted_delivery_can_settle_after_close_but_a_later_read_ends() {
+    let (tx, rx) = broadcast::channel(4);
+    let stream = LossyReceiver::new(rx);
+    tx.send(1u32).unwrap();
+    tx.send(2).unwrap();
+    let (next, hook) = stream.next();
+    let admitted = next.await;
+    stream.close();
+    assert!(matches!(admitted, Some(Next::Fresh(1))));
+    assert_eq!(in_flight(&stream), 1);
+    assert!(stream.next().0.await.is_none());
+    hook.settled();
+    assert_eq!(in_flight(&stream), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn close_interrupts_an_unsettled_delivery_and_refuses_late_put_back() {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    Python::initialize();
+    let (tx, rx) = broadcast::channel(4);
+    let stream = LossyReceiver::new(rx);
+    tx.send(1u32).unwrap();
+    let (first, first_hook) = stream.next();
+    assert!(matches!(first.await, Some(Next::Fresh(1))));
+    let (second, _second_hook) = stream.next();
+    tokio::pin!(second);
+    assert!(
+        second
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    stream.close();
+    assert!(matches!(
+        second
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(None)
+    ));
+    Python::attach(|py| first_hook.put_back(py, 1u32.into_py_any(py).unwrap(), Via::OnLoop));
+    first_hook.settled();
+    assert!(stream.slot.take().is_none());
+    assert_eq!(in_flight(&stream), 0);
+    assert!(stream.next().0.await.is_none());
+}
+
 #[tokio::test]
 async fn a_lagging_receiver_counts_the_gap_and_never_holds_up_the_sender() {
     let (tx, rx) = broadcast::channel(4);

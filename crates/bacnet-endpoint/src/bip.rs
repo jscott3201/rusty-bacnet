@@ -391,12 +391,14 @@ impl BipEndpointBuilder {
             handles = Some((
                 transport.bvlc_client_status(),
                 transport.bvlc_table_reader(),
+                transport.frame_tap().clone(),
             ));
             Ok(transport)
         })?;
-        if let Some((status, tables)) = handles {
+        if let Some((status, tables, frame_tap)) = handles {
             endpoint.bip_status = Some(status);
             endpoint.bip_tables = Some(tables);
+            endpoint.frame_tap = Some(frame_tap);
         }
         Ok(endpoint)
     }

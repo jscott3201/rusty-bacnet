@@ -35,6 +35,7 @@ fn each_receiver_gets_each_frame_in_order() {
             (TapDirection::Outbound, DataLink::Mstp, peer(), &[1][..])
         );
         let received = receiver.try_recv().unwrap();
+        assert!(sent.monotonic_timestamp <= received.monotonic_timestamp);
         assert_eq!(received.direction, TapDirection::Inbound);
         assert_eq!(&received.bytes[..], [2]);
         assert!(receiver.try_recv().is_none());
@@ -58,11 +59,48 @@ fn a_full_receiver_loses_new_frames_and_counts_them() {
     let counters = tap.counters();
     assert_eq!((counters.delivered, counters.dropped), (7, 3));
     assert_eq!(&slow.try_recv().unwrap().bytes[..], [0]);
-    assert_eq!(&slow.try_recv().unwrap().bytes[..], [1]);
+    let held = slow.try_recv().unwrap();
+    assert_eq!((&held.bytes[..], held.missed_before), (&[1][..], 0));
     assert!(slow.try_recv().is_none());
     for octet in 0..5u8 {
         assert_eq!(&fast.try_recv().unwrap().bytes[..], [octet]);
     }
+}
+
+/// The queue loses the newest frames, so a gap opens after the frames it
+/// holds: the next frame queued reports it, once, and only to the receiver
+/// that lost them. `dropped` covers the gaps reported and the trailing one.
+#[test]
+fn the_next_queued_frame_reports_the_gap_in_front_of_it() {
+    let tap = FrameTap::new();
+    let mut slow = tap.subscribe_with_capacity(1);
+    let mut fast = tap.subscribe_with_capacity(16);
+    let record = |octet: u8| tap.record(TapDirection::Inbound, DataLink::Bip, peer, &[octet]);
+    for octet in 0..3 {
+        record(octet);
+    }
+    // Frames 1 and 2 are lost after frame 0, which was queued with no gap.
+    let first = slow.try_recv().unwrap();
+    assert_eq!((&first.bytes[..], first.missed_before), (&[0][..], 0));
+    assert_eq!(
+        slow.dropped(),
+        2,
+        "the trailing gap counts before it is reported"
+    );
+    record(3);
+    record(4);
+    let next = slow.try_recv().unwrap();
+    assert_eq!((&next.bytes[..], next.missed_before), (&[3][..], 2));
+    assert!(slow.try_recv().is_none());
+    record(5);
+    let after = slow.try_recv().unwrap();
+    assert_eq!((&after.bytes[..], after.missed_before), (&[5][..], 1));
+    assert_eq!(slow.dropped(), 3);
+    for octet in 0..6u8 {
+        let frame = fast.try_recv().unwrap();
+        assert_eq!((&frame.bytes[..], frame.missed_before), (&[octet][..], 0));
+    }
+    assert_eq!(fast.dropped(), 0);
 }
 
 #[test]
