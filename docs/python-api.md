@@ -2077,11 +2077,12 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
   methods look it up. `types=[ObjectType.ANALOG_INPUT, ...]` narrows the
   objects read; another type, or an empty list, raises `ValueError` before
   anything is sent.
-- It costs the device name, its Object_List and one ReadPropertyMultiple
-  per exported object, one at a time; a device that refuses
+- It costs the device summary, its Object_List and one
+  ReadPropertyMultiple for each batch of exported objects (six to ten
+  objects a request), one at a time; a device that refuses
   ReadPropertyMultiple is read a property at a time, as the CLI section
   counts. Present_Value is never read.
-- A device that doesn't answer the name read, or a failed read of the
+- A device that doesn't answer the summary read, or a failed read of the
   whole Object_List, raises the usual error. A device that can't send the
   list whole is read element by element; an element that fails there (an
   error or no answer) ends the reading with `stopped` set (a reason string)

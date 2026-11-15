@@ -247,7 +247,7 @@ pub(crate) struct Cli {
           value_parser = crate::mstp_thread::parse_cpu)]
     pub(crate) mstp_cpus: Vec<usize>,
 
-    /// Output format (table, json).
+    /// Output format (table, json; csv too for inventory).
     #[arg(long, global = true)]
     pub(crate) format: Option<String>,
 
@@ -424,6 +424,31 @@ pub(crate) enum Command {
     Export {
         #[command(subcommand)]
         format: ExportFormat,
+    },
+
+    /// List a device's objects as point records: each one's name, units,
+    /// state texts and whether it takes commands.
+    ///
+    /// Reads the device summary, its object list, then the objects in
+    /// batches by ReadPropertyMultiple, a few objects a request. --format
+    /// csv prints one row an object, --format json (or --json) the whole
+    /// inventory with typed values; stdout carries only that, and a
+    /// summary goes to stderr. If the device stops answering partway, what
+    /// was read is still printed and the exit status is 1.
+    Inventory {
+        /// Target device (address, instance, or routed dnet:instance).
+        target: String,
+        /// Object types to read, comma-separated (ai,ao,msv, ...);
+        /// default: every object, of any type.
+        #[arg(long, value_name = "TYPES", value_delimiter = ',')]
+        types: Vec<String>,
+        /// Also read each object's Present_Value and Status_Flags.
+        #[arg(long)]
+        values: bool,
+        /// Also read each object's COV_Increment, Min_Pres_Value,
+        /// Max_Pres_Value and Relinquish_Default, where it has them.
+        #[arg(long)]
+        settings: bool,
     },
 
     /// Read multiple properties.

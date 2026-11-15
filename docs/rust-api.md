@@ -11910,8 +11910,9 @@ result it is pinned and knows the instance. The handle's async reads are
 `read` (one property, as a `Value`), `read_many` (a bulk read, as
 `Readings`), `read_object` (an object's properties, all or a list),
 `list_objects`, `describe_device`, `read_trend` (trend, event and audit log
-pages), `alarms`, `alarm_summary`, `enrollment_summary` and the 223
-inventory's ([values and errors](#values-readings-and-opserror)), and its
+pages), `alarms`, `alarm_summary` and `enrollment_summary`
+([values and errors](#values-readings-and-opserror)), `inventory` and
+`point_record` ([inventory](#inventory)), and its
 writes are `write`, `relinquish`, `priority_array` and `preview_write`
 ([writes and priorities](#writes-and-priorities)). A device's gate, turns and
 memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
@@ -12252,6 +12253,158 @@ makes, which the tool's planner shares.
 | `label::PRIORITIES` | `Priority::COUNT` |
 | `parse::parse_value_with_priority` and `parse_value_for_with_priority` returning `Option<u8>` | `Option<Priority>` |
 | `bacnet_tool::safety::Effect` with `held_by: Option<u8>` | `bacnet_ops::write::Effect` (re-exported there) with `held_by: Option<Priority>`, and `Effect::Unknown` |
+
+### Inventory
+
+`Device::inventory(&InventoryOptions)` lists a device's objects as
+`PointRecord`s (#2560): what an application needs to label and address its
+points, read in as few requests as the device allows.
+
+```rust,no_run
+use bacnet_ops::{Client, InventoryOptions, OpsError};
+use bacnet_types::enums::ObjectType;
+
+# async fn example() -> Result<(), OpsError> {
+let client = Client::bip().connect().await?;
+let ahu = client.device("192.168.1.10").await?;
+
+// Every object of the device, of any type: names, units, state texts.
+let inventory = ahu.inventory(&InventoryOptions::new()).await?;
+println!(
+    "{} objects on device {}",
+    inventory.points.len(),
+    inventory.device.device
+);
+
+// The analog inputs alone, with their values.
+let options = InventoryOptions::new()
+    .with_types([ObjectType::ANALOG_INPUT])
+    .with_values(true);
+let inputs = ahu.inventory(&options).await?;
+for point in &inputs.points {
+    let name = point.name.as_deref().unwrap_or("?");
+    match &point.present_value {
+        Some(value) => println!("{} {name}: {}", point.object, value.text),
+        None => println!("{} {name}: {:?}", point.object, point.problems),
+    }
+}
+if let Some(why) = &inputs.stopped {
+    eprintln!("stopped early ({why}); {} objects not read", inputs.unread.len());
+}
+std::fs::write("inputs.csv", inputs.to_csv()).ok();
+# Ok(())
+# }
+```
+
+- **Options.** `InventoryOptions::new()` reads every object the Object_List
+  names. `.with_types(..)` narrows it, `.with_values(true)` adds each
+  object's Present_Value and Status_Flags, and `.with_settings(true)` its
+  COV_Increment, Min_Pres_Value, Max_Pres_Value and Relinquish_Default.
+  `bacnet_ops::inventory::properties(object_type, &options)` is the one
+  list of what each object type reads: Object_Name and Description of every
+  type, a vendor's included; Units of the analog and integer types,
+  Accumulator and Pulse Converter; a binary object's Active_Text and
+  Inactive_Text; a multi-state object's Number_Of_States and State_Text;
+  and Priority_Array where only a read can tell whether the object takes
+  commands (the value types and any type this release doesn't know).
+- **A record.** `PointRecord { device, device_instance, object, name,
+  description, units, state_texts, number_of_states, commandable,
+  relinquish_default, cov_increment, min_present_value, max_present_value,
+  present_value, status_flags, problems }`. Text is exactly as the device
+  sent it. `units` is the `EngineeringUnits` value, and the values are
+  `Value`s, so their text names the units and the state (`72.5 °F`,
+  `2 (Low)`). `commandable` is what `Commandability::of` says of the type,
+  settled by the Priority_Array where the type alone can't. A property the
+  object's type doesn't have, an optional one it lacks, or one the options
+  didn't ask for is `None`. One that should have read and didn't is listed
+  in `problems` with the device's error, and never fails the inventory: an
+  object the device refuses is a record whose properties are all problems.
+- **The inventory.** `Inventory { address, device, cov, points, unread,
+  stopped }`. `device` is the `DeviceSummary` (`describe_device`'s). `cov`
+  is the device's `CovSupport` for SubscribeCOV, known from the summary at
+  no request of its own; whether one point reports changes is known only
+  once a watch has asked it. `Inventory::point(object)` finds a record.
+- **What it costs.** By ReadPropertyMultiple: the summary, the Object_List,
+  then one request for each batch of up to 16 objects and 32 properties: 16
+  objects of a type that reads two properties, 10 analog inputs, 8 binary
+  inputs or analog values, 6 multi-state values. That is about N/8 + 2
+  requests for N objects, N/5 + 2 with values. A handle made from an
+  address whose instance isn't known yet costs one more. A batch whose
+  answer the device can't send for its size is asked again an object at a
+  time, and the calls after it ask for half as many objects, down to one:
+  at most four such refusals an inventory. An answer in segments costs no
+  more requests. A device that refuses ReadPropertyMultiple costs that one
+  refused request, then a ReadProperty for each property: 13 for the
+  summary, one for the Object_List, and each object's own count. No
+  property is read twice, and every request waits at the device's gate
+  under the client's `RequestLimits`.
+- **What it holds.** The Object_List, the records built so far, and the
+  answers of one call's objects, 16 at most: each call's answers become
+  records before the next is sent, so a device at the 10,000-object cap
+  never has more than 16 objects' raw answers held at once.
+- **Errors.** `Err` is whatever is decided before a request is sent (a
+  device that can't be placed, an ambiguous instance, no route), and a
+  device that doesn't answer the summary or the whole Object_List, or
+  refuses the list: nothing was read to keep. After that the call is `Ok`.
+  A device that stops answering part way leaves the records read,
+  `unread` (the objects not read) and `stopped` (why, always
+  `unreachable()` then). An Object_List read element by element that fails
+  part way sets `stopped` too, with no object asked for.
+- **One object.** `Device::point_record(object, &options)` reads one
+  record the same way in one request, for a front end that pages a
+  device's objects itself, as the MCP export does.
+- **Without a `Client`.** `bacnet_ops::inventory::read_inventory(&mut
+  reader, &options)` and `read_point_record` read the same over a
+  `raw::Reader`, failing with `Halt`; the `bacnet` CLI uses them.
+- **JSON and CSV.** `Inventory` and `PointRecord` implement
+  `serde::Serialize` with stable field names, and `Inventory::to_json()`
+  is the indented document `bacnet inventory --json` prints: `address`,
+  `device` (`instance`, `name`, `properties`), `cov`, `points`, `unread`
+  and `stopped`. A value is `{"value": text, "decoded": data}`, the typed
+  form the CLI's other JSON uses; an object is `{"type", "type_number",
+  "instance"}`; units are `{"value", "name", "symbol"}`; a problem is
+  `{"property", "error"}`. `Inventory::to_csv()` (and `write_csv`) writes
+  one row a record under `inventory::CSV_HEADER`: `device`,
+  `device_instance`, `object` (`analog-input:1`), `name`, `description`,
+  `units` (the kebab name), `state_texts` (joined with `|`, a `|` or `\`
+  inside a text escaped with `\`), `number_of_states`, `commandable`,
+  `relinquish_default`, `cov_increment`, `min_present_value`,
+  `max_present_value`, `present_value`, `status_flags` (each value's text)
+  and `problems`. A field holding a comma, a double quote or a line break
+  is quoted, its quotes doubled; rows end with a line feed. Both keep
+  device text exactly, so import the CSV's columns as text: a spreadsheet
+  may read a name that starts with `=` as a formula.
+
+The Standard 223 export derives from the same records.
+`bacnet_ops::export::s223::inventory_options(types)` gives the options of
+its ten object types, `Model::from(&inventory)` is the inventory in the
+export's terms, a `bacnet_types::points::Point` an object
+(`PointRecord::to_point()`) or the reason it has none (`Skipped`), and
+`to_turtle(&model, &options)` writes the same Turtle as before.
+`point_list_options()` reads what `Model::point_list()` needs for a whole
+`PointList`.
+
+| Was (`bacnet_ops::export::s223`) | Now |
+|---|---|
+| `Inventory` | `bacnet_ops::Inventory` for what a device read gives; `s223::Model` (`device`, `entries`, `stopped`) for what the Turtle writer takes: `Model::from(&inventory)`, `Model::from(point_list)`, `Model::new(device)` |
+| `Entry::Point(point)`, `Entry::Failed { object, property, error }` | `Result<Point, Skipped>`: `Ok(point)`, `Err(Skipped { object, property, error })`; `s223::exported(&record)` makes one from a record |
+| `Entry::object()`, `point()`, `error()` | match on the `Result` |
+| `InventoryOptions::default()`, `InventoryOptions::new(types)?` | `s223::inventory_options(None)?`, `s223::inventory_options(Some(types))?`, which give a `bacnet_ops::InventoryOptions` |
+| `Detail::Export`, `Detail::Full`, `InventoryOptions::with_detail` | `InventoryOptions::with_settings(bool)`; `s223::point_list_options()` for everything a `PointList` holds |
+| `read_inventory(&mut reader, &options)` | `bacnet_ops::inventory::read_inventory(&mut reader, &options)`, then `Model::from(&inventory)` |
+| `Device::inventory(&options) -> s223::Inventory` | `Device::inventory(&options) -> bacnet_ops::Inventory` |
+| `Device::inventory_device(detail)` | `Device::describe_device()`, or `device.read((device_object, OBJECT_NAME))` for the name alone |
+| `Device::inventory_object(object, detail)` | `Device::point_record(object, &options)`, then `s223::exported(&record)` |
+| `WritePriority::new(n)`, `TurtleOptions::new(base, Option<WritePriority>)` | `bacnet_ops::Priority::new(n)`, `TurtleOptions::new(base, Option<Priority>)` |
+| `Inventory::stopped: Option<String>` | `bacnet_ops::Inventory::stopped: Option<OpsError>`, with `unread`; `Model::stopped` keeps the text |
+
+The read itself changed with the types: the export used to read the
+Device's Object_Name and then one object a request, and now reads the
+device summary and the objects in batches, so a device of N exported
+objects takes about N/8 + 2 requests instead of N + 2. A binary object's
+Active_Text and Inactive_Text are always read. An object the device fails
+is reported a property at a time, so the Turtle's skip comment names its
+Object_Name instead of saying its read failed.
 
 ### Moved to bacnet-tool
 

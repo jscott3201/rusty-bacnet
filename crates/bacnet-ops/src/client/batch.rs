@@ -70,6 +70,10 @@ pub(crate) struct Batched<K> {
     /// The last of `rows` was read property by property when the device
     /// stopped answering, so it holds only the properties read before.
     pub(crate) partial: bool,
+    /// The device couldn't send a batch's answer for its size, so that
+    /// batch was asked again a row at a time: a caller with more to read
+    /// asks for fewer rows a call.
+    pub(crate) too_large: bool,
     /// Some rows were read by ReadPropertyMultiple.
     by_rpm: bool,
     /// Some rows were read by ReadProperty.
@@ -110,6 +114,7 @@ pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
         refused_rpm: false,
         stopped: None,
         partial: false,
+        too_large: false,
         by_rpm: false,
         by_rp: false,
     };
@@ -137,6 +142,7 @@ pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
                         tracing::debug!(
                             "device {device}: batch answer too large ({error}); reading it a row at a time"
                         );
+                        read.too_large = true;
                         for at in (0..batch.len()).rev() {
                             batches.push_front(&batch[at..=at]);
                         }

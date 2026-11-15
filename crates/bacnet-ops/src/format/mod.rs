@@ -50,7 +50,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{Date, PropertyValue, Time};
 
-use units::unit_symbol;
+pub(crate) use units::unit_symbol;
 
 /// A property as read: its raw application-tagged value, or why the device
 /// gave none. The rows the raw readers ([`Reader`](crate::raw::Reader))

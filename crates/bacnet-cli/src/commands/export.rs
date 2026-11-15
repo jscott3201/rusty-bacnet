@@ -1,6 +1,6 @@
 //! `bacnet export 223-experimental` (#2436): a device's objects as an
-//! experimental Standard 223 point list in Turtle, read and written by
-//! `bacnet_ops::export::s223`.
+//! experimental Standard 223 point list in Turtle: read as any inventory
+//! is (`bacnet_ops::inventory`), written by `bacnet_ops::export::s223`.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -8,9 +8,9 @@ use std::sync::atomic::AtomicBool;
 
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::export::s223::{
-    InventoryOptions, TurtleOptions, WritePriority, read_inventory, write_turtle,
-};
+use bacnet_ops::Priority;
+use bacnet_ops::export::s223::{Model, TurtleOptions, inventory_options, write_turtle};
+use bacnet_ops::inventory::read_inventory;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::parse::parse_object_type;
 use bacnet_ops::raw::{Halt, Reader};
@@ -34,17 +34,18 @@ pub async fn export_cmd<T: TransportPort + 'static>(
         output,
     } = format;
     // Every option is checked before anything is sent.
-    let priority = write_priority.map(WritePriority::new).transpose()?;
+    let priority = write_priority.map(Priority::new).transpose()?;
     let turtle = TurtleOptions::new(base_iri, priority)?;
-    let options = if types.is_empty() {
-        InventoryOptions::default()
+    let types = if types.is_empty() {
+        None
     } else {
         let types = types
             .iter()
             .map(|name| parse_object_type(name))
             .collect::<std::result::Result<_, _>>()?;
-        InventoryOptions::new(types)?
+        Some(types)
     };
+    let options = inventory_options(types)?;
     if let Some(path) = output
         && std::fs::symlink_metadata(path).is_ok()
     {
@@ -67,7 +68,7 @@ pub async fn export_cmd<T: TransportPort + 'static>(
         rpm: true,
     };
     let inventory = match read_inventory(&mut reader, &options).await {
-        Ok(inventory) => inventory,
+        Ok(inventory) => Model::from(&inventory),
         Err(Halt::Device(error)) => return Err(error.into()),
         Err(Halt::Cancelled) => return Err("the export was stopped".into()),
     };

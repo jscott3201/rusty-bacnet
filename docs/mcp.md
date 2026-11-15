@@ -94,7 +94,8 @@ passive mode.
   while it is incomplete a page holds no object and its cursor goes on
   reading the list), reads the device's name, then reads the objects of
   the selected types in Object_List order, one at a time from the cursor's
-  place, through `Device::inventory_object`. A page's Turtle stays under
+  place, each as the inventory's point record (`Device::point_record`).
+  A page's Turtle stays under
   24,000 bytes: the page ends before an object likely to pass that (judged
   by its largest point so far), and an object that passes it anyway goes
   back to the next page, where it is read again. A point larger than that
