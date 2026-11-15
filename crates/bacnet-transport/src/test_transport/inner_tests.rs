@@ -187,7 +187,7 @@ async fn lifecycle_reaches_the_inner_transport_unless_replaced() {
     // An on_stop hook replaces the inner stop, and its error is returned.
     let inner = TestTransport::new();
     let seen = inner.handle();
-    let mut outer = TestTransport::builder()
+    let outer = TestTransport::builder()
         .inner(inner)
         .on_stop(|| async { Err(Error::Encoding("replaced".into())) })
         .build();

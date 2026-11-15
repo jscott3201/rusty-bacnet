@@ -122,8 +122,8 @@ async fn records(
 }
 #[tokio::test(start_paused = true)]
 async fn source_rpm_ordered_occurrences_mixed_results_both_roles_modes() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut received) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut received) = network().await;
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         for confirmed in [false, true] {
             let mut session = session(database(confirmed), role, &sink);
@@ -190,8 +190,8 @@ async fn source_rpm_ordered_occurrences_mixed_results_both_roles_modes() {
 }
 #[tokio::test(start_paused = true)]
 async fn source_rpm_complete_correlation_before_any_success_projection() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut received) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut received) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     for fault in 0..15 {
@@ -279,8 +279,8 @@ async fn source_rpm_complete_correlation_before_any_success_projection() {
 }
 #[tokio::test(start_paused = true)]
 async fn source_rpm_unique_successful_device_projection_and_per_reference_filters() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut received) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut received) = network().await;
     for case in 0..6 {
         let mut db = database(false);
         if case == 3 {

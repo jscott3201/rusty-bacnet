@@ -127,7 +127,7 @@ async fn start_sender(
 
 #[tokio::test]
 async fn direct_handshake_valid_accept_enables_direct_send() {
-    let (mut transport, hub, attempted, mut peers) = start_sender(800).await;
+    let (transport, hub, attempted, mut peers) = start_sender(800).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -180,7 +180,7 @@ async fn direct_handshake_valid_accept_enables_direct_send() {
 
 #[tokio::test]
 async fn direct_handshake_bad_identity_falls_back_to_hub() {
-    let (mut transport, hub, attempted, mut peers) = start_sender(400).await;
+    let (transport, hub, attempted, mut peers) = start_sender(400).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -226,7 +226,7 @@ async fn direct_handshake_bad_identity_falls_back_to_hub() {
 
 #[tokio::test]
 async fn direct_handshake_zero_limits_falls_back_to_hub() {
-    let (mut transport, hub, attempted, mut peers) = start_sender(400).await;
+    let (transport, hub, attempted, mut peers) = start_sender(400).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -263,7 +263,7 @@ async fn direct_handshake_zero_limits_falls_back_to_hub() {
 
 #[tokio::test]
 async fn direct_handshake_timeout_falls_back_to_hub() {
-    let (mut transport, hub, attempted, mut peers) = start_sender(120).await;
+    let (transport, hub, attempted, mut peers) = start_sender(120).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -298,7 +298,7 @@ async fn direct_handshake_timeout_falls_back_to_hub() {
 
 #[tokio::test]
 async fn direct_handshake_wrong_peer_vmac_never_receives_destination_npdu() {
-    let (mut transport, hub, _, mut peers) = start_sender(800).await;
+    let (transport, hub, _, mut peers) = start_sender(800).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let request = decode_sc_message(&hub_recv(&hub).await).unwrap();
         hub.send(&ack_for(request.message_id, b"wss://peer.example/sc"))

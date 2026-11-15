@@ -137,6 +137,33 @@ async fn transport_start_stop_and_sends_outside_a_run() {
     assert!(transport.send_broadcast(&[1, 0]).await.is_err());
 }
 
+/// A stop through a shared reference, with another holder alive (#2617):
+/// stops beside each other both return, every later send fails as one to a
+/// transport no longer running, and the receiver ends.
+#[tokio::test]
+async fn a_stop_with_another_holder_alive_refuses_every_later_send() {
+    let (serial_a, _serial_b) = LoopbackSerial::pair();
+    let mut transport = MstpTransport::new(serial_a, config(0, 127));
+    let mut rx = transport.start().await.unwrap();
+    let transport = std::sync::Arc::new(transport);
+    let other = std::sync::Arc::clone(&transport);
+    other.send_broadcast(&[1, 0]).await.unwrap();
+    let (first, second) = tokio::join!(transport.stop(), other.stop());
+    first.unwrap();
+    second.unwrap();
+    for sent in [
+        other.send_broadcast(&[1, 0]).await,
+        other.send_unicast(&[1, 0], &[5]).await,
+    ] {
+        assert!(
+            matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+            "{sent:?}"
+        );
+    }
+    assert!(rx.recv().await.is_none(), "the receiver ends");
+    other.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_failed_read_ends_the_task_and_later_sends() {
     /// A port whose every read and write fails.

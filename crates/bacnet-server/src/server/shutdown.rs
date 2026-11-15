@@ -183,17 +183,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if self.transport_cleanup.is_none()
             && let Some(network) = self.network.take()
         {
-            let mut network = match Arc::try_unwrap(network) {
-                Ok(network) => network,
-                Err(network) => {
-                    self.network = Some(network);
-                    return Err(Error::Encoding(
-                        "server network still has an internal owner".into(),
-                    ));
-                }
-            };
-            // Own the complete future, including cancellation-unsafe custom
-            // transport cleanup. Drop deliberately leaves this task running.
+            // The layer stops through a shared reference (#2617), whoever
+            // else still holds it. Own the complete future, including
+            // cancellation-unsafe custom transport cleanup. Drop
+            // deliberately leaves this task running.
             self.transport_cleanup = Some(tokio::spawn(async move {
                 let result = network.stop().await;
                 (network, result)
@@ -207,7 +200,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         match outcome {
             Ok((network, result)) => {
                 if result.is_err() {
-                    self.network = Some(Arc::new(network));
+                    self.network = Some(network);
                 }
                 result
             }

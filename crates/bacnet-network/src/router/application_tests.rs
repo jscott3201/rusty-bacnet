@@ -258,6 +258,30 @@ async fn a_tracked_receiver_feeds_the_port() {
     port.stop().await.unwrap();
 }
 
+/// A stop through a shared reference fails every later send of the port
+/// with the stopped error, before the router sees it, and ends its frames
+/// (#2617). The router still runs.
+#[tokio::test]
+async fn a_stopped_port_sends_nothing() {
+    let (mut router, apdus, _peers) = start(2).await;
+    let mut port = router.application_port(apdus);
+    let mut frames = port.start().await.unwrap();
+    let port = std::sync::Arc::new(port);
+    let other = std::sync::Arc::clone(&port);
+    port.stop().await.unwrap();
+    for sent in [
+        other.send_unicast(&routed_request(), &[]).await,
+        other.send_broadcast(&routed_request()).await,
+    ] {
+        assert!(
+            matches!(&sent, Err(Error::Transport(io)) if io.kind() == io::ErrorKind::NotConnected),
+            "{sent:?}"
+        );
+    }
+    assert!(frames.recv().await.is_none(), "the port's frames end");
+    router.stop().await.unwrap();
+}
+
 /// A ConfirmedCOVNotification, invoke ID 9, from station 5 on network 3000,
 /// relayed by the router at MAC 7 on network 2000 and addressed to this
 /// router's address on network 1000.

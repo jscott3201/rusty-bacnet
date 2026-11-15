@@ -633,6 +633,10 @@ pub(super) struct BipSocket {
     /// drive [`SendTo`]'s boxed wait on a real socket.
     #[cfg(test)]
     pub(super) block_next_try: std::sync::atomic::AtomicBool,
+    /// While set, every try reports `WouldBlock`: a socket that never takes
+    /// the datagram, for a send that must wait (#2617).
+    #[cfg(test)]
+    pub(super) block_tries: std::sync::atomic::AtomicBool,
     /// Runs at each try just before the socket write, so a test can see
     /// what the tap holds at that moment (#2519).
     #[cfg(test)]
@@ -649,6 +653,8 @@ impl BipSocket {
             sink: None,
             #[cfg(test)]
             block_next_try: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            block_tries: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             on_try: std::sync::Mutex::new(None),
         }
@@ -739,8 +745,20 @@ impl BipSocket {
         }
     }
 
-    /// One try at sending `datagram`, without waiting for the socket.
-    fn try_send(&self, datagram: &OutgoingDatagram<'_>, target: SocketAddrV4) -> io::Result<usize> {
+    /// Count one logical send, before its first try, for a test's
+    /// `SendAttemptObserver`.
+    pub(super) fn note_attempt(&self) {
+        #[cfg(any(test, feature = "test-support"))]
+        super::send_observer::attempted(&self.socket);
+    }
+
+    /// One try at sending `datagram`, without waiting for the socket. A
+    /// test's sink takes it instead of the network.
+    pub(super) fn try_send(
+        &self,
+        datagram: &OutgoingDatagram<'_>,
+        target: SocketAddrV4,
+    ) -> io::Result<usize> {
         #[cfg(test)]
         if self
             .block_next_try
@@ -749,8 +767,16 @@ impl BipSocket {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         #[cfg(test)]
+        if self.block_tries.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        #[cfg(test)]
         if let Some(hook) = self.on_try.lock().unwrap().as_mut() {
             hook();
+        }
+        #[cfg(test)]
+        if let Some(sink) = &self.sink {
+            return sink.send(&datagram.joined(), target);
         }
         datagram.try_send(&self.socket, target)
     }
@@ -759,7 +785,7 @@ impl BipSocket {
     /// first try, so that an answer the receive loop reports can't come
     /// ahead of it however long the send takes to return (#2519). A datagram
     /// in parts is put in one buffer only when the tap has a subscriber.
-    fn tap_outbound(&self, datagram: &OutgoingDatagram<'_>, target: SocketAddrV4) {
+    pub(super) fn tap_outbound(&self, datagram: &OutgoingDatagram<'_>, target: SocketAddrV4) {
         if self.tap.is_active() {
             let peer = || TapPeer::Udp(target.into());
             let record = |bytes: &[u8]| {

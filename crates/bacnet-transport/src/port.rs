@@ -18,6 +18,18 @@ use bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
 
+/// The error a send returns once its transport has stopped (#2617): an
+/// [`Error::Transport`] of kind
+/// [`NotConnected`](std::io::ErrorKind::NotConnected), the kind a send
+/// before start gets, saying that the transport stopped. See
+/// [`TransportPort::stop`].
+pub fn stopped() -> Error {
+    Error::Transport(std::io::Error::new(
+        std::io::ErrorKind::NotConnected,
+        "transport stopped",
+    ))
+}
+
 /// An owned copy of a link's group-destination rule
 /// ([`TransportPort::is_group_destination`]), for a sender that checks a
 /// destination away from the task that owns the transport, before it takes
@@ -643,8 +655,24 @@ pub trait TransportPort: Send + Sync {
         &mut self,
     ) -> impl std::future::Future<Output = Result<mpsc::Receiver<ReceivedNpdu>, Error>> + Send;
 
-    /// Stop the transport and clean up resources.
-    fn stop(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
+    /// Stop the transport and release what it holds, through a shared
+    /// reference, so an owner can stop a link that others still hold
+    /// (#2617).
+    ///
+    /// Once it returns, every send fails with an [`Error::Transport`] of
+    /// kind [`NotConnected`](std::io::ErrorKind::NotConnected), the kind a
+    /// send before start gets ([`stopped`] makes one); the receiver `start`
+    /// returned yields what was queued and then ends, unless something
+    /// outside the transport holds its sender (a loopback's peer); the
+    /// background tasks are ended; and the link's sockets, ports and leases
+    /// are released, so a port can be bound again.
+    /// A send already under way when the stop begins may still finish, and
+    /// lets go of the link as it returns. Stop is idempotent, and one called
+    /// while another runs waits for it: a first stop's future kept alive but
+    /// never polled again holds every later stop up, until it is dropped,
+    /// which hands the stop to the next. A transport that can start again
+    /// after a stop says so in its own documentation.
+    fn stop(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
     /// Synchronously abort background work and release owned transport resources.
     ///

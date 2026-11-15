@@ -114,7 +114,7 @@ fn payload(origin: u8, seq: u8) -> Vec<u8> {
 #[tokio::test]
 async fn bursty_source_capped_while_legitimate_origins_progress() {
     assert_eq!((quota(), CAPACITY), (32, 256));
-    let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
+    let (transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     // One bursty origin floods first: only the quota survives.
     for seq in 0..CAPACITY as u16 {
         send_npdu(&ws_hub, BURSTY, None, payload(0xA0, seq as u8), seq).await;
@@ -183,7 +183,7 @@ async fn bursty_source_capped_while_legitimate_origins_progress() {
 /// everything past the fourth was dropped and its request timed out.
 #[tokio::test(start_paused = true)]
 async fn one_origin_burst_of_up_to_32_is_admitted_whole() {
-    let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
+    let (transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     let mut next_id = 0x7700;
     for burst in [5u8, 10, 25, 32] {
         for seq in 0..burst {
@@ -208,7 +208,7 @@ async fn one_origin_burst_of_up_to_32_is_admitted_whole() {
 
 #[tokio::test]
 async fn slow_consumer_keeps_control_progress_while_queue_full() {
-    let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
+    let (transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     for seq in 0..(quota() + 66) as u16 {
         send_npdu(&ws_hub, BURSTY, None, payload(0xA0, seq as u8), seq).await;
     }
@@ -252,7 +252,7 @@ async fn slow_consumer_keeps_control_progress_while_queue_full() {
 
 #[tokio::test]
 async fn segmented_burst_progresses_when_consumer_drains() {
-    let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
+    let (transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     // A finite multi-NPDU sequence larger than one quota completes as long
     // as the consumer drains: no SC reassembly cache, no deadlock.
     let quota = quota() as u16;
@@ -274,7 +274,7 @@ async fn segmented_burst_progresses_when_consumer_drains() {
 
 #[tokio::test]
 async fn unicast_and_control_share_quota_without_charging_control() {
-    let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
+    let (transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     let origin: Vmac = [0x22; 6];
     // Unicast- and broadcast-shaped NPDUs share one per-origin quota.
     send_npdu(&ws_hub, origin, None, payload(0x22, 0), 0x7500).await;
@@ -350,7 +350,7 @@ async fn unicast_and_control_share_quota_without_charging_control() {
 
 #[tokio::test]
 async fn close_and_cancellation_preserve_closed_precedence() {
-    let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
+    let (transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     // A cancelled receive on the empty queue changes nothing.
     assert!(
         tokio::time::timeout(Duration::from_millis(20), rx.recv())

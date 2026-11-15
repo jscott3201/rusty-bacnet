@@ -60,7 +60,7 @@ async fn write(
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn wpm_validation_invalid_direct_local_routed_and_unknown_never_resolve_admit_or_send() {
-    let (mut client, mut peer, mut received) = setup().await;
+    let (mut client, peer, mut received) = setup().await;
     let mut cases = vec![vec![]];
     let mut empty = specs(None);
     empty[0].list_of_properties.clear();
@@ -113,7 +113,7 @@ async fn wpm_validation_invalid_direct_local_routed_and_unknown_never_resolve_ad
 
 #[tokio::test]
 async fn wpm_validation_valid_direct_local_routed_preserve_exact_wire_and_complete() {
-    let (mut client, mut peer, mut received) = setup().await;
+    let (mut client, peer, mut received) = setup().await;
     for path in [0, 10, 11] {
         for priority in std::iter::once(None).chain((1..=16).map(Some)) {
             let send = write(&client, path, specs(priority));

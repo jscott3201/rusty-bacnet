@@ -278,22 +278,36 @@ fn log_release(bbmd: SocketAddrV4, outcome: AttemptOutcome) {
     }
 }
 
+/// What a send reads under [`NodeHandle`]'s link lock: the link it decides
+/// on, and the socket it leaves from until the node stops (#2617).
+struct Linked {
+    link: Link,
+    socket: Option<Arc<BipSocket>>,
+}
+
 /// The node of one started transport, shared by its receive loop, its send
 /// paths, its driver task and the requests in flight.
 pub(super) struct NodeHandle {
-    /// A copy of the node's link, for the receive and send decisions. Only
+    /// A copy of the node's link, for the receive and send decisions, and
+    /// the socket every send leaves from. Only
     /// [`retarget`](Self::retarget) and [`set_subnet`](Self::set_subnet)
-    /// write it, under the node lock, after
-    /// the node's own copy changed: lock order is the node lock, then this.
-    link: RwLock<Link>,
+    /// write the link, and [`stop`](Self::stop) takes the socket, each under
+    /// the node lock, after the node's own copy changed: lock order is the
+    /// node lock, then this.
+    link: RwLock<Linked>,
     clock: HostClock,
-    socket: Arc<BipSocket>,
     record: Arc<ClientRecord>,
     /// Where the sends the link refuses are counted.
     refusals: Arc<SendRefusals>,
     state: Mutex<NodeState>,
     /// Tells the driver that the node changed.
     wake: Notify,
+    /// Wakes the sends waiting for the socket to take a datagram: when it
+    /// can ([`relay_writable`](Self::relay_writable)), and when the node
+    /// stops. A waiting send holds no socket (#2617).
+    pub(super) writable: Notify,
+    /// A waiting send asks the relay to watch the socket.
+    pub(super) wants_writable: Notify,
     /// Runs, with no lock held, as the driver sends each automatic
     /// registration attempt to the address in use: where a foreign device
     /// whose BBMD is known by host name may look it up again alongside it
@@ -321,9 +335,11 @@ impl NodeHandle {
         let clock = tokio_clock();
         let node = HostNode::new(link, clock.now()).map_err(config_error)?;
         let handle = Self {
-            link: RwLock::new(link),
+            link: RwLock::new(Linked {
+                link,
+                socket: Some(socket),
+            }),
             clock,
-            socket,
             record,
             refusals,
             state: Mutex::new(NodeState {
@@ -340,6 +356,8 @@ impl NodeHandle {
                 stopped: false,
             }),
             wake: Notify::new(),
+            writable: Notify::new(),
+            wants_writable: Notify::new(),
             attempt_hook: OnceLock::new(),
             #[cfg(test)]
             before_admit: Mutex::new(None),
@@ -350,7 +368,26 @@ impl NodeHandle {
     /// The node's link as it stands: its address, subnet and mode. A copy,
     /// so no lock is held while the caller decides on it.
     pub(super) fn link(&self) -> Link {
-        *self.link.read().unwrap_or_else(PoisonError::into_inner)
+        self.link
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .link
+    }
+
+    /// Run `send` on the node's link and the socket a send leaves from,
+    /// under the one read lock every send takes, or fail with the error for
+    /// a stopped transport once the node has stopped (#2617). `send` decides
+    /// and makes one non-blocking try, nothing else: a stop's write waits
+    /// for it, so no datagram goes out once the stop has taken the socket.
+    pub(super) fn with_sending<R>(
+        &self,
+        send: impl FnOnce(&Link, &Arc<BipSocket>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let linked = self.link.read().unwrap_or_else(PoisonError::into_inner);
+        match &linked.socket {
+            Some(socket) => send(&linked.link, socket),
+            None => Err(crate::port::stopped()),
+        }
     }
 
     /// Whether [`stop`](Self::stop) has run.
@@ -414,7 +451,7 @@ impl NodeHandle {
             state.register = None;
             state.attempt_started = None;
             state.refusal_warned = false;
-            *self.link.write().unwrap_or_else(PoisonError::into_inner) = *state.node.link();
+            self.link.write().unwrap_or_else(PoisonError::into_inner).link = *state.node.link();
             info!(bbmd = ?foreign.bbmd, ttl = foreign.ttl, "B/IP foreign device moved to a new BBMD registration");
             Ok(())
         })
@@ -429,7 +466,10 @@ impl NodeHandle {
                 return Ok(());
             }
             state.node.set_subnet(subnet).map_err(config_error)?;
-            *self.link.write().unwrap_or_else(PoisonError::into_inner) = *state.node.link();
+            self.link
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .link = *state.node.link();
             Ok(())
         })
     }
@@ -446,9 +486,14 @@ impl NodeHandle {
         &self.record
     }
 
-    /// The socket every send leaves from.
-    pub(super) fn socket(&self) -> &Arc<BipSocket> {
-        &self.socket
+    /// The socket every send leaves from, or `None` once the node has
+    /// stopped.
+    pub(super) fn socket(&self) -> Option<Arc<BipSocket>> {
+        self.link
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .socket
+            .clone()
     }
 
     /// The error for a send the link refused, counted.
@@ -522,6 +567,10 @@ impl NodeHandle {
     /// counted as a full hold.
     pub(super) fn admit_broadcast(&self, npdu: &[u8]) -> Result<Option<Link>, Error> {
         self.with(|state, now| {
+            // A stopped node holds nothing: the send fails (#2617).
+            if state.stopped {
+                return Err(crate::port::stopped());
+            }
             let admission = state
                 .node
                 .admit_broadcast(now)
@@ -532,11 +581,9 @@ impl NodeHandle {
                 Admission::Hold => state.held.push_back(copy()),
                 Admission::Send if waiting => {
                     if state.queued.len() >= usize::from(HELD_BROADCASTS) {
-                        if !state.stopped {
-                            let mut counters = NodeCounters::default();
-                            counters.broadcasts_hold_full = 1;
-                            self.record.absorb(&counters);
-                        }
+                        let mut counters = NodeCounters::default();
+                        counters.broadcasts_hold_full = 1;
+                        self.record.absorb(&counters);
                         return Err(self.refuse_send(SendRefusal::HoldFull));
                     }
                     state.queued.push(copy());
@@ -588,11 +635,21 @@ impl NodeHandle {
     }
 
     /// Stop: requests in flight fail as their channel closes, none starts,
-    /// and nothing more is sent or counted. Broadcasts still held or queued
-    /// count as discarded, so every held broadcast counts as released or
-    /// discarded, and every queued one as sent or discarded.
+    /// and nothing more is sent or counted. The node lets go of its socket,
+    /// so a later send fails as a stopped transport's does (#2617).
+    /// Broadcasts still held or queued count as discarded, so every held
+    /// broadcast counts as released or discarded, and every queued one as
+    /// sent or discarded.
     pub(super) fn stop(&self) {
         let mut state = self.lock();
+        // Taken under the node lock (lock order: the node lock, then the
+        // link's), and let go of once both are free.
+        let socket = self
+            .link
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .socket
+            .take();
         let kept = state.held.len() + state.queued.len();
         let discarded = u32::try_from(kept).unwrap_or(u32::MAX);
         if discarded > 0 && !state.stopped {
@@ -608,6 +665,10 @@ impl NodeHandle {
         state.release.clear();
         state.queued.clear();
         state.releasing = false;
+        drop(state);
+        drop(socket);
+        // A send waiting for the socket wakes, finds it gone and fails.
+        self.writable.notify_waiters();
     }
 
     /// The sends this node's link refused, as counted.
@@ -668,14 +729,14 @@ impl NodeHandle {
     /// attempt or a release, and report it to the node.
     async fn send_request(&self, exchange: ExchangeId, to: SocketAddrV4, message: &Bvll<'_>) {
         let mut buf = BytesMut::with_capacity(10);
-        let sent = match encode_bvll(&mut buf, message) {
-            Ok(()) => self
-                .socket
+        let sent = match (encode_bvll(&mut buf, message), self.socket()) {
+            (Ok(()), Some(socket)) => socket
                 .send_to(&buf, to)
                 .await
                 .map(drop)
                 .map_err(Error::Transport),
-            Err(error) => Err(error),
+            (Ok(()), None) => Err(crate::port::stopped()),
+            (Err(error), _) => Err(error),
         };
         match sent {
             Ok(()) => {
@@ -724,7 +785,10 @@ impl NodeHandle {
             debug!(%error, "Failed to encode a held broadcast");
             return;
         }
-        if let Err(error) = self.socket.send_to(&buf, outgoing.to).await {
+        let Some(socket) = self.socket() else {
+            return;
+        };
+        if let Err(error) = socket.send_to(&buf, outgoing.to).await {
             debug!(%error, "Failed to send a held broadcast");
         }
     }

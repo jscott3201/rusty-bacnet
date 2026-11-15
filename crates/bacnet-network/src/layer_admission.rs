@@ -578,7 +578,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         let (apdu_tx, apdu_rx) = AdmissionSender::channel(true);
         let counters = apdu_tx.counters.clone();
 
+        let (ended, ended_rx) = tokio::sync::watch::channel(());
         let dispatch_task = tokio::spawn(async move {
+            let _ended = ended;
             while let Some(received) = npdu_rx.recv().await {
                 let Some(apdu) = ingress.take(received) else {
                     continue;
@@ -590,7 +592,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             }
         });
 
-        self.dispatch_task = Some(dispatch_task);
+        self.dispatch = Some(Dispatch {
+            abort: dispatch_task.abort_handle(),
+            ended: ended_rx,
+        });
         Ok((apdu_rx, counters))
     }
 }

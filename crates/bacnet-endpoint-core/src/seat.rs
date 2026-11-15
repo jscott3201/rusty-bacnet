@@ -44,10 +44,11 @@
 //! The endpoint stops the link. Its stop closes the seat's queues and aborts
 //! the client's tasks, which the client names when it starts
 //! ([`SeatHolds::abort_on_stop`]), then waits for each task's [`SeatHold`]
-//! before it takes the layer back: a task in the middle of a turn can't hold
-//! the stop up. A client that is still alive then keeps its own reference to
-//! the layer, so the endpoint cannot stop the transport until that client is
-//! dropped.
+//! before it stops the layer, so none of them is still at work: a task in
+//! the middle of a turn can't hold the stop up. A client that is still alive
+//! keeps its own reference to the layer, and the layer stops all the same,
+//! through that shared reference (#2617): the client's later requests fail
+//! with the transport's stopped error, and its drop changes nothing.
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -87,9 +88,9 @@ impl SeatRoles {
 }
 
 /// Held by each task that keeps a seat's network layer, and dropped with
-/// it, so the endpoint's stop can wait for those tasks. Keep it in a field
-/// after the layer's `Arc`: fields drop in order, so the layer has been let
-/// go when the hold is seen to drop.
+/// it, so the endpoint's stop can wait for those tasks before it stops the
+/// layer. Keep it in a field after the layer's `Arc`: fields drop in order,
+/// so the layer has been let go when the hold is seen to drop.
 #[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct SeatHold(#[allow(dead_code)] mpsc::Sender<()>);

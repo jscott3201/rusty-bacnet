@@ -86,8 +86,8 @@ fn write_value(
 
 #[tokio::test(start_paused = true)]
 async fn source_write_wire_identity_value_boundaries_and_terminal_results() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     for confirmed in [false, true] {
         let mut session = session(write_database(confirmed), SessionRole::Both, &sink);
         session.start().await.unwrap();
@@ -207,8 +207,8 @@ async fn source_write_wire_identity_value_boundaries_and_terminal_results() {
 
 #[tokio::test(start_paused = true)]
 async fn source_write_commandability_priority_policy_matrix() {
-    let (mut peer, mut requests) = network().await;
-    let (mut sink, mut records) = network().await;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
     let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     // No inference from property identity, NULL, or a supplied wire priority.

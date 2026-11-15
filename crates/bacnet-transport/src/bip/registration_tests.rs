@@ -29,7 +29,7 @@ async fn token_follows_last_socket_worker() -> std::io::Result<()> {
     let _received = transport.start().await.unwrap();
     let address = transport.bip_port().unwrap().endpoint;
     assert_ne!(address.port(), 0);
-    let socket = transport.socket.as_ref().unwrap().clone();
+    let socket = transport.socket().unwrap();
     // Transport, receive, fanout and this held worker all share the same owner.
     assert!(Arc::strong_count(&socket) >= 4);
     let (release, held) = oneshot::channel::<()>();
@@ -37,7 +37,8 @@ async fn token_follows_last_socket_worker() -> std::io::Result<()> {
         let _ = held.await;
         drop(socket);
     });
-    let aborted = transport.abort_background_tasks();
+    transport.stop_at_once();
+    let aborted = transport.tasks.take_all();
     drop(transport);
     for task in aborted {
         let _ = task.await;
@@ -216,7 +217,7 @@ async fn a_bbmd_that_also_registers_as_a_foreign_device_fails_to_start() {
             both.enable_bbmd(vec![]);
         }
         assert_refused_as_both(both.start().await.unwrap_err());
-        assert!(both.socket.is_none());
+        assert!(both.socket().is_none());
         assert!(!both.bvlc_client_snapshot().running);
     }
 }
@@ -231,5 +232,5 @@ async fn a_started_bbmd_cant_restart_as_a_foreign_device() {
     bbmd.stop().await.unwrap();
     bbmd.register_as_foreign_device(foreign_config());
     assert_refused_as_both(bbmd.start().await.unwrap_err());
-    assert!(bbmd.socket.is_none());
+    assert!(bbmd.socket().is_none());
 }

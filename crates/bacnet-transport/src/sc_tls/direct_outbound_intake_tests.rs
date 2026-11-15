@@ -113,7 +113,7 @@ async fn outbound_wire_shapes_options_and_saturated_npdu_intake_preserve_control
         assert_eq!(ack.function, ScFunction::DisconnectAck);
         assert_eq!(ack.message_id, disconnect.message_id);
     });
-    let (mut transport, mut rx, hub) = start_outbound(&ca).await;
+    let (transport, mut rx, hub) = start_outbound(&ca).await;
     discover_send(&transport, &hub, &uri).await;
     tokio::time::timeout(Duration::from_secs(3), task)
         .await

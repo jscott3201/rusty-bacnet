@@ -67,7 +67,7 @@ async fn live_listener_ack_preserves_empty_and_known_uris_ids_and_addresses() {
         vec![],
         vec!["wss://one.example/sc", "wss://two.example:8443/sc"],
     ] {
-        let (mut transport, mut listener, mut rx, hub) = started(&uris).await;
+        let (transport, mut listener, mut rx, hub) = started(&uris).await;
         for id in [0, u16::MAX] {
             for source in [None, Some([0x22; 6])] {
                 answer(&hub, id, source, Some(&uris)).await;
@@ -83,7 +83,7 @@ async fn live_listener_ack_preserves_empty_and_known_uris_ids_and_addresses() {
 async fn capability_tracks_identity_application_intake_and_listener_lifecycle() {
     for close in ["stop", "drop", "intake"] {
         let uris = ["wss://one.example/sc"];
-        let (mut transport, listener, rx, hub) = started(&uris).await;
+        let (transport, listener, rx, hub) = started(&uris).await;
         let mut listener = Some(listener);
         let mut rx = Some(rx);
         answer(&hub, 1, None, Some(&uris)).await;

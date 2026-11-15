@@ -133,7 +133,7 @@ async fn a_control_flood_through_the_hub_stops_at_the_node_rate_limit() {
         .await
         .unwrap();
         let (mut router, mut apdus) = (started.router, started.apdus);
-        let (mut flooder, _rx) = announcer(&f.url, certs.clients[1].clone(), ANNOUNCER).await;
+        let (flooder, _rx) = announcer(&f.url, certs.clients[1].clone(), ANNOUNCER).await;
         for network in 1000..1010 {
             bounded(flooder.send_broadcast(&i_am_router(network)))
                 .await

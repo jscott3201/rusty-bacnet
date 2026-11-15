@@ -45,7 +45,7 @@ async fn barrier(hub: &LoopbackWebSocket) {
 
 #[tokio::test]
 async fn unknown_function_node_returns_connection_local_nak() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     hub.send(&[0x42, 0, 0x22, 0x33]).await.unwrap();
     let response = timeout(Duration::from_millis(150), hub.recv()).await;
     // Stop joins the receive task even on the expected pre-fix timeout.
@@ -59,7 +59,7 @@ async fn unknown_function_node_returns_connection_local_nak() {
 
 #[tokio::test]
 async fn unknown_function_all_wire_codes_and_address_option_payload_matrix() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     for raw in 0x0D..=0xFF {
         let bytes = wire(raw, 0x2233, None, None, 0, &[]);
         assert_eq!(
@@ -221,7 +221,7 @@ fn unknown_function_direct_connection_is_pure_in_all_states_and_codec_is_permiss
 
 #[tokio::test]
 async fn unknown_function_malformed_generic_wire_is_still_silent() {
-    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     for bytes in [
         vec![0x42],
         vec![0x42, 0x80, 0, 1],
@@ -246,7 +246,7 @@ async fn unknown_function_result_for_unknown_keeps_existing_parse_and_fatal_poli
             (vec![raw, 1, 0, 0, 7, 0, 0x8F], true),
             (vec![raw, 1], true),
         ] {
-            let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+            let (transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
             let bytes = wire(0, 0x2233, None, None, 0, &body);
             let msg = decode_sc_message(&bytes).unwrap();
             assert_eq!(msg.function, ScFunction::Result);

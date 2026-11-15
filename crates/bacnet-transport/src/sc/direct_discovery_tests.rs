@@ -292,7 +292,7 @@ fn connection_builders_shape_request_and_direct_npdu() {
 
 #[tokio::test]
 async fn miss_triggers_ar_request_then_direct_send_with_hub_silence() {
-    let (mut transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
+    let (transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -377,7 +377,7 @@ async fn ack_timeout_falls_back_to_hub_without_dial() {
 
 #[tokio::test]
 async fn empty_ack_falls_back_to_hub_without_dial() {
-    let (mut transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
+    let (transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -400,7 +400,7 @@ async fn empty_ack_falls_back_to_hub_without_dial() {
 
 #[tokio::test]
 async fn ar_nak_falls_back_to_hub_without_dial() {
-    let (mut transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
+    let (transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -442,7 +442,7 @@ async fn ar_nak_falls_back_to_hub_without_dial() {
 
 #[tokio::test]
 async fn mismatched_ack_id_is_ignored_then_hub_fallback() {
-    let (mut transport, _rx, hub, attempted, mut peers) = start_direct(80).await;
+    let (transport, _rx, hub, attempted, mut peers) = start_direct(80).await;
     let (send_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -566,7 +566,7 @@ async fn enabled_without_dialer_falls_back_to_hub() {
 
 #[tokio::test]
 async fn broadcast_never_uses_direct_even_when_enabled() {
-    let (mut transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
+    let (transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
     transport.send_unicast(NPDU, &BROADCAST_VMAC).await.unwrap();
     let bytes = hub_recv(&hub).await;
     let msg = decode_sc_message(&bytes).unwrap();
@@ -583,8 +583,8 @@ async fn broadcast_never_uses_direct_even_when_enabled() {
 #[cfg(feature = "sc-tls")]
 #[tokio::test]
 async fn interop_production_answer_drives_direct_without_timeout() {
-    let (mut sender, _rx, sender_hub, attempted, mut peers) = start_direct(2000).await;
-    let (mut responder, mut responder_rx, responder_hub, mut listener) =
+    let (sender, _rx, sender_hub, attempted, mut peers) = start_direct(2000).await;
+    let (responder, mut responder_rx, responder_hub, mut listener) =
         start_responder(&["wss://peer.example/sc"]).await;
     let start = Instant::now();
     let (send_res, ()) = tokio::join!(
@@ -623,8 +623,8 @@ async fn interop_production_answer_drives_direct_without_timeout() {
 #[cfg(feature = "sc-tls")]
 #[tokio::test]
 async fn interop_repeated_send_uses_cache_without_stall() {
-    let (mut sender, _rx, sender_hub, attempted, mut peers) = start_direct(2000).await;
-    let (mut responder, mut responder_rx, responder_hub, mut listener) =
+    let (sender, _rx, sender_hub, attempted, mut peers) = start_direct(2000).await;
+    let (responder, mut responder_rx, responder_hub, mut listener) =
         start_responder(&["wss://peer.example/sc"]).await;
     let (first_res, ()) = tokio::join!(
         sender.send_unicast(NPDU, &TARGET),

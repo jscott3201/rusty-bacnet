@@ -32,7 +32,7 @@ fn global(dlen: u8, control: Option<NetworkMessageType>) -> Vec<u8> {
 
 #[tokio::test]
 async fn non_router_drops_and_counts_a_global_broadcast_that_names_a_device() {
-    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut controls = network.enable_network_control_receiver().unwrap();
     let mut apdus = network.start().await.unwrap();

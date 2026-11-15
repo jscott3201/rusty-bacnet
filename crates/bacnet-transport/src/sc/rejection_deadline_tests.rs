@@ -205,7 +205,8 @@ async fn wait_for_state(
 }
 
 async fn abort_and_join(transport: &mut ScTransport<GateSocket>) {
-    let (recv, restore) = transport.abort_background_task_and_drop_sockets();
+    let (recv, restore) = transport.abort_background_tasks();
+    transport.abort_background_task_and_drop_sockets();
     if let Some(task) = recv {
         let _ = task.await;
     }

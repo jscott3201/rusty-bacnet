@@ -119,7 +119,12 @@ impl<W: WebSocketPort> super::ScTransport<W> {
         mut self,
         config: crate::sc_tls::DirectAcceptConfig,
     ) -> Result<(Self, crate::sc_tls::DirectListener), bacnet_types::error::Error> {
-        if self.ws.is_none() || self.direct_intake.npdus.is_some() {
+        let unstarted = self
+            .ws
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
+        if !unstarted || self.direct_intake.npdus.is_some() {
             return Err(bacnet_types::error::Error::Encoding(
                 "SC direct listener requires an unstarted, unregistered transport".into(),
             ));

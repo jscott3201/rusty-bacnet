@@ -144,10 +144,10 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
 async fn start_stop() {
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _rx = transport.start().await.unwrap();
-    assert!(transport.socket.is_some());
+    assert!(transport.socket().is_some());
     assert!(!transport.local_mac().iter().all(|b| *b == 0));
     transport.stop().await.unwrap();
-    assert!(transport.socket.is_none());
+    assert!(transport.socket().is_none());
 }
 
 #[tokio::test]

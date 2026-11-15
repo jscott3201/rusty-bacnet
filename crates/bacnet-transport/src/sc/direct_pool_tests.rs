@@ -214,7 +214,7 @@ fn direct_pool_hit_miss_eviction_idle_expiry_without_sleep() {
 async fn pooled_reuse_across_sends_dials_once() {
     let dials = Arc::new(AtomicUsize::new(0));
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
-    let (mut transport, hub) = start_pooled(800, dials.clone(), peer_tx).await;
+    let (transport, hub) = start_pooled(800, dials.clone(), peer_tx).await;
     let (first_res, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
         let ar_bytes = hub_recv(&hub).await;
         let ar = decode_sc_message(&ar_bytes).unwrap();
@@ -392,6 +392,6 @@ async fn concurrent_sends_share_pool_without_deadlock() {
         );
     }
     assert!(hub_try_recv(&hub).await.is_none());
-    let mut transport = transport;
+    let transport = transport;
     transport.stop().await.unwrap();
 }

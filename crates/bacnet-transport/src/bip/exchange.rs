@@ -15,6 +15,7 @@ use bacnet_types::error::Error;
 use bytes::BytesMut;
 use tokio::sync::oneshot;
 
+use super::datagram::OutgoingDatagram;
 use super::node::{NodeHandle, Outcome, Waiter};
 use super::{BipTransport, BvlcClientSnapshot, BvlcClientStatus};
 use crate::bbmd::{self, BdtEntry, FdtEntryWire};
@@ -136,18 +137,23 @@ impl NodeHandle {
             exchange.failed();
             return Err(error.into());
         }
-        if let Err(error) = self.socket().send_to(&buf, peer).await {
+        // As every send goes (#2617): it fails once the node has stopped,
+        // and one the socket makes wait holds no socket.
+        let sent = self
+            .send_now(|_| Ok((OutgoingDatagram::whole(&buf), peer)))
+            .await;
+        if let Err(error) = sent {
             exchange.failed();
-            return Err(Error::Transport(error).into());
+            return Err(error.into());
         }
         exchange.sent();
         match response.await {
             Ok(outcome) => Ok(outcome?),
             // Its waiter went without an answer: it was given up, or the
             // node dropped it as the transport stopped, and then it fails as
-            // a request made after the stop does (#2612).
+            // a request made after the stop does (#2612, #2617).
             Err(_) if give_up.is_some_and(BvlcGiveUp::is_given_up) => Err(given_up()),
-            Err(_) => Err(super::not_started().into()),
+            Err(_) => Err(crate::port::stopped().into()),
         }
     }
 
@@ -161,7 +167,7 @@ impl NodeHandle {
         let (tx, rx) = oneshot::channel();
         let id = self.with(|state, now| {
             if state.stopped {
-                return Err(BvlcExchangeError::Transport(super::not_started()));
+                return Err(BvlcExchangeError::Transport(crate::port::stopped()));
             }
             let (id, _) = state
                 .node

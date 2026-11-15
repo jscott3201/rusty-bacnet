@@ -35,6 +35,7 @@ impl ScTransport<TlsWebSocket> {
     /// Reachable through `BACnetClient::transport()` and `AnyTransport::Sc`.
     pub async fn hub_peer_info(&self) -> Option<ScHubPeerInfo> {
         let ws = self.ws_shared.as_ref()?.lock().await;
+        let ws = ws.as_ref()?;
         let conn = self.connection.as_ref()?.lock().await;
         if conn.state != ScConnectionState::Connected {
             return None;
