@@ -125,6 +125,25 @@ pub fn unreachable(error: &Error) -> bool {
     timed_out(error) || matches!(error, Error::Transport(_))
 }
 
+/// True when `error` says the request was never sent: the link, or the
+/// client, refused it before any octet left (no route to its network, a
+/// link that can't carry it, a request it can't encode). It would be
+/// refused the same way for every property, so a read fails with it once,
+/// as it does for a device that stopped answering, where a row an answer
+/// didn't decode for stays that row's own (#2610).
+pub(crate) fn unsent(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Encoding(_)
+            | Error::Encode(_)
+            | Error::UnknownDevice { .. }
+            | Error::UnsupportedTransport { .. }
+            | Error::SendTooLong { .. }
+            | Error::RoutedPathTooLong { .. }
+            | Error::RoutedPathCapacityExceeded { .. }
+    )
+}
+
 /// True when `error`, a low-level client's error, says the request timed
 /// out: the client's own timeout, or the transaction state machine giving
 /// up on its retries. A transport failure is unreachable but not a
@@ -364,8 +383,11 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         for property in properties {
             let value = match self.rp(object, property, None).await {
                 Ok(value) => Ok(value),
-                // A device that stopped answering fails the read once.
-                Err(Halt::Device(error)) if unreachable(&error) => return Err(Halt::Device(error)),
+                // A device that stopped answering fails the read once, and
+                // so does a request that was never sent.
+                Err(Halt::Device(error)) if unreachable(&error) || unsent(&error) => {
+                    return Err(Halt::Device(error));
+                }
                 Err(Halt::Device(error)) => Err(PropertyError::from(error)),
                 Err(Halt::Cancelled) => return Err(Halt::Cancelled),
             };
@@ -396,7 +418,9 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
                     _ => None,
                 })
                 .collect(),
-            Err(Halt::Device(error)) if unreachable(&error) => return Err(Halt::Device(error)),
+            Err(Halt::Device(error)) if unreachable(&error) || unsent(&error) => {
+                return Err(Halt::Device(error));
+            }
             Err(Halt::Device(error)) => {
                 tracing::info!(
                     "{object}: no Property_List ({error}); reading the usual properties"

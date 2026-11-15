@@ -53,7 +53,7 @@ pub(super) type Scripter = fn(Service, usize, &[u8]) -> Script;
 
 /// The service, invoke ID and service data of `npdu` when it is a local,
 /// unsegmented ReadProperty or ReadPropertyMultiple request.
-fn scripted_request(npdu: &[u8]) -> Option<(Service, u8, &[u8])> {
+pub(super) fn scripted_request(npdu: &[u8]) -> Option<(Service, u8, &[u8])> {
     match npdu {
         [0x01, control, apdu, _, invoke_id, service, data @ ..]
             if control & 0x28 == 0 && apdu & 0xF8 == 0x00 =>

@@ -7,6 +7,7 @@ use bacnet_encoding::apdu::Apdu;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::test_transport::{SendLog, TestTransport};
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, RejectReason};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::read_many_tests::{Script, Service, forwards, scripted};
@@ -343,6 +344,56 @@ async fn a_relinquish_whose_read_back_fails_says_it_went() {
     assert!(!error.unreachable() && !error.timed_out());
     assert!(error.to_string().contains("acknowledged"), "{error}");
     assert_eq!(writes(&sent).len(), 1);
+    drop(device);
+    stop(client, server).await;
+}
+
+/// A link that refuses to send a read, as a router's application refuses
+/// a station that names no network: nothing leaves, and the send fails
+/// with the link's own words.
+fn reads_unsent(inner: bacnet_transport::loopback::LoopbackTransport) -> TestTransport {
+    use bacnet_transport::test_transport::{SendMode, StartMode};
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .start(StartMode::Relay(256))
+        .on_send(|frame| {
+            let read =
+                !frame.broadcast && super::read_many_tests::scripted_request(&frame.npdu).is_some();
+            async move {
+                match read {
+                    true => Err(Error::Encoding("the link refused the send".into())),
+                    false => Ok(()),
+                }
+            }
+        })
+        .build()
+}
+
+/// A priority read whose requests the link refused fails with the link's
+/// error, not as a property that didn't decode (#2610); after a relinquish
+/// the device took, it is the read back's cause.
+#[tokio::test(start_paused = true)]
+async fn a_priority_read_the_link_refused_says_why() {
+    let (client, server) = lab_on(reads_unsent).await;
+    let device = lab_device(&client).await;
+    let refused = |error: &OpsError| matches!(error, OpsError::Client(Error::Encoding(why)) if why == "the link refused the send");
+    let error = device.priority_array("ao:1").await.unwrap_err();
+    assert!(refused(&error), "{error:?}");
+    assert!(!error.to_string().contains("decode"), "{error}");
+    let error = device.relinquish("ao:1", p(9)).await.unwrap_err();
+    let OpsError::ReadBack { written, source } = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(written.priority, Some(p(9)));
+    assert!(refused(source), "{source:?}");
+    // An object's read fails the same way, once, with no rows of text.
+    let error = device
+        .read_object(oid(ObjectType::ANALOG_OUTPUT, 1), Wanted::All)
+        .await
+        .unwrap_err();
+    assert!(refused(&error), "{error:?}");
     drop(device);
     stop(client, server).await;
 }
