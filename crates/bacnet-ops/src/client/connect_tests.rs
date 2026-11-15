@@ -132,6 +132,29 @@ fn the_sc_builder_takes_its_settings() {
     };
 }
 
+/// TLS material the SC configuration refuses reaches an `OpsError` by `?`,
+/// still naming the input at fault (#2600).
+#[cfg(feature = "sc-tls")]
+#[test]
+fn sc_tls_material_errors_convert_for_the_sc_builder() {
+    use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    fn load(dir: &std::path::Path) -> Result<ScNodeTlsConfig, OpsError> {
+        Ok(ScNodeTlsConfig::from_pem_files(
+            dir.join("site-ca.pem"),
+            dir.join("node.pem"),
+            dir.join("node.key"),
+        )?)
+    }
+    let error = load(std::path::Path::new("/no-such-bacnet-dir")).unwrap_err();
+    assert!(matches!(error, OpsError::Client(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("CA bundle file /no-such-bacnet-dir"),
+        "{error}"
+    );
+}
+
 /// The MS/TP builder checks its settings before it opens the port, then
 /// fails on a port that isn't there.
 #[cfg(feature = "serial")]

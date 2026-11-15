@@ -15,10 +15,13 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
+/// Built from PEM (#2600), as a site's files are: the CA, and leaves with
+/// their keys, each also kept as DER for the raw peers below.
 struct Fixture {
-    ca: CertificateDer<'static>,
+    ca: String,
     node: ScNodeTlsConfig,
     leaves: Vec<(CertificateDer<'static>, Vec<u8>)>,
+    pems: Vec<(String, String)>,
 }
 
 impl Fixture {
@@ -30,8 +33,8 @@ impl Fixture {
         ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let key = rcgen::KeyPair::generate().unwrap();
         let issuer = rcgen::Issuer::from_params(&ca, &key);
-        let ca = ca.self_signed(&key).unwrap().der().clone();
-        let leaves: Vec<_> = (0..4)
+        let ca = ca.self_signed(&key).unwrap().pem();
+        let (leaves, pems) = (0..4)
             .map(|index| {
                 let mut params = rcgen::CertificateParams::new(vec!["localhost".into()]).unwrap();
                 params.distinguished_name = rcgen::DistinguishedName::new();
@@ -39,27 +42,26 @@ impl Fixture {
                     .distinguished_name
                     .push(rcgen::DnType::CommonName, format!("peer {index}"));
                 let key = rcgen::KeyPair::generate().unwrap();
+                let cert = params.signed_by(&key, &issuer).unwrap();
                 (
-                    params.signed_by(&key, &issuer).unwrap().der().clone(),
-                    key.serialize_der(),
+                    (cert.der().clone(), key.serialize_der()),
+                    (cert.pem(), key.serialize_pem()),
                 )
             })
-            .collect();
-        let node = ScNodeTlsConfig::from_der(
-            vec![ca.clone()],
-            vec![leaves[0].0.clone()],
-            PrivatePkcs8KeyDer::from(leaves[0].1.clone()).into(),
-        )
-        .unwrap();
-        Self { ca, node, leaves }
+            .unzip::<_, _, Vec<_>, Vec<_>>();
+        let node =
+            ScNodeTlsConfig::from_pem(ca.as_bytes(), pems[0].0.as_bytes(), pems[0].1.as_bytes())
+                .unwrap();
+        Self {
+            ca,
+            node,
+            leaves,
+            pems,
+        }
     }
     fn hub_config(&self, index: usize) -> ScHubTlsConfig {
-        ScHubTlsConfig::from_der(
-            vec![self.ca.clone()],
-            vec![self.leaves[index].0.clone()],
-            PrivatePkcs8KeyDer::from(self.leaves[index].1.clone()).into(),
-        )
-        .unwrap()
+        let (chain, key) = &self.pems[index];
+        ScHubTlsConfig::from_pem(self.ca.as_bytes(), chain.as_bytes(), key.as_bytes()).unwrap()
     }
     async fn hub(&self, index: usize) -> ScHub {
         ScHub::start("127.0.0.1:0", self.hub_config(index), [0x10; 6], [0x10; 16])

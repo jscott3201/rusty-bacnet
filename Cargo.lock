@@ -339,7 +339,6 @@ dependencies = [
  "ratatui",
  "rcgen",
  "rustls",
- "rustls-pki-types",
  "serde",
  "serde_json",
  "tempfile",

@@ -10,7 +10,8 @@
 //! 64 extensions and 16 KiB interpreted extension content per certificate.
 //! Each of SAN/KU/EKU retains at most 16 values of 256 ASCII-escaped bytes;
 //! metadata fields retain at most 1024 bytes each. Truncation is explicit.
-//! Existing connection adapters use [`super::pem`] without these new limits.
+//! The TLS configurations' PEM constructors, such as
+//! [`super::ScNodeTlsConfig::from_pem_files`], take their input without these limits.
 
 use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer},

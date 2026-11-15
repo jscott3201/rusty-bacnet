@@ -6642,8 +6642,8 @@ Missing, untrusted, expired, or not-yet-valid peer certificates are rejected.
 This addresses the Python hub admission boundary of Annex AB.7.4, not full
 security-profile conformance. CA membership does not authorize BACnet operations
 or by itself bind a certificate to a claimed VMAC/Device UUID; the optional
-`certificate_bindings` policy provides the separate registration check. Python startup loads/parses
-files and delegates policy construction to native `ScHubTlsConfig::from_der`, then
+`certificate_bindings` policy provides the separate registration check. Python startup loads
+the files through native `ScHubTlsConfig::from_pem_files` (#2600), then
 uses `ScHub::start_with_tls_config` with the retained explicit UUID and default phase
 timeouts. The identity migration is not another certificate-less-access fix;
 required CA, credential error categories, file repair/retry and
@@ -7036,8 +7036,11 @@ TLS 1.3-only remains the existing local policy. Base Standard 135-2020 Annex
 AB.7.4/AB.7.4.1.1 supplies the mutual-authentication and installation-credential
 context, but this change is not full security-profile conformance, certificate
 to VMAC/UUID authorization, or a change to hostname/revocation/issuer policy.
-The shared native `ScNodeTlsConfig::from_der` now constructs this local policy;
-Python interfaces and error categories remain unchanged. Normal TLS resumption is
+The shared native `ScNodeTlsConfig::from_pem_files` now loads the files and
+constructs this local policy (#2600); Python interfaces are unchanged, and the
+message after `TLS config error:` names the file at fault and why (for example
+`can't read the CA bundle file ...`, `the private key doesn't belong to the
+chain's leaf certificate`). A key file must hold exactly one private key. Normal TLS resumption is
 preserved and may not retransmit certificates. Credentials are offered if requested
 and compatible; a trusted server with no CertificateRequest can complete without
 receiving the node certificate. Local configuration does not attest an arbitrary

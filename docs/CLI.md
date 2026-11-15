@@ -2144,6 +2144,11 @@ quote paths containing spaces in a shell. TLS 1.3-only remains local policy.
 
 SC construction rejects missing/empty CA paths, unreadable/empty/malformed or
 unusable CA PEM, and invalid or mismatched local cert/key before DNS/TCP dialing.
+The files load through `ScNodeTlsConfig::from_pem_files` (#2600), and each
+refusal starts with the flag of the file at fault (`--sc-ca: the CA bundle holds
+no certificate, so nothing would be trusted`, `--sc-key: no PKCS#8, SEC1 or
+PKCS#1 private key found`). The key file must hold exactly one unencrypted
+PKCS#8, SEC1 or PKCS#1 key; an encrypted or OpenSSH key is named as such.
 Failures retain nonzero exit status and stderr diagnostics, not a successful JSON
 result. SC tracing (including connection-close warnings) also goes to stderr so
 it cannot corrupt JSON stdout. Before any DNS or TCP, the credential lint of

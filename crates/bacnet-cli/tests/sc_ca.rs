@@ -93,16 +93,33 @@ async fn invalid_local_files_never_reach_live_listener() {
         (
             "operational é.pem",
             "".to_owned(),
-            "SC credential check could not complete: input identity (empty_certificates)",
+            "--sc-cert: the certificate chain holds no certificate",
         ),
-        ("operational é.pem", malformed.to_owned(), "cert PEM"),
+        (
+            "operational é.pem",
+            malformed.to_owned(),
+            "--sc-cert: the certificate chain is not valid PEM",
+        ),
         (
             "operational é.pem",
             invalid_der.to_owned(),
             "SC credential check refused the dial before connecting: Operational certificate [0]",
         ),
-        ("operational é.key", "".to_owned(), "key PEM"),
-        ("operational é.key", "not a key".to_owned(), "key PEM"),
+        (
+            "operational é.key",
+            "".to_owned(),
+            "--sc-key: no PKCS#8, SEC1 or PKCS#1 private key found",
+        ),
+        (
+            "operational é.key",
+            "not a key".to_owned(),
+            "--sc-key: no PKCS#8, SEC1 or PKCS#1 private key found",
+        ),
+        (
+            "operational é.key",
+            format!("{}{}", leaf.key.serialize_pem(), leaf.key.serialize_pem()),
+            "--sc-key: the private key input holds 2 keys",
+        ),
         (
             "operational é.key",
             KeyPair::generate().unwrap().serialize_pem(),
