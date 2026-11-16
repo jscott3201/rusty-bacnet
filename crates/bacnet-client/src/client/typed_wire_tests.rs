@@ -20,6 +20,7 @@ use crate::discovery::RoutedDeviceConfig;
 
 mod device;
 mod events;
+mod forms;
 mod pins;
 mod property;
 
@@ -122,14 +123,16 @@ impl Wire {
         (frame, format!("{result:?}"))
     }
 
-    /// Run the unconfirmed `call`: the frame it sent and its result.
+    /// Run the unconfirmed `call`: the frames it sent (a Who-Is follows the
+    /// client's first question for its network's number) and its result.
     pub(super) async fn unconfirmed(
         &self,
         call: impl Future<Output = Result<(), Error>>,
     ) -> (String, String) {
         let at = self.sent.len();
         let result = call.await;
-        (frame_text(&self.sent.frame(at)), format!("{result:?}"))
+        let frames: Vec<_> = self.sent.frames()[at..].iter().map(frame_text).collect();
+        (frames.join(" | "), format!("{result:?}"))
     }
 
     /// Answer send `index` as the device does: from the frame's MAC, and

@@ -9,25 +9,19 @@ use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollment
 use bacnet_types::primitives::ObjectIdentifier;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// GetEventInformation to a device on this network, its answer decoded:
-    /// the objects after `last_received_object_identifier` (from the first
-    /// when `None`) with an active event or an unacknowledged transition.
-    /// While the answer's `more_events` is set, ask again from its last
-    /// object.
+    /// GetEventInformation to the station `to`, its answer decoded: the
+    /// objects after `last_received_object_identifier` (from the first when
+    /// `None`) with an active event or an unacknowledged transition. While
+    /// the answer's `more_events` is set, ask again from its last object.
     pub async fn get_event_information(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         last_received_object_identifier: Option<ObjectIdentifier>,
     ) -> Result<GetEventInformationAck, Error> {
-        let buf = event_information_request(last_received_object_identifier);
-        let ack = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::GET_EVENT_INFORMATION,
-                &buf,
-            )
-            .await?;
-        GetEventInformationAck::decode(&ack)
+        let request = GetEventInformationRequest {
+            last_received_object_identifier,
+        };
+        self.call(to, request).await
     }
 
     /// [`Self::get_event_information`] to a discovered device, routed when
@@ -49,19 +43,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         GetEventInformationAck::decode(&ack)
     }
 
-    /// GetAlarmSummary to a device on this network, its answer decoded.
+    /// GetAlarmSummary to the station `to`, its answer decoded.
     pub async fn get_alarm_summary(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
     ) -> Result<GetAlarmSummaryAck, Error> {
-        let ack = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::GET_ALARM_SUMMARY,
-                &[],
-            )
-            .await?;
-        GetAlarmSummaryAck::decode(&ack)
+        self.call(to, super::service::AlarmSummary).await
     }
 
     /// [`Self::get_alarm_summary`] to a discovered device, routed when it
@@ -80,23 +67,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         GetAlarmSummaryAck::decode(&ack)
     }
 
-    /// GetEnrollmentSummary to a device on this network, its answer
-    /// decoded. A filter out of its range fails before sending.
+    /// GetEnrollmentSummary to the station `to`, its answer decoded. A
+    /// filter out of its range fails before sending.
     pub async fn get_enrollment_summary(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         request: &GetEnrollmentSummaryRequest,
     ) -> Result<GetEnrollmentSummaryAck, Error> {
-        let mut buf = BytesMut::new();
-        request.try_encode(&mut buf)?;
-        let ack = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
-                &buf,
-            )
-            .await?;
-        GetEnrollmentSummaryAck::decode(&ack)
+        self.call(to, request).await
     }
 
     /// [`Self::get_enrollment_summary`] to a discovered device, routed when

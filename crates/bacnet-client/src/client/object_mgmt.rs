@@ -1,26 +1,17 @@
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Delete an object on a remote device (DeleteObject, Clause 15.4).
+    /// Delete an object on the station `to` (DeleteObject, Clause 15.4).
     pub async fn delete_object(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         object_identifier: bacnet_types::primitives::ObjectIdentifier,
     ) -> Result<(), Error> {
-        use bacnet_services::object_mgmt::DeleteObjectRequest;
-
-        let request = DeleteObjectRequest { object_identifier };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf);
-
-        let _ = self
-            .confirmed_request(destination_mac, ConfirmedServiceChoice::DELETE_OBJECT, &buf)
-            .await?;
-
-        Ok(())
+        let request = bacnet_services::object_mgmt::DeleteObjectRequest { object_identifier };
+        self.call(to, request).await
     }
 
-    /// Create an object on a remote device (CreateObject, Clause 15.3).
+    /// Create an object on the station `to` (CreateObject, Clause 15.3).
     ///
     /// Returns the identifier the device's CreateObject-ACK names, which
     /// tells a create by type the instance the device chose. An ACK that
@@ -28,23 +19,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// object.
     pub async fn create_object(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         object_specifier: bacnet_services::object_mgmt::ObjectSpecifier,
         initial_values: Vec<bacnet_services::common::BACnetPropertyValue>,
     ) -> Result<bacnet_types::primitives::ObjectIdentifier, Error> {
-        use bacnet_services::object_mgmt::CreateObjectRequest;
-
-        let request = CreateObjectRequest {
+        let request = bacnet_services::object_mgmt::CreateObjectRequest {
             object_specifier,
             list_of_initial_values: initial_values,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let ack = self
-            .confirmed_request(destination_mac, ConfirmedServiceChoice::CREATE_OBJECT, &buf)
-            .await?;
-        created_object(&ack)
+        self.call(to, request).await
     }
     /// Delete an object on a discovered device, routing when needed.
     ///

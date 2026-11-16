@@ -151,7 +151,7 @@ async fn nothing_is_asked_at_start_or_for_requests_by_address() {
         vec![0x44, 0x42, 0xA0, 0x00, 0x00],
         None,
     );
-    let read = site.client.confirmed_request_to(
+    let read = site.client.confirmed_request(
         &station,
         ConfirmedServiceChoice::READ_PROPERTY,
         &[0x0C, 0x00, 0x80, 0x00, 0x01, 0x19, 0x55],

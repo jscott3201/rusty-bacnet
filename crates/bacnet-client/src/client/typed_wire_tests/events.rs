@@ -154,7 +154,7 @@ async fn subscribe_cov_property() {
         ));
 }
 
-fn notification() -> AuditNotificationRequest {
+pub(super) fn notification() -> AuditNotificationRequest {
     AuditNotificationRequest {
         notifications: vec![BACnetAuditNotification {
             source_timestamp: None,

@@ -57,18 +57,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// Send a directed (unicast) WhoIs to a specific device, with the same
+    /// Send a directed (unicast) WhoIs to the station `to`, with the same
     /// `range` as [`Self::who_is`].
     pub async fn who_is_directed(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        WhoIsRequest { range }.encode(&mut buf);
-
-        self.unconfirmed_request(destination_mac, UnconfirmedServiceChoice::WHO_IS, &buf)
-            .await
+        self.tell(to, WhoIsRequest { range }).await
     }
 
     /// Send a WhoIs broadcast to a specific remote network, with the same

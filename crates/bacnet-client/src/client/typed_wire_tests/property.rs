@@ -290,25 +290,28 @@ async fn generic_requests() {
     let data = [0x0C, 0x00, 0x00, 0x00, 0x01];
     pin!("generic/local", Answer::Simple, |c| c
         .confirmed_request(PEER, wp, &data));
-    pin!("generic/local", Answer::Simple, |c| c.confirmed_request_to(
+    pin!("generic/local", Answer::Simple, |c| c.confirmed_request(
         &station(0, PEER),
         wp,
         &data
     ));
     pin!("generic/routed", Answer::Simple, |c| c
         .confirmed_request_routed(ROUTER, DNET, DADR, wp, &data));
-    pin!("generic/routed", Answer::Simple, |c| c
-        .confirmed_request_to(&station(DNET, DADR), wp, &data));
+    pin!("generic/routed", Answer::Simple, |c| c.confirmed_request(
+        &station(DNET, DADR),
+        wp,
+        &data
+    ));
 
     let ts = UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION;
     let data = [0xA4, 0x7E, 0x0B, 0x0F, 0x07, 0xB4, 0x0C, 0x00, 0x00, 0x00];
     pin!("ugeneric/local", |c| c.unconfirmed_request(PEER, ts, &data));
-    pin!("ugeneric/local", |c| c.unconfirmed_request_to(
+    pin!("ugeneric/local", |c| c.unconfirmed_request(
         &station(0, PEER),
         ts,
         &data
     ));
-    pin!("ugeneric/routed", |c| c.unconfirmed_request_to(
+    pin!("ugeneric/routed", |c| c.unconfirmed_request(
         &station(DNET, DADR),
         ts,
         &data

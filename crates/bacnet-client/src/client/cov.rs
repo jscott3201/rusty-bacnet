@@ -102,10 +102,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         Ok(())
     }
 
-    /// Subscribe to COV notifications for an object at a directly reachable MAC address.
+    /// Subscribe to COV notifications for an object on the station `to`.
     pub async fn subscribe_cov(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         subscriber_process_identifier: u32,
         monitored_object_identifier: ObjectIdentifier,
         confirmed: bool,
@@ -117,14 +117,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Some(confirmed),
             lifetime,
         );
-
-        self.send_subscribe_cov_request(
-            ConfirmedTarget::Local {
-                mac: destination_mac,
-            },
-            request,
-        )
-        .await
+        self.call(to, request).await
     }
 
     /// Subscribe to COV notifications for a discovered device, auto-routing if needed.
@@ -162,10 +155,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Cancel a COV subscription on a remote device.
+    /// Cancel a COV subscription on the station `to`.
     pub async fn unsubscribe_cov(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         subscriber_process_identifier: u32,
         monitored_object_identifier: ObjectIdentifier,
     ) -> Result<(), Error> {
@@ -175,14 +168,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             None,
             None,
         );
-
-        self.send_subscribe_cov_request(
-            ConfirmedTarget::Local {
-                mac: destination_mac,
-            },
-            request,
-        )
-        .await
+        self.call(to, request).await
     }
 
     /// Cancel a COV subscription for a discovered device, auto-routing if needed.
@@ -218,22 +204,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Subscribe to COV notifications for a single property at a directly reachable MAC address.
-    /// Lifetime must be positive; use `unsubscribe_cov_property` for cancellation.
+    /// Subscribe to COV notifications for a single property on the station
+    /// `to`. Lifetime must be positive; use `unsubscribe_cov_property` for
+    /// cancellation.
     pub async fn subscribe_cov_property(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         subscription: CovPropertySubscription,
     ) -> Result<(), Error> {
-        let request = subscription.into_request();
-
-        self.send_subscribe_cov_property_request(
-            ConfirmedTarget::Local {
-                mac: destination_mac,
-            },
-            request,
-        )
-        .await
+        self.call(to, subscription.into_request()).await
     }
 
     /// Subscribe to COV notifications for a single property on a discovered device,
@@ -263,10 +242,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Cancel a single-property COV subscription at a directly reachable MAC address.
+    /// Cancel a single-property COV subscription on the station `to`.
     pub async fn unsubscribe_cov_property(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         subscriber_process_identifier: u32,
         monitored_object_identifier: ObjectIdentifier,
         monitored_property_identifier: PropertyIdentifier,
@@ -281,14 +260,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             monitored_property_array_index,
             None,
         );
-
-        self.send_subscribe_cov_property_request(
-            ConfirmedTarget::Local {
-                mac: destination_mac,
-            },
-            request,
-        )
-        .await
+        self.call(to, request).await
     }
 
     /// Cancel a single-property COV subscription for a discovered device,

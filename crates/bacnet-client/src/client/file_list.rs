@@ -1,26 +1,17 @@
+use super::service::ListChange;
 use super::*;
 #[cfg(test)]
 use crate::acks::validate_atomic_read_file_ack;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Send a caller-supplied AcknowledgeAlarm request without fabricating fields.
+    /// Send a caller-supplied AcknowledgeAlarm request to the station `to`
+    /// without fabricating fields.
     pub async fn acknowledge_alarm(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         request: &bacnet_services::alarm_event::AcknowledgeAlarmRequest,
     ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::ACKNOWLEDGE_ALARM,
-                &buf,
-            )
-            .await?;
-
-        Ok(())
+        self.call(to, request).await
     }
 
     /// Send exact caller-supplied alarm acknowledgment fields to a discovered device.
@@ -50,31 +41,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Read file data from a remote device (stream or record access).
+    /// Read file data from the station `to` (stream or record access), the
+    /// acknowledgement's service data returned raw.
     pub async fn atomic_read_file(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         file_identifier: bacnet_types::primitives::ObjectIdentifier,
         access: bacnet_services::file::FileAccessMethod,
     ) -> Result<Bytes, Error> {
-        use bacnet_services::file::AtomicReadFileRequest;
-
-        let request = AtomicReadFileRequest {
+        let request = bacnet_services::file::AtomicReadFileRequest {
             file_identifier,
             access,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf);
-
-        self.confirmed_request(
-            destination_mac,
-            ConfirmedServiceChoice::ATOMIC_READ_FILE,
-            &buf,
-        )
-        .await
+        self.call(to, super::service::Raw(request)).await
     }
 
-    /// Read and strictly decode one AtomicReadFile ACK window.
+    /// Read and strictly decode one AtomicReadFile ACK window from the
+    /// station `to`.
     ///
     /// This additive typed boundary validates that the ACK uses the requested
     /// stream/record access arm and does not return more octets or records than
@@ -82,15 +65,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// payload is required for compatibility.
     pub async fn atomic_read_file_decoded(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         file_identifier: bacnet_types::primitives::ObjectIdentifier,
         access: bacnet_services::file::FileAccessMethod,
     ) -> Result<bacnet_services::file::AtomicReadFileAck, Error> {
-        let requested_access = access.clone();
-        let response = self
-            .atomic_read_file(destination_mac, file_identifier, access)
-            .await?;
-        crate::acks::atomic_read_file(&requested_access, &response)
+        let request = bacnet_services::file::AtomicReadFileRequest {
+            file_identifier,
+            access,
+        };
+        self.call(to, request).await
     }
 
     /// Read raw file acknowledgement bytes from a discovered device.
@@ -143,28 +126,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         crate::acks::atomic_read_file(&requested_access, &response)
     }
 
-    /// Write file data to a remote device (stream or record access).
+    /// Write file data to the station `to` (stream or record access), the
+    /// acknowledgement's service data returned raw.
     pub async fn atomic_write_file(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         file_identifier: bacnet_types::primitives::ObjectIdentifier,
         access: bacnet_services::file::FileWriteAccessMethod,
     ) -> Result<Bytes, Error> {
-        use bacnet_services::file::AtomicWriteFileRequest;
-
-        let request = AtomicWriteFileRequest {
+        let request = bacnet_services::file::AtomicWriteFileRequest {
             file_identifier,
             access,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf);
-
-        self.confirmed_request(
-            destination_mac,
-            ConfirmedServiceChoice::ATOMIC_WRITE_FILE,
-            &buf,
-        )
-        .await
+        self.call(to, request).await
     }
 
     /// Write stream or record data to a discovered device, routing if needed.
@@ -198,72 +172,48 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Add elements to a list property on a remote device.
+    /// Add elements to a list property on the station `to`.
     ///
     /// Rejects index zero, empty elements and malformed tag framing before
     /// transaction admission or traffic. Element datatype remains target-owned.
     pub async fn add_list_element(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         object_identifier: bacnet_types::primitives::ObjectIdentifier,
         property_identifier: bacnet_types::enums::PropertyIdentifier,
         property_array_index: Option<u32>,
         list_of_elements: Vec<u8>,
     ) -> Result<(), Error> {
-        use bacnet_services::list_manipulation::ListElementRequest;
-
-        let request = ListElementRequest {
+        let request = bacnet_services::list_manipulation::ListElementRequest {
             object_identifier,
             property_identifier,
             property_array_index,
             list_of_elements,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::ADD_LIST_ELEMENT,
-                &buf,
-            )
-            .await?;
-
-        Ok(())
+        let choice = ConfirmedServiceChoice::ADD_LIST_ELEMENT;
+        self.call(to, ListChange { choice, request }).await
     }
 
-    /// Remove elements from a list property on a remote device.
+    /// Remove elements from a list property on the station `to`.
     ///
     /// Rejects index zero, empty elements and malformed tag framing before
     /// transaction admission or traffic. Element datatype remains target-owned.
     pub async fn remove_list_element(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         object_identifier: bacnet_types::primitives::ObjectIdentifier,
         property_identifier: bacnet_types::enums::PropertyIdentifier,
         property_array_index: Option<u32>,
         list_of_elements: Vec<u8>,
     ) -> Result<(), Error> {
-        use bacnet_services::list_manipulation::ListElementRequest;
-
-        let request = ListElementRequest {
+        let request = bacnet_services::list_manipulation::ListElementRequest {
             object_identifier,
             property_identifier,
             property_array_index,
             list_of_elements,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
-                &buf,
-            )
-            .await?;
-
-        Ok(())
+        let choice = ConfirmedServiceChoice::REMOVE_LIST_ELEMENT;
+        self.call(to, ListChange { choice, request }).await
     }
 }
 

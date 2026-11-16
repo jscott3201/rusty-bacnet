@@ -3,33 +3,25 @@ use std::num::NonZeroUsize;
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Read a property from a remote device.
+    /// Read a property from the station `to` (a MAC on this link, an
+    /// address or a [`Station`]; see [`Self::confirmed_request`]).
     ///
     /// The ACK must match the requested object, property and array index.
     /// Device/Network Port wildcard requests accept only a same-type concrete
     /// peer-reported object; malformed or mismatched ACKs return a decoding error.
     pub async fn read_property(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         object_identifier: bacnet_types::primitives::ObjectIdentifier,
         property_identifier: bacnet_types::enums::PropertyIdentifier,
         property_array_index: Option<u32>,
     ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
-        use bacnet_services::read_property::ReadPropertyRequest;
-
-        let request = ReadPropertyRequest {
+        let request = bacnet_services::read_property::ReadPropertyRequest {
             object_identifier,
             property_identifier,
             property_array_index,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf);
-
-        let response_data = self
-            .confirmed_request(destination_mac, ConfirmedServiceChoice::READ_PROPERTY, &buf)
-            .await?;
-
-        crate::acks::read_property(&request, &response_data)
+        self.call(to, request).await
     }
 
     /// Read a property from a discovered device, auto-routing if needed.
@@ -64,7 +56,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Read a property from a device on a remote BACnet network via a router.
-    pub async fn read_property_routed(
+    pub(super) async fn read_property_routed(
         &self,
         router_mac: &[u8],
         dest_network: u16,
@@ -96,29 +88,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         crate::acks::read_property(&request, &response_data)
     }
 
-    /// Read multiple properties from one or more objects on a remote device.
+    /// Read multiple properties from one or more objects on the station
+    /// `to`.
     pub async fn read_property_multiple(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
     ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
-        use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
-
-        let request = ReadPropertyMultipleRequest {
+        let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
             list_of_read_access_specs: specs,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let response_data = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
-                &buf,
-            )
-            .await?;
-
-        ReadPropertyMultipleACK::decode(&response_data)
+        self.call(to, request).await
     }
 
     /// Read multiple properties from a discovered device, auto-routing if needed.
@@ -224,62 +204,37 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// Write a property on a remote device.
+    /// Write a property on the station `to`.
     pub async fn write_property(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         object_identifier: bacnet_types::primitives::ObjectIdentifier,
         property_identifier: bacnet_types::enums::PropertyIdentifier,
         property_array_index: Option<u32>,
         property_value: Vec<u8>,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        use bacnet_services::write_property::WritePropertyRequest;
-
-        let request = WritePropertyRequest {
+        let request = bacnet_services::write_property::WritePropertyRequest {
             object_identifier,
             property_identifier,
             property_array_index,
             property_value,
             priority,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::WRITE_PROPERTY,
-                &buf,
-            )
-            .await?;
-
-        Ok(())
+        self.call(to, request).await
     }
 
-    /// Write multiple properties on one or more objects on a remote device.
+    /// Write multiple properties on one or more objects on the station
+    /// `to`.
     pub async fn write_property_multiple(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         specs: Vec<bacnet_services::wpm::WriteAccessSpecification>,
     ) -> Result<(), Error> {
-        use bacnet_services::wpm::WritePropertyMultipleRequest;
-
-        let request = WritePropertyMultipleRequest {
+        let request = bacnet_services::wpm::WritePropertyMultipleRequest {
             list_of_write_access_specs: specs,
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
-                &buf,
-            )
-            .await?;
-
-        Ok(())
+        self.call(to, request).await
     }
 
     // -----------------------------------------------------------------------
@@ -435,7 +390,7 @@ mod doc_tests {
         let cases = [
             (
                 "read_property_multiple",
-                "Read multiple properties from one or more objects on a remote device.",
+                "Read multiple properties from one or more objects on the station",
                 "Write",
             ),
             (
@@ -450,12 +405,12 @@ mod doc_tests {
             ),
             (
                 "write_property",
-                "Write a property on a remote device.",
+                "Write a property on the station",
                 "multiple devices concurrently",
             ),
             (
                 "write_property_multiple",
-                "Write multiple properties on one or more objects on a remote device.",
+                "Write multiple properties on one or more objects on the station",
                 "Read",
             ),
             (

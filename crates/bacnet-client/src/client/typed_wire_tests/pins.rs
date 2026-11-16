@@ -1,6 +1,9 @@
 //! The pins: case, the frame sent (link MAC, then the NPDU, in hex) and
 //! the call's result (its `Debug` text), recorded from the by-MAC and
 //! by-instance calls before #2588 moved them onto one service description.
+//! Seven are newer, for calls that had no form to record them from: the
+//! routed forms of AddListElement, RemoveListElement, the two Audit
+//! notifications and AuditLogQuery, and the directed Who-Is both ways.
 
 pub(super) const PINS: &[(&str, &str, &str)] = &[
     (
@@ -16,6 +19,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
     (
         "add-list/local",
         "02 0104020500080c068000011a01593e21073f",
+        r#"Ok(())"#,
+    ),
+    (
+        "add-list/routed",
+        "09 012400020105ff020400080c068000011a01593e21073f",
         r#"Ok(())"#,
     ),
     (
@@ -59,8 +67,18 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         r#"Ok(())"#,
     ),
     (
+        "audit-note/routed",
+        "09 012400020105ff020400200e2e0c020000012f4901ae0c02000002af0f",
+        r#"Ok(())"#,
+    ),
+    (
         "audit-query/local",
         "02 0104020500210c0f4000011e1e0c0200000149001f1f3904",
+        r#"Err(Remote(Error { class: ErrorClass::OBJECT, code: ErrorCode::UNKNOWN_OBJECT }))"#,
+    ),
+    (
+        "audit-query/routed",
+        "09 012400020105ff020400210c0f4000011e1e0c0200000149001f1f3904",
         r#"Err(Remote(Error { class: ErrorClass::OBJECT, code: ErrorCode::UNKNOWN_OBJECT }))"#,
     ),
     (
@@ -206,6 +224,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         r#"Err(Remote(Error { class: ErrorClass::OBJECT, code: ErrorCode::UNKNOWN_OBJECT }))"#,
     ),
     (
+        "remove-list/routed",
+        "09 012400020105ff020400090c068000011a015929013e21073f",
+        r#"Err(Remote(Error { class: ErrorClass::OBJECT, code: ErrorCode::UNKNOWN_OBJECT }))"#,
+    ),
+    (
         "rp-mismatch/local",
         "02 01040205000c0c000000011955",
         r#"Err(Decoding(DecodeError { offset: 0, kind: InvalidEncoding, context: "", label: "ReadProperty ACK object identifier does not match the request", values: [0, 0], index: None }))"#,
@@ -277,6 +300,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         r#"Ok(())"#,
     ),
     (
+        "uaudit-note/routed",
+        "09 012000020105ff100c0e2e0c020000012f4901ae0c02000002af0f",
+        r#"Ok(())"#,
+    ),
+    (
         "ugeneric/local",
         "02 01001009a47e0b0f07b40c000000",
         r#"Ok(())"#,
@@ -292,6 +320,8 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "09 012000020105ff1009a47e0b0f07b40c1e0500",
         r#"Ok(())"#,
     ),
+    ("who-is/local", "02 01001008", r#"Ok(())"#),
+    ("who-is/routed", "09 012000020105ff1008", r#"Ok(())"#),
     (
         "wp-error/local",
         "02 01040205000f0c00400001195529023e44429100003f",
