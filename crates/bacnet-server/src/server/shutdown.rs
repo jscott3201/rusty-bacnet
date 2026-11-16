@@ -61,8 +61,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// A request's abort lands when its task next yields, so a request
     /// already running when stop begins may find its save done and make its
-    /// write first. Its answer is sealed, but the object serves that write,
-    /// and storage holds it (#1457).
+    /// write first. On a transport of its own its answer is sealed; on a
+    /// node's seat, whose shared layer stays open for the node's other
+    /// roles, an answer the request sends before its abort lands may still
+    /// go out. Either way the object serves that write, and storage holds
+    /// it (#1457).
     ///
     /// A local write aborted with its request (a Command or Channel run
     /// writing) or dropped by the application lets go of its stage as it

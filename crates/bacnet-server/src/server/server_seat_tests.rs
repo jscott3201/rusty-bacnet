@@ -4,7 +4,6 @@ use super::*;
 use crate::server::test_transport::{SendLog, TestTransport, TestTransportHandle};
 use bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator;
 use bacnet_endpoint_core::endpoint_ingress::{EndpointIngress, IngressReceivers};
-use bacnet_endpoint_core::seat::SERVER_SEAT_QUEUE;
 use bacnet_network::response_route::ResponseRoute;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
@@ -28,9 +27,7 @@ async fn node() -> (Node, ServerSeat<TestTransport>) {
     let mut ingress = EndpointIngress::new(transport, 8);
     let receivers = ingress.start().await.unwrap();
     let coordinator = Arc::new(OutboundTransactionCoordinator::new());
-    let seat = ingress
-        .server_seat(Arc::clone(&coordinator), SERVER_SEAT_QUEUE)
-        .unwrap();
+    let seat = ingress.server_seat(Arc::clone(&coordinator)).unwrap();
     let node = Node {
         ingress,
         _receivers: receivers,
@@ -205,6 +202,20 @@ async fn a_seat_refuses_what_only_a_link_of_its_own_can_take() {
         .await;
     let error = refused.err().expect("Audit Reporters are refused");
     assert!(error.to_string().contains("Audit Reporters"), "{error}");
+
+    // One link or the other: a transport set first is refused, not
+    // dropped unstarted.
+    let (_node, seat) = node().await;
+    let unused = TestTransport::new();
+    let unused_link = unused.handle();
+    let refused = BACnetServer::generic_builder()
+        .transport(unused)
+        .seat(seat)
+        .build()
+        .await;
+    let error = refused.err().expect("a transport and a seat are refused");
+    assert!(error.to_string().contains("transport"), "{error}");
+    assert_eq!(unused_link.starts(), 0);
 }
 
 /// The seated build can be spawned: its future is `Send`, as the

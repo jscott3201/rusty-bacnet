@@ -192,12 +192,16 @@ pub struct SeatedServerBuilder<T: TransportPort> {
     seat: ServerSeat<T>,
     configured_device_bindings: Vec<DeviceBinding>,
     clock_zone: ClockConfig,
+    /// Whether the builder had a transport of its own set, which a seated
+    /// build refuses.
+    had_transport: bool,
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// Run the server on `seat`, a node's started link, in place of a
-    /// transport of its own (#2617). Set the builder's other options first;
-    /// a transport set on it is dropped unstarted. See
+    /// transport of its own (#2617). Set the builder's other options first.
+    /// A builder that already has a transport is refused when it builds:
+    /// the server takes one link or the other. See
     /// [`SeatedServerBuilder::build`] for what a seat changes.
     pub fn seat(self, seat: ServerSeat<T>) -> SeatedServerBuilder<T> {
         SeatedServerBuilder {
@@ -206,6 +210,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
             seat,
             configured_device_bindings: self.configured_device_bindings,
             clock_zone: self.clock_zone,
+            had_transport: self.transport.is_some(),
         }
     }
 }
@@ -229,11 +234,16 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
     ///   notifications, and what it sends fails with the stopped
     ///   transport's error.
     ///
-    /// Fails, before it changes anything, on a builder with a registered
-    /// Network Port or Audit Reporters, which a seat can't take yet, and on
-    /// whatever a transport of its own would refuse. Must be called within
-    /// a Tokio runtime.
+    /// Fails, before it changes anything, on a builder that had a transport
+    /// of its own set, on one with a registered Network Port or Audit
+    /// Reporters, which a seat can't take yet, and on whatever a transport
+    /// of its own would refuse. Must be called within a Tokio runtime.
     pub async fn build(mut self) -> Result<BACnetServer<T>, Error> {
+        if self.had_transport {
+            return Err(Error::Encoding(
+                "a server builder with a transport of its own takes no seat as well".into(),
+            ));
+        }
         if self.config.registered_network_port.is_some() {
             return Err(Error::Encoding(
                 "a server on a node's seat takes no registered Network Port: the node owns \

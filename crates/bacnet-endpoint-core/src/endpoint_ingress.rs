@@ -359,26 +359,27 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     }
 
     /// A seat for a full server on the started link (#2617): the layer and
-    /// `coordinator` shared, and a queue of `capacity` APDUs for what is the
-    /// server's to take. While it is attached it takes the place of the
-    /// endpoint's own request queue (see [`crate::seat`]). One server at a
-    /// time; `coordinator` must be the client seat's when one is attached.
-    /// Fails before start and once the endpoint is stopping.
+    /// `coordinator` shared, and a queue for what is the server's to take.
+    /// While it is attached it takes the place of the endpoint's own request
+    /// queue (see [`crate::seat`]), so its queue is as deep as that one, the
+    /// capacity [`Self::new`] was given. One server at a time; `coordinator`
+    /// must be the client seat's when one is attached. Fails before start
+    /// and once the endpoint is stopping.
     #[doc(hidden)]
     pub fn server_seat(
         &self,
         coordinator: Arc<crate::coordinator::OutboundTransactionCoordinator>,
-        capacity: usize,
     ) -> Result<crate::seat::ServerSeat<T>, Error> {
         let not_running = || Error::Encoding("endpoint ingress is not running".into());
         if self.lifecycle != Lifecycle::Running {
             return Err(not_running());
         }
         let network = self.started.upgrade().ok_or_else(not_running)?;
-        self.seats
-            .as_ref()
-            .ok_or_else(not_running)?
-            .attach_server(network, coordinator, capacity)
+        self.seats.as_ref().ok_or_else(not_running)?.attach_server(
+            network,
+            coordinator,
+            self.queue_capacity,
+        )
     }
 
     /// What ingress dropped because a queue of its own was full, by class

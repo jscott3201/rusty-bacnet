@@ -62,7 +62,13 @@
 //! role's confirmed requests nor its answers. Each tier keeps a slot of its
 //! own where the capacity allows: one slot for all at a capacity of 1;
 //! unconfirmed one and answers one at 2; one each at 3; 2, 1 and 1 at 4;
-//! and at the default 256, 128, 64 and 64.
+//! and at the client seat's 256, 128, 64 and 64.
+//!
+//! The server seat's queue is as deep as the endpoint's request queue,
+//! whose place it takes (the endpoint's queue capacity), and its tiers
+//! scale with it. At a capacity of 2 its confirmed requests share the
+//! answers' slot instead, so a confirmed request behind an unconfirmed one
+//! still finds room, as it does in the request queue (#2635).
 //!
 //! # Lifetime
 //!
@@ -94,10 +100,6 @@ pub const CLIENT_SEAT_QUEUE: usize = 256;
 
 /// Network controls a client seat queues before ingress drops for it.
 pub const CLIENT_SEAT_CONTROL_QUEUE: usize = 64;
-
-/// APDUs a server seat queues by default before ingress drops for it: as
-/// deep as the endpoint's own request queue, whose place it takes.
-pub const SERVER_SEAT_QUEUE: usize = 256;
 
 /// The other roles attached to the node a seat is on. Fixed when the seat
 /// is made.
@@ -269,7 +271,10 @@ pub struct ClientSeatCounters {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ServerSeatCounters {
-    /// APDUs handed to the seat.
+    /// APDUs handed to the seat. Counted as the seat's queue takes them:
+    /// what a server finds still queued when it stops, or takes after it
+    /// began stopping, it drops unanswered, and that is counted here, not
+    /// in [`Self::full_drops`].
     pub apdus: u64,
     /// APDUs the seat refused: those its full queue had no room for, and
     /// those its tiers held back for what the server can spare less (see
@@ -531,8 +536,11 @@ impl SeatSlot {
         state.holds = None;
     }
 
-    /// Run `route` with the attached client and server seats, those still
-    /// live, if any seat is attached.
+    /// Run `route` with the attached client and server seats, if any seat
+    /// is attached. A seat whose queue has closed (its role's reader is
+    /// gone) is let go of first, so `route` doesn't see it; one whose role
+    /// was dropped but whose queue is still open is still offered to, as
+    /// its reader may yet drain it.
     pub(crate) fn with<R>(
         &self,
         route: impl FnOnce(Option<&Attached>, Option<&Attached>) -> R,
@@ -564,6 +572,10 @@ impl SeatSlot {
         let capacity = attached.apdus.max_capacity();
         let floor = match received.apdu.first().map(|first| first >> 4) {
             Some(1) => copy_floor(capacity),
+            // Too small for three tiers: the server seat's confirmed
+            // requests keep the request queue's rule (#2635) and may take
+            // the last slot.
+            Some(0) if attached.role == Role::Server && capacity < 3 => 0,
             Some(0) => crate::endpoint_ingress::reserve(capacity),
             _ => return true,
         };

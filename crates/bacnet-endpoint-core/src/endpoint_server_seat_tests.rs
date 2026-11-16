@@ -27,18 +27,17 @@ struct Node {
     server: ServerSeat<TestTransport>,
 }
 
-/// A started endpoint with a client seat and a server seat of `capacity`.
+/// A started endpoint whose queues hold `capacity`, with a client seat
+/// and a server seat, which takes the request queue's place and depth.
 async fn node(capacity: usize) -> Node {
     let (transport, link) = test_transport();
-    let mut endpoint = EndpointIngress::new(transport, 8);
+    let mut endpoint = EndpointIngress::new(transport, capacity);
     let ingress = endpoint.start().await.unwrap();
     let coordinator = Arc::new(OutboundTransactionCoordinator::new());
     let client = endpoint
         .client_seat(Arc::clone(&coordinator), SeatRoles::new(true), 8)
         .unwrap();
-    let server = endpoint
-        .server_seat(Arc::clone(&coordinator), capacity)
-        .unwrap();
+    let server = endpoint.server_seat(Arc::clone(&coordinator)).unwrap();
     Node {
         endpoint,
         ingress,
@@ -237,7 +236,7 @@ async fn a_gone_server_gives_the_endpoint_its_requests_back() {
         server,
     } = node(8).await;
     // One server at a time, on the node's one pool of invoke IDs.
-    let second = endpoint.server_seat(Arc::clone(&coordinator), 8);
+    let second = endpoint.server_seat(Arc::clone(&coordinator));
     assert!(second.unwrap_err().to_string().contains("already has"));
 
     // A server that is dropped frees its seat at once, before its tasks
@@ -245,14 +244,14 @@ async fn a_gone_server_gives_the_endpoint_its_requests_back() {
     let alive: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
     server.holds.alive_while(Arc::downgrade(&alive));
     drop(alive);
-    let other_pool = endpoint.server_seat(Arc::new(OutboundTransactionCoordinator::new()), 8);
+    let other_pool = endpoint.server_seat(Arc::new(OutboundTransactionCoordinator::new()));
     assert!(
         other_pool
             .unwrap_err()
             .to_string()
             .contains("pool of invoke IDs")
     );
-    let again = endpoint.server_seat(Arc::clone(&coordinator), 8).unwrap();
+    let again = endpoint.server_seat(Arc::clone(&coordinator)).unwrap();
 
     // With its queue gone too, a request goes where it went with no seat.
     drop((server, again));
@@ -283,9 +282,54 @@ async fn one_stop_ends_both_seats_and_never_waits_for_the_server() {
     assert!(server.holds.hold().is_none());
     assert!(
         endpoint
-            .server_seat(Arc::new(OutboundTransactionCoordinator::new()), 8)
+            .server_seat(Arc::new(OutboundTransactionCoordinator::new()))
             .is_err()
     );
     drop((server, client));
     assert_eq!(link.stops(), 1);
+}
+
+/// The server seat is as deep as the request queue it replaces, whatever
+/// capacity the endpoint was made with, and its tiers scale with it. At 2 a
+/// confirmed request still gets in behind an unconfirmed one (#2635), and
+/// at 1 there is no reserve.
+#[tokio::test]
+async fn the_server_seat_takes_the_request_queues_depth_and_tiers() {
+    for (capacity, tiers) in [
+        (1, [1, 0, 0]),
+        (2, [1, 1, 0]),
+        (3, [1, 1, 1]),
+        (16, [8, 4, 4]),
+        (1024, [512, 256, 256]),
+    ] {
+        let mut node = node(capacity).await;
+        let lease = node
+            .coordinator
+            .reserve(LeaseMetadata::notification(
+                CanonicalPeer::direct(&PEER),
+                ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+            ))
+            .unwrap();
+        let answer = [0x20, lease.invoke_id(), 0x01];
+        for apdu in [WHO_IS, READ_PROPERTY, &answer[..]] {
+            for _ in 0..=capacity {
+                inject(&node.link, apdu).await;
+            }
+        }
+        settle(&mut node).await;
+
+        let mut taken = [0; 3];
+        while let Ok(received) = node.server.apdus.try_recv() {
+            let tier = match received.apdu[0] >> 4 {
+                1 => 0,
+                0 => 1,
+                _ => 2,
+            };
+            taken[tier] += 1;
+        }
+        assert_eq!(taken, tiers, "capacity {capacity}");
+        let counters = node.endpoint.server_seat_counters();
+        assert_eq!(counters.apdus, capacity as u64, "capacity {capacity}");
+        assert_eq!(counters.full_drops, 2 * capacity as u64 + 3);
+    }
 }

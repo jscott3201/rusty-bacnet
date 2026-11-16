@@ -13436,27 +13436,48 @@ session.stop().await?; // stops the link
   hear every unconfirmed request. An answer goes to the role whose lease it
   answers, from the session's one pool of invoke IDs, and a requester's
   Abort or Segment-ACK to the server.
-- Queues: the server's seat holds 256 APDUs in the same three tiers as the
+- Queues: the server's seat takes the request queue's place, so it is as
+  deep as `SessionConfig::queue_capacity`, in the same three tiers as the
   client's (unconfirmed requests at most half, confirmed requests all but the
-  last quarter, answers to the server's own requests all of it). The session
-  never waits for it: what finds no room is dropped and counted in
-  `server_seat_counters().full_drops`, and the client's traffic goes on. Past
-  the seat, the server's `RequestAdmissionPolicy` refuses work its handlers
-  have no room for, as it does standalone.
+  last quarter, answers to the server's own requests all of it; at a capacity
+  of 2 a confirmed request may take the last slot, as in the request queue).
+  The session never waits for it: what finds no room is dropped and counted
+  in `server_seat_counters().full_drops`, and the client's traffic goes on.
+  Past the seat, the server's `RequestAdmissionPolicy` refuses work its
+  handlers have no room for, as it does standalone. What the server finds
+  still queued when it stops is dropped unanswered and counted only as
+  handed over (`apdus`).
+- One pool of invoke IDs: the server and the full client share the session's
+  256. When it runs out the server's confirmed notifications wait for an ID
+  while the client's requests fail at once, so a server with many confirmed
+  COV notifications in flight can leave the client none.
 - The session keeps the one owner of the local network number; the server
   runs none and takes the number it publishes.
+- DeviceCommunicationControl binds the whole device (Clause 16.1.2), but on
+  a node today it silences the server alone. After a DISABLE_INITIATION the
+  server accepts, the server initiates nothing (its notifications and its
+  `broadcast_i_am()` are refused), while the full client's requests and the
+  session's own `broadcast_i_am()` still go out. A later step of #2617 makes
+  it hold for the whole node.
 - Refused: a session with no server role (a full client there answers every
   request itself), with a source Audit Reporter, with its own COV reporting
-  (`with_cov`), or with a registered Network Port; and a builder with
-  `registered_network_port` or `audit_reporters`. One full server at a time.
+  (`with_cov`), or with a registered Network Port; and a builder with a
+  transport of its own, `registered_network_port` or `audit_reporters`. One
+  full server at a time.
 - Stopping: stop the server, then the session. The server's `stop()` joins
   its work and settles its saves but leaves the link to the session. A
   session stopped first stops the link all the same; the server's later
   sends fail with the stopped transport's error, and its own `stop()` still
   completes.
-- A server built elsewhere can run on any node's seat:
-  `BACnetServer::generic_builder().seat(seat).build()` takes a
-  `bacnet_endpoint_core::seat::ServerSeat`.
+- `full_server` is the way to put a server on a node today. Its builder
+  hook, `ServerBuilder::seat`, takes a `bacnet_endpoint_core::seat::ServerSeat`,
+  which only an endpoint session makes for now.
+- Where this is going (maintainer decisions on #2617): the node becomes one
+  device in its settings too, with Protocol_Services_Supported the union of
+  both roles' services and Max_APDU_Length_Accepted the smaller of the two;
+  the session builds its full server itself and the narrow server role goes,
+  taking the session's own COV reporting, local writes and persistence with
+  it; and in Python `await endpoint.server()` returns a `BACnetServer`.
 
 ### Endpoint shutdown and the object database
 

@@ -1,13 +1,16 @@
 //! A full `BACnetServer` on the session's link (#2617).
 use super::*;
-use bacnet_endpoint_core::seat::{SERVER_SEAT_QUEUE, ServerSeat, ServerSeatCounters};
+use bacnet_endpoint_core::seat::{ServerSeat, ServerSeatCounters};
 use bacnet_server::server::{BACnetServer, ServerBuilder};
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// A seat for a full server on this session's link: its network layer
     /// and invoke-ID coordinator, shared, and a queue for what is the
-    /// server's to receive. Refused where the server could not be the
-    /// session's only server role (see [`Self::full_server`]).
+    /// server's to receive, as deep as the session's request queue
+    /// ([`SessionConfig::queue_capacity`]), whose place it takes. Refused
+    /// where the server could not be the session's only server role (see
+    /// [`Self::full_server`]); those refusals come before the check that the
+    /// session runs.
     fn server_seat(&self) -> Result<ServerSeat<T>, Error> {
         let refused = |why: &str| Err(Error::Encoding(format!("no full server here: {why}")));
         if !matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
@@ -33,7 +36,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.ingress
             .as_ref()
             .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?
-            .server_seat(Arc::clone(&self.coordinator), SERVER_SEAT_QUEUE)
+            .server_seat(Arc::clone(&self.coordinator))
     }
 
     /// A full [`BACnetServer`] on this session's link, built from `builder`:
@@ -45,7 +48,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// request the session's own narrow server role would have taken, and
     /// answers it from its own database: the session's database, its
     /// Device writes, ReinitializeDevice handler and read limit no longer
-    /// answer anything, until the server is stopped or dropped. A session
+    /// answer anything. Once the server is stopped or dropped, the narrow
+    /// server role answers from the session's database again. A session
     /// with a [`DeviceIdentity`](crate::identity::DeviceIdentity) gives it
     /// to the server, replacing any the builder had, so the node is one
     /// device on its address; the database the builder holds must then
@@ -59,7 +63,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// it. One full server at a time. Refused, too, on a session with a
     /// source Audit Reporter, with its own COV reporting
     /// ([`with_cov`](Self::with_cov)), or with a registered Network Port:
-    /// those stay with the session's narrow server role for now.
+    /// those stay with the session's narrow server role for now. The session's
+    /// own COV reporting, local writes and persistence go with that role in
+    /// a later step of #2617, when the session builds its server itself.
     ///
     /// **Who answers what.** The server answers every confirmed request but
     /// a ConfirmedCOVNotification, which is a full client's; a
@@ -70,11 +76,28 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// **A server that falls behind.** The session never waits for it:
     /// what its seat's queue has no room for is dropped and counted in
     /// [`server_seat_counters`](Self::server_seat_counters), and a full
-    /// client's traffic goes on. Unconfirmed requests fill at most half of
-    /// the queue, confirmed requests all but its last quarter, and answers
-    /// to the server's own requests all of it. Past the queue, the server's
-    /// own admission ([`RequestAdmissionPolicy`](bacnet_server::server::RequestAdmissionPolicy))
+    /// client's traffic goes on. The queue is as deep as the session's
+    /// request queue ([`SessionConfig::queue_capacity`]). Unconfirmed
+    /// requests fill at most half of it, confirmed requests all but its last
+    /// quarter, and answers to the server's own requests all of it. Past the
+    /// queue, the server's own admission
+    /// ([`RequestAdmissionPolicy`](bacnet_server::server::RequestAdmissionPolicy))
     /// refuses work its handlers have no room for.
+    ///
+    /// **One pool of invoke IDs.** The server and a full client lease from
+    /// the session's one pool of 256. When it runs out, the server's
+    /// confirmed notifications wait for an ID, while the client's requests
+    /// fail at once: a server with many confirmed COV notifications in
+    /// flight (up to 255) can leave the client's requests none.
+    ///
+    /// **DeviceCommunicationControl is the server's alone, for now.** The
+    /// standard has it bind the whole device (Clause 16.1.2). Today a
+    /// DISABLE_INITIATION the server accepts silences the server: its own
+    /// requests and notifications and its
+    /// [`broadcast_i_am`](BACnetServer::broadcast_i_am). It does not silence
+    /// the full client's requests or the session's own
+    /// [`broadcast_i_am`](Self::broadcast_i_am), which still go out. A later
+    /// step of #2617 makes it hold for the whole node.
     ///
     /// **Stopping.** Stop the server, then the session: the server's
     /// [`stop`](BACnetServer::stop) joins its work and settles its saves,

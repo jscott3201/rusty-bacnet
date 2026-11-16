@@ -479,3 +479,153 @@ fn the_full_server_build_is_send(
 ) -> impl Send + 'static + use<> {
     session.full_server(BACnetServer::generic_builder())
 }
+
+/// The node's AI-1 as `reader` reads it: 42.0 from the full server's
+/// database, 20.0 from the session's.
+async fn read_node(reader: &BACnetClient<TestTransport>) -> f32 {
+    let value = tokio::time::timeout(
+        WAIT,
+        reader.read_property(
+            &Wire::mac(NODE),
+            ai1(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        ),
+    )
+    .await
+    .expect("an answer from the node")
+    .unwrap();
+    f32::from_be_bytes(value.property_value[1..5].try_into().unwrap())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stopped_full_server_hands_the_requests_back_to_the_narrow_role() {
+    let Lab {
+        mut session,
+        node_link,
+        mut server,
+        client,
+        mut peer,
+        mut other,
+        ..
+    } = lab().await;
+    assert_eq!(read_node(&other).await, 42.0);
+    server.stop().await.unwrap();
+    // The narrow server role answers again, from the session's database.
+    assert_eq!(read_node(&other).await, 20.0);
+    drop((server, client));
+    session.stop().await.unwrap();
+    assert_eq!(node_link.stops(), 1);
+    other.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_dropped_full_server_hands_the_requests_back_to_the_narrow_role() {
+    let Lab {
+        mut session,
+        node_link,
+        server,
+        client,
+        mut peer,
+        mut other,
+        ..
+    } = lab().await;
+    assert_eq!(read_node(&other).await, 42.0);
+    // Dropped without a stop: its dispatch task is aborted, and its queue
+    // closes once the runtime has run that abort.
+    drop(server);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(read_node(&other).await, 20.0);
+    drop(client);
+    session.stop().await.unwrap();
+    assert_eq!(node_link.stops(), 1);
+    other.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
+/// The refusals no running session is needed for: they come before the
+/// check that the session runs.
+#[tokio::test(start_paused = true)]
+async fn a_full_server_is_refused_beside_source_audit_or_a_registered_port() {
+    let wire = Wire::new();
+    let audited = EndpointSession::new(
+        wire.port(NODE).build(),
+        SessionRole::Both,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .with_source_audit_reporter(ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap());
+    let refused = audited.full_server(BACnetServer::generic_builder()).await;
+    let error = refused.err().expect("refused beside source Audit");
+    assert!(
+        error.to_string().contains("source Audit Reporter"),
+        "{error}"
+    );
+
+    let registered = EndpointSession::new(
+        wire.port(PEER).build(),
+        SessionRole::Both,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .with_registered_network_port(ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap());
+    let refused = registered
+        .full_server(BACnetServer::generic_builder())
+        .await;
+    let error = refused.err().expect("refused beside a registered port");
+    assert!(error.to_string().contains("Network Port"), "{error}");
+}
+
+/// Today a DeviceCommunicationControl the full server accepts silences the
+/// server alone. Clause 16.1.2 binds the whole device: a later step of
+/// #2617 (PR 2) makes DCC node-wide, and the client's read and the
+/// session's I-Am below are refused then, so this test flips.
+#[tokio::test(start_paused = true)]
+async fn disable_initiation_silences_only_the_server_for_now() {
+    let mut lab = lab().await;
+    lab.server.stop().await.unwrap();
+    lab.server = lab
+        .session
+        .full_server(
+            BACnetServer::generic_builder()
+                .database(database(NODE_DEVICE, 42.0))
+                .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive),
+        )
+        .await
+        .unwrap();
+    lab.other
+        .device_communication_control(
+            &Wire::mac(NODE),
+            bacnet_types::enums::EnableDisable::DISABLE_INITIATION,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    // The server initiates nothing.
+    let refused = lab.server.broadcast_i_am().await.unwrap_err();
+    assert!(
+        refused.to_string().to_lowercase().contains("communication"),
+        "{refused}"
+    );
+    // The node's full client still reads, and the session still announces.
+    let before = lab.node_sent.frames().len();
+    lab.client
+        .read_property(
+            &Wire::mac(PEER),
+            ai1(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        )
+        .await
+        .expect("the client's read goes out, for now");
+    assert!(lab.node_sent.frames().len() > before);
+    lab.session
+        .broadcast_i_am()
+        .await
+        .expect("the session's I-Am goes out, for now");
+
+    stop(lab).await;
+}
