@@ -222,6 +222,35 @@ async fn no_burst_of_any_kind_or_size_ends_the_session() {
     }
 }
 
+/// The session hands ingress its coordinator: a flood of answers no lease
+/// holds, ahead of the answer to the narrow client's read, fills the small
+/// answer queue only down to its reserve, so that answer still gets in.
+#[tokio::test(start_paused = true)]
+async fn a_narrow_client_read_completes_through_a_flood_of_stray_answers() {
+    let lab = burst_lab(SMALL).await;
+    let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
+    lab.wire.hold(&node);
+    for i in 0..100 {
+        lab.wire.deliver(&node, Kind::StrayAnswers.frame(i));
+    }
+    let drive = async {
+        eventually(WAIT, "the peer's answer held for the node", async || {
+            lab.wire.held(&node) == 101
+        })
+        .await;
+        lab.wire.release(&node);
+    };
+    let client = lab.session.client().unwrap();
+    let (read, ()) = tokio::join!(
+        client.read_property(&peer, ai1(), PropertyIdentifier::PRESENT_VALUE, None),
+        drive,
+    );
+    assert_eq!(read.unwrap().object_identifier, ai1());
+    let counters = lab.session.policy_counters().await;
+    assert!(counters.answer_full_drops > 0, "{counters:?}");
+    stop(lab).await;
+}
+
 /// A read by the node's client and a peer's read of the node both land in
 /// the middle of a 1,000-frame I-Am burst: the burst's overflow is dropped
 /// and counted, both reads are answered, and the node answers after it too.

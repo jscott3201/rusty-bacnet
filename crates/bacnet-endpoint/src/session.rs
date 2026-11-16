@@ -168,7 +168,10 @@ pub struct SessionConfig {
     /// requests, and answers no lease holds may not take the answer
     /// queue's, which stays for answers to the session's own requests. A
     /// capacity of 1 keeps no reserve, so there one Who-Is can shut out a
-    /// confirmed request.
+    /// confirmed request. Under a flood of stray answers, then, the
+    /// session's own answers keep 64 slots at the default capacity, and 4
+    /// at 16. A [`full_client`](EndpointSession::full_client)'s answers
+    /// don't use this queue but its seat's, which has tiers of its own.
     ///
     /// A queued item takes a slot of at most 192 octets (176 to 184 on a
     /// 64-bit target today) plus its NPDU or APDU (B/IP copies each NPDU to
@@ -284,8 +287,12 @@ pub struct PolicyCountersSnapshot {
     /// Unconfirmed requests past their share of the full request queue
     /// (see [`SessionConfig::queue_capacity`]).
     pub unconfirmed_full_drops: u64,
-    /// Confirmed requests the full request queue had no room for; none was
-    /// answered, and the requester's retry is its recovery.
+    /// Confirmed requests for the session's own roles that its full request
+    /// queue had no room for; none was answered, and the requester's retry
+    /// is its recovery. One for a full client (its COV notification, or any
+    /// on a session with no server role) that the client's seat refuses is
+    /// counted in [`client_seat_counters`](EndpointSession::client_seat_counters)
+    /// instead.
     pub confirmed_full_drops: u64,
     /// Answers and segments the full answer queue had no room for; an
     /// answer to the session's own request then ends by its timeout.

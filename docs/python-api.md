@@ -6969,12 +6969,15 @@ object: a tracked object's Value_Source reads null.
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
 `active_leases`, plus policy counters and the client seat's counts). A full
 queue never ends the endpoint (#2635): what it has no room for is dropped,
-counted by class in `unconfirmed_full_drops` (unconfirmed requests such as the I-Ams a global
-Who-Is brings, past their share of the request queue, which keeps a quarter
-for confirmed requests), `confirmed_full_drops` (confirmed requests left
-unanswered, which their requesters send again after their APDU timeout),
-`answer_full_drops` (answers; one no lease holds may not take the last
-quarter of the answer queue from the endpoint's own) and `policy_full_drops`
+counted by class in `unconfirmed_full_drops` (unconfirmed requests such as
+the I-Ams a global Who-Is brings, past their share of the request queue,
+which keeps a quarter for confirmed requests), `confirmed_full_drops`
+(confirmed requests for the endpoint's own roles left unanswered, which
+their requesters send again after their APDU timeout; one the client's
+queue refuses counts in `client_seat_full_drops`), `answer_full_drops`
+(answers; one no lease holds may not take the last quarter of the answer
+queue from the endpoint's own: 64 slots at the default capacity, 4 at 16)
+and `policy_full_drops`
 (malformed or refused APDUs), and logged at most once every 10 seconds.
 `queue_capacity` (default 256) sizes each queue; from 2 up each keeps at
 least one slot in reserve, and a capacity of 1 keeps none. With the
@@ -7034,7 +7037,15 @@ async with BipEndpoint(1001, interface="192.168.1.10", broadcast_address="192.16
 - **Queue.** The endpoint hands the client its share of what arrives
   through a bounded queue. A full queue drops and counts at once, never
   waits: `status()` reports `client_seat_apdus`, `client_seat_full_drops`
-  and `client_seat_control_full_drops` (network controls).
+  and `client_seat_control_full_drops` (network controls). The queue has
+  three tiers (#2635): copies of unconfirmed requests (I-Ams, Who-Is) fill
+  at most half of it, confirmed requests to the client (its COV
+  notifications, and every one on an endpoint with no server role) all but
+  its last quarter, and answers to its own requests all of it, so a burst
+  of I-Ams from its own discovery shuts out neither. `client_seat_full_drops`
+  counts what the queue refused, what its tiers held back included; on an
+  endpoint with no server role a confirmed request it refuses counts there,
+  not in `confirmed_full_drops`.
 - **Answers.** Beside the server role, the client answers only the COV
   notifications of its own subscriptions; the server role answers the
   rest. A ConfirmedEventNotification is published to

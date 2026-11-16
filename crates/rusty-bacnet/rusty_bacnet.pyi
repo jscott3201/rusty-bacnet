@@ -9183,7 +9183,9 @@ class EndpointStatus(TypedDict):
     ``unconfirmed_full_drops`` counts unconfirmed requests (I-Am, Who-Is,
     notifications) past their share of the request queue, which keeps a
     quarter for confirmed requests; ``confirmed_full_drops`` confirmed
-    requests dropped unanswered, which their requesters send again;
+    requests for the endpoint's own roles dropped unanswered, which their
+    requesters send again (one the client's seat refuses counts in
+    ``client_seat_full_drops``);
     ``answer_full_drops`` answers and segments (one no lease holds may not
     take the last quarter of the answer queue); ``policy_full_drops``
     refused APDUs (malformed, an unknown PDU type). Each queue of
@@ -9208,7 +9210,7 @@ class EndpointStatus(TypedDict):
     client_seat_apdus: int
     """APDUs handed to the client on the link (#2617), over the session's run."""
     client_seat_full_drops: int
-    """APDUs dropped at once because that client's queue was full; never waited for."""
+    """APDUs the client's queue refused, never waited for: those it had no room for, and those its tiers held back (copies of unconfirmed requests use at most half of it, confirmed requests to the client all but the quarter kept for its answers). On an endpoint with no server role, a confirmed request refused here is counted here, not in ``confirmed_full_drops``."""
     client_seat_control_full_drops: int
     """Network controls dropped the same way."""
 

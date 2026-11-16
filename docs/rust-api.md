@@ -13255,10 +13255,16 @@ capacity of two up, that the traffic it can best spare may not take:
   the look claims nothing). An answer that still finds no room is dropped:
   its request ends by its timeout and retries, as if the link had lost it,
   and a source-audited operation records TIMEOUT.
-- On a full client's seat, the quarter of its 256 slots is kept for answers
-  to the client's requests: Unconfirmed-Request copies, its COV
-  notifications and, on a node with no server role, every Confirmed-Request
-  may not take it. The seat counts its drops in `client_seat_counters()`.
+- A full client's seat has three tiers. Unconfirmed-Request copies fill at
+  most half of its 256 slots; Confirmed-Requests to the client (its COV
+  notifications and, on a node with no server role, every one) all but the
+  last quarter; answers to the client's requests all of them. The seat
+  counts what it refused, what its tiers held back included, in
+  `client_seat_counters().full_drops`, and a Confirmed-Request it refuses is
+  counted there, not in `confirmed_full_drops`. The seat's answers never use
+  the session's answer queue, whose reserve (64 slots at the default
+  capacity, 4 at 16) keeps the session's own answers from a flood of
+  strays.
 
 A capacity of 1 keeps no reserve. `SessionConfig::queue_capacity` (default
 256, as deep as the network layer's receive queue) sizes the request, answer

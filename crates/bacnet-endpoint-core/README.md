@@ -100,9 +100,11 @@ a transport of its own. Ingress hands the seat what is the client's: a copy
 of each Unconfirmed-Request, each ConfirmedCOVNotification, the answers whose
 lease [`coordinator::OutboundTransactionCoordinator::holder_of`] reads as a
 full client's, and the network controls. It never waits for the seat: a full
-queue is skipped and counted, and anything but an answer to the client's
-request leaves a quarter of it for those answers. The module's documentation has the whole rule
-and how the link stops around a seat.
+queue is skipped and counted. Its queue has three tiers: copies of
+Unconfirmed-Requests fill at most half of it, Confirmed-Requests to the
+client all but its last quarter, and answers to the client's requests all
+of it. The module's documentation has the whole rule and how the link stops
+around a seat.
 
 The example establishes local lease and duplicate-terminal behavior. It does
 not exercise network delivery, transport security, firmware, or a physical

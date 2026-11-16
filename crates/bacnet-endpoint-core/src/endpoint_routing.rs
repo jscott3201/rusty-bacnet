@@ -28,8 +28,9 @@
 //!   nothing, only once the queue is that full). An answer that still finds
 //!   no room is dropped: its lease ends by its owner's timeout and retry, as
 //!   if the link had lost it.
-//! - On the client seat, everything but an answer to the client's request
-//!   fills its queue only down to its reserve
+//! - The client seat has three tiers: copies of Unconfirmed-Requests stop
+//!   at half of it, Confirmed-Requests to the client at its reserve, and
+//!   answers to the client's requests may fill it
 //!   ([`SeatSlot::takes`](crate::seat::SeatSlot::takes)).
 //! - An APDU the classifier refuses goes to the policy queue, and is dropped
 //!   when that is full.
@@ -68,6 +69,12 @@ pub(crate) fn down_to_reserve<T>(queue: &mpsc::Sender<T>) -> bool {
 
 /// Whether one of `coordinator`'s leases holds the answer `received`. Looks,
 /// claims nothing. With no coordinator every answer counts as held.
+///
+/// It reads only the peer and the invoke ID. A Segment-ACK or Abort a
+/// requester sends (server bit clear) is about a request this node serves,
+/// not a lease: one that happens to match a lease counts as held, and any
+/// other as a stray. Harmless while the narrow server never segments;
+/// revisit when the full server takes a seat (#2617 step 4).
 fn held_by_lease(
     coordinator: Option<&OutboundTransactionCoordinator>,
     received: &ReceivedApdu,
@@ -96,8 +103,11 @@ fn held_by_lease(
 pub struct IngressDropCounters {
     /// Unconfirmed-Requests past their share of the request queue.
     pub unconfirmed_full_drops: u64,
-    /// Confirmed-Requests the full request queue had no room for; none was
-    /// answered.
+    /// Confirmed-Requests for the endpoint's own roles that its full request
+    /// queue had no room for; none was answered. One that goes to a client
+    /// seat instead (a COV notification to the client, or any on an
+    /// endpoint with no server role) and finds no room there is counted in
+    /// [`ClientSeatCounters::full_drops`](crate::seat::ClientSeatCounters::full_drops).
     pub confirmed_full_drops: u64,
     /// Answers and segments (Simple-ACK, Complex-ACK, Error, Reject, Abort,
     /// Segment-ACK) the full answer queue had no room for: those no lease
@@ -155,6 +165,17 @@ pub(super) enum Dropped {
     Policy,
 }
 
+/// When each kind of drop line last went out, and the counts the last line
+/// of either kind covered.
+#[derive(Default)]
+struct DropLog {
+    /// The last debug line: unconfirmed drops alone, routine.
+    debug: Option<tokio::time::Instant>,
+    /// The last warning: any other class. A debug line never delays one.
+    warn: Option<tokio::time::Instant>,
+    reported: IngressDropCounters,
+}
+
 /// Ingress's full-queue drop counts, shared with the endpoint's owner.
 #[derive(Default)]
 pub(super) struct IngressDrops {
@@ -162,8 +183,7 @@ pub(super) struct IngressDrops {
     confirmed: AtomicU64,
     answer: AtomicU64,
     policy: AtomicU64,
-    /// When the last log line went out, and the counts it reported.
-    logged: Mutex<Option<(tokio::time::Instant, IngressDropCounters)>>,
+    logged: Mutex<DropLog>,
 }
 
 impl IngressDrops {
@@ -176,8 +196,10 @@ impl IngressDrops {
         }
     }
 
-    /// Count one drop, and log the drops since the last line when that line
-    /// is at least [`DROP_LOG_INTERVAL`] old. Returns what a line logged.
+    /// Count one drop, and log the drops no line has reported yet when the
+    /// last line of their kind is at least [`DROP_LOG_INTERVAL`] old: a
+    /// warning when any is more than an Unconfirmed-Request, a debug line
+    /// otherwise. Each kind keeps its own interval. Returns what was logged.
     pub(super) fn add(&self, class: Dropped) -> Option<DropReport> {
         let counter = match class {
             Dropped::Unconfirmed => &self.unconfirmed,
@@ -199,20 +221,26 @@ impl IngressDrops {
 
     fn report(&self, force: bool) -> Option<DropReport> {
         let now = tokio::time::Instant::now();
-        let mut logged = self.logged.lock().unwrap_or_else(PoisonError::into_inner);
-        let recent = logged.is_some_and(|(at, _)| now.duration_since(at) < DROP_LOG_INTERVAL);
-        if recent && !force {
-            return None;
-        }
+        let mut log = self.logged.lock().unwrap_or_else(PoisonError::into_inner);
         let counters = self.counters();
-        let since = counters.since(&logged.map(|(_, reported)| reported).unwrap_or_default());
+        let since = counters.since(&log.reported);
         let dropped = since.total();
         if dropped == 0 {
             return None;
         }
-        *logged = Some((now, counters));
-        drop(logged);
         let warned = dropped != since.unconfirmed_full_drops;
+        let last = if warned { log.warn } else { log.debug };
+        if !force && last.is_some_and(|at| now.duration_since(at) < DROP_LOG_INTERVAL) {
+            return None;
+        }
+        // A warning covers the unconfirmed drops too, so it also counts as
+        // the debug line of its interval.
+        log.debug = Some(now);
+        if warned {
+            log.warn = Some(now);
+        }
+        log.reported = counters;
+        drop(log);
         macro_rules! line {
             ($level:ident) => {
                 tracing::$level!(

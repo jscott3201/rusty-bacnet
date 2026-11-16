@@ -279,44 +279,101 @@ async fn a_malformed_apdu_never_reaches_the_seat() {
     assert_eq!(seated.endpoint.client_seat_counters().apdus, 0);
 }
 
-/// A burst of Unconfirmed-Requests fills the seat only down to the quarter
-/// kept for answers (#2635): the client's own answers and notifications
-/// still get in while it is behind on I-Ams.
+/// The seat's three tiers (#2635): copies of Unconfirmed-Requests fill it
+/// only to half, the client's COV notifications down to its last quarter,
+/// and answers to its requests all of it. A burst of I-Ams shuts out
+/// neither the client's notifications nor its answers.
 #[tokio::test]
-async fn unconfirmed_copies_leave_the_seat_room_for_the_clients_answers() {
+async fn the_seat_takes_answers_before_notifications_before_copies() {
     let mut seated = seated(true, 8).await;
     for _ in 0..10 {
         inject(&seated.link, WHO_IS).await;
         receive(&mut seated.ingress.inbound_requests).await;
     }
     let counters = seated.endpoint.client_seat_counters();
-    assert_eq!((counters.apdus, counters.full_drops), (6, 4));
+    assert_eq!((counters.apdus, counters.full_drops), (4, 6));
 
-    // The two slots left are for answers to the client's requests. Its COV
-    // notification is a request like the rest, and finds the share used.
+    // Two COV notifications get in behind a full share of copies; a third
+    // finds only the answers' quarter left.
+    let mut replies = Vec::new();
+    for _ in 0..3 {
+        replies.push(inject_expecting_reply(&seated.link, COV_NOTIFICATION).await);
+    }
+    // Two answers get in behind both; a third finds the queue full.
     let lease = seated.coordinator.reserve(requester(&PEER)).unwrap();
     let answer = [0x20, lease.invoke_id(), 0x0c];
-    let _reply = inject_expecting_reply(&seated.link, COV_NOTIFICATION).await;
-    inject(&seated.link, &answer).await;
-    inject(&seated.link, &answer).await;
-    // A third answer finds the queue full, as any APDU does.
-    inject(&seated.link, &answer).await;
+    for _ in 0..3 {
+        inject(&seated.link, &answer).await;
+    }
     inject(&seated.link, READ_PROPERTY).await;
     receive(&mut seated.ingress.inbound_requests).await;
     let counters = seated.endpoint.client_seat_counters();
-    assert_eq!((counters.apdus, counters.full_drops), (8, 6));
+    assert_eq!((counters.apdus, counters.full_drops), (8, 8));
 
     let queued: Vec<Bytes> = std::iter::from_fn(|| seated.seat.apdus.try_recv().ok())
         .map(|received| received.apdu)
         .collect();
-    assert_eq!(queued.len(), 8);
-    assert!(queued[..6].iter().all(|apdu| apdu.as_ref() == WHO_IS));
+    assert!(queued[..4].iter().all(|apdu| apdu.as_ref() == WHO_IS));
+    assert!(
+        queued[4..6]
+            .iter()
+            .all(|apdu| apdu.as_ref() == COV_NOTIFICATION)
+    );
     assert!(queued[6..].iter().all(|apdu| apdu.as_ref() == answer));
+    assert_eq!(queued.len(), 8);
+    // The refused notification's reply sender was released.
+    assert_eq!(
+        replies[2].try_recv(),
+        Err(oneshot::error::TryRecvError::Closed)
+    );
     // The endpoint's own counts are untouched: none of its queues was full.
     assert_eq!(
         seated.endpoint.full_drop_counters(),
         IngressDropCounters::default()
     );
+}
+
+/// Each tier keeps a slot of its own where the capacity allows: one slot
+/// shared by all at 1; copies one and answers one at 2; one each at 3; two,
+/// one and one at 4.
+#[tokio::test]
+async fn the_seats_tiers_at_small_capacities() {
+    for (capacity, tiers) in [
+        (1, [1, 0, 0]),
+        (2, [1, 0, 1]),
+        (3, [1, 1, 1]),
+        (4, [2, 1, 1]),
+        (8, [4, 2, 2]),
+    ] {
+        let mut seated = seated(true, capacity).await;
+        let lease = seated.coordinator.reserve(requester(&PEER)).unwrap();
+        let answer = [0x20, lease.invoke_id(), 0x0c];
+        for _ in 0..capacity + 1 {
+            inject(&seated.link, WHO_IS).await;
+            receive(&mut seated.ingress.inbound_requests).await;
+        }
+        let mut replies = Vec::new();
+        for _ in 0..capacity + 1 {
+            replies.push(inject_expecting_reply(&seated.link, COV_NOTIFICATION).await);
+        }
+        for _ in 0..capacity + 1 {
+            inject(&seated.link, &answer).await;
+        }
+        inject(&seated.link, &[0x80]).await;
+        receive(&mut seated.ingress.policy_outcomes).await;
+
+        let mut taken = [0; 3];
+        while let Ok(received) = seated.seat.apdus.try_recv() {
+            let tier = match received.apdu[0] >> 4 {
+                1 => 0,
+                0 => 1,
+                _ => 2,
+            };
+            taken[tier] += 1;
+        }
+        assert_eq!(taken, tiers, "capacity {capacity}");
+        assert_eq!(taken.iter().sum::<usize>(), capacity);
+    }
 }
 
 /// With no server role every Confirmed-Request goes whole to the seat, and
@@ -351,6 +408,11 @@ async fn confirmed_requests_leave_a_serverless_seat_room_for_the_clients_answers
         .count();
     assert_eq!(released, 4);
     assert!(seated.ingress.inbound_requests.try_recv().is_err());
+    // Counted once, by the seat: the endpoint's own counts never saw them.
+    assert_eq!(
+        seated.endpoint.full_drop_counters(),
+        IngressDropCounters::default()
+    );
 }
 
 #[tokio::test]

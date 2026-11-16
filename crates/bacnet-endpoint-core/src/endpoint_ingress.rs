@@ -35,7 +35,7 @@ use egress::{NetworkServiceCommand, NetworkServicePayload, send_network_service_
 #[path = "endpoint_routing.rs"]
 mod routing;
 use crate::coordinator::OutboundTransactionCoordinator;
-pub(crate) use routing::down_to_reserve;
+pub(crate) use routing::reserve;
 use routing::{ControlTee, IngressDrops, IngressQueues, next_apdu, route_received};
 pub use routing::{DROP_LOG_INTERVAL, IngressDropCounters};
 

@@ -1,7 +1,7 @@
-//! The client seat keeps a quarter of its queue for answers to the client's
-//! requests (#2635). A client that falls behind while a burst of I-Ams
-//! arrives, here one that never reads, still gets the answer to its own
-//! request; the burst's overflow is dropped and counted.
+//! The client seat's tiers (#2635): copies of a burst of I-Ams fill at most
+//! half of it, so a client that falls behind while they arrive, here one
+//! that never reads, still gets its COV notification and the answer to its
+//! own request; the burst's overflow is dropped and counted.
 use super::*;
 use bacnet_endpoint_core::coordinator::{CanonicalPeer, LeaseMetadata, TerminalPolicy};
 use bacnet_transport::bvll::encode_bip_mac;
@@ -52,6 +52,10 @@ async fn a_seat_nobody_reads_keeps_room_for_the_answer_to_its_clients_request() 
     for instance in 0..BURST as u32 {
         wire.deliver(&node, i_am(instance));
     }
+    // A ConfirmedCOVNotification, which beside a server role is the
+    // client's alone.
+    let notification = Bytes::from_static(&[0x01, 0x04, 0x00, 0x05, 0x22, 0x01]);
+    wire.deliver(&node, wire::frame(&peer, notification, false));
     wire.deliver(&node, wire::frame(&peer, answer, false));
     wire.release(&node);
     eventually(
@@ -59,23 +63,24 @@ async fn a_seat_nobody_reads_keeps_room_for_the_answer_to_its_clients_request() 
         "the whole burst classified",
         async || {
             let counters = session.client_seat_counters();
-            counters.apdus + counters.full_drops == BURST as u64 + 1
+            counters.apdus + counters.full_drops == BURST as u64 + 2
         },
     )
     .await;
 
-    // Three quarters of the seat's 256 slots took I-Ams; the answer took
-    // one of the quarter kept for it.
+    // Half of the seat's 256 slots took I-Ams; the notification and the
+    // answer took slots of the tiers kept for them.
     let counters = session.client_seat_counters();
-    assert_eq!((counters.apdus, counters.full_drops), (193, 108));
+    assert_eq!((counters.apdus, counters.full_drops), (130, 172));
     let queued: Vec<ReceivedApdu> = std::iter::from_fn(|| seat.apdus.try_recv().ok()).collect();
-    assert_eq!(queued.len(), 193);
-    assert_eq!(queued[192].apdu.as_ref(), [0x20, lease.invoke_id(), 0x0f]);
+    assert_eq!(queued.len(), 130);
     assert!(
-        queued[..192]
+        queued[..128]
             .iter()
             .all(|received| received.apdu[0] == 0x10)
     );
+    assert_eq!(queued[128].apdu.as_ref(), [0x00, 0x05, 0x22, 0x01]);
+    assert_eq!(queued[129].apdu.as_ref(), [0x20, lease.invoke_id(), 0x0f]);
     assert!(session.is_running());
 
     drop(seat);

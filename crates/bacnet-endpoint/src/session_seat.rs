@@ -54,6 +54,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// (#2617 step 4). A session with no server role leaves the client to
     /// answer as a standalone one does, acknowledgment included.
     ///
+    /// **A client that falls behind.** The session never waits for the
+    /// client: what its seat's queue has no room for is dropped and counted
+    /// in [`client_seat_counters`](Self::client_seat_counters). The queue
+    /// has three tiers (#2635): copies of unconfirmed requests (I-Ams,
+    /// Who-Is, unconfirmed notifications) fill at most half of it,
+    /// confirmed requests to the client (its COV notifications) all but its
+    /// last quarter, and answers to its own requests all of it. A burst of
+    /// I-Ams from its own discovery then shuts out neither its COV
+    /// notifications nor its answers.
+    ///
     /// **Stopping.** One [`stop`](Self::stop) stops the session, whether
     /// the client is still alive or not (#2617): it closes the session's
     /// roles, ends the client's tasks, fails its open requests and stops
