@@ -158,7 +158,8 @@ async fn peer_server(transport: TestTransport) -> BACnetServer<TestTransport> {
         .unwrap()
 }
 
-/// A standalone client on node [`OTHER`], with the session's timers.
+/// A standalone client on node [`OTHER`], with a 1000 ms APDU timeout and
+/// no retries, so a request nobody answers fails at once.
 async fn other_client(wire: &Wire) -> BACnetClient<TestTransport> {
     BACnetClient::generic_builder()
         .transport(wire.port(OTHER).build())

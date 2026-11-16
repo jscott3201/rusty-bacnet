@@ -216,10 +216,8 @@ impl PyBipEndpoint {
     ///     queue_capacity: Bounded queue capacity (must be >0, default 256).
     ///         A full queue drops and counts what it has no room for
     ///         (`status()`'s `*_full_drops`); it never ends the session.
-    ///     apdu_timeout_ms / apdu_retries: The node's APDU timeout and
-    ///         retries (default 6000 ms and 3): the client role's request
-    ///         timing, and the Device's APDU_Timeout and
-    ///         Number_Of_APDU_Retries.
+    ///     apdu_timeout_ms / apdu_retries: The client role's APDU timeout
+    ///         and retries (default 6000 ms and 3).
     ///     read_work_limit: Keyword-only. Result rows one ReadProperty served
     ///         by the server role may expand (must be >0, default 256): its
     ///         own row plus, for a Group's Present_Value, one per member

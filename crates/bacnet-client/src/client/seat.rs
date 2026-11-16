@@ -434,16 +434,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///   DISABLE_INITIATION, each request and unconfirmed send fails with
     ///   [`Error::InitiationDisabled`] (`sent: false`) and nothing goes
     ///   out, and a request already waiting ends with `sent: true` when its
-    ///   retry falls due (an answer that comes first still completes it). Its answers to what it
-    ///   receives, and its network-layer messages, still go. It ends with
+    ///   retry falls due (an answer that comes first still completes it).
+    ///   Its answers to what it receives, and its network-layer messages,
+    ///   still go. It ends with
     ///   the control's duration, an ENABLE, an accepted WARMSTART or
     ///   COLDSTART, or the server's stop. A segmented request already being
     ///   sent finishes its segments. [`ClientOptions::with_node_dcc_override`]
     ///   starts a client outside it;
-    /// - a segmented Complex-ACK, or a Segment-ACK or Abort from an
-    ///   answering device, that answers no request of the node's reaches
-    ///   this client, which aborts the first two as an idle client does
-    ///   (Clause 5.4.4.1);
+    /// - a segmented Complex-ACK, or a Segment-ACK from an answering device,
+    ///   that answers no request of the node's reaches this client, which
+    ///   aborts it as an idle client does (Clause 5.4.4.1). Other answers to
+    ///   nothing the node asked stay with the node, which counts them;
     /// - [`Self::stop`] stops the client alone. The node stops the link,
     ///   which it can do once this client is dropped. When the node stops
     ///   first, this client's tasks end, its open requests fail, and it

@@ -73,9 +73,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// has three tiers (#2635): copies of unconfirmed requests (I-Ams,
     /// Who-Is, unconfirmed notifications) fill at most half of it,
     /// confirmed requests to the client (its COV notifications) all but its
-    /// last quarter, and answers to its own requests all of it. A burst of
-    /// I-Ams from its own discovery then shuts out neither its COV
-    /// notifications nor its answers.
+    /// last quarter, and answers to its own requests all of it. Segmented
+    /// answers to nothing the node asked share the copies' half. A burst of
+    /// I-Ams from its own discovery, or of such answers, then shuts out
+    /// neither its COV notifications nor its answers.
     ///
     /// **Stopping.** One [`stop`](Self::stop) stops the session, whether
     /// the client is still alive or not (#2617): it closes the session's

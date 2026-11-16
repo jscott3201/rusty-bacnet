@@ -400,8 +400,10 @@ impl Outcome {
             // The node's DeviceCommunicationControl stopped it (#2617):
             // before it went out it was never sent; once it had, only its
             // retry was held back, and whether it was applied is unknown.
-            Err(error @ Error::InitiationDisabled { sent: false }) => {
-                return Self::NotSent(error.to_string());
+            Err(Error::InitiationDisabled { sent: false }) => {
+                return Self::NotSent(
+                    "DeviceCommunicationControl has disabled initiation on this node".into(),
+                );
             }
             Err(error @ Error::InitiationDisabled { sent: true }) => {
                 return Self::Failed(error.to_string());
@@ -495,6 +497,8 @@ mod tests {
         let refused = Outcome::of(&Err(Error::InitiationDisabled { sent: false }));
         assert!(matches!(refused, Outcome::NotSent(_)), "{refused:?}");
         assert_eq!(refused.applied(), Some(false));
+        let shown = refused.describe();
+        assert_eq!(shown.matches("not sent").count(), 1, "{shown}");
         let withheld = Outcome::of(&Err(Error::InitiationDisabled { sent: true }));
         assert!(matches!(withheld, Outcome::Failed(_)), "{withheld:?}");
         assert_eq!(withheld.applied(), None);

@@ -328,12 +328,14 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
     /// Fails, before it changes anything, on a builder that had a transport
     /// of its own set, on one with a registered Network Port, which a seat
     /// can't take yet, on a Device identity, `cov_retry_timeout_ms` or
-    /// `notification_retries` the builder set that differ from the node's,
+    /// `notification_retries` the builder set that differ from the node's
+    /// (an identity is compared after both are resolved to the link, and
+    /// without its service list, which a full server builds itself),
     /// on a database whose Device declares another APDU_Timeout or
     /// Number_Of_APDU_Retries than the node's (one that declares the object
     /// model's defaults, 6000 ms and 3, is given the node's), and on
-    /// whatever a transport
-    /// of its own would refuse. Must be called within a Tokio runtime.
+    /// whatever a transport of its own would refuse. Must be called within
+    /// a Tokio runtime.
     pub async fn build(mut self) -> Result<BACnetServer<T>, Error> {
         if self.had_transport {
             return Err(Error::Encoding(
@@ -415,6 +417,11 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
             tracing::debug!("a seated server serves the node's Device identity");
         } else if served(&self.config.device)? != served(&identity)? {
             return Err(contradicts("Device identity"));
+        } else if self.config.device.services() != identity.services() {
+            tracing::debug!(
+                "a seated server serves the node's Device identity in place of the builder's, \
+                 which differs only in its service list"
+            );
         }
         let timing = [
             (

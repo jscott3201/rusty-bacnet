@@ -13494,18 +13494,23 @@ session.stop().await?; // stops the link
   ConfirmedCOVNotification, which it aborts.
 - DeviceCommunicationControl binds the whole node (Clause 16.1). While the
   server holds a DISABLE_INITIATION it accepted, nothing on the node
-  initiates but I-Am answers to Who-Is and audit notifications: the full
-  client's requests and unconfirmed sends, the narrow client's requests and
-  both `broadcast_i_am()`s fail with `Error::InitiationDisabled { sent:
-  false }` and send nothing, and a client request already waiting ends with
-  `sent: true` when its retry falls due, as it may have been carried out. Answers and network-layer messages still go. It ends with
-  the control's duration, an ENABLE, an accepted WARMSTART or COLDSTART, or
-  the server's stop or drop. An operator's own tool may start a client
+  initiates but I-Am answers to Who-Is and audit notifications, and nothing
+  is sent: the full client's requests and unconfirmed sends, the narrow
+  client's requests and the session's `broadcast_i_am()` fail with
+  `Error::InitiationDisabled { sent: false }`, and the server's own
+  `broadcast_i_am()` with a SERVICES / COMMUNICATION_DISABLED
+  `Error::Remote`, as on a standalone server. A client request already
+  waiting ends with `sent: true` when its retry falls due, as it may have
+  been carried out. Answers and network-layer messages still go. It ends
+  with the control's duration, an ENABLE, an accepted WARMSTART or
+  COLDSTART, or the server's stop or drop. An operator's own tool may start a client
   outside it with `ClientOptions::with_node_dcc_override(true)`, an override
   of Clause 16.1 the node warns about in its log.
-- A segmented Complex-ACK, or a Segment-ACK or Abort from an answering
-  device, that answers no request of the node's goes to the full client,
-  which aborts the first two as an idle client does (Clause 5.4.4.1).
+- A segmented Complex-ACK, or a Segment-ACK from an answering device, that
+  answers no request of the node's goes to the full client, which aborts it
+  as an idle client does (Clause 5.4.4.1); it takes at most half of the
+  client's queue. Other answers to nothing the node asked stay with the
+  session, which counts them.
 - Refused: a session with no server role (a full client there answers every
   request itself), with no Device identity, with a source Audit Reporter,
   with its own COV reporting (`with_cov`), or with a registered Network

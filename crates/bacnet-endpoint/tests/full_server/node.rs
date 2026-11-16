@@ -7,6 +7,7 @@ use bacnet_services::cov::COVNotificationRequest;
 use bacnet_types::constructed::BACnetPropertyValue;
 use bacnet_types::enums::{EnableDisable, ReinitializedState, ServiceSupported};
 use bacnet_types::error::Error;
+use std::sync::Arc;
 
 /// A node like [`lab`]'s, built with `config`, whose full server accepts
 /// DeviceCommunicationControl and ReinitializeDevice from anyone.
@@ -371,7 +372,8 @@ async fn the_node_settings_have_one_place() {
 
 /// On a link that takes 480 octets, as every MS/TP node's does, a builder
 /// given the session's own identity is the node's identity, not a
-/// contradiction: both are compared as the link serves them.
+/// contradiction: both are compared as the link serves them, and without
+/// the service list, which the full server builds itself.
 #[tokio::test(start_paused = true)]
 async fn the_sessions_own_identity_is_taken_on_a_small_link() {
     let wire = Wire::new();
@@ -385,7 +387,12 @@ async fn the_sessions_own_identity_is_taken_on_a_small_link() {
     .device(identity.clone());
     session.start().await.unwrap();
     let mut server = session
-        .full_server(BACnetServer::generic_builder().device(identity.clone()))
+        .full_server(
+            BACnetServer::generic_builder().device(identity.clone().with_services(&[
+                ServiceSupported::READ_PROPERTY,
+                ServiceSupported::WRITE_PROPERTY,
+            ])),
+        )
         .await
         .expect("the session's own identity");
     let accepted = server
@@ -397,6 +404,95 @@ async fn the_sessions_own_identity_is_taken_on_a_small_link() {
         .await
         .unwrap();
     assert_eq!(accepted, PropertyValue::Unsigned(480));
+    server.stop().await.unwrap();
+    session.stop().await.unwrap();
+}
+
+/// A Who-Is first asks this network's number (#2572). If the node is
+/// disabled while that question is going out, the Who-Is that waited on it
+/// is not sent: the client checks its seat again after the question.
+#[tokio::test(start_paused = true)]
+async fn a_who_is_behind_the_number_question_is_held_back() {
+    let wire = Wire::new();
+    let other = BACnetClient::generic_builder()
+        .transport(wire.port(OTHER).build())
+        .apdu_timeout_ms(1_000)
+        .apdu_retries(0)
+        .build()
+        .await
+        .unwrap();
+    // The node's link holds its What-Is-Network-Number until released, and
+    // carries every other frame as the wire does.
+    let asking = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let node_mac = Wire::mac(NODE);
+    let port = {
+        let (wire, asking, release) = (wire.clone(), Arc::clone(&asking), Arc::clone(&release));
+        let source = node_mac.clone();
+        wire.port(NODE).number_controls().on_send(move |sent| {
+            let question = decode_npdu(sent.npdu.clone()).is_ok_and(|npdu| {
+                npdu.message_type == Some(bacnet_npdu::NetworkMessageType::WHAT_IS_NETWORK_NUMBER)
+            });
+            let (wire, asking, release, source) = (
+                wire.clone(),
+                Arc::clone(&asking),
+                Arc::clone(&release),
+                source.clone(),
+            );
+            async move {
+                if question {
+                    asking.notify_one();
+                    release.notified().await;
+                }
+                if sent.broadcast {
+                    wire.broadcast(&source, sent.npdu);
+                } else {
+                    wire.deliver(&sent.mac, wire::frame(&source, sent.npdu, false));
+                }
+                Ok(())
+            }
+        })
+    };
+    let node_sent = port.sent();
+    let mut session =
+        EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
+            .unwrap()
+            .device(DeviceIdentity::new(NODE_DEVICE, 42).unwrap());
+    session.start().await.unwrap();
+    let mut server = session
+        .full_server(
+            BACnetServer::generic_builder()
+                .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive),
+        )
+        .await
+        .unwrap();
+    let client = session.full_client().unwrap();
+
+    let who_is = Box::pin(client.who_is(None));
+    let disable = Box::pin(async {
+        asking.notified().await;
+        other
+            .device_communication_control(&node_mac, EnableDisable::DISABLE_INITIATION, None, None)
+            .await
+            .unwrap();
+        release.notify_one();
+    });
+    let (result, ()) = tokio::join!(who_is, disable);
+    assert!(
+        matches!(result, Err(Error::InitiationDisabled { sent: false })),
+        "{result:?}"
+    );
+    let who_is_sent = node_sent.frames().into_iter().any(|frame| {
+        decode_npdu(frame.npdu)
+            .ok()
+            .and_then(|npdu| decode_apdu(npdu.payload).ok())
+            .is_some_and(|apdu| {
+                matches!(apdu, Apdu::UnconfirmedRequest(request)
+                if request.service_choice == bacnet_types::enums::UnconfirmedServiceChoice::WHO_IS)
+            })
+    });
+    assert!(!who_is_sent, "the Who-Is went out");
+    drop(client);
     server.stop().await.unwrap();
     session.stop().await.unwrap();
 }

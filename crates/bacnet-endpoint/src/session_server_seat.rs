@@ -74,13 +74,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///   with Max_APDU_Length_Accepted the smaller of the identity's and the
     ///   client role's [`SessionConfig::max_apdu_length`] (Clause 12.11.18),
     ///   resolved to the link. A builder identity that is not the default
-    ///   and differs from it is refused, and the database the builder holds
-    ///   must serve that Device, or be left out for a stock one;
+    ///   is compared with it as the link serves both (after each is
+    ///   resolved to the link) and leaving out the service list, which the
+    ///   full server builds itself: one that differs otherwise is refused.
+    ///   The database the builder holds must serve that Device, or be left
+    ///   out for a stock one;
     /// - APDU_Timeout and Number_Of_APDU_Retries are
     ///   [`SessionConfig::apdu_timeout_ms`] and
     ///   [`SessionConfig::apdu_retries`] (default 6000 ms and 3), which the
-    ///   client roles use and the server's confirmed notifications use too. A builder that set other
-    ///   values, or a database whose Device declares others, is refused; a
+    ///   client roles use and the server's confirmed notifications use too.
+    ///   A builder that set other values, or a database whose Device
+    ///   declares others, is refused; a
     ///   Device that declares the object model's defaults (6000 ms and 3, as
     ///   one built from an identity does) is given the session's;
     /// - on a [`SessionRole::Both`] session, Protocol_Services_Supported
@@ -137,18 +141,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// **DeviceCommunicationControl binds the node.** The standard has it
     /// bind the whole device (Clause 16.1). While the server holds a
     /// DISABLE_INITIATION it accepted, the node initiates nothing but I-Am
-    /// answers to Who-Is and audit notifications: the server's own requests,
-    /// notifications and [`broadcast_i_am`](BACnetServer::broadcast_i_am),
-    /// the full client's requests and unconfirmed sends, the narrow
-    /// [`client`](Self::client)'s requests and the session's own
+    /// answers to Who-Is and audit notifications, and nothing is sent: the
+    /// server holds its own requests and notifications, and its
+    /// [`broadcast_i_am`](BACnetServer::broadcast_i_am) fails with a
+    /// SERVICES / COMMUNICATION_DISABLED [`Error::Remote`], as on a
+    /// standalone server; the full client's requests and unconfirmed sends,
+    /// the narrow [`client`](Self::client)'s requests and the session's own
     /// [`broadcast_i_am`](Self::broadcast_i_am) fail with
-    /// [`Error::InitiationDisabled`]
-    /// with `sent: false` and send nothing, and a client request already
-    /// waiting ends with `sent: true` when its retry falls due. Answers, and network-layer
-    /// messages, still go. It ends when the control's duration runs out, an
-    /// ENABLE or an accepted WARMSTART or COLDSTART ReinitializeDevice is
-    /// accepted, or the server stops or is dropped. A full client its
-    /// operator started with
+    /// [`Error::InitiationDisabled`] and `sent: false`. A client request
+    /// already waiting ends with `sent: true` when its retry falls due.
+    /// Answers, and network-layer messages, still go. It ends when the
+    /// control's duration runs out, on an ENABLE or an accepted WARMSTART or
+    /// COLDSTART ReinitializeDevice, or when the server stops or is dropped.
+    /// A full client its operator started with
     /// [`ClientOptions::with_node_dcc_override`](bacnet_client::client::ClientOptions::with_node_dcc_override)
     /// keeps initiating; the session logs a warning then.
     ///
