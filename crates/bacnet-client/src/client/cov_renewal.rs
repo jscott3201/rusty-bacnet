@@ -250,8 +250,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// one the device keeps the subscription under (its network and MAC,
     /// whatever router it came through), and names this subscription's
     /// process and object. Every renewal goes the way the first request
-    /// went: through the router named, or for an address through the router
-    /// its row names at the time.
+    /// went: through the router named, or, for a station named by its
+    /// address ([`Station::Remote`]), through the router its discovery-table
+    /// row named when the subscription started, so the purge taking that
+    /// row later (a device silent past its age limit while it only
+    /// notifies) doesn't end the subscription. With no row for such a
+    /// station, this fails with [`Error::UnknownDevice`] before anything is
+    /// sent.
     /// The helper only renews; after [`ManagedCOVSubscription::stop`], cancel
     /// with [`Self::unsubscribe_cov`] to the same station.
     ///
@@ -310,6 +315,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         options.validate(lifetime)?;
         let (subscriber_process_identifier, monitored_object_identifier) = request.identity();
 
+        // The route is fixed once, for the first request and every renewal.
+        let target = self.with_fixed_route(target)?;
         let mut notifications = self.cov_notifications();
 
         request.send(&self, &target).await?;

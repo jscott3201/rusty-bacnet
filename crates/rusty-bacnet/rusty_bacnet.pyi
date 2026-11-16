@@ -5871,9 +5871,12 @@ class BACnetClient:
         """Cancel a COV subscription.
 
         ``address`` is a ``str`` or a ``RoutedTarget``, as for
-        ``subscribe_cov``: the device finds the subscription by the address
-        the request came from and the process and object, so cancel to the
-        station the subscription went to.
+        ``subscribe_cov``. The device finds the subscription by the address
+        the request came from and the process and object, so name the target
+        the subscription named: the same ``RoutedTarget``, or the same
+        ``str``. The same device reached another way, such as by its own
+        ``ip:port`` after a routed subscription, answers with success and
+        keeps the subscription.
         """
         ...
 

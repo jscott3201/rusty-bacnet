@@ -2376,7 +2376,11 @@ await client.subscribe_cov(
 
 `address` is a `str` or a `RoutedTarget`, as for `subscribe_cov`. The device
 finds the subscription by the address the request came from, the process
-and the object, so cancel to the station the subscription went to.
+and the object, so the cancel must name the target the subscription named:
+the same `RoutedTarget` for one made through a router, the same `str` for
+one made directly. The same device reached another way, such as by its own
+`ip:port` after a routed subscription, sees the cancel come from another
+address: it answers with success and keeps the subscription.
 
 ```python
 await client.unsubscribe_cov(

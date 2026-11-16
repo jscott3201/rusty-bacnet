@@ -9715,9 +9715,9 @@ server's `CovSubscriptionTable`, `AtomicCovCounters` and the in-flight
 tracker, and `bacnet_server::server` no longer re-exports `CovPolicy` or
 `CovCounters`.
 
-Single-property `subscribe_cov_property` requires a `std::num::NonZeroU32` lifetime in seconds; 28,800 seconds and the full
-positive `u32` range are accepted. Use their explicit `unsubscribe_...` methods
-for cancellation. The typed `SubscribeCOVPropertyRequest::encode` returns `Result`
+Single-property `subscribe_cov_property` requires a `std::num::NonZeroU32`
+lifetime in seconds; 28,800 seconds and the full positive `u32` range are
+accepted. Cancel with `unsubscribe_cov_property`. The typed `SubscribeCOVPropertyRequest::encode` returns `Result`
 and validates the entire subscribe/cancel field pairing before appending bytes.
 The server rejects a missing member of the confirmed/lifetime pair as
 INCONSISTENT_PARAMETERS (the selected syntax interpretation), and paired zero
@@ -9739,7 +9739,10 @@ as every typed call does (#1790, #2588): a MAC, a `BACnetAddress` or a
 `Station`, such as the one `resolve_device(instance)` gives. A device keeps
 a subscription under the address the request came from and notifies back
 through its router, so the helpers match notifications by the station's
-network and MAC, whatever router relays them. The helpers only renew: after
+network and MAC, whatever router relays them. A station named by its
+address goes through the router its discovery-table row names when the
+subscription starts, and every renewal keeps that router, so a row the
+purge takes later doesn't end the subscription. The helpers only renew: after
 `ManagedCOVSubscription::stop`, cancel to the same station with
 `unsubscribe_cov` or `unsubscribe_cov_property`.
 

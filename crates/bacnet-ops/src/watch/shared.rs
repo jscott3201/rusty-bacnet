@@ -519,15 +519,17 @@ impl Registry {
     }
 
     /// Apply a COV notification to the entry it names; the instant a
-    /// held-back signal is due, the first time one is held back.
+    /// held-back signal is due, the first time one is held back. `own` is
+    /// the client's network number, once known.
     pub(super) fn deliver(
         &self,
         received: &ReceivedCOVNotification,
+        own: Option<u16>,
     ) -> Option<(Instant, Arc<Shared>)> {
         let process = received.notification.subscriber_process_identifier;
         let shared = Arc::clone(self.table().by_process.get(&process)?);
         let mut state = shared.lock();
-        if !dispatch::belongs(&shared.point, state.target.as_ref(), received) {
+        if !dispatch::belongs(&shared.point, state.target.as_ref(), received, own) {
             return None;
         }
         let merged = dispatch::merge(

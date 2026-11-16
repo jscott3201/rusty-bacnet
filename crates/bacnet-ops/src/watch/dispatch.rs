@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use bacnet_client::client::{ReceivedCOVNotification, Station};
-use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetPropertyValue;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
@@ -60,7 +59,7 @@ pub(super) async fn run(
             biased;
             _ = stop.wait_for(|stopped| *stopped) => break,
             received = notifications.recv() => match received {
-                Ok(received) => held.extend(registry.deliver(&received)),
+                Ok(received) => held.extend(registry.deliver(&received, own())),
                 Err(RecvError::Lagged(missed)) => {
                     registry.lagged.fetch_add(missed, Ordering::Relaxed);
                 }
@@ -105,14 +104,16 @@ pub(super) async fn run(
     }
 }
 
-/// True when `received` is for `point`: from its device's address (see
-/// [`Station`]: its network and MAC, whatever router it came through),
-/// about its object, and for a property watch, carrying
-/// that property.
+/// True when `received` is for `point`: from its device's address, by
+/// the client's rule ([`Station::sent`]: its network and MAC, whatever
+/// router it came through, or its MAC alone once `own`, the client's
+/// network number, says the device is on this network), about its object,
+/// and for a property watch, carrying that property.
 pub(super) fn belongs(
     point: &Point,
     target: Option<&Station>,
     received: &ReceivedCOVNotification,
+    own: Option<u16>,
 ) -> bool {
     let notification = &received.notification;
     if notification.monitored_object_identifier != point.object {
@@ -126,22 +127,7 @@ pub(super) fn belongs(
     {
         return false;
     }
-    let local_from = |mac: &MacAddr| {
-        received.source_network.is_none()
-            && received.source_address.is_none()
-            && received.source_mac == *mac
-    };
-    match target {
-        Some(Station::Local { mac }) => local_from(mac),
-        // A routed device on the client's own network is sent to as a
-        // local one, and may answer from its address as the MAC.
-        Some(Station::Remote { network, mac } | Station::Routed { network, mac, .. }) => {
-            (received.source_network == Some(*network)
-                && received.source_address.as_ref() == Some(mac))
-                || local_from(mac)
-        }
-        None => false,
-    }
+    target.is_some_and(|target| target.sent(received, own))
 }
 
 /// Whether `value` is one a point keeps: for an object watch, any value

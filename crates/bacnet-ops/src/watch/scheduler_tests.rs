@@ -537,12 +537,19 @@ fn a_routed_device_is_matched_by_its_address() {
         ..object(ai(1))
     };
     let target = Station::routed(&[2], 10, &[3]);
-    let belongs =
-        |received: &ReceivedCOVNotification| dispatch::belongs(&point, Some(&target), received);
+    let belongs = |received: &ReceivedCOVNotification| {
+        dispatch::belongs(&point, Some(&target), received, None)
+    };
     // Through its router, as the instance match would take it.
     assert!(belongs(&from(DEVICE, &[2], Some((10, &[3])))));
-    // On the client's own network, sending from its address as a MAC.
-    assert!(belongs(&from(DEVICE, &[3], None)));
+    // On the client's own network, sending from its address as a MAC: only
+    // once the client knows network 10 is its own, as the client's managed
+    // subscriptions match (`Station::sent`). Before, that MAC on this link
+    // is some other station.
+    let local = from(DEVICE, &[3], None);
+    assert!(!belongs(&local));
+    assert!(dispatch::belongs(&point, Some(&target), &local, Some(10)));
+    assert!(!dispatch::belongs(&point, Some(&target), &local, Some(11)));
     // Another device behind the same router: another address.
     assert!(!belongs(&from(2002, &[2], Some((10, &[4])))));
     // The same address on another network.
@@ -557,7 +564,8 @@ fn a_routed_device_is_matched_by_its_address() {
     assert!(!dispatch::belongs(
         &point,
         None,
-        &from(DEVICE, &[2], Some((10, &[3])))
+        &from(DEVICE, &[2], Some((10, &[3]))),
+        Some(10)
     ));
 }
 

@@ -267,32 +267,53 @@ class RoutedCovRouterTests(unittest.IsolatedAsyncioTestCase):
         await accepted_registration(self.far)
         self.far_address = await self.far.local_address()
 
+    def target(self):
+        return rb.RoutedTarget(5, self.far_address, router=self.router_address)
+
+    async def counters(self):
+        counters = await self.far.cov_counters()
+        return {name: counters[name] for name in
+                ("subscriptions_created", "subscriptions_active", "subscriptions_cancelled")}
+
+    async def heard(self, queue, value, confirmed):
+        """The next notification: back through the router, naming the server
+        on network 5, with Present_Value `value`."""
+        heard = await asyncio.wait_for(queue.get(), 5)
+        self.assertEqual((heard.source_network, heard.source_address),
+                         (5, mac(self.far_address)))
+        self.assertEqual(heard.source_mac, mac(self.router_address))
+        self.assertEqual(heard.delivery, "confirmed" if confirmed else "unconfirmed")
+        self.assertEqual(heard.subscriber_process_identifier, PROCESS)
+        self.assertIn(rb.PropertyValue.real(value),
+                      [item["value"] for item in heard.values
+                       if item["property_id"] == rb.PropertyIdentifier.PRESENT_VALUE])
+
     async def routed_subscription(self, client, confirmed):
-        target = rb.RoutedTarget(5, self.far_address, router=self.router_address)
+        target = self.target()
+        before = await self.counters()
         queue, task = await collect(client)
         try:
             await asyncio.wait_for(client.subscribe_cov(
                 target, PROCESS, AI_1, confirmed=confirmed, lifetime=60), 10)
-            self.assertEqual((await self.far.cov_counters())["subscriptions_active"], 1)
-            for value in (10.0, 30.0):
-                if value != 10.0:
-                    await self.far.set_present_value_local(AI_1, rb.PropertyValue.real(value))
-                heard = await asyncio.wait_for(queue.get(), 5)
-                # Back through the router, naming the server on network 5.
-                self.assertEqual((heard.source_network, heard.source_address),
-                                 (5, mac(self.far_address)))
-                self.assertEqual(heard.source_mac, mac(self.router_address))
-                self.assertEqual(heard.delivery, "confirmed" if confirmed else "unconfirmed")
-                self.assertEqual(heard.subscriber_process_identifier, PROCESS)
-                self.assertIn(rb.PropertyValue.real(value),
-                              [item["value"] for item in heard.values
-                               if item["property_id"] == rb.PropertyIdentifier.PRESENT_VALUE])
+            await self.heard(queue, 10.0, confirmed)
+            await self.far.set_present_value_local(AI_1, rb.PropertyValue.real(30.0))
+            await self.heard(queue, 30.0, confirmed)
+
+            # A renewal: the same target again is the same subscription, and
+            # the device notifies once more.
+            await asyncio.wait_for(client.subscribe_cov(
+                target, PROCESS, AI_1, confirmed=confirmed, lifetime=60), 10)
+            await self.heard(queue, 30.0, confirmed)
+            after = await self.counters()
+            self.assertEqual(after["subscriptions_created"], before["subscriptions_created"] + 1)
+            self.assertEqual(after["subscriptions_active"], 1)
 
             # The cancel reaches the subscription the request made.
             await asyncio.wait_for(client.unsubscribe_cov(target, PROCESS, AI_1), 10)
-            counters = await self.far.cov_counters()
-            self.assertEqual((counters["subscriptions_active"], counters["subscriptions_cancelled"]),
-                             (0, 1 if not confirmed else 2))
+            after = await self.counters()
+            self.assertEqual(after["subscriptions_active"], 0)
+            self.assertEqual(after["subscriptions_cancelled"],
+                             before["subscriptions_cancelled"] + 1)
             await self.far.set_present_value_local(AI_1, rb.PropertyValue.real(10.0))
             with self.assertRaises(asyncio.TimeoutError):
                 await asyncio.wait_for(queue.get(), 0.5)
@@ -305,6 +326,20 @@ class RoutedCovRouterTests(unittest.IsolatedAsyncioTestCase):
             await self.routed_subscription(client, confirmed=False)
             await self.routed_subscription(client, confirmed=True)
 
+    async def test_a_cancel_by_another_address_leaves_the_subscription(self):
+        # The server keeps the subscription under the address the request
+        # came from: this client through the router. The same server asked
+        # directly, by its own ip:port, sees the cancel from the client's
+        # own address, finds nothing to cancel and says so with success; the
+        # routed subscription stays until a cancel names the same target.
+        async with rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                                   apdu_timeout_ms=2000) as client:
+            target = self.target()
+            await asyncio.wait_for(client.subscribe_cov(target, PROCESS, AI_1, False, 60), 10)
+            await asyncio.wait_for(client.unsubscribe_cov(self.far_address, PROCESS, AI_1), 10)
+            self.assertEqual((await self.counters())["subscriptions_active"], 1)
+            await asyncio.wait_for(client.unsubscribe_cov(target, PROCESS, AI_1), 10)
+            self.assertEqual((await self.counters())["subscriptions_active"], 0)
 
 if __name__ == "__main__":
     unittest.main()

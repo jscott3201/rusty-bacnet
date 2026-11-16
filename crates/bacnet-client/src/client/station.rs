@@ -123,13 +123,12 @@ impl Station {
     /// source network and address for a remote one. The router it came
     /// through is no part of that address and isn't compared. A remote
     /// station on this client's own network (`local_network`, once
-    /// learned) is sent to as a local one, so its notifications may come
-    /// with no source network, from its address as the MAC.
-    pub(super) fn sent(
-        &self,
-        received: &ReceivedCOVNotification,
-        local_network: Option<u16>,
-    ) -> bool {
+    /// learned, as [`BACnetClient::network_number`] gives it) is sent to as
+    /// a local one, so its notifications may come with no source network,
+    /// from its address as the MAC.
+    ///
+    /// The managed COV helpers match notifications by this rule.
+    pub fn sent(&self, received: &ReceivedCOVNotification, local_network: Option<u16>) -> bool {
         let local_from = |mac: &MacAddr| {
             received.source_network.is_none()
                 && received.source_address.is_none()
@@ -549,6 +548,25 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// network 0 or this client's own network, else through the router its
     /// discovery-table row names. Checked before any request state is
     /// taken.
+    /// `to` with its route fixed now: a station named by its address on
+    /// another network ([`Station::Remote`]) becomes [`Station::Routed`]
+    /// through the router its discovery-table row names, and any other
+    /// station is `to` as it is. With no row, [`Error::UnknownDevice`], as
+    /// a request to it would fail, before anything is sent.
+    pub(super) fn with_fixed_route(&self, to: Station) -> Result<Station, Error> {
+        match to {
+            Station::Remote { network, mac } => match self.route_to(network, &mac)? {
+                Route::Local => Ok(Station::Remote { network, mac }),
+                Route::Via(router) => Ok(Station::Routed {
+                    router,
+                    network,
+                    mac,
+                }),
+            },
+            other => Ok(other),
+        }
+    }
+
     fn route_to(&self, network: u16, mac: &[u8]) -> Result<Route, Error> {
         Self::station_of(network, mac)?;
         if network == 0 || self.network.local_network_number().get() == Some(network) {

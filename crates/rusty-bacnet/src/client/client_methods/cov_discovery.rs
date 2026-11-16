@@ -50,9 +50,11 @@ impl BACnetClient {
     }
 
     /// Unsubscribe from COV notifications for an object. `address` is a
-    /// local address or a `RoutedTarget`, as for `subscribe_cov`: the
+    /// local address or a `RoutedTarget`, as for `subscribe_cov`. The
     /// device finds the subscription by the address it saw the request
-    /// from, so a cancel goes to the station the subscription went to.
+    /// from, so name the target the subscription named: the same device
+    /// reached another way, such as by its own `ip:port` after a routed
+    /// subscription, answers with success and keeps the subscription.
     #[pyo3(signature = (address, subscriber_process_identifier, monitored_object_identifier))]
     fn unsubscribe_cov<'py>(
         &self,

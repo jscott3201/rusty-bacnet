@@ -237,6 +237,79 @@ async fn a_routed_subscription_renews_through_the_router_and_follows_its_station
     router.stop().await.unwrap();
 }
 
+fn renew_early() -> ManagedCOVSubscriptionOptions {
+    ManagedCOVSubscriptionOptions::default().with_renewal_margin(Duration::from_secs(10))
+}
+
+/// A subscription to a station named by its address takes the router its
+/// row names when it starts and keeps it: a renewal still goes after the
+/// purge has taken the row, as it does for a device that only notifies and
+/// is never asked anything past its row's age limit. With no row at the
+/// start, nothing is sent.
+#[tokio::test(start_paused = true)]
+async fn an_address_keeps_the_router_it_started_with_after_its_row_goes() {
+    let (client_transport, mut router) = LoopbackTransport::pair(CLIENT.to_vec(), ROUTER.to_vec());
+    let mut rx = router.start().await.unwrap();
+    let client = Arc::new(
+        BACnetClient::generic_builder()
+            .transport(client_transport)
+            .apdu_timeout_ms(1000)
+            .build()
+            .await
+            .unwrap(),
+    );
+    let to = Station::remote(NETWORK, &STATION);
+    let refused = Arc::clone(&client)
+        .manage_cov_subscription(&to, 9, ai(1), false, 60, renew_early())
+        .await
+        .err();
+    assert!(
+        matches!(refused, Some(Error::UnknownDevice { .. })),
+        "{refused:?}"
+    );
+    assert!(rx.try_recv().is_err(), "nothing sent without a route");
+
+    client
+        .device_table
+        .lock()
+        .upsert(device(Some((NETWORK, &STATION))));
+    let start = tokio::spawn({
+        let client = Arc::clone(&client);
+        let to = to.clone();
+        async move {
+            client
+                .manage_cov_subscription(&to, 9, ai(1), false, 60, renew_early())
+                .await
+        }
+    });
+    let (invoke_id, _) = routed_subscribe(&mut rx).await;
+    ack(&router, invoke_id).await;
+    let managed = start.await.unwrap().unwrap();
+    let mut events = managed.events();
+
+    client.device_table.lock().clear();
+    let (renewal, request) =
+        tokio::time::timeout(Duration::from_secs(120), routed_subscribe(&mut rx))
+            .await
+            .expect("the renewal goes through the router the subscription started with");
+    assert_eq!(request.lifetime, Some(60));
+    ack(&router, renewal).await;
+    assert_eq!(
+        events.recv().await.unwrap(),
+        ManagedCOVSubscriptionEvent::Renewed {
+            requested_lifetime: 60,
+            renew_after: Duration::from_secs(50),
+        }
+    );
+
+    managed.stop().await;
+    let Ok(mut client) = Arc::try_unwrap(client) else {
+        panic!("managed subscription kept a client reference after stop");
+    };
+    client.stop().await.unwrap();
+    router.stop().await.unwrap();
+}
+
 #[test]
 fn a_local_target_takes_only_its_mac_with_no_source_network() {
     let target = Station::local(&[0x05]);
