@@ -1329,9 +1329,11 @@ def __init__(self, group: str, *, ttl: int = 1, port: Optional[int] = None) -> N
 
 ## RoutedTarget
 
-A station on another BACnet network (#2612), where a read takes an
-`address`: `RoutedTarget(network, address, router=None)`, in that
-order. A `str` address always names a station on the local link.
+A station on another BACnet network (#2612), where `BACnetClient`'s
+`read_property`, `read_property_multiple`, `read_range`,
+`read_log_page` and `write_property` take an `address` (#2617):
+`RoutedTarget(network, address, router=None)`, in that order. A
+`str` address always names a station on the local link.
 
 `network` is the station's network number, an `int` from 1 to 65534
 (ValueError outside it, OverflowError outside 0 to 65535, TypeError for
@@ -1345,19 +1347,25 @@ decimal as `"N"` or `"mstp:N"` (0 to 254), so
 `RoutedTarget(5, "10") == RoutedTarget(5, b"\x0a")`. The string forms
 refuse 255 (MS/TP's broadcast); `b"\xff"` is taken, a station on an
 ARCNET network, whose broadcast is 0. A `router` that is a broadcast
-on the local link is refused when a read is called.
+or group address on the local link raises BacnetError when a call is
+made, before anything is sent.
 
 `router` is the next hop's address on the local link, in the same
 forms or as `bytes`, such as a routed `DiscoveredDevice`'s
-`mac_address`, or `BACnetClient.discover_routers()`' `mac`. Without
-one, each request is one broadcast on the local link that names the
-destination network, for the router that serves it to forward. On a B/IP
-network with BBMDs, or from a foreign device, that broadcast reaches
-every subnet in the BDT and every registered foreign device, so pass
-`router` for scans. Learning the router once and reusing it comes with
-the full client (#2617). Other values raise ValueError, a type other than
-`str` or `bytes` TypeError, and so does a call in another order,
-since `network` takes an `int`.
+`mac_address`, or `BACnetClient.discover_routers()`' `mac`; each
+request goes through it. Without one, the client uses the route it
+knows: the router its discovery table names for the station, after
+one Who-Is to the station's network when it has none, as
+`BACnetClient.device()` does. A station that doesn't answer raises
+`BacnetLookupError`, and for 30 seconds a call to it with no router
+raises at once without asking again, unless an I-Am from it arrives
+first; calls made together for one station share one Who-Is. To scan
+stations that never announce themselves, such as MS/TP slaves, pass
+`router` from `BACnetClient.discover_routers()`: without it each
+costs one 3-second Who-Is wait. A station on the client's own network, once it knows the number,
+is sent to directly either way. Other values raise ValueError, a type
+other than `str` or `bytes` TypeError, and so does a call in another
+order, since `network` takes an `int`.
 
 Frozen; compares and hashes by its network and octets, however they were
 written; copies and pickles.
@@ -1366,7 +1374,7 @@ Properties:
 
 - `network: int`
 - `address: bytes`: The station's MAC on its network.
-- `router: bytes | None`: The router's MAC on the local link, or None for the broadcast form.
+- `router: bytes | None`: The router's MAC on the local link, or None for the route the client knows.
 
 ### RoutedTarget.__init__
 

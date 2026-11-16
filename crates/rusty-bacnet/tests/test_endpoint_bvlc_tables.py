@@ -220,7 +220,7 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
                 # The same shape as the standalone client's.
                 self.assertEqual(ast.unparse(stub_method(classes["BACnetClient"], name).returns),
                                  returns)
-        for cls in (rb.ScEndpoint, rb.MstpEndpoint, rb.EndpointClient):
+        for cls in (rb.ScEndpoint, rb.MstpEndpoint):
             for name in ("read_bdt", "read_fdt"):
                 self.assertFalse(hasattr(cls, name))
 

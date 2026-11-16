@@ -49,8 +49,8 @@ use crate::types::{
 };
 use state::started;
 
-type CoreClient = client::BACnetClient<AppTransport>;
-type ClientInner = Arc<state::ClientState>;
+pub(crate) type CoreClient = client::BACnetClient<AppTransport>;
+pub(crate) type ClientInner = Arc<state::ClientState>;
 
 fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
     bacnet_services::write_property::validate_priority(priority)
@@ -263,6 +263,9 @@ async fn send_who_has(
 #[pyclass(name = "BACnetClient", module = "rusty_bacnet")]
 pub struct BACnetClient {
     inner: ClientInner,
+    /// A client on an endpoint's link (#2617): its endpoint starts it,
+    /// and `async with` only enters it.
+    seated: bool,
     transport_type: String,
     // BIP config
     interface: String,
@@ -336,10 +339,12 @@ mod client_methods {
     mod vt_audit_time_directed;
 }
 mod handles;
+mod routed;
+mod seated;
 mod state;
 
 pub(crate) use handles::DeviceTie;
-pub(crate) use state::Held;
+pub(crate) use state::{Held, Liveness, close};
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -13,6 +13,8 @@ mod source_audit;
 #[cfg(test)]
 #[path = "../../bacnet-server/src/test_rows.rs"]
 mod test_rows;
+#[cfg(test)]
+mod wrapped_session_tests;
 
 pub use identity::{DeviceIdentity, NetworkPortEntry, build_database_with_extra};
 pub use roles::{ClientRoleHandle, EndpointApduDestination, ServerRoleHandle};

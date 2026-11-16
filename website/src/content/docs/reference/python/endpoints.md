@@ -321,10 +321,20 @@ def __aexit__(
 ### BipEndpoint.client
 
 ```python
-def client(self) -> Awaitable[EndpointClient]
+def client(self) -> Awaitable[BACnetClient]
 ```
 
-Clone the client role (RuntimeError before start/after close).
+The `BACnetClient` on this endpoint's socket (#2617): the
+standalone class, with all its calls, on the endpoint's one address.
+While it runs, each call returns the same object; once its `stop()`
+has finished, a fresh one. Its `stop()` and `async with` exit end
+the client role alone; the endpoint's close stops it too, and calls
+in flight end as a stopping client's do. RuntimeError before start,
+after close, and while the last client is still stopping or its stop
+failed (the error names the cause);
+NotImplementedError on an endpoint built with
+`source_audit_reporter`, whose client arrives when source Audit
+moves to the full client (#2617 step 3).
 
 ### BipEndpoint.server
 
@@ -709,10 +719,26 @@ def __aexit__(
 ### ScEndpoint.client
 
 ```python
-def client(self) -> Awaitable[EndpointClient]
+def client(self) -> Awaitable[BACnetClient]
 ```
 
-Clone the client role.
+The `BACnetClient` on this endpoint's hub connection (#2617): the
+standalone class, with all its calls, on the endpoint's one address.
+While it runs, each call returns the same object; once its `stop()`
+has finished, a fresh one. Its `stop()` and `async with` exit end
+the client role alone; the endpoint's close stops it too, and calls
+in flight end as a stopping client's do. RuntimeError before start,
+after close, and while the last client is still stopping or its stop
+failed (the error names the cause);
+NotImplementedError on an endpoint built with
+`source_audit_reporter`, whose client arrives when source Audit
+moves to the full client (#2617 step 3).
+
+It starts after the hub link is up, so its `connection_events()`
+begins at that call, after the first `connected`: read the link's
+state at once with its `connection_status()`, or use this
+endpoint's `connection_events()`, whose first call holds the
+events from the start.
 
 ### ScEndpoint.server
 
@@ -1081,10 +1107,23 @@ def __aexit__(
 ### MstpEndpoint.client
 
 ```python
-def client(self) -> Awaitable[EndpointClient]
+def client(self) -> Awaitable[BACnetClient]
 ```
 
-Clone the client role.
+The `BACnetClient` on this endpoint's serial link (#2617): the
+standalone class, with all its calls, on the endpoint's one address.
+While it runs, each call returns the same object; once its `stop()`
+has finished, a fresh one. Its `stop()` and `async with` exit end
+the client role alone; the endpoint's close stops it too, and calls
+in flight end as a stopping client's do. RuntimeError before start,
+after close, and while the last client is still stopping or its stop
+failed (the error names the cause);
+NotImplementedError on an endpoint built with
+`source_audit_reporter`, whose client arrives when source Audit
+moves to the full client (#2617 step 3).
+
+Its requests wait for this node's token, as the server role's
+answers do.
 
 ### MstpEndpoint.server
 
@@ -1163,170 +1202,6 @@ Set the Reliability the application works out for an object, as
 errors (#2490). Status\_Flags' FAULT follows it, and with `cov` the
 object's COV subscribers hear of it. The endpoint runs no event pass,
 so Event\_State stays as it is. RuntimeError before `start()`.
-
-## EndpointClient
-
-Client role cloned from a running endpoint (no lifecycle).
-
-Initiates `read_property`, `read_range`, `read_property_multiple` and direct B/IP `write_property` through the owner's single transport.
-The reads take a `str` address on the local link or a `RoutedTarget`
-for a station behind a router (#2612): through its `router`, or, with
-none, as one broadcast on the local link per request that names the
-destination network (see `RoutedTarget`). A router given as a
-broadcast or group address raises BacnetError before anything is sent.
-After the owner closes, calls fail closed with `BacnetError`.
-
-### EndpointClient.read_property
-
-```python
-def read_property(
-    self,
-    address: str | RoutedTarget,
-    object_id: ObjectIdentifier,
-    property_id: PropertyIdentifier,
-    array_index: Optional[int] = None,
-) -> Awaitable[PropertyValue]
-```
-
-Read a property through the shared transport.
-
-ACK object/property/index must match. Device/Network Port instance 4194303
-requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
-BacnetError; this method returns the property value, not ACK metadata,
-shaped as `PropertyValue` describes for read results. A routed
-read goes to the router, or by local broadcast, with the station's
-network and MAC as its destination; the answer relayed from the
-station completes it, and a second copy (two routers forwarding one
-broadcast) is dropped and counted in `status()`'s
-`unclaimed_terminal`. It is audited and paced as a direct read is.
-A router that can't reach the network may send back a
-Reject-Message-To-Network, which this read doesn't report: it ends
-at its timeout with BacnetTimeoutError.
-
-### EndpointClient.write_property
-
-```python
-def write_property(
-    self,
-    address: str,
-    object_id: ObjectIdentifier,
-    property_id: PropertyIdentifier,
-    value: PropertyValue,
-    priority: Optional[int] = None,
-    array_index: Optional[int] = None,
-    *,
-    commandability: Literal["commandable", "noncommandable"],
-) -> Awaitable[None]
-```
-
-Write to a direct IPv4 B/IP peer through the shared requester; it
-takes no `RoutedTarget`.
-
-Commandability is required even without a source Reporter. It controls
-Audit filtering, never the wire priority. Omitted commandable priority
-means effective 16, including NULL. Invalid literals, priority, raw TLV
-framing and APDU size raise ValueError synchronously (out-of-u8 priorities
-raise OverflowError). Empty encoded lists are valid. Eligible source
-records preserve complete 0–32-byte values and omit longer values.
-After source admission, caller cancellation does not cancel the attempt.
-
-### EndpointClient.read_property_multiple
-
-```python
-def read_property_multiple(
-    self,
-    address: str | RoutedTarget,
-    specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]],
-) -> Awaitable[list[ReadAccessResult]]
-```
-
-Read 1–64 explicit property occurrences on concrete objects.
-
-Empty lists, ALL/REQUIRED/OPTIONAL and wildcard instances raise ValueError
-before address parsing or I/O. Index zero is valid. Complete ordered ACK
-correlation permits an inline error to omit its requested index; successful
-values must echo it. Byte limits and malformed/mismatched ACKs raise
-BacnetError. Returned dictionaries share standalone RPM conversion.
-
-### EndpointClient.read_range
-
-```python
-def read_range(
-    self,
-    address: str | RoutedTarget,
-    object_id: ObjectIdentifier,
-    property_id: PropertyIdentifier,
-    array_index: Optional[int] = None,
-    range_type: Optional[Literal["position", "sequence", "time"]] = None,
-    reference_index: Optional[int] = None,
-    reference_seq: Optional[int] = None,
-    count: Optional[int] = None,
-    *,
-    reference_time: ReferenceTime | None = None,
-    validation: Literal["strict", "lenient"] = "strict",
-) -> Awaitable[ReadRangeResult]
-```
-
-Read a range of items from a list or log object.
-
-`range_type` is `"position"`, `"sequence"`, `"time"` or
-`None` (all-items). `"time"` reads the `count` items newer than
-`reference_time` (older, for a negative count): a naive
-`datetime.datetime` in the device's local time, or a
-`((year, month, day, day_of_week), (hour, minute, second, hundredths))` pair; an aware datetime raises ValueError, since the
-device's zone isn't known here (#1533). Invalid selectors, array index
-zero, missing or zero counts and a time that isn't specific raise
-ValueError before I/O; a count outside INTEGER16 (-32768..=32767)
-raises OverflowError before address parsing or I/O (#1360).
-Position/sequence reference zero is valid; omitted references default
-to zero.
-
-`validation="strict"` refuses an answer that breaks a ReadRange rule
-with BacnetReadRangeViolationError, whose `rule` names it;
-`"lenient"` keeps it and lists the rules in `violations` (#1531).
-Decode a log's records with `decode_log_records`.
-
-### EndpointClient.read_log_page
-
-```python
-def read_log_page(
-    self,
-    address: str | RoutedTarget,
-    object_id: ObjectIdentifier,
-    cursor: LogCursor = None,
-    page_size: int = 100,
-) -> Awaitable[LogPage]
-```
-
-Read one page of a log's Log\_Buffer from `cursor` (#1530).
-
-`cursor` is `None` or `"oldest"` (the oldest record, found from
-Record\_Count and Total\_Record\_Count), `("sequence", n)`,
-`("position", n)` or `("time", reference_time)`; lists work
-too, so a checkpoint survives JSON. Loop on `page["next"]` until
-`page["done"]`, then keep `next` as the checkpoint. One request
-is outstanding at a time. A first record past the one asked for sets
-`gap`; when the log drops the record asked for, the read starts
-over from the oldest. A page answered from before the one asked for,
-or none where the counts say records are, raises
-BacnetLogNotAdvancingError: such a device's sequence numbers are
-inconsistent, so read it from `("position", 1)`. `wrapped` marks
-a page that reached the top of the sequence range. A page whose
-records don't decode raises BacnetError, dropping the records before
-the failing one; an answer that breaks a rule the reader can't
-tolerate, such as an echo that doesn't match, raises
-BacnetReadRangeViolationError. A non-log object or a `page_size`
-outside 1..=32767 raises ValueError before I/O. Every request of a
-page, the count reads included, goes to `address`.
-
-### EndpointClient.service_scope
-
-```python
-def service_scope(self) -> dict[str, Any]
-```
-
-Narrow scope: initiates reads, direct or routed, and direct B/IP
-`write_property`.
 
 ## EndpointServer
 
@@ -1411,6 +1286,9 @@ Keys:
 - `no_client_role: int`
 - `unclaimed_terminal: int`
 - `responder_declined: int`
+- `client_seat_apdus: int`: APDUs handed to the client on the link (#2617), over the session's run.
+- `client_seat_full_drops: int`: APDUs dropped at once because that client's queue was full; never waited for.
+- `client_seat_control_full_drops: int`: Network controls dropped the same way.
 
 ## ReadRangeResult
 

@@ -4862,6 +4862,13 @@ class BACnetClient:
     await stop() again to join it. Drain duration depends on outstanding requests.
     Entry is exclusive; entering an already running or closing client fails.
 
+    ``await endpoint.client()`` on a ``BipEndpoint``, ``ScEndpoint`` or
+    ``MstpEndpoint`` gives a client of this class on the endpoint's link
+    (#2617), with every call, on the endpoint's one address. Its endpoint
+    starts it: ``async with`` only enters it, and once stopped it stays
+    stopped (ask the endpoint for another). Its ``stop()`` ends the client
+    role alone.
+
     Usage::
 
         async with BACnetClient() as client:
@@ -5072,7 +5079,7 @@ class BACnetClient:
 
     def read_property(
         self,
-        address: str,
+        address: str | RoutedTarget,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
@@ -5083,12 +5090,14 @@ class BACnetClient:
         requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
         BacnetError; this method returns the property value, not ACK metadata,
         shaped as ``PropertyValue`` describes for read results.
+        ``address`` is a ``str`` on the local link, or a ``RoutedTarget`` for
+        a station behind a router (#2617), as ``RoutedTarget`` describes.
         """
         ...
 
     def write_property(
         self,
-        address: str,
+        address: str | RoutedTarget,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         value: PropertyValue,
@@ -5100,6 +5109,8 @@ class BACnetClient:
         Priority is None or 1..16. Invalid u8 priorities raise ValueError
         synchronously; integers outside u8 raise OverflowError. The client's
         ``write_policy`` doesn't apply: this is the low-level write.
+        ``address`` is a ``str`` on the local link, or a ``RoutedTarget`` for
+        a station behind a router (#2617), as ``RoutedTarget`` describes.
         """
         ...
 
@@ -5165,7 +5176,7 @@ class BACnetClient:
 
     def read_property_multiple(
         self,
-        address: str,
+        address: str | RoutedTarget,
         specs: list[
             tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]
         ],
@@ -5175,6 +5186,8 @@ class BACnetClient:
         ``specs`` is a list of ``(object_id, [(property_id, array_index), ...])`` tuples.
         Returns ordered object/result dictionaries. Empty request/property lists
         are rejected; this standalone profile still permits property selectors.
+        ``address`` is a ``str`` on the local link, or a ``RoutedTarget``
+        (#2617).
         """
         ...
 
@@ -5841,7 +5854,7 @@ class BACnetClient:
 
     def read_range(
         self,
-        address: str,
+        address: str | RoutedTarget,
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
@@ -5872,12 +5885,14 @@ class BACnetClient:
         with BacnetReadRangeViolationError, whose ``rule`` names it;
         ``"lenient"`` keeps it and lists the rules in ``violations`` (#1531).
         Decode a log's records with ``decode_log_records``.
+        ``address`` is a ``str`` on the local link, or a ``RoutedTarget`` for
+        a station behind a router (#2617), as ``RoutedTarget`` describes.
         """
         ...
 
     def read_log_page(
         self,
-        address: str,
+        address: str | RoutedTarget,
         object_id: ObjectIdentifier,
         cursor: LogCursor = None,
         page_size: int = 100,
@@ -5900,7 +5915,9 @@ class BACnetClient:
         the failing one; an answer that breaks a rule the reader can't
         tolerate, such as an echo that doesn't match, raises
         BacnetReadRangeViolationError. A non-log object or a ``page_size``
-        outside 1..=32767 raises ValueError before I/O.
+        outside 1..=32767 raises ValueError before I/O. ``address`` is a
+        ``str`` on the local link, or a ``RoutedTarget`` (#2617); every
+        request of a page, the count reads included, goes there.
         """
         ...
 
@@ -9074,9 +9091,11 @@ class ScHub:
 # ---------------------------------------------------------------------------
 
 class RoutedTarget:
-    """A station on another BACnet network (#2612), where a read takes an
-    ``address``: ``RoutedTarget(network, address, router=None)``, in that
-    order. A ``str`` address always names a station on the local link.
+    """A station on another BACnet network (#2612), where ``BACnetClient``'s
+    ``read_property``, ``read_property_multiple``, ``read_range``,
+    ``read_log_page`` and ``write_property`` take an ``address`` (#2617):
+    ``RoutedTarget(network, address, router=None)``, in that order. A
+    ``str`` address always names a station on the local link.
 
     ``network`` is the station's network number, an ``int`` from 1 to 65534
     (ValueError outside it, OverflowError outside 0 to 65535, TypeError for
@@ -9090,19 +9109,25 @@ class RoutedTarget:
     ``RoutedTarget(5, "10") == RoutedTarget(5, b"\\x0a")``. The string forms
     refuse 255 (MS/TP's broadcast); ``b"\\xff"`` is taken, a station on an
     ARCNET network, whose broadcast is 0. A ``router`` that is a broadcast
-    on the local link is refused when a read is called.
+    or group address on the local link raises BacnetError when a call is
+    made, before anything is sent.
 
     ``router`` is the next hop's address on the local link, in the same
     forms or as ``bytes``, such as a routed ``DiscoveredDevice``'s
-    ``mac_address``, or ``BACnetClient.discover_routers()``' ``mac``. Without
-    one, each request is one broadcast on the local link that names the
-    destination network, for the router that serves it to forward. On a B/IP
-    network with BBMDs, or from a foreign device, that broadcast reaches
-    every subnet in the BDT and every registered foreign device, so pass
-    ``router`` for scans. Learning the router once and reusing it comes with
-    the full client (#2617). Other values raise ValueError, a type other than
-    ``str`` or ``bytes`` TypeError, and so does a call in another order,
-    since ``network`` takes an ``int``.
+    ``mac_address``, or ``BACnetClient.discover_routers()``' ``mac``; each
+    request goes through it. Without one, the client uses the route it
+    knows: the router its discovery table names for the station, after
+    one Who-Is to the station's network when it has none, as
+    ``BACnetClient.device()`` does. A station that doesn't answer raises
+    ``BacnetLookupError``, and for 30 seconds a call to it with no router
+    raises at once without asking again, unless an I-Am from it arrives
+    first; calls made together for one station share one Who-Is. To scan
+    stations that never announce themselves, such as MS/TP slaves, pass
+    ``router`` from ``BACnetClient.discover_routers()``: without it each
+    costs one 3-second Who-Is wait. A station on the client's own network, once it knows the number,
+    is sent to directly either way. Other values raise ValueError, a type
+    other than ``str`` or ``bytes`` TypeError, and so does a call in another
+    order, since ``network`` takes an ``int``.
 
     Frozen; compares and hashes by its network and octets, however they were
     written; copies and pickles.
@@ -9122,7 +9147,8 @@ class RoutedTarget:
         ...
     @property
     def router(self) -> bytes | None:
-        """The router's MAC on the local link, or None for the broadcast form."""
+        """The router's MAC on the local link, or None for the route the
+        client knows."""
         ...
 
 
@@ -9163,6 +9189,12 @@ class EndpointStatus(TypedDict):
     no_client_role: int
     unclaimed_terminal: int
     responder_declined: int
+    client_seat_apdus: int
+    """APDUs handed to the client on the link (#2617), over the session's run."""
+    client_seat_full_drops: int
+    """APDUs dropped at once because that client's queue was full; never waited for."""
+    client_seat_control_full_drops: int
+    """Network controls dropped the same way."""
 
 class ReadRangeResult(TypedDict):
     object_id: ObjectIdentifier
@@ -9221,152 +9253,6 @@ class ReadPropertyResult(TypedDict):
 class ReadAccessResult(TypedDict):
     object_id: ObjectIdentifier
     results: list[ReadPropertyResult]
-
-class EndpointClient:
-    """Client role cloned from a running endpoint (no lifecycle).
-
-    Initiates ``read_property``, ``read_range``, ``read_property_multiple`` and direct B/IP ``write_property`` through the owner's single transport.
-    The reads take a ``str`` address on the local link or a ``RoutedTarget``
-    for a station behind a router (#2612): through its ``router``, or, with
-    none, as one broadcast on the local link per request that names the
-    destination network (see ``RoutedTarget``). A router given as a
-    broadcast or group address raises BacnetError before anything is sent.
-    After the owner closes, calls fail closed with ``BacnetError``.
-    """
-
-    def read_property(
-        self,
-        address: str | RoutedTarget,
-        object_id: ObjectIdentifier,
-        property_id: PropertyIdentifier,
-        array_index: Optional[int] = None,
-    ) -> Awaitable[PropertyValue]:
-        """Read a property through the shared transport.
-
-        ACK object/property/index must match. Device/Network Port instance 4194303
-        requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
-        BacnetError; this method returns the property value, not ACK metadata,
-        shaped as ``PropertyValue`` describes for read results. A routed
-        read goes to the router, or by local broadcast, with the station's
-        network and MAC as its destination; the answer relayed from the
-        station completes it, and a second copy (two routers forwarding one
-        broadcast) is dropped and counted in ``status()``'s
-        ``unclaimed_terminal``. It is audited and paced as a direct read is.
-        A router that can't reach the network may send back a
-        Reject-Message-To-Network, which this read doesn't report: it ends
-        at its timeout with BacnetTimeoutError.
-        """
-        ...
-
-    def write_property(
-        self,
-        address: str,
-        object_id: ObjectIdentifier,
-        property_id: PropertyIdentifier,
-        value: PropertyValue,
-        priority: Optional[int] = None,
-        array_index: Optional[int] = None,
-        *,
-        commandability: Literal["commandable", "noncommandable"],
-    ) -> Awaitable[None]:
-        """Write to a direct IPv4 B/IP peer through the shared requester; it
-        takes no ``RoutedTarget``.
-
-        Commandability is required even without a source Reporter. It controls
-        Audit filtering, never the wire priority. Omitted commandable priority
-        means effective 16, including NULL. Invalid literals, priority, raw TLV
-        framing and APDU size raise ValueError synchronously (out-of-u8 priorities
-        raise OverflowError). Empty encoded lists are valid. Eligible source
-        records preserve complete 0–32-byte values and omit longer values.
-        After source admission, caller cancellation does not cancel the attempt.
-        """
-        ...
-
-    def read_property_multiple(
-        self,
-        address: str | RoutedTarget,
-        specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]],
-    ) -> Awaitable[list[ReadAccessResult]]:
-        """Read 1–64 explicit property occurrences on concrete objects.
-
-        Empty lists, ALL/REQUIRED/OPTIONAL and wildcard instances raise ValueError
-        before address parsing or I/O. Index zero is valid. Complete ordered ACK
-        correlation permits an inline error to omit its requested index; successful
-        values must echo it. Byte limits and malformed/mismatched ACKs raise
-        BacnetError. Returned dictionaries share standalone RPM conversion.
-        """
-        ...
-
-    def read_range(
-        self,
-        address: str | RoutedTarget,
-        object_id: ObjectIdentifier,
-        property_id: PropertyIdentifier,
-        array_index: Optional[int] = None,
-        range_type: Optional[Literal["position", "sequence", "time"]] = None,
-        reference_index: Optional[int] = None,
-        reference_seq: Optional[int] = None,
-        count: Optional[int] = None,
-        *,
-        reference_time: ReferenceTime | None = None,
-        validation: Literal["strict", "lenient"] = "strict",
-    ) -> Awaitable[ReadRangeResult]:
-        """Read a range of items from a list or log object.
-
-        ``range_type`` is ``"position"``, ``"sequence"``, ``"time"`` or
-        ``None`` (all-items). ``"time"`` reads the ``count`` items newer than
-        ``reference_time`` (older, for a negative count): a naive
-        ``datetime.datetime`` in the device's local time, or a
-        ``((year, month, day, day_of_week), (hour, minute, second,
-        hundredths))`` pair; an aware datetime raises ValueError, since the
-        device's zone isn't known here (#1533). Invalid selectors, array index
-        zero, missing or zero counts and a time that isn't specific raise
-        ValueError before I/O; a count outside INTEGER16 (-32768..=32767)
-        raises OverflowError before address parsing or I/O (#1360).
-        Position/sequence reference zero is valid; omitted references default
-        to zero.
-
-        ``validation="strict"`` refuses an answer that breaks a ReadRange rule
-        with BacnetReadRangeViolationError, whose ``rule`` names it;
-        ``"lenient"`` keeps it and lists the rules in ``violations`` (#1531).
-        Decode a log's records with ``decode_log_records``.
-        """
-        ...
-
-    def read_log_page(
-        self,
-        address: str | RoutedTarget,
-        object_id: ObjectIdentifier,
-        cursor: LogCursor = None,
-        page_size: int = 100,
-    ) -> Awaitable[LogPage]:
-        """Read one page of a log's Log_Buffer from ``cursor`` (#1530).
-
-        ``cursor`` is ``None`` or ``"oldest"`` (the oldest record, found from
-        Record_Count and Total_Record_Count), ``("sequence", n)``,
-        ``("position", n)`` or ``("time", reference_time)``; lists work
-        too, so a checkpoint survives JSON. Loop on ``page["next"]`` until
-        ``page["done"]``, then keep ``next`` as the checkpoint. One request
-        is outstanding at a time. A first record past the one asked for sets
-        ``gap``; when the log drops the record asked for, the read starts
-        over from the oldest. A page answered from before the one asked for,
-        or none where the counts say records are, raises
-        BacnetLogNotAdvancingError: such a device's sequence numbers are
-        inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
-        a page that reached the top of the sequence range. A page whose
-        records don't decode raises BacnetError, dropping the records before
-        the failing one; an answer that breaks a rule the reader can't
-        tolerate, such as an echo that doesn't match, raises
-        BacnetReadRangeViolationError. A non-log object or a ``page_size``
-        outside 1..=32767 raises ValueError before I/O. Every request of a
-        page, the count reads included, goes to ``address``.
-        """
-        ...
-
-    def service_scope(self) -> dict[str, Any]:
-        """Narrow scope: initiates reads, direct or routed, and direct B/IP
-        ``write_property``."""
-        ...
 
 class EndpointServer:
     """Server role cloned from a running endpoint (no lifecycle).
@@ -9583,8 +9469,18 @@ class BipEndpoint:
         _exc_tb: Any = None,
     ) -> Awaitable[None]: ...
 
-    def client(self) -> Awaitable[EndpointClient]:
-        """Clone the client role (RuntimeError before start/after close)."""
+    def client(self) -> Awaitable[BACnetClient]:
+        """The ``BACnetClient`` on this endpoint's socket (#2617): the
+        standalone class, with all its calls, on the endpoint's one address.
+        While it runs, each call returns the same object; once its ``stop()``
+        has finished, a fresh one. Its ``stop()`` and ``async with`` exit end
+        the client role alone; the endpoint's close stops it too, and calls
+        in flight end as a stopping client's do. RuntimeError before start,
+        after close, and while the last client is still stopping or its stop
+        failed (the error names the cause);
+        NotImplementedError on an endpoint built with
+        ``source_audit_reporter``, whose client arrives when source Audit
+        moves to the full client (#2617 step 3)."""
         ...
 
     def server(self) -> Awaitable[EndpointServer]:
@@ -9804,8 +9700,24 @@ class ScEndpoint:
         _exc_tb: Any = None,
     ) -> Awaitable[None]: ...
 
-    def client(self) -> Awaitable[EndpointClient]:
-        """Clone the client role."""
+    def client(self) -> Awaitable[BACnetClient]:
+        """The ``BACnetClient`` on this endpoint's hub connection (#2617): the
+        standalone class, with all its calls, on the endpoint's one address.
+        While it runs, each call returns the same object; once its ``stop()``
+        has finished, a fresh one. Its ``stop()`` and ``async with`` exit end
+        the client role alone; the endpoint's close stops it too, and calls
+        in flight end as a stopping client's do. RuntimeError before start,
+        after close, and while the last client is still stopping or its stop
+        failed (the error names the cause);
+        NotImplementedError on an endpoint built with
+        ``source_audit_reporter``, whose client arrives when source Audit
+        moves to the full client (#2617 step 3).
+
+        It starts after the hub link is up, so its ``connection_events()``
+        begins at that call, after the first ``connected``: read the link's
+        state at once with its ``connection_status()``, or use this
+        endpoint's ``connection_events()``, whose first call holds the
+        events from the start."""
         ...
 
     def server(self) -> Awaitable[EndpointServer]:
@@ -10017,8 +9929,21 @@ class MstpEndpoint:
         _exc_tb: Any = None,
     ) -> Awaitable[None]: ...
 
-    def client(self) -> Awaitable[EndpointClient]:
-        """Clone the client role."""
+    def client(self) -> Awaitable[BACnetClient]:
+        """The ``BACnetClient`` on this endpoint's serial link (#2617): the
+        standalone class, with all its calls, on the endpoint's one address.
+        While it runs, each call returns the same object; once its ``stop()``
+        has finished, a fresh one. Its ``stop()`` and ``async with`` exit end
+        the client role alone; the endpoint's close stops it too, and calls
+        in flight end as a stopping client's do. RuntimeError before start,
+        after close, and while the last client is still stopping or its stop
+        failed (the error names the cause);
+        NotImplementedError on an endpoint built with
+        ``source_audit_reporter``, whose client arrives when source Audit
+        moves to the full client (#2617 step 3).
+
+        Its requests wait for this node's token, as the server role's
+        answers do."""
         ...
 
     def server(self) -> Awaitable[EndpointServer]:
