@@ -32,7 +32,31 @@ fn status(transport: &Bip6Transport) -> Bip6ForeignStatus {
 
 /// Wait, a millisecond at a time, until `transport` reports `want` as its
 /// BBMD's latest answer.
+///
+/// A held or refused answer comes from a datagram, which can be on its way
+/// for longer than the 10,000 steps below take on a paused clock (about
+/// 160 ms), so it is waited for in real time with the clock held still
+/// ([`in_real_time`]). Unanswered and none come from the clock moving, so
+/// those are waited for on it.
 async fn answered(transport: &Bip6Transport, want: Option<Bip6RegistrationAnswer>) {
+    if matches!(
+        want,
+        Some(Bip6RegistrationAnswer::Held | Bip6RegistrationAnswer::Refused)
+    ) {
+        in_real_time(async {
+            for _ in 0..5_000 {
+                if status(transport).last_answer == want {
+                    return;
+                }
+                tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1)))
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
+        assert_eq!(status(transport).last_answer, want);
+        return;
+    }
     for _ in 0..10_000 {
         if status(transport).last_answer == want {
             return;
