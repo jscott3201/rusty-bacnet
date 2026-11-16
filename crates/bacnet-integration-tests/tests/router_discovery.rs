@@ -9,7 +9,9 @@
 
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, DiscoveredRouter, RoutingTableError, RoutingTableWait};
+use bacnet_client::client::{
+    BACnetClient, DiscoveredRouter, RoutingTableError, RoutingTableWait, Station,
+};
 use bacnet_network::layer::{NetworkReport, ReceivedNetworkReport, RoutingTableEntry};
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_npdu::{RejectMessageReason, RejectMessageToNetwork};
@@ -241,10 +243,8 @@ async fn the_router_and_its_remote_network_are_found_and_reached() {
 
     // The device behind the router is read through it.
     let ack = client
-        .read_property_routed(
-            &[ROUTER_MAC],
-            REMOTE,
-            &[STATION],
+        .read_property(
+            &Station::routed(&[ROUTER_MAC], REMOTE, &[STATION]),
             supply_air(),
             PropertyIdentifier::OBJECT_NAME,
             None,

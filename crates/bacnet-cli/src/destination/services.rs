@@ -1,45 +1,25 @@
-//! The services a one-shot command sends to a [`Destination`], each to its
-//! address through the client's address entry points
-//! ([`BACnetClient::confirmed_request_to`] and
-//! [`BACnetClient::unconfirmed_request_to`]), encoded and checked as the
-//! client's typed calls encode and check them (#2560).
+//! The services a one-shot command sends to a [`Destination`]: each one the
+//! client's typed call to the destination's address (#2560, #2588), so the
+//! CLI encodes and checks nothing itself.
 
-use bacnet_client::acks;
 use bacnet_client::client::BACnetClient;
-use bacnet_client::log_reader::{self, LogCursor, LogPage, LogRequester, unsigned_value};
-use bacnet_services::alarm_event::{
-    AcknowledgeAlarmRequest, GetEventInformationAck, GetEventInformationRequest,
-};
+use bacnet_client::log_reader::{LogCursor, LogPage};
+use bacnet_services::alarm_event::{AcknowledgeAlarmRequest, GetEventInformationAck};
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
 use bacnet_services::common::BACnetPropertyValue;
-use bacnet_services::cov::SubscribeCOVRequest;
-use bacnet_services::device_mgmt::{
-    DeviceCommunicationControlRequest, ReinitializeDeviceRequest, TimeSynchronizationRequest,
-};
 use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
-use bacnet_services::file::{
-    AtomicReadFileAck, AtomicReadFileRequest, AtomicWriteFileRequest, FileAccessMethod,
-    FileWriteAccessMethod,
-};
-use bacnet_services::object_mgmt::{
-    CreateObjectAck, CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier,
-};
-use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
-use bacnet_services::read_range::{
-    ReadRangeAck, ReadRangeReply, ReadRangeRequest, ReadRangeValidation,
-};
-use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
-use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
-use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_services::file::{AtomicReadFileAck, FileAccessMethod, FileWriteAccessMethod};
+use bacnet_services::object_mgmt::ObjectSpecifier;
+use bacnet_services::read_property::ReadPropertyACK;
+use bacnet_services::read_range::{ReadRangeReply, ReadRangeRequest, ReadRangeValidation};
+use bacnet_services::rpm::ReadPropertyMultipleACK;
+use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetAddress, ReadAccessSpecification};
-use bacnet_types::enums::{
-    ConfirmedServiceChoice, EnableDisable, PropertyIdentifier, ReinitializedState,
-    UnconfirmedServiceChoice,
-};
+use bacnet_types::enums::{EnableDisable, PropertyIdentifier, ReinitializedState};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 
 use super::Destination;
 
@@ -49,18 +29,6 @@ impl Destination {
         (&self.address).into()
     }
 
-    /// One confirmed request to the station, its answer's service data.
-    async fn confirmed<T: TransportPort + 'static>(
-        &self,
-        client: &BACnetClient<T>,
-        service: ConfirmedServiceChoice,
-        data: &[u8],
-    ) -> Result<Bytes, Error> {
-        client
-            .confirmed_request_to(&self.station(), service, data)
-            .await
-    }
-
     /// One checked stream or record file window.
     pub async fn atomic_read_file<T: TransportPort + 'static>(
         &self,
@@ -68,16 +36,9 @@ impl Destination {
         file: ObjectIdentifier,
         access: FileAccessMethod,
     ) -> Result<AtomicReadFileAck, Error> {
-        let request = AtomicReadFileRequest {
-            file_identifier: file,
-            access: access.clone(),
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf);
-        let ack = self
-            .confirmed(client, ConfirmedServiceChoice::ATOMIC_READ_FILE, &buf)
-            .await?;
-        acks::atomic_read_file(&access, &ack)
+        client
+            .atomic_read_file_decoded(&self.station(), file, access)
+            .await
     }
 
     /// AtomicWriteFile, retaining its raw service acknowledgement.
@@ -87,13 +48,8 @@ impl Destination {
         file: ObjectIdentifier,
         access: FileWriteAccessMethod,
     ) -> Result<Bytes, Error> {
-        let request = AtomicWriteFileRequest {
-            file_identifier: file,
-            access,
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf);
-        self.confirmed(client, ConfirmedServiceChoice::ATOMIC_WRITE_FILE, &buf)
+        client
+            .atomic_write_file(&self.station(), file, access)
             .await
     }
 
@@ -104,16 +60,9 @@ impl Destination {
         specifier: ObjectSpecifier,
         initial_values: Vec<BACnetPropertyValue>,
     ) -> Result<ObjectIdentifier, Error> {
-        let request = CreateObjectRequest {
-            object_specifier: specifier,
-            list_of_initial_values: initial_values,
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-        let ack = self
-            .confirmed(client, ConfirmedServiceChoice::CREATE_OBJECT, &buf)
-            .await?;
-        CreateObjectAck::decode(&ack).map(|ack| ack.object_identifier)
+        client
+            .create_object(&self.station(), specifier, initial_values)
+            .await
     }
 
     /// Delete the identified object.
@@ -122,14 +71,7 @@ impl Destination {
         client: &BACnetClient<T>,
         object: ObjectIdentifier,
     ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        DeleteObjectRequest {
-            object_identifier: object,
-        }
-        .encode(&mut buf);
-        self.confirmed(client, ConfirmedServiceChoice::DELETE_OBJECT, &buf)
-            .await
-            .map(drop)
+        client.delete_object(&self.station(), object).await
     }
 
     /// Acknowledge an alarm with the caller's exact request.
@@ -138,11 +80,7 @@ impl Destination {
         client: &BACnetClient<T>,
         request: &AcknowledgeAlarmRequest,
     ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-        self.confirmed(client, ConfirmedServiceChoice::ACKNOWLEDGE_ALARM, &buf)
-            .await
-            .map(drop)
+        client.acknowledge_alarm(&self.station(), request).await
     }
 
     /// DeviceCommunicationControl.
@@ -153,15 +91,9 @@ impl Destination {
         duration: Option<u16>,
         password: Option<String>,
     ) -> Result<(), Error> {
-        let request = DeviceCommunicationControlRequest {
-            time_duration: duration,
-            enable_disable: state,
-            password,
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-        let service = ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL;
-        self.confirmed(client, service, &buf).await.map(drop)
+        client
+            .device_communication_control(&self.station(), state, duration, password)
+            .await
     }
 
     /// ReinitializeDevice.
@@ -171,15 +103,9 @@ impl Destination {
         state: ReinitializedState,
         password: Option<String>,
     ) -> Result<(), Error> {
-        let request = ReinitializeDeviceRequest {
-            reinitialized_state: state,
-            password,
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-        self.confirmed(client, ConfirmedServiceChoice::REINITIALIZE_DEVICE, &buf)
+        client
+            .reinitialize_device(&self.station(), state, password)
             .await
-            .map(drop)
     }
 
     /// Send the selected unconfirmed time service once.
@@ -190,16 +116,12 @@ impl Destination {
         time: Time,
         utc: bool,
     ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        TimeSynchronizationRequest { date, time }.encode(&mut buf);
-        let service = if utc {
-            UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION
+        let to = self.station();
+        if utc {
+            client.utc_time_synchronization(&to, date, time).await
         } else {
-            UnconfirmedServiceChoice::TIME_SYNCHRONIZATION
-        };
-        client
-            .unconfirmed_request_to(&self.station(), service, &buf)
-            .await
+            client.time_synchronization(&to, date, time).await
+        }
     }
 
     /// GetEventInformation from after `last`, decoded.
@@ -208,15 +130,7 @@ impl Destination {
         client: &BACnetClient<T>,
         last: Option<ObjectIdentifier>,
     ) -> Result<GetEventInformationAck, Error> {
-        let mut buf = BytesMut::new();
-        GetEventInformationRequest {
-            last_received_object_identifier: last,
-        }
-        .encode(&mut buf);
-        let ack = self
-            .confirmed(client, ConfirmedServiceChoice::GET_EVENT_INFORMATION, &buf)
-            .await?;
-        GetEventInformationAck::decode(&ack)
+        client.get_event_information(&self.station(), last).await
     }
 
     /// GetAlarmSummary, decoded.
@@ -224,10 +138,7 @@ impl Destination {
         &self,
         client: &BACnetClient<T>,
     ) -> Result<GetAlarmSummaryAck, Error> {
-        let ack = self
-            .confirmed(client, ConfirmedServiceChoice::GET_ALARM_SUMMARY, &[])
-            .await?;
-        GetAlarmSummaryAck::decode(&ack)
+        client.get_alarm_summary(&self.station()).await
     }
 
     /// GetEnrollmentSummary with the caller's filters, decoded.
@@ -236,12 +147,9 @@ impl Destination {
         client: &BACnetClient<T>,
         request: &GetEnrollmentSummaryRequest,
     ) -> Result<GetEnrollmentSummaryAck, Error> {
-        let mut buf = BytesMut::new();
-        request.try_encode(&mut buf)?;
-        let ack = self
-            .confirmed(client, ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY, &buf)
-            .await?;
-        GetEnrollmentSummaryAck::decode(&ack)
+        client
+            .get_enrollment_summary(&self.station(), request)
+            .await
     }
 
     /// ReadRange with the selected acknowledgement validation.
@@ -251,12 +159,9 @@ impl Destination {
         request: &ReadRangeRequest,
         validation: ReadRangeValidation,
     ) -> Result<ReadRangeReply, Error> {
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-        let ack = self
-            .confirmed(client, ConfirmedServiceChoice::READ_RANGE, &buf)
-            .await?;
-        ReadRangeReply::check(request, ReadRangeAck::decode(&ack)?, validation)
+        client
+            .read_range_with(&self.station(), request, validation)
+            .await
     }
 
     /// One log page, including all metadata and range subrequests.
@@ -267,8 +172,9 @@ impl Destination {
         cursor: LogCursor,
         page_size: u16,
     ) -> Result<LogPage, Error> {
-        let at = At { client, to: self };
-        log_reader::read_log_page(&at, self.address.mac(), log, cursor, page_size).await
+        client
+            .read_log_page(&self.station(), log, cursor, page_size)
+            .await
     }
 
     /// ReadProperty.
@@ -279,17 +185,9 @@ impl Destination {
         property: PropertyIdentifier,
         index: Option<u32>,
     ) -> Result<ReadPropertyACK, Error> {
-        let request = ReadPropertyRequest {
-            object_identifier: object,
-            property_identifier: property,
-            property_array_index: index,
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf);
-        let ack = self
-            .confirmed(client, ConfirmedServiceChoice::READ_PROPERTY, &buf)
-            .await?;
-        acks::read_property(&request, &ack)
+        client
+            .read_property(&self.station(), object, property, index)
+            .await
     }
 
     /// ReadPropertyMultiple.
@@ -298,14 +196,7 @@ impl Destination {
         client: &BACnetClient<T>,
         specs: Vec<ReadAccessSpecification>,
     ) -> Result<ReadPropertyMultipleACK, Error> {
-        let mut buf = BytesMut::new();
-        ReadPropertyMultipleRequest {
-            list_of_read_access_specs: specs,
-        }
-        .encode(&mut buf)?;
-        let service = ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE;
-        let ack = self.confirmed(client, service, &buf).await?;
-        ReadPropertyMultipleACK::decode(&ack)
+        client.read_property_multiple(&self.station(), specs).await
     }
 
     /// WriteProperty of an encoded value.
@@ -318,18 +209,9 @@ impl Destination {
         value: Vec<u8>,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        let request = WritePropertyRequest {
-            object_identifier: object,
-            property_identifier: property,
-            property_array_index: index,
-            property_value: value,
-            priority,
-        };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-        self.confirmed(client, ConfirmedServiceChoice::WRITE_PROPERTY, &buf)
+        client
+            .write_property(&self.station(), object, property, index, value, priority)
             .await
-            .map(drop)
     }
 
     /// WritePropertyMultiple.
@@ -338,13 +220,7 @@ impl Destination {
         client: &BACnetClient<T>,
         specs: Vec<WriteAccessSpecification>,
     ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        WritePropertyMultipleRequest {
-            list_of_write_access_specs: specs,
-        }
-        .encode(&mut buf)?;
-        let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
-        self.confirmed(client, service, &buf).await.map(drop)
+        client.write_property_multiple(&self.station(), specs).await
     }
 
     /// SubscribeCOV for `object`, from process `process`.
@@ -356,13 +232,9 @@ impl Destination {
         confirmed: bool,
         lifetime: Option<u32>,
     ) -> Result<(), Error> {
-        let request = SubscribeCOVRequest {
-            subscriber_process_identifier: process,
-            monitored_object_identifier: object,
-            issue_confirmed_notifications: Some(confirmed),
-            lifetime,
-        };
-        self.cov(client, &request).await
+        client
+            .subscribe_cov(&self.station(), process, object, confirmed, lifetime)
+            .await
     }
 
     /// Cancel process `process`'s subscription to `object`.
@@ -372,57 +244,8 @@ impl Destination {
         process: u32,
         object: ObjectIdentifier,
     ) -> Result<(), Error> {
-        let request = SubscribeCOVRequest {
-            subscriber_process_identifier: process,
-            monitored_object_identifier: object,
-            issue_confirmed_notifications: None,
-            lifetime: None,
-        };
-        self.cov(client, &request).await
-    }
-
-    /// One SubscribeCOV, a subscription or its cancellation.
-    async fn cov<T: TransportPort + 'static>(
-        &self,
-        client: &BACnetClient<T>,
-        request: &SubscribeCOVRequest,
-    ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-        self.confirmed(client, ConfirmedServiceChoice::SUBSCRIBE_COV, &buf)
-            .await
-            .map(drop)
-    }
-}
-
-/// A paged log read's requests, to one destination: the MAC the reader
-/// passes is the destination's own, and its address decides the route.
-struct At<'a, T: TransportPort + 'static> {
-    client: &'a BACnetClient<T>,
-    to: &'a Destination,
-}
-
-impl<T: TransportPort + 'static> LogRequester for At<'_, T> {
-    async fn read_unsigned(
-        &self,
-        _mac: &[u8],
-        log: ObjectIdentifier,
-        property: PropertyIdentifier,
-    ) -> Result<u64, Error> {
-        let ack = self
-            .to
-            .read_property(self.client, log, property, None)
-            .await?;
-        unsigned_value(&ack.property_value)
-    }
-
-    async fn read_range_lenient(
-        &self,
-        _mac: &[u8],
-        request: &ReadRangeRequest,
-    ) -> Result<ReadRangeReply, Error> {
-        self.to
-            .read_range(self.client, request, ReadRangeValidation::Lenient)
+        client
+            .unsubscribe_cov(&self.station(), process, object)
             .await
     }
 }

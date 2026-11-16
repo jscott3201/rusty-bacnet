@@ -70,57 +70,57 @@ fn check_transmittable_length(peer_or_local: LengthBoundedBy, transport: u16) ->
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Send a confirmed request and wait for the response.
+    /// Send a confirmed request to the station `to` and wait for its answer:
+    /// the service data of its acknowledgement (empty for a SimpleAck). The
+    /// typed calls are this with their request encoded and their answer
+    /// checked. A request larger than the device takes is sent segmented
+    /// when it accepts segments.
     ///
-    /// Returns the service response data (empty for SimpleAck). Automatically
-    /// uses segmented transfer when the payload exceeds the remote device's
-    /// max APDU length.
+    /// `to` is a MAC on this link, a [`BACnetAddress`] or a [`Station`]
+    /// ([`ToStation`] lists the forms). A station on another network goes
+    /// through the router the caller names or, for an address, the one the
+    /// discovery table's row at it names (Clause 6.2.2), with its network
+    /// and MAC as the NPDU's DNET and DADR. Once the client has learned its
+    /// own network's number, a station on it is sent to at its MAC on this
+    /// link, with no DNET and not through any router (#1358); an answer from
+    /// it with no SNET completes the request, and so does one a router
+    /// relays back with that network and MAC as its SNET and SADR (#1465),
+    /// since both name the same station. The row at the station's address,
+    /// when the table has one, bounds the request by the device's Max APDU
+    /// Length Accepted and segmentation, and an answer from it starts the
+    /// row's age again; with no row the client's configured limits apply.
     ///
-    /// A confirmed request goes to one device, so a `destination_mac` that
-    /// reaches a group of nodes ([`TransportPort::is_group_destination`]:
-    /// the link's broadcast MAC, or on B/IP the limited broadcast, the
+    /// # Errors
+    ///
+    /// Before any request state is taken: [`Error::Encoding`] for a station
+    /// a confirmed request can't go to. That is a MAC that reaches a group
+    /// of nodes on this link ([`TransportPort::is_group_destination`]: the
+    /// link's broadcast MAC, or on B/IP the limited broadcast, the
     /// configured broadcast IP or a multicast address at any port), which
-    /// would make it a local broadcast (Clause 6.3), fails with
-    /// [`Error::Encoding`] before any transaction state is taken (#1479). So
-    /// does a routed target that names this client's own network with such a
-    /// MAC, since it goes local.
+    /// would make it a local broadcast (Clause 6.3, #1479); an empty MAC in
+    /// an address; and on another network a network of 0 or 65535 or a MAC
+    /// longer than [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets, which
+    /// no router carries to one station. [`Error::UnknownDevice`] for a
+    /// remote address with no named router and no row in the discovery
+    /// table, since the row is the route. Then the errors of the request
+    /// itself.
+    ///
+    /// [`BACnetAddress`]: bacnet_types::constructed::BACnetAddress
     pub async fn confirmed_request(
         &self,
-        destination_mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
-        self.confirmed_request_inner(
-            ConfirmedTarget::Local {
-                mac: destination_mac,
-            },
-            service_choice,
-            service_data,
-        )
-        .await
+        to.confirmed(self, service_choice, service_data).await
     }
 
-    /// Send a confirmed request routed through a BACnet router.
-    ///
-    /// The NPDU is sent as a unicast to `router_mac` with DNET/DADR set so
-    /// the router forwards it to `dest_network`/`dest_mac`.
-    ///
-    /// A confirmed request goes to one device, so `dest_network` must be in
-    /// 1..=65534 and `dest_mac` must hold 1 to
-    /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets. DNET 0 names no network, DNET
-    /// 65535 and an empty DADR address a broadcast, and any of them fails
-    /// with [`Error::Encoding`] before path or transaction state is taken.
-    /// Every routed confirmed entry point, such as the `_to_device` and
-    /// `_from_device` methods, applies the same rule.
-    ///
-    /// Once the client has learned its own network's number, a
-    /// `dest_network` naming it is this network. After those checks the
-    /// request goes to `dest_mac` as a local request, with no DNET and not
-    /// through `router_mac` (#1358). An answer from `dest_mac` with no SNET
-    /// completes it, and so does one a router relays back with `dest_network`
-    /// as its SNET and `dest_mac` as its SADR (#1465), since both name the
-    /// same station.
-    pub async fn confirmed_request_routed(
+    /// Test shorthand: a confirmed request through the router at
+    /// `router_mac` to the station at `dest_mac` on `dest_network`, the
+    /// target a [`Station::Routed`] names. #2588 PR 2: removed with the
+    /// by-instance family, its tests moving onto `Station::routed`.
+    #[cfg(test)]
+    pub(super) async fn confirmed_request_routed(
         &self,
         router_mac: &[u8],
         dest_network: u16,
@@ -162,17 +162,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             check_routed_unicast(dest_network, dest_mac.len())?;
         }
         let target = named.localized(self.network.local_network_number().get());
-        // With no DNET, a group destination is a local broadcast, which
-        // carries no confirmed request (Clause 6.3, #1479).
-        if let ConfirmedTarget::Local { mac } = target
-            && self.network.transport().is_group_destination(mac)
-        {
-            return Err(Error::Encoding(
-                "a confirmed request goes to one device, not to a broadcast or group \
+        if let ConfirmedTarget::Local { mac } = target {
+            // An empty MAC names no one station: refused as an address on
+            // network 0 with no MAC is, whichever form named it (#2588).
+            Self::station_of(0, mac)?;
+            // With no DNET, a group destination is a local broadcast, which
+            // carries no confirmed request (Clause 6.3, #1479).
+            if self.network.transport().is_group_destination(mac) {
+                return Err(Error::Encoding(
+                    "a confirmed request goes to one device, not to a broadcast or group \
                      address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
                      Clause 6.3)"
-                    .into(),
-            ));
+                        .into(),
+                ));
+            }
         }
         let routed_forwarded_npci_len = match target {
             ConfirmedTarget::Local { .. } => None,
@@ -677,13 +680,38 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Send an unconfirmed request (fire-and-forget) to a specific destination.
+    /// Send an unconfirmed request to the station `to`, once, with no answer
+    /// waited for: success means it was sent.
+    ///
+    /// `to` takes the forms [`Self::confirmed_request`] takes and is routed
+    /// the same way. A MAC on this link is sent to as given; an address on
+    /// this client's own network, once it has learned the number, is the
+    /// station at that MAC on this link, which must then be one station, not
+    /// a broadcast or group address.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::confirmed_request`] before sending, and the transport's
+    /// error.
     pub async fn unconfirmed_request(
+        &self,
+        to: &(impl ToStation + ?Sized),
+        service_choice: UnconfirmedServiceChoice,
+        service_data: &[u8],
+    ) -> Result<(), Error> {
+        to.unconfirmed(self, service_choice, service_data).await
+    }
+
+    /// An unconfirmed request to `destination_mac` on this link: one
+    /// station, so an empty MAC, which names none, is refused as an address
+    /// on network 0 with no MAC is (#2588).
+    pub(super) async fn unconfirmed_local(
         &self,
         destination_mac: &[u8],
         service_choice: UnconfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<(), Error> {
+        Self::station_of(0, destination_mac)?;
         self.seat_open()?;
         let pdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
             service_choice,

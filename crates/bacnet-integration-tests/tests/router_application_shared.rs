@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_network::router::{
     BACnetRouter, RouterApplicationPort, RouterApplicationPorts, RouterOptions, RouterPort,
 };
@@ -209,10 +209,8 @@ async fn each_client_reads_the_other_sides_server() {
     let site = site().await;
     let remote = site
         .client
-        .read_property_routed(
-            &[0xEE],
-            2,
-            &[STATION],
+        .read_property(
+            &Station::routed(&[0xEE], 2, &[STATION]),
             sensor(),
             PropertyIdentifier::OBJECT_NAME,
             None,
@@ -238,11 +236,10 @@ async fn each_client_reads_the_other_sides_server() {
         PropertyValue::CharacterString(format!("Sensor {HOSTED}"))
     );
     // Both at once.
+    let station = Station::routed(&[0xEE], 2, &[STATION]);
     let (remote, hosted) = tokio::join!(
-        site.client.read_property_routed(
-            &[0xEE],
-            2,
-            &[STATION],
+        site.client.read_property(
+            &station,
             device(REMOTE),
             PropertyIdentifier::OBJECT_NAME,
             None,
@@ -384,10 +381,8 @@ async fn the_ports_follow_a_router_ports_limit() {
     assert_eq!(site.client.transport_max_apdu_length(), 1476);
     let read = async |site: &Site| {
         site.client
-            .read_property_routed(
-                &[0xEE],
-                2,
-                &[STATION],
+            .read_property(
+                &Station::routed(&[0xEE], 2, &[STATION]),
                 sensor(),
                 PropertyIdentifier::OBJECT_NAME,
                 None,

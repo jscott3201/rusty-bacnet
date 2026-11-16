@@ -26,7 +26,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
-use super::{BACnetClient, DeviceEventKind, DeviceReadRequest};
+use super::{BACnetClient, DeviceEventKind, DeviceReadRequest, Station};
 
 const CLIENT: [u8; 1] = [0x01];
 const PEER: [u8; 1] = [0x02];
@@ -213,7 +213,12 @@ async fn two_claimants_are_listed_reachable_by_address_and_refused_by_instance()
         .await
         .unwrap();
     client
-        .read_property_routed(&PEER, NETWORK, &STATION, object(), present, None)
+        .read_property(
+            &Station::routed(&PEER, NETWORK, &STATION),
+            object(),
+            present,
+            None,
+        )
         .await
         .unwrap();
     let refused = client

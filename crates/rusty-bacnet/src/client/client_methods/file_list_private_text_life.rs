@@ -124,8 +124,10 @@ impl BACnetClient {
                 }
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
-                    let path = target.path(&high, &inner.route_misses).await?;
-                    routed::atomic_read_file(high.low_level(), &path, fid, access).await
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .atomic_read_file_decoded(&to, fid, access)
+                        .await
                 }
             }
             .map_err(to_py_err)?;
@@ -188,8 +190,8 @@ impl BACnetClient {
                 }
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
-                    let path = target.path(&high, &inner.route_misses).await?;
-                    routed::atomic_write_file(high.low_level(), &path, fid, access).await
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level().atomic_write_file(&to, fid, access).await
                 }
             }
             .map_err(to_py_err)?;

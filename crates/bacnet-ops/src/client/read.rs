@@ -13,7 +13,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
@@ -21,7 +21,7 @@ use bacnet_types::enums::{AbortReason, ErrorClass, ObjectType, PropertyIdentifie
 use bacnet_types::error::{Error, RangeError, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use crate::device::{DeviceAddress, Path};
+use crate::device::{DeviceAddress, path_to};
 use crate::format::{PropertyError, RawRow, decode_all};
 use crate::limits::{RequestLimits, Turn};
 use crate::target::AddressStyle;
@@ -307,8 +307,8 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
 
     /// The path to the device, from the client's discovery table for one
     /// behind a router.
-    async fn path(&self) -> Result<Path, Halt> {
-        Path::to(self.client, &self.device)
+    async fn path(&self) -> Result<Station, Halt> {
+        path_to(self.client, &self.device)
             .await
             .map_err(Halt::Device)
     }
@@ -323,7 +323,8 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
     ) -> Result<Vec<u8>, Halt> {
         let path = self.path().await?;
         let _turn = self.take_turn().await?;
-        path.read_property(self.client, object, property, index)
+        self.client
+            .read_property(&path, object, property, index)
             .await
             .map(|ack| ack.property_value)
             .map_err(Halt::Device)
@@ -337,9 +338,9 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         _turn: &Turn,
         specs: Vec<ReadAccessSpecification>,
     ) -> Result<ReadPropertyMultipleACK, Halt> {
-        self.path()
-            .await?
-            .read_property_multiple(self.client, specs)
+        let path = self.path().await?;
+        self.client
+            .read_property_multiple(&path, specs)
             .await
             .map_err(Halt::Device)
     }
@@ -365,8 +366,9 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         };
         let path = self.path().await?;
         let _turn = self.take_turn().await?;
-        let ack = path
-            .read_property_multiple(self.client, vec![spec])
+        let ack = self
+            .client
+            .read_property_multiple(&path, vec![spec])
             .await
             .map_err(Halt::Device)?;
         Ok(rpm_rows(ack))

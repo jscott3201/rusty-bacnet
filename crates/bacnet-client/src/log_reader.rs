@@ -25,7 +25,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
-use crate::client::BACnetClient;
+use crate::client::{BACnetClient, ToStation};
 
 /// Where a paged log read starts, or resumes from a checkpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -137,9 +137,42 @@ pub fn unsigned_value(value: &[u8]) -> Result<u64, Error> {
     Ok(count)
 }
 
+/// A paged log read's requests, every one to the station `to`, whatever MAC
+/// the reader passes.
+struct At<'a, T: TransportPort + 'static, A: ToStation + ?Sized> {
+    client: &'a BACnetClient<T>,
+    to: &'a A,
+}
+
+impl<T: TransportPort + 'static, A: ToStation + ?Sized> LogRequester for At<'_, T, A> {
+    async fn read_unsigned(
+        &self,
+        _: &[u8],
+        log: ObjectIdentifier,
+        property: PropertyIdentifier,
+    ) -> Result<u64, Error> {
+        let ack = self
+            .client
+            .read_property(self.to, log, property, None)
+            .await?;
+        unsigned_value(&ack.property_value)
+    }
+
+    async fn read_range_lenient(
+        &self,
+        _: &[u8],
+        request: &ReadRangeRequest,
+    ) -> Result<ReadRangeReply, Error> {
+        self.client
+            .read_range_with(self.to, request, ReadRangeValidation::Lenient)
+            .await
+    }
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Read one page of `log`'s Log_Buffer from `cursor`, asking for up to
-    /// `page_size` records (1..=32767); see [`read_log_page`].
+    /// Read one page of `log`'s Log_Buffer on the station `to` from
+    /// `cursor`, asking for up to `page_size` records (1..=32767); see
+    /// [`read_log_page`]. Every request of the page goes to `to`.
     ///
     /// ```no_run
     /// # use bacnet_client::client::BACnetClient;
@@ -163,12 +196,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// ```
     pub async fn read_log_page(
         &self,
-        mac: &[u8],
+        to: &(impl ToStation + ?Sized),
         log: ObjectIdentifier,
         cursor: LogCursor,
         page_size: u16,
     ) -> Result<LogPage, Error> {
-        read_log_page(self, mac, log, cursor, page_size).await
+        read_log_page(&At { client: self, to }, &[], log, cursor, page_size).await
     }
 }
 
