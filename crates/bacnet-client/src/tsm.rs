@@ -22,7 +22,8 @@ mod completion;
 mod coordinated;
 mod progress;
 pub(crate) use coordinated::{
-    CoordinatedCompletion, CoordinatedTerminalPhase, SegmentedAckArrival,
+    CoordinatedCompletion, CoordinatedRegistrationError, CoordinatedTerminalPhase,
+    SegmentedAckArrival,
 };
 use coordinated::{PendingLease, PendingRelease};
 use progress::TransactionShared;
@@ -254,12 +255,18 @@ pub struct Tsm {
     allocators: HashMap<MacAddr, InvokeIdAllocator, BuildMapHasher>,
     pending: HashMap<(MacAddr, u8), PendingTransaction, BuildMapHasher>,
     coordinator: Option<Arc<bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator>>,
-    /// The coordinator new transactions lease from: `coordinator` itself,
+    /// The coordinator a new transaction leases from: `coordinator` itself,
     /// except while the node this client is seated on restricts initiation
-    /// (DeviceCommunicationControl, #2617) and once its seat has closed.
-    /// Registration reads only this, so the restriction costs a request
-    /// nothing it didn't already check.
+    /// (DeviceCommunicationControl), while the client's requests are its
+    /// node's to audit (source Audit), and once its seat has closed (#2617).
+    /// Registration reads only this, so neither costs a request anything it
+    /// didn't already check; `restricted` and `diverted` say, on the cold
+    /// path of a refused registration, which emptied it.
     leasing: Option<Arc<bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator>>,
+    /// The node restricts initiation (DeviceCommunicationControl).
+    restricted: bool,
+    /// The client's registrations go to its node's source Audit.
+    diverted: bool,
 }
 
 impl Tsm {
@@ -271,6 +278,8 @@ impl Tsm {
             pending: HashMap::default(),
             coordinator: None,
             leasing: None,
+            restricted: false,
+            diverted: false,
         }
     }
 
@@ -374,6 +383,10 @@ impl Tsm {
         registration
     }
 
+    // Inlined into each registration, as it was when one body registered
+    // through the coordinator: a second, the diverted one (#2617), made the
+    // compiler call it instead, about 20 instructions on every request.
+    #[inline(always)]
     fn new_pending_transaction(
         service_choice: ConfirmedServiceChoice,
         phase: TransactionPhase,

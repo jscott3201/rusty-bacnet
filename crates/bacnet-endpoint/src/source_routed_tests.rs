@@ -163,6 +163,20 @@ impl Site {
     /// The session's Reporter records `operations`, confirmed or not, to
     /// Device 999, bound behind the router.
     async fn start(confirmed: bool, operations: &[AuditOperation]) -> Self {
+        let config = SessionConfig {
+            apdu_timeout_ms: 1_000,
+            apdu_retries: 0,
+            ..SessionConfig::default()
+        };
+        Self::start_with(confirmed, operations, config).await
+    }
+
+    /// [`Site::start`], with the session's `config`.
+    async fn start_with(
+        confirmed: bool,
+        operations: &[AuditOperation],
+        config: SessionConfig,
+    ) -> Self {
         let (mut near, router_near) =
             LoopbackTransport::pair(SESSION.to_vec(), ROUTER_NEAR.to_vec());
         let unicasts = near.record_unicast_destinations();
@@ -198,25 +212,17 @@ impl Site {
                 None,
             )
             .unwrap();
-        let mut session = EndpointSession::new(
-            near,
-            SessionRole::Both,
-            SessionConfig {
-                apdu_timeout_ms: 1_000,
-                apdu_retries: 0,
-                ..SessionConfig::default()
-            },
-        )
-        .unwrap()
-        .with_database(db)
-        .with_source_audit_routed_device_binding(
-            oid(ObjectType::DEVICE, 999),
-            REMOTE,
-            MacAddr::from_slice(&STATION),
-        )
-        .with_source_audit_reporter(selected())
-        .with_device_writes(Arc::new(|_| true))
-        .with_reinitialize(|_, _| Ok(()));
+        let mut session = EndpointSession::new(near, SessionRole::Both, config)
+            .unwrap()
+            .with_database(db)
+            .with_source_audit_routed_device_binding(
+                oid(ObjectType::DEVICE, 999),
+                REMOTE,
+                MacAddr::from_slice(&STATION),
+            )
+            .with_source_audit_reporter(selected())
+            .with_device_writes(Arc::new(|_| true))
+            .with_reinitialize(|_, _| Ok(()));
         session.start().await.unwrap();
         let mut peer = NetworkLayer::new(station);
         let rx = peer.start().await.unwrap();
@@ -469,6 +475,65 @@ async fn an_audited_read_of_a_routed_station_names_its_network() {
     site.stop().await;
 }
 
+/// The session's full client names a routed station the same way (#2617):
+/// its record is the narrow requester's, but for the invoke ID and time.
+#[tokio::test(start_paused = true)]
+async fn a_full_clients_audited_read_of_a_routed_station_names_its_network() {
+    let mut site = Site::start(false, &[AuditOperation::READ]).await;
+    let narrow = site.session.cloned_client_handle().unwrap();
+    let full = Arc::new(site.session.full_client().unwrap());
+    let mut records = Vec::new();
+    for through_full in [false, true] {
+        let (narrow, full) = (narrow.clone(), Arc::clone(&full));
+        let read = tokio::spawn(async move {
+            if through_full {
+                let station =
+                    bacnet_client::client::Station::routed(&ROUTER_NEAR, REMOTE, &STATION);
+                full.read_property(&station, target(), PropertyIdentifier::PRESENT_VALUE, None)
+                    .await
+            } else {
+                narrow
+                    .read_property_with_destination(
+                        EndpointApduDestination::Routed {
+                            destination_network: REMOTE,
+                            destination_mac: MacAddr::from_slice(&STATION),
+                            router_mac: MacAddr::from_slice(&ROUTER_NEAR),
+                        },
+                        Vec::new(),
+                        target(),
+                        PropertyIdentifier::PRESENT_VALUE,
+                        None,
+                    )
+                    .await
+            }
+        });
+        let request = site.receive().await;
+        let (invoke, rp) = read_request(&request);
+        site.send(ack(invoke, &rp), false).await;
+        assert!(read.await.unwrap().is_ok());
+        let (record, _) = notification(&site.receive().await, false);
+        assert_eq!(record.invoke_id, Some(invoke));
+        records.push(record);
+    }
+    let full_record = records.pop().unwrap();
+    assert_eq!(
+        full_record.target_device,
+        BACnetRecipient::Address(BACnetAddress {
+            network_number: REMOTE,
+            mac_address: MacAddr::from_slice(&STATION),
+        })
+    );
+    let mut narrow_record = records.pop().unwrap();
+    let mut full_record = full_record;
+    for record in [&mut narrow_record, &mut full_record] {
+        record.invoke_id = None;
+        record.source_timestamp = None;
+    }
+    assert_eq!(full_record, narrow_record);
+    drop(full);
+    site.stop().await;
+}
+
 /// A peer's Reject or Error came back through the learned router: the
 /// record fails, setting COMMUNICATION_FAILURE, but the router stays, so the
 /// next record goes to it as a unicast. Only a lost delivery forgets it.
@@ -530,3 +595,6 @@ async fn a_refused_record_keeps_its_router() {
 
 #[path = "source_routed_change_tests.rs"]
 mod change;
+
+#[path = "source_routed_segmented_tests.rs"]
+mod segmented;

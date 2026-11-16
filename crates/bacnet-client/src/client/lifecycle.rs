@@ -520,6 +520,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
 impl<T: TransportPort> Drop for BACnetClient<T> {
     fn drop(&mut self) {
+        // A runner shares its client's transactions and owns no task: its
+        // own request ends with the request's future (#2617).
+        if self
+            .pacer
+            .audit
+            .get()
+            .is_some_and(super::source_audit::Role::is_runner)
+        {
+            return;
+        }
         self.abort_owned_tasks();
         if let Some(mut tsm) = self.tsm.try_lock() {
             tsm.cancel_all_transactions();
