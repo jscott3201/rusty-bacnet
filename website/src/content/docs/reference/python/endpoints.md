@@ -1403,8 +1403,11 @@ class; a full queue never ends the session (#2635).
 notifications) past their share of the request queue, which keeps a
 quarter for confirmed requests; `confirmed_full_drops` confirmed
 requests dropped unanswered, which their requesters send again;
-`answer_full_drops` answers and segments; `policy_full_drops`
-refused APDUs (malformed, an unknown PDU type).
+`answer_full_drops` answers and segments (one no lease holds may not
+take the last quarter of the answer queue); `policy_full_drops`
+refused APDUs (malformed, an unknown PDU type). Each queue of
+`queue_capacity` 2 or more keeps at least one slot in reserve; a
+capacity of 1 keeps none.
 
 Keys:
 

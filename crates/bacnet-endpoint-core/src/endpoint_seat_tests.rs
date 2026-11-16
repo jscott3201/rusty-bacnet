@@ -292,25 +292,26 @@ async fn unconfirmed_copies_leave_the_seat_room_for_the_clients_answers() {
     let counters = seated.endpoint.client_seat_counters();
     assert_eq!((counters.apdus, counters.full_drops), (6, 4));
 
-    // The two slots left are for what is the client's alone.
+    // The two slots left are for answers to the client's requests. Its COV
+    // notification is a request like the rest, and finds the share used.
     let lease = seated.coordinator.reserve(requester(&PEER)).unwrap();
     let answer = [0x20, lease.invoke_id(), 0x0c];
-    inject(&seated.link, &answer).await;
     let _reply = inject_expecting_reply(&seated.link, COV_NOTIFICATION).await;
-    // A third finds the queue full, as any APDU does.
+    inject(&seated.link, &answer).await;
+    inject(&seated.link, &answer).await;
+    // A third answer finds the queue full, as any APDU does.
     inject(&seated.link, &answer).await;
     inject(&seated.link, READ_PROPERTY).await;
     receive(&mut seated.ingress.inbound_requests).await;
     let counters = seated.endpoint.client_seat_counters();
-    assert_eq!((counters.apdus, counters.full_drops), (8, 5));
+    assert_eq!((counters.apdus, counters.full_drops), (8, 6));
 
     let queued: Vec<Bytes> = std::iter::from_fn(|| seated.seat.apdus.try_recv().ok())
         .map(|received| received.apdu)
         .collect();
     assert_eq!(queued.len(), 8);
     assert!(queued[..6].iter().all(|apdu| apdu.as_ref() == WHO_IS));
-    assert_eq!(queued[6].as_ref(), answer);
-    assert_eq!(queued[7].as_ref(), COV_NOTIFICATION);
+    assert!(queued[6..].iter().all(|apdu| apdu.as_ref() == answer));
     // The endpoint's own counts are untouched: none of its queues was full.
     assert_eq!(
         seated.endpoint.full_drop_counters(),
@@ -318,10 +319,45 @@ async fn unconfirmed_copies_leave_the_seat_room_for_the_clients_answers() {
     );
 }
 
+/// With no server role every Confirmed-Request goes whole to the seat, and
+/// it too fills the seat only down to the reserve: a burst of reads can't
+/// crowd out the answer to the client's own request (#2635).
+#[tokio::test]
+async fn confirmed_requests_leave_a_serverless_seat_room_for_the_clients_answers() {
+    let mut seated = seated(false, 8).await;
+    let mut replies = Vec::new();
+    for _ in 0..10 {
+        replies.push(inject_expecting_reply(&seated.link, READ_PROPERTY).await);
+    }
+    let lease = seated.coordinator.reserve(requester(&PEER)).unwrap();
+    let answer = [0x20, lease.invoke_id(), 0x0c];
+    inject(&seated.link, &answer).await;
+    // A marker the policy queue takes, classified after the rest.
+    inject(&seated.link, &[0x80]).await;
+    receive(&mut seated.ingress.policy_outcomes).await;
+
+    let counters = seated.endpoint.client_seat_counters();
+    assert_eq!((counters.apdus, counters.full_drops), (7, 4));
+    let queued: Vec<ReceivedApdu> =
+        std::iter::from_fn(|| seated.seat.apdus.try_recv().ok()).collect();
+    assert!(queued[..6].iter().all(|r| r.apdu.as_ref() == READ_PROPERTY));
+    assert_eq!(queued[6].apdu.as_ref(), answer);
+    // The four dropped requests' reply senders were released, never handed
+    // to the endpoint in the client's place.
+    let released = replies
+        .iter_mut()
+        .map(|reply| reply.try_recv())
+        .filter(|reply| *reply == Err(oneshot::error::TryRecvError::Closed))
+        .count();
+    assert_eq!(released, 4);
+    assert!(seated.ingress.inbound_requests.try_recv().is_err());
+}
+
 #[tokio::test]
 async fn a_client_that_stops_reading_is_skipped_and_counted() {
-    let mut seated = seated(true, 2).await;
-    // The client never reads: its queue of two fills, and the server still
+    // A queue of one keeps no reserve (#2635).
+    let mut seated = seated(true, 1).await;
+    // The client never reads: its queue of one fills, and the server still
     // gets every request, at once.
     for _ in 0..5 {
         inject(&seated.link, WHO_IS).await;
@@ -362,11 +398,9 @@ async fn a_client_that_stops_reading_is_skipped_and_counted() {
     assert!(seated.ingress.policy_outcomes.try_recv().is_err());
 
     let counters = seated.endpoint.client_seat_counters();
-    assert_eq!((counters.apdus, counters.full_drops), (2, 5));
-    // Only the two that fit are the client's.
-    for _ in 0..2 {
-        assert_eq!(receive(&mut seated.seat.apdus).await.apdu.as_ref(), WHO_IS);
-    }
+    assert_eq!((counters.apdus, counters.full_drops), (1, 6));
+    // Only the one that fit is the client's.
+    assert_eq!(receive(&mut seated.seat.apdus).await.apdu.as_ref(), WHO_IS);
     assert!(seated.seat.apdus.try_recv().is_err());
 }
 

@@ -60,9 +60,7 @@ use bacnet_encoding::apdu::Apdu;
 use bacnet_endpoint_core::coordinator::{
     AdmissionOutcome, CoordinatorError, OutboundTransactionCoordinator,
 };
-use bacnet_endpoint_core::endpoint_ingress::{
-    ClassifierExit, EndpointIngress, PolicyOutcome, PolicyReason,
-};
+use bacnet_endpoint_core::endpoint_ingress::{EndpointIngress, PolicyOutcome, PolicyReason};
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_objects::database::ObjectDatabase;
@@ -164,14 +162,25 @@ pub struct SessionConfig {
     ///
     /// What finds a queue full is dropped and counted by class in
     /// [`policy_counters`](EndpointSession::policy_counters); a full queue
-    /// never ends the session (#2635). Unconfirmed requests may fill the
-    /// request queue only down to a quarter of it, which stays for
-    /// confirmed requests. A queued APDU takes a 208-octet slot plus its
-    /// NPDU (B/IP copies each to its own size; at most about 1.5 KB): a
-    /// request queue full of I-Ams holds about 60 KB, and the three ingress
-    /// queues at the default hold at most about 1.3 MB together. Tokio
-    /// allocates slots in blocks of 32 as a queue first fills, so an idle
-    /// session holds next to none of it.
+    /// never ends the session (#2635). Each queue keeps a reserve, a quarter
+    /// of it and at least one slot from a capacity of two up: unconfirmed
+    /// requests may not take the request queue's, which stays for confirmed
+    /// requests, and answers no lease holds may not take the answer
+    /// queue's, which stays for answers to the session's own requests. A
+    /// capacity of 1 keeps no reserve, so there one Who-Is can shut out a
+    /// confirmed request.
+    ///
+    /// A queued item takes a slot of at most 192 octets (176 to 184 on a
+    /// 64-bit target today) plus its NPDU or APDU (B/IP copies each NPDU to
+    /// its own size; at most about 1.5 KB). At the default the four queues
+    /// hold at most about 1.7 MB together, and a request queue full of I-Ams
+    /// about 50 KB. Tokio allocates slots in blocks of 32 as a queue first
+    /// fills, so an idle session holds next to none of it.
+    ///
+    /// A request that finds no room gets no answer, and an answer that finds
+    /// none ends its request by timeout: peers and clients with long APDU
+    /// timeouts or no retries pay one timeout for each. Raise this capacity,
+    /// and [`apdu_retries`](Self::apdu_retries), where bursts are expected.
     ///
     /// Must be greater than zero; [`EndpointSession::new`] returns
     /// [`Error::Encoding`] otherwise.
@@ -382,13 +391,12 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
 /// Terminal state of the session dispatch task.
 ///
 /// Returned by [`stop`](EndpointSession::stop): either an explicit stop won
-/// the race, the ingress classifier exited, or all dispatch receivers closed.
+/// the race, or all dispatch receivers closed, as they do when the ingress
+/// classifier ends (its input closed).
 #[derive(Debug)]
 pub enum SessionExit {
     /// Explicit `stop()` won the race.
     Cancelled,
-    /// Ingress classifier exited (input closed / policy route closed).
-    Ingress(ClassifierExit),
     /// Dispatch receivers all closed.
     ReceiversClosed,
 }
@@ -427,6 +435,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             ..ClientConfig::default()
         };
         let local_receive_capacity = transport.local_receive_apdu_capacity();
+        // Answers to the session's own leases come before answers no lease
+        // holds when the answer queue runs short (#2635).
+        let ingress = EndpointIngress::new(transport, config.queue_capacity)
+            .with_coordinator(Arc::clone(&coordinator));
         Ok(Self {
             local_receive_capacity,
             shared: Arc::new(SessionShared {
@@ -440,7 +452,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 }),
             }),
             coordinator,
-            ingress: Some(EndpointIngress::new(transport, config.queue_capacity)),
+            ingress: Some(ingress),
             requester: None,
             responder: None,
             notifications: None,

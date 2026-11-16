@@ -87,7 +87,10 @@ a full one never ends classification: what finds no room is dropped, counted
 by class ([`endpoint_ingress::IngressDropCounters`]) and logged at most once
 per [`endpoint_ingress::DROP_LOG_INTERVAL`]. An Unconfirmed-Request may fill
 the request queue only down to a quarter of it, which stays for confirmed
-requests.
+requests; given the endpoint's coordinator
+([`endpoint_ingress::EndpointIngress::with_coordinator`]), an answer no
+lease holds may fill the answer queue only down to a quarter kept for
+answers its leases hold. A queue of one keeps no reserve.
 
 ## A client seat
 
@@ -97,8 +100,8 @@ a transport of its own. Ingress hands the seat what is the client's: a copy
 of each Unconfirmed-Request, each ConfirmedCOVNotification, the answers whose
 lease [`coordinator::OutboundTransactionCoordinator::holder_of`] reads as a
 full client's, and the network controls. It never waits for the seat: a full
-queue is skipped and counted, and an Unconfirmed-Request's copy leaves a
-quarter of it for the client's answers. The module's documentation has the whole rule
+queue is skipped and counted, and anything but an answer to the client's
+request leaves a quarter of it for those answers. The module's documentation has the whole rule
 and how the link stops around a seat.
 
 The example establishes local lease and duplicate-terminal behavior. It does

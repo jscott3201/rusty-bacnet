@@ -34,10 +34,10 @@
 //!
 //! Ingress never waits for the seat. An APDU or control that finds the
 //! seat's queue full is dropped and counted ([`ClientSeatCounters`]), so a
-//! client that stops reading holds nothing else up. The copy of an
-//! Unconfirmed-Request finds it full once only a quarter of it is left
-//! (#2635): a burst of I-Ams can't crowd out the answers to the client's
-//! own requests.
+//! client that stops reading holds nothing else up. Anything but an answer
+//! to the client's request finds it full once only a quarter of it is left
+//! (#2635): a burst of I-Ams, or of confirmed requests on a node with no
+//! server role, can't crowd out the answers to the client's own requests.
 //!
 //! # Lifetime
 //!
@@ -200,8 +200,9 @@ impl<T: TransportPort> std::fmt::Debug for ClientSeat<T> {
 pub struct ClientSeatCounters {
     /// APDUs handed to the seat.
     pub apdus: u64,
-    /// APDUs dropped because the seat's queue was full: for the copy of an
-    /// Unconfirmed-Request, full down to the quarter kept for answers.
+    /// APDUs dropped because the seat's queue was full: for anything but an
+    /// answer to the client's request, full down to the quarter kept for
+    /// those answers.
     pub full_drops: u64,
     /// Network controls dropped because the seat's control queue was full.
     pub control_full_drops: u64,
@@ -368,13 +369,14 @@ impl SeatSlot {
         state.attached.as_ref().map(route)
     }
 
-    /// Whether the seat takes a copy of `received` now. The copy of an
-    /// Unconfirmed-Request may fill the seat's queue only down to the
-    /// reserve kept for answers and confirmed requests (#2635): past that it
-    /// is dropped and counted here, before it is made.
-    pub(crate) fn takes_copy(&self, attached: &Attached, received: &ReceivedApdu) -> bool {
-        let unconfirmed = received.apdu.first().is_some_and(|first| first >> 4 == 1);
-        if unconfirmed && crate::endpoint_ingress::unconfirmed_share_full(&attached.apdus) {
+    /// Whether the seat takes `received`, or a copy of it, now (#2635).
+    /// Anything but an answer (or a segment of one) to the client's request
+    /// may fill the seat's queue only down to the reserve kept for those
+    /// answers: past that it is dropped and counted here, before any copy
+    /// is made. An answer is offered as it is.
+    pub(crate) fn takes(&self, attached: &Attached, received: &ReceivedApdu) -> bool {
+        let request = received.apdu.first().is_some_and(|first| first >> 4 <= 1);
+        if request && crate::endpoint_ingress::down_to_reserve(&attached.apdus) {
             add(&self.full_drops);
             return false;
         }

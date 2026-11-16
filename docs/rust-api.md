@@ -13230,28 +13230,49 @@ The session's ingress never waits for its queues, and a full one never ends
 the session (#2635). What finds no room is dropped and counted by class in
 `policy_counters()` (`unconfirmed_full_drops`, `confirmed_full_drops`,
 `answer_full_drops`, `policy_full_drops`; `EndpointIngress::full_drop_counters`
-underneath), and logged at most once per `DROP_LOG_INTERVAL` (10 s).
+underneath). One log line per `DROP_LOG_INTERVAL` (10 s) reports the drops
+since the last: at debug level when they were all unconfirmed requests (a
+large discovery is routine), as a warning otherwise; the drops after the
+last line are reported when the session stops.
+
+Each queue keeps a reserve, a quarter of it and at least one slot from a
+capacity of two up, that the traffic it can best spare may not take:
 
 - An Unconfirmed-Request opens no transaction and is answered by nobody, so
-  it may fill the request queue only down to a quarter of its capacity. The
-  rest stays for confirmed requests: a global Who-Is's I-Ams, or a device
-  that floods them, can't crowd out a peer's read.
-- A Confirmed-Request that finds no room gets no answer. Its requester sends
-  it again after its APDU timeout (Clause 5.3.1), which recovers a passing
-  burst where an Abort (OUT_OF_RESOURCES, Clause 18.10) would end the
-  transaction. On MS/TP the dropped request's reply sender is released, so
-  the MAC sends Reply Postponed at once.
-- An answer finds a queue only answers use. If even that is full, the answer
-  is dropped and its request ends by its timeout and retries, as if the link
-  had lost it; a source-audited operation then records TIMEOUT.
-- A full client's seat keeps the same quarter of its 256 slots for answers
-  and its own notifications, and counts its drops in `client_seat_counters()`.
+  it may not take the request queue's reserve, which stays for confirmed
+  requests: a global Who-Is's I-Ams, or a device that floods them, can't
+  crowd out a peer's read.
+- A Confirmed-Request that finds no room gets no answer. This tier only
+  queues; refusing work with an answer is the server role's, at its own
+  admission. A silent drop lets the requester's retry (Clause 5.3.1) succeed
+  once a passing burst is over, where an Abort (OUT_OF_RESOURCES, Clause
+  18.10) would end the transaction, and most clients don't retry one. On
+  MS/TP the dropped request's reply sender is released, so the MAC sends
+  Reply Postponed at once.
+- Answers have a queue requests can't fill. An answer no lease holds may not
+  take its reserve, which stays for answers to the session's own requests
+  (the session's coordinator is asked only when the queue is that full, and
+  the look claims nothing). An answer that still finds no room is dropped:
+  its request ends by its timeout and retries, as if the link had lost it,
+  and a source-audited operation records TIMEOUT.
+- On a full client's seat, the quarter of its 256 slots is kept for answers
+  to the client's requests: Unconfirmed-Request copies, its COV
+  notifications and, on a node with no server role, every Confirmed-Request
+  may not take it. The seat counts its drops in `client_seat_counters()`.
 
-`SessionConfig::queue_capacity` (default 256, as deep as the network layer's
-receive queue) sizes each queue. A queued APDU takes a 208-octet slot plus its
-NPDU, so the three ingress queues hold at most about 1.3 MB together, and a
-request queue full of I-Ams about 60 KB. Standalone `BACnetClient` and
-`BACnetServer` don't use this classifier.
+A capacity of 1 keeps no reserve. `SessionConfig::queue_capacity` (default
+256, as deep as the network layer's receive queue) sizes the request, answer
+and policy queues and the egress channel. A queued item takes a slot of at
+most 192 bytes (176 to 184 on a 64-bit target) plus its NPDU or APDU, which
+B/IP copies to its own size, so the four queues hold at most about 1.7 MB
+together, and a request queue full of I-Ams about 50 KB.
+
+Older and slower peers: a dropped request or answer costs its requester one
+APDU timeout, and a requester with a long timeout or no retries pays it in
+full. The endpoint's own client roles default to `apdu_retries: 0`, so a
+dropped answer fails that call after its timeout. Where bursts are expected,
+raise `queue_capacity`, and `apdu_retries` on the requesting side.
+Standalone `BACnetClient` and `BACnetServer` don't use this classifier.
 
 ### Full client on an endpoint
 

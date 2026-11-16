@@ -34,7 +34,8 @@ use egress::{NetworkServiceCommand, NetworkServicePayload, send_network_service_
 
 #[path = "endpoint_routing.rs"]
 mod routing;
-pub(crate) use routing::unconfirmed_share_full;
+use crate::coordinator::OutboundTransactionCoordinator;
+pub(crate) use routing::down_to_reserve;
 use routing::{ControlTee, IngressDrops, IngressQueues, next_apdu, route_received};
 pub use routing::{DROP_LOG_INTERVAL, IngressDropCounters};
 
@@ -146,6 +147,8 @@ pub struct EndpointIngress<T: TransportPort> {
     seats: Option<Arc<SeatSlot>>,
     /// What a full queue dropped, readable in any state.
     drops: Arc<IngressDrops>,
+    /// See [`Self::with_coordinator`].
+    coordinator: Option<Arc<OutboundTransactionCoordinator>>,
     queue_capacity: usize,
     lifecycle: Lifecycle,
     cancel_tx: Option<oneshot::Sender<()>>,
@@ -161,12 +164,23 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             started: std::sync::Weak::new(),
             seats: None,
             drops: Arc::default(),
+            coordinator: None,
             queue_capacity,
             lifecycle: Lifecycle::Ready,
             cancel_tx: None,
             session_task: None,
             egress_open: None,
         }
+    }
+
+    /// The endpoint's pool of invoke IDs (#2635): once the answer queue is
+    /// down to its last quarter, an answer none of `coordinator`'s leases
+    /// holds is dropped, so it can't take a slot from one that a lease
+    /// holds. The look claims nothing. Without a coordinator every answer
+    /// is treated alike.
+    pub fn with_coordinator(mut self, coordinator: Arc<OutboundTransactionCoordinator>) -> Self {
+        self.coordinator = Some(coordinator);
+        self
     }
 
     /// Pre-start link capability; never retains or exposes a transport reference.
@@ -269,6 +283,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             policy_tx,
             seats: Arc::clone(&seats),
             drops: Arc::clone(&self.drops),
+            coordinator: self.coordinator.clone(),
         };
         let controls_tee = ControlTee {
             layer: layer_controls,
@@ -422,6 +437,8 @@ impl<T: TransportPort> Drop for EndpointIngress<T> {
         if let Some(task) = self.session_task.take() {
             task.abort();
         }
+        // An aborted session task reports no tail of its own.
+        let _ = self.drops.flush();
     }
 }
 
@@ -482,6 +499,9 @@ async fn session_task<T: TransportPort + 'static>(
             SessionEvent::Egress(None) => receive_egress = false,
         }
     };
+    // Drops since the last log line are reported now, not left waiting
+    // for a next drop that won't come (#2635).
+    let _ = queues.drops.flush();
 
     egress_open.store(false, Ordering::Release);
     egress_rx.close();

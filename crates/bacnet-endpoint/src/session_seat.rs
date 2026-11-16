@@ -102,3 +102,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .unwrap_or_default()
     }
 }
+
+/// A seat nobody reads while a burst arrives (#2635).
+#[cfg(test)]
+#[path = "session_seat_tests.rs"]
+mod tests;

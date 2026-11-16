@@ -6972,9 +6972,15 @@ endpoint (#2635): what it has no room for is dropped, counted by class in
 Who-Is brings, past their share of the request queue, which keeps a quarter
 for confirmed requests), `confirmed_full_drops` (confirmed requests left
 unanswered, which their requesters send again after their APDU timeout),
-`answer_full_drops` and `policy_full_drops` (malformed or refused APDUs),
-and logged at most once every 10 seconds. `queue_capacity` (default 256)
-sizes each queue. `BipEndpoint` also takes `bbmd=` and
+`answer_full_drops` (answers; one no lease holds may not take the last
+quarter of the answer queue from the endpoint's own) and `policy_full_drops`
+(malformed or refused APDUs), and logged at most once every 10 seconds.
+`queue_capacity` (default 256) sizes each queue; from 2 up each keeps at
+least one slot in reserve, and a capacity of 1 keeps none. With the
+endpoints' default `apdu_retries=0` a dropped answer fails its call when its
+APDU timeout runs out, and a peer with no retries pays a timeout for each
+dropped request: where bursts are expected, raise `queue_capacity` and
+`apdu_retries`. `BipEndpoint` also takes `bbmd=` and
 `foreign_device=`, reports a registration with `foreign_registration()`
 (see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)), and
 reads a BBMD's tables with `read_bdt()` and `read_fdt()` (see

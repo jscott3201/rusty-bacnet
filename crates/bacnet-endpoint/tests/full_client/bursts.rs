@@ -175,8 +175,11 @@ async fn no_burst_of_any_kind_or_size_ends_the_session() {
                         counters.confirmed_full_drops,
                         "{what}"
                     );
-                    assert!(
-                        answered + counters.confirmed_full_drops <= size as u64,
+                    // Each request is answered, declined by the responder
+                    // (its answer found egress full) or dropped unanswered.
+                    assert_eq!(
+                        answered + counters.responder_declined + counters.confirmed_full_drops,
+                        size as u64,
                         "{what}"
                     );
                     assert!(answered > 0, "{what}");
