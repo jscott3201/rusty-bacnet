@@ -93,6 +93,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if let Some(network) = self.network.as_ref().filter(|_| self.owns_link()) {
             network.seal_responses();
         }
+        // On a seat, the node initiates again (#2617).
+        self.comm_state.release_node();
         self.broadcaster.seal();
         self.request_tasks.close();
         stop_producer(&mut self.network_number_task).await;
@@ -238,6 +240,7 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
         if let Some(network) = self.network.as_ref().filter(|_| self.owns_link()) {
             network.seal_responses();
         }
+        self.comm_state.release_node();
         self.broadcaster.seal();
         self.notification_transactions
             .application_sealed

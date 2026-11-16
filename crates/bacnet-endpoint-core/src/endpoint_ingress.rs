@@ -404,6 +404,13 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .unwrap_or_default()
     }
 
+    /// The node's DeviceCommunicationControl state, which a full server on
+    /// its seat sets (#2617). `None` before start.
+    #[doc(hidden)]
+    pub fn node_dcc(&self) -> Option<crate::seat::NodeDcc> {
+        self.seats.as_ref().map(|seats| seats.dcc().clone())
+    }
+
     /// Cancels classification, stops the network layer, and reports classifier exit.
     ///
     /// The seats' queues close first, which ends a seated client's tasks;

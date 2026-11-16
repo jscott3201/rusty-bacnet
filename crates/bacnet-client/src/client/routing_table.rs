@@ -288,7 +288,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
         // Subscribe first, so no answer can arrive before the receiver.
         let mut rx = self.network_reports();
-        self.seat_open()?;
+        self.link_open()?;
         *self
             .routing_query
             .outstanding

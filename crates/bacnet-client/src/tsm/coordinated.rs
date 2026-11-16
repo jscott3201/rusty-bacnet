@@ -46,6 +46,9 @@ pub(crate) enum PendingRelease {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CoordinatedRegistrationError {
     CoordinatorUnavailable,
+    /// The node this client is seated on restricts initiation
+    /// (DeviceCommunicationControl, #2617).
+    InitiationRestricted,
     Reserve(ReserveError),
     DuplicateInvokeId,
 }
@@ -55,6 +58,10 @@ impl fmt::Display for CoordinatedRegistrationError {
         match self {
             Self::CoordinatorUnavailable => {
                 formatter.write_str("coordinator is unavailable for client transaction")
+            }
+            Self::InitiationRestricted => {
+                let error = bacnet_types::error::Error::InitiationDisabled { sent: false };
+                fmt::Display::fmt(&error, formatter)
             }
             Self::Reserve(ReserveError::Exhausted) => {
                 formatter.write_str("all invoke IDs exhausted for destination")
@@ -88,6 +95,20 @@ pub(crate) enum CoordinatedTerminalPhase {
     NoTransaction,
 }
 
+impl From<CoordinatedRegistrationError> for bacnet_types::error::Error {
+    /// The typed [`Error::InitiationDisabled`](bacnet_types::error::Error::InitiationDisabled)
+    /// for a refusal DeviceCommunicationControl caused; the text of the
+    /// others.
+    fn from(error: CoordinatedRegistrationError) -> Self {
+        match error {
+            CoordinatedRegistrationError::InitiationRestricted => {
+                Self::InitiationDisabled { sent: false }
+            }
+            other => Self::Encoding(other.to_string()),
+        }
+    }
+}
+
 impl Tsm {
     pub(crate) fn current_owner(
         &self,
@@ -106,8 +127,25 @@ impl Tsm {
             config,
             allocators: Default::default(),
             pending: Default::default(),
+            leasing: Some(Arc::clone(&coordinator)),
             coordinator: Some(coordinator),
         }
+    }
+
+    /// Follow the node's DeviceCommunicationControl state (#2617): while
+    /// `restricted`, new transactions are refused and a retry falling due
+    /// ends its transaction instead. A closed TSM stays closed.
+    pub(crate) fn restrict_initiation(&mut self, restricted: bool) {
+        self.leasing = if restricted {
+            None
+        } else {
+            self.coordinator.clone()
+        };
+    }
+
+    /// Whether the node this client is seated on restricts initiation now.
+    pub(crate) fn initiation_restricted(&self) -> bool {
+        self.leasing.is_none() && self.coordinator.is_some()
     }
 
     pub(crate) fn register_coordinated_transaction_with_progress(
@@ -134,10 +172,13 @@ impl Tsm {
         segmented: bool,
         terminal_policy: TerminalPolicy,
     ) -> Result<(u8, TransactionRegistration), CoordinatedRegistrationError> {
-        let coordinator = self
-            .coordinator
-            .as_ref()
-            .ok_or(CoordinatedRegistrationError::CoordinatorUnavailable)?;
+        let coordinator = self.leasing.as_ref().ok_or_else(|| {
+            if self.coordinator.is_some() {
+                CoordinatedRegistrationError::InitiationRestricted
+            } else {
+                CoordinatedRegistrationError::CoordinatorUnavailable
+            }
+        })?;
         let metadata = if segmented {
             LeaseMetadata::segmented_requester(peer, service_choice, terminal_policy)
         } else {
@@ -596,6 +637,7 @@ impl Tsm {
     pub(crate) fn close_coordinated(&mut self) {
         self.cancel_all_transactions();
         self.coordinator = None;
+        self.leasing = None;
     }
 
     #[cfg(test)]

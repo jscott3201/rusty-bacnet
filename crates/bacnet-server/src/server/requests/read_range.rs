@@ -42,6 +42,8 @@ pub(super) async fn response(
         .map_err(Error::into_request_reject)
     {
         Ok(decoded) => {
+            // A node's profile differs from the server's only in the
+            // services it lists, which no ReadRange reads (#2617).
             let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
                 .with_identity(Some(&config.device));
             let scope = bacnet_device_core::read::ReadScope {

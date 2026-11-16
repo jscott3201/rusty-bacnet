@@ -100,7 +100,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             controls: network_controls,
             notification_transactions,
             seated,
+            execution,
+            dcc: node_dcc,
+            number: seat_number,
         } = boxed(|| link.start(outputs.db(), &config, audit_routes)).await?;
+        notification_transactions.set_retries(config.notification_retries);
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         // The limiter keeps this startup identity; changing Device membership
@@ -121,7 +125,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
         let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
         let device_bindings = Arc::new(RwLock::new(device_bindings));
-        let comm_state = Arc::new(CommState::default()); // ENABLE at every start
+        // ENABLE at every start, the node's too on a seat (#2617).
+        let comm_state = Arc::new(CommState::new(node_dcc));
         let dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>> =
             Arc::new(Mutex::new(Default::default()));
         let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
@@ -142,15 +147,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return Err(error);
             }
         };
-        let network_number_task = network_controls.map(|controls| {
-            super::network_port::spawn_number_worker(
+        let network_number_task = match (network_controls, seat_number) {
+            (Some(controls), _) => Some(super::network_port::spawn_number_worker(
                 &network,
                 &db,
                 config.registered_network_port,
                 controls,
                 target_audit.as_ref().map(Arc::downgrade),
-            )
-        });
+            )),
+            // On a seat the node's Number owner publishes; target Audit
+            // follows its notice (#2617).
+            (None, Some(number)) => target_audit
+                .as_ref()
+                .map(|audit| super::server_seat::follow_number(number, Arc::downgrade(audit))),
+            (None, None) => None,
+        };
         let network_dispatch = Arc::clone(&network);
         let config_dispatch = Arc::clone(&config);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
@@ -182,6 +193,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 mutation_decisions: Arc::clone(&mutation_decisions),
                 warnings: Arc::default(),
                 config: Arc::clone(&config_dispatch),
+                execution,
             }),
             confirmed_request_tracker: Arc::clone(&confirmed_request_tracker),
             clock: clock.clone(),
@@ -815,6 +827,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_revisit_task,
             local_mac,
             seated,
+            execution,
         };
         boxed(|| server.execute_initial_staging_plans()).await;
         outputs.complete();

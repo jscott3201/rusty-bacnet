@@ -31,7 +31,7 @@ async def finish(method):
 
 def endpoint(**keywords):
     options = {"interface": "127.0.0.1", "port": 0, "broadcast_address": "127.0.0.1",
-               "apdu_timeout_ms": 2000, **keywords}
+               "apdu_timeout_ms": 2000, "apdu_retries": 0, **keywords}
     owner = rb.BipEndpoint(ENDPOINT, device_name="Scanner", **options)
     owner.add_analog_input(instance=1, name="Virtual temperature", units=62, present_value=21.5)
     return owner

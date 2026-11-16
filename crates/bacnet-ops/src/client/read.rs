@@ -142,6 +142,11 @@ pub fn unreachable(error: &Error) -> bool {
 ///   carry the request, or it can't be encoded. Nothing was sent.
 /// - [`Error::RoutedPathCapacityExceeded`]: the client has no room for
 ///   another routed path. Nothing was sent.
+/// - [`Error::InitiationDisabled`]: the node the client is seated on has
+///   had initiation turned off by DeviceCommunicationControl (#2617).
+///   Nothing was sent, or, with `sent`, a request that went out had its
+///   retry withheld; either way no word of the device's, and the next
+///   request fails the same way until the node is enabled again.
 /// - [`Error::Encoding`], the client's untyped error (#1833 types it). A
 ///   link refusing the send comes as this (a router's application given a
 ///   station that names no network), and so do a client out of invoke IDs,
@@ -164,6 +169,7 @@ pub(crate) fn failed_locally(error: &Error) -> bool {
             | Error::UnknownDevice { .. }
             | Error::UnsupportedTransport { .. }
             | Error::RoutedPathCapacityExceeded { .. }
+            | Error::InitiationDisabled { .. }
     )
 }
 

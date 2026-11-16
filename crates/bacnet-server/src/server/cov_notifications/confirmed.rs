@@ -242,7 +242,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let comm_state = Arc::clone(ctx.comm_state);
         let cov_table = Arc::clone(ctx.cov_table);
         let apdu_timeout = Duration::from_millis(ctx.config.cov_retry_timeout_ms);
-        let apdu_retries = DEFAULT_APDU_RETRIES;
+        let apdu_retries = ctx.config.notification_retries;
         // After a failure the coordinate waits one full retry cycle, the first
         // attempt and every retry, before it may report again. That bounds a
         // dead or refusing subscriber to half the in-flight time at most.

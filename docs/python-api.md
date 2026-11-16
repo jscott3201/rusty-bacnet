@@ -7130,11 +7130,11 @@ queue from the endpoint's own: 64 slots at the default capacity, 4 at 16)
 and `policy_full_drops`
 (malformed or refused APDUs), and logged at most once every 10 seconds.
 `queue_capacity` (default 256) sizes each queue; from 2 up each keeps at
-least one slot in reserve, and a capacity of 1 keeps none. With the
-endpoints' default `apdu_retries=0` a dropped answer fails its call when its
-APDU timeout runs out, and a peer with no retries pays a timeout for each
-dropped request: where bursts are expected, raise `queue_capacity` and
-`apdu_retries`. `BipEndpoint` also takes `bbmd=` and
+least one slot in reserve, and a capacity of 1 keeps none. A dropped answer
+costs its call an APDU timeout before a retry (the endpoints default to
+`apdu_timeout_ms=6000` and `apdu_retries=3`), and a peer with no retries
+pays a timeout for each dropped request: where bursts are expected, raise
+`queue_capacity`, and `apdu_retries` where calls must not fail. `BipEndpoint` also takes `bbmd=` and
 `foreign_device=`, reports a registration with `foreign_registration()`
 (see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)), and
 reads a BBMD's tables with `read_bdt()` and `read_fdt()` (see

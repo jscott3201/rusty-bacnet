@@ -159,14 +159,16 @@ fn the_server_pics_follows_the_identity_device() {
             pics.vendor_info.protocol_revision,
         )
     };
-    let server = PicsGenerator::new(&db, &config, &pics_config).for_server();
+    let server = PicsGenerator::new(&db, &config, &pics_config)
+        .for_server(crate::device_view::DeviceExecution::FullServer);
     assert_eq!(protocol(server.generate()), (1, 22));
     assert_eq!(protocol(generate_pics(&db, &config, &pics_config)), (2, 30));
     let elsewhere = ServerConfig {
         device: DeviceIdentity::new(7, 0).unwrap(),
         ..ServerConfig::default()
     };
-    let server = PicsGenerator::new(&db, &elsewhere, &pics_config).for_server();
+    let server = PicsGenerator::new(&db, &elsewhere, &pics_config)
+        .for_server(crate::device_view::DeviceExecution::FullServer);
     assert_eq!(protocol(server.generate()), (2, 30));
 }
 

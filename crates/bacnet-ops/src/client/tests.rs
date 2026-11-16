@@ -674,3 +674,18 @@ fn timeouts_are_a_kind_of_unreachable() {
         assert_eq!(super::unreachable(&error), gone, "{error}");
     }
 }
+
+/// DeviceCommunicationControl on the client's node stops a request at the
+/// client: neither a timeout nor the device's answer (#2617). Reads end on
+/// it, a watch asks for its subscription again, and a batch doesn't fall
+/// back to one property at a time.
+#[test]
+fn a_disabled_node_fails_locally() {
+    use bacnet_types::error::Error;
+    for sent in [false, true] {
+        let error = Error::InitiationDisabled { sent };
+        assert!(super::failed_locally(&error), "{error}");
+        assert!(!super::unreachable(&error), "{error}");
+        assert!(!super::timed_out(&error), "{error}");
+    }
+}

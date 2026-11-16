@@ -32,8 +32,11 @@
 //!   its source and invoke ID: the client seat for a full client's lease,
 //!   the server seat for a server's (any [`LeaseOwner::Notification`]
 //!   lease, so the node must leave the server seat the only role that makes
-//!   them). Any other goes to the endpoint's answer queue, where an answer
-//!   no lease claims is counted and dropped;
+//!   them). A segmented Complex-ACK, or a Segment-ACK sent by the answering
+//!   side, that no lease holds goes to the client seat when one is attached:
+//!   the client in its idle state aborts either (Clause 5.4.4.1). Any other
+//!   goes to the endpoint's answer queue, where an answer no lease claims is
+//!   counted and dropped;
 //! - an Abort or Segment-ACK sent by a requester is about a request the
 //!   node serves: it goes to the server seat, or to the endpoint's answer
 //!   queue when there is none;
@@ -51,8 +54,9 @@
 //! Each seat's queue has three tiers (#2635), so what the role can best
 //! spare finds it full first:
 //!
-//! - Unconfirmed-Requests (I-Ams, Who-Is, notifications) may fill it only
-//!   down to half of it;
+//! - Unconfirmed-Requests (I-Ams, Who-Is, notifications), and on the client
+//!   seat the segmented answers no lease holds, may fill it only down to
+//!   half of it;
 //! - Confirmed-Requests may fill it down to its last quarter, the reserve
 //!   each endpoint queue keeps;
 //! - answers to the role's own requests, and a requester's Abort or
@@ -69,6 +73,16 @@
 //! scale with it. At a capacity of 2 its confirmed requests share the
 //! answers' slot instead, so a confirmed request behind an unconfirmed one
 //! still finds room, as it does in the request queue (#2635).
+//!
+//! # One device
+//!
+//! The node is one device, so what DeviceCommunicationControl does binds
+//! both roles (Clause 16.1): the seated server sets the node's state
+//! ([`NodeDcc`]) as it accepts a request, its duration runs out, or a
+//! restart enables it again, and every seated client follows it
+//! ([`InitiationGate`]), unless its operator started it outside it. The
+//! server's seat also carries the node's own device settings
+//! ([`NodeDevice`]), so the Device it serves states what the node does.
 //!
 //! # Lifetime
 //!
@@ -171,23 +185,217 @@ impl SeatHolds {
     }
 }
 
-/// Tells a seated client that the node's Number owner may have changed the
-/// layer's local network number. The seated client runs no Number owner of
-/// its own; it folds its discovery table when this fires.
+/// Tells a seated role that the node's Number owner may have changed the
+/// layer's local network number. A seated role runs no Number owner of its
+/// own: the client folds its discovery table when this fires, and a server
+/// with target Audit routes its recipient again. Each seat waits on a
+/// notice of its own, so one publication reaches both.
 #[doc(hidden)]
 #[derive(Clone, Debug, Default)]
-pub struct SeatNumber(Arc<Notify>);
+pub struct SeatNumber {
+    seats: Arc<[Notify; 2]>,
+    /// Which seat's notice [`Self::changed`] waits on.
+    seat: usize,
+}
 
 impl SeatNumber {
+    /// This one's handle for `role`'s seat.
+    pub(crate) fn for_seat(&self, role: Role) -> Self {
+        Self {
+            seats: Arc::clone(&self.seats),
+            seat: role as usize,
+        }
+    }
+
     /// The node's Number owner published the number.
     pub fn published(&self) {
-        self.0.notify_one();
+        for seat in self.seats.iter() {
+            seat.notify_one();
+        }
     }
 
     /// Wait for the next publication. One made while nothing waited is kept.
     pub async fn changed(&self) {
-        self.0.notified().await;
+        self.seats[self.seat].notified().await;
     }
+}
+
+/// A seated client's part in the node's DeviceCommunicationControl
+/// (Clause 16.1): told when the node's server restricts initiation, and
+/// when it enables it again.
+#[doc(hidden)]
+pub trait InitiationGate: Send + Sync {
+    /// Initiation is now restricted (`true`) or enabled again (`false`).
+    fn restrict(&self, restricted: bool);
+}
+
+#[derive(Default)]
+struct NodeDccState {
+    restricted: bool,
+    /// The server seat whose state this is (see [`ServerDcc`]); 0 for none.
+    owner: u64,
+    last_owner: u64,
+    gates: Vec<Weak<dyn InitiationGate>>,
+    /// Clients started outside the node's state, by their operator's
+    /// choice: warned about, never restricted.
+    exempt: Vec<Weak<dyn Any + Send + Sync>>,
+}
+
+impl NodeDccState {
+    fn prune(&mut self) {
+        self.gates.retain(|gate| gate.strong_count() > 0);
+        self.exempt.retain(|client| client.strong_count() > 0);
+    }
+
+    fn warn_exempt(&self) {
+        if self.restricted && !self.exempt.is_empty() {
+            tracing::warn!(
+                exempt_clients = self.exempt.len(),
+                "DeviceCommunicationControl disabled initiation on this node, but a full client \
+                 started outside the node's DeviceCommunicationControl keeps initiating \
+                 (an operator override of Clause 16.1)"
+            );
+        }
+    }
+
+    fn apply(&mut self, restricted: bool) {
+        self.prune();
+        if self.restricted == restricted {
+            return;
+        }
+        self.restricted = restricted;
+        for gate in self.gates.iter().filter_map(Weak::upgrade) {
+            gate.restrict(restricted);
+        }
+        self.warn_exempt();
+    }
+}
+
+/// The node's DeviceCommunicationControl state (Clause 16.1), which its
+/// seated server sets and every seated client follows: the standard binds
+/// the device, and the node is one device. Changes are applied to each
+/// client under one lock, before the server answers the request that made
+/// them.
+#[doc(hidden)]
+#[derive(Clone, Default)]
+pub struct NodeDcc(Arc<Mutex<NodeDccState>>);
+
+impl std::fmt::Debug for NodeDcc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeDcc")
+            .field("restricted", &self.is_restricted())
+            .finish_non_exhaustive()
+    }
+}
+
+impl NodeDcc {
+    fn state(&self) -> std::sync::MutexGuard<'_, NodeDccState> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the node's server has restricted initiation now.
+    pub fn is_restricted(&self) -> bool {
+        self.state().restricted
+    }
+
+    /// Have `gate` follow the node's state from now on, starting from the
+    /// state in force. It is let go once it can't be upgraded.
+    pub fn follow(&self, gate: Weak<dyn InitiationGate>) {
+        let mut state = self.state();
+        state.prune();
+        if state.restricted
+            && let Some(gate) = gate.upgrade()
+        {
+            gate.restrict(true);
+        }
+        state.gates.push(gate);
+    }
+
+    /// A client that its operator started outside the node's state, alive
+    /// while `client` can be upgraded: it is never restricted, and a
+    /// warning is logged when DeviceCommunicationControl takes effect while
+    /// it is attached, or when it attaches while it is in effect.
+    pub fn exempt(&self, client: Weak<dyn Any + Send + Sync>) {
+        let mut state = self.state();
+        state.prune();
+        state.exempt.push(client);
+        state.warn_exempt();
+    }
+
+    /// The handle a newly seated server sets the state through. The state
+    /// is the newest server's: one that was seated before can no longer
+    /// change it.
+    fn claim(&self) -> ServerDcc {
+        let mut state = self.state();
+        state.last_owner += 1;
+        state.owner = state.last_owner;
+        let owner = state.owner;
+        state.apply(false);
+        ServerDcc {
+            node: self.clone(),
+            owner,
+        }
+    }
+}
+
+/// A seated server's hold on its node's DeviceCommunicationControl state.
+/// Released when it drops, or by [`Self::release`]: the node then enables
+/// initiation again, as a restarted device would.
+#[doc(hidden)]
+pub struct ServerDcc {
+    node: NodeDcc,
+    owner: u64,
+}
+
+impl std::fmt::Debug for ServerDcc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerDcc").finish_non_exhaustive()
+    }
+}
+
+impl ServerDcc {
+    /// The server restricted initiation (`true`) or enabled it (`false`).
+    /// Does nothing once another server holds the node's state.
+    pub fn set(&self, restricted: bool) {
+        let mut state = self.node.state();
+        if state.owner == self.owner {
+            state.apply(restricted);
+        }
+    }
+
+    /// The server is going: the node enables initiation again, unless
+    /// another server holds its state by now.
+    pub fn release(&self) {
+        let mut state = self.node.state();
+        if state.owner == self.owner {
+            state.apply(false);
+            state.owner = 0;
+        }
+    }
+}
+
+impl Drop for ServerDcc {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// The node's own device settings, which a full server on its seat follows
+/// so that the Device it serves states what the whole node does (#2617):
+/// whether the node has a client role, the largest APDU that role accepts,
+/// and the one APDU timeout and retry count both roles use.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NodeDevice {
+    /// The node has a client role, whose executed services the Device
+    /// lists beside the server's.
+    pub client: bool,
+    /// The largest APDU the node's client role accepts.
+    pub client_max_apdu_length: u16,
+    /// The node's APDU_Timeout, in milliseconds.
+    pub apdu_timeout_ms: u64,
+    /// The node's Number_Of_APDU_Retries.
+    pub apdu_retries: u8,
 }
 
 /// What a full client is handed in place of a transport: see the
@@ -215,6 +423,10 @@ pub struct ClientSeat<T: TransportPort> {
     /// The line back to the endpoint, for each task that keeps the layer.
     #[doc(hidden)]
     pub holds: SeatHolds,
+    /// The node's DeviceCommunicationControl state, which the client
+    /// follows unless its operator started it outside it.
+    #[doc(hidden)]
+    pub dcc: NodeDcc,
 }
 
 impl<T: TransportPort> std::fmt::Debug for ClientSeat<T> {
@@ -241,6 +453,17 @@ pub struct ServerSeat<T: TransportPort> {
     /// The line back to the endpoint.
     #[doc(hidden)]
     pub holds: SeatHolds,
+    /// Fires when the node's Number owner publishes the network number.
+    #[doc(hidden)]
+    pub number: SeatNumber,
+    /// The server's hold on the node's DeviceCommunicationControl state.
+    #[doc(hidden)]
+    pub dcc: ServerDcc,
+    /// The node's device settings, when the node has them: the endpoint's
+    /// session gives them; a seat made from the ingress alone has none,
+    /// and its server serves its own Device.
+    #[doc(hidden)]
+    pub node: Option<NodeDevice>,
 }
 
 impl<T: TransportPort> std::fmt::Debug for ServerSeat<T> {
@@ -352,6 +575,7 @@ pub(crate) struct SeatSlot {
     /// attaches.
     attached: AtomicBool,
     number: SeatNumber,
+    dcc: NodeDcc,
     /// By [`Role`].
     counts: [Counts; 2],
     control_full_drops: AtomicU64,
@@ -389,6 +613,7 @@ impl SeatSlot {
             }),
             attached: AtomicBool::new(false),
             number: SeatNumber::default(),
+            dcc: NodeDcc::default(),
             counts: Default::default(),
             control_full_drops: AtomicU64::new(0),
         });
@@ -401,6 +626,10 @@ impl SeatSlot {
 
     pub(crate) fn number(&self) -> &SeatNumber {
         &self.number
+    }
+
+    pub(crate) fn dcc(&self) -> &NodeDcc {
+        &self.dcc
     }
 
     pub(crate) fn counters(&self) -> ClientSeatCounters {
@@ -436,8 +665,9 @@ impl SeatSlot {
             apdus: made.apdus,
             controls: made.controls.expect("a client seat's controls"),
             roles,
-            number: self.number.clone(),
+            number: self.number.for_seat(Role::Client),
             holds: made.holds,
+            dcc: self.dcc.clone(),
         })
     }
 
@@ -455,6 +685,9 @@ impl SeatSlot {
             coordinator,
             apdus: made.apdus,
             holds: made.holds,
+            number: self.number.for_seat(Role::Server),
+            dcc: self.dcc.claim(),
+            node: None,
         })
     }
 
@@ -579,6 +812,19 @@ impl SeatSlot {
             Some(0) => crate::endpoint_ingress::reserve(capacity),
             _ => return true,
         };
+        if attached.apdus.capacity() <= floor {
+            add(&self.counts[attached.role as usize].full_drops);
+            return false;
+        }
+        true
+    }
+
+    /// Whether the client seat takes an answer to nothing the node asked (see
+    /// the [module docs](self)): only while more than a copy's floor of free
+    /// slots is left, so such answers never take the room the client's own
+    /// answers have. One that isn't is dropped and counted here.
+    pub(crate) fn takes_stray(&self, attached: &Attached) -> bool {
+        let floor = copy_floor(attached.apdus.max_capacity());
         if attached.apdus.capacity() <= floor {
             add(&self.counts[attached.role as usize].full_drops);
             return false;

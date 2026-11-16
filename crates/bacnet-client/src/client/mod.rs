@@ -189,6 +189,8 @@ pub struct ClientOptions {
     /// Slow receivers observe lag; valid confirmed notifications are still acknowledged.
     pub event_channel_capacity: usize,
     confirmed_cov_notification_ack_policy: ConfirmedCOVNotificationAckPolicy,
+    /// See [`Self::with_node_dcc_override`].
+    node_dcc_override: bool,
 }
 
 impl Default for ClientConfig {
@@ -217,6 +219,7 @@ impl Default for ClientOptions {
             event_channel_capacity: DEFAULT_EVENT_CHANNEL_CAPACITY,
             confirmed_cov_notification_ack_policy:
                 cov_notifications::default_confirmed_cov_notification_ack_policy(),
+            node_dcc_override: false,
         }
     }
 }

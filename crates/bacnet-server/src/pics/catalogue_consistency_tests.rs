@@ -91,7 +91,7 @@ fn the_catalogue_pics_follows_each_types_rows_and_the_registry() {
     };
     let pics_config = PicsConfig::default();
     let pics = PicsGenerator::new(&db, &server_config, &pics_config)
-        .for_server()
+        .for_server(crate::device_view::DeviceExecution::FullServer)
         .generate();
     let registry = &server_config.object_types;
 

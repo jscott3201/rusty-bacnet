@@ -199,7 +199,13 @@ impl TransactionOwner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RequestTimerExpiration {
     Retry,
-    SegmentedResponse { generation: u64 },
+    /// A retry was due while the node's DeviceCommunicationControl
+    /// restricts initiation (#2617): the transaction ended, its invoke ID
+    /// released, and nothing more is sent.
+    Withdrawn,
+    SegmentedResponse {
+        generation: u64,
+    },
     TimedOut,
     NoTransaction,
 }
@@ -248,6 +254,12 @@ pub struct Tsm {
     allocators: HashMap<MacAddr, InvokeIdAllocator, BuildMapHasher>,
     pending: HashMap<(MacAddr, u8), PendingTransaction, BuildMapHasher>,
     coordinator: Option<Arc<bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator>>,
+    /// The coordinator new transactions lease from: `coordinator` itself,
+    /// except while the node this client is seated on restricts initiation
+    /// (DeviceCommunicationControl, #2617) and once its seat has closed.
+    /// Registration reads only this, so the restriction costs a request
+    /// nothing it didn't already check.
+    leasing: Option<Arc<bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator>>,
 }
 
 impl Tsm {
@@ -258,6 +270,7 @@ impl Tsm {
             allocators: HashMap::default(),
             pending: HashMap::default(),
             coordinator: None,
+            leasing: None,
         }
     }
 
@@ -601,6 +614,10 @@ impl Tsm {
     /// Returning [`RequestTimerExpiration::Retry`] authorizes one retry. The
     /// caller then releases the enclosing TSM lock before transport I/O; a
     /// segmented-response transition that follows does not revoke that send.
+    /// While the node this client is seated on restricts initiation, a retry
+    /// is not authorized: the transaction ends with
+    /// [`RequestTimerExpiration::Withdrawn`] (#2617), as the server's own
+    /// confirmed notifications do.
     pub(crate) fn expire_request_timer(
         &mut self,
         destination_mac: &[u8],
@@ -620,15 +637,20 @@ impl Tsm {
                 generation: pending.segment_generation,
             };
         }
-        if !final_timeout {
+        if !final_timeout && !self.initiation_restricted() {
             return RequestTimerExpiration::Retry;
         }
+        let withdrawn = !final_timeout;
         let pending = self
             .pending
             .remove(&key)
             .expect("pending transaction exists");
         self.release_pending(destination_mac, invoke_id, pending, PendingRelease::Release);
-        RequestTimerExpiration::TimedOut
+        if withdrawn {
+            RequestTimerExpiration::Withdrawn
+        } else {
+            RequestTimerExpiration::TimedOut
+        }
     }
 
     /// Cancel only if no segment activity has advanced past `generation`.
