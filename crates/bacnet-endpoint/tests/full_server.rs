@@ -1,0 +1,631 @@
+//! A full `BACnetServer` and a full `BACnetClient` on one endpoint
+//! session's link (#2617), on paused time over an in-memory link with
+//! broadcasts.
+//!
+//! The node under test is an endpoint session with both roles, whose full
+//! server serves its own database (AI-1 at 42.0) in place of the session's
+//! narrow server role (whose database has AI-1 at 20.0), beside a full
+//! client. Its peers are a `bacnet-server` device and a standalone client.
+#![allow(dead_code)]
+
+#[path = "support/eventually.rs"]
+mod eventually;
+#[path = "support/wire.rs"]
+mod wire;
+
+use std::time::Duration;
+
+use bacnet_client::client::{BACnetClient, COVNotificationDelivery};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu};
+use bacnet_encoding::constructed::encode_event_notification;
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
+use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
+use bacnet_endpoint::{DeviceIdentity, build_database_with_extra};
+use bacnet_objects::analog::AnalogInputObject;
+use bacnet_server::server::BACnetServer;
+use bacnet_services::alarm_event::EventNotificationRequest;
+use bacnet_transport::test_transport::{SendLog, TestTransport, TestTransportHandle};
+use bacnet_types::MacAddr;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, EngineeringUnits, EventState, EventType, NotifyType, ObjectType,
+    PropertyIdentifier,
+};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
+use bytes::{Bytes, BytesMut};
+
+use eventually::eventually;
+use wire::Wire;
+
+const NODE: u8 = 1;
+const PEER: u8 = 2;
+const OTHER: u8 = 3;
+
+const NODE_DEVICE: u32 = 1001;
+const PEER_DEVICE: u32 = 2002;
+
+const WAIT: Duration = Duration::from_secs(5);
+
+fn ai1() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
+}
+
+/// A database for `instance` with AI-1 at `value`.
+fn database(instance: u32, value: f32) -> bacnet_objects::database::ObjectDatabase {
+    let identity = DeviceIdentity::new(instance, 42).unwrap();
+    let mut input = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+    input.set_present_value(value);
+    build_database_with_extra(&identity, vec![Box::new(input)]).unwrap()
+}
+
+/// A node with both roles, a full client and a full server on its link,
+/// and two peers.
+struct Lab {
+    wire: Wire,
+    session: EndpointSession<TestTransport>,
+    node_sent: SendLog,
+    node_link: TestTransportHandle,
+    server: BACnetServer<TestTransport>,
+    client: BACnetClient<TestTransport>,
+    /// A device the node's client reads, with AI-1 at 21.5.
+    peer: BACnetServer<TestTransport>,
+    /// A standalone client that reads the node.
+    other: BACnetClient<TestTransport>,
+}
+
+/// A started session on node [`NODE`] with `role`, Device [`NODE_DEVICE`]
+/// and AI-1 at 20.0 in its own database.
+async fn session(
+    wire: &Wire,
+    role: SessionRole,
+) -> (EndpointSession<TestTransport>, SendLog, TestTransportHandle) {
+    let port = wire.port(NODE);
+    let (sent, link) = (port.sent(), port.handle());
+    let mut session = EndpointSession::new(port.build(), role, SessionConfig::default())
+        .unwrap()
+        .device(DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
+        .with_database(database(NODE_DEVICE, 20.0));
+    session.start().await.unwrap();
+    (session, sent, link)
+}
+
+async fn lab() -> Lab {
+    let wire = Wire::new();
+    let peer = BACnetServer::generic_builder()
+        .device(DeviceIdentity::new(PEER_DEVICE, 42).unwrap())
+        .database(database(PEER_DEVICE, 21.5))
+        .transport(wire.port(PEER).build())
+        .build()
+        .await
+        .unwrap();
+    let other = BACnetClient::generic_builder()
+        .transport(wire.port(OTHER).build())
+        .apdu_timeout_ms(1_000)
+        .apdu_retries(0)
+        .build()
+        .await
+        .unwrap();
+    let (session, node_sent, node_link) = session(&wire, SessionRole::Both).await;
+    let server = session
+        .full_server(BACnetServer::generic_builder().database(database(NODE_DEVICE, 42.0)))
+        .await
+        .unwrap();
+    let client = session.full_client().unwrap();
+    Lab {
+        wire,
+        session,
+        node_sent,
+        node_link,
+        server,
+        client,
+        peer,
+        other,
+    }
+}
+
+/// The graceful order: the server, then the session, which stops the link
+/// once; the server's stop leaves it up.
+async fn stop(lab: Lab) {
+    let Lab {
+        mut session,
+        node_link,
+        mut server,
+        client,
+        mut peer,
+        mut other,
+        ..
+    } = lab;
+    server.stop().await.unwrap();
+    assert_eq!(node_link.stops(), 0, "the server stopped the node's link");
+    drop(client);
+    session.stop().await.unwrap();
+    assert_eq!(node_link.stops(), 1);
+    other.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
+/// The APDUs the node sent to `to`, leaving out network messages.
+fn sent_to(log: &SendLog, to: &MacAddr) -> Vec<Apdu> {
+    log.frames()
+        .into_iter()
+        .filter(|frame| frame.mac == *to)
+        .filter_map(|frame| {
+            let npdu = decode_npdu(frame.npdu).ok()?;
+            if npdu.message_type.is_some() {
+                return None;
+            }
+            decode_apdu(npdu.payload).ok()
+        })
+        .collect()
+}
+
+/// The invoke IDs of `log`'s Confirmed-Requests for `service`.
+fn requests(log: &SendLog, service: ConfirmedServiceChoice) -> Vec<u8> {
+    log.frames()
+        .into_iter()
+        .filter_map(|frame| decode_apdu(decode_npdu(frame.npdu).ok()?.payload).ok())
+        .filter_map(|apdu| match apdu {
+            Apdu::ConfirmedRequest(request) if request.service_choice == service => {
+                Some(request.invoke_id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_full_server_answers_for_the_node_beside_its_full_client() {
+    let lab = lab().await;
+    let node = Wire::mac(NODE);
+
+    // The full server answers a Who-Is for the node's Device.
+    lab.other.who_is(None).await.unwrap();
+    eventually(WAIT, "the node's I-Am", async || {
+        lab.other.discovered_devices().await.iter().any(|device| {
+            device.object_identifier.instance_number() == NODE_DEVICE && device.mac_address == node
+        })
+    })
+    .await;
+    // It reads from its own database, not the session's, and it runs the
+    // services the session's narrow server role doesn't, ReadPropertyMultiple
+    // among them.
+    let value = lab
+        .other
+        .read_property(&node, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
+        .await
+        .unwrap();
+    // An application-tagged REAL: tag 4, length 4.
+    let mut real = vec![0x44];
+    real.extend_from_slice(&42.0f32.to_be_bytes());
+    assert_eq!(value.property_value, real);
+    let many = lab
+        .other
+        .read_property_multiple(
+            &node,
+            vec![ReadAccessSpecification {
+                object_identifier: ai1(),
+                list_of_property_references: vec![
+                    PropertyReference {
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                    },
+                    PropertyReference {
+                        property_identifier: PropertyIdentifier::OBJECT_NAME,
+                        property_array_index: None,
+                    },
+                ],
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(many.list_of_read_access_results[0].list_of_results.len(), 2);
+
+    // The node's client reads the peer meanwhile.
+    let peer_value = lab
+        .client
+        .read_property(
+            &Wire::mac(PEER),
+            ai1(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(peer_value.object_identifier, ai1());
+
+    // The session's narrow server role saw none of it.
+    let counters = lab.session.policy_counters().await;
+    assert_eq!(counters.responder_declined, 0);
+    assert_eq!(counters.confirmed_full_drops, 0);
+    let seat = lab.session.server_seat_counters();
+    assert!(seat.apdus >= 3, "{seat:?}");
+    assert_eq!(seat.full_drops, 0);
+
+    stop(lab).await;
+}
+
+/// A ConfirmedEventNotification's parameters.
+fn event_notification() -> Vec<u8> {
+    let request = EventNotificationRequest {
+        process_identifier: 1,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 3003).unwrap(),
+        event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap(),
+        timestamp: BACnetTimeStamp::SequenceNumber(5),
+        notification_class: 0,
+        priority: 100,
+        event_type: EventType::OUT_OF_RANGE,
+        message_text: Some("too hot".into()),
+        notify_type: NotifyType::ALARM,
+        ack_required: false,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
+        event_values: None,
+    };
+    let mut parameters = BytesMut::new();
+    encode_event_notification(&request, &mut parameters).unwrap();
+    parameters.to_vec()
+}
+
+/// `service` with `parameters` under `invoke_id`, in an NPDU expecting a
+/// reply.
+fn confirmed(invoke_id: u8, service: ConfirmedServiceChoice, parameters: &[u8]) -> Bytes {
+    let mut apdu = BytesMut::new();
+    encode_apdu(
+        &mut apdu,
+        &Apdu::ConfirmedRequest(ConfirmedRequest {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: false,
+            max_segments: None,
+            max_apdu_length: 1476,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: service,
+            service_request: Bytes::copy_from_slice(parameters),
+        }),
+    )
+    .unwrap();
+    let mut npdu = BytesMut::new();
+    encode_npdu(
+        &mut npdu,
+        &Npdu {
+            expecting_reply: true,
+            payload: apdu.freeze(),
+            ..Npdu::default()
+        },
+    )
+    .unwrap();
+    npdu.freeze()
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_server_acknowledges_an_event_notification_the_client_hears() {
+    let lab = lab().await;
+    let (node, other) = (Wire::mac(NODE), Wire::mac(OTHER));
+    let mut events = lab.client.event_notifications();
+    // The narrow server role rejected both of these as services it doesn't
+    // know (`full_client/roles.rs` pins that); the full server runs them.
+    let requests = [
+        // File 9, which the node hasn't: stream access from 0, 16 octets.
+        confirmed(
+            1,
+            ConfirmedServiceChoice::ATOMIC_READ_FILE,
+            &[
+                0xc4, 0x02, 0x80, 0x00, 0x09, 0x0e, 0x31, 0x00, 0x21, 0x10, 0x0f,
+            ],
+        ),
+        confirmed(
+            2,
+            ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+            &event_notification(),
+        ),
+    ];
+    for request in requests {
+        lab.wire.deliver(&node, wire::frame(&other, request, false));
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    let answers = sent_to(&lab.node_sent, &other);
+    let [Apdu::Error(file), Apdu::SimpleAck(event)] = &answers[..] else {
+        panic!("the full server's answers: {answers:?}");
+    };
+    assert_eq!(file.invoke_id, 1);
+    assert_eq!(
+        (event.invoke_id, event.service_choice),
+        (2, ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION)
+    );
+    // The client heard the event notification, and answered nothing.
+    let heard = events.try_recv().expect("the event notification");
+    assert_eq!(heard.source_mac, other);
+    assert!(events.try_recv().is_err());
+
+    stop(lab).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_answer_goes_to_the_role_that_asked() {
+    let lab = lab().await;
+    let (node, peer, other) = (Wire::mac(NODE), Wire::mac(PEER), Wire::mac(OTHER));
+
+    // The other client subscribes to the node's AI-1 with confirmed
+    // notifications, which the full server sends and that client
+    // acknowledges; the node's client subscribes to the peer's AI-1 the
+    // same way.
+    let mut from_node = lab.other.cov_notifications();
+    let mut from_peer = lab.client.cov_notifications();
+    // Each notification arrives, confirmed, and is acknowledged before the
+    // next change.
+    let acknowledged = async |heard: &mut tokio::sync::broadcast::Receiver<_>, what: &str| {
+        let notification: bacnet_client::client::ReceivedCOVNotification =
+            tokio::time::timeout(WAIT, heard.recv())
+                .await
+                .unwrap_or_else(|_| panic!("no notification {what}"))
+                .unwrap();
+        assert_eq!(notification.delivery, COVNotificationDelivery::Confirmed);
+        eventually(WAIT, "the notification acknowledged", async || {
+            lab.session.active_leases() == 0
+        })
+        .await;
+    };
+    lab.other
+        .subscribe_cov(&node, 7, ai1(), true, Some(600))
+        .await
+        .unwrap();
+    acknowledged(&mut from_node, "from the node").await;
+    lab.client
+        .subscribe_cov(&peer, 9, ai1(), true, Some(600))
+        .await
+        .unwrap();
+    acknowledged(&mut from_peer, "from the peer").await;
+    for round in 0..5u8 {
+        lab.server
+            .set_present_value_local(&ai1(), PropertyValue::Real(50.0 + f32::from(round)))
+            .await
+            .unwrap();
+        acknowledged(&mut from_node, "from the node").await;
+        lab.peer
+            .set_present_value_local(&ai1(), PropertyValue::Real(60.0 + f32::from(round)))
+            .await
+            .unwrap();
+        acknowledged(&mut from_peer, "from the peer").await;
+    }
+    // Long enough for any unanswered notification to be sent again.
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let notifications = |log| requests(log, ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION);
+    // Each acknowledgment reached the server that sent the notification,
+    // so none went twice; and the node's client acknowledged each of the
+    // peer's once, with nothing from the node's server.
+    assert_eq!(notifications(&lab.node_sent).len(), 6);
+    assert_eq!(
+        notifications(&lab.peer.transport().unwrap().sent()).len(),
+        6
+    );
+    let to_peer: Vec<Apdu> = sent_to(&lab.node_sent, &peer)
+        .into_iter()
+        .filter(|apdu| !matches!(apdu, Apdu::ConfirmedRequest(_)))
+        .collect();
+    assert_eq!(to_peer.len(), 6, "{to_peer:?}");
+    assert!(to_peer.iter().all(|apdu| matches!(
+        apdu,
+        Apdu::SimpleAck(ack)
+            if ack.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
+    )));
+    // The node's notifications and the client's requests drew on one pool,
+    // so nothing was claimed by a role that didn't ask.
+    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+    assert!(sent_to(&lab.node_sent, &other).len() >= 6);
+
+    stop(lab).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_full_server_is_refused_where_it_could_not_be_the_nodes_only_server() {
+    let wire = Wire::new();
+    // No server role: a full client there answers every request itself.
+    let (mut alone, _, _) = session(&wire, SessionRole::ClientOnly).await;
+    let refused = alone.full_server(BACnetServer::generic_builder()).await;
+    assert!(
+        refused
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("no server role")
+    );
+    alone.stop().await.unwrap();
+
+    // The session's own COV reporting.
+    let port = wire.port(PEER);
+    let mut reporting =
+        EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
+            .unwrap()
+            .device(DeviceIdentity::new(PEER_DEVICE, 42).unwrap())
+            .with_database(database(PEER_DEVICE, 1.0))
+            .with_cov(bacnet_device_core::report::ReportConfig::default());
+    reporting.start().await.unwrap();
+    let refused = reporting.full_server(BACnetServer::generic_builder()).await;
+    assert!(refused.err().unwrap().to_string().contains("COV"));
+    reporting.stop().await.unwrap();
+
+    // One at a time; a dropped server frees the seat at once.
+    let (mut session, _, link) = session(&Wire::new(), SessionRole::ServerOnly).await;
+    let first = session
+        .full_server(BACnetServer::generic_builder())
+        .await
+        .unwrap();
+    let second = session.full_server(BACnetServer::generic_builder()).await;
+    assert!(second.err().unwrap().to_string().contains("already has"));
+    drop(first);
+    let mut again = session
+        .full_server(BACnetServer::generic_builder())
+        .await
+        .expect("the dropped server's seat is free");
+    // The session's identity is the server's.
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, NODE_DEVICE).unwrap();
+    assert!(
+        again
+            .read_local(&device, PropertyIdentifier::OBJECT_IDENTIFIER, None)
+            .await
+            .is_ok()
+    );
+    again.stop().await.unwrap();
+    session.stop().await.unwrap();
+    assert_eq!(link.stops(), 1);
+}
+
+/// The session's server build can be spawned: its future is `Send` and
+/// borrows nothing of the session.
+fn the_full_server_build_is_send(
+    session: &EndpointSession<TestTransport>,
+) -> impl Send + 'static + use<> {
+    session.full_server(BACnetServer::generic_builder())
+}
+
+/// The node's AI-1 as `reader` reads it: 42.0 from the full server's
+/// database, 20.0 from the session's.
+async fn read_node(reader: &BACnetClient<TestTransport>) -> f32 {
+    let value = tokio::time::timeout(
+        WAIT,
+        reader.read_property(
+            &Wire::mac(NODE),
+            ai1(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        ),
+    )
+    .await
+    .expect("an answer from the node")
+    .unwrap();
+    f32::from_be_bytes(value.property_value[1..5].try_into().unwrap())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stopped_full_server_hands_the_requests_back_to_the_narrow_role() {
+    let Lab {
+        mut session,
+        node_link,
+        mut server,
+        client,
+        mut peer,
+        mut other,
+        ..
+    } = lab().await;
+    assert_eq!(read_node(&other).await, 42.0);
+    server.stop().await.unwrap();
+    // The narrow server role answers again, from the session's database.
+    assert_eq!(read_node(&other).await, 20.0);
+    drop((server, client));
+    session.stop().await.unwrap();
+    assert_eq!(node_link.stops(), 1);
+    other.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_dropped_full_server_hands_the_requests_back_to_the_narrow_role() {
+    let Lab {
+        mut session,
+        node_link,
+        server,
+        client,
+        mut peer,
+        mut other,
+        ..
+    } = lab().await;
+    assert_eq!(read_node(&other).await, 42.0);
+    // Dropped without a stop: its dispatch task is aborted, and its queue
+    // closes once the runtime has run that abort.
+    drop(server);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(read_node(&other).await, 20.0);
+    drop(client);
+    session.stop().await.unwrap();
+    assert_eq!(node_link.stops(), 1);
+    other.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
+/// The refusals no running session is needed for: they come before the
+/// check that the session runs.
+#[tokio::test(start_paused = true)]
+async fn a_full_server_is_refused_beside_source_audit_or_a_registered_port() {
+    let wire = Wire::new();
+    let audited = EndpointSession::new(
+        wire.port(NODE).build(),
+        SessionRole::Both,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .with_source_audit_reporter(ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap());
+    let refused = audited.full_server(BACnetServer::generic_builder()).await;
+    let error = refused.err().expect("refused beside source Audit");
+    assert!(
+        error.to_string().contains("source Audit Reporter"),
+        "{error}"
+    );
+
+    let registered = EndpointSession::new(
+        wire.port(PEER).build(),
+        SessionRole::Both,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .with_registered_network_port(ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap());
+    let refused = registered
+        .full_server(BACnetServer::generic_builder())
+        .await;
+    let error = refused.err().expect("refused beside a registered port");
+    assert!(error.to_string().contains("Network Port"), "{error}");
+}
+
+/// Today a DeviceCommunicationControl the full server accepts silences the
+/// server alone. Clause 16.1.2 binds the whole device: a later step of
+/// #2617 (PR 2) makes DCC node-wide, and the client's read and the
+/// session's I-Am below are refused then, so this test flips.
+#[tokio::test(start_paused = true)]
+async fn disable_initiation_silences_only_the_server_for_now() {
+    let mut lab = lab().await;
+    lab.server.stop().await.unwrap();
+    lab.server = lab
+        .session
+        .full_server(
+            BACnetServer::generic_builder()
+                .database(database(NODE_DEVICE, 42.0))
+                .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive),
+        )
+        .await
+        .unwrap();
+    lab.other
+        .device_communication_control(
+            &Wire::mac(NODE),
+            bacnet_types::enums::EnableDisable::DISABLE_INITIATION,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    // The server initiates nothing.
+    let refused = lab.server.broadcast_i_am().await.unwrap_err();
+    assert!(
+        refused.to_string().to_lowercase().contains("communication"),
+        "{refused}"
+    );
+    // The node's full client still reads, and the session still announces.
+    let before = lab.node_sent.frames().len();
+    lab.client
+        .read_property(
+            &Wire::mac(PEER),
+            ai1(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        )
+        .await
+        .expect("the client's read goes out, for now");
+    assert!(lab.node_sent.frames().len() > before);
+    lab.session
+        .broadcast_i_am()
+        .await
+        .expect("the session's I-Am goes out, for now");
+
+    stop(lab).await;
+}

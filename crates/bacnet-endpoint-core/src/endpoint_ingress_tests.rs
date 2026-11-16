@@ -478,6 +478,10 @@ mod lifecycle;
 #[path = "endpoint_seat_tests.rs"]
 mod seat;
 
+/// The server seat beside the client seat (#2617).
+#[path = "endpoint_server_seat_tests.rs"]
+mod server_seat;
+
 /// What a full queue does: dropped and counted by class, never the end of
 /// the session (#2635).
 #[path = "endpoint_full_queue_tests.rs"]

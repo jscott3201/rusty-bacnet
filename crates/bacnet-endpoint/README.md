@@ -143,8 +143,8 @@ so its requests and the server role's notifications never collide, and
 answers only the COV notifications of its own subscriptions; the server role
 answers everything else. The narrow server role doesn't execute
 ConfirmedEventNotification: the node answers one with a Reject (unrecognized
-service) while the full client still publishes it, until the full server
-takes a seat and acknowledges it. The session has the one owner of the local
+service) while the full client still publishes it; a full server on the
+session (below) acknowledges it. The session has the one owner of the local
 network number. A session with a source Audit Reporter refuses a full client, whose
 requests would not be audited. One stop stops the session with the client
 still alive (#2617): its tasks end, its open requests fail and the link stops.
@@ -152,6 +152,17 @@ From then on the client sends nothing more: its requests and unconfirmed sends
 fail at once, and a call made directly on its `transport()`, such as a BVLC
 query, fails with the transport's stopped error. Dropping the client afterwards
 changes nothing.
+
+[`EndpointSession::full_server`](session::EndpointSession::full_server) builds
+a full `bacnet-server` `BACnetServer` on the same transport, from a
+`BACnetServer::generic_builder()`, with the session's Device identity. While it
+lives it answers every request but the full client's COV notifications, from
+its own database, in place of the narrow server role, which answers again once
+the server is stopped or dropped. Its queue is as deep as the session's request
+queue. It shares the session's invoke-ID pool and network-number owner. Stop
+the server, then the session. DeviceCommunicationControl silences only the
+server for now: the full client's requests and the session's own I-Am still go
+out.
 
 ## What is proven
 
