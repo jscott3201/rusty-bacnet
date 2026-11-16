@@ -1,12 +1,18 @@
 //! A B/IP stop through a shared reference (#2617): with another holder of
 //! the transport alive, every later send fails with the stopped error, the
-//! port can be bound again as soon as the stop returns, stops beside each
-//! other both wait for the port, sends racing a stop end cleanly, and a
-//! send left waiting holds no socket.
+//! socket is closed, and so its port free, as soon as the stop returns,
+//! stops beside each other both wait for it, sends racing a stop end
+//! cleanly, and a send left waiting holds no socket.
+//!
+//! That the socket is closed is read from the transport's own references
+//! ([`closed`]), not by binding its port again: the port is an ephemeral
+//! one, and another test process can be given it between the close and
+//! that bind, which failed a run on Windows (#2657).
 
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket as StdUdpSocket};
-use std::sync::Arc;
+use std::net::{Ipv4Addr, UdpSocket as StdUdpSocket};
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 use std::task::Poll;
 use std::time::Duration;
 
@@ -17,18 +23,32 @@ fn stopped(sent: &Result<(), Error>) -> bool {
     matches!(sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected)
 }
 
-/// A started transport on loopback, shared, the address it bound and its
-/// receiver.
+/// A started transport on loopback, shared, its socket, watched but not
+/// held, and its receiver.
 async fn shared() -> (
     Arc<BipTransport>,
-    SocketAddrV4,
+    Weak<BipSocket>,
     mpsc::Receiver<ReceivedNpdu>,
 ) {
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     let rx = transport.start().await.unwrap();
-    // The socket binds the wildcard address at the transport's port.
-    let bound = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, transport.port);
-    (Arc::new(transport), bound, rx)
+    // The one socket a loopback transport binds: the wildcard address at
+    // its port, owned by the node, the receive loop, the fanout worker and
+    // the relay.
+    let socket = Arc::downgrade(&transport.socket().unwrap());
+    (Arc::new(transport), socket, rx)
+}
+
+/// Whether the transport let go of `socket`: no reference to it is left,
+/// so it is dropped, which closes it and frees its port. Unlike a bind of
+/// the port, nothing outside this process can change the answer.
+fn closed(socket: &Weak<BipSocket>) -> bool {
+    socket.strong_count() == 0
+}
+
+/// Poll `future` once.
+async fn poll_once<F: Future + Unpin>(future: &mut F) -> Poll<F::Output> {
+    std::future::poll_fn(|cx| Poll::Ready(Pin::new(&mut *future).poll(cx))).await
 }
 
 /// A peer on loopback and its B/IP MAC.
@@ -55,7 +75,7 @@ fn block_every_try(transport: &BipTransport) {
 
 #[tokio::test]
 async fn a_stop_with_another_holder_alive_fails_every_later_send_and_frees_the_port() {
-    let (transport, bound, mut rx) = shared().await;
+    let (transport, socket, mut rx) = shared().await;
     let other = Arc::clone(&transport);
     let (peer, mac) = peer();
     other.send_unicast(&[0x01, 0x00], &mac).await.unwrap();
@@ -63,8 +83,8 @@ async fn a_stop_with_another_holder_alive_fails_every_later_send_and_frees_the_p
     peer.recv(&mut buf).unwrap();
 
     transport.stop().await.unwrap();
-    // The port is free at once, while `other` still holds the transport.
-    drop(StdUdpSocket::bind(bound).expect("the stop let go of the port"));
+    // Closed at once, while `other` still holds the transport.
+    assert!(closed(&socket), "the stop let go of the socket");
     for sent in [
         other.send_unicast(&[0x01, 0x00], &mac).await,
         other.send_broadcast(&[0x01, 0x00]).await,
@@ -84,29 +104,41 @@ async fn a_stop_with_another_holder_alive_fails_every_later_send_and_frees_the_p
     other.stop().await.unwrap();
 }
 
-/// Two stops at once both succeed, and the port is free when the second
-/// returns. That a stop waits for one already running is the stop gate's,
-/// pinned in `stopping_tests`.
+/// Two stops at once both succeed, and the second, which comes while the
+/// first still waits for the tasks that hold the socket, returns only once
+/// the socket is closed. The order is forced: a stop spawned and left to
+/// run finishes before the test goes on, so the second would find nothing
+/// running (#2657).
 #[tokio::test]
-async fn stops_beside_each_other_both_return_once_the_port_is_free() {
-    for _ in 0..20 {
-        let (transport, bound, _rx) = shared().await;
-        let other = Arc::clone(&transport);
-        let first = tokio::spawn(async move { transport.stop().await });
-        tokio::task::yield_now().await;
-        other.stop().await.unwrap();
-        drop(StdUdpSocket::bind(bound).expect("the second stop returned with the port free"));
-        first.await.unwrap().unwrap();
-    }
+async fn stops_beside_each_other_both_return_once_the_socket_is_closed() {
+    let (transport, socket, _rx) = shared().await;
+    let other = Arc::clone(&transport);
+    // The first stop takes the gate, aborts the tasks and waits for the
+    // first of them, which nothing has run since.
+    let mut first = Box::pin(async move { transport.stop().await });
+    assert!(poll_once(&mut first).await.is_pending());
+    let first = tokio::spawn(first);
+    let mut second = Box::pin(other.stop());
+    assert!(
+        poll_once(&mut second).await.is_pending(),
+        "the second stop waits for the first"
+    );
+    assert!(!closed(&socket), "it came while the socket was open");
+    second.await.unwrap();
+    assert!(
+        closed(&socket),
+        "the second stop returned with the socket closed"
+    );
+    first.await.unwrap().unwrap();
 }
 
 /// Sends from several tasks race one stop. Each send either went out or
-/// failed with the stopped error; none hangs or panics, and once the last
-/// of them has returned the port is free. Real UDP, so real time: each
-/// sender ends at its first failure, which the stop brings at once.
+/// failed with the stopped error; none hangs or panics, and none holds the
+/// socket once the stop returns. Real UDP, so real time: each sender ends
+/// at its first failure, which the stop brings at once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sends_racing_a_stop_complete_or_fail_cleanly() {
-    let (transport, bound, _rx) = shared().await;
+    let (transport, socket, _rx) = shared().await;
     let (_peer, mac) = peer();
     let (going, mut all_going) = mpsc::channel(4);
     let senders: Vec<_> = (0..4)
@@ -144,21 +176,22 @@ async fn sends_racing_a_stop_complete_or_fail_cleanly() {
         .await
         .expect("the stop doesn't wait on the senders")
         .unwrap();
+    // The senders may still be running: none of them holds the socket.
+    assert!(closed(&socket), "the stop let go of the socket");
     for sender in senders {
         tokio::time::timeout(Duration::from_secs(5), sender)
             .await
             .expect("every sender ends")
             .expect("no sender panicked");
     }
-    drop(StdUdpSocket::bind(bound).expect("the port is free"));
 }
 
 /// A send the task's cooperative budget holds back at its first poll holds
-/// nothing: once the stop returns the port binds again, and the send,
+/// nothing: once the stop returns the socket is closed, and the send,
 /// polled then, fails with the stopped error and sends nothing.
 #[tokio::test]
 async fn a_send_held_back_by_the_budget_holds_no_socket() {
-    let (transport, bound, _rx) = shared().await;
+    let (transport, socket, _rx) = shared().await;
     let (peer, mac) = peer();
     let mut send = Box::pin(transport.send_unicast(&[0x01, 0x00], &mac));
     let first = std::future::poll_fn(|cx| {
@@ -171,24 +204,24 @@ async fn a_send_held_back_by_the_budget_holds_no_socket() {
     .await;
     assert!(first.is_pending());
     transport.stop().await.unwrap();
-    drop(StdUdpSocket::bind(bound).expect("the held-back send held no socket"));
+    assert!(closed(&socket), "the held-back send held no socket");
     assert!(stopped(&send.await));
     assert!(received_nothing(&peer));
 }
 
-/// A send the socket makes wait holds no socket either: a stop frees the
-/// port while the send future lives, not polled again, and the send then
+/// A send the socket makes wait holds no socket either: a stop closes the
+/// socket while the send future lives, not polled again, and the send then
 /// fails with the stopped error, sending nothing.
 #[tokio::test]
 async fn a_send_waiting_for_the_socket_holds_none_and_fails_after_the_stop() {
-    let (transport, bound, _rx) = shared().await;
+    let (transport, socket, _rx) = shared().await;
     let (peer, mac) = peer();
     block_every_try(&transport);
     let mut send = Box::pin(transport.send_unicast(&[0x01, 0x00], &mac));
     let first = std::future::poll_fn(|cx| Poll::Ready(send.as_mut().poll(cx))).await;
     assert!(first.is_pending(), "it waits");
     transport.stop().await.unwrap();
-    drop(StdUdpSocket::bind(bound).expect("the waiting send held no socket"));
+    assert!(closed(&socket), "the waiting send held no socket");
     assert!(stopped(&send.await));
     assert!(received_nothing(&peer));
 }
@@ -197,7 +230,7 @@ async fn a_send_waiting_for_the_socket_holds_none_and_fails_after_the_stop() {
 /// fails with the stopped error.
 #[tokio::test]
 async fn a_waiting_send_wakes_at_the_stop() {
-    let (transport, bound, _rx) = shared().await;
+    let (transport, socket, _rx) = shared().await;
     let (peer, mac) = peer();
     block_every_try(&transport);
     let send = tokio::spawn({
@@ -207,11 +240,11 @@ async fn a_waiting_send_wakes_at_the_stop() {
     tokio::task::yield_now().await;
     assert!(!send.is_finished(), "it waits");
     transport.stop().await.unwrap();
+    assert!(closed(&socket), "the stop let go of the socket");
     let sent = tokio::time::timeout(Duration::from_secs(1), send)
         .await
         .expect("the stop woke the send")
         .unwrap();
     assert!(stopped(&sent));
-    drop(StdUdpSocket::bind(bound).expect("the port is free"));
     assert!(received_nothing(&peer));
 }
