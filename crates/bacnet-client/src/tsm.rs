@@ -22,7 +22,8 @@ mod completion;
 mod coordinated;
 mod progress;
 pub(crate) use coordinated::{
-    CoordinatedCompletion, CoordinatedTerminalPhase, SegmentedAckArrival,
+    CoordinatedCompletion, CoordinatedRegistrationError, CoordinatedTerminalPhase,
+    SegmentedAckArrival,
 };
 use coordinated::{PendingLease, PendingRelease};
 use progress::TransactionShared;
@@ -248,6 +249,12 @@ pub struct Tsm {
     allocators: HashMap<MacAddr, InvokeIdAllocator, BuildMapHasher>,
     pending: HashMap<(MacAddr, u8), PendingTransaction, BuildMapHasher>,
     coordinator: Option<Arc<bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator>>,
+    /// The coordinator a new transaction registers through: `coordinator`
+    /// itself, except while registrations are diverted to the client's
+    /// cold path (a seated client whose requests its node audits, #2617)
+    /// and once the seat has closed. It is the one test a registration
+    /// makes, so a client whose registrations go on pays nothing for it.
+    registrar: Option<Arc<bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator>>,
 }
 
 impl Tsm {
@@ -258,6 +265,7 @@ impl Tsm {
             allocators: HashMap::default(),
             pending: HashMap::default(),
             coordinator: None,
+            registrar: None,
         }
     }
 

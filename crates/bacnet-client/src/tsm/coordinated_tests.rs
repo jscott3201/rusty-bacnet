@@ -532,3 +532,47 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
         assert_eq!(tsm.pending_count(), 0);
     }
 }
+
+/// Diverted registrations (#2617): the client's registration is refused,
+/// a diverted one goes through the coordinator and is answered as any
+/// other, and once the seat closes both are refused.
+#[test]
+fn diverted_registrations_take_the_coordinator_only_when_asked() {
+    let (mut tsm, coordinator) = coordinated_tsm();
+    let peer = CanonicalPeer::direct(&[7]);
+    let service = ConfirmedServiceChoice::READ_PROPERTY;
+    tsm.divert_registrations();
+    assert!(matches!(
+        tsm.register_coordinated_transaction_with_progress(
+            MacAddr::from_slice(&[7]),
+            peer.clone(),
+            service,
+            false,
+        ),
+        Err(CoordinatedRegistrationError::CoordinatorUnavailable)
+    ));
+    let (invoke_id, _registration) = tsm
+        .register_diverted(MacAddr::from_slice(&[7]), peer.clone(), service, false)
+        .unwrap();
+    assert_eq!(coordinator.active_count().unwrap(), 1);
+    assert_eq!(
+        tsm.coordinated_token(&[7], invoke_id).unwrap().invoke_id(),
+        invoke_id
+    );
+    // The diversion stays: the next plain registration is refused again.
+    assert!(
+        tsm.register_coordinated_transaction_with_progress(
+            MacAddr::from_slice(&[7]),
+            peer.clone(),
+            service,
+            false,
+        )
+        .is_err()
+    );
+    tsm.close_coordinated();
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+    assert!(matches!(
+        tsm.register_diverted(MacAddr::from_slice(&[7]), peer, service, false),
+        Err(CoordinatedRegistrationError::CoordinatorUnavailable)
+    ));
+}

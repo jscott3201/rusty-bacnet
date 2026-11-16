@@ -916,6 +916,12 @@ mod segmentation_abort;
 mod segmentation_context;
 mod segmented_request;
 mod service;
+mod source_audit;
+mod source_audit_targets;
+#[doc(hidden)]
+pub use source_audit::{AuditedRequest, SourceAuditor};
+#[doc(hidden)]
+pub use source_audit_targets::{AuditTarget, AuditedOutcome, audit_result};
 mod station;
 mod summaries;
 mod transaction_cleanup;

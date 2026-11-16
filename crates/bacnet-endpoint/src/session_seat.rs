@@ -8,13 +8,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// and invoke-ID coordinator, shared, and queues for what is the
     /// client's to receive.
     fn client_seat(&self) -> Result<ClientSeat<T>, Error> {
-        if self.source_audit_reporter.is_some() {
-            return Err(Error::Encoding(
-                "a session with a source Audit Reporter has no full client: its requests \
-                 would not be audited"
-                    .into(),
-            ));
-        }
         if !self.is_running() {
             return Err(Error::Encoding("endpoint session is not running".into()));
         }
@@ -41,9 +34,24 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// See [`BACnetClient::start_on_seat`] for what a seat changes.
     ///
     /// The session must be running. One full client at a time: another is
-    /// refused until the first is dropped. A session with a source Audit
-    /// Reporter refuses one: the full client's requests are not audited, so
-    /// none may leave beside audited ones.
+    /// refused until the first is dropped.
+    ///
+    /// **Source Audit.** With a source Audit Reporter
+    /// ([`with_source_audit_reporter`](Self::with_source_audit_reporter)),
+    /// the client's requests of the services Table 19-5 maps to READ and
+    /// WRITE are audited (#2617): ReadProperty, ReadPropertyMultiple,
+    /// ReadRange, AtomicReadFile, AuditLogQuery, WriteProperty,
+    /// WritePropertyMultiple, AtomicWriteFile, AddListElement and
+    /// RemoveListElement. Each is admitted by the Reporter's settings and
+    /// then owned by the session, so a caller that goes away loses neither
+    /// the request nor its records. A write sent with a priority is a
+    /// command at that priority, which the Audit_Priority_Filter applies to;
+    /// one without a priority is not filtered by priority. An audited
+    /// request goes to one station, direct or behind a router, and one of a
+    /// service it audits that doesn't decode is refused before it is sent.
+    /// Its other requests, such as subscriptions or device management, are
+    /// not audited yet. An operation cut off by a stop, of the session or of
+    /// the client, is not recorded.
     ///
     /// **Who answers what.** Beside a server role the client answers only
     /// the COV notifications of its own subscriptions. Today's narrow
@@ -101,7 +109,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// notification channel capacities and how it answers a confirmed COV
     /// notification.
     pub fn full_client_with(&self, options: ClientOptions) -> Result<BACnetClient<T>, Error> {
-        BACnetClient::start_on_seat(self.client_config.clone(), self.client_seat()?, options)
+        let seat = self.client_seat()?;
+        let config = self.client_config.clone();
+        match &self.source_audit {
+            Some(source) => {
+                let auditor = crate::source_audit::SeatAuditor(Arc::downgrade(source));
+                BACnetClient::start_on_audited_seat(config, seat, options, Arc::new(auditor))
+            }
+            None => BACnetClient::start_on_seat(config, seat, options),
+        }
     }
 
     /// What ingress handed to the full client's seat, and what it dropped

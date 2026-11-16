@@ -106,8 +106,38 @@ impl Tsm {
             config,
             allocators: Default::default(),
             pending: Default::default(),
+            registrar: Some(Arc::clone(&coordinator)),
             coordinator: Some(coordinator),
         }
+    }
+
+    /// Send every later registration to the client's cold path, which
+    /// hands the request to the node's source Audit (#2617). Transactions
+    /// already open, and the answers to every one, keep the coordinator.
+    pub(crate) fn divert_registrations(&mut self) {
+        self.registrar = None;
+    }
+
+    /// [`Self::register_coordinated_transaction_with_progress`] through the
+    /// coordinator itself, while registrations are diverted: the request a
+    /// node runs for its audited client (#2617). Refused, as every other
+    /// registration is, once the seat has closed.
+    pub(crate) fn register_diverted(
+        &mut self,
+        destination_mac: MacAddr,
+        peer: CanonicalPeer,
+        service_choice: ConfirmedServiceChoice,
+        segmented: bool,
+    ) -> Result<(u8, TransactionRegistration), CoordinatedRegistrationError> {
+        let diverted = std::mem::replace(&mut self.registrar, self.coordinator.clone());
+        let registered = self.register_coordinated_transaction_with_progress(
+            destination_mac,
+            peer,
+            service_choice,
+            segmented,
+        );
+        self.registrar = diverted;
+        registered
     }
 
     pub(crate) fn register_coordinated_transaction_with_progress(
@@ -135,7 +165,7 @@ impl Tsm {
         terminal_policy: TerminalPolicy,
     ) -> Result<(u8, TransactionRegistration), CoordinatedRegistrationError> {
         let coordinator = self
-            .coordinator
+            .registrar
             .as_ref()
             .ok_or(CoordinatedRegistrationError::CoordinatorUnavailable)?;
         let metadata = if segmented {
@@ -596,6 +626,7 @@ impl Tsm {
     pub(crate) fn close_coordinated(&mut self) {
         self.cancel_all_transactions();
         self.coordinator = None;
+        self.registrar = None;
     }
 
     #[cfg(test)]

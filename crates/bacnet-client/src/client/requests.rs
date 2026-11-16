@@ -1,4 +1,5 @@
 use super::segmentation_context::{ConfirmedWait, SegmentedRequestLimits};
+use super::source_audit::Refused;
 use super::*;
 use bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE;
 
@@ -284,7 +285,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         remote_max_apdu,
                         remote_max_segments,
                         routed_forwarded_npci_len,
-                        routed_path_lease: path_lease.as_ref(),
+                        routed_path_lease: path_lease,
+                        pace: _pace,
                         sized_by,
                     },
                 )
@@ -294,7 +296,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
         // The TSM keys below copy `tsm_mac` with `from_slice`, which copies
         // it at once; `clone` copies a `MacAddr` a byte at a time (#1978).
-        let (invoke_id, registration) = {
+        let registered = {
             let mut tsm = self.tsm.lock();
             tsm.register_coordinated_transaction_with_progress(
                 MacAddr::from_slice(&tsm_mac),
@@ -302,7 +304,24 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 service_choice,
                 false,
             )
-            .map_err(|error| Error::Encoding(error.to_string()))?
+        };
+        // A refusal is a closed seat, or a request the node audits (#2617).
+        let (invoke_id, registration) = match registered {
+            Ok(registered) => registered,
+            Err(refused) => match self.on_refused(refused, target, service_choice, false)? {
+                Refused::Registered(registered) => registered,
+                Refused::Audited(auditor) => {
+                    let request = self.audited_request(
+                        auditor,
+                        named,
+                        service_choice,
+                        service_data,
+                        _pace,
+                        path_lease,
+                    );
+                    return request.await;
+                }
+            },
         };
 
         let owner = registration.owner.clone();

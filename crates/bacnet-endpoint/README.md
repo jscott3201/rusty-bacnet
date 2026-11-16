@@ -145,8 +145,8 @@ answers everything else. The narrow server role doesn't execute
 ConfirmedEventNotification: the node answers one with a Reject (unrecognized
 service) while the full client still publishes it; a full server on the
 session (below) acknowledges it. The session has the one owner of the local
-network number. A session with a source Audit Reporter refuses a full client, whose
-requests would not be audited. One stop stops the session with the client
+network number. With a source Audit Reporter the session audits the full client's reads and
+writes, each owned by the session once admitted (#2617). One stop stops the session with the client
 still alive (#2617): its tasks end, its open requests fail and the link stops.
 From then on the client sends nothing more: its requests and unconfirmed sends
 fail at once, and a call made directly on its `transport()`, such as a BVLC

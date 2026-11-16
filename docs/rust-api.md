@@ -13380,8 +13380,8 @@ assert!(client.who_is(None).await.is_err());
 ```
 
 - One full client at a time; another is refused until the first is dropped.
-- A session with a source Audit Reporter refuses a full client, whose
-  requests would not be audited.
+- With a source Audit Reporter, the client's reads and writes are audited
+  ([below](#source-audit-of-the-full-client)).
 - Beside a server role the client answers only the COV notifications of its
   own subscriptions. The narrow server role answers a
   ConfirmedEventNotification with a Reject (unrecognized service) while the
@@ -13419,6 +13419,43 @@ let session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOS
 assert!(session.bvlc_tables().is_some());
 # Ok::<(), bacnet_types::error::Error>(())
 ```
+
+### Source Audit of the full client
+
+On a session with a source Audit Reporter
+(`with_source_audit_reporter`), the full client's requests of the services
+Table 19-5 maps to READ and WRITE go through that Reporter (#2617):
+ReadProperty, ReadPropertyMultiple, ReadRange, AtomicReadFile, AuditLogQuery,
+WriteProperty, WritePropertyMultiple, AtomicWriteFile, AddListElement and
+RemoveListElement, whichever call sends them: typed, raw, routed or through
+`bacnet_ops`. Each is admitted as the narrow requester's operations are (one
+of 64 at once, the Reporter's Audit_Level, Auditable_Operations and
+Audit_Priority_Filter, the Device's recipient, one station direct or behind a
+router) and then belongs to the session: a caller that goes away loses
+neither the request nor its records, since the client retries with the same
+invoke ID and the records carry the real answer. A request the Reporter
+doesn't select, or with no recipient, goes unaudited in the caller's task.
+
+- Each target is its own record (Clause 19.6.5): one per reference of a
+  ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or
+  OPTIONAL; one per write of a WritePropertyMultiple, where those before a
+  refused write succeeded and the rest carry its error. A file operation and
+  an Audit Log query name no property, and a file write no value.
+- A write sent with a priority is a command at that priority: the
+  Audit_Priority_Filter applies and the record names the priority. One sent
+  without a priority is not filtered by priority and names none. There is no
+  commandability argument.
+- Records match the narrow requester's for the same operations. A ReadRange
+  answer that names what was read is recorded as a success whichever rule of
+  its page a strict caller refuses it for; the client's own timeout is
+  TIMEOUT.
+- A request of an audited service that doesn't decode is refused before it
+  is sent. The client's other requests (subscriptions, object and device
+  management, alarm acknowledgment) are not audited yet, nor is WriteGroup.
+- An operation cut off by a stop, of the session or of the client, is not
+  recorded.
+- None of this costs a standalone client anything: an audited client's
+  requests leave the request path at the test registration already makes.
 
 ### Full server on an endpoint
 

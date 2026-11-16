@@ -21,7 +21,7 @@
 //! from the device's shared pool.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
@@ -115,6 +115,12 @@ pub(crate) struct RequestPacer {
     interval: Duration,
     capacity: usize,
     lanes: Mutex<Lanes>,
+    /// The client's part in its node's source Audit (#2617), set once on a
+    /// seated client whose node audits it and on each copy that runs one of
+    /// its requests. It lives here, in the allocation each client has to
+    /// itself and every request passes first, so a client is no larger for
+    /// it; the request path reads it only where a registration is refused.
+    pub(super) audit: OnceLock<super::source_audit::Role>,
 }
 
 /// Held for the life of a request that went; dropping it, when the request
@@ -155,6 +161,7 @@ impl RequestPacer {
             interval,
             capacity,
             lanes: Mutex::new(Lanes::default()),
+            audit: OnceLock::new(),
         }
     }
 
