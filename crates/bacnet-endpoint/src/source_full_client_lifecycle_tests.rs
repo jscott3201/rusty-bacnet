@@ -5,8 +5,9 @@
 use super::*;
 use bacnet_encoding::apdu::{SegmentAck, UnconfirmedRequest};
 use bacnet_services::file::FileWriteAccessMethod;
+use bacnet_services::text_message::TextMessageRequest;
 use bacnet_services::who_is::IAmRequest;
-use bacnet_types::enums::Segmentation;
+use bacnet_types::enums::{MessagePriority, Segmentation};
 
 /// An audited read waiting for its answer when the session stops gets an
 /// error, frees its invoke ID and records nothing. So does one whose
@@ -349,9 +350,9 @@ async fn a_segmented_request_is_audited_as_any_other() {
 }
 
 /// A confirmed service outside the ten audited goes as it is on an audited
-/// client and records nothing; its caller going away mid-request sends no
-/// retry and frees its invoke ID, as on any client; and an unconfirmed
-/// send goes out.
+/// client and records nothing, raw or typed; its caller going away
+/// mid-request sends no retry and frees its invoke ID, as on any client;
+/// and an unconfirmed send goes out.
 #[tokio::test(start_paused = true)]
 async fn an_unaudited_service_and_an_unconfirmed_send_go_as_they_are() {
     let (peer, mut requests) = network().await;
@@ -401,6 +402,35 @@ async fn an_unaudited_service_and_an_unconfirmed_send_go_as_they_are() {
             .is_err(),
         "no retry after the caller left"
     );
+
+    // A typed call of a service the node doesn't audit goes too.
+    let text = {
+        let client = Arc::clone(&client);
+        let mac = peer.local_mac().to_vec();
+        tokio::spawn(async move {
+            let message = TextMessageRequest {
+                source_device: oid(ObjectType::DEVICE, 1),
+                message_class: None,
+                message_priority: MessagePriority::NORMAL,
+                message: "check pump".into(),
+            };
+            client.confirmed_text_message(&mac[..], &message).await
+        })
+    };
+    let request = receive(&mut requests).await;
+    let Apdu::ConfirmedRequest(pdu) = decode_apdu(request.apdu.clone()).unwrap() else {
+        panic!("a confirmed request")
+    };
+    assert_eq!(
+        pdu.service_choice,
+        ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE
+    );
+    let answer = Apdu::SimpleAck(SimpleAck {
+        invoke_id: pdu.invoke_id,
+        service_choice: pdu.service_choice,
+    });
+    send(&peer, &request.source_mac, answer).await;
+    assert!(timeout(WAIT, text).await.unwrap().unwrap().is_ok());
 
     client
         .unconfirmed_request(peer.local_mac(), UnconfirmedServiceChoice::WHO_IS, &[])
