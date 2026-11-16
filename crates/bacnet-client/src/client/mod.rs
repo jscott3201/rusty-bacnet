@@ -1005,6 +1005,8 @@ mod event_notification_tests;
 #[cfg(test)]
 pub(crate) mod fake_device;
 #[cfg(test)]
+mod future_size_tests;
+#[cfg(test)]
 mod group_source_request_tests;
 #[cfg(test)]
 mod list_error_tests;

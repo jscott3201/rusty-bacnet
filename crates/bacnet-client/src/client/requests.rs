@@ -1,6 +1,7 @@
 use super::segmentation_context::{ConfirmedWait, SegmentedRequestLimits};
 use super::source_audit::Refused;
 use super::*;
+use crate::tsm::{CoordinatedRegistrationError, TransactionRegistration};
 use bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE;
 
 /// Which term of Clause 5.2.1.2's minimum bound the transmittable length down.
@@ -116,6 +117,28 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         to.confirmed(self, service_choice, service_data).await
     }
 
+    /// Register a confirmed request with the TSM, its lock held for the
+    /// call alone. The segmented request matches on the result where it is
+    /// made, without naming it, so its future doesn't keep the result
+    /// through its later awaits (#2617).
+    #[inline(always)]
+    pub(super) fn register_transaction(
+        &self,
+        tsm_mac: MacAddr,
+        canonical: CanonicalPeer,
+        service_choice: ConfirmedServiceChoice,
+        segmented: bool,
+    ) -> Result<(u8, TransactionRegistration), CoordinatedRegistrationError> {
+        self.tsm
+            .lock()
+            .register_coordinated_transaction_with_progress(
+                tsm_mac,
+                canonical,
+                service_choice,
+                segmented,
+            )
+    }
+
     pub(super) async fn confirmed_request_inner(
         &self,
         target: ConfirmedTarget<'_>,
@@ -163,10 +186,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // through the same router. The guard lives until this request
         // returns, by any path or by being dropped, and then starts the
         // interval for the next request to this destination.
-        let _pace = self.pacer.wait(pacing::PaceKey::of(target)).await;
+        let mut _pace = self.pacer.wait(pacing::PaceKey::of(target)).await;
         // The lease serializes one active request per (immediate router, DNET)
         // and remains live through every return path, including cancellation.
-        let path_lease = match target {
+        let mut path_lease = match target {
             ConfirmedTarget::Local { .. } => None,
             ConfirmedTarget::Routed {
                 router_mac,
@@ -251,21 +274,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
                 .into());
             }
+            let mut limits = SegmentedRequestLimits {
+                named: &named,
+                remote_max_apdu,
+                remote_max_segments,
+                routed_forwarded_npci_len,
+                routed_path_lease: &mut path_lease,
+                pace: &mut _pace,
+                sized_by,
+            };
             return self
-                .segmented_confirmed_request(
-                    target,
-                    service_choice,
-                    service_data,
-                    SegmentedRequestLimits {
-                        named,
-                        remote_max_apdu,
-                        remote_max_segments,
-                        routed_forwarded_npci_len,
-                        routed_path_lease: path_lease,
-                        pace: _pace,
-                        sized_by,
-                    },
-                )
+                .segmented_confirmed_request(target, service_choice, service_data, &mut limits)
                 .await;
         }
 

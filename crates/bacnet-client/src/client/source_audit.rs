@@ -228,6 +228,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// The request's own errors, and the node's refusal. A request of a
     /// service the node audits that doesn't decode is refused before
     /// anything is sent.
+    #[cold]
+    #[inline(never)]
     pub(super) fn audited_request(
         &self,
         auditor: Arc<dyn SourceAuditor>,
@@ -279,29 +281,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// [`Self::audited_request`] for a request diverted where it was about
-    /// to go segmented, with the target as named, the turn and the routed
-    /// path its `limits` hold.
+    /// to go segmented. Its turn and routed path are its caller's, reached
+    /// through `limits`, and the caller ends once this does.
+    #[cold]
+    #[inline(never)]
     pub(super) fn audited_segmented(
         &self,
         auditor: Arc<dyn SourceAuditor>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
-        limits: SegmentedRequestLimits<'_>,
+        limits: &mut SegmentedRequestLimits<'_>,
     ) -> Diverted {
-        let SegmentedRequestLimits {
-            named,
-            routed_path_lease,
-            pace,
-            ..
-        } = limits;
-        self.audited_request(
-            auditor,
-            named,
-            service_choice,
-            service_data,
-            pace,
-            routed_path_lease,
-        )
+        let (pace, lease) = (limits.pace.take(), limits.routed_path_lease.take());
+        let named = *limits.named;
+        self.audited_request(auditor, named, service_choice, service_data, pace, lease)
     }
 
     /// A copy of this client that runs one request for its node: the same

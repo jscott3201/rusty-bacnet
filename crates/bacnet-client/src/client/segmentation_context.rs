@@ -51,24 +51,32 @@ pub(super) struct InboundSegmentSource<'a> {
     pub(super) warning: &'a WarnThrottle,
 }
 
-/// Limits and routing state for one segmented confirmed request.
+/// Limits and routing state for one segmented confirmed request, which
+/// the request borrows from its caller.
+///
+/// Borrowed, so the segmented request's future holds a pointer where it
+/// would hold this twice (an async fn keeps its arguments twice). Every
+/// typed call's future holds that one, and a debug build keeps several
+/// copies of each on the stack of whatever polls them: in #2617, 320 bytes
+/// more here cost the TUI's agent tests 48 KiB of stack, past the 1 MiB
+/// that CI's stack step gives Windows threads (see `future_size_tests`).
 pub(super) struct SegmentedRequestLimits<'a> {
     /// The target as the caller named it, before a station on this client's
     /// own network was localized: what a request its node audits starts
     /// over from (#2617).
-    pub(super) named: ConfirmedTarget<'a>,
+    pub(super) named: &'a ConfirmedTarget<'a>,
     /// Largest APDU the peer accepts.
     pub(super) remote_max_apdu: u16,
     /// Most segments the peer accepts, when it advertised a bound.
     pub(super) remote_max_segments: Option<u32>,
     /// Forwarded NPCI length reserved for a routed request.
     pub(super) routed_forwarded_npci_len: Option<u16>,
-    /// Routed-path lease to mark terminal when the request finishes. Held
-    /// here, with `pace`, so a request its node audits can hand both over
-    /// (#2617).
-    pub(super) routed_path_lease: Option<RoutedPathLease>,
-    /// The request's turn at the destination, kept until it ends.
-    pub(super) pace: pacing::PaceGuard,
+    /// Routed-path lease to mark terminal when the request finishes. A
+    /// request its node audits lets it go (#2617).
+    pub(super) routed_path_lease: &'a mut Option<RoutedPathLease>,
+    /// The request's turn at the destination, which a request its node
+    /// audits takes along (#2617).
+    pub(super) pace: &'a mut pacing::PaceGuard,
     /// The network and MAC of the discovery-table row that sized the
     /// request, whose age the device's answer restarts; `None` when no row
     /// did (see `BACnetClient::note_answer`).

@@ -436,14 +436,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         target: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
-        limits: SegmentedRequestLimits<'_>,
+        limits: &mut SegmentedRequestLimits<'_>,
     ) -> Result<Bytes, Error> {
         let SegmentedRequestLimits {
             remote_max_apdu,
             remote_max_segments,
             routed_forwarded_npci_len,
             ..
-        } = limits;
+        } = *limits;
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
@@ -469,18 +469,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         );
 
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
-        let registered = self
-            .tsm
-            .lock()
-            .register_coordinated_transaction_with_progress(
-                tsm_mac.clone(),
-                transaction_peer.canonical,
-                service_choice,
-                true,
-            );
         // A refusal is a closed seat, the node's DeviceCommunicationControl,
         // or a request the node audits (#2617).
-        let (invoke_id, registration) = match registered {
+        let (invoke_id, registration) = match self.register_transaction(
+            tsm_mac.clone(),
+            transaction_peer.canonical,
+            service_choice,
+            true,
+        ) {
             Ok(registered) => registered,
             Err(refused) => match self.on_refused(refused, target, service_choice, true)? {
                 Refused::Registered(registered) => registered,
@@ -789,7 +785,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         };
 
-        if let Some(lease) = &limits.routed_path_lease {
+        if let Some(lease) = limits.routed_path_lease.as_ref() {
             lease.mark_terminal_observed();
         }
         guard.mark_completed();

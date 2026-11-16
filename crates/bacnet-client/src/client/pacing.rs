@@ -134,6 +134,18 @@ pub(crate) struct PaceGuard {
     sent: Option<(Arc<RequestPacer>, PaceKey, u64, u64)>,
 }
 
+impl PaceGuard {
+    /// Move the request's turn out, leaving a guard that ends none: for a
+    /// segmented request its node audits, which only borrows its caller's
+    /// guard (#2617).
+    #[cold]
+    pub(crate) fn take(&mut self) -> Self {
+        Self {
+            sent: self.sent.take(),
+        }
+    }
+}
+
 impl Drop for PaceGuard {
     fn drop(&mut self) {
         let Some((pacer, key, generation, ticket)) = self.sent.take() else {
