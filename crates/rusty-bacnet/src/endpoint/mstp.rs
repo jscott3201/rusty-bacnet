@@ -223,7 +223,10 @@ impl PyMstpEndpoint {
     ///         allowed; stored into DEVICE_UUID).
     ///     queue_capacity / apdu_timeout_ms / apdu_retries: Session tuning
     ///         (queue_capacity default 256; a full queue drops and counts,
-    ///         see `status()`'s `*_full_drops`).
+    ///         see `status()`'s `*_full_drops`). The APDU timeout and
+    ///         retries (default 6000 ms and 3) are the node's: the client
+    ///         role's request timing, and the Device's APDU_Timeout and
+    ///         Number_Of_APDU_Retries.
     ///     read_work_limit: Keyword-only. Result rows one ReadProperty served
     ///         by the server role may expand (must be >0, default 256): its
     ///         own row plus, for a Group's Present_Value, one per member
@@ -289,7 +292,7 @@ impl PyMstpEndpoint {
         device_uuid=None,
         queue_capacity=256,
         apdu_timeout_ms=6000,
-        apdu_retries=0,
+        apdu_retries=3,
         *,
         read_work_limit=256,
         min_request_interval_ms=0,

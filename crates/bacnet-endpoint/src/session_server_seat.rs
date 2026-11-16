@@ -78,14 +78,20 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///   must serve that Device, or be left out for a stock one;
     /// - APDU_Timeout and Number_Of_APDU_Retries are
     ///   [`SessionConfig::apdu_timeout_ms`] and
-    ///   [`SessionConfig::apdu_retries`], which the client roles use and the
-    ///   server's confirmed notifications use too. A builder that set other
+    ///   [`SessionConfig::apdu_retries`] (default 6000 ms and 3), which the
+    ///   client roles use and the server's confirmed notifications use too. A builder that set other
     ///   values, or a database whose Device declares others, is refused; a
     ///   Device that declares the object model's defaults (6000 ms and 3, as
     ///   one built from an identity does) is given the session's;
     /// - on a [`SessionRole::Both`] session, Protocol_Services_Supported
     ///   lists what the node's client executes (I-Am, I-Have, both COV
-    ///   notifications) beside the server's services (Clause 12.11.14);
+    ///   notifications) beside the server's services (Clause 12.11.14). It
+    ///   follows the session's role, not whether a full client is attached
+    ///   at the moment: until one is, a ConfirmedCOVNotification the Device
+    ///   lists reaches the server, which rejects it, and a full client on a
+    ///   [`SessionRole::ServerOnly`] session executes services the Device
+    ///   doesn't list. Following the attached client would cost every
+    ///   ReadProperty a read of shared state;
     /// - Segmentation_Supported, Max_Segments_Accepted and
     ///   APDU_Segment_Timeout are the identity's, which the server follows.
     ///   A [`full_client`](Self::full_client) keeps its own segmentation
@@ -137,8 +143,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`client`](Self::client)'s requests and the session's own
     /// [`broadcast_i_am`](Self::broadcast_i_am) fail with
     /// [`Error::InitiationDisabled`]
-    /// and send nothing, and a client request already waiting ends the
-    /// same way when its retry falls due. Answers, and network-layer
+    /// with `sent: false` and send nothing, and a client request already
+    /// waiting ends with `sent: true` when its retry falls due. Answers, and network-layer
     /// messages, still go. It ends when the control's duration runs out, an
     /// ENABLE or an accepted WARMSTART or COLDSTART ReinitializeDevice is
     /// accepted, or the server stops or is dropped. A full client its

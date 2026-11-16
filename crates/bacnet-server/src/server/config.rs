@@ -65,8 +65,10 @@ pub struct ServerConfig {
     /// [`EventNotificationCounters::cov_wait_expired`](crate::server::EventNotificationCounters::cov_wait_expired),
     /// for a peer's write, a local write, a local authorization, the
     /// intrinsic-reporting sweep and the Staging plan a start-up or local
-    /// write starts. It is this server setting, not the Device's
-    /// APDU_Timeout property, which defaults to 6000 ms and isn't read.
+    /// write starts. On a server with a transport of its own it is this
+    /// setting, not the Device's APDU_Timeout property (which defaults to
+    /// 6000 ms), that times them. On a node's seat both are the node's
+    /// APDU timeout, the session's `apdu_timeout_ms` (#2617).
     ///
     /// Starting a server with 0 fails, with an error naming this field:
     /// every report's deadline would be the instant it begins. Any other

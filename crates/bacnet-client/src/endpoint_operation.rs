@@ -163,7 +163,7 @@ impl PreparedEndpointOperation {
                     .lock()
                     .is_ok_and(|tsm| tsm.initiation_restricted())
             {
-                return Err(Error::InitiationDisabled);
+                return Err(Error::InitiationDisabled { sent: true });
             }
             let send = inner.egress.admit_owned_apdu(
                 self.encoded.clone(),

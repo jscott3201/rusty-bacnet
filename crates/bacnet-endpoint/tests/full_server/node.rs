@@ -77,7 +77,7 @@ async fn client_reads(client: &BACnetClient<TestTransport>) -> Result<(), Error>
 }
 
 fn disabled(result: Result<(), Error>) -> bool {
-    matches!(result, Err(Error::InitiationDisabled))
+    matches!(result, Err(Error::InitiationDisabled { sent: false }))
 }
 
 /// A ConfirmedCOVNotification from the other client, for the node's client
@@ -130,7 +130,7 @@ async fn disable_initiation_stops_every_initiation_on_the_node() {
         )
         .await;
     assert!(
-        matches!(narrow, Err(Error::InitiationDisabled)),
+        matches!(narrow, Err(Error::InitiationDisabled { sent: false })),
         "{narrow:?}"
     );
     assert!(lab.server.broadcast_i_am().await.is_err());
@@ -262,7 +262,7 @@ async fn a_waiting_request_loses_its_retry() {
     });
     let (result, ()) = tokio::join!(read, disable);
     assert!(
-        matches!(result, Err(Error::InitiationDisabled)),
+        matches!(result, Err(Error::InitiationDisabled { sent: true })),
         "{result:?}"
     );
     let sent = lab
@@ -366,5 +366,37 @@ async fn the_node_settings_have_one_place() {
         .err()
         .expect("another identity is refused");
     assert!(error.to_string().contains("Device identity"), "{error}");
+    session.stop().await.unwrap();
+}
+
+/// On a link that takes 480 octets, as every MS/TP node's does, a builder
+/// given the session's own identity is the node's identity, not a
+/// contradiction: both are compared as the link serves them.
+#[tokio::test(start_paused = true)]
+async fn the_sessions_own_identity_is_taken_on_a_small_link() {
+    let wire = Wire::new();
+    let identity = DeviceIdentity::new(NODE_DEVICE, 42).unwrap();
+    let mut session = EndpointSession::new(
+        wire.port(NODE).receive_capacity(480).build(),
+        SessionRole::Both,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .device(identity.clone());
+    session.start().await.unwrap();
+    let mut server = session
+        .full_server(BACnetServer::generic_builder().device(identity.clone()))
+        .await
+        .expect("the session's own identity");
+    let accepted = server
+        .read_local(
+            &identity.device_oid(),
+            PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted, PropertyValue::Unsigned(480));
+    server.stop().await.unwrap();
     session.stop().await.unwrap();
 }

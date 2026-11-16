@@ -190,9 +190,17 @@ pub struct SessionConfig {
     /// Must be greater than zero; [`EndpointSession::new`] returns
     /// [`Error::Encoding`] otherwise.
     pub queue_capacity: usize,
-    /// Client APDU timeout (ms).
+    /// The node's APDU timeout in milliseconds (default 6000): how long the
+    /// client roles wait for an answer before they send a request again,
+    /// and, with a [`full_server`](EndpointSession::full_server), how long
+    /// its confirmed notifications wait, and the Device's APDU_Timeout
+    /// (Clause 12.11.28).
     pub apdu_timeout_ms: u64,
-    /// Client APDU retries.
+    /// The node's APDU retries (default 3): how many times the client roles
+    /// send a request again, and, with a
+    /// [`full_server`](EndpointSession::full_server), its confirmed
+    /// notifications, and the Device's Number_Of_APDU_Retries
+    /// (Clause 12.11.29).
     pub apdu_retries: u8,
     /// Client max APDU length.
     ///
@@ -258,8 +266,8 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             queue_capacity: 256,
-            apdu_timeout_ms: 1_000,
-            apdu_retries: 0,
+            apdu_timeout_ms: 6_000,
+            apdu_retries: 3,
             max_apdu_length: 480,
             read_work_limit: bacnet_device_core::read::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
@@ -949,7 +957,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .and_then(EndpointIngress::node_dcc)
             .is_some_and(|dcc| dcc.is_restricted())
         {
-            return Err(Error::InitiationDisabled);
+            return Err(Error::InitiationDisabled { sent: false });
         }
         let egress = self
             .egress

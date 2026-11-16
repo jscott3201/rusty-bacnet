@@ -13353,9 +13353,10 @@ together, and a request queue full of I-Ams about 50 KB.
 
 Older and slower peers: a dropped request or answer costs its requester one
 APDU timeout, and a requester with a long timeout or no retries pays it in
-full. The endpoint's own client roles default to `apdu_retries: 0`, so a
-dropped answer fails that call after its timeout. Where bursts are expected,
-raise `queue_capacity`, and `apdu_retries` on the requesting side.
+full. The endpoint's own client roles default to `apdu_timeout_ms: 6000` and
+`apdu_retries: 3` (#2617), so a dropped answer costs that call a timeout
+before its retry. Where bursts are expected, raise `queue_capacity`, and
+`apdu_retries` on the requesting side.
 Standalone `BACnetClient` and `BACnetServer` don't use this classifier.
 
 ### Full client on an endpoint
@@ -13478,10 +13479,15 @@ session.stop().await?; // stops the link
   identity is the session's, with Max_APDU_Length_Accepted the smaller of
   the identity's and the client's `max_apdu_length` (Clause 12.11.18).
   APDU_Timeout and Number_Of_APDU_Retries are `SessionConfig::apdu_timeout_ms`
-  and `apdu_retries`, which the client uses and the server's confirmed
-  notifications use too (`cov_retry_timeout_ms`, `notification_retries`). On
-  a `Both` session Protocol_Services_Supported lists what the client executes
-  (I-Am, I-Have, both COV notifications) beside the server's services.
+  and `apdu_retries` (default 6000 ms and 3), which the client uses and the
+  server's confirmed notifications use too (`cov_retry_timeout_ms`,
+  `notification_retries`). On a `Both` session Protocol_Services_Supported
+  lists what the client executes (I-Am, I-Have, both COV notifications)
+  beside the server's services. That follows the session's role, not the
+  client attached at the moment: until one is, the server rejects a
+  ConfirmedCOVNotification the Device lists, and a full client on a
+  `ServerOnly` session executes services the Device doesn't list. Following
+  the attached client would cost every ReadProperty a read of shared state.
   Segmentation_Supported is the identity's and the server follows it; the
   full client keeps its own segmentation settings until the session builds
   its server itself, and it can't reassemble a segmented
@@ -13490,9 +13496,9 @@ session.stop().await?; // stops the link
   server holds a DISABLE_INITIATION it accepted, nothing on the node
   initiates but I-Am answers to Who-Is and audit notifications: the full
   client's requests and unconfirmed sends, the narrow client's requests and
-  both `broadcast_i_am()`s fail with `Error::InitiationDisabled` and send
-  nothing, and a client request already waiting ends the same way when its
-  retry falls due. Answers and network-layer messages still go. It ends with
+  both `broadcast_i_am()`s fail with `Error::InitiationDisabled { sent:
+  false }` and send nothing, and a client request already waiting ends with
+  `sent: true` when its retry falls due, as it may have been carried out. Answers and network-layer messages still go. It ends with
   the control's duration, an ENABLE, an accepted WARMSTART or COLDSTART, or
   the server's stop or drop. An operator's own tool may start a client
   outside it with `ClientOptions::with_node_dcc_override(true)`, an override

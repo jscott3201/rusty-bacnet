@@ -564,7 +564,7 @@ fn a_restricted_node_leases_nothing_and_withdraws_retries() {
     assert_eq!(refused, CoordinatedRegistrationError::InitiationRestricted);
     assert!(matches!(
         bacnet_types::error::Error::from(refused),
-        bacnet_types::error::Error::InitiationDisabled
+        bacnet_types::error::Error::InitiationDisabled { sent: false }
     ));
     // The one already waiting gets no retry: it ends, and its ID is free.
     assert_eq!(

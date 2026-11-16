@@ -396,10 +396,16 @@ fn log_not_advancing_display() {
 }
 
 #[test]
-fn initiation_disabled_names_device_communication_control() {
-    let text = Error::InitiationDisabled.to_string();
-    assert!(text.contains("DeviceCommunicationControl"), "{text}");
-    assert!(text.starts_with("not sent"), "{text}");
+fn initiation_disabled_says_whether_the_request_went_out() {
+    let refused = Error::InitiationDisabled { sent: false }.to_string();
+    assert!(refused.contains("DeviceCommunicationControl"), "{refused}");
+    assert!(refused.starts_with("not sent"), "{refused}");
+    let withheld = Error::InitiationDisabled { sent: true }.to_string();
+    assert!(
+        withheld.contains("DeviceCommunicationControl"),
+        "{withheld}"
+    );
+    assert!(withheld.starts_with("no retry sent"), "{withheld}");
 }
 
 #[test]

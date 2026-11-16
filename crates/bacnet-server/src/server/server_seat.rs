@@ -400,18 +400,50 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
             Error::Encoding("a server on a node's seat needs the node's Device identity".into())
         })?;
         let defaults = ServerConfig::default();
-        if self.config.device != defaults.device && self.config.device != identity {
+        // Compared as the link serves them: the node resolved its identity
+        // against the link at start, so on a link that takes less than the
+        // identity asks (480 octets on MS/TP) the two differ only there. The
+        // identity's service list is left out: the server serves the node's
+        // executed services whatever it says.
+        let capacity = self.seat.network.transport().local_receive_apdu_capacity();
+        let served = |identity: &bacnet_objects::DeviceIdentity| {
+            identity
+                .resolve(capacity)
+                .map(|resolved| resolved.with_services(&[]))
+        };
+        if self.config.device == defaults.device {
+            tracing::debug!("a seated server serves the node's Device identity");
+        } else if served(&self.config.device)? != served(&identity)? {
             return Err(contradicts("Device identity"));
         }
-        if self.config.cov_retry_timeout_ms != defaults.cov_retry_timeout_ms
-            && self.config.cov_retry_timeout_ms != node.apdu_timeout_ms
-        {
-            return Err(contradicts("APDU timeout (cov_retry_timeout_ms)"));
-        }
-        if self.config.notification_retries != defaults.notification_retries
-            && self.config.notification_retries != node.apdu_retries
-        {
-            return Err(contradicts("APDU retries (notification_retries)"));
+        let timing = [
+            (
+                "cov_retry_timeout_ms",
+                self.config.cov_retry_timeout_ms,
+                defaults.cov_retry_timeout_ms,
+                node.apdu_timeout_ms,
+            ),
+            (
+                "notification_retries",
+                u64::from(self.config.notification_retries),
+                u64::from(defaults.notification_retries),
+                u64::from(node.apdu_retries),
+            ),
+        ];
+        for (setting, set, default, node) in timing {
+            if set == default {
+                tracing::debug!(
+                    setting,
+                    default,
+                    node,
+                    "a seated server takes the node's value"
+                );
+            } else if set != node {
+                return Err(contradicts(match setting {
+                    "cov_retry_timeout_ms" => "APDU timeout (cov_retry_timeout_ms)",
+                    _ => "APDU retries (notification_retries)",
+                }));
+            }
         }
         let mut state_timing = true;
         if let Some(db) = &self.db {
@@ -430,7 +462,14 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
                 Some(u64::from(node.apdu_retries)),
             );
             state_timing = declared == defaults;
-            if !state_timing && declared != node_timing && declared != (None, None) {
+            if state_timing {
+                tracing::debug!(
+                    apdu_timeout_ms = node.apdu_timeout_ms,
+                    apdu_retries = node.apdu_retries,
+                    "the database's Device declares the object model's default APDU timing: \
+                     it is given the node's"
+                );
+            } else if declared != node_timing && declared != (None, None) {
                 return Err(Error::Encoding(format!(
                     "a server on a node's seat serves the node's APDU_Timeout ({} ms) and \
                      Number_Of_APDU_Retries ({}): the database's Device declares others",

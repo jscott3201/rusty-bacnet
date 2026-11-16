@@ -60,7 +60,8 @@ impl fmt::Display for CoordinatedRegistrationError {
                 formatter.write_str("coordinator is unavailable for client transaction")
             }
             Self::InitiationRestricted => {
-                fmt::Display::fmt(&bacnet_types::error::Error::InitiationDisabled, formatter)
+                let error = bacnet_types::error::Error::InitiationDisabled { sent: false };
+                fmt::Display::fmt(&error, formatter)
             }
             Self::Reserve(ReserveError::Exhausted) => {
                 formatter.write_str("all invoke IDs exhausted for destination")
@@ -100,7 +101,9 @@ impl From<CoordinatedRegistrationError> for bacnet_types::error::Error {
     /// others.
     fn from(error: CoordinatedRegistrationError) -> Self {
         match error {
-            CoordinatedRegistrationError::InitiationRestricted => Self::InitiationDisabled,
+            CoordinatedRegistrationError::InitiationRestricted => {
+                Self::InitiationDisabled { sent: false }
+            }
             other => Self::Encoding(other.to_string()),
         }
     }

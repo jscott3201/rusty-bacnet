@@ -68,20 +68,20 @@ async fn answers_nobody_asked_for_and_octets_that_are_no_apdu_are_counted_and_dr
     }
     eventually(WAIT, "each stray answer counted", async || {
         let counters = lab.session.policy_counters().await;
-        (counters.unclaimed_terminal, counters.ingress_policy) == (3, 2)
+        (counters.unclaimed_terminal, counters.ingress_policy) == (4, 2)
     })
     .await;
 
     // A stray segment of a Complex-ACK and a stray server Segment-ACK reach
-    // the client, which aborts each as an idle client does (Clause 5.4.4.1),
-    // and so does a stray server Abort, which it drops (#2617). The other
-    // strays stay with the endpoint, which counts them, and the node says
-    // nothing back to them.
+    // the client, which aborts each as an idle client does (Clause 5.4.4.1,
+    // #2617). The other strays, a server's Abort among them, which an idle
+    // client would only drop, stay with the endpoint, which counts them, and
+    // the node says nothing back to them.
     eventually(WAIT, "the client's two Aborts", async || {
         lab.node_sent.len() == sent + 2
     })
     .await;
-    assert_eq!(lab.session.client_seat_counters().apdus, 3);
+    assert_eq!(lab.session.client_seat_counters().apdus, 2);
     let aborts: Vec<_> = lab.node_sent.frames()[sent..]
         .iter()
         .map(|frame| {

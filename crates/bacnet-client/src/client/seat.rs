@@ -279,7 +279,9 @@ impl<T: TransportPort> BACnetClient<T> {
     pub(super) fn seat_open(&self) -> Result<(), Error> {
         match self.device_table.asking.refusal() {
             None => Ok(()),
-            Some(network_number::Refusal::Restricted) => Err(Error::InitiationDisabled),
+            Some(network_number::Refusal::Restricted) => {
+                Err(Error::InitiationDisabled { sent: false })
+            }
             Some(network_number::Refusal::Sealed) => Err(seat_closed()),
         }
     }
@@ -430,9 +432,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// - the node is one device, so a DeviceCommunicationControl its full
     ///   server accepts binds this client too (Clause 16.1): while it holds
     ///   DISABLE_INITIATION, each request and unconfirmed send fails with
-    ///   [`Error::InitiationDisabled`] and nothing goes out, and a request
-    ///   already waiting ends the same way when its retry falls due (an
-    ///   answer that comes first still completes it). Its answers to what it
+    ///   [`Error::InitiationDisabled`] (`sent: false`) and nothing goes
+    ///   out, and a request already waiting ends with `sent: true` when its
+    ///   retry falls due (an answer that comes first still completes it). Its answers to what it
     ///   receives, and its network-layer messages, still go. It ends with
     ///   the control's duration, an ENABLE, an accepted WARMSTART or
     ///   COLDSTART, or the server's stop. A segmented request already being

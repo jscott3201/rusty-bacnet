@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- **Breaking (Rust API):** `EndpointSession::full_server` needs a session Device
-  identity and serves the node's Device: both roles' services, the smaller
-  largest APDU, and the session's APDU timeout and retries, refusing a builder
-  or database that contradicts them (#2617).
+- **Breaking (Rust API):** `EndpointSession::full_server` needs a session
+  identity and serves the node's Device: the smaller largest APDU, the
+  session's APDU timing and, on a `Both` session, the client's services too;
+  a contradicting builder or database is refused (#2617).

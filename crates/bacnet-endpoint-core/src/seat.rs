@@ -32,11 +32,11 @@
 //!   its source and invoke ID: the client seat for a full client's lease,
 //!   the server seat for a server's (any [`LeaseOwner::Notification`]
 //!   lease, so the node must leave the server seat the only role that makes
-//!   them). A segmented Complex-ACK, or a Segment-ACK or Abort sent by the
-//!   answering side, that no lease holds goes to the client seat when one is
-//!   attached: the client in its idle state aborts the first two
-//!   (Clause 5.4.4.1). Any other goes to the endpoint's answer queue, where
-//!   an answer no lease claims is counted and dropped;
+//!   them). A segmented Complex-ACK, or a Segment-ACK sent by the answering
+//!   side, that no lease holds goes to the client seat when one is attached:
+//!   the client in its idle state aborts either (Clause 5.4.4.1). Any other
+//!   goes to the endpoint's answer queue, where an answer no lease claims is
+//!   counted and dropped;
 //! - an Abort or Segment-ACK sent by a requester is about a request the
 //!   node serves: it goes to the server seat, or to the endpoint's answer
 //!   queue when there is none;
@@ -54,8 +54,9 @@
 //! Each seat's queue has three tiers (#2635), so what the role can best
 //! spare finds it full first:
 //!
-//! - Unconfirmed-Requests (I-Ams, Who-Is, notifications) may fill it only
-//!   down to half of it;
+//! - Unconfirmed-Requests (I-Ams, Who-Is, notifications), and on the client
+//!   seat the segmented answers no lease holds, may fill it only down to
+//!   half of it;
 //! - Confirmed-Requests may fill it down to its last quarter, the reserve
 //!   each endpoint queue keeps;
 //! - answers to the role's own requests, and a requester's Abort or
@@ -811,6 +812,19 @@ impl SeatSlot {
             Some(0) => crate::endpoint_ingress::reserve(capacity),
             _ => return true,
         };
+        if attached.apdus.capacity() <= floor {
+            add(&self.counts[attached.role as usize].full_drops);
+            return false;
+        }
+        true
+    }
+
+    /// Whether the client seat takes an answer to nothing the node asked (see
+    /// the [module docs](self)): only while more than a copy's floor of free
+    /// slots is left, so such answers never take the room the client's own
+    /// answers have. One that isn't is dropped and counted here.
+    pub(crate) fn takes_stray(&self, attached: &Attached) -> bool {
+        let floor = copy_floor(attached.apdus.max_capacity());
         if attached.apdus.capacity() <= floor {
             add(&self.counts[attached.role as usize].full_drops);
             return false;
