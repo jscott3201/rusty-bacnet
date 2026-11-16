@@ -23,7 +23,7 @@ from rusty_bacnet import (
 
 # The calls that take a RoutedTarget where they take an address (#2617).
 ROUTED_CALLS = ("read_property", "read_property_multiple", "read_range", "read_log_page",
-                "write_property")
+                "write_property", "atomic_read_file", "atomic_write_file")
 
 
 def installed_stub() -> ast.Module:

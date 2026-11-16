@@ -80,12 +80,13 @@ impl BACnetClient {
     /// `start_position` and `data` (bytes) for stream access, or
     /// `start_record`, `record_count` and `records` (a list of bytes) for
     /// record access. An acknowledgment in the other access method, or with
-    /// more octets or records than requested, raises.
+    /// more octets or records than requested, raises. `address` is a local
+    /// address or a `RoutedTarget`, as for `read_property` (#2613).
     #[pyo3(signature = (address, file_identifier, access_method, start_position=0, requested_octet_count=0, start_record=0, requested_record_count=0))]
     fn atomic_read_file<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         file_identifier: PyObjectIdentifier,
         access_method: String,
         start_position: i32,
@@ -93,6 +94,7 @@ impl BACnetClient {
         start_record: i32,
         requested_record_count: u32,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let address = routed::Address::of(address)?;
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let fid = file_identifier.to_rust();
@@ -114,12 +116,21 @@ impl BACnetClient {
         };
 
         crate::py_async::future_into_py(py, async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            let ack = c
-                .atomic_read_file_decoded(&mac, fid, access)
-                .await
-                .map_err(to_py_err)?;
+            let ack = match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.atomic_read_file_decoded(&mac, fid, access).await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .atomic_read_file_decoded(&to, fid, access)
+                        .await
+                }
+            }
+            .map_err(to_py_err)?;
             crate::py_async::attach(|py| {
                 Ok(atomic_read_file_ack_to_py(py, &ack)?.into_any().unbind())
             })
@@ -132,12 +143,13 @@ impl BACnetClient {
     /// acknowledgment as a dict: `access_method`, then `start_position` for
     /// stream access or `start_record` for record access, where the device
     /// says the write took place. An acknowledgment in the other access
-    /// method raises.
+    /// method raises. `address` is a local address or a `RoutedTarget`, as
+    /// for `read_property` (#2613).
     #[pyo3(signature = (address, file_identifier, access_method, start_position=0, file_data=vec![], start_record=0, record_count=0, file_record_data=None))]
     fn atomic_write_file<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         file_identifier: PyObjectIdentifier,
         access_method: String,
         start_position: i32,
@@ -146,6 +158,7 @@ impl BACnetClient {
         record_count: u32,
         file_record_data: Option<Vec<Vec<u8>>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let address = routed::Address::of(address)?;
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let fid = file_identifier.to_rust();
@@ -169,12 +182,19 @@ impl BACnetClient {
 
         let stream_requested = matches!(access, FileWriteAccessMethod::Stream { .. });
         crate::py_async::future_into_py(py, async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            let raw = c
-                .atomic_write_file(&mac, fid, access)
-                .await
-                .map_err(to_py_err)?;
+            let raw = match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.atomic_write_file(&mac, fid, access).await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level().atomic_write_file(&to, fid, access).await
+                }
+            }
+            .map_err(to_py_err)?;
             crate::py_async::attach(|py| {
                 Ok(atomic_write_file_ack_to_py(py, stream_requested, &raw)?
                     .into_any()

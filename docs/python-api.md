@@ -3122,6 +3122,12 @@ the log drops the one it asked for. A non-log object or a `page_size` outside
 
 #### `atomic_read_file(address, file_identifier, access_method, start_position=0, requested_octet_count=0, start_record=0, requested_record_count=0) -> dict`
 
+`address` is a `str` on the local link or a `RoutedTarget` for a station
+behind a router (#2613), with the routing rules of
+[Routed targets](#routed-targets): the request names the station, with
+`router=` or the route the client learns. The answer is the same dict,
+segmented or not, and a reject, error or abort raises as for a local read.
+
 Returns the decoded acknowledgment (#2080): `access_method` (`"stream"` or
 `"record"`) and `end_of_file`, then `start_position` and `data` (bytes) for
 stream access, or `start_record`, `record_count` and `records` (a list of
@@ -3148,9 +3154,34 @@ chunk = await client.atomic_read_file(
     requested_record_count=10,
 )
 chunk["start_record"], chunk["records"]
+
+# A station behind a router, read in bounded blocks until end of file.
+[router] = await client.discover_routers(5)  # the router for network 5
+target = RoutedTarget(5, "10", router=router.mac)
+position, data = 0, b""
+while True:
+    block = await client.atomic_read_file(
+        target,
+        ObjectIdentifier(ObjectType.FILE, 1),
+        access_method="stream",
+        start_position=position,
+        requested_octet_count=1024,
+    )
+    data += block["data"]
+    position += len(block["data"])
+    if block["end_of_file"]:
+        break
 ```
 
+A device that doesn't support segmentation, such as one behind an older
+router, can't send a block larger than one APDU: it answers with an abort
+(segmentation not supported, raised as `BacnetAbortError`) or an error. Ask
+for fewer octets with a smaller `requested_octet_count`, until a block fits
+one APDU.
+
 #### `atomic_write_file(address, file_identifier, access_method, ...) -> dict`
+
+`address` is a `str` or a `RoutedTarget`, as for `atomic_read_file`.
 
 Returns the decoded acknowledgment (#2080): `access_method`, then
 `start_position` for stream access or `start_record` for record access,
@@ -6985,7 +7016,8 @@ in the scanner's terms:
 For a device on this link, `device_address` is also what the calls that take
 an `address` (`read_property` and the rest) take. Those calls don't take
 `"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`,
-`read_range`, `read_log_page` and `write_property` take
+`read_range`, `read_log_page`, `write_property`, `atomic_read_file` and
+`atomic_write_file` take
 `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`
 (see [Routed targets](#routed-targets)); `device()` takes either.
 
@@ -7463,11 +7495,14 @@ endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
 
 ### Routed targets
 
-`BACnetClient`'s `read_property`, `read_property_multiple`, `read_range`,
-`read_log_page` and `write_property` take, where they take `address`, either
+Seven calls of `BACnetClient` take, where they take `address`, either
 a `str`, which always names a station on the client's own link and is never
 read as `net:mac`, or a `RoutedTarget` naming one behind a router (#2612,
-#2617), on a standalone client and an endpoint's alike.
+#2617, #2613), on a standalone client and an endpoint's alike. The seven
+are `read_property`, `read_property_multiple`, `read_range`,
+`read_log_page`, `write_property`, `atomic_read_file` and
+`atomic_write_file`; the COV subscriptions and the other typed calls take a
+local address only until #2588.
 
 **To scan stations that don't announce themselves (MS/TP slaves), pass
 `router` from `discover_routers()`.** Without it each such station costs one
@@ -7520,10 +7555,10 @@ The answer the router relays from the station completes the call. A
 request no one answers ends as a typed call's does, with `BacnetAbortError`
 for the transaction's timeout. Routed calls are paced as direct ones are,
 and every request of a `read_log_page`, the count reads included, goes to
-the same target. The other services take no `RoutedTarget` yet: reach a
-routed device through `device(target)` handles or the `_from_device` and
-`_to_device` forms, by its instance (#2588 brings a routed form to every
-service).
+the same target. To reach a routed device with a service that takes no
+`RoutedTarget` yet, use a `device(target)` handle or the `_from_device`
+and `_to_device` forms, by its instance (#2588 brings a routed form to
+every service).
 
 `RoutedTarget` is frozen, compares and hashes by its network and octets
 however they were written, and copies and pickles. A bad value raises
@@ -7568,9 +7603,8 @@ on the endpoint's link. Its calls keep their names and result shapes:
 | a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the client stopped while it waited |
 | an endpoint with `source_audit_reporter`: audited reads | `NotImplementedError` until source Audit moves to the full client (#2617 step 3) |
 
-Not yet routed on the full client: `atomic_read_file`, `atomic_write_file`,
-the COV subscriptions and the other typed calls take a local address only;
-reach a routed device through a `device()` handle or the `_from_device` and
+Not yet routed on the full client: the COV subscriptions and the other
+typed calls take a local address only; reach a routed device through a `device()` handle or the `_from_device` and
 `_to_device` forms. #2588 brings a routed form to every service.
 
 ### Migration: separately-constructed client/server to endpoint

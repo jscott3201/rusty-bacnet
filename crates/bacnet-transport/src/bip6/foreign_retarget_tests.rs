@@ -290,13 +290,14 @@ async fn a_bbmd_the_bound_socket_cannot_reach_is_refused() {
 /// registered, at once rather than at the next renewal.
 ///
 /// Time is paused, and real sockets let the clock jump while a datagram is
-/// on its way, so the timing is read at the gate, which a renewal reaches
-/// with no I/O in between.
+/// on its way, so each read of a BBMD's socket holds the clock still
+/// ([`in_real_time`]); the timing is read at the gate, which a renewal
+/// reaches with no I/O in between.
 #[tokio::test(start_paused = true)]
 async fn an_activation_during_a_renewal_in_flight_registers_the_new_target() {
     let old = bbmd().await;
     let new = bbmd().await;
-    let (transport, lent) = started(&old, 300).await;
+    let (transport, lent) = in_real_time(started(&old, 300)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     target
         .gate
@@ -318,24 +319,27 @@ async fn an_activation_during_a_renewal_in_flight_registers_the_new_target() {
     let in_flight = next_within(&old, long, |message| match message {
         Bvll6::RegisterForeignDevice { ttl, .. } => Some(ttl),
         _ => None,
-    })
-    .await;
-    assert_eq!(in_flight, 300, "the renewal in flight goes out as read");
+    });
+    assert_eq!(
+        in_real_time(in_flight).await,
+        300,
+        "the renewal in flight goes out as read"
+    );
     let moved = next_within(&new, long, |message| match message {
         Bvll6::RegisterForeignDevice { ttl, .. } => Some(ttl),
         _ => None,
-    })
-    .await;
-    assert_eq!(moved, 120);
+    });
+    assert_eq!(in_real_time(moved).await, 120);
     transport.stop().await.unwrap();
 }
 
 /// A new time-to-live sets the renewal period: half of it, at least 30 s.
-/// The periods are read at the gate, as above.
+/// The periods are read at the gate, as above, and the registrations
+/// after, with the clock held still.
 #[tokio::test(start_paused = true)]
 async fn a_new_ttl_changes_the_renewal_period() {
     let peer = bbmd().await;
-    let (transport, lent) = started(&peer, 300).await;
+    let (transport, lent) = in_real_time(started(&peer, 300)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     let reached = || target.reached.notified();
     reached().await;
@@ -356,15 +360,18 @@ async fn a_new_ttl_changes_the_renewal_period() {
     // The registrations carried the lifetimes in force.
     let mut sent = Vec::new();
     let long = Duration::from_secs(3600);
-    while sent.last() != Some(&20) || sent.len() < 6 {
-        sent.push(
-            next_within(&peer, long, |message| match message {
-                Bvll6::RegisterForeignDevice { ttl, .. } => Some(ttl),
-                _ => None,
-            })
-            .await,
-        );
-    }
+    in_real_time(async {
+        while sent.last() != Some(&20) || sent.len() < 6 {
+            sent.push(
+                next_within(&peer, long, |message| match message {
+                    Bvll6::RegisterForeignDevice { ttl, .. } => Some(ttl),
+                    _ => None,
+                })
+                .await,
+            );
+        }
+    })
+    .await;
     assert_eq!(sent[..6], [300, 300, 100, 100, 20, 20]);
     transport.stop().await.unwrap();
 }

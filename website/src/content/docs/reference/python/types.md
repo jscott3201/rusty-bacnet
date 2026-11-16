@@ -1331,7 +1331,10 @@ def __init__(self, group: str, *, ttl: int = 1, port: Optional[int] = None) -> N
 
 A station on another BACnet network (#2612), where `BACnetClient`'s
 `read_property`, `read_property_multiple`, `read_range`,
-`read_log_page` and `write_property` take an `address` (#2617):
+`read_log_page`, `write_property`, `atomic_read_file` and
+`atomic_write_file` take an `address` (#2617, #2613); the other
+typed calls, the COV subscriptions among them, take a local address
+only until #2588:
 `RoutedTarget(network, address, router=None)`, in that order. A
 `str` address always names a station on the local link.
 
