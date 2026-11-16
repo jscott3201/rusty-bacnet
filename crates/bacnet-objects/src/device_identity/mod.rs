@@ -32,7 +32,7 @@ pub use network_port::NetworkPortEntry;
 /// assert_eq!(identity.vendor_id(), 42);
 /// # Ok::<(), bacnet_types::error::Error>(())
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceIdentity {
     instance: u32,
     vendor_id: u16,

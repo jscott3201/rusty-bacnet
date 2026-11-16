@@ -20,10 +20,30 @@ use super::*;
 use bacnet_network::network_number::{DelayedAnswer, NumberControl, number_is_reply};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_types::network_number::NetworkNumber;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tokio::sync::{Notify, watch};
 
 pub(super) const CAPACITY: usize = 256;
+
+/// [`Asking::sends`]: the client sends.
+const OPEN: u8 = 0;
+/// [`Asking::sends`]: the node this client is seated on restricts
+/// initiation (DeviceCommunicationControl, Clause 16.1): the client
+/// initiates no service, but its network-layer messages, which are no
+/// service, still go out.
+const RESTRICTED: u8 = 1;
+/// [`Asking::sends`]: the seat this client ran on has closed: its node
+/// stopped or dropped it, or the client was stopped. Nothing more is sent,
+/// the question for the network's number included.
+const SEALED: u8 = 2;
+
+/// Why [`Asking::sends`] refuses a send.
+pub(super) enum Refusal {
+    /// DeviceCommunicationControl restricts the node.
+    Restricted,
+    /// The seat has closed.
+    Sealed,
+}
 
 /// When the client asks for its network's number: shared by the request
 /// methods, which ask before a Who-Is, the dispatch task, which wants an
@@ -41,11 +61,10 @@ pub(super) struct Asking {
     /// A question went out. A send that failed doesn't count, so the next
     /// need asks again.
     asked: AtomicBool,
-    /// The seat this client ran on has closed (#2617): its node stopped or
-    /// dropped it, or the client was stopped. Nothing more is sent, the
-    /// question for the network's number included. Never set for a client
+    /// [`OPEN`], [`RESTRICTED`] or [`SEALED`]: whether this client may send
+    /// what keeps no transaction (#2617). Never other than open for a client
     /// with a transport of its own.
-    sealed: AtomicBool,
+    sends: AtomicU8,
     /// Held across a send, so two needs at once ask once.
     sending: tokio::sync::Mutex<()>,
     /// Wakes the owner to ask for the dispatch task, which never waits on
@@ -61,14 +80,38 @@ impl Asking {
         }
     }
 
-    /// The client's seat closed: see the field.
+    /// The client's seat closed: see [`SEALED`].
     pub(super) fn seal(&self) {
-        self.sealed.store(true, Ordering::Release);
+        self.sends.store(SEALED, Ordering::Release);
     }
 
     /// Whether the client's seat has closed.
     pub(super) fn is_sealed(&self) -> bool {
-        self.sealed.load(Ordering::Relaxed)
+        self.sends.load(Ordering::Relaxed) == SEALED
+    }
+
+    /// Follow the node's DeviceCommunicationControl state (#2617). A sealed
+    /// client stays sealed.
+    pub(super) fn restrict(&self, restricted: bool) {
+        let (from, to) = if restricted {
+            (OPEN, RESTRICTED)
+        } else {
+            (RESTRICTED, OPEN)
+        };
+        let _ = self
+            .sends
+            .compare_exchange(from, to, Ordering::AcqRel, Ordering::Relaxed);
+    }
+
+    /// Whether this client may initiate a service now. One load and a test,
+    /// as the seal's check always was; the reason is read only on refusal.
+    #[inline]
+    pub(super) fn refusal(&self) -> Option<Refusal> {
+        match self.sends.load(Ordering::Relaxed) {
+            OPEN => None,
+            RESTRICTED => Some(Refusal::Restricted),
+            _ => Some(Refusal::Sealed),
+        }
     }
 
     /// Wait until the dispatch task wants the number asked for.

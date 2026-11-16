@@ -581,7 +581,7 @@ class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await endpoint.status())["active_leases"], 0)
 
     async def test_a_network_the_router_cant_reach(self):
-        endpoint = self.endpoint(apdu_timeout_ms=500,
+        endpoint = self.endpoint(apdu_timeout_ms=500, apdu_retries=0,
                                  foreign_device=rb.ForeignDevice(self.router_address, ttl=60))
         async with endpoint:
             await accepted_registration(endpoint)

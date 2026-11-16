@@ -56,6 +56,27 @@ impl fmt::Display for NotAdvancing {
     }
 }
 
+/// [`Error::InitiationDisabled`]'s text.
+struct Initiation {
+    sent: bool,
+}
+
+impl fmt::Display for Initiation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.sent {
+            f.write_str(
+                "no retry sent: DeviceCommunicationControl disabled initiation on this device \
+                 after the request went out, and no answer came",
+            )
+        } else {
+            f.write_str(
+                "not sent: DeviceCommunicationControl has disabled initiation on this device \
+                 until it is enabled again",
+            )
+        }
+    }
+}
+
 /// [`Error::AmbiguousDevice`]'s addresses, in the CLI's target grammar where
 /// it has a form for one: a routed station as `2:0x05`; on the local
 /// network, by the MAC's length, which names its link among this stack's
@@ -286,6 +307,22 @@ pub enum Error {
         /// What the device numbered the first record it sent;
         /// `None` when it returned no records.
         returned: Option<u64>,
+    },
+
+    /// The device this request leaves from has had initiation turned off by
+    /// DeviceCommunicationControl (DISABLE_INITIATION, Clause 16.1). It ends
+    /// when the control's duration runs out, a DeviceCommunicationControl
+    /// ENABLE is accepted, or a WARMSTART or COLDSTART ReinitializeDevice
+    /// is. A full client on a node with a full server returns it for every
+    /// request and unconfirmed send while the node's server holds that
+    /// state (#2617).
+    #[error("{}", Initiation { sent: *.sent })]
+    InitiationDisabled {
+        /// `false`: nothing was sent, as the request was refused before it
+        /// went out. `true`: the request went out before initiation was
+        /// turned off, no answer came, and its retry was not sent, so the
+        /// device may have carried it out.
+        sent: bool,
     },
 }
 

@@ -68,18 +68,35 @@ async fn answers_nobody_asked_for_and_octets_that_are_no_apdu_are_counted_and_dr
     }
     eventually(WAIT, "each stray answer counted", async || {
         let counters = lab.session.policy_counters().await;
-        (counters.unclaimed_terminal, counters.ingress_policy) == (6, 2)
+        (counters.unclaimed_terminal, counters.ingress_policy) == (4, 2)
     })
     .await;
 
-    // None reached the client, and the node said nothing back. For a stray
-    // segment of a Complex-ACK or a stray Segment-ACK that is a known gap:
-    // Clause 5.4.4.1 has an idle client abort one, and a standalone client
-    // does. An answer no lease holds stays with the endpoint today; the gap
-    // closes when such answers are routed to the seat (#2617).
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    assert_eq!(lab.session.client_seat_counters().apdus, 0);
-    assert_eq!(lab.node_sent.len(), sent);
+    // A stray segment of a Complex-ACK and a stray server Segment-ACK reach
+    // the client, which aborts each as an idle client does (Clause 5.4.4.1,
+    // #2617). The other strays, a server's Abort among them, which an idle
+    // client would only drop, stay with the endpoint, which counts them, and
+    // the node says nothing back to them.
+    eventually(WAIT, "the client's two Aborts", async || {
+        lab.node_sent.len() == sent + 2
+    })
+    .await;
+    assert_eq!(lab.session.client_seat_counters().apdus, 2);
+    let aborts: Vec<_> = lab.node_sent.frames()[sent..]
+        .iter()
+        .map(|frame| {
+            assert_eq!(frame.mac, peer);
+            let npdu = decode_npdu(frame.npdu.clone()).unwrap();
+            match decode_apdu(npdu.payload).unwrap() {
+                Apdu::Abort(abort) => (abort.sent_by_server, abort.invoke_id, abort.abort_reason),
+                other => panic!("{other:?}"),
+            }
+        })
+        .collect();
+    assert_eq!(
+        aborts,
+        [201, 205].map(|id| (false, id, AbortReason::INVALID_APDU_IN_THIS_STATE))
+    );
     // And nothing is stuck behind them.
     client
         .read_property(&peer, ai1(), PropertyIdentifier::PRESENT_VALUE, None)

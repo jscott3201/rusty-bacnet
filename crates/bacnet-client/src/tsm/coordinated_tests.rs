@@ -533,24 +533,30 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
     }
 }
 
-/// Diverted registrations (#2617): the client's registration is refused,
-/// a diverted one goes through the coordinator and is answered as any
-/// other, and once the seat closes both are refused.
+/// Diverted registrations (#2617): the client's registration is refused
+/// as diverted, a diverted one goes through the coordinator and is
+/// answered as any other, the node's DeviceCommunicationControl refuses
+/// both while it restricts initiation and leaves the diversion when it
+/// lifts, and once the seat closes both are refused.
 #[test]
 fn diverted_registrations_take_the_coordinator_only_when_asked() {
     let (mut tsm, coordinator) = coordinated_tsm();
     let peer = CanonicalPeer::direct(&[7]);
     let service = ConfirmedServiceChoice::READ_PROPERTY;
-    tsm.divert_registrations();
-    assert!(matches!(
+    let plain = |tsm: &mut Tsm| {
         tsm.register_coordinated_transaction_with_progress(
             MacAddr::from_slice(&[7]),
-            peer.clone(),
+            CanonicalPeer::direct(&[7]),
             service,
             false,
-        ),
-        Err(CoordinatedRegistrationError::CoordinatorUnavailable)
-    ));
+        )
+        .err()
+    };
+    tsm.divert_registrations();
+    assert_eq!(
+        plain(&mut tsm),
+        Some(CoordinatedRegistrationError::Diverted)
+    );
     let (invoke_id, _registration) = tsm
         .register_diverted(MacAddr::from_slice(&[7]), peer.clone(), service, false)
         .unwrap();
@@ -560,19 +566,114 @@ fn diverted_registrations_take_the_coordinator_only_when_asked() {
         invoke_id
     );
     // The diversion stays: the next plain registration is refused again.
-    assert!(
-        tsm.register_coordinated_transaction_with_progress(
-            MacAddr::from_slice(&[7]),
-            peer.clone(),
-            service,
-            false,
-        )
-        .is_err()
+    assert_eq!(
+        plain(&mut tsm),
+        Some(CoordinatedRegistrationError::Diverted)
     );
+    // DeviceCommunicationControl refuses both while it restricts, names
+    // itself, and leaves the diversion in place when it lifts.
+    tsm.restrict_initiation(true);
+    assert_eq!(
+        plain(&mut tsm),
+        Some(CoordinatedRegistrationError::InitiationRestricted)
+    );
+    assert_eq!(
+        tsm.register_diverted(MacAddr::from_slice(&[7]), peer.clone(), service, false)
+            .err(),
+        Some(CoordinatedRegistrationError::InitiationRestricted)
+    );
+    tsm.restrict_initiation(false);
+    assert_eq!(
+        plain(&mut tsm),
+        Some(CoordinatedRegistrationError::Diverted)
+    );
+    assert!(!tsm.initiation_restricted());
     tsm.close_coordinated();
     assert_eq!(coordinator.active_count().unwrap(), 0);
     assert!(matches!(
         tsm.register_diverted(MacAddr::from_slice(&[7]), peer, service, false),
         Err(CoordinatedRegistrationError::CoordinatorUnavailable)
     ));
+}
+
+/// The node's DeviceCommunicationControl (#2617): while it restricts
+/// initiation no transaction is leased, with a refusal that names it; a
+/// retry falling due ends its transaction, freeing the invoke ID; and once
+/// it is lifted the TSM leases again. A closed TSM stays closed.
+#[test]
+fn a_restricted_node_leases_nothing_and_withdraws_retries() {
+    let (mut tsm, coordinator) = coordinated_tsm();
+    let peer = CanonicalPeer::direct(&[7]);
+    let (waiting, registration) = register(
+        &mut tsm,
+        &[7],
+        peer.clone(),
+        ConfirmedServiceChoice::READ_PROPERTY,
+        false,
+    );
+    assert!(!tsm.initiation_restricted());
+
+    tsm.restrict_initiation(true);
+    assert!(tsm.initiation_restricted());
+    let refused = tsm
+        .register_coordinated_transaction_with_progress(
+            MacAddr::from_slice(&[7]),
+            peer.clone(),
+            ConfirmedServiceChoice::READ_PROPERTY,
+            false,
+        )
+        .err()
+        .expect("refused");
+    assert_eq!(refused, CoordinatedRegistrationError::InitiationRestricted);
+    assert!(matches!(
+        bacnet_types::error::Error::from(refused),
+        bacnet_types::error::Error::InitiationDisabled { sent: false }
+    ));
+    // The one already waiting gets no retry: it ends, and its ID is free.
+    assert_eq!(
+        tsm.expire_request_timer(&[7], waiting, &registration.owner, false),
+        RequestTimerExpiration::Withdrawn
+    );
+    assert_eq!(tsm.pending_count(), 0);
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+
+    tsm.restrict_initiation(false);
+    register(
+        &mut tsm,
+        &[7],
+        peer.clone(),
+        ConfirmedServiceChoice::READ_PROPERTY,
+        false,
+    );
+
+    tsm.close_coordinated();
+    tsm.restrict_initiation(false);
+    let closed = tsm
+        .register_coordinated_transaction_with_progress(
+            MacAddr::from_slice(&[7]),
+            peer,
+            ConfirmedServiceChoice::READ_PROPERTY,
+            false,
+        )
+        .err()
+        .expect("closed");
+    assert_eq!(closed, CoordinatedRegistrationError::CoordinatorUnavailable);
+}
+
+/// A final timeout is a timeout, restricted or not.
+#[test]
+fn a_final_timeout_is_no_withdrawal() {
+    let (mut tsm, _coordinator) = coordinated_tsm();
+    let (waiting, registration) = register(
+        &mut tsm,
+        &[7],
+        CanonicalPeer::direct(&[7]),
+        ConfirmedServiceChoice::READ_PROPERTY,
+        false,
+    );
+    tsm.restrict_initiation(true);
+    assert_eq!(
+        tsm.expire_request_timer(&[7], waiting, &registration.owner, true),
+        RequestTimerExpiration::TimedOut
+    );
 }

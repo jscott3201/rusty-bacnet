@@ -131,7 +131,7 @@ class RoutedFileWireTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     endpoint = rb.BipEndpoint(NEAR, interface="127.0.0.1", port=0,
                                               broadcast_address="127.0.0.1",
-                                              apdu_timeout_ms=timeout_ms)
+                                              apdu_timeout_ms=timeout_ms, apdu_retries=0)
                     await asyncio.wait_for(endpoint.start(), 10)
                     try:
                         await scenario(await endpoint.client())
@@ -538,7 +538,8 @@ class RoutedFileRouterTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_large_write_is_segmented_and_edge_cases_match_direct(self):
         target = rb.RoutedTarget(5, self.far_address, router=self.router_address)
         endpoint = rb.BipEndpoint(NEAR, interface="127.0.0.1", port=0,
-                                  broadcast_address="127.0.0.1", apdu_timeout_ms=2000)
+                                  broadcast_address="127.0.0.1", apdu_timeout_ms=2000,
+                                  apdu_retries=0)
         async with endpoint:
             client = await endpoint.client()
             await self.write_segmented(client, target)

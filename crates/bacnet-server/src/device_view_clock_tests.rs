@@ -124,14 +124,8 @@ fn endpoint_services_do_not_sample_the_clock() {
     let db = database(Some(clock.clone()));
     for writes in [false, true] {
         for reinitialize in [false, true] {
-            let context = DeviceReadContext::new(
-                &db,
-                DeviceExecution::Endpoint {
-                    writes,
-                    reinitialize,
-                    cov: false,
-                },
-            );
+            let context =
+                DeviceReadContext::new(&db, DeviceExecution::endpoint(writes, reinitialize, false));
             let value = services(&context, &db);
             assert_clock_services(value.clone(), false);
             let supported = supported(value);

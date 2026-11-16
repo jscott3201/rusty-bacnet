@@ -478,7 +478,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 service_choice,
                 true,
             );
-        // A refusal is a closed seat, or a request the node audits (#2617).
+        // A refusal is a closed seat, the node's DeviceCommunicationControl,
+        // or a request the node audits (#2617).
         let (invoke_id, registration) = match registered {
             Ok(registered) => registered,
             Err(refused) => match self.on_refused(refused, target, service_choice, true)? {

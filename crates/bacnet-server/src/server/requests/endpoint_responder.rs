@@ -383,11 +383,11 @@ impl EndpointResponder {
             reply::refuse_segmented(invoke_id)
         } else if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
             let profile = confirmed_response::ReadProfile {
-                execution: crate::device_view::DeviceExecution::Endpoint {
-                    writes: self.device_writes.is_some(),
-                    reinitialize: self.reinitialize.is_some(),
-                    cov: self.cov.is_some(),
-                },
+                execution: crate::device_view::DeviceExecution::endpoint(
+                    self.device_writes.is_some(),
+                    self.reinitialize.is_some(),
+                    self.cov.is_some(),
+                ),
                 registered_port: self.registered_port.as_ref().map(|(oid, _)| *oid),
                 work_limit: self.read_work_limit,
                 identity: self.identity.as_ref(),

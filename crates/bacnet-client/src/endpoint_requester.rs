@@ -144,6 +144,16 @@ impl Drop for EndpointRequesterInner {
     }
 }
 
+/// The node's DeviceCommunicationControl reaches this requester through its
+/// transaction state, as it reaches a full client (#2617).
+impl bacnet_endpoint_core::seat::InitiationGate for EndpointRequesterInner {
+    fn restrict(&self, restricted: bool) {
+        if let Ok(mut tsm) = self.tsm.lock() {
+            tsm.restrict_initiation(restricted);
+        }
+    }
+}
+
 /// Unsegmented RP/RR/RPM/WP requester attached to a shared endpoint.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -185,6 +195,17 @@ impl EndpointRequester {
                 closed: tokio::sync::watch::channel(false).0,
             }),
         })
+    }
+
+    /// Follow the node's DeviceCommunicationControl state (#2617): while a
+    /// full server on the node restricts initiation, requests are refused
+    /// with [`Error::InitiationDisabled`] and a retry falling due is not
+    /// sent.
+    #[doc(hidden)]
+    pub fn follow_node_dcc(&self, dcc: &bacnet_endpoint_core::seat::NodeDcc) {
+        let gate: std::sync::Weak<dyn bacnet_endpoint_core::seat::InitiationGate> =
+            Arc::downgrade(&self.inner) as _;
+        dcc.follow(gate);
     }
 
     /// Performs one direct ReadProperty transaction.

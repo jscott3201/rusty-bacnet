@@ -114,11 +114,7 @@ fn the_view_rows_answer_shapes_and_writability_as_its_old_overrides_did() {
     let properties: Vec<P> = properties.collect();
     for execution in [
         DeviceExecution::FullServer,
-        DeviceExecution::Endpoint {
-            writes: true,
-            reinitialize: true,
-            cov: true,
-        },
+        DeviceExecution::endpoint(true, true, true),
     ] {
         for identity in [None, Some(&identity)] {
             let context = DeviceReadContext::new(&db, execution).with_identity(identity);

@@ -155,14 +155,24 @@ changes nothing.
 
 [`EndpointSession::full_server`](session::EndpointSession::full_server) builds
 a full `bacnet-server` `BACnetServer` on the same transport, from a
-`BACnetServer::generic_builder()`, with the session's Device identity. While it
-lives it answers every request but the full client's COV notifications, from
-its own database, in place of the narrow server role, which answers again once
-the server is stopped or dropped. Its queue is as deep as the session's request
-queue. It shares the session's invoke-ID pool and network-number owner. Stop
-the server, then the session. DeviceCommunicationControl silences only the
-server for now: the full client's requests and the session's own I-Am still go
-out.
+`BACnetServer::generic_builder()`. While it lives it answers every request but
+the full client's COV notifications, from its own database, in place of the
+narrow server role, which answers again once the server is stopped or dropped.
+Its queue is as deep as the session's request queue. It shares the session's
+invoke-ID pool and network-number owner, and target Audit follows that owner.
+Stop the server, then the session.
+
+The node is one device. The session needs a Device identity for a full server,
+and the server serves the node's Device from the session's settings: its
+identity, Max_APDU_Length_Accepted the smaller of the two roles', the session's
+APDU timeout and retries (which the server's confirmed notifications use too),
+and on a `Both` session the client's executed services beside the server's. A
+builder or database that contradicts them is refused. A DeviceCommunicationControl
+the server accepts binds the whole node (Clause 16.1): the full client's
+requests, the narrow client's and the session's own I-Am fail with
+`Error::InitiationDisabled` until it ends, unless an operator starts a client
+with `ClientOptions::with_node_dcc_override`. The full client keeps its own
+segmentation settings until the session builds its server itself.
 
 ## What is proven
 

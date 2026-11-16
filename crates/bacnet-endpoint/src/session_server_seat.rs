@@ -1,6 +1,6 @@
 //! A full `BACnetServer` on the session's link (#2617).
 use super::*;
-use bacnet_endpoint_core::seat::{ServerSeat, ServerSeatCounters};
+use bacnet_endpoint_core::seat::{NodeDevice, ServerSeat, ServerSeatCounters};
 use bacnet_server::server::{BACnetServer, ServerBuilder};
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
@@ -30,13 +30,27 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if self.registered_network_port.is_some() {
             return refused("the session's database holds its registered Network Port");
         }
+        if self.identity.is_none() {
+            return refused(
+                "the session has no Device identity, which is the node's one set of device \
+                 settings: compose one with device()",
+            );
+        }
         if !self.is_running() {
             return Err(Error::Encoding("endpoint session is not running".into()));
         }
-        self.ingress
+        let mut seat = self
+            .ingress
             .as_ref()
             .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?
-            .server_seat(Arc::clone(&self.coordinator))
+            .server_seat(Arc::clone(&self.coordinator))?;
+        seat.node = Some(NodeDevice {
+            client: matches!(self.role, SessionRole::Both),
+            client_max_apdu_length: self.client_config.max_apdu_length,
+            apdu_timeout_ms: self.config.apdu_timeout_ms,
+            apdu_retries: self.config.apdu_retries,
+        });
+        Ok(seat)
     }
 
     /// A full [`BACnetServer`] on this session's link, built from `builder`:
@@ -49,18 +63,52 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// answers it from its own database: the session's database, its
     /// Device writes, ReinitializeDevice handler and read limit no longer
     /// answer anything. Once the server is stopped or dropped, the narrow
-    /// server role answers from the session's database again. A session
-    /// with a [`DeviceIdentity`](crate::identity::DeviceIdentity) gives it
-    /// to the server, replacing any the builder had, so the node is one
-    /// device on its address; the database the builder holds must then
-    /// serve that Device, or be left out for a stock one. See
+    /// server role answers from the session's database again. See
     /// [`SeatedServerBuilder::build`](bacnet_server::server::SeatedServerBuilder::build)
     /// for what a seat changes, and the builder options it refuses.
     ///
-    /// The session must be running and built with a server role
+    /// **One device.** The node has one set of device settings, the
+    /// session's, and the server serves them as the node's Device:
+    ///
+    /// - the session's [`DeviceIdentity`](crate::identity::DeviceIdentity),
+    ///   with Max_APDU_Length_Accepted the smaller of the identity's and the
+    ///   client role's [`SessionConfig::max_apdu_length`] (Clause 12.11.18),
+    ///   resolved to the link. A builder identity that is not the default
+    ///   is compared with it as the link serves both (after each is
+    ///   resolved to the link) and leaving out the service list, which the
+    ///   full server builds itself: one that differs otherwise is refused.
+    ///   The database the builder holds must serve that Device, or be left
+    ///   out for a stock one;
+    /// - APDU_Timeout and Number_Of_APDU_Retries are
+    ///   [`SessionConfig::apdu_timeout_ms`] and
+    ///   [`SessionConfig::apdu_retries`] (default 6000 ms and 3), which the
+    ///   client roles use and the server's confirmed notifications use too.
+    ///   A builder that set other values, or a database whose Device
+    ///   declares others, is refused; a
+    ///   Device that declares the object model's defaults (6000 ms and 3, as
+    ///   one built from an identity does) is given the session's;
+    /// - on a [`SessionRole::Both`] session, Protocol_Services_Supported
+    ///   lists what the node's client executes (I-Am, I-Have, both COV
+    ///   notifications) beside the server's services (Clause 12.11.14). It
+    ///   follows the session's role, not whether a full client is attached
+    ///   at the moment: until one is, a ConfirmedCOVNotification the Device
+    ///   lists reaches the server, which rejects it, and a full client on a
+    ///   [`SessionRole::ServerOnly`] session executes services the Device
+    ///   doesn't list. Following the attached client would cost every
+    ///   ReadProperty a read of shared state;
+    /// - Segmentation_Supported, Max_Segments_Accepted and
+    ///   APDU_Segment_Timeout are the identity's, which the server follows.
+    ///   A [`full_client`](Self::full_client) keeps its own segmentation
+    ///   settings until the session builds its server itself (a later step
+    ///   of #2617): it accepts segmented answers even where the Device says
+    ///   it receives none, and, as before, it aborts a segmented
+    ///   ConfirmedCOVNotification, which it can't reassemble.
+    ///
+    /// The session must be running, built with a server role
     /// ([`SessionRole::ServerOnly`] or [`SessionRole::Both`]), so that a
     /// [`full_client`](Self::full_client) leaves the server's requests to
-    /// it. One full server at a time. Refused, too, on a session with a
+    /// it, and composed with a Device identity
+    /// ([`device`](Self::device)). One full server at a time. Refused, too, on a session with a
     /// source Audit Reporter, with its own COV reporting
     /// ([`with_cov`](Self::with_cov)), or with a registered Network Port:
     /// those stay with the session's narrow server role for now. The session's
@@ -90,14 +138,24 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// fail at once: a server with many confirmed COV notifications in
     /// flight (up to 255) can leave the client's requests none.
     ///
-    /// **DeviceCommunicationControl is the server's alone, for now.** The
-    /// standard has it bind the whole device (Clause 16.1.2). Today a
-    /// DISABLE_INITIATION the server accepts silences the server: its own
-    /// requests and notifications and its
-    /// [`broadcast_i_am`](BACnetServer::broadcast_i_am). It does not silence
-    /// the full client's requests or the session's own
-    /// [`broadcast_i_am`](Self::broadcast_i_am), which still go out. A later
-    /// step of #2617 makes it hold for the whole node.
+    /// **DeviceCommunicationControl binds the node.** The standard has it
+    /// bind the whole device (Clause 16.1). While the server holds a
+    /// DISABLE_INITIATION it accepted, the node initiates nothing but I-Am
+    /// answers to Who-Is and audit notifications, and nothing is sent: the
+    /// server holds its own requests and notifications, and its
+    /// [`broadcast_i_am`](BACnetServer::broadcast_i_am) fails with a
+    /// SERVICES / COMMUNICATION_DISABLED [`Error::Remote`], as on a
+    /// standalone server; the full client's requests and unconfirmed sends,
+    /// the narrow [`client`](Self::client)'s requests and the session's own
+    /// [`broadcast_i_am`](Self::broadcast_i_am) fail with
+    /// [`Error::InitiationDisabled`] and `sent: false`. A client request
+    /// already waiting ends with `sent: true` when its retry falls due.
+    /// Answers, and network-layer messages, still go. It ends when the
+    /// control's duration runs out, on an ENABLE or an accepted WARMSTART or
+    /// COLDSTART ReinitializeDevice, or when the server stops or is dropped.
+    /// A full client its operator started with
+    /// [`ClientOptions::with_node_dcc_override`](bacnet_client::client::ClientOptions::with_node_dcc_override)
+    /// keeps initiating; the session logs a warning then.
     ///
     /// **Stopping.** Stop the server, then the session: the server's
     /// [`stop`](BACnetServer::stop) joins its work and settles its saves,
@@ -111,11 +169,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         &self,
         builder: ServerBuilder<T>,
     ) -> impl Future<Output = Result<BACnetServer<T>, Error>> + use<T> {
-        let builder = match &self.identity {
-            Some(identity) => builder.device(identity.clone()),
-            None => builder,
-        };
-        let seated = self.server_seat().map(|seat| builder.seat(seat));
+        let seated = self.server_seat().map(|seat| {
+            let builder = builder.seat(seat);
+            match &self.identity {
+                Some(identity) => builder.node_identity(identity.clone()),
+                None => builder,
+            }
+        });
         async move { seated?.build().await }
     }
 

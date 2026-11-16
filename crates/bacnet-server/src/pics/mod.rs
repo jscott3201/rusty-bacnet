@@ -323,7 +323,9 @@ pub struct PicsGenerator<'a> {
     db: &'a ObjectDatabase,
     server_config: &'a ServerConfig,
     pics_config: &'a PicsConfig,
-    served: bool,
+    /// The running server's execution profile, when the PICS is the
+    /// server's: then its Device is read through the server's view.
+    served: Option<crate::device_view::DeviceExecution>,
 }
 
 impl<'a> PicsGenerator<'a> {
@@ -337,12 +339,12 @@ impl<'a> PicsGenerator<'a> {
             db,
             server_config,
             pics_config,
-            served: false,
+            served: None,
         }
     }
 
-    pub(crate) fn for_server(mut self) -> Self {
-        self.served = true;
+    pub(crate) fn for_server(mut self, execution: crate::device_view::DeviceExecution) -> Self {
+        self.served = Some(execution);
         self
     }
 
@@ -382,16 +384,17 @@ impl<'a> PicsGenerator<'a> {
         // through the server's view, which for the identity Device serves
         // the identity's Vendor_Identifier; the standalone view has no
         // identity and passes every property read here through raw.
-        let device = (self.served)
+        let device = (self.served.is_some())
             .then(|| announcement_device(self.db, &self.server_config.device))
             .flatten()
             .or_else(|| self.db.selected_device())
             .and_then(|oid| self.db.get(&oid));
         let view = crate::device_view::DeviceReadContext::new(
             self.db,
-            crate::device_view::DeviceExecution::FullServer,
+            self.served
+                .unwrap_or(crate::device_view::DeviceExecution::FullServer),
         )
-        .with_identity(self.served.then_some(&self.server_config.device));
+        .with_identity(self.served.map(|_| &self.server_config.device));
         let read = |property| device.map(|d| view.object(d).read_property(property, None));
         let unsigned = |property, fallback| match read(property) {
             Some(Ok(PropertyValue::Unsigned(raw))) => u16::try_from(raw).unwrap_or(fallback),
@@ -488,7 +491,7 @@ impl<'a> PicsGenerator<'a> {
         // full server always uses its fixed execution profile, filtered by
         // database clock availability; a mutable/custom Device cannot override
         // that contract.
-        let effective_executed = (!self.served)
+        let effective_executed = (self.served.is_none())
             .then(|| {
                 let device = self.db.get(&self.db.selected_device()?)?;
                 match device
@@ -506,9 +509,11 @@ impl<'a> PicsGenerator<'a> {
         let clock_available = self.db.clock_frame().is_some();
         let executed: Box<dyn Iterator<Item = ServiceSupported> + '_> = match &effective_executed {
             Some(services) => Box::new(services.iter()),
-            None => {
-                Box::new(crate::device_view::DeviceExecution::FullServer.services(clock_available))
-            }
+            None => Box::new(
+                self.served
+                    .unwrap_or(crate::device_view::DeviceExecution::FullServer)
+                    .services(clock_available),
+            ),
         };
         for service in executed {
             service_map

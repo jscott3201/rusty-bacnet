@@ -98,6 +98,9 @@ pub struct AuditedRequest {
     station: BACnetAddress,
     decoded: Decoded,
     run: Run,
+    /// The client's transaction state, for the node's
+    /// DeviceCommunicationControl state at admission.
+    tsm: Arc<SyncMutex<Tsm>>,
 }
 
 impl AuditedRequest {
@@ -115,6 +118,13 @@ impl AuditedRequest {
     /// station on this client's own network is once the number is known.
     pub fn station(&self) -> &BACnetAddress {
         &self.station
+    }
+
+    /// Whether the node's DeviceCommunicationControl restricts this
+    /// client's initiation now (#2617): a request admitted while it does
+    /// would be refused when it registers, so a node refuses it first.
+    pub fn initiation_restricted(&self) -> bool {
+        self.tsm.lock().initiation_restricted()
     }
 
     /// Send the request, through the one request path every request takes,
@@ -163,9 +173,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// The TSM refused to register a request to `target`: its seat has
-    /// closed, or the client's requests are its node's to audit (#2617). A
-    /// runner registers through the coordinator here and goes on; an
-    /// audited client's request goes to its node.
+    /// closed, the node's DeviceCommunicationControl restricts initiation,
+    /// or the client's requests are its node's to audit (#2617). Only the
+    /// last goes on: a runner registers through the coordinator here, and
+    /// an audited client's request goes to its node. The others fail as
+    /// they do on any client, the restriction with
+    /// [`Error::InitiationDisabled`] and nothing sent, before an audited
+    /// request takes a slot or a sequence number.
     #[cold]
     #[inline(never)]
     pub(super) fn on_refused(
@@ -175,6 +189,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         segmented: bool,
     ) -> Result<Refused, Error> {
+        if refused != CoordinatedRegistrationError::Diverted {
+            return Err(Error::from(refused));
+        }
         match self.pacer.audit.get() {
             Some(Role::Runner(invoke_id)) => {
                 let peer = target.transaction_peer();
@@ -182,12 +199,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .tsm
                     .lock()
                     .register_diverted(peer.tsm_mac, peer.canonical, service_choice, segmented)
-                    .map_err(|error| Error::Encoding(error.to_string()))?;
+                    .map_err(Error::from)?;
                 let _ = invoke_id.set(registered.0);
                 Ok(Refused::Registered(registered))
             }
             Some(Role::Audited(auditor)) => Ok(Refused::Audited(Arc::clone(auditor))),
-            None => Err(Error::Encoding(refused.to_string())),
+            None => Err(Error::from(refused)),
         }
     }
 
@@ -252,6 +269,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             station,
             decoded,
             run,
+            tsm: Arc::clone(&self.tsm),
         })
     }
 

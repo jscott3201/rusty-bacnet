@@ -189,9 +189,9 @@ impl PyScEndpoint {
     ///         against the SC link before Device construction or dialing.
     ///     queue_capacity: Bounded queue capacity (must be >0, default 256;
     ///         a full queue drops and counts, see `status()`'s
-    ///         `*_full_drops`). Client timers
-    ///         stay at the session default; the SC builder exposes no timer
-    ///         override by design.
+    ///         `*_full_drops`). The APDU timeout and retries stay at
+    ///         the session default, 6000 ms and 3; the SC builder exposes no
+    ///         timer override by design.
     ///     read_work_limit: Result rows one ReadProperty served by the server
     ///         role may expand (must be >0, default 256): its own row plus,
     ///         for a Group's Present_Value, one per member property. A read
