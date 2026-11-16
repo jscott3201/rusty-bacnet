@@ -156,19 +156,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.i_have_tx.subscribe()
     }
 
-    /// Send a Who-Has as [`Self::who_has`] does, then collect the I-Haves
-    /// that answer it for `wait` ([`collect_answers`]): one per device,
-    /// object and source address, in the order they arrived, at most
-    /// [`MAX_I_HAVE_REPLIES`]. No answer is an empty list, not an error.
+    /// Send a Who-Has to `scope` as [`Self::who_has`] does, then collect
+    /// the I-Haves that answer it for `wait` ([`collect_answers`]): one per
+    /// device, object and source address, in the order they arrived, at
+    /// most [`MAX_I_HAVE_REPLIES`]. No answer is an empty list, not an
+    /// error.
     pub async fn who_has_replies(
         &self,
+        scope: Broadcast,
         object: WhoHasObject,
         range: Option<DeviceInstanceRange>,
         wait: Duration,
     ) -> Result<Vec<ReceivedIHave>, Error> {
         // Subscribe first, so no answer can arrive before the receiver.
         let mut rx = self.i_have_events();
-        self.who_has(object.clone(), range).await?;
+        self.who_has(scope, object.clone(), range).await?;
         let deadline = tokio::time::Instant::now() + wait;
         Ok(collect_answers(&mut rx, deadline, &object, range, |_| true).await)
     }

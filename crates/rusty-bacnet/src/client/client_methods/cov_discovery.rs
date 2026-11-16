@@ -88,6 +88,112 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
+    /// Subscribe to COV notifications for one property of an object
+    /// (SubscribeCOVProperty, #2588). `address` is a local address or a
+    /// `RoutedTarget`, as for `subscribe_cov`. `lifetime` is required, 1 or
+    /// more seconds: such a subscription can't be indefinite, so 0 raises
+    /// `ValueError` before anything is sent. `array_index` names one element
+    /// of an array property; `cov_increment` overrides the object's own
+    /// increment for a numeric property. Notifications arrive on
+    /// `cov_notifications()`, as for `subscribe_cov`.
+    #[pyo3(signature = (address, subscriber_process_identifier, monitored_object_identifier, property_identifier, confirmed, lifetime, array_index=None, cov_increment=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn subscribe_cov_property<'py>(
+        &self,
+        py: Python<'py>,
+        address: &Bound<'py, PyAny>,
+        subscriber_process_identifier: u32,
+        monitored_object_identifier: PyObjectIdentifier,
+        property_identifier: PyPropertyIdentifier,
+        confirmed: bool,
+        lifetime: u32,
+        array_index: Option<u32>,
+        cov_increment: Option<f32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let lifetime = std::num::NonZeroU32::new(lifetime).ok_or_else(|| {
+            PyValueError::new_err(
+                "lifetime must be 1 or more seconds: a COV-property subscription can't be indefinite",
+            )
+        })?;
+        let address = routed::Address::of(address)?;
+        let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
+        let subscription = client::CovPropertySubscription {
+            subscriber_process_identifier,
+            monitored_object_identifier: monitored_object_identifier.to_rust(),
+            monitored_property_identifier: property_identifier.to_rust(),
+            monitored_property_array_index: array_index,
+            confirmed,
+            lifetime,
+            cov_increment,
+        };
+
+        let future = async move {
+            match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.subscribe_cov_property(&mac, subscription).await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .subscribe_cov_property(&to, subscription)
+                        .await
+                }
+            }
+            .map_err(to_py_err)?;
+            Ok(())
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
+    }
+
+    /// Cancel a single-property COV subscription. Name the target, the
+    /// process, the object, the property and its array index the
+    /// subscription named: the device finds it by those and the address the
+    /// request came from, as for `unsubscribe_cov`.
+    #[pyo3(signature = (address, subscriber_process_identifier, monitored_object_identifier, property_identifier, array_index=None))]
+    fn unsubscribe_cov_property<'py>(
+        &self,
+        py: Python<'py>,
+        address: &Bound<'py, PyAny>,
+        subscriber_process_identifier: u32,
+        monitored_object_identifier: PyObjectIdentifier,
+        property_identifier: PyPropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let address = routed::Address::of(address)?;
+        let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
+        let (process, oid) = (
+            subscriber_process_identifier,
+            monitored_object_identifier.to_rust(),
+        );
+        let pid = property_identifier.to_rust();
+
+        let future = async move {
+            match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.unsubscribe_cov_property(&mac, process, oid, pid, array_index)
+                        .await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .unsubscribe_cov_property(&to, process, oid, pid, array_index)
+                        .await
+                }
+            }
+            .map_err(to_py_err)?;
+            Ok(())
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
+    }
+
     /// Get an async iterator yielding incoming COV notifications.
     fn cov_notifications<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();

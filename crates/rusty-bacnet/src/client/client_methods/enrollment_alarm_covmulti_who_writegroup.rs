@@ -146,7 +146,7 @@ impl BACnetClient {
     fn subscribe_cov_property_multiple<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         subscriber_process_identifier: u32,
         specs: Vec<PyCovSubscriptionSpec>,
         issue_confirmed_notifications: bool,
@@ -178,20 +178,26 @@ impl BACnetClient {
             max_notification_delay,
             list_of_cov_subscription_specifications: rust_specs,
         };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf)
+        req.validate()
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let address = routed::Address::of(address)?;
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let future = async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            c.confirmed_request(
-                &mac,
-                ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
-                &buf,
-            )
-            .await
+            match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.subscribe_cov_property_multiple(&mac, &req).await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .subscribe_cov_property_multiple(&to, &req)
+                        .await
+                }
+            }
             .map_err(to_py_err)?;
             Ok(())
         };
@@ -219,13 +225,12 @@ impl BACnetClient {
             model_name,
             serial_number,
         };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf)
+        req.encode(&mut BytesMut::new())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         let inner = self.inner.clone();
         let future = async move {
             let c = started(&inner).await?;
-            c.broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_AM_I, &buf)
+            c.who_am_i(client::Broadcast::Local, &req)
                 .await
                 .map_err(to_py_err)?;
             Ok(())

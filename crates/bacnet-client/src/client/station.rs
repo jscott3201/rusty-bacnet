@@ -152,6 +152,24 @@ impl Station {
     }
 }
 
+/// Where an unconfirmed broadcast goes: the scope of a typed broadcast
+/// call such as [`BACnetClient::who_is`] (#2588). A call to one station
+/// takes a [`ToStation`] instead (`who_is_directed` and the like).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Broadcast {
+    /// Every station on this network.
+    Local,
+    /// Every station on one remote network, 1 to 65534, through the router
+    /// to it. Once the client knows its own network's number, that number
+    /// is this network, and the broadcast goes as a local one. Network 0
+    /// and 65535 name no one remote network: [`Broadcast::Local`] and
+    /// [`Broadcast::Global`] are those, and a call refuses them here before
+    /// anything is sent.
+    Network(u16),
+    /// Every station on every network (DNET 65535).
+    Global,
+}
+
 /// A station a typed call takes: a [`Station`], a [`BACnetAddress`] (network
 /// 0 is this link, any other goes through the router its discovery-table
 /// row names), or a MAC on this link (`[u8]`, `[u8; N]`, `Vec<u8>`,

@@ -3,6 +3,7 @@
 //! Default demo (device 5007): RPM read OA-T, STAT ZN-T, and DUCT-T in one request.
 #![forbid(unsafe_code)]
 
+use bacnet_client::client::Broadcast;
 use std::net::Ipv4Addr;
 use std::process;
 use std::time::Duration;
@@ -192,7 +193,7 @@ async fn discover_device(
         eprintln!("ERROR: local Who-Is failed: {e}");
         process::exit(1);
     }
-    if let Err(e) = client.who_is(Some(range)).await {
+    if let Err(e) = client.who_is(Broadcast::Global, Some(range)).await {
         eprintln!("ERROR: global Who-Is failed: {e}");
         process::exit(1);
     }

@@ -7,6 +7,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a check tool reports on the console
 #![forbid(unsafe_code)]
 
+use bacnet_client::client::Broadcast;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -56,7 +57,7 @@ async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(args.timeout);
     let mut missing = args.expect.clone();
     while !missing.is_empty() && tokio::time::Instant::now() < deadline {
-        client.who_is(None).await?;
+        client.who_is(Broadcast::Global, None).await?;
         tokio::time::sleep(Duration::from_secs(1)).await;
         let found = client.discovered_devices().await;
         missing.retain(|instance| {

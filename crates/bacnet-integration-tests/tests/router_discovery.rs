@@ -7,6 +7,7 @@
 //!   it reaches, reads the server through it, and hears the router's
 //!   reject for a network it doesn't know.
 
+use bacnet_client::client::Broadcast;
 use std::time::Duration;
 
 use bacnet_client::client::{
@@ -86,7 +87,10 @@ async fn who_has_collects_the_i_have_of_a_local_server() {
         WhoHasObject::Name(NAME.into()),
         WhoHasObject::Identifier(supply_air()),
     ] {
-        let replies = client.who_has_replies(object, None, WAIT).await.unwrap();
+        let replies = client
+            .who_has_replies(Broadcast::Global, object, None, WAIT)
+            .await
+            .unwrap();
         assert_eq!(replies.len(), 1, "{replies:?}");
         let reply = &replies[0];
         assert_eq!(reply.i_have.device_identifier, device());
@@ -99,23 +103,40 @@ async fn who_has_collects_the_i_have_of_a_local_server() {
     // No such name, and a range that leaves the device out: nothing, once
     // the wait is over.
     let unknown = client
-        .who_has_replies(WhoHasObject::Name("Return Air Temp".into()), None, WAIT)
+        .who_has_replies(
+            Broadcast::Global,
+            WhoHasObject::Name("Return Air Temp".into()),
+            None,
+            WAIT,
+        )
         .await
         .unwrap();
     assert_eq!(unknown, []);
     let elsewhere = DeviceInstanceRange::new(1, 10).unwrap();
     let out_of_range = client
-        .who_has_replies(WhoHasObject::Name(NAME.into()), Some(elsewhere), WAIT)
+        .who_has_replies(
+            Broadcast::Global,
+            WhoHasObject::Name(NAME.into()),
+            Some(elsewhere),
+            WAIT,
+        )
         .await
         .unwrap();
     assert_eq!(out_of_range, []);
 
     // An I-Have for another question, heard during the wait, isn't kept.
     let (unrelated, sent) = tokio::join!(
-        client.who_has_replies(WhoHasObject::Name("Return Air Temp".into()), None, WAIT),
+        client.who_has_replies(
+            Broadcast::Global,
+            WhoHasObject::Name("Return Air Temp".into()),
+            None,
+            WAIT
+        ),
         async {
             tokio::time::sleep(Duration::from_millis(10)).await;
-            client.who_has(WhoHasObject::Name(NAME.into()), None).await
+            client
+                .who_has(Broadcast::Global, WhoHasObject::Name(NAME.into()), None)
+                .await
         }
     );
     sent.unwrap();
@@ -148,7 +169,12 @@ async fn the_same_answer_twice_is_listed_once() {
         peer
     });
     let replies = client
-        .who_has_replies(WhoHasObject::Name(NAME.into()), None, WAIT)
+        .who_has_replies(
+            Broadcast::Global,
+            WhoHasObject::Name(NAME.into()),
+            None,
+            WAIT,
+        )
         .await
         .unwrap();
     assert_eq!(replies.len(), 1, "{replies:?}");
@@ -164,7 +190,7 @@ async fn every_i_have_reaches_the_event_subscribers() {
     let mut client = client(client_end).await;
     let mut events = client.i_have_events();
     client
-        .who_has(WhoHasObject::Name(NAME.into()), None)
+        .who_has(Broadcast::Global, WhoHasObject::Name(NAME.into()), None)
         .await
         .unwrap();
     let event = tokio::time::timeout(WAIT, events.recv())
@@ -267,7 +293,12 @@ async fn the_router_and_its_remote_network_are_found_and_reached() {
 async fn who_has_finds_an_object_behind_the_router() {
     let (mut router, mut server, mut client) = routed_site().await;
     let replies = client
-        .who_has_replies(WhoHasObject::Name(NAME.into()), None, WAIT)
+        .who_has_replies(
+            Broadcast::Global,
+            WhoHasObject::Name(NAME.into()),
+            None,
+            WAIT,
+        )
         .await
         .unwrap();
     assert_eq!(replies.len(), 1, "{replies:?}");
@@ -286,7 +317,7 @@ async fn who_has_finds_an_object_behind_the_router() {
 async fn a_reject_for_an_unknown_network_is_surfaced() {
     let (mut router, mut server, mut client) = routed_site().await;
     let mut reports = client.network_reports();
-    client.who_is_network(99, None).await.unwrap();
+    client.who_is(Broadcast::Network(99), None).await.unwrap();
     let received = next_report(&mut reports).await;
     assert_eq!(received.source_mac.as_slice(), [ROUTER_MAC]);
     assert_eq!(

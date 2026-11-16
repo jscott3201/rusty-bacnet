@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
+use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::num::NonZeroU32;
@@ -135,6 +136,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             monitored_property_array_index,
             None,
         );
+        self.call(to, request).await
+    }
+
+    /// Subscribe to COV notifications for several properties of several
+    /// objects on the station `to`, or cancel such a subscription, with one
+    /// SubscribeCOVPropertyMultiple (Clause 13.16). The whole request is
+    /// checked before anything is sent
+    /// ([`SubscribeCOVPropertyMultipleRequest::validate`]). A device that
+    /// refuses one of the subscriptions says which in the error's
+    /// first-failed-subscription detail.
+    pub async fn subscribe_cov_property_multiple(
+        &self,
+        to: &(impl ToStation + ?Sized),
+        request: &SubscribeCOVPropertyMultipleRequest,
+    ) -> Result<(), Error> {
         self.call(to, request).await
     }
 

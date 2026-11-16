@@ -2,6 +2,7 @@
 //! full server accepts binds the whole node (Clause 16.1), and the Device
 //! it serves states what both roles do.
 use super::*;
+use bacnet_client::client::Broadcast;
 use bacnet_client::client::ClientOptions;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_types::constructed::BACnetPropertyValue;
@@ -117,7 +118,7 @@ async fn disable_initiation_stops_every_initiation_on_the_node() {
     let before = lab.node_sent.len();
 
     assert!(disabled(client_reads(&lab.client).await));
-    assert!(disabled(lab.client.who_is(None).await));
+    assert!(disabled(lab.client.who_is(Broadcast::Global, None).await));
     assert!(disabled(lab.session.broadcast_i_am().await));
     let narrow = lab
         .session
@@ -154,7 +155,7 @@ async fn a_disabled_node_still_answers() {
     control(&lab, EnableDisable::DISABLE_INITIATION, None).await;
 
     assert_eq!(read_node(&lab.other).await, 42.0);
-    lab.other.who_is(None).await.unwrap();
+    lab.other.who_is(Broadcast::Global, None).await.unwrap();
     eventually(WAIT, "the node's I-Am answer", async || {
         lab.other
             .discovered_devices()
@@ -468,7 +469,7 @@ async fn a_who_is_behind_the_number_question_is_held_back() {
         .unwrap();
     let client = session.full_client().unwrap();
 
-    let who_is = Box::pin(client.who_is(None));
+    let who_is = Box::pin(client.who_is(Broadcast::Global, None));
     let disable = Box::pin(async {
         asking.notified().await;
         other

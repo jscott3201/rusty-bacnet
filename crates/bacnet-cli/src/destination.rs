@@ -12,6 +12,7 @@
 //! device claims its instance, and an address needs no instance at all.
 //! The BVLL commands, which only go to this network, take [`resolve_mac`].
 
+use bacnet_client::client::Broadcast;
 use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::time::Duration;
@@ -238,7 +239,10 @@ async fn find_routed<T: TransportPort + 'static>(
         }
         Station::Mac(_) => None,
     };
-    client.who_is_network(dnet, range).await.map_err(text)?;
+    client
+        .who_is(Broadcast::Network(dnet), range)
+        .await
+        .map_err(text)?;
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {

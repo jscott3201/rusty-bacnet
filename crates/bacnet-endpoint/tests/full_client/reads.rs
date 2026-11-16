@@ -1,6 +1,7 @@
 //! Discovery and reads through the full client, and the high-level calls a
 //! standalone client has.
 use super::*;
+use bacnet_client::client::Broadcast;
 use bacnet_services::file::{FileAccessMethod, FileReadAckMethod};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::PropertyIdentifier;
@@ -14,7 +15,7 @@ async fn who_is_fills_the_full_clients_table_in_each_scope() {
 
     // To every network: the peer's I-Am is a broadcast, which the node's
     // server role hears too.
-    client.who_is(None).await.unwrap();
+    client.who_is(Broadcast::Global, None).await.unwrap();
     eventually(WAIT, "the peer's I-Am in the table", async || {
         client.get_device(PEER_DEVICE).await.unwrap().is_some()
     })
@@ -44,7 +45,7 @@ async fn who_is_fills_the_full_clients_table_in_each_scope() {
 
     // To one remote network: the question leaves with that DNET. No router
     // is on this link, so nothing answers.
-    client.who_is_network(7, None).await.unwrap();
+    client.who_is(Broadcast::Network(7), None).await.unwrap();
     let last = lab.node_sent.frames().pop().unwrap();
     assert!(last.broadcast);
     assert_eq!(last.decode_npdu().destination.unwrap().network, 7);
@@ -52,7 +53,7 @@ async fn who_is_fills_the_full_clients_table_in_each_scope() {
     // A Who-Is from another node reaches both roles and upsets neither.
     let seen = lab.session.client_seat_counters().apdus;
     let other = other_client(&lab.wire).await;
-    other.who_is(None).await.unwrap();
+    other.who_is(Broadcast::Global, None).await.unwrap();
     eventually(WAIT, "the Who-Is copied to the seat", async || {
         lab.session.client_seat_counters().apdus > seen
     })

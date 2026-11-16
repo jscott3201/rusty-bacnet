@@ -1,6 +1,7 @@
 //! The services only the bindings sent, from octets they encoded and
-//! answers they decoded themselves: PrivateTransfer, TextMessage,
-//! LifeSafetyOperation, the VT services and SubscribeCOVPropertyMultiple.
+//! answers they decoded themselves, until they had typed calls:
+//! PrivateTransfer, TextMessage, LifeSafetyOperation, the VT services and
+//! SubscribeCOVPropertyMultiple. The pins were recorded from those sends.
 
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
@@ -38,32 +39,22 @@ async fn confirmed_private_transfer() {
         }
         .encode(buf)
     }));
-    let choice = ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER;
-    let data = octets(|buf| private_transfer().encode(buf));
-    pin!("cpt/local", ack.clone(), |c| async {
-        let answer = c.confirmed_request(PEER, choice, &data).await?;
-        PrivateTransferAck::decode(&answer)
-    });
-    pin!("cpt/routed", ack, |c| async {
-        let answer = c.confirmed_request(&routed(), choice, &data).await?;
-        PrivateTransferAck::decode(&answer)
-    });
-    pin!("cpt-error/local", Answer::Error, |c| async {
-        let answer = c.confirmed_request(PEER, choice, &data).await?;
-        PrivateTransferAck::decode(&answer)
-    });
+    let request = private_transfer();
+    pin!("cpt/local", ack.clone(), |c| c
+        .confirmed_private_transfer(PEER, &request));
+    pin!("cpt/routed", ack, |c| c
+        .confirmed_private_transfer(&routed(), &request));
+    pin!("cpt-error/local", Answer::Error, |c| c
+        .confirmed_private_transfer(PEER, &request));
 }
 
 #[tokio::test]
 async fn unconfirmed_private_transfer() {
-    let choice = UnconfirmedServiceChoice::UNCONFIRMED_PRIVATE_TRANSFER;
-    let data = octets(|buf| private_transfer().encode(buf));
-    pin!("upt/local", |c| c.unconfirmed_request(PEER, choice, &data));
-    pin!("upt/routed", |c| c.unconfirmed_request(
-        &routed(),
-        choice,
-        &data
-    ));
+    let request = private_transfer();
+    pin!("upt/local", |c| c
+        .unconfirmed_private_transfer(PEER, &request));
+    pin!("upt/routed", |c| c
+        .unconfirmed_private_transfer(&routed(), &request));
 }
 
 fn text_message(class: Option<MessageClass>) -> TextMessageRequest {
@@ -77,32 +68,15 @@ fn text_message(class: Option<MessageClass>) -> TextMessageRequest {
 
 #[tokio::test]
 async fn text_messages() {
-    let text = || text_message(Some(MessageClass::Text("maint".to_string())));
-    let numeric = || text_message(Some(MessageClass::Numeric(3)));
-    let confirmed = ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE;
-    let unconfirmed = UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE;
-    let encoded = |request: TextMessageRequest| octets(|buf| request.encode(buf).unwrap());
-    let (text_data, numeric_data) = (encoded(text()), encoded(numeric()));
-    pin!("ctm/local", Answer::Simple, |c| async {
-        c.confirmed_request(PEER, confirmed, &text_data)
-            .await
-            .map(drop)
-    });
-    pin!("ctm/routed", Answer::Simple, |c| async {
-        c.confirmed_request(&routed(), confirmed, &text_data)
-            .await
-            .map(drop)
-    });
-    pin!("utm/local", |c| c.unconfirmed_request(
-        PEER,
-        unconfirmed,
-        &numeric_data
-    ));
-    pin!("utm/routed", |c| c.unconfirmed_request(
-        &routed(),
-        unconfirmed,
-        &numeric_data
-    ));
+    let text = text_message(Some(MessageClass::Text("maint".to_string())));
+    let numeric = text_message(Some(MessageClass::Numeric(3)));
+    pin!("ctm/local", Answer::Simple, |c| c
+        .confirmed_text_message(PEER, &text));
+    pin!("ctm/routed", Answer::Simple, |c| c
+        .confirmed_text_message(&routed(), &text));
+    pin!("utm/local", |c| c.unconfirmed_text_message(PEER, &numeric));
+    pin!("utm/routed", |c| c
+        .unconfirmed_text_message(&routed(), &numeric));
 }
 
 #[tokio::test]
@@ -113,16 +87,10 @@ async fn life_safety_operation() {
         request: LifeSafetyOperation::SILENCE_AUDIBLE,
         object_identifier: Some(oid(ObjectType::LIFE_SAFETY_POINT, 2)),
     };
-    let choice = ConfirmedServiceChoice::LIFE_SAFETY_OPERATION;
-    let data = octets(|buf| request.encode(buf).unwrap());
-    pin!("lso/local", Answer::Simple, |c| async {
-        c.confirmed_request(PEER, choice, &data).await.map(drop)
-    });
-    pin!("lso/routed", Answer::Simple, |c| async {
-        c.confirmed_request(&routed(), choice, &data)
-            .await
-            .map(drop)
-    });
+    pin!("lso/local", Answer::Simple, |c| c
+        .life_safety_operation(PEER, &request));
+    pin!("lso/routed", Answer::Simple, |c| c
+        .life_safety_operation(&routed(), &request));
 }
 
 #[tokio::test]
@@ -137,30 +105,16 @@ async fn virtual_terminal() {
         }
         .encode(buf)
     }));
-    let open_data = octets(|buf| open.encode(buf));
-    let choice = ConfirmedServiceChoice::VT_OPEN;
-    pin!("vt-open/local", opened.clone(), |c| async {
-        VTOpenAck::decode(&c.confirmed_request(PEER, choice, &open_data).await?)
-    });
-    pin!("vt-open/routed", opened, |c| async {
-        VTOpenAck::decode(&c.confirmed_request(&routed(), choice, &open_data).await?)
-    });
+    pin!("vt-open/local", opened.clone(), |c| c.vt_open(PEER, &open));
+    pin!("vt-open/routed", opened, |c| c.vt_open(&routed(), &open));
 
     let close = VTCloseRequest {
         list_of_remote_vt_session_identifiers: vec![29, 30],
     };
-    let close_data = octets(|buf| close.encode(buf).unwrap());
-    let choice = ConfirmedServiceChoice::VT_CLOSE;
-    pin!("vt-close/local", Answer::Simple, |c| async {
-        c.confirmed_request(PEER, choice, &close_data)
-            .await
-            .map(drop)
-    });
-    pin!("vt-close/routed", Answer::Simple, |c| async {
-        c.confirmed_request(&routed(), choice, &close_data)
-            .await
-            .map(drop)
-    });
+    pin!("vt-close/local", Answer::Simple, |c| c
+        .vt_close(PEER, &close));
+    pin!("vt-close/routed", Answer::Simple, |c| c
+        .vt_close(&routed(), &close));
 
     let data = VTDataRequest {
         vt_session_identifier: 29,
@@ -173,14 +127,8 @@ async fn virtual_terminal() {
         }
         .encode(buf)
     }));
-    let data_data = octets(|buf| data.encode(buf));
-    let choice = ConfirmedServiceChoice::VT_DATA;
-    pin!("vt-data/local", partial.clone(), |c| async {
-        VTDataAck::decode(&c.confirmed_request(PEER, choice, &data_data).await?)
-    });
-    pin!("vt-data/routed", partial, |c| async {
-        VTDataAck::decode(&c.confirmed_request(&routed(), choice, &data_data).await?)
-    });
+    pin!("vt-data/local", partial.clone(), |c| c.vt_data(PEER, &data));
+    pin!("vt-data/routed", partial, |c| c.vt_data(&routed(), &data));
 }
 
 #[tokio::test]
@@ -202,14 +150,8 @@ async fn subscribe_cov_property_multiple() {
             }],
         }],
     };
-    let choice = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
-    let data = octets(|buf| request.encode(buf).unwrap());
-    pin!("scpm/local", Answer::Simple, |c| async {
-        c.confirmed_request(PEER, choice, &data).await.map(drop)
-    });
-    pin!("scpm/routed", Answer::Simple, |c| async {
-        c.confirmed_request(&routed(), choice, &data)
-            .await
-            .map(drop)
-    });
+    pin!("scpm/local", Answer::Simple, |c| c
+        .subscribe_cov_property_multiple(PEER, &request));
+    pin!("scpm/routed", Answer::Simple, |c| c
+        .subscribe_cov_property_multiple(&routed(), &request));
 }

@@ -33,7 +33,7 @@ receiving share a two-second timeout; the complete NPDU is checked against
 independent expected bytes for this global Who-Is request.
 
 ```rust
-use bacnet_client::client::{BACnetClient, ClientConfig};
+use bacnet_client::client::{BACnetClient, Broadcast, ClientConfig};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use tokio::time::{timeout, Duration};
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut frames = peer.start().await?;
     let mut client = BACnetClient::start(ClientConfig::default(), client_port).await?;
     let received = timeout(Duration::from_secs(2), async {
-        client.who_is(None).await?;
+        client.who_is(Broadcast::Global, None).await?;
         let frame = frames.recv().await.ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "loopback peer closed")
         })?;

@@ -1,5 +1,6 @@
 //! One-shot probe for a running mini-device-revisited server.
 #![forbid(unsafe_code)]
+use bacnet_client::client::Broadcast;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
@@ -49,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (value, _) = decode_application_value(&ack.property_value, 0)?;
     println!("unicast object-name: {value:?}");
 
-    client.who_is(None).await?;
+    client.who_is(Broadcast::Global, None).await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     let devices = client.discovered_devices().await;
     for d in &devices {

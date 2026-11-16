@@ -989,12 +989,58 @@ the subscription named: the same `RoutedTarget`, or the same
 `ip:port` after a routed subscription, answers with success and
 keeps the subscription.
 
+### BACnetClient.subscribe_cov_property
+
+```python
+def subscribe_cov_property(
+    self,
+    address: str | RoutedTarget,
+    subscriber_process_identifier: int,
+    monitored_object_identifier: ObjectIdentifier,
+    property_identifier: PropertyIdentifier,
+    confirmed: bool,
+    lifetime: int,
+    array_index: Optional[int] = None,
+    cov_increment: Optional[float] = None,
+) -> Awaitable[None]
+```
+
+Subscribe to Change-of-Value notifications for one property of an
+object (SubscribeCOVProperty, #2588).
+
+`address` is a `str` or a `RoutedTarget`, as for
+`subscribe_cov`. `lifetime` is required, 1 or more seconds: such
+a subscription can't be indefinite, so 0 raises ValueError before
+anything is sent; renew by subscribing again before it runs out.
+`array_index` names one element of an array property;
+`cov_increment` overrides the object's own increment for a numeric
+property. Notifications arrive on `cov_notifications()`.
+
+### BACnetClient.unsubscribe_cov_property
+
+```python
+def unsubscribe_cov_property(
+    self,
+    address: str | RoutedTarget,
+    subscriber_process_identifier: int,
+    monitored_object_identifier: ObjectIdentifier,
+    property_identifier: PropertyIdentifier,
+    array_index: Optional[int] = None,
+) -> Awaitable[None]
+```
+
+Cancel a single-property COV subscription.
+
+Name the target, process, object, property and array index the
+subscription named: the device finds it by those and the address
+the request came from, as for `unsubscribe_cov`.
+
 ### BACnetClient.subscribe_cov_property_multiple
 
 ```python
 def subscribe_cov_property_multiple(
     self,
-    address: str,
+    address: str | RoutedTarget,
     subscriber_process_identifier: int,
     specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int], Optional[float], bool]]]],
     issue_confirmed_notifications: bool,

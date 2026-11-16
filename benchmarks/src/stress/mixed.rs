@@ -3,6 +3,7 @@
 //! Simulates a building automation workload with weighted service mix:
 //! 60% RP, 15% WP, 10% RPM, 5% COV sub/unsub, 5% WhoIs, 5% other.
 
+use bacnet_client::client::Broadcast;
 use std::time::{Duration, Instant};
 
 use rand::rngs::StdRng;
@@ -127,7 +128,7 @@ pub async fn run(_transport: &str, clients: u64, duration_secs: u64) -> Vec<Degr
                     }
                 } else if roll < 95 {
                     // 5% WhoIs
-                    client.who_is(None).await
+                    client.who_is(Broadcast::Global, None).await
                 } else {
                     // 5% ReadProperty on Device object
                     let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();

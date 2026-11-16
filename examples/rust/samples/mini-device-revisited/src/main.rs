@@ -10,6 +10,7 @@
 //! subnet Who-Is reaches the socket on Linux; advertise the NIC IP in I-Am.
 #![forbid(unsafe_code)]
 
+use bacnet_client::client::Broadcast;
 use bacnet_types::error::RemoteError;
 use std::env;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -467,7 +468,7 @@ async fn discovery_self_check(
         Err(e) => warn!("unicast self-check failed: {e}"),
     }
 
-    if let Err(e) = client.who_is(None).await {
+    if let Err(e) = client.who_is(Broadcast::Global, None).await {
         warn!("Who-Is self-check failed: {e}");
         let _ = client.stop().await;
         return;

@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_client::client::Broadcast;
 use bacnet_types::error::RemoteError;
 
 #[tokio::test]
@@ -178,7 +179,7 @@ async fn who_is_through_server() {
     let mut client = make_client().await;
 
     // Send WhoIs — the server should respond with IAm
-    client.who_is(None).await.unwrap();
+    client.who_is(Broadcast::Global, None).await.unwrap();
 
     // Give the server time to process and respond
     tokio::time::sleep(Duration::from_millis(200)).await;

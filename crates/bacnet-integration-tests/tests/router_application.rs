@@ -13,6 +13,7 @@
 //! 9, and hears a network the table lacks refused the way
 //! `BACnetRouter::originate` refuses it.
 
+use bacnet_client::client::Broadcast;
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, Station};
@@ -280,7 +281,7 @@ async fn a_device_behind_another_router_is_read_through_it() {
 #[tokio::test(start_paused = true)]
 async fn a_device_found_by_who_is_is_read_by_its_instance() {
     let mut site = site().await;
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let found = site.found(INSTANCE).await;
     assert_eq!(found.source_network, Some(2));
     assert_eq!(found.source_address.as_deref(), Some(&[STATION][..]));
@@ -319,7 +320,7 @@ async fn a_device_found_by_who_is_is_read_by_its_instance() {
 #[tokio::test(start_paused = true)]
 async fn a_segmented_reply_is_reassembled() {
     let mut site = site().await;
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     site.found(INSTANCE).await;
     while site.to_station.try_recv().is_ok() {}
     let ack = site

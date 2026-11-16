@@ -5880,9 +5880,49 @@ class BACnetClient:
         """
         ...
 
+    def subscribe_cov_property(
+        self,
+        address: str | RoutedTarget,
+        subscriber_process_identifier: int,
+        monitored_object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        confirmed: bool,
+        lifetime: int,
+        array_index: Optional[int] = None,
+        cov_increment: Optional[float] = None,
+    ) -> Awaitable[None]:
+        """Subscribe to Change-of-Value notifications for one property of an
+        object (SubscribeCOVProperty, #2588).
+
+        ``address`` is a ``str`` or a ``RoutedTarget``, as for
+        ``subscribe_cov``. ``lifetime`` is required, 1 or more seconds: such
+        a subscription can't be indefinite, so 0 raises ValueError before
+        anything is sent; renew by subscribing again before it runs out.
+        ``array_index`` names one element of an array property;
+        ``cov_increment`` overrides the object's own increment for a numeric
+        property. Notifications arrive on ``cov_notifications()``.
+        """
+        ...
+
+    def unsubscribe_cov_property(
+        self,
+        address: str | RoutedTarget,
+        subscriber_process_identifier: int,
+        monitored_object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        array_index: Optional[int] = None,
+    ) -> Awaitable[None]:
+        """Cancel a single-property COV subscription.
+
+        Name the target, process, object, property and array index the
+        subscription named: the device finds it by those and the address
+        the request came from, as for ``unsubscribe_cov``.
+        """
+        ...
+
     def subscribe_cov_property_multiple(
         self,
-        address: str,
+        address: str | RoutedTarget,
         subscriber_process_identifier: int,
         specs: list[
             tuple[
@@ -9286,9 +9326,10 @@ class RoutedTarget:
     """A station on another BACnet network (#2612), where ``BACnetClient``'s
     ``read_property``, ``read_property_multiple``, ``read_range``,
     ``read_log_page``, ``write_property``, ``atomic_read_file``,
-    ``atomic_write_file``, ``subscribe_cov`` and ``unsubscribe_cov`` take
-    an ``address`` (#2617, #2613, #2588); the other typed calls take a local
-    address only:
+    ``atomic_write_file``, ``subscribe_cov``, ``unsubscribe_cov``,
+    ``subscribe_cov_property``, ``unsubscribe_cov_property`` and
+    ``subscribe_cov_property_multiple`` take an ``address`` (#2617, #2613,
+    #2588); the other typed calls take a local address only:
     ``RoutedTarget(network, address, router=None)``, in that order. A
     ``str`` address always names a station on the local link.
 

@@ -10,6 +10,7 @@ use super::local_routes::{
     PEER, REMOTE_NETWORK, ROUTER, THIS_NETWORK, i_am, relayed_from, send_to_client,
 };
 use super::*;
+use crate::client::Broadcast;
 use crate::client::{BACnetClient, ClientConfig};
 use crate::discovery::RoutedDeviceConfig;
 use bacnet_encoding::apdu::{Apdu, ComplexAck, SimpleAck};
@@ -199,14 +200,14 @@ async fn nothing_is_asked_at_start_or_for_requests_by_address() {
 #[tokio::test(start_paused = true)]
 async fn the_first_who_is_goes_after_one_question_and_no_other_does() {
     let mut site = open_site(true).await;
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let frames = site.sent.frames();
     assert_eq!(frames.len(), 2, "{frames:?}");
     assert_ask(&frames[0]);
     assert_who_is(&frames[1]);
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     site.client
-        .who_is_network(REMOTE_NETWORK, None)
+        .who_is(Broadcast::Network(REMOTE_NETWORK), None)
         .await
         .unwrap();
     site.client.who_is_directed(&PEER, None).await.unwrap();
@@ -216,7 +217,7 @@ async fn the_first_who_is_goes_after_one_question_and_no_other_does() {
     site.client.stop().await.unwrap();
 
     let mut site = open_site(false).await;
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let frames = site.settled().await;
     assert_eq!(frames.len(), 1, "{frames:?}");
     assert_who_is(&frames[0]);
@@ -241,7 +242,7 @@ async fn the_first_routed_i_am_asks_once() {
     let frames = site.settled().await;
     assert_eq!(frames.len(), 1, "{frames:?}");
     assert_ask(&frames[0]);
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let frames = site.settled().await;
     assert_eq!(frames.len(), 2, "{frames:?}");
     assert_who_is(&frames[1]);
@@ -257,7 +258,7 @@ async fn the_first_routed_registration_asks_once() {
     assert_eq!(frames.len(), 1, "asked before the call returned");
     assert_ask(&frames[0]);
     site.add_routed(11, REMOTE_NETWORK, &[5]).await;
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let frames = site.settled().await;
     assert_eq!(frames.len(), 2, "{frames:?}");
     assert_who_is(&frames[1]);
@@ -270,9 +271,9 @@ async fn the_first_routed_registration_asks_once() {
 async fn a_failed_question_holds_no_who_is_back_and_is_asked_again() {
     let mut site = open_site(true).await;
     site.handle.fail_next_send();
-    site.client.who_is(None).await.unwrap();
-    site.client.who_is(None).await.unwrap();
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let frames = site.settled().await;
     assert_eq!(frames.len(), 5, "{frames:?}");
     assert_ask(&frames[0]);
@@ -290,7 +291,7 @@ async fn a_link_return_asks_again_after_a_first_question_while_unknown() {
     let mut site = open_site(true).await;
     site.link_returns();
     assert!(site.settled().await.is_empty(), "nothing asked yet");
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     for asks in [3, 4] {
         site.link_returns();
         let frames = site.settled().await;
@@ -424,9 +425,14 @@ async fn two_who_is_at_once_ask_once() {
         tokio::time::sleep(Duration::from_millis(10)).await;
         site.gate.add_permits(10);
     };
-    let (first, second, ()) =
-        bounded(async { tokio::join!(site.client.who_is(None), site.client.who_is(None), driver) })
-            .await;
+    let (first, second, ()) = bounded(async {
+        tokio::join!(
+            site.client.who_is(Broadcast::Global, None),
+            site.client.who_is(Broadcast::Global, None),
+            driver
+        )
+    })
+    .await;
     first.unwrap();
     second.unwrap();
     let frames = site.sent.frames();
@@ -459,7 +465,8 @@ async fn the_owner_neither_asks_twice_nor_stops_while_a_question_is_held() {
         assert_eq!(site.asks(), 1, "the held question alone");
         site.gate.add_permits(10);
     };
-    let (who_is, ()) = bounded(async { tokio::join!(site.client.who_is(None), driver) }).await;
+    let (who_is, ()) =
+        bounded(async { tokio::join!(site.client.who_is(Broadcast::Global, None), driver) }).await;
     who_is.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let frames = site.sent.frames();
@@ -474,7 +481,10 @@ async fn the_owner_neither_asks_twice_nor_stops_while_a_question_is_held() {
 #[tokio::test(start_paused = true)]
 async fn a_who_is_given_up_mid_question_leaves_the_asking_whole() {
     let mut site = gated().await;
-    let given_up = tokio::time::timeout(Duration::from_millis(100), site.client.who_is(None));
+    let given_up = tokio::time::timeout(
+        Duration::from_millis(100),
+        site.client.who_is(Broadcast::Global, None),
+    );
     assert!(given_up.await.is_err(), "held in the send, then dropped");
     assert_eq!(site.asks(), 1, "the held question was logged");
     site.gate.add_permits(10);
@@ -482,7 +492,7 @@ async fn a_who_is_given_up_mid_question_leaves_the_asking_whole() {
     send_to_client(&site.inbound, &i_am(10), &ROUTER, routed).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(site.asks(), 2, "{:?}", site.sent.frames());
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(site.asks(), 2, "asked once it went");
     assert_eq!(site.sent.frames().len(), 3);
@@ -495,7 +505,7 @@ async fn a_who_is_given_up_mid_question_leaves_the_asking_whole() {
 async fn a_question_the_caller_sent_counts() {
     let mut site = open_site(true).await;
     site.client.what_is_network_number(None).await.unwrap();
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let frames = site.settled().await;
     assert_eq!(frames.len(), 2, "{frames:?}");
     assert_ask(&frames[0]);
@@ -510,11 +520,11 @@ async fn a_question_the_caller_sent_counts() {
 async fn a_refused_who_is_asks_nothing() {
     let mut site = open_site(true).await;
     for network in [0, u16::MAX] {
-        let refused = site.client.who_is_network(network, None).await;
+        let refused = site.client.who_is(Broadcast::Network(network), None).await;
         assert!(refused.is_err(), "network {network}");
     }
     assert!(site.settled().await.is_empty(), "nothing sent");
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let frames = site.settled().await;
     assert_eq!(frames.len(), 2, "{frames:?}");
     assert_ask(&frames[0]);
