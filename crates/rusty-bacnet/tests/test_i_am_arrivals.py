@@ -17,10 +17,10 @@ import rusty_bacnet as rb
 import test_frames
 from bvll_peer import RawPeer, bvll, mac
 from port_retry import rerun_on_lost_port
-from sc_client_fixture import ClientScFixture
+from sc_client_fixture import ClientScFixture, mtls
 from test_bip6_vmac import free_udp6_port, ipv6_loopback
 from test_bip_modes import accepted_registration
-from test_router import port
+from test_router import exclusive, port
 
 ORIGINAL_UNICAST, ORIGINAL_BROADCAST, FORWARDED = 0x0A, 0x0B, 0x04
 REGISTER_FOREIGN_DEVICE, DISTRIBUTE_BROADCAST = 0x05, 0x09
@@ -382,10 +382,87 @@ class RoutedArrivalTests(Arrivals):
         self.assertIsNone(record.forwarding_bbmd)
         self.assertTrue(record.broadcast)
         # The calls that take an address take the device as a RoutedTarget
-        # built from the record, where RoutedTarget is accepted.
+        # built from the record.
         target = rb.RoutedTarget(record.source_network, record.source_address,
                                  router=record.next_hop_router)
         self.assertEqual(target, rb.RoutedTarget(5, mac(device.address), router=router))
+
+    async def test_a_routed_record_names_the_device_to_read_through_its_router(self):
+        far = rb.BACnetServer(5006, interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                              foreign_device=rb.ForeignDevice(self.ports[1].address, ttl=60))
+        far.add_analog_input(1, "Far temperature", 62, 12.5)
+        await asyncio.wait_for(far.start(), 10)
+
+        async def stop():
+            await asyncio.wait_for(far.stop(), 10)
+        self.addAsyncCleanup(stop)
+        await accepted_registration(far)
+        arrivals = await self.routed_client.i_am_arrivals()
+        await self.routed_client.who_is(scope=5)
+        record = await self.next(arrivals)
+        while record.object_identifier.instance != 5006:
+            record = await self.next(arrivals)
+        self.assertEqual(record.source_network, 5)
+        self.assertEqual(record.next_hop_router, self.ports[0].address)
+        target = rb.RoutedTarget(record.source_network, record.source_address,
+                                 router=record.next_hop_router)
+        value = await asyncio.wait_for(self.routed_client.read_property(
+            target, rb.ObjectIdentifier(rb.ObjectType.ANALOG_INPUT, 1),
+            rb.PropertyIdentifier.PRESENT_VALUE), 10)
+        self.assertEqual(value, rb.PropertyValue.real(12.5))
+
+
+class SeatedArrivalTests(Arrivals):
+    """The client an endpoint's ``client()`` returns: it reads the
+    endpoint's link and follows the endpoint's own-echo rule."""
+
+    async def test_a_seated_client_leaves_out_the_endpoints_own_i_am(self):
+        endpoint = await self.endpoint(760, broadcast_address="127.0.0.1")
+        own = await endpoint.local_address()
+        client = await endpoint.client()
+        streams = [await client.i_am_arrivals(), await endpoint.i_am_arrivals()]
+        frames = await endpoint.frames()
+        # Out, and back to the endpoint's socket as the broadcast to
+        # 127.0.0.1 it is.
+        await endpoint.broadcast_i_am()
+        echoed = False
+        while not echoed:
+            frame = await asyncio.wait_for(anext(frames), 10)
+            summary = rb.decode_frame(frame.octets, frame.link)
+            echoed = summary.service == "i-am" and frame.direction == "inbound"
+        peer = self.peer()
+        # Returned by a BBMD, then another instance at the endpoint's address.
+        peer.send(bvll(FORWARDED, mac(own) + local(i_am(760))), self.to(own))
+        peer.send(bvll(FORWARDED, mac(own) + local(i_am(9999))), self.to(own))
+        for arrivals in streams:
+            record = await self.next(arrivals)
+            self.assertEqual((record.object_identifier.instance, record.link_source), (9999, own))
+            self.assertEqual((arrivals.own_echoes, arrivals.missed), (2, 0))
+
+    async def test_seated_and_endpoint_streams_end_with_their_owners(self):
+        endpoint = await self.endpoint(761)
+        own = await endpoint.local_address()
+        client = await endpoint.client()
+        mine = await client.i_am_arrivals()
+        its = await endpoint.i_am_arrivals()
+        # The client's stop ends its stream and leaves the endpoint's.
+        pending = asyncio.ensure_future(anext(mine))
+        await client.stop()
+        with self.assertRaises(StopAsyncIteration):
+            await asyncio.wait_for(pending, 10)
+        peer = self.peer()
+        peer.send(bvll(ORIGINAL_BROADCAST, local(i_am(5))), self.to(own))
+        self.assertEqual((await self.next(its)).object_identifier.instance, 5)
+        # The endpoint's close ends both its stream and a new client's.
+        again = await (await endpoint.client()).i_am_arrivals()
+        waiting = [asyncio.ensure_future(anext(again)), asyncio.ensure_future(anext(its))]
+        await endpoint.close()
+        for waiter in waiting:
+            with self.assertRaises(StopAsyncIteration):
+                await asyncio.wait_for(waiter, 10)
+        # Neither stream, still held, keeps the socket: its port binds again.
+        exclusive(own).close()
+        self.assertEqual((mine.missed, its.missed, again.missed), (0, 0, 0))
 
 
 @unittest.skipUnless(ipv6_loopback(), "this host has no IPv6 loopback")
@@ -433,6 +510,30 @@ class ScArrivalTests(ClientScFixture):
         self.assertEqual(record.link_source, "02:00:00:00:00:04")
         self.assertEqual(record.device_address, "02:00:00:00:00:04")
         self.assertFalse(record.forwarded)
+
+    async def test_an_sc_endpoints_client_gives_its_arrivals(self):
+        # ScEndpoint has no i_am_arrivals() of its own: its client's reads
+        # the endpoint's hub connection.
+        hub, _ = await self.serving_hub()
+        endpoint = rb.ScEndpoint(device_instance=4106, sc_hub=await hub.url(),
+                                 sc_vmac=b"\x02\0\0\0\0\x05",
+                                 sc_ca_cert=self.path("site.pem"),
+                                 sc_client_cert=self.path("client.pem"),
+                                 sc_client_key=self.path("client.key"),
+                                 sc_device_uuid=mtls.CLIENT_UUID)
+        await asyncio.wait_for(endpoint.start(), 10)
+
+        async def close():
+            await asyncio.wait_for(endpoint.close(), 5)
+        self.addAsyncCleanup(close)
+        self.assertFalse(hasattr(endpoint, "i_am_arrivals"))
+        client = await endpoint.client()
+        arrivals = await client.i_am_arrivals()
+        await client.who_is()
+        record = await asyncio.wait_for(anext(arrivals), 10)
+        self.assertEqual((record.link, record.object_identifier.instance), ("sc", 3000))
+        self.assertEqual((record.link_sender, record.link_source), ("primary", "02:00:00:00:00:04"))
+        self.assertEqual(arrivals.own_echoes, 0)
 
 
 if __name__ == "__main__":

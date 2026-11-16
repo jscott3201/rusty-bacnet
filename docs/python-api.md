@@ -6984,20 +6984,29 @@ in the scanner's terms:
 
 For a device on this link, `device_address` is also what the calls that take
 an `address` (`read_property` and the rest) take. Those calls don't take
-`"5:0x07"`: for a routed record pass
+`"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`,
+`read_range`, `read_log_page` and `write_property` take
 `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`
-where `RoutedTarget` is accepted, or name the device to `device()`.
+(see [Routed targets](#routed-targets)); `device()` takes either.
 
 Records compare, hash, copy and pickle by their fields.
 
-What is not a record: a frame this node sends; and, on a `BipEndpoint`, its
-own I-Am come back to it, one from its own address naming its own device
+Where it works: `BACnetClient.i_am_arrivals()` on a standalone client on any
+link, and on the client an endpoint's `client()` returns, `BipEndpoint`,
+`ScEndpoint` and `MstpEndpoint` alike (it reads that endpoint's link);
+`BipEndpoint.i_am_arrivals()` on the endpoint itself. `ScEndpoint` and
+`MstpEndpoint` have no method of their own: use their client's. Each stream
+ends when its owner stops: a client's at its `stop()` or its endpoint's close,
+an endpoint's at the endpoint's close.
+
+What is not a record: a frame this node sends; and, on a `BipEndpoint` or the
+client its `client()` returns, the endpoint's own I-Am come back to it, one from its own address naming its own device
 instance (its broadcast returned, or sent back by a BBMD), which is counted in
 `IAmArrivalIterator.own_echoes` and is no loss in `missed_before`. Any other
 I-Am from its own address is a record: another device there is a conflict to
 see, and behind NAT another site may reuse a private address in the origin a
-BBMD forwards (Annex J.7.5). A `BACnetClient` sends no I-Am, so it leaves
-nothing out and `own_echoes` stays 0. A BACnet/SC hub never returns a broadcast
+BBMD forwards (Annex J.7.5). A standalone `BACnetClient` sends no I-Am, so it
+leaves nothing out and `own_echoes` stays 0. A BACnet/SC hub never returns a broadcast
 to its sender, and the MS/TP port takes its own echo out. An I-Am whose
 parameters don't decode, or an SC one naming no originating VMAC, counts in
 `IAmArrivalIterator.malformed`; to see who sent it and why it failed, read the

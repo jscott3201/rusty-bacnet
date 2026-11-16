@@ -728,9 +728,11 @@ def i_am_arrivals(self, capacity: int = 1024) -> Awaitable[IAmArrivalIterator]
 Follow every I-Am this client's own transport receives from now
 on (B/IP, B/IPv6, SC or MS/TP), one `IAmArrival` each (#2612),
 from a tap queue of `capacity` frames of every kind (1 to 65536,
-else ValueError). A client sends no I-Am, so nothing is left out:
-an I-Am from its own address (another node using it, or one a NAT
-site reuses) is a record. RuntimeError before start and after stop;
+else ValueError). A standalone client sends no I-Am, so nothing is
+left out: an I-Am from its own address (another node using it, or
+one a NAT site reuses) is a record. A client an endpoint's
+`client()` returns follows the endpoint's rule, and is how
+`ScEndpoint` and `MstpEndpoint` give arrivals. RuntimeError before start and after stop;
 a router application client raises ValueError. Stop ends the
 iterator.
 
@@ -2011,7 +2013,7 @@ Properties:
 - `source_network: Optional[int]`: SNET, when a router relayed the I-Am from another network.
 - `source_address: Optional[bytes]`: SADR, the device's MAC on `source_network`.
 - `broadcast: bool`: A link broadcast or a broadcast on a network. False for an MS/TP I-Am one station unicast to another, which the bus lets this station hear.
-- `device_address: Optional[str]`: The device's address as `BACnetClient.device()` takes it: `link_source` for a device on this link, `"5:0x07"` for one a router relayed. None when those name no one station. The calls that take an `address` take `"5:0x07"` from no one: for a routed record, pass `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)` where `RoutedTarget` is accepted.
+- `device_address: Optional[str]`: The device's address as `BACnetClient.device()` takes it: `link_source` for a device on this link, `"5:0x07"` for one a router relayed. None when those name no one station. The calls that take an `address` don't take `"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`, `read_range`, `read_log_page` and `write_property` take `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`.
 - `next_hop_router: Optional[str]`: The router that relayed it, when `source_network` is set: its `link_source`.
 - `forwarding_bbmd: Optional[str]`: The BBMD that forwarded it, when `forwarded`: its `link_sender`.
 - `missed_before: int`: Frames of any kind this subscription lost just before this record, as `Frame.missed_before`: the tap cannot tell which of them held an I-Am. Summed over the records received, plus any lost after the last one, it is `IAmArrivalIterator.missed`. An own echo left out is no loss and adds nothing.
@@ -2030,7 +2032,7 @@ Properties:
 
 - `missed: int`: Frames of any kind lost so far, live, as `FrameIterator.missed`. Readable after close.
 - `malformed: int`: Inbound I-Am frames read so far that made no record: parameters that don't decode, or an SC message naming no originating VMAC. `frames()` and `decode_frame` show who sent one and why it failed. A frame whose headers don't decode is not counted: it is not known to hold an I-Am. Readable after close.
-- `own_echoes: int`: The owner's own I-Ams come back to it, read so far and left out: on a `BipEndpoint`, those from its own address naming its own device instance, whether its broadcast returned or a BBMD sent it back. Always 0 on a `BACnetClient`, which sends no I-Am and leaves nothing out. Readable after close.
+- `own_echoes: int`: The owner's own I-Ams come back to it, read so far and left out: on a `BipEndpoint` and on the client its `client()` returns, those from the endpoint's own address naming its own device instance, whether its broadcast returned or a BBMD sent it back. Always 0 on a standalone `BACnetClient`, which sends no I-Am and leaves nothing out. Readable after close.
 
 ### IAmArrivalIterator.__aiter__
 

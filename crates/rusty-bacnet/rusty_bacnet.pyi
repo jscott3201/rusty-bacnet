@@ -4929,9 +4929,11 @@ class IAmArrival:
         """The device's address as ``BACnetClient.device()`` takes it:
         ``link_source`` for a device on this link, ``"5:0x07"`` for one a
         router relayed. None when those name no one station. The calls that
-        take an ``address`` take ``"5:0x07"`` from no one: for a routed
-        record, pass ``RoutedTarget(rec.source_network, rec.source_address,
-        router=rec.next_hop_router)`` where ``RoutedTarget`` is accepted."""
+        take an ``address`` don't take ``"5:0x07"``: for a routed record,
+        ``read_property``, ``read_property_multiple``, ``read_range``,
+        ``read_log_page`` and ``write_property`` take
+        ``RoutedTarget(rec.source_network, rec.source_address,
+        router=rec.next_hop_router)``."""
         ...
     @property
     def next_hop_router(self) -> Optional[str]:
@@ -4981,10 +4983,11 @@ class IAmArrivalIterator:
     @property
     def own_echoes(self) -> int:
         """The owner's own I-Ams come back to it, read so far and left out:
-        on a ``BipEndpoint``, those from its own address naming its own
-        device instance, whether its broadcast returned or a BBMD sent it
-        back. Always 0 on a ``BACnetClient``, which sends no I-Am and leaves
-        nothing out. Readable after close."""
+        on a ``BipEndpoint`` and on the client its ``client()`` returns,
+        those from the endpoint's own address naming its own device
+        instance, whether its broadcast returned or a BBMD sent it back.
+        Always 0 on a standalone ``BACnetClient``, which sends no I-Am and
+        leaves nothing out. Readable after close."""
         ...
 
 class BACnetClient:
@@ -5652,9 +5655,11 @@ class BACnetClient:
         """Follow every I-Am this client's own transport receives from now
         on (B/IP, B/IPv6, SC or MS/TP), one ``IAmArrival`` each (#2612),
         from a tap queue of ``capacity`` frames of every kind (1 to 65536,
-        else ValueError). A client sends no I-Am, so nothing is left out:
-        an I-Am from its own address (another node using it, or one a NAT
-        site reuses) is a record. RuntimeError before start and after stop;
+        else ValueError). A standalone client sends no I-Am, so nothing is
+        left out: an I-Am from its own address (another node using it, or
+        one a NAT site reuses) is a record. A client an endpoint's
+        ``client()`` returns follows the endpoint's rule, and is how
+        ``ScEndpoint`` and ``MstpEndpoint`` give arrivals. RuntimeError before start and after stop;
         a router application client raises ValueError. Stop ends the
         iterator."""
         ...
@@ -9291,8 +9296,8 @@ class RoutedTarget:
     first; calls made together for one station share one Who-Is. To scan
     stations that never announce themselves, such as MS/TP slaves, pass
     ``router`` from ``BACnetClient.discover_routers()``: without it each
-    costs one 3-second Who-Is wait. A station on the client's own network, once it knows the number,
-    is sent to directly either way. Other values raise ValueError, a type
+    costs one 3-second Who-Is wait. A station on the client's own network,
+    once it knows the number, is sent to directly either way. Other values raise ValueError, a type
     other than ``str`` or ``bytes`` TypeError, and so does a call in another
     order, since ``network`` takes an ``int``.
 

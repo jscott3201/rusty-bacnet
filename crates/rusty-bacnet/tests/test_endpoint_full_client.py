@@ -321,8 +321,8 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
         loop = asyncio.get_running_loop()
         started = loop.time()
-        # Well inside the 2 s request timeout: the close fails the open
-        # requests, stops the client, then the link.
+        # Well inside the 2 s request timeout: the session's stop fails the
+        # open requests and releases the link, then the client closes.
         await asyncio.wait_for(self.endpoint.close(), 1.5)
         for read in reads:
             with self.assertRaisesRegex(rb.BacnetError, "the client stopped while it waited"):

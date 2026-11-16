@@ -78,7 +78,8 @@ impl Running {
             }
         }
         let core = self.session.full_client().map_err(to_py_err)?;
-        if !state.seat(core) {
+        let own_instance = self.session.identity().map(|identity| identity.instance());
+        if !state.seat(core, own_instance) {
             return Err(PyRuntimeError::new_err(
                 "the endpoint's new client is already started",
             ));
