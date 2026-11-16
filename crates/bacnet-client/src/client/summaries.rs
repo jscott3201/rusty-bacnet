@@ -37,7 +37,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             last_received_object_identifier,
         })?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        self.send_via(device_target(&mac, &routing), request).await
+        self.send_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// GetAlarmSummary to the station `to`, its answer decoded.
@@ -55,7 +56,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_instance: u32,
     ) -> Result<GetAlarmSummaryAck, Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        self.call_via(device_target(&mac, &routing), AlarmSummary)
+        self.call_via(device_target(&mac, routing.as_ref()), AlarmSummary)
             .await
     }
 
@@ -80,6 +81,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // A filter out of range fails before the lookup.
         let request = Encoded::new(request)?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        self.send_via(device_target(&mac, &routing), request).await
+        self.send_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 }

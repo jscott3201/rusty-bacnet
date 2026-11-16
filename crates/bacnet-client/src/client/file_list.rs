@@ -24,7 +24,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request: &bacnet_services::alarm_event::AcknowledgeAlarmRequest,
     ) -> Result<(), Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Read file data from the station `to` (stream or record access), the
@@ -78,7 +79,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             file_identifier,
             access,
         };
-        self.call_via(device_target(&mac, &routing), Raw(request))
+        self.call_via(device_target(&mac, routing.as_ref()), Raw(request))
             .await
     }
 
@@ -98,7 +99,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             file_identifier,
             access,
         };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Write file data to the station `to` (stream or record access), the
@@ -131,7 +133,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             file_identifier,
             access,
         };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Add elements to a list property on the station `to`.

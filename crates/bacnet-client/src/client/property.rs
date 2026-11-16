@@ -39,7 +39,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             property_identifier,
             property_array_index,
         };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Read multiple properties from one or more objects on the station
@@ -65,7 +66,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
             list_of_read_access_specs: specs,
         };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Read one property from multiple discovered devices concurrently.
@@ -194,7 +196,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             property_value,
             priority,
         };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Write multiple properties on a discovered device, auto-routing if needed.
@@ -208,7 +211,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_write_access_specs: specs,
         })?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        self.send_via(device_target(&mac, &routing), request).await
+        self.send_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Write one property on multiple discovered devices concurrently.

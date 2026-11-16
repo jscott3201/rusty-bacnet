@@ -703,8 +703,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// An unconfirmed request to `destination_mac` on this link: one
-    /// station, so an empty MAC, which is the link's broadcast, is refused
-    /// as an address on network 0 with no MAC is (#2588).
+    /// station, so an empty MAC, which names none, is refused as an address
+    /// on network 0 with no MAC is (#2588).
     pub(super) async fn unconfirmed_local(
         &self,
         destination_mac: &[u8],

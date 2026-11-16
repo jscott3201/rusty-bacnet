@@ -120,7 +120,7 @@ impl<S: Confirmed> Encoded<S> {
 /// by-instance family.
 pub(super) fn device_target<'a>(
     mac: &'a [u8],
-    routing: &'a Option<(u16, Vec<u8>)>,
+    routing: Option<&'a (u16, Vec<u8>)>,
 ) -> ConfirmedTarget<'a> {
     match routing {
         Some((network, address)) => ConfirmedTarget::Routed {

@@ -41,7 +41,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) -> Result<(), Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
         let request = bacnet_services::object_mgmt::DeleteObjectRequest { object_identifier };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Create an object on a discovered device, routing when needed.
@@ -59,7 +60,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             object_specifier,
             list_of_initial_values: initial_values,
         };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 }
 

@@ -100,7 +100,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             request,
             validation,
         };
-        self.call_via(device_target(&mac, &routing), range).await
+        self.call_via(device_target(&mac, routing.as_ref()), range)
+            .await
     }
 
     /// Read one log page from a discovered device, routing every subrequest.
@@ -137,12 +138,9 @@ struct RoutedLogRequester<'a, T: TransportPort> {
     address: &'a [u8],
 }
 
-impl<'a, T: TransportPort> RoutedLogRequester<'a, T> {
+impl<T: TransportPort> RoutedLogRequester<'_, T> {
     /// The station through the router the reader names.
-    fn target<'r>(&self, router_mac: &'r [u8]) -> ConfirmedTarget<'r>
-    where
-        'a: 'r,
-    {
+    fn target<'r>(&'r self, router_mac: &'r [u8]) -> ConfirmedTarget<'r> {
         ConfirmedTarget::Routed {
             router_mac,
             dest_network: self.network,

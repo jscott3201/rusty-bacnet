@@ -72,7 +72,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             enable_disable,
             password,
         };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Send ReinitializeDevice to a discovered device, routing when needed.
@@ -90,7 +91,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             reinitialized_state,
             password,
         };
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Send local time synchronization to a discovered device, routing when needed.

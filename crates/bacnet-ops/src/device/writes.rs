@@ -10,6 +10,7 @@
 //! goes again where a following handle's device went; one that timed out
 //! may have been applied, so it is never sent again.
 
+use bacnet_encoding::constructed::check_property_value;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -276,6 +277,11 @@ impl<T: TransportPort + 'static> Device<T> {
     /// Send `order` as one WriteProperty at the device's gate: the address
     /// it went to.
     async fn send_write(&self, order: &Order) -> Result<DeviceAddress, OpsError> {
+        // The one check of the WriteProperty encoding `order` hasn't had
+        // (a legacy EventParameters value that wouldn't decode back), made
+        // before the device is looked up, as the encoding itself refuses it.
+        check_property_value(order.property.property, &order.value.raw, 3)
+            .map_err(|refused| OpsError::Client(refused.within("WriteProperty").into()))?;
         let address = self.target().await?;
         let result = self.write_at(&address, order).await;
         // No route: nothing was sent. A timeout is never sent again.
@@ -292,11 +298,10 @@ impl<T: TransportPort + 'static> Device<T> {
             .map_err(|error| OpsError::at(&address, error))
     }
 
-    /// One WriteProperty of `order` to `at`, in the device's turn. The
-    /// client encodes it once and refuses what it can't encode before
-    /// anything goes to the device; `order` already holds a checked
-    /// priority and a value its own encoder wrote, so that refusal is the
-    /// legacy EventParameters form alone.
+    /// One WriteProperty of `order` to `at`, in the device's turn, encoded
+    /// once by the client. Its priority is a checked one and
+    /// [`Self::send_write`] has checked its value, so the encoding refuses
+    /// nothing here.
     async fn write_at(&self, at: &DeviceAddress, order: &Order) -> Result<(), Error> {
         let (path, _turn) = self.turn_at(at).await?;
         let PropertyRef {

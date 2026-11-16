@@ -110,7 +110,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Cancel a COV subscription on the station `to`.
@@ -146,7 +147,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Subscribe to COV notifications for a single property on the station
@@ -171,7 +173,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Cancel a single-property COV subscription on the station `to`.
@@ -218,7 +221,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
-        self.call_via(device_target(&mac, &routing), request).await
+        self.call_via(device_target(&mac, routing.as_ref()), request)
+            .await
     }
 
     /// Cancel a COV subscription at `target`, the device a

@@ -99,10 +99,14 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
 }
 
 /// Where a subscription to `station` goes: its MAC on this network, or the
-/// station behind the router on the way. A remote station that names no
-/// router goes through the one its row in `client`'s discovery table names,
-/// as a request to it would; with no row it has no route
-/// ([`Error::UnknownDevice`], as [`path_to`] fails).
+/// station behind the router on the way.
+///
+/// The `Remote` arm is defensive: [`path_to`] names the router of every
+/// routed station it finds, so it never gives one. A remote station would
+/// go through the router its row in `client`'s discovery table names, as a
+/// request to it would; with no row it has no route and fails with
+/// [`Error::UnknownDevice`], which [`start`] treats as it treats
+/// `path_to`'s own: the point is not asked for, and nothing is sent.
 async fn target_of<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     station: Station,

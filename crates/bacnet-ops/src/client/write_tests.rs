@@ -731,3 +731,41 @@ async fn an_indexed_present_value_preview_is_not_a_vendor_property() {
     drop(device);
     stop(client, server).await;
 }
+
+/// A value the WriteProperty encoding refuses (a legacy EventParameters
+/// value that wouldn't decode back) is refused before the device is looked
+/// up: a routed handle whose row has gone gets the encoding's error, not an
+/// unknown device, and nothing is sent.
+#[tokio::test(start_paused = true)]
+async fn an_unencodable_value_is_refused_before_the_lookup() {
+    let (client, server) = lab_on(forwards).await;
+    let sent = log(&client);
+    client
+        .low_level()
+        .add_routed_device(bacnet_client::discovery::RoutedDeviceConfig {
+            instance: 4321,
+            router_mac: vec![2],
+            remote_network: 2,
+            remote_mac: vec![5],
+            max_apdu_length: 1476,
+            segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
+            max_segments_accepted: None,
+        })
+        .await
+        .unwrap();
+    let device = client.device("2:0x05").await.unwrap();
+    client.low_level().clear_devices().await;
+    let before = sent.len();
+    let legacy = PropertyValue::ApplicationData(vec![0xFE, 0xFF, 0x09]);
+    let refused = device
+        .write("event-enrollment:1 event-parameters", legacy, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(refused, OpsError::Client(Error::Encode(_))),
+        "{refused:?}"
+    );
+    assert_eq!(sent.len(), before, "nothing was sent");
+    drop(device);
+    stop(client, server).await;
+}
