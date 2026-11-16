@@ -60,7 +60,13 @@ impl Wire {
     /// the node that owns the MAC and its broadcasts every other node; a
     /// frame for no node, or for a full queue, is lost, as on a real link.
     pub fn port(&self, n: u8) -> TestTransportBuilder {
-        let (queue, inbound) = mpsc::channel(QUEUE);
+        self.port_with_queue(n, QUEUE)
+    }
+
+    /// [`Self::port`] with a receive queue `depth` frames deep, for a test
+    /// that releases a burst longer than a socket's buffer would hold.
+    pub fn port_with_queue(&self, n: u8, depth: usize) -> TestTransportBuilder {
+        let (queue, inbound) = mpsc::channel(depth);
         let mac = Self::mac(n);
         self.nodes().push(Node {
             mac: mac.clone(),

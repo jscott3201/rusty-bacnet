@@ -14,6 +14,8 @@ mod eventually;
 #[path = "support/wire.rs"]
 mod wire;
 
+#[path = "full_client/bursts.rs"]
+mod bursts;
 #[path = "full_client/lifecycle.rs"]
 mod lifecycle;
 #[path = "full_client/numbers.rs"]

@@ -247,6 +247,17 @@ dial, and MS/TP station/timing knobs stay transport-specific by design.
   its exact coordinator lease via RAII for ordinary reads. Admitted audited
   reads are session-owned through their terminal outcome. `stop()` seals admission, cancels
   waiters, and joins dispatch exactly once.
+- Ingress never waits for its queues and a full one never ends the session
+  (#2635): what finds no room is dropped, counted by class in
+  [`policy_counters`](session::EndpointSession::policy_counters) and logged
+  at most every ten seconds. Unconfirmed requests may fill the request queue
+  only down to a quarter of its
+  [`queue_capacity`](session::SessionConfig::queue_capacity) (default 256),
+  kept for confirmed requests, and answers no lease holds the answer queue
+  only down to a quarter kept for answers to the session's own requests (a
+  capacity of 1 keeps no reserve); a confirmed request with no room gets no
+  answer and is recovered by its requester's retry; an answer with no room
+  ends its request by timeout, as if the link had lost it.
 - All fallible boundaries return typed [`bacnet_types::error::Error`];
   queue-capacity, BBMD-ordering, SC identity/heartbeat, and MS/TP
   addressing misconfiguration fail fast at build time.

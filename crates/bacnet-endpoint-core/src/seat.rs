@@ -36,6 +36,23 @@
 //! seat's queue full is dropped and counted ([`ClientSeatCounters`]), so a
 //! client that stops reading holds nothing else up.
 //!
+//! The queue has three tiers (#2635), so what the client can best spare
+//! finds it full first:
+//!
+//! - copies of Unconfirmed-Requests (I-Ams, Who-Is, notifications) may fill
+//!   it only down to half of it;
+//! - Confirmed-Requests to the client (its COV notifications, a copy of an
+//!   event notification, and every one on a node with no server role) may
+//!   fill it down to its last quarter, the reserve each endpoint queue
+//!   keeps;
+//! - answers to the client's requests may fill all of it.
+//!
+//! A burst of I-Ams from the client's own discovery then shuts out neither
+//! its COV notifications nor its answers. Each tier keeps a slot of its
+//! own where the capacity allows: one slot for all at a capacity of 1;
+//! copies one and answers one at 2; one each at 3; 2, 1 and 1 at 4; and at
+//! the default 256, 128, 64 and 64.
+//!
 //! # Lifetime
 //!
 //! The endpoint stops the link. Its stop closes the seat's queues and aborts
@@ -197,7 +214,11 @@ impl<T: TransportPort> std::fmt::Debug for ClientSeat<T> {
 pub struct ClientSeatCounters {
     /// APDUs handed to the seat.
     pub apdus: u64,
-    /// APDUs dropped because the seat's queue was full.
+    /// APDUs the seat refused: those its full queue had no room for, and
+    /// those its tiers held back for what the client can spare less (see
+    /// the [module docs](self)). On an endpoint with no server role, a
+    /// Confirmed-Request the seat refuses is counted here, not in the
+    /// endpoint's own counts.
     pub full_drops: u64,
     /// Network controls dropped because the seat's control queue was full.
     pub control_full_drops: u64,
@@ -247,6 +268,14 @@ pub(crate) struct SeatSlot {
     apdus: AtomicU64,
     full_drops: AtomicU64,
     control_full_drops: AtomicU64,
+}
+
+/// The free slots of a seat of `capacity` that copies of
+/// Unconfirmed-Requests leave: twice the
+/// [`reserve`](crate::endpoint_ingress::reserve), so they fill at most half
+/// of a seat of 8 or more, but never all of it, so they keep a slot too.
+pub(crate) fn copy_floor(capacity: usize) -> usize {
+    (2 * crate::endpoint_ingress::reserve(capacity)).min(capacity.saturating_sub(1))
 }
 
 fn add(counter: &AtomicU64) {
@@ -362,6 +391,24 @@ impl SeatSlot {
             self.attached.store(false, Ordering::Relaxed);
         }
         state.attached.as_ref().map(route)
+    }
+
+    /// Whether the seat takes `received`, or a copy of it, now: whether more
+    /// than its tier's floor of free slots is left (see the
+    /// [module docs](self)). One that isn't is dropped and counted here,
+    /// before any copy is made. An answer is offered as it is.
+    pub(crate) fn takes(&self, attached: &Attached, received: &ReceivedApdu) -> bool {
+        let capacity = attached.apdus.max_capacity();
+        let floor = match received.apdu.first().map(|first| first >> 4) {
+            Some(1) => copy_floor(capacity),
+            Some(0) => crate::endpoint_ingress::reserve(capacity),
+            _ => return true,
+        };
+        if attached.apdus.capacity() <= floor {
+            add(&self.full_drops);
+            return false;
+        }
+        true
     }
 
     /// Hand `received` to the seat without waiting. A full queue drops and

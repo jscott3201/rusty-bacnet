@@ -213,7 +213,9 @@ impl PyBipEndpoint {
     ///         narrow endpoint reality; wider profiles need the full server).
     ///     device_uuid: Optional 16-byte UUID (zeros allowed for BIP-only;
     ///         stored into DEVICE_UUID, single identity source).
-    ///     queue_capacity: Bounded queue capacity (must be >0).
+    ///     queue_capacity: Bounded queue capacity (must be >0, default 256).
+    ///         A full queue drops and counts what it has no room for
+    ///         (`status()`'s `*_full_drops`); it never ends the session.
     ///     apdu_timeout_ms / apdu_retries: Client timers.
     ///     read_work_limit: Keyword-only. Result rows one ReadProperty served
     ///         by the server role may expand (must be >0, default 256): its
@@ -286,7 +288,7 @@ impl PyBipEndpoint {
         segmentation=None,
         services=None,
         device_uuid=None,
-        queue_capacity=16,
+        queue_capacity=256,
         apdu_timeout_ms=6000,
         apdu_retries=0,
         registered_network_port=None,
@@ -667,6 +669,10 @@ impl PyBipEndpoint {
                 dict.set_item("no_client_role", snapshot.0.no_client_role)?;
                 dict.set_item("unclaimed_terminal", snapshot.0.unclaimed_terminal)?;
                 dict.set_item("responder_declined", snapshot.0.responder_declined)?;
+                dict.set_item("unconfirmed_full_drops", snapshot.0.unconfirmed_full_drops)?;
+                dict.set_item("confirmed_full_drops", snapshot.0.confirmed_full_drops)?;
+                dict.set_item("answer_full_drops", snapshot.0.answer_full_drops)?;
+                dict.set_item("policy_full_drops", snapshot.0.policy_full_drops)?;
                 snapshot.4.add_to(&dict)?;
                 Ok(dict.into_any().unbind())
             })

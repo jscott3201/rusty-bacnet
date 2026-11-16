@@ -183,7 +183,9 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
 
 pub(super) async fn handle_ingress_policy(shared: &Arc<SessionShared>, outcome: PolicyOutcome) {
     // Policy-outcome ownership: the session counts every classifier outcome
-    // (malformed/unsupported/route-full/route-closed) instead of dropping it.
+    // (malformed/unsupported/group-source/route-closed) instead of dropping
+    // it. What a full queue had no room for never reaches it: ingress counts
+    // that by class (#2635).
     let mut counters = shared.counters.lock().await;
     counters.ingress_policy += 1;
     let _ = outcome.reason;

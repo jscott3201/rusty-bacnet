@@ -436,6 +436,7 @@ dependencies = [
  "bacnet-types",
  "bytes",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 //! RB-15 lease + queue ownership tests (Loopback, deterministic).
 //!
-//! Covers: lease exhaustion → release → reuse, lost consumer, full role +
-//! policy queues, ingress policy ownership.
+//! Covers: lease exhaustion → release → reuse, lost consumer, a full role
+//! queue, ingress policy ownership.
 
 use std::time::Duration;
 
@@ -164,16 +164,16 @@ async fn lost_consumer_routes_to_policy_without_hanging() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn full_ingress_queue_overflows_to_policy() {
-    // Ingress with capacity 1: fill the inbound queue, then prove the next
-    // request overflows to the policy queue (RouteFull) instead of blocking.
+async fn a_full_ingress_queue_drops_and_counts_instead_of_blocking() {
+    // Ingress with capacity 1 that nothing reads: the first request takes
+    // the one slot, the next two find it full and are dropped and counted
+    // (#2635), never handed to policy, and the sender never waits.
     let (endpoint_transport, peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut endpoint = EndpointIngress::new(endpoint_transport, 1);
     let mut ingress = endpoint.start().await.unwrap();
     let mut peer = NetworkLayer::new(peer_transport);
     let _peer_rx = peer.start().await.unwrap();
 
-    // Hold the single inbound slot without consuming it.
     let mut service = BytesMut::new();
     ReadPropertyRequest {
         object_identifier: object_id(3),
@@ -181,7 +181,7 @@ async fn full_ingress_queue_overflows_to_policy() {
         property_array_index: None,
     }
     .encode(&mut service);
-    for invoke_id in [10u8, 11u8] {
+    for invoke_id in [10u8, 11, 12] {
         let request = Apdu::ConfirmedRequest(ConfirmedRequest {
             segmented: false,
             more_follows: false,
@@ -204,80 +204,20 @@ async fn full_ingress_queue_overflows_to_policy() {
         )
         .await
         .unwrap();
-        // Let the classifier task poll between the two sends without sleeping:
-        // yield until the first item is queued.
-        if invoke_id == 10 {
-            let first = tokio::time::timeout(WAIT, ingress.inbound_requests.recv())
-                .await
-                .expect("first request must arrive")
-                .expect("inbound closed");
-            match decode_apdu(first.apdu.clone()).unwrap() {
-                Apdu::ConfirmedRequest(req) => assert_eq!(req.invoke_id, 10),
-                other => panic!("expected request, got {other:?}"),
-            }
-            // Re-queue pressure: send the second immediately; the classifier
-            // will route it to inbound (capacity 1, currently empty after our
-            // recv) — so instead prove boundedness via policy on a third
-            // burst below. Keep this deterministic: put the first back by
-            // sending two more without consuming.
-            for extra in [11u8, 12u8] {
-                let request = Apdu::ConfirmedRequest(ConfirmedRequest {
-                    segmented: false,
-                    more_follows: false,
-                    segmented_response_accepted: false,
-                    max_segments: None,
-                    max_apdu_length: 480,
-                    invoke_id: extra,
-                    sequence_number: None,
-                    proposed_window_size: None,
-                    service_choice: ConfirmedServiceChoice::READ_PROPERTY,
-                    service_request: service.clone().freeze(),
-                });
-                let mut encoded = BytesMut::new();
-                encode_apdu(&mut encoded, &request).unwrap();
-                peer.send_apdu(
-                    &encoded,
-                    &[0x01],
-                    true,
-                    bacnet_npdu::NetworkPriority::Normal,
-                )
-                .await
-                .unwrap();
-            }
-            // Drain at most 2 inbound items; any overflow must appear as a
-            // policy outcome (RouteFull) instead of blocking the sender.
-            let mut inbound = 0;
-            let mut policy = 0;
-            let deadline = tokio::time::Instant::now() + WAIT;
-            while inbound + policy < 3 && tokio::time::Instant::now() < deadline {
-                tokio::select! {
-                    item = ingress.inbound_requests.recv() => {
-                        if item.is_some() {
-                            inbound += 1;
-                        }
-                    }
-                    item = ingress.policy_outcomes.recv() => {
-                        if item.is_some() {
-                            policy += 1;
-                        }
-                    }
-                    // Paused time moves only on a sleep, so the deadline can pass.
-                    _ = tokio::time::sleep(Duration::from_millis(1)) => {}
-                }
-                if inbound >= 1 && policy >= 1 {
-                    break;
-                }
-            }
-            assert!(
-                policy >= 1 || inbound >= 2,
-                "bounded queues must not block: inbound={inbound} policy={policy}"
-            );
-            endpoint.stop().await.unwrap();
-            peer.stop().await.unwrap();
-            return;
-        }
     }
-    panic!("unreachable: first request must have been consumed above");
+    eventually(WAIT, "the two that found no room counted", async || {
+        endpoint.full_drop_counters().confirmed_full_drops == 2
+    })
+    .await;
+    let first = ingress.inbound_requests.recv().await.unwrap();
+    match decode_apdu(first.apdu.clone()).unwrap() {
+        Apdu::ConfirmedRequest(request) => assert_eq!(request.invoke_id, 10),
+        other => panic!("expected request, got {other:?}"),
+    }
+    assert!(ingress.inbound_requests.try_recv().is_err());
+    assert!(ingress.policy_outcomes.try_recv().is_err());
+    endpoint.stop().await.unwrap();
+    peer.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
