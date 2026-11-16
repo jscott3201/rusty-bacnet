@@ -2,7 +2,7 @@
 //! The diversion itself, and the records on the wire, are tested with an
 //! endpoint session in `bacnet-endpoint`.
 
-use super::source_audit_targets::{attempted, decode};
+use super::source_audit_targets::{attempted, audit_result, decode};
 use super::*;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::rpm::{
@@ -255,5 +255,58 @@ fn an_rpm_answer_that_does_not_follow_the_request() {
     assert_eq!(
         records[0].1,
         Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
+    );
+}
+
+/// A WritePropertyMultiple-Error names a property, not a position: for a
+/// property the request writes twice it names the last write, so the
+/// first is recorded as made, and that write and every one after it carry
+/// the error.
+#[test]
+fn a_wpm_error_naming_a_property_written_twice_names_its_last_write() {
+    use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+    use bacnet_types::constructed::{BACnetObjectPropertyReference, BACnetPropertyValue};
+    use bacnet_types::error::ErrorDetail;
+    let object = oid(ObjectType::ANALOG_VALUE, 1);
+    let write = |property_identifier, priority| BACnetPropertyValue {
+        property_identifier,
+        property_array_index: None,
+        value: vec![0x21, 1],
+        priority,
+    };
+    let request = WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: object,
+            list_of_properties: vec![
+                write(PropertyIdentifier::PRESENT_VALUE, Some(8)),
+                write(PropertyIdentifier::PRESENT_VALUE, Some(16)),
+                write(PropertyIdentifier::DESCRIPTION, None),
+            ],
+        }],
+    };
+    let mut data = BytesMut::new();
+    request.encode(&mut data).unwrap();
+    let (_, targets, decoded) = decode(ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE, &data)
+        .unwrap()
+        .unwrap();
+    let denied = (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
+    let error = Error::with_detail(
+        denied.0,
+        denied.1,
+        Some(ErrorDetail::FirstFailedWriteAttempt(
+            BACnetObjectPropertyReference {
+                object_identifier: object,
+                property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+                property_array_index: None,
+            },
+        )),
+    );
+    let (records, _) = decoded.records(targets, &Err(error));
+    assert_eq!(
+        records
+            .iter()
+            .map(|(_, result)| *result)
+            .collect::<Vec<_>>(),
+        [None, Some(denied), Some(denied)]
     );
 }

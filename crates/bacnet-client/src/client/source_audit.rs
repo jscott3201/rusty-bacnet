@@ -256,23 +256,24 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// [`Self::audited_request`] for a request diverted where it was about
-    /// to go segmented, with the turn and routed path its `limits` hold.
+    /// to go segmented, with the target as named, the turn and the routed
+    /// path its `limits` hold.
     pub(super) fn audited_segmented(
         &self,
         auditor: Arc<dyn SourceAuditor>,
-        target: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
         limits: SegmentedRequestLimits<'_>,
     ) -> Diverted {
         let SegmentedRequestLimits {
+            named,
             routed_path_lease,
             pace,
             ..
         } = limits;
         self.audited_request(
             auditor,
-            target,
+            named,
             service_choice,
             service_data,
             pace,

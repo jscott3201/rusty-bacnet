@@ -7201,10 +7201,13 @@ async with BipEndpoint(1001, interface="192.168.1.10", broadcast_address="192.16
   a `priority` is a command at that priority, which the Reporter's
   Audit_Priority_Filter applies to and the record names; one without is not
   filtered by priority. Once admitted, a request belongs to the endpoint: a
-  cancelled call loses neither the request nor its record. A request the
-  Reporter doesn't select goes unrecorded, and so do `write_group`,
-  subscriptions, object and device management for now. An operation cut off by the endpoint's
-  close, or by the client's `stop()`, is not recorded.
+  cancelled call loses neither the request nor its record. At most 64 are
+  held at once; past them a call waits for a slot, and its timeout starts
+  once it is admitted. A request the Reporter doesn't select goes
+  unrecorded. Not audited yet: `write_group`, subscriptions, object and
+  device management, alarm acknowledgment and life safety. An operation cut
+  off by the endpoint's close, or by the client's `stop()`, is not
+  recorded.
 
 Python endpoint server roles execute and advertise ReadProperty, plus
 ReinitializeDevice when built with `on_reinitialize` (the keywords and rules of

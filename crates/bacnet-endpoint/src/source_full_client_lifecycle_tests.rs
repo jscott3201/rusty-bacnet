@@ -341,3 +341,128 @@ async fn a_segmented_request_is_audited_as_any_other() {
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
+
+/// A confirmed service outside the ten audited goes as it is on an audited
+/// client and records nothing; its caller going away mid-request sends no
+/// retry and frees its invoke ID, as on any client; and an unconfirmed
+/// send goes out.
+#[tokio::test(start_paused = true)]
+async fn an_unaudited_service_and_an_unconfirmed_send_go_as_they_are() {
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
+    session.client_config.apdu_retries = 2;
+    session.client_config.apdu_timeout_ms = 3_000;
+    session.start().await.unwrap();
+    let client = full_client(&session);
+    // DeviceCommunicationControl, ENABLE for no set time.
+    let communication_control = |client: &Client| {
+        let client = Arc::clone(client);
+        let mac = peer.local_mac().to_vec();
+        tokio::spawn(async move {
+            client
+                .confirmed_request(
+                    &mac[..],
+                    ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
+                    &[0x19, 0x00],
+                )
+                .await
+        })
+    };
+    let call = communication_control(&client);
+    let request = receive(&mut requests).await;
+    let Apdu::ConfirmedRequest(pdu) = decode_apdu(request.apdu.clone()).unwrap() else {
+        panic!("a confirmed request")
+    };
+    let answer = Apdu::SimpleAck(SimpleAck {
+        invoke_id: pdu.invoke_id,
+        service_choice: pdu.service_choice,
+    });
+    send(&peer, &request.source_mac, answer).await;
+    assert!(timeout(WAIT, call).await.unwrap().unwrap().is_ok());
+
+    let call = communication_control(&client);
+    let _first = receive(&mut requests).await;
+    call.abort();
+    let _ = call.await;
+    eventually(WAIT, "invoke IDs are free", async || {
+        session.coordinator.active_count().unwrap() == 0
+    })
+    .await;
+    assert!(
+        timeout(Duration::from_secs(20), requests.recv())
+            .await
+            .is_err(),
+        "no retry after the caller left"
+    );
+
+    client
+        .unconfirmed_request(peer.local_mac(), UnconfirmedServiceChoice::WHO_IS, &[])
+        .await
+        .unwrap();
+    let who_is = receive(&mut requests).await;
+    assert!(matches!(
+        decode_apdu(who_is.apdu.clone()).unwrap(),
+        Apdu::UnconfirmedRequest(_)
+    ));
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(records.try_recv().is_err());
+    drop(client);
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
+/// A client dropped with an audited request in flight, then a new client
+/// on the same session: the first request is not recorded, the new
+/// client's is, and every invoke ID comes back.
+#[tokio::test(start_paused = true)]
+async fn a_new_client_after_one_dropped_mid_request_is_audited_alone() {
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
+    let mut session = session(database(false), SessionRole::Both, &sink);
+    session.client_config.apdu_timeout_ms = 60_000;
+    session.start().await.unwrap();
+    let client = full_client(&session);
+    let read = full_read(
+        &client,
+        peer.local_mac(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+    );
+    let first = receive(&mut requests).await;
+    read.abort();
+    let _ = read.await;
+    let Ok(client) = Arc::try_unwrap(client) else {
+        panic!("the read's task let its client go")
+    };
+    drop(client);
+    let client = full_client(&session);
+    let (invoke, rp) = read_request(&first);
+    send(&peer, &first.source_mac, ack(invoke, &rp)).await;
+    let read = full_read(
+        &client,
+        peer.local_mac(),
+        PropertyIdentifier::OBJECT_NAME,
+        None,
+    );
+    let second = receive(&mut requests).await;
+    let (invoke, rp) = read_request(&second);
+    send(&peer, &second.source_mac, ack(invoke, &rp)).await;
+    assert!(timeout(WAIT, read).await.unwrap().unwrap().is_ok());
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.invoke_id, Some(invoke));
+    assert!(
+        timeout(Duration::from_millis(100), records.recv())
+            .await
+            .is_err()
+    );
+    eventually(WAIT, "invoke IDs are free", async || {
+        session.coordinator.active_count().unwrap() == 0
+    })
+    .await;
+    drop(client);
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}

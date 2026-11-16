@@ -282,6 +282,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     service_choice,
                     service_data,
                     SegmentedRequestLimits {
+                        named,
                         remote_max_apdu,
                         remote_max_segments,
                         routed_forwarded_npci_len,

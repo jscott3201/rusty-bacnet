@@ -3,9 +3,10 @@
 //! The client hands the session every confirmed request of a service Table
 //! 19-5 maps to READ or WRITE (see `bacnet_client::client::SourceAuditor`).
 //! It has already waited for its turn at the destination. Here the request
-//! is admitted as the narrow requester's operations are: one of 64 permits,
-//! the database guard, the Reporter's filters, a recipient, one station, a
-//! timestamp. Then a task the session owns runs it, so a caller that goes
+//! is admitted as the narrow requester's operations are, but for the slots:
+//! one of 64 slots, waited for when all are held (the narrow requester
+//! refuses the 65th), the database guard, the Reporter's filters, a
+//! recipient, one station, a timestamp. Then a task the session owns runs it, so a caller that goes
 //! away loses neither the request nor its records: the client retries with
 //! the same invoke ID and the records carry the real answer. A request the
 //! Reporter doesn't select, or that has no recipient, runs unaudited in the
@@ -75,10 +76,15 @@ impl SourceAudit {
     /// Admit and carry out a request of the session's full client, as the
     /// module documentation describes.
     async fn audit_seated(self: &Arc<Self>, request: AuditedRequest) -> Result<Bytes, Error> {
-        // Bound every retained operation; never spawn permit waiters.
+        // At most 64 operations are held at once. Past them a request waits
+        // here for a slot, in its caller's task: nothing is spawned for it,
+        // its timeout starts once it is admitted, and a stop (which closes
+        // the slots) or its caller going away ends the wait with nothing
+        // sent and no slot held.
         let permit = Arc::clone(&self.operations)
-            .try_acquire_owned()
-            .map_err(|_| Error::Encoding("source Audit admission is closed or full".into()))?;
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Encoding("endpoint shutdown".into()))?;
         let mut db = self.db.write().await;
         if self.operations.is_closed() {
             return Err(Error::Encoding("endpoint shutdown".into()));

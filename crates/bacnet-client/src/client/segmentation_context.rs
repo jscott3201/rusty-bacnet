@@ -53,6 +53,10 @@ pub(super) struct InboundSegmentSource<'a> {
 
 /// Limits and routing state for one segmented confirmed request.
 pub(super) struct SegmentedRequestLimits<'a> {
+    /// The target as the caller named it, before a station on this client's
+    /// own network was localized: what a request its node audits starts
+    /// over from (#2617).
+    pub(super) named: ConfirmedTarget<'a>,
     /// Largest APDU the peer accepts.
     pub(super) remote_max_apdu: u16,
     /// Most segments the peer accepts, when it advertised a bound.

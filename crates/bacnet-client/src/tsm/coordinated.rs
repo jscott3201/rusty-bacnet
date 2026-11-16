@@ -1,4 +1,6 @@
 use bacnet_types::error::RemoteError;
+use bacnet_types::map_hash::BuildMapHasher;
+use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
 use std::sync::Arc;
@@ -41,6 +43,15 @@ pub(crate) enum PendingRelease {
     Complete,
     Cancel,
     Release,
+}
+
+/// What one registration asks for.
+struct Registration {
+    destination_mac: MacAddr,
+    peer: CanonicalPeer,
+    service_choice: ConfirmedServiceChoice,
+    segmented: bool,
+    terminal_policy: TerminalPolicy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,15 +140,21 @@ impl Tsm {
         service_choice: ConfirmedServiceChoice,
         segmented: bool,
     ) -> Result<(u8, TransactionRegistration), CoordinatedRegistrationError> {
-        let diverted = std::mem::replace(&mut self.registrar, self.coordinator.clone());
-        let registered = self.register_coordinated_transaction_with_progress(
-            destination_mac,
-            peer,
-            service_choice,
-            segmented,
-        );
-        self.registrar = diverted;
-        registered
+        let coordinator = self
+            .coordinator
+            .as_ref()
+            .ok_or(CoordinatedRegistrationError::CoordinatorUnavailable)?;
+        Self::register_through(
+            coordinator,
+            &mut self.pending,
+            Registration {
+                destination_mac,
+                peer,
+                service_choice,
+                segmented,
+                terminal_policy: TerminalPolicy::EitherAck,
+            },
+        )
     }
 
     pub(crate) fn register_coordinated_transaction_with_progress(
@@ -168,6 +185,36 @@ impl Tsm {
             .registrar
             .as_ref()
             .ok_or(CoordinatedRegistrationError::CoordinatorUnavailable)?;
+        Self::register_through(
+            coordinator,
+            &mut self.pending,
+            Registration {
+                destination_mac,
+                peer,
+                service_choice,
+                segmented,
+                terminal_policy,
+            },
+        )
+    }
+
+    /// Reserve an invoke ID from `coordinator` and enter the transaction
+    /// in `pending`: every registration, through whichever slot gave the
+    /// coordinator. Inlined, so the registration the request path makes is
+    /// the code it was.
+    #[inline(always)]
+    fn register_through(
+        coordinator: &OutboundTransactionCoordinator,
+        pending: &mut HashMap<(MacAddr, u8), PendingTransaction, BuildMapHasher>,
+        registration: Registration,
+    ) -> Result<(u8, TransactionRegistration), CoordinatedRegistrationError> {
+        let Registration {
+            destination_mac,
+            peer,
+            service_choice,
+            segmented,
+            terminal_policy,
+        } = registration;
         let metadata = if segmented {
             LeaseMetadata::segmented_requester(peer, service_choice, terminal_policy)
         } else {
@@ -184,12 +231,12 @@ impl Tsm {
         } else {
             TransactionPhase::AwaitingResponse
         };
-        let (pending, registration) =
+        let (entry_value, registration) =
             Self::new_pending_transaction(service_choice, phase, PendingLease::Coordinated(token));
 
-        match self.pending.entry((destination_mac, invoke_id)) {
+        match pending.entry((destination_mac, invoke_id)) {
             Entry::Vacant(entry) => {
-                entry.insert(pending);
+                entry.insert(entry_value);
                 Ok((invoke_id, registration))
             }
             Entry::Occupied(_) => {

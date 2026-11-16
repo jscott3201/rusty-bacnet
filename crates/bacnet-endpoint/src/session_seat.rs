@@ -44,14 +44,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// WritePropertyMultiple, AtomicWriteFile, AddListElement and
     /// RemoveListElement. Each is admitted by the Reporter's settings and
     /// then owned by the session, so a caller that goes away loses neither
-    /// the request nor its records. A write sent with a priority is a
+    /// the request nor its records. At most 64 are held at once; past them
+    /// a request waits for a slot in its caller's task, and its timeout
+    /// starts once it is admitted. A write sent with a priority is a
     /// command at that priority, which the Audit_Priority_Filter applies to;
     /// one without a priority is not filtered by priority. An audited
-    /// request goes to one station, direct or behind a router, and one of a
-    /// service it audits that doesn't decode is refused before it is sent.
-    /// Its other requests, such as subscriptions or device management, are
-    /// not audited yet. An operation cut off by a stop, of the session or of
-    /// the client, is not recorded.
+    /// request goes to one station, direct or behind a router, and a raw
+    /// request of an audited service that doesn't decode is refused before
+    /// it is sent. Not audited yet: WriteGroup, subscriptions, object and
+    /// device management, alarm acknowledgment and life safety. An
+    /// operation cut off by a stop, of the session or of the client, is not
+    /// recorded.
     ///
     /// **Who answers what.** Beside a server role the client answers only
     /// the COV notifications of its own subscriptions. Today's narrow

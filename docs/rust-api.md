@@ -13428,13 +13428,16 @@ Table 19-5 maps to READ and WRITE go through that Reporter (#2617):
 ReadProperty, ReadPropertyMultiple, ReadRange, AtomicReadFile, AuditLogQuery,
 WriteProperty, WritePropertyMultiple, AtomicWriteFile, AddListElement and
 RemoveListElement, whichever call sends them: typed, raw, routed or through
-`bacnet_ops`. Each is admitted as the narrow requester's operations are (one
-of 64 at once, the Reporter's Audit_Level, Auditable_Operations and
-Audit_Priority_Filter, the Device's recipient, one station direct or behind a
-router) and then belongs to the session: a caller that goes away loses
-neither the request nor its records, since the client retries with the same
-invoke ID and the records carry the real answer. A request the Reporter
-doesn't select, or with no recipient, goes unaudited in the caller's task.
+`bacnet_ops`. Each is admitted as the narrow requester's operations are (the
+Reporter's Audit_Level, Auditable_Operations and Audit_Priority_Filter, the
+Device's recipient, one station direct or behind a router) and then belongs
+to the session: a caller that goes away loses neither the request nor its
+records, since the client retries with the same invoke ID and the records
+carry the real answer. At most 64 are held at once; past them a request
+waits for a slot in its caller's task, with nothing spawned for it, and its
+timeout starts once it is admitted. A stop or the caller going away ends the
+wait with nothing sent. A request the Reporter doesn't select, or with no
+recipient, goes unaudited in the caller's task.
 
 - Each target is its own record (Clause 19.6.5): one per reference of a
   ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or
@@ -13445,13 +13448,28 @@ doesn't select, or with no recipient, goes unaudited in the caller's task.
   Audit_Priority_Filter applies and the record names the priority. One sent
   without a priority is not filtered by priority and names none. There is no
   commandability argument.
-- Records match the narrow requester's for the same operations. A ReadRange
-  answer that names what was read is recorded as a success whichever rule of
-  its page a strict caller refuses it for; the client's own timeout is
-  TIMEOUT.
-- A request of an audited service that doesn't decode is refused before it
-  is sent. The client's other requests (subscriptions, object and device
-  management, alarm acknowledgment) are not audited yet, nor is WriteGroup.
+- Records carry the narrow requester's fields for the same operations, but
+  for these differences:
+  - a write without a priority names none and isn't filtered by priority,
+    where the narrow requester's commandable write named 16 and was filtered
+    at 16;
+  - a ReadRange answer that names what was read is a success whichever rule
+    of its page a strict caller refuses it for (the narrow requester
+    recorded the refusal as OTHER);
+  - every Abort for a TSM timeout records TIMEOUT: the client reports its own
+    wait running out that way, and a peer's Abort with that reason can't be
+    told from it without a cost on every request (the narrow requester
+    recorded a peer's as ABORT_TSM_TIMEOUT);
+  - the 65th request at once waits for a slot, where the narrow requester
+    refused it;
+  - a ReadPropertyMultiple of ALL, REQUIRED or OPTIONAL, or of a wildcard
+    object, which the narrow requester refused, is recorded per value its
+    answer reports, and so is an answer that decodes but doesn't follow the
+    request reference by reference (the narrow requester failed it).
+- A raw request of an audited service that doesn't decode is refused before
+  it is sent: what it names can't be reported. Not audited yet on an audited
+  session: WriteGroup, subscriptions, object and device management, alarm
+  acknowledgment and life safety.
 - An operation cut off by a stop, of the session or of the client, is not
   recorded.
 - None of this costs a standalone client anything: an audited client's

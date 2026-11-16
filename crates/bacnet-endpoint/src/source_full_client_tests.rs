@@ -255,3 +255,6 @@ mod services;
 
 #[path = "source_full_client_lifecycle_tests.rs"]
 mod lifecycle;
+
+#[path = "source_full_client_slots_tests.rs"]
+mod slots;

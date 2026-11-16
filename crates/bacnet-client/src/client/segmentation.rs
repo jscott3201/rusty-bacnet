@@ -485,7 +485,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 Refused::Registered(registered) => registered,
                 Refused::Audited(auditor) => {
                     return self
-                        .audited_segmented(auditor, target, service_choice, service_data, limits)
+                        .audited_segmented(auditor, service_choice, service_data, limits)
                         .await;
                 }
             },

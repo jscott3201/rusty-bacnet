@@ -263,8 +263,7 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
 /// out as TIMEOUT. The client reports that wait as an Abort for a TSM
 /// timeout, which a peer's Abort for that reason can't be told from; both
 /// say the device didn't answer in time.
-#[doc(hidden)]
-pub fn audit_result(error: &Error) -> (ErrorClass, ErrorCode) {
+pub(crate) fn audit_result(error: &Error) -> (ErrorClass, ErrorCode) {
     use bacnet_types::error::RemoteError;
     let code = match error {
         Error::Remote(RemoteError::Error { class, code })
@@ -383,18 +382,25 @@ impl Decoded {
     /// Every target of a request that failed with `error`. A
     /// WritePropertyMultiple carried out its writes in order up to the
     /// first that failed, which its error names: those before it
-    /// succeeded, and the rest were not made.
+    /// succeeded, and the rest were not made. The error names a property,
+    /// not a position, so when a request writes that property more than
+    /// once it is taken to name the last write of it, and the earlier ones
+    /// are recorded as made: a device stops at its first failure, so a
+    /// failed earlier write would have left the later one unmade, which the
+    /// error can't tell apart.
     fn failed(&self, targets: Vec<AuditTarget>, error: &Error) -> Records {
         let result = audit_result(error);
         let first_failed = match (self, error) {
             (Self::WriteMultiple, Error::Structured { detail, .. }) => match detail.as_ref() {
-                ErrorDetail::FirstFailedWriteAttempt(failed) => targets.iter().position(|target| {
-                    target.object == failed.object_identifier
-                        && target.names(
-                            PropertyIdentifier::from_raw(failed.property_identifier),
-                            failed.property_array_index,
-                        )
-                }),
+                ErrorDetail::FirstFailedWriteAttempt(failed) => {
+                    targets.iter().rposition(|target| {
+                        target.object == failed.object_identifier
+                            && target.names(
+                                PropertyIdentifier::from_raw(failed.property_identifier),
+                                failed.property_array_index,
+                            )
+                    })
+                }
                 _ => None,
             },
             _ => None,
