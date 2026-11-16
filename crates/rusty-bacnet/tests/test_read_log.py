@@ -25,7 +25,6 @@ from rusty_bacnet import (
     BacnetLogNotAdvancingError,
     BacnetReadRangeViolationError,
     BipEndpoint,
-    EndpointClient,
     EventType,
     ObjectIdentifier,
     ObjectType,
@@ -339,13 +338,8 @@ class WrappedDeviceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReadLogContractTests(unittest.TestCase):
-    def test_client_and_endpoint_share_signatures(self) -> None:
-        for name in ("read_range", "read_log_page"):
-            with self.subTest(method=name):
-                self.assertEqual(
-                    inspect.signature(getattr(EndpointClient, name)),
-                    inspect.signature(getattr(BACnetClient, name)),
-                )
+    def test_client_signatures(self) -> None:
+        # An endpoint's client is a BACnetClient (#2617), so they can't drift.
         parameters = inspect.signature(BACnetClient.read_range).parameters
         self.assertEqual(parameters["reference_time"].kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertEqual(parameters["validation"].default, "strict")

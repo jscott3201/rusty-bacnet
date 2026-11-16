@@ -3,7 +3,9 @@
 //! - `BipEndpoint`: one B/IP UDP socket.
 //! - `ScEndpoint`: one SC hub connection (single UUID for transport+identity).
 //! - `MstpEndpoint`: one serial owner.
-//! - `EndpointClient` / `EndpointServer`: cloned role handles, no lifecycle.
+//! - `endpoint.client()` is a `BACnetClient` on the endpoint's link
+//!   (#2617), and `EndpointServer` the server role's cloned handle, with
+//!   no lifecycle.
 //!
 //! BIPv6/Ethernet have no endpoint owner by design; use the standalone
 //! `BACnetClient`/`BACnetServer` path there.
@@ -17,13 +19,14 @@ mod cov;
 mod lifecycle;
 mod mstp;
 mod roles;
+mod running;
 mod sc;
 mod source_audit;
 mod table_reads;
 
 pub(crate) use bip::PyBipEndpoint;
 pub(crate) use mstp::PyMstpEndpoint;
-pub(crate) use roles::{PyEndpointClient, PyEndpointServer};
+pub(crate) use roles::PyEndpointServer;
 pub(crate) use sc::PyScEndpoint;
 
 /// Register endpoint classes with the module.
@@ -31,9 +34,9 @@ pub fn register(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()
     m.add_class::<PyBipEndpoint>()?;
     m.add_class::<PyScEndpoint>()?;
     m.add_class::<PyMstpEndpoint>()?;
-    m.add_class::<PyEndpointClient>()?;
     m.add_class::<PyEndpointServer>()?;
-    // A general target type; the endpoint client is its first user (#2612).
+    // A request's target behind a router, on `BACnetClient`'s typed calls
+    // (#2612, #2617).
     m.add_class::<crate::types::PyRoutedTarget>()?;
     Ok(())
 }

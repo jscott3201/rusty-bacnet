@@ -13323,6 +13323,29 @@ assert!(client.who_is(None).await.is_err());
   requests and unconfirmed sends fail at once, and a call made directly on
   `client.transport()`, such as a BVLC query, fails with the transport's
   stopped error. Dropping the client afterwards changes nothing.
+- The full client's type is the session's: `BACnetClient<T>` for an
+  `EndpointSession<T>`. An owner that keeps its clients over one enum of
+  links builds the session over that enum with
+  `BipEndpointBuilder::build_session_wrapped(wrap)`,
+  `MstpEndpointBuilder::build_session_wrapped(wrap)` or
+  `ScEndpointBuilder::connect_hub_session_wrapped(hubs, wrap)` (#2617):
+  `wrap` gets the one transport the builder made, after the session took
+  its link handles (BVLC status and tables, frame tap, MS/TP diagnostics,
+  SC link monitor), so those calls keep working. The Python bindings build
+  their endpoints this way, so `endpoint.client()` is a `BACnetClient`.
+
+```rust
+use bacnet_endpoint::bip::BipEndpointBuilder;
+use bacnet_endpoint::SessionRole;
+use bacnet_transport::any::AnyTransport;
+use std::net::Ipv4Addr;
+
+let session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST)
+    .role(SessionRole::Both)
+    .build_session_wrapped(AnyTransport::from)?; // EndpointSession<AnyTransport>
+assert!(session.bvlc_tables().is_some());
+# Ok::<(), bacnet_types::error::Error>(())
+```
 
 ### Endpoint shutdown and the object database
 

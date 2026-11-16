@@ -413,3 +413,93 @@ fn mstp_python_wrapper_applies_its_read_work_limit() {
     );
     assert!(matches!(&replies[1], Apdu::ComplexAck(_)), "{replies:?}");
 }
+
+/// The MS/TP endpoint hands out a `BACnetClient` on its serial link
+/// (#2617): the same object while it runs, a fresh one after its `stop()`,
+/// stopped by the endpoint's close; the B/IP and SC calls refuse plainly.
+#[test]
+fn mstp_python_wrapper_hands_out_a_bacnet_client() {
+    Python::initialize();
+    let mut endpoint = PyMstpEndpoint::new(
+        8004,
+        "injected-serial",
+        "Full client",
+        555,
+        38400,
+        SESSION_MAC,
+        127,
+        1,
+        480,
+        None,
+        None,
+        None,
+        16,
+        6000,
+        0,
+        256,
+        0,
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    // The other end stays open for the test, so the link stays up.
+    let peer = Arc::new(std::sync::Mutex::new(None));
+    endpoint.config.serial_opener = Some(Arc::new({
+        let peer = peer.clone();
+        move |_| {
+            let (serial, other) = LoopbackSerial::pair();
+            *peer.lock().unwrap() = Some(other);
+            Ok(TestSerial::Peer(serial))
+        }
+    }));
+    let endpoint = Python::attach(|py| Py::new(py, endpoint).unwrap());
+    Python::attach(|py| {
+        let globals = PyDict::new(py);
+        globals
+            .set_item("endpoint", endpoint.clone_ref(py))
+            .unwrap();
+        py.run(
+            pyo3::ffi::c_str!(
+                r#"
+import asyncio
+async def refused(call, kind):
+    try:
+        await call()
+    except Exception as error:
+        assert type(error).__name__ == kind, repr(error)
+    else:
+        raise AssertionError(f"{call} was not refused")
+async def go():
+    await endpoint.start()
+    client = await endpoint.client()
+    assert type(client).__name__ == "BACnetClient", type(client)
+    assert client is await endpoint.client()
+    assert (await endpoint.status())["client_seat_full_drops"] == 0
+    await refused(lambda: client.read_bdt("127.0.0.1:47808"), "BacnetError")
+    await refused(client.connection_status, "RuntimeError")
+    await client.stop()
+    fresh = await endpoint.client()
+    assert fresh is not client
+    await endpoint.close()
+    await refused(fresh.who_is, "RuntimeError")
+asyncio.run(go())
+"#
+            ),
+            Some(&globals),
+            None,
+        )
+        .unwrap();
+    });
+}

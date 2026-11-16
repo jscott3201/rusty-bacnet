@@ -1,4 +1,5 @@
-"""Installed endpoint RPM profile, ordered results and independent ACK vectors."""
+"""RPM from an endpoint's client (#2617), the standalone profile on the
+endpoint's socket: ordered results and independent ACK vectors."""
 import asyncio
 import socket
 import unittest
@@ -32,20 +33,20 @@ class EndpointRpmTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(results[2]["error"])
                 self.assertIsNone(results[2]["value"])
                 self.assertEqual(results[0], results[3])
-            invalid = [[], [(oid, [])], [(oid, [(PropertyIdentifier.OBJECT_NAME, None)] * 65)]]
-            invalid += [[(oid, [(p, None)])] for p in (
-                PropertyIdentifier.ALL, PropertyIdentifier.REQUIRED, PropertyIdentifier.OPTIONAL)]
-            invalid += [[(ObjectIdentifier(kind, 4194303), [(PropertyIdentifier.OBJECT_NAME, None)])]
-                        for kind in (ObjectType.DEVICE, ObjectType.NETWORK_PORT)]
-            for specs in invalid:
-                with self.subTest(specs=specs), self.assertRaises(ValueError):
-                    await role.read_property_multiple("invalid address", specs)
+            # The standalone profile: an empty list is refused before
+            # anything is sent; selectors and wildcard instances are taken.
+            for specs in ([], [(oid, [])]):
+                with self.subTest(specs=specs), self.assertRaisesRegex(BacnetError, "nonempty"):
+                    await role.read_property_multiple(await server.local_address(), specs)
+            all_of = await role.read_property_multiple(
+                await server.local_address(), [(oid, [(PropertyIdentifier.ALL, None)])])
+            self.assertGreater(len(all_of[0]["results"]), 4)
             self.assertEqual((await endpoint.status())["active_leases"], 0)
-            self.assertIn("read_property_multiple", role.service_scope()["initiates"])
+            self.assertIsInstance(role, BACnetClient)
         finally:
             await endpoint.close()
             await server.stop()
-        with self.assertRaises(BacnetError):
+        with self.assertRaisesRegex(RuntimeError, "ran on an endpoint"):
             await role.read_property_multiple("127.0.0.1:47808", [(oid, [(PropertyIdentifier.OBJECT_NAME, None)])])
 
     async def test_independent_ordered_ack_errors_and_corruption(self):
@@ -79,8 +80,25 @@ class EndpointRpmTests(unittest.IsolatedAsyncioTestCase):
                             if fault == "malformed": body = b"\x00"
                             payload = b"\x01\x00\x30" + bytes([wire[8], 14]) + body
                             await loop.sock_sendto(peer, b"\x81\x0a" + (len(payload) + 4).to_bytes(2, "big") + payload, remote)
-                            if fault:
+                            if fault == "malformed":
                                 with self.assertRaises(BacnetError): await asyncio.wait_for(task, 2)
+                            elif fault:
+                                # The standalone profile (#2617): the answer as the
+                                # device gave it, each result naming what it is, for
+                                # the caller to compare with what it asked.
+                                answered = await asyncio.wait_for(task, 2)
+                                if fault == "wrong_object":
+                                    self.assertEqual(answered[0]["object_id"],
+                                                     ObjectIdentifier(ObjectType.DEVICE, 11))
+                                if fault == "extra":
+                                    self.assertEqual(len(answered[0]["results"]), 3)
+                                if fault == "missing":
+                                    self.assertEqual(len(answered[0]["results"]), 1)
+                                if fault == "reorder":
+                                    self.assertEqual(answered[0]["results"][0]["property_id"],
+                                                     PropertyIdentifier.OBJECT_LIST)
+                                if fault == "wrong_index":
+                                    self.assertEqual(answered[0]["results"][1]["array_index"], 1)
                             else:
                                 result = (await asyncio.wait_for(task, 2))[0]["results"]
                                 self.assertEqual(result[0]["value"], PropertyValue.unsigned(42))

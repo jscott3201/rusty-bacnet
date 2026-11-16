@@ -384,7 +384,21 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// identity resolves against the transport's receive capacity before
     /// generating or validating its Device. An identity-free session keeps
     /// the [`SessionConfig`] 480 default.
-    pub fn build_session(mut self) -> Result<EndpointSession<MstpTransport<S>>, Error> {
+    pub fn build_session(self) -> Result<EndpointSession<MstpTransport<S>>, Error> {
+        self.build_session_wrapped(std::convert::identity)
+    }
+
+    /// Builds the session [`build_session`](Self::build_session) would, with
+    /// its one MS/TP transport passed through `wrap` first (#2617), as
+    /// [`BipEndpointBuilder::build_session_wrapped`](crate::bip::BipEndpointBuilder::build_session_wrapped)
+    /// does. The transport's diagnostics are taken before `wrap`, so
+    /// [`EndpointSession::mstp_diagnostics`] keeps working. `wrap` must pass
+    /// every [`TransportPort`](bacnet_transport::port::TransportPort) call
+    /// through to the transport it is given.
+    pub fn build_session_wrapped<U: bacnet_transport::port::TransportPort + 'static>(
+        mut self,
+        wrap: impl FnOnce(MstpTransport<S>) -> U,
+    ) -> Result<EndpointSession<U>, Error> {
         self.validate_only()?;
         let bindings = std::mem::take(&mut self.source_audit_bindings);
         let routed = std::mem::take(&mut self.source_audit_routed);
@@ -396,7 +410,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         let cov = self.cov.take();
         let transport = self.build_transport()?;
         let diagnostics = transport.diagnostics();
-        let mut endpoint = EndpointSession::new(transport, role, session)?;
+        let mut endpoint = EndpointSession::new(wrap(transport), role, session)?;
         endpoint.mstp_diagnostics = Some(diagnostics);
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);

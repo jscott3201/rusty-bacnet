@@ -61,7 +61,7 @@ PRIMARY = {
     "client": ["BACnetClient"],
     "server": ["BACnetServer", "ScHub"],
     "router": ["BACnetRouter"],
-    "endpoints": ["BipEndpoint", "ScEndpoint", "MstpEndpoint", "EndpointClient", "EndpointServer"],
+    "endpoints": ["BipEndpoint", "ScEndpoint", "MstpEndpoint", "EndpointServer"],
 }
 
 # The stub's section comments, by the start of their text, and their groups.

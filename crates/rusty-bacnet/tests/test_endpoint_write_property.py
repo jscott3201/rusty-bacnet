@@ -1,4 +1,6 @@
-"""Installed endpoint WP signature, synchronous preflight and independent wire vectors."""
+"""WriteProperty from an endpoint's client (#2617): the BACnetClient on the
+endpoint's socket, its synchronous preflight and independent wire vectors.
+The narrow client's commandability= keyword went with it."""
 import asyncio
 import ast
 import inspect
@@ -7,35 +9,30 @@ import socket
 import unittest
 
 import rusty_bacnet
-from rusty_bacnet import (BACnetServer, BipEndpoint, EndpointClient, BacnetError,
+from rusty_bacnet import (BACnetClient, BACnetServer, BipEndpoint,
                          BacnetProtocolError, ObjectIdentifier, ObjectType,
                          PropertyIdentifier, PropertyValue)
 
 
 class EndpointWriteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_required_commandability_and_synchronous_preflight_without_reporter(self):
+    async def test_synchronous_preflight(self):
         endpoint = BipEndpoint(device_instance=9180, interface="127.0.0.1", port=0)
         await endpoint.start()
         try:
             role = await endpoint.client()
+            self.assertIsInstance(role, BACnetClient)
             args = ("not-an-address", ObjectIdentifier(ObjectType.ANALOG_VALUE, 7),
                     PropertyIdentifier.PRESENT_VALUE, PropertyValue.null())
+            # No commandability= any more: it went with the narrow client.
             with self.assertRaises(TypeError):
-                role.write_property(*args)
-            for literal in ("unknown", "Commandable", "", "false"):
-                with self.assertRaisesRegex(ValueError, "commandability"):
-                    role.write_property(*args, commandability=literal)
+                role.write_property(*args, commandability="commandable")
             for priority in (0, 17, 255):
                 with self.assertRaisesRegex(ValueError, "priority"):
-                    role.write_property(*args, priority=priority, commandability="noncommandable")
+                    role.write_property(*args, priority=priority)
             for priority in (-1, 256):
                 with self.assertRaises(OverflowError):
-                    role.write_property(*args, priority=priority, commandability="commandable")
-            for raw in (b"\x3e", b"\x00" * 33 + b"\x3e", b"\x00" * 2000):
-                with self.assertRaises(ValueError):
-                    role.write_property(*args[:3], PropertyValue.application_data(raw), commandability="noncommandable")
+                    role.write_property(*args, priority=priority)
             self.assertEqual((await endpoint.status())["active_leases"], 0)
-            self.assertIn("write_property", role.service_scope()["initiates"])
         finally:
             await endpoint.close()
 
@@ -49,13 +46,13 @@ class EndpointWriteTests(unittest.IsolatedAsyncioTestCase):
             address = f"127.0.0.1:{peer.getsockname()[1]}"
             try:
                 role = await endpoint.client()
-                for commandability in ("commandable", "noncommandable"):
+                for _ in range(2):
                     for raw, priority, error in ((b"", None, False), (b"\x00", None, False),
                                                  (b"\x00" * 32, 8, False), (b"\x00" * 33, 8, False),
                                                  (b"", None, True)):
                         future = role.write_property(address, oid, PropertyIdentifier.PRESENT_VALUE,
                                                      PropertyValue.application_data(raw), priority=priority,
-                                                     array_index=2, commandability=commandability)
+                                                     array_index=2)
                         self.assertTrue(inspect.isawaitable(future))
                         task = asyncio.ensure_future(future)
                         try:
@@ -74,8 +71,8 @@ class EndpointWriteTests(unittest.IsolatedAsyncioTestCase):
                             if not task.done(): task.cancel()
                             await asyncio.gather(task, return_exceptions=True)
                 await endpoint.close()
-                with self.assertRaises(BacnetError):
-                    await role.write_property(address, oid, PropertyIdentifier.PRESENT_VALUE, PropertyValue.null(), commandability="commandable")
+                with self.assertRaisesRegex(RuntimeError, "ran on an endpoint"):
+                    await role.write_property(address, oid, PropertyIdentifier.PRESENT_VALUE, PropertyValue.null())
             finally:
                 await endpoint.close()
 
@@ -88,22 +85,18 @@ class EndpointWriteTests(unittest.IsolatedAsyncioTestCase):
         try:
             role = await endpoint.client(); address = await server.local_address()
             self.assertIsNone(await role.write_property(address, ObjectIdentifier(ObjectType.NOTIFICATION_CLASS, 1),
-                              PropertyIdentifier.RECIPIENT_LIST, PropertyValue.application_data(b""), commandability="noncommandable"))
+                              PropertyIdentifier.RECIPIENT_LIST, PropertyValue.application_data(b"")))
             with self.assertRaises(BacnetProtocolError):
                 await role.write_property(address, ObjectIdentifier(ObjectType.ANALOG_VALUE, 7),
-                      PropertyIdentifier.PRESENT_VALUE, PropertyValue.application_data(b""), commandability="commandable")
+                      PropertyIdentifier.PRESENT_VALUE, PropertyValue.application_data(b""))
         finally:
             await endpoint.close(); await server.stop()
 
     def test_native_signature_and_installed_stub(self):
-        signature = inspect.signature(EndpointClient.write_property)
-        commandability = signature.parameters["commandability"]
-        self.assertEqual(commandability.kind, inspect.Parameter.KEYWORD_ONLY)
-        self.assertIs(commandability.default, inspect.Parameter.empty)
+        signature = inspect.signature(BACnetClient.write_property)
+        self.assertNotIn("commandability", signature.parameters)
         tree = ast.parse(Path(rusty_bacnet.__file__).with_suffix(".pyi").read_text())
-        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "EndpointClient")
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "BACnetClient")
         method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "write_property")
         self.assertEqual(ast.unparse(method.returns), "Awaitable[None]")
-        self.assertEqual([a.arg for a in method.args.kwonlyargs], ["commandability"])
-        self.assertEqual(method.args.kw_defaults, [None])
-        self.assertEqual(ast.unparse(method.args.kwonlyargs[0].annotation), "Literal['commandable', 'noncommandable']")
+        self.assertEqual([a.arg for a in method.args.kwonlyargs], [])

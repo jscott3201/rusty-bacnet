@@ -14,12 +14,16 @@ from pathlib import Path
 
 import rusty_bacnet
 from rusty_bacnet import (
+    BACnetClient,
     BipEndpoint,
-    EndpointClient,
     EndpointServer,
     MstpEndpoint,
     ScEndpoint,
 )
+
+# The calls that take a RoutedTarget where they take an address (#2617).
+ROUTED_CALLS = ("read_property", "read_property_multiple", "read_range", "read_log_page",
+                "write_property")
 
 
 def installed_stub() -> ast.Module:
@@ -77,7 +81,6 @@ class EndpointStubParityTests(unittest.TestCase):
             with self.subTest(symbol=name):
                 self.assertIn(name, classes)
         for name in (
-            "EndpointClient",
             "EndpointServer",
             "BipEndpoint",
             "ScEndpoint",
@@ -86,6 +89,10 @@ class EndpointStubParityTests(unittest.TestCase):
             with self.subTest(symbol=name):
                 self.assertIn(name, classes)
                 self.assertTrue(hasattr(rusty_bacnet, name), f"runtime missing {name}")
+        # The narrow client class is gone: endpoint.client() is a
+        # BACnetClient (#2617).
+        self.assertNotIn("EndpointClient", classes)
+        self.assertFalse(hasattr(rusty_bacnet, "EndpointClient"))
 
     def test_runtime_signatures_match_stub(self):
         tree = installed_stub()
@@ -161,6 +168,8 @@ class EndpointStubParityTests(unittest.TestCase):
                     self.assertIsInstance(method, ast.FunctionDef)
                     self.assertIsInstance(method.returns, ast.Subscript)
                     self.assertEqual(ast.unparse(method.returns.value), "Awaitable")
+                    if name == "client":
+                        self.assertEqual(ast.unparse(method.returns), "Awaitable[BACnetClient]")
         # Sync pending seam.
         for cls in (BipEndpoint, ScEndpoint, MstpEndpoint):
             for name in (
@@ -225,12 +234,13 @@ class EndpointStubParityTests(unittest.TestCase):
                 self.assertIsNone(stub_defaults["audit_level"])
                 self.assertIsNone(stub_defaults["auditable_operations"])
                 self.assertIsNotNone(stub_defaults["issue_confirmed_notifications"])
-        # Roles.
-        self.assertEqual(
-            list(inspect.signature(EndpointClient.read_property).parameters),
-            ["self", "address", "object_id", "property_id", "array_index"],
-        )
-        stub_method(classes["EndpointClient"], "read_property")
+        # Roles: the client's routed calls take a str or a RoutedTarget.
+        for name in ROUTED_CALLS:
+            with self.subTest(method=name):
+                node = stub_method(classes["BACnetClient"], name)
+                self.assertEqual(ast.unparse(node.args.args[1].annotation), "str | RoutedTarget")
+                self.assertEqual(runtime_arg_kinds(getattr(BACnetClient, name)),
+                                 stub_arg_kinds(node))
         self.assertTrue(hasattr(EndpointServer, "is_session_alive"))
         stub_method(classes["EndpointServer"], "is_session_alive")
         stub_method(classes["EndpointServer"], "suspend_next_reply")
@@ -250,7 +260,6 @@ class EndpointStubParityTests(unittest.TestCase):
                 "class BipEndpoint",
                 "class ScEndpoint",
                 "class MstpEndpoint",
-                "class EndpointClient",
                 "class EndpointServer",
                 "class EndpointStatus",
                 "class RoutedTarget",

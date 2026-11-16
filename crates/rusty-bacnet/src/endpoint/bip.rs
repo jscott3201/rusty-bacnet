@@ -12,7 +12,7 @@ use std::net::Ipv4Addr;
 
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::DeviceIdentity;
-use bacnet_endpoint::session::{EndpointSession, SessionRole};
+use bacnet_endpoint::session::SessionRole;
 use bacnet_transport::bip::{BipMode, BipTransport};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::data_link::DataLink;
@@ -26,7 +26,8 @@ use crate::endpoint::common::{
     pending_group, with_bip_port,
 };
 use crate::endpoint::lifecycle::Lifecycle;
-use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
+use crate::endpoint::roles::PyEndpointServer;
+use crate::endpoint::running::Running;
 use crate::errors::to_py_err;
 use crate::types::{PyReadAccessSpec, PySegmentation};
 
@@ -62,19 +63,17 @@ struct BipEndpointConfig {
     cov: Option<bacnet_device_core::report::ReportConfig>,
 }
 
-type BipSession = EndpointSession<BipTransport>;
-
 /// The running session's BBMD table reader, taken under the session lock
 /// and used after it is released, so a read waiting on its answer never
 /// holds up `close()`.
 async fn bvlc_tables(
-    session: &tokio::sync::Mutex<Option<BipSession>>,
+    session: &tokio::sync::Mutex<Option<Running>>,
 ) -> PyResult<bacnet_transport::bip::BvlcTableReader> {
     session
         .lock()
         .await
         .as_ref()
-        .and_then(EndpointSession::bvlc_tables)
+        .and_then(|session| session.bvlc_tables())
         .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))
 }
 
@@ -92,7 +91,7 @@ fn table_read_error(error: bacnet_transport::bip::BvlcExchangeError) -> PyErr {
 }
 
 impl BipEndpointConfig {
-    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<BipSession> {
+    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<Running> {
         let config = self;
         // Fail fast before building objects: probe the port and the
         // interface, so conflicts preserve pending for retry. The real bind
@@ -135,12 +134,14 @@ impl BipEndpointConfig {
         if let Some(cov) = config.cov.clone() {
             builder = builder.cov(cov);
         }
-        let mut session = builder.build_session().map_err(to_py_err)?;
+        let mut session = builder
+            .build_session_wrapped(crate::app_transport::AppTransport::from)
+            .map_err(to_py_err)?;
         if let Some(source) = &config.source_audit {
             session = source.select(session);
         }
         let session = config.device_writes.install(session);
-        Ok(config.reinitialize.install(session))
+        Ok(Running::new(config.reinitialize.install(session)))
     }
 }
 
@@ -169,7 +170,7 @@ impl BipEndpointConfig {
 /// `BACnetClient`/`BACnetServer` path there.
 #[pyclass(name = "BipEndpoint", module = "rusty_bacnet")]
 pub struct PyBipEndpoint {
-    lifecycle: Lifecycle<BipSession, PendingObject>,
+    lifecycle: Lifecycle<Running, PendingObject>,
     frames: std::sync::Arc<crate::frames::FrameSubscriptions>,
     config: BipEndpointConfig,
     /// The BBMD table reads started, for `read_bdt` and `read_fdt` (#2612).
@@ -567,25 +568,23 @@ impl PyBipEndpoint {
         })
     }
 
-    /// Clone the client role (fails with RuntimeError before start/after close).
+    /// The `BACnetClient` on this endpoint's socket (#2617): the standalone
+    /// class, with all its calls, on the endpoint's one address. While it
+    /// runs, each call returns the same object; once its `stop()` has
+    /// finished, a fresh one. Its `stop()` ends the client role alone, and
+    /// the endpoint's close stops it too. Raises RuntimeError before start,
+    /// after close, and while the last client is still stopping or its stop
+    /// failed (naming the cause), and
+    /// NotImplementedError on an endpoint with `source_audit_reporter`
+    /// (its client arrives with #2617 step 3).
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.lifecycle.session.clone();
-        crate::py_async::future_into_py(py, async move {
-            let handle = {
-                let guard = inner.lock().await;
-                let session = guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "endpoint not started — use 'async with' or await start()",
-                    )
-                })?;
-                session.cloned_client_handle().ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "endpoint not started — use 'async with' or await start()",
-                    )
-                })?
-            };
-            Ok(PyEndpointClient::new(handle))
-        })
+        let client = super::running::client(
+            py,
+            self.lifecycle.session.clone(),
+            "bip",
+            self.config.source_audit.is_some(),
+        )?;
+        crate::py_async::future_into_py(py, client)
     }
 
     /// Clone the server role (fails with RuntimeError before start/after close).
@@ -625,7 +624,7 @@ impl PyBipEndpoint {
             let guard = inner.lock().await;
             guard
                 .as_ref()
-                .and_then(EndpointSession::bip_local_address)
+                .and_then(|session| session.bip_local_address())
                 .map(|address| address.to_string())
                 .ok_or_else(|| PyRuntimeError::new_err("endpoint is not active"))
         })
@@ -650,7 +649,8 @@ impl PyBipEndpoint {
                 let counters = session.policy_counters().await;
                 let leases = session.active_leases();
                 let running = session.is_running();
-                (counters, leases, running, address)
+                let seat = session.seat_counts();
+                (counters, leases, running, address, seat)
             };
             // Lock released before touching Python.
             crate::py_async::attach(|py| {
@@ -667,6 +667,7 @@ impl PyBipEndpoint {
                 dict.set_item("no_client_role", snapshot.0.no_client_role)?;
                 dict.set_item("unclaimed_terminal", snapshot.0.unclaimed_terminal)?;
                 dict.set_item("responder_declined", snapshot.0.responder_declined)?;
+                snapshot.4.add_to(&dict)?;
                 Ok(dict.into_any().unbind())
             })
         })
@@ -682,7 +683,7 @@ impl PyBipEndpoint {
                 let guard = inner.lock().await;
                 guard
                     .as_ref()
-                    .and_then(EndpointSession::foreign_registration)
+                    .and_then(|session| session.foreign_registration())
                     .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?
             };
             crate::registration_dicts::registration_dict(registration)

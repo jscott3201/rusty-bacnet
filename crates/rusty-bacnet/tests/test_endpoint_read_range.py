@@ -1,14 +1,14 @@
-"""Installed standalone/endpoint ReadRange contract and real B/IP operations."""
+"""Installed ReadRange contract and real B/IP operations, on a standalone
+client and on the BACnetClient an endpoint hands out (#2617)."""
 import asyncio
 import ast
-import inspect
 from pathlib import Path
 import tempfile
 import unittest
 
 import rusty_bacnet
 from rusty_bacnet import (
-    BACnetClient, BACnetServer, BipEndpoint, BitString, EndpointClient, BacnetError,
+    BACnetClient, BACnetServer, BipEndpoint, BitString,
     BacnetProtocolError, ObjectIdentifier, ObjectType, PropertyIdentifier,
 )
 
@@ -25,7 +25,7 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
         await endpoint.start()
         try:
             role = await endpoint.client()
-            self.assertEqual(role.service_scope(), {"initiates": ["read_property", "read_range", "read_property_multiple", "write_property"], "executes": []})
+            self.assertIsInstance(role, BACnetClient)
             address = await target.local_address()
             # ReadRange reads a BACnetLIST, not an array such as Object_List:
             # four date [0] entries in Calendar 1's Date_List.
@@ -73,7 +73,8 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
                         with self.assertRaises(ValueError):
                             reader.read_range("not-an-address", oid, selector)
             await endpoint.close()
-            with self.assertRaises(BacnetError):
+            # The close stopped the client on the endpoint's link.
+            with self.assertRaisesRegex(RuntimeError, "ran on an endpoint"):
                 await role.read_range(address, oid, pid)
         finally:
             await endpoint.close()
@@ -106,11 +107,10 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await target.stop()
 
-    def test_signatures_and_installed_stub_share_exact_shape(self):
-        self.assertEqual(inspect.signature(EndpointClient.read_range), inspect.signature(BACnetClient.read_range))
+    def test_installed_stub_shape(self):
         stub = Path(rusty_bacnet.__file__).with_suffix(".pyi").read_text()
         tree = ast.parse(stub)
-        for name in ("EndpointClient", "BACnetClient"):
+        for name in ("BACnetClient",):
             cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name)
             method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "read_range")
             self.assertEqual(ast.unparse(method.returns), "Awaitable[ReadRangeResult]")
