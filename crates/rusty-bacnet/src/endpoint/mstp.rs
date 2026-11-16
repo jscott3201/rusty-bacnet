@@ -516,16 +516,11 @@ impl PyMstpEndpoint {
 
     /// The `BACnetClient` on this endpoint's serial link (#2617), as
     /// `BipEndpoint.client()` gives one: the same object while it runs, a
-    /// fresh one once its `stop()` has finished, NotImplementedError with
-    /// `source_audit_reporter`. Its requests wait for this node's token as
-    /// the server role's answers do.
+    /// fresh one once its `stop()` has finished, its reads and writes
+    /// audited with `source_audit_reporter`. Its requests wait for this
+    /// node's token as the server role's answers do.
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let client = super::running::client(
-            py,
-            self.lifecycle.session.clone(),
-            "mstp",
-            self.config.source_audit.is_some(),
-        )?;
+        let client = super::running::client(py, self.lifecycle.session.clone(), "mstp")?;
         crate::py_async::future_into_py(py, client)
     }
 

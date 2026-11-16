@@ -488,19 +488,14 @@ impl PyScEndpoint {
 
     /// The `BACnetClient` on this endpoint's hub connection (#2617), as
     /// `BipEndpoint.client()` gives one: the same object while it runs, a
-    /// fresh one once its `stop()` has finished, NotImplementedError with
-    /// `source_audit_reporter`. It starts after the hub link is up, so its
+    /// fresh one once its `stop()` has finished, its reads and writes
+    /// audited with `source_audit_reporter`. It starts after the hub link is up, so its
     /// `connection_events()` begins at that call, after the first
     /// `connected`: read the link's state now with its
     /// `connection_status()`, or this endpoint's `connection_events()`,
     /// whose first call holds the events from the start.
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let client = super::running::client(
-            py,
-            self.lifecycle.session.clone(),
-            "sc",
-            self.config.source_audit.is_some(),
-        )?;
+        let client = super::running::client(py, self.lifecycle.session.clone(), "sc")?;
         crate::py_async::future_into_py(py, client)
     }
 

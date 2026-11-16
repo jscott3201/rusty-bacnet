@@ -1,4 +1,4 @@
-"""The BACnetClient on an endpoint's socket (#2617 step 2).
+"""The BACnetClient on an endpoint's socket (#2617 steps 2 and 3).
 
 `await endpoint.client()` returns the standalone class running on the
 endpoint session's one address, so a virtual device served by the endpoint
@@ -11,7 +11,9 @@ loop has no add_reader.
 """
 import asyncio
 import struct
+import tempfile
 import unittest
+from pathlib import Path
 
 import rusty_bacnet as rb
 from bvll_peer import RawPeer, bvll, mac
@@ -22,6 +24,7 @@ AI_1 = rb.ObjectIdentifier(O.ANALOG_INPUT, 1)
 ENDPOINT = 2617
 PEER = 2618
 TWIN = 2619
+SINK = 2620
 
 
 async def finish(method):
@@ -354,24 +357,99 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AuditedEndpointTests(unittest.IsolatedAsyncioTestCase):
-    async def test_source_audit_refuses_a_client_until_step_3(self):
-        # The full client's requests aren't audited until source Audit moves
-        # to it (#2617 step 3), so an endpoint with a Reporter refuses one.
-        for owner in (
-            rb.BipEndpoint(ENDPOINT, interface="127.0.0.1", port=0,
-                           broadcast_address="127.255.255.255",
-                           device_write_policy=lambda context: True,
-                           source_audit_reporter=rb.ObjectIdentifier(O.AUDIT_REPORTER, 1),
-                           audit_recipient={"kind": "device",
-                                            "object_identifier": rb.ObjectIdentifier(O.DEVICE, 9)},
-                           audit_device_bindings=[(rb.ObjectIdentifier(O.DEVICE, 9),
-                                                   "127.0.0.1:47999")]),
-        ):
-            with self.subTest(owner=type(owner).__name__):
-                # Before start too: the configuration decides.
-                with self.assertRaisesRegex(NotImplementedError, r"#2617 step 3"):
-                    owner.client()
+    """An endpoint with a source Audit Reporter audits its client's reads
+    and writes (#2617 step 3), each request owned by the endpoint once
+    admitted, so a caller that is cancelled loses neither it nor its
+    record."""
 
+    async def asyncSetUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        sink = rb.BACnetServer(SINK, interface="127.0.0.1", port=0,
+                               broadcast_address="127.0.0.1")
+        sink.add_audit_log(1, "sink", str(Path(directory.name) / "audit"), buffer_size=32)
+        sink.configure_audit_notification_sink(1, policy="allow_all")
+        await asyncio.wait_for(sink.start(), 10)
+        self.addAsyncCleanup(finish, sink.stop)
+        self.sink_address = await sink.local_address()
+        sink_device = rb.ObjectIdentifier(O.DEVICE, SINK)
+        # A recipient on 127.0.0.1 can't share the link's broadcast address.
+        self.endpoint = endpoint(
+            broadcast_address="127.255.255.255",
+            device_write_policy=lambda context: True,
+            source_audit_reporter=rb.ObjectIdentifier(O.AUDIT_REPORTER, 1),
+            audit_recipient={"kind": "device", "object_identifier": sink_device},
+            audit_device_bindings=[(sink_device, self.sink_address)])
+        self.endpoint.add_audit_reporter(
+            1, "Source", audit_level="audit_all",
+            auditable_operations=(1 << rb.AuditOperation.READ.to_raw())
+            | (1 << rb.AuditOperation.WRITE.to_raw()),
+            issue_confirmed_notifications=True)
+        await asyncio.wait_for(self.endpoint.start(), 10)
+        self.addAsyncCleanup(finish, self.endpoint.close)
+
+    async def records(self, count):
+        """The sink's records of this endpoint's operations, once there are
+        `count` of them."""
+        query = {"audit_log": rb.ObjectIdentifier(O.AUDIT_LOG, 1),
+                 "query_parameters": {"kind": "by_source", "successful_actions_only": 0,
+                                      "source_device_identifier": rb.ObjectIdentifier(O.DEVICE, ENDPOINT)},
+                 "requested_count": 32}
+        async with rb.BACnetClient(interface="127.0.0.1", port=0,
+                                   broadcast_address="127.0.0.1") as reader:
+            async with asyncio.timeout(5):
+                while True:
+                    result = await reader.audit_log_query_typed(self.sink_address, query)
+                    found = [entry["record"]["datum"]["audit_notification"]
+                             for entry in result["records"]]
+                    if len(found) >= count:
+                        return found
+                    await asyncio.sleep(0.02)
+
+    async def test_reads_and_writes_are_recorded(self):
+        target = rb.BACnetServer(PEER, interface="127.0.0.1", port=0,
+                                 broadcast_address="127.0.0.1")
+        target.add_analog_input(1, "Target temperature", 62, 12.5)
+        await asyncio.wait_for(target.start(), 10)
+        self.addAsyncCleanup(finish, target.stop)
+        address = await target.local_address()
+        client = await self.endpoint.client()
+        self.assertIs(type(client), rb.BACnetClient)
+        self.assertEqual(await client.read_property(address, AI_1, P.PRESENT_VALUE),
+                         rb.PropertyValue.real(12.5))
+        # A write with a priority is a command at that priority.
+        await client.write_property(address, AI_1, P.DESCRIPTION,
+                                    rb.PropertyValue.character_string("audited"), priority=8)
+        # The sink keeps the two records in no promised order.
+        found = {record["operation"]: record for record in await self.records(2)}
+        read, write = found[rb.AuditOperation.READ], found[rb.AuditOperation.WRITE]
+        station = {"kind": "address", "network_number": 0, "mac_address": mac(address)}
+        for record in (read, write):
+            self.assertEqual(record["target_device"], station)
+            self.assertEqual(str(record["target_object"]), str(AI_1))
+            self.assertIsNone(record.get("result"))
+        self.assertEqual(write["target_priority"], 8)
+        self.assertIsNone(read.get("target_priority"))
+
+    async def test_a_cancelled_read_is_still_recorded(self):
+        heard = []
+        peer = RawPeer(lambda datagram, source: heard.append((datagram, source)))
+        self.addCleanup(peer.close)
+        client = await self.endpoint.client()
+        read = asyncio.ensure_future(client.read_property(peer.address, AI_1, P.PRESENT_VALUE))
+        async with asyncio.timeout(5):
+            while not heard:
+                await asyncio.sleep(0.01)
+        read.cancel()
+        await asyncio.gather(read, return_exceptions=True)
+        # The answer comes after its caller went away: the endpoint still
+        # takes it and records the read.
+        datagram, source = heard[0]
+        peer.send(read_property_ack(datagram, 1.5), source)
+        [record] = await self.records(1)
+        self.assertEqual(record["operation"], rb.AuditOperation.READ)
+        self.assertEqual(record["invoke_id"], datagram[8])
+        self.assertIsNone(record.get("result"))
 
 if __name__ == "__main__":
     unittest.main()

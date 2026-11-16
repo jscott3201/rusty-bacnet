@@ -252,9 +252,10 @@ impl PyBipEndpoint {
     ///         `ObjectIdentifier` of an Audit Reporter added with
     ///         `add_audit_reporter`; the session reports through it the
     ///         ReinitializeDevice resets, backups and restores it carries
-    ///         out, `report_device_reset_local()` calls, and the client
-    ///         role's reads. It needs `device_write_policy` and
-    ///         `audit_recipient`, the Device's Audit recipient (an
+    ///         out, `report_device_reset_local()` calls, and the reads
+    ///         and writes of its `client()` (#2617). It needs
+    ///         `device_write_policy` and `audit_recipient`, the Device's
+    ///         Audit recipient (an
     ///         `AuditRecipientInput`). `audit_device_bindings` is a list of
     ///         `(ObjectIdentifier, "ipv4:port")` routes to recipient
     ///         Devices, or `"network:0xMAC"` for one behind a router
@@ -576,16 +577,10 @@ impl PyBipEndpoint {
     /// finished, a fresh one. Its `stop()` ends the client role alone, and
     /// the endpoint's close stops it too. Raises RuntimeError before start,
     /// after close, and while the last client is still stopping or its stop
-    /// failed (naming the cause), and
-    /// NotImplementedError on an endpoint with `source_audit_reporter`
-    /// (its client arrives with #2617 step 3).
+    /// failed (naming the cause). With `source_audit_reporter`, its reads
+    /// and writes are audited (#2617).
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let client = super::running::client(
-            py,
-            self.lifecycle.session.clone(),
-            "bip",
-            self.config.source_audit.is_some(),
-        )?;
+        let client = super::running::client(py, self.lifecycle.session.clone(), "bip")?;
         crate::py_async::future_into_py(py, client)
     }
 
