@@ -170,7 +170,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// `router_mac` is only the immediate transport next hop (Clause 6.2.2);
     /// the peer's identity is the (`remote_network`, `remote_mac`) SNET/SADR
-    /// pair, which is what [`BACnetClient::confirmed_request_routed`] and the
+    /// pair, which is what a request to a routed [`Station`] and the
     /// device-table routed lookup match against. The supplied Max APDU
     /// Length Accepted, segmentation capability, and optional Max Segments
     /// Accepted are treated as advertised peer limits for request sizing.
@@ -184,7 +184,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// unchanged (an empty SADR could never satisfy a routed lookup). A
     /// `remote_network` outside 1..=65534 or a `remote_mac` longer than
     /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) is refused the same way, since
-    /// [`BACnetClient::confirmed_request_routed`] refuses that destination.
+    /// a routed confirmed request ([`BACnetClient::confirmed_request`])
+    /// refuses that destination.
     ///
     /// A `remote_network` that is this client's own network, once the client
     /// has learned its number, names a local device: it is stored as the
