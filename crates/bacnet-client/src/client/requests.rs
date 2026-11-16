@@ -299,7 +299,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 service_choice,
                 false,
             )
-            .map_err(|error| Error::Encoding(error.to_string()))?
+            .map_err(Error::from)?
         };
 
         let owner = registration.owner.clone();
@@ -529,7 +529,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                                 );
                                                 return Err(error);
                                             }
-                                            RequestTimerExpiration::Retry => unreachable!(
+                                            RequestTimerExpiration::Retry
+                                            | RequestTimerExpiration::Withdrawn => unreachable!(
                                                 "final retry-send failure disposition cannot authorize another retry"
                                             ),
                                         }
@@ -543,6 +544,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 }
                                 RequestTimerExpiration::SegmentedResponse { generation } => {
                                     progress = TransactionProgress::SegmentedResponse { generation };
+                                }
+                                // DeviceCommunicationControl restricts the
+                                // node: no retry goes out (#2617).
+                                RequestTimerExpiration::Withdrawn => {
+                                    self.enqueue_transaction_cleanup(
+                                        tsm_mac, invoke_id, owner, false, None,
+                                    );
+                                    return Err(Error::InitiationDisabled);
                                 }
                                 RequestTimerExpiration::TimedOut => {
                                     self.enqueue_transaction_cleanup(

@@ -27,6 +27,9 @@ pub(super) struct RequestServices<T: TransportPort + 'static> {
     /// The server's throttles on warnings a peer can set off.
     pub(super) warnings: Arc<InboundWarnings>,
     pub(super) config: Arc<ServerConfig>,
+    /// What the Device's Protocol_Services_Supported lists: the server's
+    /// services, or on a node with a client role the node's (#2617).
+    pub(super) execution: crate::device_view::DeviceExecution,
 }
 
 /// The server's throttles on warnings a peer can set off once per packet
@@ -64,6 +67,7 @@ impl<T: TransportPort + 'static> Clone for RequestServices<T> {
             mutation_decisions: Arc::clone(&self.mutation_decisions),
             warnings: Arc::clone(&self.warnings),
             config: Arc::clone(&self.config),
+            execution: self.execution,
         }
     }
 }
@@ -230,6 +234,7 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
             warnings: Arc::default(),
             config,
+            execution: crate::device_view::DeviceExecution::FullServer,
         }
     }
 }
@@ -319,6 +324,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             mutation_decisions: Arc::clone(&self.mutation_decisions),
             warnings: Arc::default(),
             config: Arc::clone(&self.config),
+            execution: self.execution,
         }
     }
 

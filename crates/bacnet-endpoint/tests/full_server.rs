@@ -13,6 +13,11 @@ mod eventually;
 #[path = "support/wire.rs"]
 mod wire;
 
+/// The node is one device: its DeviceCommunicationControl and its Device
+/// object (#2617, PR 2).
+#[path = "full_server/node.rs"]
+mod node;
+
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, COVNotificationDelivery};
@@ -575,57 +580,4 @@ async fn a_full_server_is_refused_beside_source_audit_or_a_registered_port() {
         .await;
     let error = refused.err().expect("refused beside a registered port");
     assert!(error.to_string().contains("Network Port"), "{error}");
-}
-
-/// Today a DeviceCommunicationControl the full server accepts silences the
-/// server alone. Clause 16.1.2 binds the whole device: a later step of
-/// #2617 (PR 2) makes DCC node-wide, and the client's read and the
-/// session's I-Am below are refused then, so this test flips.
-#[tokio::test(start_paused = true)]
-async fn disable_initiation_silences_only_the_server_for_now() {
-    let mut lab = lab().await;
-    lab.server.stop().await.unwrap();
-    lab.server = lab
-        .session
-        .full_server(
-            BACnetServer::generic_builder()
-                .database(database(NODE_DEVICE, 42.0))
-                .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive),
-        )
-        .await
-        .unwrap();
-    lab.other
-        .device_communication_control(
-            &Wire::mac(NODE),
-            bacnet_types::enums::EnableDisable::DISABLE_INITIATION,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-    // The server initiates nothing.
-    let refused = lab.server.broadcast_i_am().await.unwrap_err();
-    assert!(
-        refused.to_string().to_lowercase().contains("communication"),
-        "{refused}"
-    );
-    // The node's full client still reads, and the session still announces.
-    let before = lab.node_sent.frames().len();
-    lab.client
-        .read_property(
-            &Wire::mac(PEER),
-            ai1(),
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-        )
-        .await
-        .expect("the client's read goes out, for now");
-    assert!(lab.node_sent.frames().len() > before);
-    lab.session
-        .broadcast_i_am()
-        .await
-        .expect("the session's I-Am goes out, for now");
-
-    stop(lab).await;
 }

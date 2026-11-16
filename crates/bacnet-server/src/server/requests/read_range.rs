@@ -1,5 +1,5 @@
 use super::*;
-use crate::device_view::{DeviceExecution, DeviceReadContext};
+use crate::device_view::DeviceReadContext;
 use bacnet_services::read_range::ReadRangeRequest;
 
 /// ReadRange under one database read guard, through the same executor Device
@@ -16,6 +16,7 @@ pub(super) async fn response(
     tables: confirmed_response::LiveTables<'_>,
     request: &ConfirmedRequestPdu,
     config: &ServerConfig,
+    execution: crate::device_view::DeviceExecution,
     effective_max_apdu: u16,
     segmented_response_available: bool,
     completed: impl FnOnce(
@@ -42,8 +43,7 @@ pub(super) async fn response(
         .map_err(Error::into_request_reject)
     {
         Ok(decoded) => {
-            let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
-                .with_identity(Some(&config.device));
+            let view = DeviceReadContext::new(&db, execution).with_identity(Some(&config.device));
             let scope = bacnet_device_core::read::ReadScope {
                 work_limit: config.read_property_multiple_budget.max_result_elements,
                 registered_port: None,

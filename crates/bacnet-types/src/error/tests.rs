@@ -396,6 +396,13 @@ fn log_not_advancing_display() {
 }
 
 #[test]
+fn initiation_disabled_names_device_communication_control() {
+    let text = Error::InitiationDisabled.to_string();
+    assert!(text.contains("DeviceCommunicationControl"), "{text}");
+    assert!(text.starts_with("not sent"), "{text}");
+}
+
+#[test]
 fn send_too_long_keeps_the_observed_lengths_without_becoming_an_apdu_reject() {
     let error = Error::SendTooLong {
         length: 1500,

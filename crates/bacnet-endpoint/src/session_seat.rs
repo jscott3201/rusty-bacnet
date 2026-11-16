@@ -55,6 +55,18 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// leaves the client to answer as a standalone one does, acknowledgment
     /// included.
     ///
+    /// **One device.** A DeviceCommunicationControl DISABLE_INITIATION a
+    /// [`full_server`](Self::full_server) accepts binds this client too: its
+    /// requests and unconfirmed sends fail with
+    /// [`Error::InitiationDisabled`](bacnet_types::error::Error::InitiationDisabled)
+    /// until the control ends (see [`full_server`](Self::full_server)). An
+    /// operator's own tool may start its client outside the node's control
+    /// with [`full_client_with`](Self::full_client_with) and
+    /// [`ClientOptions::with_node_dcc_override`], an override of Clause 16.1
+    /// the session warns about. A segmented answer no request of the node's
+    /// holds comes to this client, which aborts it as an idle client does
+    /// (Clause 5.4.4.1).
+    ///
     /// **A client that falls behind.** The session never waits for the
     /// client: what its seat's queue has no room for is dropped and counted
     /// in [`client_seat_counters`](Self::client_seat_counters). The queue
@@ -98,8 +110,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// [`Self::full_client`], with the client's startup `options`: its
-    /// notification channel capacities and how it answers a confirmed COV
-    /// notification.
+    /// notification channel capacities, how it answers a confirmed COV
+    /// notification, and whether its operator starts it outside the node's
+    /// DeviceCommunicationControl ([`ClientOptions::with_node_dcc_override`]).
     pub fn full_client_with(&self, options: ClientOptions) -> Result<BACnetClient<T>, Error> {
         BACnetClient::start_on_seat(self.client_config.clone(), self.client_seat()?, options)
     }

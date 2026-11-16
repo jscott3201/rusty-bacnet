@@ -350,7 +350,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let learned_routers = Arc::clone(learned_routers);
             let suppressions = Arc::clone(suppressions);
             let timeout = Duration::from_millis(retry_timeout_ms);
-            let apdu_retries = DEFAULT_APDU_RETRIES;
+            let apdu_retries = notification_transactions.retries();
             // Dropped once the first attempt is handed off, or ends with
             // none, which lets the lane go on (#2537).
             let (first_attempt, handed_off) = oneshot::channel::<()>();

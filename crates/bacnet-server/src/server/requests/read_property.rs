@@ -109,7 +109,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &admitted.services.db,
                 Some(admitted.services.live_tables()),
                 confirmed_response::ReadProfile {
-                    execution: crate::device_view::DeviceExecution::FullServer,
+                    execution: admitted.services.execution,
                     registered_port: config.registered_network_port,
                     work_limit: config.read_property_multiple_budget.max_result_elements,
                     identity: Some(&config.device),
@@ -278,6 +278,7 @@ mod tests {
                 request,
                 ack,
                 config,
+                crate::device_view::DeviceExecution::FullServer,
                 |_, _, _, _, _| {},
             )
         }

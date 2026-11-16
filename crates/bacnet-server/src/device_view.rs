@@ -26,36 +26,79 @@ use identity::IdentityView;
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
-#[derive(Clone, Copy)]
+/// What a full client executes beside a full server on one node (#2617):
+/// I-Am and I-Have, which its discovery takes in, and the COV
+/// notifications of its subscriptions, which it acknowledges. The server
+/// already lists both event notifications, whose confirmed form it
+/// acknowledges; the client takes neither COV-notification-multiple form.
+pub(crate) const NODE_CLIENT_SERVICES: &[ServiceSupported] = &[
+    ServiceSupported::I_AM,
+    ServiceSupported::I_HAVE,
+    ServiceSupported::CONFIRMED_COV_NOTIFICATION,
+    ServiceSupported::UNCONFIRMED_COV_NOTIFICATION,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeviceExecution {
     FullServer,
+    /// A full server on a node's seat beside the node's client role, which
+    /// executes [`NODE_CLIENT_SERVICES`] too: the Device lists what the
+    /// whole node executes (Clause 12.11.14).
+    Node,
     /// An endpoint's responder: ReadProperty, and each service its session
-    /// enabled. `cov` is SubscribeCOV, SubscribeCOVProperty and
-    /// SubscribeCOVPropertyMultiple (#2490).
-    Endpoint {
-        writes: bool,
-        reinitialize: bool,
-        cov: bool,
-    },
+    /// enabled.
+    Endpoint(EndpointServices),
+}
+
+/// The services an endpoint's responder runs beside ReadProperty, packed
+/// into one octet, so the execution profile a read carries is two octets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EndpointServices(u8);
+
+impl EndpointServices {
+    const WRITES: u8 = 1;
+    const REINITIALIZE: u8 = 2;
+    const COV: u8 = 4;
+
+    /// WriteProperty, ReinitializeDevice, and with `cov` SubscribeCOV,
+    /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple (#2490), each
+    /// when its session enabled it.
+    pub(crate) fn new(writes: bool, reinitialize: bool, cov: bool) -> Self {
+        Self(
+            u8::from(writes) * Self::WRITES
+                | u8::from(reinitialize) * Self::REINITIALIZE
+                | u8::from(cov) * Self::COV,
+        )
+    }
+
+    fn has(self, service: u8) -> bool {
+        self.0 & service != 0
+    }
 }
 
 impl DeviceExecution {
+    /// An endpoint's responder's profile: see [`EndpointServices::new`].
+    pub(crate) fn endpoint(writes: bool, reinitialize: bool, cov: bool) -> Self {
+        Self::Endpoint(EndpointServices::new(writes, reinitialize, cov))
+    }
+
     pub(crate) fn services(self, clock: bool) -> impl Iterator<Item = ServiceSupported> {
         let services = match self {
             Self::FullServer => EXECUTED_SERVICES.to_vec(),
-            Self::Endpoint {
-                writes,
-                reinitialize,
-                cov,
-            } => {
+            Self::Node => EXECUTED_SERVICES
+                .iter()
+                .chain(NODE_CLIENT_SERVICES)
+                .copied()
+                .collect(),
+            Self::Endpoint(enabled) => {
                 let mut services = vec![ServiceSupported::READ_PROPERTY];
-                if writes {
+                if enabled.has(EndpointServices::WRITES) {
                     services.push(ServiceSupported::WRITE_PROPERTY);
                 }
-                if reinitialize {
+                if enabled.has(EndpointServices::REINITIALIZE) {
                     services.push(ServiceSupported::REINITIALIZE_DEVICE);
                 }
-                if cov {
+                if enabled.has(EndpointServices::COV) {
                     services.push(ServiceSupported::SUBSCRIBE_COV);
                     services.push(ServiceSupported::SUBSCRIBE_COV_PROPERTY);
                     services.push(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE);
@@ -79,11 +122,11 @@ impl DeviceExecution {
     /// neither for an endpoint without it.
     fn cov_lists(self) -> &'static [P] {
         match self {
-            Self::FullServer | Self::Endpoint { cov: true, .. } => &[
+            Self::Endpoint(enabled) if !enabled.has(EndpointServices::COV) => &[],
+            Self::FullServer | Self::Node | Self::Endpoint(_) => &[
                 P::ACTIVE_COV_SUBSCRIPTIONS,
                 P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
             ],
-            Self::Endpoint { cov: false, .. } => &[],
         }
     }
 }
@@ -129,8 +172,10 @@ impl<'a> DeviceReadContext<'a> {
     /// Only full-server service bits depend on clock availability. Cache both
     /// answers for this request; Device time values and metadata stay live.
     fn clock_available(&self) -> bool {
-        matches!(self.execution, DeviceExecution::FullServer)
-            && *self.clock.get_or_init(|| self.db.clock_frame().is_some())
+        matches!(
+            self.execution,
+            DeviceExecution::FullServer | DeviceExecution::Node
+        ) && *self.clock.get_or_init(|| self.db.clock_frame().is_some())
     }
     pub(crate) fn with_identity(
         mut self,

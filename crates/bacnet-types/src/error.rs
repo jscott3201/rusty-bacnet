@@ -287,6 +287,20 @@ pub enum Error {
         /// `None` when it returned no records.
         returned: Option<u64>,
     },
+
+    /// The device this request would leave from has had initiation turned
+    /// off by DeviceCommunicationControl (DISABLE_INITIATION, Clause 16.1):
+    /// nothing was sent. It ends when the control's duration runs out, a
+    /// DeviceCommunicationControl ENABLE is accepted, or a WARMSTART or
+    /// COLDSTART ReinitializeDevice is. A full client on a node with a full
+    /// server returns it for every request and unconfirmed send while the
+    /// node's server holds that state, and for a request already waiting
+    /// when its retry falls due then (#2617).
+    #[error(
+        "not sent: DeviceCommunicationControl has disabled initiation on this device until it is \
+         enabled again"
+    )]
+    InitiationDisabled,
 }
 
 impl From<RemoteError> for Error {

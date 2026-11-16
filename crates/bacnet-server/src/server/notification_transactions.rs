@@ -86,6 +86,9 @@ pub struct NotificationTransactions {
     /// push, or the seal at `stop()` or the drop), so a server that sends no
     /// event notification allocates nothing for them.
     pub(super) event_lanes: std::sync::OnceLock<Box<super::event_send::LaneState>>,
+    /// How many times a confirmed event notification is sent again: the
+    /// server's [`ServerConfig::notification_retries`], set at start.
+    retries: std::sync::atomic::AtomicU8,
 }
 
 type ReporterFailureQueue = (
@@ -203,7 +206,20 @@ impl NotificationTransactions {
             audit_failures: std::sync::OnceLock::new(),
             run_slots: crate::command_lists::RemoteSlots::default(),
             event_lanes: std::sync::OnceLock::new(),
+            retries: std::sync::atomic::AtomicU8::new(super::DEFAULT_APDU_RETRIES),
         })
+    }
+
+    /// Take the server's [`ServerConfig::notification_retries`], once, at
+    /// start (#2617).
+    pub(super) fn set_retries(&self, retries: u8) {
+        self.retries
+            .store(retries, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How many times a confirmed event notification is sent again.
+    pub(super) fn retries(&self) -> u8 {
+        self.retries.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Where the requests the server's runs make in other devices wait

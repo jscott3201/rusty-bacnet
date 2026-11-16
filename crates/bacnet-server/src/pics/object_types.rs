@@ -54,13 +54,13 @@ impl PicsGenerator<'_> {
                 });
                 continue;
             }
-            let view = (self.served && object_type == ObjectType::DEVICE).then(|| {
-                crate::device_view::DeviceReadContext::new(
-                    self.db,
-                    crate::device_view::DeviceExecution::FullServer,
-                )
-                .with_identity(Some(&self.server_config.device))
-            });
+            let view = self
+                .served
+                .filter(|_| object_type == ObjectType::DEVICE)
+                .map(|execution| {
+                    crate::device_view::DeviceReadContext::new(self.db, execution)
+                        .with_identity(Some(&self.server_config.device))
+                });
             let supported_properties =
                 Self::union_property_support(objects.iter().flat_map(|object| {
                     if let Some(view) = &view {

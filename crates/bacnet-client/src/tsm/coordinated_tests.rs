@@ -532,3 +532,85 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
         assert_eq!(tsm.pending_count(), 0);
     }
 }
+
+/// The node's DeviceCommunicationControl (#2617): while it restricts
+/// initiation no transaction is leased, with a refusal that names it; a
+/// retry falling due ends its transaction, freeing the invoke ID; and once
+/// it is lifted the TSM leases again. A closed TSM stays closed.
+#[test]
+fn a_restricted_node_leases_nothing_and_withdraws_retries() {
+    let (mut tsm, coordinator) = coordinated_tsm();
+    let peer = CanonicalPeer::direct(&[7]);
+    let (waiting, registration) = register(
+        &mut tsm,
+        &[7],
+        peer.clone(),
+        ConfirmedServiceChoice::READ_PROPERTY,
+        false,
+    );
+    assert!(!tsm.initiation_restricted());
+
+    tsm.restrict_initiation(true);
+    assert!(tsm.initiation_restricted());
+    let refused = tsm
+        .register_coordinated_transaction_with_progress(
+            MacAddr::from_slice(&[7]),
+            peer.clone(),
+            ConfirmedServiceChoice::READ_PROPERTY,
+            false,
+        )
+        .err()
+        .expect("refused");
+    assert_eq!(refused, CoordinatedRegistrationError::InitiationRestricted);
+    assert!(matches!(
+        bacnet_types::error::Error::from(refused),
+        bacnet_types::error::Error::InitiationDisabled
+    ));
+    // The one already waiting gets no retry: it ends, and its ID is free.
+    assert_eq!(
+        tsm.expire_request_timer(&[7], waiting, &registration.owner, false),
+        RequestTimerExpiration::Withdrawn
+    );
+    assert_eq!(tsm.pending_count(), 0);
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+
+    tsm.restrict_initiation(false);
+    register(
+        &mut tsm,
+        &[7],
+        peer.clone(),
+        ConfirmedServiceChoice::READ_PROPERTY,
+        false,
+    );
+
+    tsm.close_coordinated();
+    tsm.restrict_initiation(false);
+    let closed = tsm
+        .register_coordinated_transaction_with_progress(
+            MacAddr::from_slice(&[7]),
+            peer,
+            ConfirmedServiceChoice::READ_PROPERTY,
+            false,
+        )
+        .err()
+        .expect("closed");
+    assert_eq!(closed, CoordinatedRegistrationError::CoordinatorUnavailable);
+}
+
+/// A final timeout is a timeout, restricted or not.
+#[test]
+fn a_final_timeout_is_no_withdrawal() {
+    let (mut tsm, _coordinator) = coordinated_tsm();
+    let (waiting, registration) = register(
+        &mut tsm,
+        &[7],
+        CanonicalPeer::direct(&[7]),
+        ConfirmedServiceChoice::READ_PROPERTY,
+        false,
+    );
+    tsm.restrict_initiation(true);
+    assert_eq!(
+        tsm.expire_request_timer(&[7], waiting, &registration.owner, true),
+        RequestTimerExpiration::TimedOut
+    );
+}

@@ -935,12 +935,22 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// from [`server_config`](crate::identity::server_config).
     /// Transport-dependent: B/IP reaches the local subnet broadcast; SC
     /// relays via the hub as a broadcast NPDU. Fails when the session is not
-    /// running.
+    /// running, and with [`Error::InitiationDisabled`] while a
+    /// [`full_server`](Self::full_server) holds a DeviceCommunicationControl
+    /// DISABLE_INITIATION: this I-Am answers no Who-Is (Clause 16.1).
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
         let identity = self
             .identity
             .as_ref()
             .ok_or_else(|| Error::Encoding("endpoint I-Am requires a composed identity".into()))?;
+        if self
+            .ingress
+            .as_ref()
+            .and_then(EndpointIngress::node_dcc)
+            .is_some_and(|dcc| dcc.is_restricted())
+        {
+            return Err(Error::InitiationDisabled);
+        }
         let egress = self
             .egress
             .as_ref()

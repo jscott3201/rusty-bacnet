@@ -299,6 +299,19 @@ fn from_requester(apdu: &[u8]) -> bool {
         .is_some_and(|first| matches!(first >> 4, 4 | 7) && first & 0x01 == 0)
 }
 
+/// Whether `apdu` is a segmented Complex-ACK (3 with the segmented-message
+/// bit), or a Segment-ACK (4) or Abort (7) the answering side sent (server
+/// bit set). With no lease to hold one, it is the client's to handle in its
+/// idle state, where Clause 5.4.4.1 has it abort the first two and drop the
+/// Abort.
+fn client_stray(apdu: &[u8]) -> bool {
+    apdu.first().is_some_and(|first| match first >> 4 {
+        3 => first & 0x08 != 0,
+        4 | 7 => first & 0x01 != 0,
+        _ => false,
+    })
+}
+
 /// The role whose lease holds the answer `received`, if any: looked up once
 /// for both seats, claiming nothing. Requests and a requester's Abort or
 /// Segment-ACK have none.
@@ -345,6 +358,10 @@ fn client_share(
             }
         }
         (IngressRoute::TerminalOrSegment, _) if holder == Some(LeaseHolder::Client) => {
+            SeatShare::Whole
+        }
+        // No lease holds it: a segmented answer is the client's to abort.
+        (IngressRoute::TerminalOrSegment, _) if holder.is_none() && client_stray(apdu) => {
             SeatShare::Whole
         }
         (IngressRoute::TerminalOrSegment, _) => SeatShare::None,

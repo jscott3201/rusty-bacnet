@@ -78,6 +78,13 @@ pub struct ServerConfig {
     /// as abandoned (#2412). Keep it well above how long a loaded host
     /// takes to answer.
     pub cov_retry_timeout_ms: u64,
+    /// How many times a confirmed request the server initiates is sent
+    /// again after `cov_retry_timeout_ms` passes with no answer: COV and
+    /// event notifications, and the writes and reads its Command and Channel
+    /// objects make in other devices (default 3, Clause 12.11.29's suggested
+    /// Number_Of_APDU_Retries). A server on a node's seat takes the node's
+    /// (#2617).
+    pub notification_retries: u8,
     /// Opt-in inbound time-sync restrictions; default allows all, with no step cap.
     pub time_sync_policy: TimeSyncPolicy,
     /// Optional fast, nonblocking observer invoked after the clock changes.
@@ -223,6 +230,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("share_wildcard_port", &self.share_wildcard_port)
             .field("device", &self.device)
             .field("cov_retry_timeout_ms", &self.cov_retry_timeout_ms)
+            .field("notification_retries", &self.notification_retries)
             .field("time_sync_policy", &self.time_sync_policy)
             .field("mutation_policy", &self.mutation_policy)
             .field(
@@ -284,7 +292,7 @@ impl ServerConfig {
     pub(crate) fn cov_flight_timing(&self) -> bacnet_device_core::cov::FlightTiming {
         bacnet_device_core::cov::FlightTiming::new(
             bacnet_time::Duration::from_millis(self.cov_retry_timeout_ms),
-            super::DEFAULT_APDU_RETRIES,
+            self.notification_retries,
         )
     }
 }
@@ -308,6 +316,7 @@ impl Default for ServerConfig {
             share_port_by_address: false,
             share_wildcard_port: false,
             cov_retry_timeout_ms: 3000,
+            notification_retries: super::DEFAULT_APDU_RETRIES,
             time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
             on_reinitialize: None,

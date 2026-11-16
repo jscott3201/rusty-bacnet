@@ -482,6 +482,11 @@ mod seat;
 #[path = "endpoint_server_seat_tests.rs"]
 mod server_seat;
 
+/// One device on two seats: stray segmented answers, and the node's
+/// DeviceCommunicationControl state (#2617).
+#[path = "endpoint_node_tests.rs"]
+mod node;
+
 /// What a full queue does: dropped and counted by class, never the end of
 /// the session (#2635).
 #[path = "endpoint_full_queue_tests.rs"]
