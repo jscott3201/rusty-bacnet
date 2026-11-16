@@ -13440,8 +13440,11 @@ records, since the client retries with the same invoke ID and the records
 carry the real answer. At most 64 are held at once; past them a request
 waits for a slot in its caller's task, with nothing spawned for it, and its
 timeout starts once it is admitted. A stop or the caller going away ends the
-wait with nothing sent. A request the Reporter doesn't select, or with no
-recipient, goes unaudited in the caller's task.
+wait with nothing sent. A request waiting for a slot keeps the turn at its
+destination it was given before it waited (`min_request_interval_ms`), so two
+requests to one device that both waited can go out together when slots free.
+A request the Reporter doesn't select, or with no recipient, goes unaudited
+in the caller's task.
 
 - Each target is its own record (Clause 19.6.5): one per reference of a
   ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or
@@ -13474,15 +13477,23 @@ recipient, goes unaudited in the caller's task.
   it is sent: what it names can't be reported. Not audited yet on an audited
   session: WriteGroup, subscriptions, object and device management, alarm
   acknowledgment and life safety.
-- An operation cut off by a stop, of the session or of the client, is not
-  recorded.
-- Under the node's DeviceCommunicationControl DISABLE_INITIATION an audited
-  request is refused as every request is, with
-  `InitiationDisabled { sent: false }`, before it takes a slot or a sequence
-  number, and one waiting for a slot is refused when it gets one. One
-  already sent whose retry is withheld ends with
-  `InitiationDisabled { sent: true }` and is recorded as failed, with
-  SERVICES, COMMUNICATION_DISABLED. A client started with
+- What is recorded when something else ends the operation: one cut off by
+  a stop, of the session or of the client, is not recorded; one the node's
+  DeviceCommunicationControl refuses before it was sent is not recorded
+  either, since nothing reached the target and Clause 19.6.1 warns against
+  needless notification load; one already sent whose retry the control
+  withholds is recorded as failed, with SERVICES, COMMUNICATION_DISABLED.
+- DeviceCommunicationControl does not reach an audited session yet: a
+  session with a source Audit Reporter refuses a full server, and only a
+  full server on the session sets the node's state. Once the server seat
+  takes source Audit (a later step of #2617), DISABLE_INITIATION will
+  refuse an audited request as every request is, with
+  `InitiationDisabled { sent: false }`: before it takes a slot, and, when
+  it was waiting for a slot or for the database, before it takes a
+  sequence number. One the control catches after that, before the request
+  registers, is refused there, unsent and unrecorded, and its sequence
+  number is left unused. One already sent whose retry is withheld ends with
+  `InitiationDisabled { sent: true }`. A client started with
   `with_node_dcc_override` is audited as usual.
 - None of this costs a standalone client anything: an audited client's
   requests leave the request path at the test registration already makes.

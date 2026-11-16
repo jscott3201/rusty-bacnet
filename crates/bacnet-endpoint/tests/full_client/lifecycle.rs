@@ -84,7 +84,9 @@ async fn the_session_stopping_first_fails_open_requests_and_stops_the_link_under
                 None,
             )
             .await;
-        assert!(late.is_err());
+        // A confirmed request says what an unconfirmed send says.
+        let late = late.unwrap_err().to_string();
+        assert!(late.contains("seat has closed"), "{late}");
         assert!(client.who_is(None).await.is_err());
         assert!(
             client

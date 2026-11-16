@@ -177,9 +177,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// or the client's requests are its node's to audit (#2617). Only the
     /// last goes on: a runner registers through the coordinator here, and
     /// an audited client's request goes to its node. The others fail as
-    /// they do on any client, the restriction with
-    /// [`Error::InitiationDisabled`] and nothing sent, before an audited
-    /// request takes a slot or a sequence number.
+    /// every seated client's request does, a closed seat as its sends do
+    /// and the restriction with [`Error::InitiationDisabled`], with nothing
+    /// sent and before an audited request takes a slot or a sequence
+    /// number.
     #[cold]
     #[inline(never)]
     pub(super) fn on_refused(
@@ -189,8 +190,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         segmented: bool,
     ) -> Result<Refused, Error> {
-        if refused != CoordinatedRegistrationError::Diverted {
-            return Err(Error::from(refused));
+        match refused {
+            CoordinatedRegistrationError::Diverted => {}
+            CoordinatedRegistrationError::CoordinatorUnavailable => {
+                return Err(super::seat::seat_closed());
+            }
+            refused => return Err(Error::from(refused)),
         }
         match self.pacer.audit.get() {
             Some(Role::Runner(invoke_id)) => {
@@ -204,7 +209,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 Ok(Refused::Registered(registered))
             }
             Some(Role::Audited(auditor)) => Ok(Refused::Audited(Arc::clone(auditor))),
-            None => Err(Error::from(refused)),
+            None => Err(Error::from(CoordinatedRegistrationError::Diverted)),
         }
     }
 

@@ -103,6 +103,54 @@ async fn disable_initiation_refuses_an_audited_request_before_admission() {
     sink.stop().await.unwrap();
 }
 
+/// A request waiting for the database when the node restricts initiation
+/// is refused once it has the database, before it takes a sequence number.
+#[tokio::test(start_paused = true)]
+async fn a_request_waiting_for_the_database_takes_no_sequence_number() {
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
+    let mut session = session(database(false), SessionRole::Both, &sink);
+    session.client_config.apdu_timeout_ms = 60_000;
+    session.start().await.unwrap();
+    let client = full_client(&session);
+    let seat = node_dcc(&session);
+    let source = Arc::clone(session.source_audit.as_ref().unwrap());
+    let first = read_and_record(&client, &peer, &mut requests, &mut records).await;
+    assert_eq!(
+        first.source_timestamp,
+        Some(BACnetTimeStamp::SequenceNumber(0))
+    );
+    let db = Arc::clone(session.database.as_ref().unwrap());
+    let guard = db.write().await;
+    let waiting = full_read(
+        &client,
+        peer.local_mac(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+    );
+    eventually(WAIT, "the read holds a slot", async || {
+        source.available_operations() != 64
+    })
+    .await;
+    seat.dcc.set(true);
+    drop(guard);
+    assert!(matches!(
+        timeout(WAIT, waiting).await.unwrap().unwrap(),
+        Err(Error::InitiationDisabled { sent: false })
+    ));
+    seat.dcc.set(false);
+    let next = read_and_record(&client, &peer, &mut requests, &mut records).await;
+    assert_eq!(
+        next.source_timestamp,
+        Some(BACnetTimeStamp::SequenceNumber(1))
+    );
+    drop(client);
+    drop(seat);
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
 /// A request waiting for a slot when the node restricts initiation never
 /// goes out: once a slot frees it is refused, with nothing sent and
 /// nothing recorded, and takes no sequence number. The one whose answer
@@ -131,6 +179,21 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
         sent.push(receive(&mut requests).await);
     }
     seat.dcc.set(true);
+    // A request made now is refused at once, while every slot is held: at
+    // its registration, before it would wait for one.
+    let late = full_read(
+        &client,
+        peer.local_mac(),
+        PropertyIdentifier::OBJECT_NAME,
+        None,
+    );
+    assert!(matches!(
+        timeout(Duration::from_millis(10), late)
+            .await
+            .expect("refused at once")
+            .unwrap(),
+        Err(Error::InitiationDisabled { sent: false })
+    ));
     let request = sent.pop().unwrap();
     let (invoke, rp) = read_request(&request);
     send(&peer, &request.source_mac, ack(invoke, &rp)).await;

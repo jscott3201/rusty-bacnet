@@ -170,6 +170,14 @@ impl SourceAudit {
             status.set_configured(false);
             return Err(Error::Encoding("source Device is unavailable".into()));
         }
+        // Again just before the sequence number: one that took effect while
+        // the request waited for the database is refused here, taking none.
+        // From here to the request's registration, in the session's task,
+        // the control can still take effect: the request is then refused
+        // there, unsent and unrecorded, and its number is left unused.
+        if request.initiation_restricted() {
+            return Err(Error::InitiationDisabled { sent: false });
+        }
         let timestamp = match db
             .clock_frame()
             .filter(|frame| frame.is_valid_actual_datetime())

@@ -51,7 +51,7 @@ async fn an_audited_operation_cut_off_by_a_stop_is_not_recorded() {
                     None,
                 );
                 let error = Box::pin(next).await.unwrap_err();
-                assert!(error.to_string().contains("unavailable"), "{error}");
+                assert!(error.to_string().contains("seat has closed"), "{error}");
                 let source = Arc::clone(session.source_audit.as_ref().unwrap());
                 eventually(WAIT, "every slot is free", async || {
                     source.available_operations() == 64
