@@ -1,6 +1,7 @@
-//! A `RoutedTarget` as the target of a typed call (#2617): `read_property`,
-//! `read_property_multiple`, `read_range`, `read_log_page` and
-//! `write_property` take one where they take an address, on a standalone
+//! A `RoutedTarget` as the target of a typed call (#2617, #2613):
+//! `read_property`, `read_property_multiple`, `read_range`, `read_log_page`,
+//! `write_property`, `atomic_read_file` and `atomic_write_file` take one
+//! where they take an address, on a standalone
 //! client and on one from `endpoint.client()` alike, as the narrow endpoint
 //! client did (#2612). Each call goes through the client's own routed
 //! requests, so it is paced, sized and segmented as every other request is.
@@ -21,6 +22,10 @@ use std::time::{Duration, Instant};
 
 use bacnet_client::log_reader::{LogRequester, unsigned_value};
 use bacnet_ops::{DeviceAddress, OpsError};
+use bacnet_services::file::{
+    AtomicReadFileAck, AtomicReadFileRequest, AtomicWriteFileRequest, FileAccessMethod,
+    FileWriteAccessMethod,
+};
 use bacnet_services::read_range::ReadRangeValidation;
 use bacnet_services::read_range::{ReadRangeAck, ReadRangeReply, ReadRangeRequest};
 use bacnet_transport::port::TransportPort;
@@ -376,6 +381,42 @@ pub(super) async fn read_range(
     request.encode(&mut buf)?;
     let answer = confirmed(core, path, ConfirmedServiceChoice::READ_RANGE, &buf).await?;
     ReadRangeReply::check(request, ReadRangeAck::decode(&answer)?, validation)
+}
+
+/// One AtomicReadFile on `path`, its answer decoded and checked against
+/// `access` as `atomic_read_file_decoded` checks a local one: the same
+/// access method, and no more octets or records than asked for.
+pub(super) async fn atomic_read_file(
+    core: &CoreClient,
+    path: &Path,
+    file_identifier: ObjectIdentifier,
+    access: FileAccessMethod,
+) -> Result<AtomicReadFileAck, Error> {
+    let request = AtomicReadFileRequest {
+        file_identifier,
+        access,
+    };
+    let mut buf = bytes::BytesMut::new();
+    request.encode(&mut buf);
+    let answer = confirmed(core, path, ConfirmedServiceChoice::ATOMIC_READ_FILE, &buf).await?;
+    bacnet_client::acks::atomic_read_file(&request.access, &answer)
+}
+
+/// One AtomicWriteFile on `path`, its raw answer returned as the local
+/// `atomic_write_file` returns it.
+pub(super) async fn atomic_write_file(
+    core: &CoreClient,
+    path: &Path,
+    file_identifier: ObjectIdentifier,
+    access: FileWriteAccessMethod,
+) -> Result<Bytes, Error> {
+    let request = AtomicWriteFileRequest {
+        file_identifier,
+        access,
+    };
+    let mut buf = bytes::BytesMut::new();
+    request.encode(&mut buf);
+    confirmed(core, path, ConfirmedServiceChoice::ATOMIC_WRITE_FILE, &buf).await
 }
 
 /// The log reader's requests to one station behind a router: each read

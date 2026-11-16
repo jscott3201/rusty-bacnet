@@ -4931,7 +4931,8 @@ class IAmArrival:
         router relayed. None when those name no one station. The calls that
         take an ``address`` don't take ``"5:0x07"``: for a routed record,
         ``read_property``, ``read_property_multiple``, ``read_range``,
-        ``read_log_page`` and ``write_property`` take
+        ``read_log_page``, ``write_property``, ``atomic_read_file`` and
+        ``atomic_write_file`` take
         ``RoutedTarget(rec.source_network, rec.source_address,
         router=rec.next_hop_router)``."""
         ...
@@ -6097,7 +6098,7 @@ class BACnetClient:
 
     def atomic_read_file(
         self,
-        address: str,
+        address: str | RoutedTarget,
         file_identifier: ObjectIdentifier,
         access_method: str,
         start_position: int = 0,
@@ -6110,12 +6111,15 @@ class BACnetClient:
         then ``start_position`` and ``data`` for stream access, or
         ``start_record``, ``record_count`` and ``records`` for record access.
         An acknowledgment in the other access method, or with more octets or
-        records than requested, raises BacnetError."""
+        records than requested, raises BacnetError. ``address`` is a ``str``
+        on the local link, or a ``RoutedTarget`` for a station behind a
+        router (#2613), as ``RoutedTarget`` describes: the answer, segmented
+        or not, and a reject, error or abort come back as from a local read."""
         ...
 
     def atomic_write_file(
         self,
-        address: str,
+        address: str | RoutedTarget,
         file_identifier: ObjectIdentifier,
         access_method: str,
         start_position: int = 0,
@@ -6128,7 +6132,9 @@ class BACnetClient:
         Returns the decoded acknowledgment: ``access_method``, then
         ``start_position`` for stream access or ``start_record`` for record
         access, where the device says the write took place. An
-        acknowledgment in the other access method raises BacnetError."""
+        acknowledgment in the other access method raises BacnetError.
+        ``address`` is a ``str`` or a ``RoutedTarget``, as for
+        ``atomic_read_file`` (#2613)."""
         ...
 
     # --- List manipulation ---
@@ -9265,7 +9271,10 @@ class ScHub:
 class RoutedTarget:
     """A station on another BACnet network (#2612), where ``BACnetClient``'s
     ``read_property``, ``read_property_multiple``, ``read_range``,
-    ``read_log_page`` and ``write_property`` take an ``address`` (#2617):
+    ``read_log_page``, ``write_property``, ``atomic_read_file`` and
+    ``atomic_write_file`` take an ``address`` (#2617, #2613); the other
+    typed calls, the COV subscriptions among them, take a local address
+    only until #2588:
     ``RoutedTarget(network, address, router=None)``, in that order. A
     ``str`` address always names a station on the local link.
 

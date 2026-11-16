@@ -1222,7 +1222,7 @@ request of a page, the count reads included, goes there.
 ```python
 def atomic_read_file(
     self,
-    address: str,
+    address: str | RoutedTarget,
     file_identifier: ObjectIdentifier,
     access_method: str,
     start_position: int = 0,
@@ -1237,14 +1237,17 @@ Returns the decoded acknowledgment: `access_method`, `end_of_file`,
 then `start_position` and `data` for stream access, or
 `start_record`, `record_count` and `records` for record access.
 An acknowledgment in the other access method, or with more octets or
-records than requested, raises BacnetError.
+records than requested, raises BacnetError. `address` is a `str`
+on the local link, or a `RoutedTarget` for a station behind a
+router (#2613), as `RoutedTarget` describes: the answer, segmented
+or not, and a reject, error or abort come back as from a local read.
 
 ### BACnetClient.atomic_write_file
 
 ```python
 def atomic_write_file(
     self,
-    address: str,
+    address: str | RoutedTarget,
     file_identifier: ObjectIdentifier,
     access_method: str,
     start_position: int = 0,
@@ -1260,6 +1263,8 @@ Returns the decoded acknowledgment: `access_method`, then
 `start_position` for stream access or `start_record` for record
 access, where the device says the write took place. An
 acknowledgment in the other access method raises BacnetError.
+`address` is a `str` or a `RoutedTarget`, as for
+`atomic_read_file` (#2613).
 
 ### BACnetClient.add_list_element
 
@@ -2013,7 +2018,7 @@ Properties:
 - `source_network: Optional[int]`: SNET, when a router relayed the I-Am from another network.
 - `source_address: Optional[bytes]`: SADR, the device's MAC on `source_network`.
 - `broadcast: bool`: A link broadcast or a broadcast on a network. False for an MS/TP I-Am one station unicast to another, which the bus lets this station hear.
-- `device_address: Optional[str]`: The device's address as `BACnetClient.device()` takes it: `link_source` for a device on this link, `"5:0x07"` for one a router relayed. None when those name no one station. The calls that take an `address` don't take `"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`, `read_range`, `read_log_page` and `write_property` take `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`.
+- `device_address: Optional[str]`: The device's address as `BACnetClient.device()` takes it: `link_source` for a device on this link, `"5:0x07"` for one a router relayed. None when those name no one station. The calls that take an `address` don't take `"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`, `read_range`, `read_log_page`, `write_property`, `atomic_read_file` and `atomic_write_file` take `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`.
 - `next_hop_router: Optional[str]`: The router that relayed it, when `source_network` is set: its `link_source`.
 - `forwarding_bbmd: Optional[str]`: The BBMD that forwarded it, when `forwarded`: its `link_sender`.
 - `missed_before: int`: Frames of any kind this subscription lost just before this record, as `Frame.missed_before`: the tap cannot tell which of them held an I-Am. Summed over the records received, plus any lost after the last one, it is `IAmArrivalIterator.missed`. An own echo left out is no loss and adds nothing.
