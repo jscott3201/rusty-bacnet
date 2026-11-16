@@ -70,11 +70,9 @@ pub(crate) fn down_to_reserve<T>(queue: &mpsc::Sender<T>) -> bool {
 /// Whether one of `coordinator`'s leases holds the answer `received`. Looks,
 /// claims nothing. With no coordinator every answer counts as held.
 ///
-/// It reads only the peer and the invoke ID. A Segment-ACK or Abort a
-/// requester sends (server bit clear) is about a request this node serves,
-/// not a lease: one that happens to match a lease counts as held, and any
-/// other as a stray. Harmless while the narrow server never segments;
-/// revisit when the full server takes a seat (#2617 step 4).
+/// A Segment-ACK or Abort a requester sends (server bit clear) is about a
+/// request this node serves, not about a lease: none counts as held,
+/// whatever lease its invoke ID happens to match (#2640).
 fn held_by_lease(
     coordinator: Option<&OutboundTransactionCoordinator>,
     received: &ReceivedApdu,
@@ -83,6 +81,9 @@ fn held_by_lease(
     let Some(coordinator) = coordinator else {
         return true;
     };
+    if from_requester(&received.apdu) {
+        return false;
+    }
     received.apdu.get(1).is_some_and(|invoke_id| {
         coordinator
             .holder_of_source(
@@ -288,6 +289,13 @@ enum SeatShare {
     Whole,
 }
 
+/// Whether `apdu` is an Abort (7) or Segment-ACK (4) with the server bit
+/// clear: one a requester sent, about a request this node serves.
+fn from_requester(apdu: &[u8]) -> bool {
+    apdu.first()
+        .is_some_and(|first| matches!(first >> 4, 4 | 7) && first & 0x01 == 0)
+}
+
 /// The seat's share of a valid APDU, from its first octets (see
 /// [`crate::seat`]). Only an answer's lease is looked up, and nothing is
 /// claimed.
@@ -312,9 +320,9 @@ fn seat_share(
                 _ => SeatShare::None,
             }
         }
-        // An Abort (7) or Segment-ACK (4) with the server bit clear came
-        // from a requester: it is about a request this node serves.
-        (IngressRoute::TerminalOrSegment, 4 | 7) if first & 0x01 == 0 => SeatShare::None,
+        // A requester's Abort or Segment-ACK is about a request this node
+        // serves.
+        (IngressRoute::TerminalOrSegment, _) if from_requester(apdu) => SeatShare::None,
         (IngressRoute::TerminalOrSegment, _) => {
             let holder = apdu.get(1).and_then(|invoke_id| {
                 attached.coordinator.holder_of_source(
