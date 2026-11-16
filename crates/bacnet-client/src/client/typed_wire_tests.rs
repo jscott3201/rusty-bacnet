@@ -201,18 +201,36 @@ pub(super) fn check(case: &str, got: (String, String)) {
     }
 }
 
+/// The exchange `make` builds, on the heap. `make` runs in this function's
+/// frame, so a test of dozens of exchanges keeps one pointer per exchange
+/// in its own: inline, a debug build gives each exchange's temporaries a
+/// stack slot of their own, about 25 KiB each, and a test of 45 outgrew a
+/// 1 MiB stack.
+pub(super) fn boxed<'a, F: Future<Output = ()> + 'a>(
+    make: impl FnOnce() -> F,
+) -> std::pin::Pin<Box<dyn Future<Output = ()> + 'a>> {
+    Box::pin(make())
+}
+
 /// Pin one exchange: `$call` with the wire's client as `$c`, answered with
-/// `$answer` (or unconfirmed), against the pin named `$case`.
+/// `$answer` (or unconfirmed), against the pin named `$case`. Each one is a
+/// future of its own ([`boxed`]).
 macro_rules! pin {
-    ($case:expr, $answer:expr, |$c:ident| $call:expr) => {{
-        let wire = $crate::client::typed_wire_tests::wire().await;
-        let $c = &wire.client;
-        $crate::client::typed_wire_tests::check($case, wire.confirmed($call, $answer).await);
-    }};
-    ($case:expr, |$c:ident| $call:expr) => {{
-        let wire = $crate::client::typed_wire_tests::wire().await;
-        let $c = &wire.client;
-        $crate::client::typed_wire_tests::check($case, wire.unconfirmed($call).await);
-    }};
+    ($case:expr, $answer:expr, |$c:ident| $call:expr) => {
+        $crate::client::typed_wire_tests::boxed(|| async {
+            let wire = $crate::client::typed_wire_tests::wire().await;
+            let $c = &wire.client;
+            $crate::client::typed_wire_tests::check($case, wire.confirmed($call, $answer).await);
+        })
+        .await
+    };
+    ($case:expr, |$c:ident| $call:expr) => {
+        $crate::client::typed_wire_tests::boxed(|| async {
+            let wire = $crate::client::typed_wire_tests::wire().await;
+            let $c = &wire.client;
+            $crate::client::typed_wire_tests::check($case, wire.unconfirmed($call).await);
+        })
+        .await
+    };
 }
 pub(super) use pin;
