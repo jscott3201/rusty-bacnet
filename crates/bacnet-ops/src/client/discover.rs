@@ -6,13 +6,11 @@
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, DeviceEvent, DiscoveredRouter};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEvent, DiscoveredRouter};
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
+use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::UnconfirmedServiceChoice;
 use bacnet_types::error::Error;
-use bytes::BytesMut;
 
 use super::Client;
 use crate::device::DeviceAddress;
@@ -201,13 +199,11 @@ impl Scope {
     /// answer to it, as for a Who-Has (`Scope::answered_by`, #2596).
     pub(crate) fn covers(&self, address: &DeviceAddress, own: Option<u16>) -> bool {
         let address = address.clone().localized(own);
+        let network = (!address.is_local()).then(|| address.network());
         match self {
-            Self::Global => true,
-            Self::Local => address.is_local(),
-            Self::Network(network) => match address.is_local() {
-                true => own == Some(*network),
-                false => address.network() == *network,
-            },
+            Self::Local => Broadcast::Local.answered_from(network, own),
+            Self::Network(n) => Broadcast::Network(*n).answered_from(network, own),
+            Self::Global => Broadcast::Global.answered_from(network, own),
             Self::Directed(station) => address == station.clone().localized(own),
         }
     }
@@ -220,18 +216,14 @@ impl Scope {
         range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
         match (self, station) {
-            (Self::Local, _) => {
-                let mut buf = BytesMut::new();
-                WhoIsRequest { range }.encode(&mut buf);
-                client
-                    .broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
-                    .await
-                    .map_err(|error| to_local_broadcast(client, error))
-            }
-            (Self::Network(network), _) => client.who_is_network(*network, range).await,
+            (Self::Local, _) => client
+                .who_is(Broadcast::Local, range)
+                .await
+                .map_err(|error| to_local_broadcast(client, error)),
+            (Self::Network(network), _) => client.who_is(Broadcast::Network(*network), range).await,
             (Self::Directed(_), Some(mac)) => client.who_is_directed(mac, range).await,
             (Self::Directed(_), None) => unreachable!("a directed Who-Is has its station"),
-            (Self::Global, _) => client.who_is(range).await,
+            (Self::Global, _) => client.who_is(Broadcast::Global, range).await,
         }
     }
 }

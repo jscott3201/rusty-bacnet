@@ -8,7 +8,7 @@ use std::ops::RangeInclusive;
 use std::process;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Station};
+use bacnet_client::client::{BACnetClient, Broadcast, Station};
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_services::rpm::ReadResultElement;
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
@@ -670,7 +670,7 @@ async fn main() {
             eprintln!("ERROR: local Who-Is failed: {e}");
             process::exit(1);
         }
-        if let Err(e) = client.who_is(Some(range)).await {
+        if let Err(e) = client.who_is(Broadcast::Global, Some(range)).await {
             eprintln!("ERROR: global Who-Is failed: {e}");
             process::exit(1);
         }

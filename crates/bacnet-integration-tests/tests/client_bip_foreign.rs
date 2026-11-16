@@ -2,7 +2,7 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, DeviceEventKind};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEventKind};
 use bacnet_encoding::{
     apdu::{Apdu, UnconfirmedRequest, decode_apdu, encode_apdu},
     npdu::{Npdu, decode_npdu, encode_npdu},
@@ -114,7 +114,7 @@ async fn bip_foreign_builder_discovers_device_through_bbmd_after_observed_regist
     assert_eq!(snapshot.read_fdt.acknowledgements, 1);
 
     let mut discovered = client.device_events();
-    client.who_is(None).await.unwrap();
+    client.who_is(Broadcast::Global, None).await.unwrap();
     // The client's first Who-Is goes after the What-Is-Network-Number it
     // asks on that first need (#2572): the BBMD and, forwarded, its BDT peer
     // take the question first.

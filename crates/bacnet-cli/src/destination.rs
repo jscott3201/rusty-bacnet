@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, DeviceEventKind};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -238,7 +238,10 @@ async fn find_routed<T: TransportPort + 'static>(
         }
         Station::Mac(_) => None,
     };
-    client.who_is_network(dnet, range).await.map_err(text)?;
+    client
+        .who_is(Broadcast::Network(dnet), range)
+        .await
+        .map_err(text)?;
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {

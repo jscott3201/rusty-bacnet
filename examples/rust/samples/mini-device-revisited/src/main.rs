@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use socket2::{Domain, Protocol, Socket, Type};
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
@@ -467,7 +467,7 @@ async fn discovery_self_check(
         Err(e) => warn!("unicast self-check failed: {e}"),
     }
 
-    if let Err(e) = client.who_is(None).await {
+    if let Err(e) = client.who_is(Broadcast::Global, None).await {
         warn!("Who-Is self-check failed: {e}");
         let _ = client.stop().await;
         return;

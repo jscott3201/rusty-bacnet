@@ -24,7 +24,8 @@ from rusty_bacnet import (
 # The calls that take a RoutedTarget where they take an address (#2617, #2588).
 ROUTED_CALLS = ("read_property", "read_property_multiple", "read_range", "read_log_page",
                 "write_property", "atomic_read_file", "atomic_write_file",
-                "subscribe_cov", "unsubscribe_cov")
+                "subscribe_cov", "unsubscribe_cov", "subscribe_cov_property",
+                "unsubscribe_cov_property", "subscribe_cov_property_multiple")
 
 
 def installed_stub() -> ast.Module:

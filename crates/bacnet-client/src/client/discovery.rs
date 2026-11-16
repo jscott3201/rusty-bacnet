@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 
@@ -50,7 +51,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     // Discovery
     // -----------------------------------------------------------------------
 
-    /// Send a WhoIs broadcast to discover devices.
+    /// Send a Who-Is to `scope` to discover devices: [`Broadcast::Global`]
+    /// reaches devices behind routers too, [`Broadcast::Local`] this
+    /// network alone, [`Broadcast::Network`] one remote network.
     ///
     /// `range` limits the devices that answer to those whose instance lies
     /// in it; `None` asks every device. A [`DeviceInstanceRange`] holds both
@@ -62,12 +65,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// number (#2572): the answer lets a device a router relays back from
     /// this network be one device. A question that fails to send doesn't
     /// hold the Who-Is back.
-    pub async fn who_is(&self, range: Option<DeviceInstanceRange>) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        WhoIsRequest { range }.encode(&mut buf);
-
-        self.broadcast_global_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
-            .await
+    pub async fn who_is(
+        &self,
+        scope: Broadcast,
+        range: Option<DeviceInstanceRange>,
+    ) -> Result<(), Error> {
+        self.tell_all(scope, WhoIsRequest { range }).await
     }
 
     /// Send a directed (unicast) WhoIs to the station `to`, with the same
@@ -80,34 +83,52 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.tell(to, WhoIsRequest { range }).await
     }
 
-    /// Send a WhoIs broadcast to a specific remote network, with the same
-    /// `range` as [`Self::who_is`].
-    pub async fn who_is_network(
-        &self,
-        dest_network: u16,
-        range: Option<DeviceInstanceRange>,
-    ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        WhoIsRequest { range }.encode(&mut buf);
-
-        self.broadcast_network_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf, dest_network)
-            .await
-    }
-
-    /// Send a WhoHas as a global broadcast, as [`Self::who_is`] does, so that
-    /// devices behind routers hear it too, to find an object by identifier
-    /// or name, asking the devices in `range`, or every device for `None`
-    /// (Clause 16.9, #1483).
+    /// Send a Who-Has to `scope` to find an object by identifier or name,
+    /// asking the devices in `range`, or every device for `None` (Clause
+    /// 16.9, #1483). [`Broadcast::Global`] reaches devices behind routers
+    /// too.
     pub async fn who_has(
         &self,
+        scope: Broadcast,
         object: WhoHasObject,
         range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        WhoHasRequest { range, object }.encode(&mut buf)?;
+        self.tell_all(scope, WhoHasRequest { range, object }).await
+    }
 
-        self.broadcast_global_unconfirmed(UnconfirmedServiceChoice::WHO_HAS, &buf)
-            .await
+    /// Send a Who-Has to the station `to` alone, as [`Self::who_has`]
+    /// does to a scope.
+    pub async fn who_has_directed(
+        &self,
+        to: &(impl ToStation + ?Sized),
+        object: WhoHasObject,
+        range: Option<DeviceInstanceRange>,
+    ) -> Result<(), Error> {
+        self.tell(to, WhoHasRequest { range, object }).await
+    }
+
+    /// Send a Who-Am-I to `scope` (Clause 16.11): this device asks to be
+    /// given an identity, naming itself by the vendor, model name and
+    /// serial number in `request`, which should be its Device object's.
+    /// A model name or serial number that can't be encoded fails before
+    /// anything is sent.
+    ///
+    /// Each call sends one; pacing repeats is the caller's. The standard
+    /// lets a device send a Who-Am-I at any time but not repeat it more
+    /// often than once in five minutes, unless it answers a Who-Is or an
+    /// operator asks for it (Clause 16.11.2).
+    pub async fn who_am_i(&self, scope: Broadcast, request: &WhoAmIRequest) -> Result<(), Error> {
+        self.tell_all(scope, request).await
+    }
+
+    /// Send a Who-Am-I to the station `to` alone, as [`Self::who_am_i`]
+    /// does to a scope: to answer a Who-Is from it, say.
+    pub async fn who_am_i_directed(
+        &self,
+        to: &(impl ToStation + ?Sized),
+        request: &WhoAmIRequest,
+    ) -> Result<(), Error> {
+        self.tell(to, request).await
     }
 
     /// Get a snapshot of all discovered devices, one per address, ordered by

@@ -101,13 +101,13 @@ async fn a_client_started_before_the_number_is_known_asks_once_and_takes_the_own
         // Nothing asks before the first need. The first Who-Is asks once,
         // and the session's owner asks nothing of its own.
         assert_eq!(sent(&lab, NetworkMessageType::WHAT_IS_NETWORK_NUMBER), 0);
-        client.who_is(None).await.unwrap();
+        client.who_is(Broadcast::Global, None).await.unwrap();
         assert_eq!(sent(&lab, NetworkMessageType::WHAT_IS_NETWORK_NUMBER), 1);
         // Nothing on this link answers the question, as on a site with no
         // router that knows its number. The Who-Is went anyway, and later
         // ones neither wait nor ask again.
         tokio::time::sleep(Duration::from_secs(60)).await;
-        client.who_is(None).await.unwrap();
+        client.who_is(Broadcast::Global, None).await.unwrap();
         client
             .who_is_directed(&Wire::mac(PEER), None)
             .await
@@ -154,7 +154,7 @@ async fn a_client_started_after_the_number_is_known_asks_nothing() {
 
         let client = lab.session.full_client().unwrap();
         assert_eq!(client.network_number(), Some(NETWORK));
-        client.who_is(None).await.unwrap();
+        client.who_is(Broadcast::Global, None).await.unwrap();
         // A relayed device from this network is local from its first I-Am.
         relay_an_i_am(&lab);
         assert_eq!(relayed_row(&client).await.source_network, None);
@@ -172,7 +172,7 @@ async fn a_client_started_after_the_number_is_known_asks_nothing() {
 async fn on_a_link_with_no_number_controls_nothing_is_asked_or_answered() {
     let lab = lab_with(SessionRole::Both, false).await;
     let client = lab.session.full_client().unwrap();
-    client.who_is(None).await.unwrap();
+    client.who_is(Broadcast::Global, None).await.unwrap();
     ask_the_number(&lab);
     announce_the_number(&lab);
     tokio::time::sleep(Duration::from_secs(60)).await;

@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Station};
+use bacnet_client::client::{BACnetClient, Broadcast, Station};
 use bacnet_network::router::{
     BACnetRouter, RouterApplicationPort, RouterApplicationPorts, RouterOptions, RouterPort,
 };
@@ -269,7 +269,7 @@ async fn each_client_reads_the_other_sides_server() {
 #[tokio::test(start_paused = true)]
 async fn a_segmented_reply_each_way() {
     let mut site = site().await;
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     found(&site.client, REMOTE).await;
     while site.to_station.try_recv().is_ok() {}
     let ack = site
@@ -315,12 +315,15 @@ async fn a_segmented_reply_each_way() {
 #[tokio::test(start_paused = true)]
 async fn who_is_finds_servers_on_both_sides() {
     let site = site().await;
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     let remote = found(&site.client, REMOTE).await;
     assert_eq!(remote.source_network, Some(2));
     assert_eq!(remote.source_address.as_deref(), Some(&[STATION][..]));
 
-    site.remote_client.who_is(None).await.unwrap();
+    site.remote_client
+        .who_is(Broadcast::Global, None)
+        .await
+        .unwrap();
     let hosted = found(&site.remote_client, HOSTED).await;
     assert_eq!(hosted.mac_address.as_slice(), [ROUTER_ON_1]);
     assert_eq!(hosted.source_network, None, "the router's own, not routed");
@@ -356,7 +359,7 @@ async fn confirmed_notifications_are_acknowledged_to_their_sender() {
         .unwrap();
     // The router's client hears the remote server's notification, a
     // Confirmed-Request, and answers it through the saved plan.
-    site.client.who_is(None).await.unwrap();
+    site.client.who_is(Broadcast::Global, None).await.unwrap();
     found(&site.client, REMOTE).await;
     let mut routed = site.client.cov_notifications();
     site.client

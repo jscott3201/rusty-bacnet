@@ -8,7 +8,7 @@ use std::net::Ipv4Addr;
 use std::process;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_types::enums::UnconfirmedServiceChoice;
@@ -182,7 +182,7 @@ async fn main() {
     }
 
     eprintln!("Sending global Who-Is (DNET=0xFFFF)...");
-    if let Err(e) = client.who_is(range).await {
+    if let Err(e) = client.who_is(Broadcast::Global, range).await {
         eprintln!("ERROR: global Who-Is failed: {e}");
         process::exit(1);
     }

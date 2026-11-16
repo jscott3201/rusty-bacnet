@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use crate::destination;
+use bacnet_client::client::Broadcast;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::mstp::{LoopbackSerial, MstpTransport};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -630,7 +631,7 @@ async fn the_cli_client_discovers_and_reads_a_server_on_the_trunk() {
     let deadline = Duration::from_secs(30);
     let device = tokio::time::timeout(deadline, async {
         loop {
-            client.who_is(None).await.unwrap();
+            client.who_is(Broadcast::Global, None).await.unwrap();
             for _ in 0..20 {
                 if let Some(device) = client.get_device(SERVER_INSTANCE).await.unwrap() {
                     return device;

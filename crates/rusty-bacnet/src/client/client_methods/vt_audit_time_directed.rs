@@ -29,13 +29,7 @@ impl BACnetClient {
                 vt_class: vt_class.to_rust(),
                 local_vt_session_identifier,
             };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
-            let resp = c
-                .confirmed_request(&mac, ConfirmedServiceChoice::VT_OPEN, &buf)
-                .await
-                .map_err(to_py_err)?;
-            let ack = VTOpenAck::decode(&resp).map_err(to_py_err)?;
+            let ack = c.vt_open(&mac, &req).await.map_err(to_py_err)?;
             Ok(ack.remote_vt_session_identifier)
         })
     }
@@ -55,8 +49,7 @@ impl BACnetClient {
         let req = VTCloseRequest {
             list_of_remote_vt_session_identifiers: session_ids,
         };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf)
+        req.validate()
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
         let inner = self.inner.clone();
@@ -64,9 +57,7 @@ impl BACnetClient {
         let future = async move {
             let mac = peers.parse(&address)?;
             let c = started(&inner).await?;
-            c.confirmed_request(&mac, ConfirmedServiceChoice::VT_CLOSE, &buf)
-                .await
-                .map_err(to_py_err)?;
+            c.vt_close(&mac, &req).await.map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -99,13 +90,7 @@ impl BACnetClient {
                 vt_new_data: data,
                 vt_data_flag: data_flag,
             };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
-            let resp = c
-                .confirmed_request(&mac, ConfirmedServiceChoice::VT_DATA, &buf)
-                .await
-                .map_err(to_py_err)?;
-            let ack = VTDataAck::decode(&resp).map_err(to_py_err)?;
+            let ack = c.vt_data(&mac, &req).await.map_err(to_py_err)?;
             crate::py_async::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("all_new_data_accepted", ack.all_new_data_accepted())?;

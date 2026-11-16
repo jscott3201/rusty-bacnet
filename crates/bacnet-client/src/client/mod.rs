@@ -911,6 +911,7 @@ mod event_notifications;
 mod file_list;
 mod i_have;
 mod lifecycle;
+mod messages;
 mod network_reports;
 mod object_mgmt;
 pub(crate) mod pacing;
@@ -965,7 +966,7 @@ pub use routing_table::{
     DEFAULT_ROUTING_TABLE_MAX_ENTRIES, RoutingTable, RoutingTableError, RoutingTableWait,
 };
 use station::ConfirmedTarget;
-pub use station::{Station, ToStation};
+pub use station::{Broadcast, Station, ToStation};
 pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]

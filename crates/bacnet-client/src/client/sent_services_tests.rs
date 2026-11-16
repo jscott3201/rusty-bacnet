@@ -19,9 +19,17 @@ use bacnet_services::audit::{
     BACnetAuditNotification,
 };
 use bacnet_services::common::BACnetPropertyValue;
+use bacnet_services::cov_multiple::{
+    COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+};
 use bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest;
 use bacnet_services::file::{FileAccessMethod, FileWriteAccessMethod};
+use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_services::object_mgmt::ObjectSpecifier;
+use bacnet_services::private_transfer::PrivateTransferRequest;
+use bacnet_services::text_message::TextMessageRequest;
+use bacnet_services::virtual_terminal::{VTCloseRequest, VTDataRequest, VTOpenRequest};
+use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::who_has::WhoHasObject;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
@@ -29,7 +37,8 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::constructed::{BACnetRecipient, PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{
     AcknowledgmentFilter, AuditOperation, BACnetSuccessFilter, EnableDisable, ErrorClass,
-    ErrorCode, EventState, ObjectType, PropertyIdentifier, ReinitializedState, ServiceSupported,
+    ErrorCode, EventState, LifeSafetyOperation, MessagePriority, ObjectType, PropertyIdentifier,
+    ReinitializedState, ServiceSupported, VTClass,
 };
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 
@@ -158,9 +167,39 @@ async fn send_everything(client: &BACnetClient<LoopbackTransport>) {
         .utc_time_synchronization(&PEER, date, time)
         .await
         .unwrap();
-    client.who_is(None).await.unwrap();
+    client.who_is(Broadcast::Global, None).await.unwrap();
     client
-        .who_has(WhoHasObject::Identifier(ai), None)
+        .who_has(Broadcast::Global, WhoHasObject::Identifier(ai), None)
+        .await
+        .unwrap();
+    client
+        .who_am_i(
+            Broadcast::Local,
+            &WhoAmIRequest {
+                vendor_id: 555,
+                model_name: "model".into(),
+                serial_number: "1".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let transfer = PrivateTransferRequest {
+        vendor_id: 555,
+        service_number: 1,
+        service_parameters: None,
+    };
+    client
+        .unconfirmed_private_transfer(&PEER, &transfer)
+        .await
+        .unwrap();
+    let message = TextMessageRequest {
+        source_device: oid(ObjectType::DEVICE, 1),
+        message_class: None,
+        message_priority: MessagePriority::NORMAL,
+        message: "hello".into(),
+    };
+    client
+        .unconfirmed_text_message(&PEER, &message)
         .await
         .unwrap();
     client
@@ -313,6 +352,68 @@ async fn send_everything(client: &BACnetClient<LoopbackTransport>) {
                 },
                 start_at_sequence_number: None,
                 requested_count: 1,
+            },
+        )
+        .await;
+    let _ = client.confirmed_private_transfer(&PEER, &transfer).await;
+    let _ = client.confirmed_text_message(&PEER, &message).await;
+    let _ = client
+        .life_safety_operation(
+            &PEER,
+            &LifeSafetyOperationRequest {
+                requesting_process_identifier: 1,
+                requesting_source: "operator".into(),
+                request: LifeSafetyOperation::RESET,
+                object_identifier: None,
+            },
+        )
+        .await;
+    let _ = client
+        .vt_open(
+            &PEER,
+            &VTOpenRequest {
+                vt_class: VTClass::DEFAULT_TERMINAL,
+                local_vt_session_identifier: 1,
+            },
+        )
+        .await;
+    let _ = client
+        .vt_close(
+            &PEER,
+            &VTCloseRequest {
+                list_of_remote_vt_session_identifiers: vec![1],
+            },
+        )
+        .await;
+    let _ = client
+        .vt_data(
+            &PEER,
+            &VTDataRequest {
+                vt_session_identifier: 1,
+                vt_new_data: vec![b'x'],
+                vt_data_flag: false,
+            },
+        )
+        .await;
+    let _ = client
+        .subscribe_cov_property_multiple(
+            &PEER,
+            &SubscribeCOVPropertyMultipleRequest {
+                subscriber_process_identifier: 1,
+                issue_confirmed_notifications: false,
+                lifetime: Some(60),
+                max_notification_delay: Some(1),
+                list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+                    monitored_object_identifier: ai,
+                    list_of_cov_references: vec![COVReference {
+                        monitored_property: PropertyReference {
+                            property_identifier: pv,
+                            property_array_index: None,
+                        },
+                        cov_increment: None,
+                        timestamped: false,
+                    }],
+                }],
             },
         )
         .await;

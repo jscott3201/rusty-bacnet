@@ -661,8 +661,8 @@ parsing, the value formatter).
 - **Generics.** The worker is generic over `T: TransportPort` and instantiated
   per transport, as the one-shot commands are. `App` and the views are not
   generic, so monomorphization stays in the worker layer.
-- **APIs used by M0:** `who_is`, `who_is_directed`, `who_is_network` and
-  `broadcast_unconfirmed` (for a local-only Who-Is), `device_events()`,
+- **APIs used by M0:** `who_is` (to a `Broadcast` scope) and
+  `who_is_directed`, `device_events()`,
   `device_collision_events()` and `discovered_devices()`.
 - **APIs later screens will use:** RP and RPM, WP and WPM (local and routed);
   `subscribe_cov`, `manage_cov_subscription` and `cov_notifications()`; the BBMD
