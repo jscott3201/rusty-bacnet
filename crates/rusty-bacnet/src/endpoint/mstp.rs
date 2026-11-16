@@ -5,8 +5,8 @@
 
 use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
-use bacnet_endpoint::session::{EndpointSession, SessionRole};
-use bacnet_transport::mstp::{Echo, MstpConfig, MstpTransport, SerialPort};
+use bacnet_endpoint::session::SessionRole;
+use bacnet_transport::mstp::{Echo, MstpConfig, SerialPort};
 use bacnet_transport::mstp_serial::{SerialConfig, TokioSerialPort};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -17,7 +17,8 @@ use crate::endpoint::common::{
     parse_device_uuid, parse_read_work_limit, parse_segmentation, parse_services, pending_group,
 };
 use crate::endpoint::lifecycle::Lifecycle;
-use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
+use crate::endpoint::roles::PyEndpointServer;
+use crate::endpoint::running::Running;
 use crate::errors::to_py_err;
 use crate::mstp_py::MstpTiming;
 use crate::types::{PyReadAccessSpec, PySegmentation};
@@ -107,7 +108,6 @@ mod options_tests;
 type EndpointSerial = lifecycle_tests::TestSerial;
 #[cfg(not(test))]
 type EndpointSerial = TokioSerialPort;
-type MstpSession = EndpointSession<MstpTransport<EndpointSerial>>;
 
 impl MstpEndpointConfig {
     /// The link configuration the keywords describe, as the builder will
@@ -144,7 +144,7 @@ impl MstpEndpointConfig {
         Ok(serial.with_echo(self.echo))
     }
 
-    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<MstpSession> {
+    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<Running> {
         let config = self;
         let serial = config.open_serial()?;
         let boxes = build_pending_boxes(&objects)?;
@@ -163,13 +163,21 @@ impl MstpEndpointConfig {
         if let Some(cov) = config.cov.clone() {
             builder = builder.cov(cov);
         }
-        let session = builder.build_session().map_err(to_py_err)?;
+        // The serial port is boxed into the link a standalone MS/TP client
+        // has, so the session's full client is a Python `BACnetClient`'s.
+        let session = builder
+            .build_session_wrapped(|transport| {
+                crate::app_transport::AppTransport::from(bacnet_transport::any::AnyTransport::from(
+                    transport,
+                ))
+            })
+            .map_err(to_py_err)?;
         let session = match &config.source_audit {
             Some(source) => source.select(session),
             None => session,
         };
         let session = config.device_writes.install(session);
-        Ok(config.reinitialize.install(session))
+        Ok(Running::new(config.reinitialize.install(session)))
     }
 }
 
@@ -182,7 +190,7 @@ impl MstpEndpointConfig {
 /// Lifecycle mirrors `BipEndpoint`. BIPv6/Ethernet have no endpoint owner.
 #[pyclass(name = "MstpEndpoint", module = "rusty_bacnet")]
 pub struct PyMstpEndpoint {
-    lifecycle: Lifecycle<MstpSession, PendingObject>,
+    lifecycle: Lifecycle<Running, PendingObject>,
     config: MstpEndpointConfig,
 }
 
@@ -506,25 +514,19 @@ impl PyMstpEndpoint {
         self.close(py)
     }
 
-    /// Clone the client role.
+    /// The `BACnetClient` on this endpoint's serial link (#2617), as
+    /// `BipEndpoint.client()` gives one: the same object while it runs, a
+    /// fresh one once its `stop()` has finished, NotImplementedError with
+    /// `source_audit_reporter`. Its requests wait for this node's token as
+    /// the server role's answers do.
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.lifecycle.session.clone();
-        crate::py_async::future_into_py(py, async move {
-            let handle = {
-                let guard = inner.lock().await;
-                let session = guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "endpoint not started — use 'async with' or await start()",
-                    )
-                })?;
-                session.cloned_client_handle().ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "endpoint not started — use 'async with' or await start()",
-                    )
-                })?
-            };
-            Ok(PyEndpointClient::new(handle))
-        })
+        let client = super::running::client(
+            py,
+            self.lifecycle.session.clone(),
+            "mstp",
+            self.config.source_audit.is_some(),
+        )?;
+        crate::py_async::future_into_py(py, client)
     }
 
     /// Clone the server role.
@@ -575,7 +577,7 @@ impl PyMstpEndpoint {
                 let counters = session.policy_counters().await;
                 let leases = session.active_leases();
                 let running = session.is_running();
-                (counters, leases, running)
+                (counters, leases, running, session.seat_counts())
             };
             crate::py_async::attach(|py| {
                 let dict = PyDict::new(py);
@@ -595,6 +597,7 @@ impl PyMstpEndpoint {
                 dict.set_item("confirmed_full_drops", snapshot.0.confirmed_full_drops)?;
                 dict.set_item("answer_full_drops", snapshot.0.answer_full_drops)?;
                 dict.set_item("policy_full_drops", snapshot.0.policy_full_drops)?;
+                snapshot.3.add_to(&dict)?;
                 Ok(dict.into_any().unbind())
             })
         })

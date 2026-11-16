@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::sc::ScEndpointBuilder;
-use bacnet_endpoint::session::{EndpointSession, SessionRole};
+use bacnet_endpoint::session::SessionRole;
 use bacnet_transport::sc::{ScHubDialer, ScLinkMonitor, ScReconnectConfig};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -21,13 +21,11 @@ use crate::endpoint::common::{
     with_sc_port,
 };
 use crate::endpoint::lifecycle::Lifecycle;
-use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
+use crate::endpoint::roles::PyEndpointServer;
+use crate::endpoint::running::Running;
 use crate::errors::to_py_err;
 use crate::sc_events::{FirstScEvents, PyScEventIterator, PyScLinkStatus};
 use crate::types::{PyReadAccessSpec, PySegmentation};
-
-type ScSession =
-    EndpointSession<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>;
 
 /// Owned, validated SC endpoint startup configuration (no I/O here).
 #[derive(Clone)]
@@ -66,7 +64,7 @@ impl ScEndpointConfig {
         self,
         objects: Vec<PendingObject>,
         first_events: Arc<FirstScEvents>,
-    ) -> PyResult<ScSession> {
+    ) -> PyResult<Running> {
         let config = self;
         let tls_config = crate::tls::build_client_tls_config(
             Some(config.ca_cert.as_str()),
@@ -100,9 +98,11 @@ impl ScEndpointConfig {
         if let Some(cov) = config.cov.clone() {
             builder = builder.cov(cov);
         }
-        let session = Box::pin(builder.connect_hub_session(hubs))
-            .await
-            .map_err(to_py_err)?;
+        let session = Box::pin(
+            builder.connect_hub_session_wrapped(hubs, crate::app_transport::AppTransport::from),
+        )
+        .await
+        .map_err(to_py_err)?;
         // Subscribed before the lifecycle starts the session, so the first
         // connection_events() call sees the first connected (#1908).
         if let Some(link) = session.sc_link() {
@@ -113,7 +113,7 @@ impl ScEndpointConfig {
             None => session,
         };
         let session = config.device_writes.install(session);
-        Ok(config.reinitialize.install(session))
+        Ok(Running::new(config.reinitialize.install(session)))
     }
 }
 
@@ -127,7 +127,7 @@ impl ScEndpointConfig {
 /// manager). BIPv6/Ethernet have no endpoint owner.
 #[pyclass(name = "ScEndpoint", module = "rusty_bacnet")]
 pub struct PyScEndpoint {
-    lifecycle: Lifecycle<ScSession, PendingObject>,
+    lifecycle: Lifecycle<Running, PendingObject>,
     config: ScEndpointConfig,
     /// Each start's receiver for the first `connection_events()` call; the
     /// next start replaces one nobody took.
@@ -135,12 +135,12 @@ pub struct PyScEndpoint {
 }
 
 /// The started session's hub link; RuntimeError before start or after close.
-async fn sc_link(session: &tokio::sync::Mutex<Option<ScSession>>) -> PyResult<ScLinkMonitor> {
+async fn sc_link(session: &tokio::sync::Mutex<Option<Running>>) -> PyResult<ScLinkMonitor> {
     session
         .lock()
         .await
         .as_ref()
-        .and_then(EndpointSession::sc_link)
+        .and_then(|session| session.sc_link())
         .ok_or_else(|| {
             PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
         })
@@ -486,25 +486,22 @@ impl PyScEndpoint {
         self.close(py)
     }
 
-    /// Clone the client role.
+    /// The `BACnetClient` on this endpoint's hub connection (#2617), as
+    /// `BipEndpoint.client()` gives one: the same object while it runs, a
+    /// fresh one once its `stop()` has finished, NotImplementedError with
+    /// `source_audit_reporter`. It starts after the hub link is up, so its
+    /// `connection_events()` begins at that call, after the first
+    /// `connected`: read the link's state now with its
+    /// `connection_status()`, or this endpoint's `connection_events()`,
+    /// whose first call holds the events from the start.
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.lifecycle.session.clone();
-        crate::py_async::future_into_py(py, async move {
-            let handle = {
-                let guard = inner.lock().await;
-                let session = guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "endpoint not started — use 'async with' or await start()",
-                    )
-                })?;
-                session.cloned_client_handle().ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "endpoint not started — use 'async with' or await start()",
-                    )
-                })?
-            };
-            Ok(PyEndpointClient::new(handle))
-        })
+        let client = super::running::client(
+            py,
+            self.lifecycle.session.clone(),
+            "sc",
+            self.config.source_audit.is_some(),
+        )?;
+        crate::py_async::future_into_py(py, client)
     }
 
     /// Clone the server role.
@@ -555,7 +552,7 @@ impl PyScEndpoint {
                 let counters = session.policy_counters().await;
                 let leases = session.active_leases();
                 let running = session.is_running();
-                (counters, leases, running)
+                (counters, leases, running, session.seat_counts())
             };
             crate::py_async::attach(|py| {
                 let dict = PyDict::new(py);
@@ -583,6 +580,7 @@ impl PyScEndpoint {
                 dict.set_item("confirmed_full_drops", snapshot.0.confirmed_full_drops)?;
                 dict.set_item("answer_full_drops", snapshot.0.answer_full_drops)?;
                 dict.set_item("policy_full_drops", snapshot.0.policy_full_drops)?;
+                snapshot.3.add_to(&dict)?;
                 Ok(dict.into_any().unbind())
             })
         })

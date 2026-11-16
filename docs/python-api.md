@@ -1015,9 +1015,8 @@ and `priority_for_writing=17` raises `BacnetProtocolError`.
 
 Every read that returns a `PropertyValue` decodes the value's octets by one
 rule: `BACnetClient.read_property` and `read_property_multiple` (and their
-`_from_device` and batch forms), `EndpointClient.read_property` and
-`read_property_multiple`, `CovNotification.values`, and
-`BACnetServer.read_property`. Every element of the value is kept, and only
+`_from_device` and batch forms, and on an endpoint's client),
+`CovNotification.values`, and `BACnetServer.read_property`. Every element of the value is kept, and only
 broken framing (a length past the end, an unmatched opening or closing tag)
 is an error.
 
@@ -1227,7 +1226,7 @@ rejected before per-value conversion. An indexed read of a single reference
 does not acquire a typed form. Trend Log Multiple remains a collection, including
 empty and one-element reads.
 
-Tags reads use the same form through client RP/RPM, endpoint client roles,
+Tags reads use the same form through client RP/RPM, an endpoint's client,
 batch reads and the shared local-read decoder. A whole read is a `list` of
 name/value mappings; an indexed element is a `name_value`, and index zero is
 an `unsigned` count. A semantic tag's value is `None`; a valued NULL carries
@@ -1450,7 +1449,7 @@ other clients. Requests to different destinations don't wait on each other;
 `ValueError`. Behind a router the pause after a reply holds for requests made
 one after another only. `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take the
 same keyword-only `min_request_interval_ms`, validated the same way, and pace
-their `EndpointClient`'s confirmed requests with the same pacer (#1542). On
+the confirmed requests of the client they hand out with the same pacer (#1542). On
 both, only new confirmed requests wait: a retry keeps its request's turn, and
 replies, notifications and unconfirmed requests go at once.
 
@@ -2180,7 +2179,7 @@ where a node is, not which VMAC it has. Find the VMAC with
 
 #### `read_property(address, object_id, property_id, array_index=None) -> PropertyValue`
 
-Standalone and endpoint clients validate the ACK's object, property and array
+Clients, an endpoint's included, validate the ACK's object, property and array
 index. Device or Network Port instance `4194303` requests accept a concrete
 same-type identifier reported by the peer; unresolved wildcard and mismatched
 ACKs raise `BacnetError`. The return value is the decoded property value,
@@ -2955,8 +2954,9 @@ for s in summaries:
 
 #### `read_range(address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None, *, reference_time=None, validation="strict") -> dict`
 
-Read a range of items from a list or log object. This method is shared by
-`BACnetClient` and `EndpointClient`. Python supports all-items (`range_type=None`),
+Read a range of items from a list or log object, on any `BACnetClient`, an
+endpoint's included; `address` is a `str` or a `RoutedTarget` (see
+[Routed targets](#routed-targets)). Python supports all-items (`range_type=None`),
 position, sequence and time forms. Invalid selectors,
 array index zero and omitted or zero counts for a selected range raise
 `ValueError` before address parsing or I/O. A count outside INTEGER16
@@ -3079,8 +3079,8 @@ and offset.
 
 #### `read_log_page(address, object_id, cursor=None, page_size=100) -> dict`
 
-Reads one page of a log's Log_Buffer (#1530), on `BACnetClient` and
-`EndpointClient`. `cursor` is `None` or `"oldest"` (the oldest record, from
+Reads one page of a log's Log_Buffer (#1530), on any `BACnetClient`, an
+endpoint's included, from a `str` address or a `RoutedTarget`. `cursor` is `None` or `"oldest"` (the oldest record, from
 Record_Count and Total_Record_Count), `("sequence", n)`, `("position", n)` or
 `("time", reference_time)`. The page is a dict: `"records"` (as
 `decode_log_records` gives them), `"first_sequence_number"`, `"result_flags"`,
@@ -6936,9 +6936,10 @@ they contain; this API does not apply the CLI capture's password masking.
 ## Endpoint (one transport, both roles)
 
 `BipEndpoint`, `ScEndpoint`, and `MstpEndpoint` own one transport above both
-sibling roles. Each exposes `await endpoint.client()` (`EndpointClient`) and
-`await endpoint.server()` (`EndpointServer`); roles hold no lifecycle and fail
-closed with `BacnetError` after the owner closes. Builder-time config only:
+roles. `await endpoint.client()` is a `BACnetClient` on that transport, and
+`await endpoint.server()` the `EndpointServer` handle, which holds no
+lifecycle and fails closed with `BacnetError` after the owner closes (see
+[The endpoint's client](#the-endpoints-client)). Builder-time config only:
 `DeviceIdentity` (instance/vendor/APDU/segmentation/services/ports/UUID) is
 validated in the constructor; there is no post-start owner mutation. A
 `device_instance` of 4194303, which no object may have, or anything larger
@@ -6966,9 +6967,9 @@ object: a tracked object's Value_Source reads null.
 
 `await endpoint.status()` returns a redacted snapshot (`is_running`,
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
-`active_leases`, plus policy counters). A full queue never ends the
-endpoint (#2635): what it has no room for is dropped, counted by class in
-`unconfirmed_full_drops` (unconfirmed requests such as the I-Ams a global
+`active_leases`, plus policy counters and the client seat's counts). A full
+queue never ends the endpoint (#2635): what it has no room for is dropped,
+counted by class in `unconfirmed_full_drops` (unconfirmed requests such as the I-Ams a global
 Who-Is brings, past their share of the request queue, which keeps a quarter
 for confirmed requests), `confirmed_full_drops` (confirmed requests left
 unanswered, which their requesters send again after their APDU timeout),
@@ -6985,18 +6986,70 @@ dropped request: where bursts are expected, raise `queue_capacity` and
 (see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)), and
 reads a BBMD's tables with `read_bdt()` and `read_fdt()` (see
 [Endpoint BBMD table reads](#endpoint-bbmd-table-reads)). `local_address()` is `"ip:port"`
-(BIP), VMAC hex (SC), or station string (MS/TP). Roles expose no callbacks;
-the client initiates `read_property`, `read_property_multiple`, `read_range`,
-`read_log_page`, each to a station on the local link or behind a router (see
-[Endpoint routed reads](#endpoint-routed-reads)), and `write_property` (see
-[Endpoint direct WriteProperty](#endpoint-direct-writeproperty)), and the owner
-broadcasts one I-Am for its identity with `await endpoint.broadcast_i_am()`; concurrent use is
-`asyncio.gather` over these reads plus
-`is_session_alive()` polling. The Rust-calls-Python paths are the owner's
+(BIP), VMAC hex (SC), or station string (MS/TP). The owner broadcasts one
+I-Am for its identity with `await endpoint.broadcast_i_am()`; concurrent use
+is `asyncio.gather` over the client's calls plus `is_session_alive()`
+polling. The Rust-calls-Python paths are the owner's
 optional `on_reinitialize` / `after_reinitialize` pair and its optional
 `device_write_policy` callable. Interpreter
 finalization only seals forcefully; always await `close()` or context exit.
 BIPv6/Ethernet have no endpoint owner; use the standalone path there.
+
+### The endpoint's client
+
+`await endpoint.client()` returns a `BACnetClient` (#2617): the standalone
+class, on the endpoint's one address, with every call it has. A device the
+endpoint serves and a scanner's work share one socket: `discover(scope=...)`
+and `who_is`, the device table and `device(target)` handles, the typed reads
+and writes (to a station behind a router too; see
+[Routed targets](#routed-targets)), `atomic_read_file`, COV subscriptions,
+`discover_routers`, `network_reports`, `routing_table` and `frames()`, and,
+on a `BipEndpoint`, `read_bdt`, `read_fdt` and the legacy BVLC writes
+(`write_bdt`, `delete_fdt_entry`) for older BBMDs. Calls for another link
+refuse as on a standalone client of that link: `read_bdt` on an SC or MS/TP
+endpoint's client raises `BacnetError`, `connection_status()` on a B/IP or
+MS/TP one `RuntimeError`.
+
+```python
+async with BipEndpoint(1001, interface="192.168.1.10", broadcast_address="192.168.1.255") as endpoint:
+    client = await endpoint.client()
+    found = await client.discover(scope="global", wait=3)
+    rows = await client.read_bdt("192.168.1.1")
+```
+
+- **One client per session.** While it runs, every `endpoint.client()` call
+  returns the same object. Its `stop()`, and `async with` exit, end the
+  client role alone: the endpoint keeps serving, and the next
+  `endpoint.client()` returns a fresh client. One still stopping (a call in
+  flight holds its stop) raises `RuntimeError`; await its `stop()` first. A
+  client from the endpoint is started already: `async with client` only
+  enters it, and once stopped it stays stopped.
+- **Close.** The endpoint's `close()` stops the session and its link with the
+  client on it, then the client: open requests
+  fail at once with `BacnetError`, and a call that listens, such as
+  `discover`, ends at its `wait`, as on a standalone client's `stop()`.
+  Afterwards the client's calls raise `RuntimeError` naming the endpoint.
+  The client's `frames()` and the endpoint's observe the same socket, and
+  both end at close; neither keeps the transport alive.
+- **Queue.** The endpoint hands the client its share of what arrives
+  through a bounded queue. A full queue drops and counts at once, never
+  waits: `status()` reports `client_seat_apdus`, `client_seat_full_drops`
+  and `client_seat_control_full_drops` (network controls).
+- **Answers.** Beside the server role, the client answers only the COV
+  notifications of its own subscriptions; the server role answers the
+  rest. A ConfirmedEventNotification is published to
+  `event_notifications()` and answered with a Reject (unrecognized
+  service) until the full server takes a seat (#2617 step 4).
+- **SC.** The client starts after the hub link is up, so its
+  `connection_events()` begins at that call, after the first `connected`:
+  read the link at once with its `connection_status()`, or use the
+  endpoint's `connection_events()`, whose first call holds the events from
+  the start. **MS/TP:** its requests wait for this node's token, as the
+  server role's answers do.
+- **Source Audit.** An endpoint built with `source_audit_reporter` has no
+  client yet: `endpoint.client()` raises `NotImplementedError`, since the
+  full client's requests would not be audited. That arrives when source
+  Audit moves to the full client (#2617 step 3).
 
 Python endpoint server roles execute and advertise ReadProperty, plus
 ReinitializeDevice when built with `on_reinitialize` (the keywords and rules of
@@ -7134,9 +7187,12 @@ connection times out, since the endpoint's client role makes no retries.
 Reporter (#2348, #2357), the Python side of the Rust session's
 `with_source_audit_reporter`. Through it the session
 reports the ReinitializeDevice resets, backup steps and restore steps it
-carries out for peers, each `report_device_reset_local()` call, and the
-client role's reads, each filtered by the Reporter's Audit_Level and
-Auditable_Operations, and sends the records to the Device's Audit recipient.
+carries out for peers and each `report_device_reset_local()` call, each
+filtered by the Reporter's Audit_Level and Auditable_Operations, and sends
+the records to the Device's Audit recipient. Such an endpoint has no client
+until source Audit moves to the full client (#2617 step 3):
+`endpoint.client()` raises `NotImplementedError` (see
+[The endpoint's client](#the-endpoints-client)).
 
 ```python
 reporter = ObjectIdentifier(ObjectType.AUDIT_REPORTER, 1)
@@ -7291,33 +7347,20 @@ endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
                                      (PropertyIdentifier.OBJECT_NAME, None)])])
 ```
 
-### Endpoint ReadPropertyMultiple
+### Routed targets
 
-`await client.read_property_multiple(address, specs)` shares standalone RPM's
-ordered list of object dictionaries (`object_id`, `results`). Each result has
-`property_id`, `array_index`, `value` (`PropertyValue`, raw `bytes`, or `None`) and
-`error` (an `ErrorClass`/`ErrorCode` tuple or `None`). Duplicate occurrences remain
-separate. Successful values echo the requested index; an inline error may omit
-it. Entire ACK identity/order/count correlation precedes returning results.
+`BACnetClient`'s `read_property`, `read_property_multiple`, `read_range`,
+`read_log_page` and `write_property` take, where they take `address`, either
+a `str`, which always names a station on the client's own link and is never
+read as `net:mac`, or a `RoutedTarget` naming one behind a router (#2612,
+#2617), on a standalone client and an endpoint's alike.
 
-The endpoint accepts 1–64 explicit references across nonempty object lists and
-concrete identifiers. Empty lists, ALL/REQUIRED/OPTIONAL and wildcard object
-instances raise `ValueError` before address parsing/I/O. Index zero is valid;
-indexes outside native unsigned32 raise `OverflowError` during conversion.
-Requests and raw ACKs must fit the configured unsegmented max APDU. Protocol,
-size, malformed/mismatched ACK and closed-owner failures raise `BacnetError`.
-Standalone RPM retains its broader selector profile but now rejects empty lists
-through the shared fallible encoder. A `BipEndpoint` with a source Audit
-Reporter reports these reads through it, filtered by its operations (see
-[Endpoint source Audit Reporter](#endpoint-source-audit-reporter)).
-
-### Endpoint routed reads
-
-`read_property`, `read_property_multiple`, `read_range` and `read_log_page`
-take, where they take `address`, either a `str`, which always names a
-station on the endpoint's own link, or a `RoutedTarget` naming one behind a
-router (#2612). `RoutedTarget(network, address, router=None)` takes its
-arguments in that order, positionally or by keyword:
+**To scan stations that don't announce themselves (MS/TP slaves), pass
+`router` from `discover_routers()`.** Without it each such station costs one
+Who-Is and its 3-second wait before the call fails; the remembered miss
+below only spares repeat calls.
+`RoutedTarget(network, address, router=None)` takes its arguments in that
+order, positionally or by keyword:
 
 - `network`: the station's network number, an `int` from 1 to 65534.
 - `address`: the station's MAC on that network, 1 to 18 octets, as `bytes`
@@ -7345,30 +7388,28 @@ async with endpoint:
 ```
 
 With a `router`, each request goes to that router with the station's
-network and MAC as its destination. Without one, each request is one
-broadcast on the local link carrying the destination network and station,
-which the router serving that network forwards (the way to reach a network
-whose router is not known). On a B/IP network with BBMDs, or from a foreign
-device, that broadcast reaches every subnet in the BDT and every registered
-foreign device, so pass `router` for scans. The endpoint client learns no
-routes: learning a network's router once and reusing it comes with the full
-client (#2617). A `router` that is a broadcast or group address on the
-link (the configured broadcast address, 255.255.255.255, a multicast group,
-MS/TP station 255) raises `BacnetError` before anything is sent: leave the
-router out for the broadcast form.
+network and MAC as its destination. Without one, the client uses the route
+it knows, as `device()` does: the router its discovery table names for the
+station, after one Who-Is to the station's network when it has no row.
+Calls made together for one station share that Who-Is and its answer. A
+station that doesn't answer raises `BacnetLookupError`, and for 30 seconds
+a call to it with no router raises at once, without asking again, unless an
+I-Am from it gives the client a row first. **A station that never announces
+itself, such as an MS/TP slave, needs `router`**: `discover_routers()` finds
+the routers on the link. A `router` that is a broadcast or group
+address on the link (the configured broadcast address, 255.255.255.255, a
+multicast group, MS/TP station 255) raises `BacnetError` before anything is
+sent: a routed request goes to its router by unicast. A network that turns
+out to be the client's own goes to the station direct, its router unused.
 
-The answer the router relays from the station completes the read. When two
-routers forward one broadcast, the first answer completes it and the second
-is dropped and counted in `status()`'s `unclaimed_terminal`. A router that
-can't reach the network may send back a Reject-Message-To-Network, which
-the endpoint's read doesn't report today: the read ends at its timeout
-(`BacnetTimeoutError`); the full client reports it. A network that turns out
-to be the endpoint's own goes to the station direct, its router unused.
-Routed reads are paced and, on a `BipEndpoint` with a source Audit Reporter,
-audited as direct ones are; a record names the station by its network and
-MAC. Every request of a `read_log_page`, the count reads included, goes to
-the same target. `write_property` takes a direct address only, and
-`service_scope()` lists the same services as before.
+The answer the router relays from the station completes the call. A
+request no one answers ends as a typed call's does, with `BacnetAbortError`
+for the transaction's timeout. Routed calls are paced as direct ones are,
+and every request of a `read_log_page`, the count reads included, goes to
+the same target. The other services take no `RoutedTarget` yet: reach a
+routed device through `device(target)` handles or the `_from_device` and
+`_to_device` forms, by its instance (#2588 brings a routed form to every
+service).
 
 `RoutedTarget` is frozen, compares and hashes by its network and octets
 however they were written, and copies and pickles. A bad value raises
@@ -7392,7 +7433,31 @@ and after `close()`, as does a read that `close()` cuts off: `close()` doesn't
 wait for one. A cancelled read gives its request up, so the same read can
 start again at once; the same read beside one still running is refused, as
 `BACnetClient`'s is. They only read: Write-BDT, Delete-FDT-Entry and a
-one-shot registration stay on `BACnetClient`.
+one-shot registration are on the endpoint's client
+(`await endpoint.client()`), as on any `BACnetClient`.
+
+### Migration: `EndpointClient` to the endpoint's `BACnetClient` (#2617)
+
+`EndpointClient` is gone: `await endpoint.client()` returns a `BACnetClient`
+on the endpoint's link. Its calls keep their names and result shapes:
+
+| `EndpointClient` | `BACnetClient` from `endpoint.client()` |
+|---|---|
+| `read_property(address, ...)`, a `str` or a `RoutedTarget` | the same call; a `RoutedTarget` with no `router` now takes the route the client learns, not a broadcast per request. To scan stations that don't announce themselves (MS/TP slaves), pass `router` from `discover_routers()`: without it each costs a 3-second Who-Is wait |
+| `read_property_multiple` checked its arguments at the call (`ValueError`) | a bad address raises `ValueError`, and an empty list `BacnetError`, when awaited |
+| `read_property_multiple(address, specs)` | the same call, with the standalone profile: selectors and wildcard instances are taken, an empty list raises `BacnetError` when awaited, and the answer comes back as the device gave it, each result naming its object, property and index, for you to compare with what you asked |
+| `read_range(address, ..., validation=...)` | the same call |
+| `read_log_page(address, object_id, cursor, page_size)` | the same call |
+| `write_property(address, ..., *, commandability=...)` | `write_property(address, ...)` without `commandability=`; it takes a `RoutedTarget` too, and sends a raw value as given |
+| `service_scope()` | gone: the client initiates every service it has a call for |
+| a request no one answered: `BacnetTimeoutError` | `BacnetAbortError` for the transaction's timeout, as a typed call raises it |
+| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the client stopped while it waited |
+| an endpoint with `source_audit_reporter`: audited reads | `NotImplementedError` until source Audit moves to the full client (#2617 step 3) |
+
+Not yet routed on the full client: `atomic_read_file`, `atomic_write_file`,
+the COV subscriptions and the other typed calls take a local address only;
+reach a routed device through a `device()` handle or the `_from_device` and
+`_to_device` forms. #2588 brings a routed form to every service.
 
 ### Migration: separately-constructed client/server to endpoint
 
@@ -8189,28 +8254,21 @@ Remote WP inputs remain six-tuples; the server's local `source_object` argument
 is unrelated. Results do not echo complete requests or encoded write values.
 Returned values remain inspectable; this is not a general secrecy guarantee.
 
-### Endpoint direct WriteProperty
+### Endpoint WriteProperty
 
-`EndpointClient.write_property(address, object_id, property_id, value,
-priority=None, array_index=None, *, commandability=...)` returns `Awaitable[None]`
-through the endpoint's shared requester. The required keyword is exactly
-`"commandable"` or `"noncommandable"`, including when no Reporter is configured.
-It declares remote property semantics and never changes the supplied wire priority.
-Only direct IPv4 B/IP peers are supported. This adds no Python source Reporter
-configuration surface; Rust owns that existing optional profile.
-
-Invalid commandability, priority, raw TLV framing and complete request size fail
-synchronously with `ValueError`; priorities outside the native u8 range raise
-`OverflowError`. `PropertyValue.application_data(b"")` can represent an empty list;
-`PropertyValue.null()` represents NULL. The target still decides datatype validity
-and may return a protocol error. Existing endpoint read methods keep their native
-Awaitable results and established correlation rules.
+The endpoint's client writes as any `BACnetClient` does:
+`await client.write_property(address, object_id, property_id, value,
+priority=None, array_index=None)`, to a `str` address or a `RoutedTarget`
+(see [Routed targets](#routed-targets)). A priority outside 1 to 16 raises
+`ValueError` at the call, one outside the native u8 range `OverflowError`.
+`PropertyValue.application_data(b"")` can represent an empty list and
+`PropertyValue.null()` NULL; the target decides datatype validity and may
+return a protocol error.
 
 ```python
-role = await endpoint.client()
-await role.write_property(
+client = await endpoint.client()
+await client.write_property(
     "127.0.0.1:47808", ObjectIdentifier(ObjectType.ANALOG_VALUE, 7),
-    PropertyIdentifier.PRESENT_VALUE, PropertyValue.real(21.0),
-    priority=8, commandability="commandable",
+    PropertyIdentifier.PRESENT_VALUE, PropertyValue.real(21.0), priority=8,
 )
 ```
