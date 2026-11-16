@@ -58,7 +58,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// **One device.** A DeviceCommunicationControl DISABLE_INITIATION a
     /// [`full_server`](Self::full_server) accepts binds this client too: its
     /// requests and unconfirmed sends fail with
-    /// [`Error::InitiationDisabled`](bacnet_types::error::Error::InitiationDisabled)
+    /// [`Error::InitiationDisabled`]
     /// until the control ends (see [`full_server`](Self::full_server)). An
     /// operator's own tool may start its client outside the node's control
     /// with [`full_client_with`](Self::full_client_with) and

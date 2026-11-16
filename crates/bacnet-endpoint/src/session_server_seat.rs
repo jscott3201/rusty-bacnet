@@ -136,7 +136,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// the full client's requests and unconfirmed sends, the narrow
     /// [`client`](Self::client)'s requests and the session's own
     /// [`broadcast_i_am`](Self::broadcast_i_am) fail with
-    /// [`Error::InitiationDisabled`](bacnet_types::error::Error::InitiationDisabled)
+    /// [`Error::InitiationDisabled`]
     /// and send nothing, and a client request already waiting ends the
     /// same way when its retry falls due. Answers, and network-layer
     /// messages, still go. It ends when the control's duration runs out, an

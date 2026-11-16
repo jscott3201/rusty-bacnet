@@ -64,11 +64,17 @@ impl EndpointServices {
     /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple (#2490), each
     /// when its session enabled it.
     pub(crate) fn new(writes: bool, reinitialize: bool, cov: bool) -> Self {
-        Self(
-            u8::from(writes) * Self::WRITES
-                | u8::from(reinitialize) * Self::REINITIALIZE
-                | u8::from(cov) * Self::COV,
-        )
+        let mut enabled = 0;
+        for (on, service) in [
+            (writes, Self::WRITES),
+            (reinitialize, Self::REINITIALIZE),
+            (cov, Self::COV),
+        ] {
+            if on {
+                enabled |= service;
+            }
+        }
+        Self(enabled)
     }
 
     fn has(self, service: u8) -> bool {

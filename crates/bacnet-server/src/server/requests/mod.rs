@@ -354,7 +354,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     services.live_tables(),
                     &req,
                     config,
-                    services.execution,
                     effective_max_apdu,
                     segmented_response_available,
                     |db, target, property, index, result| {
