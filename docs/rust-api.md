@@ -13476,6 +13476,14 @@ recipient, goes unaudited in the caller's task.
   acknowledgment and life safety.
 - An operation cut off by a stop, of the session or of the client, is not
   recorded.
+- Under the node's DeviceCommunicationControl DISABLE_INITIATION an audited
+  request is refused as every request is, with
+  `InitiationDisabled { sent: false }`, before it takes a slot or a sequence
+  number, and one waiting for a slot is refused when it gets one. One
+  already sent whose retry is withheld ends with
+  `InitiationDisabled { sent: true }` and is recorded as failed, with
+  SERVICES, COMMUNICATION_DISABLED. A client started with
+  `with_node_dcc_override` is audited as usual.
 - None of this costs a standalone client anything: an audited client's
   requests leave the request path at the test registration already makes.
 

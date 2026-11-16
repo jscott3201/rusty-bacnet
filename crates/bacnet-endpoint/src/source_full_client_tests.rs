@@ -258,3 +258,6 @@ mod lifecycle;
 
 #[path = "source_full_client_slots_tests.rs"]
 mod slots;
+
+#[path = "source_full_client_dcc_tests.rs"]
+mod dcc;

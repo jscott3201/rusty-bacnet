@@ -238,10 +238,11 @@ pub(super) fn decode(
 }
 
 /// Whether a request that ended with `result` reached its target, given
-/// that it registered a transaction. A peer's answer, a timeout and a
-/// transport failure while sending did; a refusal before anything was
-/// sent, and a request whose transaction its client's or node's stop
-/// ended, did not.
+/// that it registered a transaction. A peer's answer, a timeout, a
+/// transport failure while sending, and a request sent before the node's
+/// DeviceCommunicationControl withheld its retry did; a refusal before
+/// anything was sent, and a request whose transaction its client's or
+/// node's stop ended, did not.
 pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
     match result {
         Ok(_) => true,
@@ -253,6 +254,7 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
                 | Error::Timeout(_)
                 | Error::Transport(_)
                 | Error::Segmentation(_)
+                | Error::InitiationDisabled { sent: true }
         ),
     }
 }
@@ -262,13 +264,19 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
 /// its COMMUNICATION code, and the client's own wait for an answer running
 /// out as TIMEOUT. The client reports that wait as an Abort for a TSM
 /// timeout, which a peer's Abort for that reason can't be told from; both
-/// say the device didn't answer in time.
+/// say the device didn't answer in time. A request whose retry the node's
+/// DeviceCommunicationControl withheld is SERVICES, COMMUNICATION_DISABLED,
+/// the pair the standard uses for a device whose communication that
+/// control turned off.
 pub(crate) fn audit_result(error: &Error) -> (ErrorClass, ErrorCode) {
     use bacnet_types::error::RemoteError;
     let code = match error {
         Error::Remote(RemoteError::Error { class, code })
         | Error::Structured { class, code, .. } => {
             return (*class, *code);
+        }
+        Error::InitiationDisabled { .. } => {
+            return (ErrorClass::SERVICES, ErrorCode::COMMUNICATION_DISABLED);
         }
         Error::Timeout(_)
         | Error::Remote(RemoteError::Abort {

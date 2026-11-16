@@ -41,8 +41,9 @@ async fn an_audited_operation_cut_off_by_a_stop_is_not_recorded() {
             };
             if cut == "client stop" {
                 client.stop().await.unwrap();
-                // A stopped client's next request is refused at once,
-                // before the session admits it.
+                // A stopped client's next request is refused at once, as
+                // on any closed seat, before the session admits it: it
+                // takes no slot.
                 let next = client.read_property(
                     peer.local_mac(),
                     target(),
@@ -50,7 +51,12 @@ async fn an_audited_operation_cut_off_by_a_stop_is_not_recorded() {
                     None,
                 );
                 let error = Box::pin(next).await.unwrap_err();
-                assert!(error.to_string().contains("seat has closed"), "{error}");
+                assert!(error.to_string().contains("unavailable"), "{error}");
+                let source = Arc::clone(session.source_audit.as_ref().unwrap());
+                eventually(WAIT, "every slot is free", async || {
+                    source.available_operations() == 64
+                })
+                .await;
             }
             drop(client);
         }

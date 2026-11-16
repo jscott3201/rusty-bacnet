@@ -85,6 +85,12 @@ impl SourceAudit {
             .acquire_owned()
             .await
             .map_err(|_| Error::Encoding("endpoint shutdown".into()))?;
+        // A request that waited for its slot while the node's
+        // DeviceCommunicationControl took effect goes no further: refused
+        // before it takes a sequence number, as one made then is.
+        if request.initiation_restricted() {
+            return Err(Error::InitiationDisabled { sent: false });
+        }
         let mut db = self.db.write().await;
         if self.operations.is_closed() {
             return Err(Error::Encoding("endpoint shutdown".into()));
