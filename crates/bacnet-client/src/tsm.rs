@@ -369,6 +369,10 @@ impl Tsm {
         registration
     }
 
+    // Inlined into each registration, as it was when one body registered
+    // through the coordinator: a second, the diverted one (#2617), made the
+    // compiler call it instead, about 20 instructions on every request.
+    #[inline(always)]
     fn new_pending_transaction(
         service_choice: ConfirmedServiceChoice,
         phase: TransactionPhase,
