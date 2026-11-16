@@ -13,6 +13,7 @@ const PEER: [u8; 1] = [0x11];
 const WHO_IS: &[u8] = &[0x10, 0x08];
 const READ_PROPERTY: &[u8] = &[0x00, 0x05, 0x21, 0x0c];
 const COV_NOTIFICATION: &[u8] = &[0x00, 0x05, 0x22, 0x01];
+const COV_NOTIFICATION_MULTIPLE: &[u8] = &[0x00, 0x05, 0x25, 0x1f];
 const EVENT_NOTIFICATION: &[u8] = &[0x00, 0x05, 0x23, 0x02];
 /// A first segment of a WriteProperty: segments of a request are the
 /// server's to reassemble, or to abort.
@@ -99,11 +100,14 @@ async fn every_request_is_the_servers_but_the_clients_cov_notifications() {
         assert_quiet(&mut node);
     }
 
-    // A ConfirmedCOVNotification is the client's alone.
-    let _reply = inject_expecting_reply(&node.link, COV_NOTIFICATION).await;
-    let notified = receive(&mut node.client.apdus).await;
-    assert!(notified.reply_tx.is_some());
-    assert_quiet(&mut node);
+    // A COV notification of either form is the client's alone (#2654).
+    for apdu in [COV_NOTIFICATION, COV_NOTIFICATION_MULTIPLE] {
+        let _reply = inject_expecting_reply(&node.link, apdu).await;
+        let notified = receive(&mut node.client.apdus).await;
+        assert_eq!(notified.apdu.as_ref(), apdu);
+        assert!(notified.reply_tx.is_some());
+        assert_quiet(&mut node);
+    }
 
     // A ConfirmedEventNotification is the server's to answer; the client
     // hears a copy.
@@ -117,7 +121,7 @@ async fn every_request_is_the_servers_but_the_clients_cov_notifications() {
         node.endpoint.client_seat_counters(),
         node.endpoint.server_seat_counters(),
     );
-    assert_eq!((client.apdus, client.full_drops), (3, 0));
+    assert_eq!((client.apdus, client.full_drops), (4, 0));
     assert_eq!((server.apdus, server.full_drops), (4, 0));
 }
 

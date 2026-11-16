@@ -12,7 +12,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use tokio::sync::broadcast;
 
-use bacnet_client::client::{COVNotificationDelivery, ReceivedCOVNotification};
+use bacnet_client::client::{
+    COVNotificationDelivery, CovEvent, ReceivedCOVNotification, ReceivedCOVNotificationMultiple,
+};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::common::BACnetPropertyValue;
@@ -65,7 +67,7 @@ pub(crate) use audit::{audit_log_query_request_from_py, audit_notification_reque
 pub(crate) use audit_projection::{audit_log_query_ack_to_py, audit_log_record_to_py};
 pub(crate) use authentication_policy::authentication_policies_from_py;
 pub use bit_string::PyBitString;
-pub use cov::{PyCovNotification, PyCovNotificationIterator};
+pub use cov::{PyCovNotification, PyCovNotificationIterator, PyCovNotificationMultiple};
 pub(crate) use date::{date_from_value, date_value, specific_date_time};
 pub(crate) use destination::destinations;
 pub use device::PyDiscoveredDevice;
@@ -170,6 +172,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBACnetTimeStamp>()?;
     m.add_class::<PyDiscoveredDevice>()?;
     m.add_class::<PyCovNotification>()?;
+    m.add_class::<PyCovNotificationMultiple>()?;
     m.add_class::<PyCovNotificationIterator>()?;
 
     // 255, what an unspecified date or time field holds (#1501).

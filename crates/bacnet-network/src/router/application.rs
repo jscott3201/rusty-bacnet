@@ -155,7 +155,8 @@ pub struct RouterApplicationPort {
 /// shared out by what it is:
 ///
 /// - a Confirmed-Request goes to the server, except a
-///   ConfirmedCOVNotification, which goes to the client, and a
+///   ConfirmedCOVNotification or ConfirmedCOVNotificationMultiple, which
+///   goes to the client, and a
 ///   ConfirmedEventNotification, which goes to both: the server's answer is
 ///   sent and the client's dropped, unless the server's port can't take it
 ///   (not started, stopped or full), when the client's answer is sent. A

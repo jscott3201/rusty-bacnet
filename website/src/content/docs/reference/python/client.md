@@ -1055,10 +1055,9 @@ def subscribe_cov_property_multiple(
 Subscribe to COV notifications for multiple properties on multiple objects.
 
 `address` is a `str` or a `RoutedTarget`, as for
-`subscribe_cov` (#2588). The client doesn't deliver the
-notifications such a subscription brings yet: it refuses a
-ConfirmedCOVNotificationMultiple and drops the unconfirmed form, so
-none reaches `cov_notifications()` (#2654).
+`subscribe_cov` (#2588). The notifications such a subscription
+brings arrive on `cov_notifications()` as `CovNotificationMultiple`
+objects.
 `specs` is `[(object_id, [(property_id, array_index, cov_increment, timestamped), ...]), ...]`.
 `issue_confirmed_notifications` is required, including for cancellation requests.
 For subscriptions and re-subscriptions, `lifetime` and `max_notification_delay` are both required.
@@ -1077,7 +1076,12 @@ first\_failed\_subscription set; a general failure leaves it None.
 def cov_notifications(self) -> Awaitable[CovNotificationIterator]
 ```
 
-Get an async iterator for incoming COV notifications.
+Get an async iterator for incoming COV notifications of both kinds:
+`CovNotification` (one object) and `CovNotificationMultiple`
+(several objects, from `subscribe_cov_property_multiple`). The client
+acknowledges a confirmed one of either kind whether or not it knows the
+subscription; match one by its `subscriber_process_identifier` and
+source.
 
 ### BACnetClient.delete_object
 

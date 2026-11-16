@@ -29,12 +29,14 @@ fn each_pdu_type_goes_where_it_belongs() {
     let client = To(Side::Client);
     let server = To(Side::Server);
     let answer = |ends| Answer { invoke_id: 9, ends };
-    let cases: [(&[u8], Route); 23] = [
+    let cases: [(&[u8], Route); 25] = [
         // Confirmed-Requests: ReadProperty and audit notifications (32) to
-        // the server, COV notifications (1) to the client, event
-        // notifications (2) to both, segmented ones too.
+        // the server, COV notifications (1, and 31 for several objects) to
+        // the client, event notifications (2) to both, segmented ones too.
         (&[0x00, 0x05, 9, 0x0C], server),
         (&[0x00, 0x05, 9, 0x01], client),
+        (&[0x00, 0x05, 9, 0x1F], client),
+        (&[0x08, 0x05, 9, 0, 1, 0x1F], client),
         (&[0x00, 0x05, 9, 0x02], ServerAnswers),
         (&[0x08, 0x05, 9, 0, 1, 0x02], ServerAnswers),
         (&[0x00, 0x05, 9, 0x20], server),

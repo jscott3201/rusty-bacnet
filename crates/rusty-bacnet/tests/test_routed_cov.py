@@ -398,6 +398,49 @@ class RoutedCovRouterTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await stop(task)
 
+    async def heard_multiple(self, queue, process, value, confirmed):
+        """The next notification: a COV-multiple one (#2654), back through the
+        router, naming the server on network 5, with AI 1's Present_Value
+        `value`, timestamped when `confirmed`."""
+        heard = await asyncio.wait_for(queue.get(), 5)
+        self.assertEqual(heard.kind, "multiple")
+        self.assertEqual((heard.source_network, heard.source_address),
+                         (5, mac(self.far_address)))
+        self.assertEqual(heard.source_mac, mac(self.router_address))
+        self.assertEqual(heard.delivery, "confirmed" if confirmed else "unconfirmed")
+        self.assertEqual(heard.subscriber_process_identifier, process)
+        [reported] = heard.objects
+        self.assertEqual(reported["monitored_object_identifier"], AI_1)
+        values = [item for item in reported["values"] if item["property_id"] == PV]
+        self.assertIn(rb.PropertyValue.real(value), [item["value"] for item in values])
+        self.assertEqual(heard.timestamp is not None, confirmed)
+        self.assertEqual(all(item["time_of_change"] is not None for item in values), confirmed)
+
+    async def test_a_routed_property_multiple_subscription_notifies_and_cancels(self):
+        async with rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                                   apdu_timeout_ms=2000) as client:
+            target = self.target()
+            queue, task = await collect(client)
+            try:
+                for process, confirmed in ((PROCESS + 1, True), (PROCESS + 2, False)):
+                    with self.subTest(confirmed=confirmed):
+                        # Confirmed and timestamped, or neither.
+                        await asyncio.wait_for(client.subscribe_cov_property_multiple(
+                            target, process, [(AI_1, [(PV, None, None, confirmed)])],
+                            issue_confirmed_notifications=confirmed,
+                            max_notification_delay=1, lifetime=60), 10)
+                        await self.heard_multiple(queue, process, 10.0, confirmed)
+                        await self.far.set_present_value_local(AI_1, rb.PropertyValue.real(30.0))
+                        await self.heard_multiple(queue, process, 30.0, confirmed)
+                        # The whole context's cancel, to the same target, ends it.
+                        await asyncio.wait_for(client.subscribe_cov_property_multiple(
+                            target, process, [], issue_confirmed_notifications=confirmed), 10)
+                        await self.far.set_present_value_local(AI_1, rb.PropertyValue.real(10.0))
+                        with self.assertRaises(asyncio.TimeoutError):
+                            await asyncio.wait_for(queue.get(), 1)
+            finally:
+                await stop(task)
+
     async def test_a_cancel_by_another_address_leaves_the_subscription(self):
         # The server keeps the subscription under the address the request
         # came from: this client through the router. The same server asked

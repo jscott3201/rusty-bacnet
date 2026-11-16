@@ -230,7 +230,9 @@ async fn cov_subscribe_then_cancel() {
     let initial_notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for initial COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(
         initial_notification
             .notification
@@ -257,7 +259,9 @@ async fn cov_subscribe_then_cancel() {
     let received = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.notification.monitored_object_identifier, ao_oid);
 
     // 3. Cancel the subscription

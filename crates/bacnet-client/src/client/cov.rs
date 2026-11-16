@@ -147,10 +147,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// refuses one of the subscriptions says which in the error's
     /// first-failed-subscription detail.
     ///
-    /// This client doesn't deliver the notifications such a subscription
-    /// brings yet: it refuses a ConfirmedCOVNotificationMultiple and drops
-    /// an UnconfirmedCOVNotificationMultiple, so none reaches
-    /// [`Self::cov_notifications`] (#2654).
+    /// The notifications such a subscription brings arrive on
+    /// [`Self::cov_notifications`] as [`CovEvent::Multiple`], beside the
+    /// single-object ones, in the order they came.
     pub async fn subscribe_cov_property_multiple(
         &self,
         to: &(impl ToStation + ?Sized),
@@ -159,9 +158,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.call(to, request).await
     }
 
-    /// Get a receiver for incoming COV notifications. Each call returns a new
-    /// independent receiver.
-    pub fn cov_notifications(&self) -> broadcast::Receiver<ReceivedCOVNotification> {
+    /// Get a receiver for incoming COV notifications of both forms: about one
+    /// object ([`CovEvent::Object`]: ConfirmedCOVNotification and
+    /// UnconfirmedCOVNotification) or about several ([`CovEvent::Multiple`]:
+    /// ConfirmedCOVNotificationMultiple and UnconfirmedCOVNotificationMultiple),
+    /// in the order they arrive. Each call returns a new independent receiver.
+    ///
+    /// The client acknowledges a confirmed notification of either form, and
+    /// publishes it here, whether or not it knows the subscription: it keeps
+    /// no list of them. Match one by its subscriber process identifier and
+    /// its source ([`Station::is_source_of`]), or set
+    /// [`ClientOptions::with_confirmed_cov_notification_ack_policy`] to
+    /// answer otherwise. A notification the sender sends again, its answer
+    /// lost, is published again.
+    pub fn cov_notifications(&self) -> broadcast::Receiver<CovEvent> {
         self.cov_tx.subscribe()
     }
 }

@@ -4175,7 +4175,8 @@ let client = BACnetClient::generic_builder().transport(ports.client).build().awa
 The router shares out what it delivers to its application:
 
 - A Confirmed-Request goes to the server, with two exceptions. A
-  ConfirmedCOVNotification goes to the client alone. A
+  ConfirmedCOVNotification or ConfirmedCOVNotificationMultiple goes to the
+  client alone. A
   ConfirmedEventNotification goes to both: the client hears it, and the server
   takes it for its Notification Forwarders. The server's answer is the one
   sent; the client's is dropped. When the server's port can't take it (not
@@ -10272,22 +10273,43 @@ let request = SubscribeCOVPropertyMultipleRequest {
     max_notification_delay: Some(10),
     list_of_cov_subscription_specifications: cov_specs,
 };
-// The client doesn't deliver its COV-multiple notifications yet (#2654).
 client.subscribe_cov_property_multiple(&mac, &request).await?;
 
-// Receive the object subscription's notifications (broadcast channel —
-// multiple consumers OK)
+// Receive both subscriptions' notifications on one broadcast channel
+// (multiple consumers OK), in the order they arrive.
 let mut rx = client.cov_notifications();
-let notification: ReceivedCOVNotification = rx.recv().await?;
+match rx.recv().await? {
+    CovEvent::Object(received) => {
+        // ConfirmedCOVNotification or UnconfirmedCOVNotification.
+        let _values = &received.notification.list_of_values;
+    }
+    CovEvent::Multiple(received) => {
+        // ConfirmedCOVNotificationMultiple or
+        // UnconfirmedCOVNotificationMultiple: each object's changed values,
+        // with their time of change when the subscription asked for it.
+        for object in &received.notification.list_of_cov_notifications {
+            let _changes = &object.list_of_values;
+        }
+    }
+}
 
 // Unsubscribe
 client.unsubscribe_cov(&mac, process_id, oid).await?;
 ```
 
-A SubscribeCOVPropertyMultiple subscription's notifications don't reach
-`cov_notifications` yet: the client refuses a
-ConfirmedCOVNotificationMultiple and drops an
-UnconfirmedCOVNotificationMultiple (#2654).
+`cov_notifications()` yields a `CovEvent`: `Object(ReceivedCOVNotification)`
+for the notifications SubscribeCOV and SubscribeCOVProperty subscriptions
+bring, or `Multiple(ReceivedCOVNotificationMultiple)` for those of a
+SubscribeCOVPropertyMultiple subscription (#2654). Both carry the same
+source fields and delivery, and `CovEvent` reads the fields they share
+(`subscriber_process_identifier()`, `time_remaining()`, `source_mac()` and
+so on); `Station::is_source_of` matches either by its source. The client
+acknowledges a confirmed notification of either form whether or not it knows
+the subscription, and publishes it; `confirmed_cov_notification_ack_policy`
+sees the `CovEvent` and may answer otherwise. A notification sent again,
+its answer lost, is acknowledged and published again. A segmented confirmed
+notification is aborted unread (#2646). `ManagedCOVSubscription` renews
+SubscribeCOV and SubscribeCOVProperty subscriptions only.
 
 `SubscribeCOVPropertyMultipleRequest::encode` is fallible and validates the entire
 request before appending bytes; `validate` makes the same checks alone, and
@@ -13449,7 +13471,8 @@ session.stop().await?; // stops the link
 ```
 
 - Who answers what: the server answers every request but a
-  ConfirmedCOVNotification, which is the full client's. It acknowledges a
+  ConfirmedCOVNotification or ConfirmedCOVNotificationMultiple, which is the
+  full client's. It acknowledges a
   ConfirmedEventNotification, of which the full client hears a copy. Both
   hear every unconfirmed request. An answer goes to the role whose lease it
   answers, from the session's one pool of invoke IDs, and a requester's
@@ -13479,8 +13502,9 @@ session.stop().await?; // stops the link
   and `apdu_retries` (default 6000 ms and 3), which the client uses and the
   server's confirmed notifications use too (`cov_retry_timeout_ms`,
   `notification_retries`). On a `Both` session Protocol_Services_Supported
-  lists what the client executes (I-Am, I-Have, both COV notifications)
-  beside the server's services. That follows the session's role, not the
+  lists what the client executes (I-Am, I-Have, and the COV notifications
+  of one object and of several, both forms of each) beside the server's
+  services. That follows the session's role, not the
   client attached at the moment: until one is, the server rejects a
   ConfirmedCOVNotification the Device lists, and a full client on a
   `ServerOnly` session executes services the Device doesn't list. Following

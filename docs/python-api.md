@@ -1317,7 +1317,8 @@ A `WritePolicy` copies and pickles as `WritePolicy()` and the
 A high-level [`Value`](#value) copies and pickles too, from its octets, text
 and data (#2561).
 
-The other classes (`DiscoveredDevice`, `CovNotification`, the high-level
+The other classes (`DiscoveredDevice`, `CovNotification`,
+`CovNotificationMultiple`, the high-level
 results `Reading`, `Readings`, `PriorityView`, `Written`, `WritePreview`,
 `ObjectList`, `DeviceSummary` and `Discovered`, a `Device` handle,
 `ScHubCertificateBinding`, and the client, server, endpoint and hub
@@ -1345,10 +1346,13 @@ Read-only device information from WhoIs/IAm discovery (frozen).
 
 ## CovNotification
 
-Read-only incoming COV notification (frozen).
+Read-only incoming COV notification about one object (frozen): a
+ConfirmedCOVNotification or UnconfirmedCOVNotification, which `subscribe_cov`
+and `subscribe_cov_property` subscriptions bring.
 
 | Property | Type | Description |
 |----------|------|-------------|
+| `.kind` | `str` | `"object"`; a [`CovNotificationMultiple`](#covnotificationmultiple) reads `"multiple"` |
 | `.subscriber_process_identifier` | `int` | Subscriber process ID |
 | `.initiating_device_identifier` | `ObjectIdentifier` | Source device |
 | `.monitored_object_identifier` | `ObjectIdentifier` | Changed object |
@@ -1373,16 +1377,65 @@ object's type; octets whose framing is broken come back as `bytes`.
 
 ---
 
+## CovNotificationMultiple
+
+Read-only incoming COV notification about several objects (frozen): a
+ConfirmedCOVNotificationMultiple or UnconfirmedCOVNotificationMultiple, which
+`subscribe_cov_property_multiple` subscriptions bring (#2654).
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `.kind` | `str` | `"multiple"` |
+| `.subscriber_process_identifier` | `int` | Subscriber process ID |
+| `.initiating_device_identifier` | `ObjectIdentifier` | Source device |
+| `.time_remaining` | `int` | Subscription seconds remaining |
+| `.timestamp` | `tuple \| None` | When the last change it conveys happened, `((year, month, day, day_of_week), (hour, minute, second, hundredths))`, the year in full; `None` when no value carries a time of change |
+| `.delivery` | `str` | `"confirmed"` or `"unconfirmed"`: the service the notification came by |
+| `.source_mac` | `bytes` | The MAC the notification came from (the router's, if routed) |
+| `.source_network` | `int \| None` | Remote network number (if routed) |
+| `.source_address` | `bytes \| None` | Remote MAC address (if routed) |
+| `.objects` | `list[dict]` | The objects reported, in order (see below) |
+
+Each item in `.objects` is a dict:
+```python
+{
+    "monitored_object_identifier": ObjectIdentifier,
+    "values": [
+        {
+            "property_id": PropertyIdentifier,
+            "array_index": int | None,
+            "value": PropertyValue | bytes,
+            "time_of_change": (hour, minute, second, hundredths) | None,
+        },
+    ],
+}
+```
+
+`value` decodes as in `CovNotification.values`, using that object's type.
+`time_of_change` is there when the subscription asked for timestamps for
+that property; such a property may appear more than once, once for each
+change the device queued since its last notification.
+
+---
+
 ## CovNotificationIterator
 
-Async iterator yielding `CovNotification` objects from the client's broadcast channel.
+Async iterator yielding `CovNotification` and `CovNotificationMultiple`
+objects from the client's broadcast channel, in the order they arrived;
+`kind` tells them apart.
 
 ```python
 notifications = await client.cov_notifications()
 async for notification in notifications:
-    print(notification.monitored_object_identifier)
-    for v in notification.values:
-        print(f"  {v['property_id']}: {v['value']}")
+    if notification.kind == "object":
+        print(notification.monitored_object_identifier)
+        for v in notification.values:
+            print(f"  {v['property_id']}: {v['value']}")
+    else:
+        for obj in notification.objects:
+            for v in obj["values"]:
+                print(f"  {obj['monitored_object_identifier']} "
+                      f"{v['property_id']}: {v['value']}")
 ```
 
 One that falls behind the client's COV channel loses the oldest
@@ -2427,11 +2480,18 @@ those and the address the request came from, as for `unsubscribe_cov`.
 #### `cov_notifications() -> Awaitable[CovNotificationIterator]`
 
 Returns an awaitable that yields an async iterator. Await the factory before
-iterating; it can be called multiple times for independent consumers.
+iterating; it can be called multiple times for independent consumers. It
+yields both kinds of notification, a `CovNotification` about one object and
+a `CovNotificationMultiple` about several, in the order they arrived. The
+client acknowledges a confirmed notification of either kind whether or not it
+knows the subscription, so match one by its `subscriber_process_identifier`
+and source.
 
 ```python
 notifications = await client.cov_notifications()
 async for notif in notifications:
+    if notif.kind != "object":
+        continue  # a CovNotificationMultiple
     print(f"Object {notif.monitored_object_identifier} changed:")
     for v in notif.values:
         print(f"  {v['property_id']}: {v['value']}")
@@ -3432,7 +3492,7 @@ the peer omits that optional ACK member; an explicit class zero remains `0`.
 
 #### `subscribe_cov_property_multiple(address, subscriber_process_identifier, specs, issue_confirmed_notifications, max_notification_delay=None, lifetime=None)`
 
-Subscribe to COV on multiple properties across multiple objects. `address` is a `str` or a `RoutedTarget`, as for `subscribe_cov` (#2588). The client doesn't deliver the notifications such a subscription brings yet: it refuses a ConfirmedCOVNotificationMultiple and drops the unconfirmed form, so none reaches `cov_notifications()` (#2654). `issue_confirmed_notifications` is now a required `bool`, including for cancellation requests. This is a breaking Python call-signature change; callers should pass it by keyword as shown below. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`. For whole-context cancellations, pass `specs=[]` and omit both timing fields.
+Subscribe to COV on multiple properties across multiple objects. `address` is a `str` or a `RoutedTarget`, as for `subscribe_cov` (#2588). The notifications such a subscription brings arrive on `cov_notifications()` as [`CovNotificationMultiple`](#covnotificationmultiple) objects (#2654). `issue_confirmed_notifications` is now a required `bool`, including for cancellation requests. This is a breaking Python call-signature change; callers should pass it by keyword as shown below. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`. For whole-context cancellations, pass `specs=[]` and omit both timing fields.
 
 Each supplied object specification must contain at least one property reference.
 `PropertyIdentifier.ALL`, `PropertyIdentifier.OPTIONAL`, and
@@ -6834,6 +6894,8 @@ async def client_example():
         async def listen():
             notifications = await client.cov_notifications()
             async for notif in notifications:
+                if notif.kind != "object":
+                    continue  # a CovNotificationMultiple
                 for v in notif.values:
                     print(f"COV: {v['property_id']} = {v['value']}")
 

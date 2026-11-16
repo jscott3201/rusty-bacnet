@@ -237,8 +237,7 @@ async fn outbound_tls_public_client_notification_and_reject_use_original_socket(
         bounded(notifications.recv())
             .await
             .unwrap()
-            .notification
-            .subscriber_process_identifier,
+            .subscriber_process_identifier(),
         71
     );
     assert!(matches!(peer.receive().await,Apdu::SimpleAck(a) if a.invoke_id==71));

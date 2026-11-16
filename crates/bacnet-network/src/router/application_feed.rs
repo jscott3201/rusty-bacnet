@@ -452,8 +452,9 @@ pub(super) fn classify(apdu: &[u8]) -> Route {
             // segmented request, else the invoke ID.
             let service = apdu.get(if first & 0x08 != 0 { 5 } else { 3 });
             match service {
-                // ConfirmedCOVNotification: only the client takes it.
-                Some(1) => Route::To(Side::Client),
+                // ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple
+                // (31): only the client takes them (#2654).
+                Some(1 | 31) => Route::To(Side::Client),
                 // ConfirmedEventNotification: the client hears it, and the
                 // server takes it too, for its Notification Forwarders.
                 Some(2) => Route::ServerAnswers,

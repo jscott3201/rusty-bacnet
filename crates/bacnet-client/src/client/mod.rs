@@ -608,7 +608,7 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     /// The discovery table, with the asking for the network's number
     /// beside it (#2572).
     device_table: Arc<network_number::Discovery>,
-    cov_tx: broadcast::Sender<ReceivedCOVNotification>,
+    cov_tx: broadcast::Sender<CovEvent>,
     event_tx: broadcast::Sender<ReceivedEventNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
@@ -935,7 +935,7 @@ pub use bacnet_network::layer::RoutingTableEntry;
 pub use cov::CovPropertySubscription;
 pub use cov_notifications::{
     COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,
-    ReceivedCOVNotification,
+    CovEvent, ReceivedCOVNotification, ReceivedCOVNotificationMultiple,
 };
 pub use cov_renewal::{
     ManagedCOVSubscription, ManagedCOVSubscriptionEvent, ManagedCOVSubscriptionOptions,
@@ -970,6 +970,8 @@ mod builder_options_tests;
 mod confirmed_request_dispatch_tests;
 #[cfg(test)]
 mod coordinator_tests;
+#[cfg(test)]
+mod cov_multiple_notification_tests;
 #[cfg(test)]
 mod cov_notification_tests;
 #[cfg(test)]

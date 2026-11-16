@@ -142,6 +142,7 @@ impl BACnetClient {
     /// `issue_confirmed_notifications` is required, including for cancellations.
     /// For subscriptions and re-subscriptions, `lifetime` and `max_notification_delay` are both required.
     /// A whole-context cancellation uses an empty `specs` list and omits both timing fields.
+    /// The notifications arrive on `cov_notifications()` as `CovNotificationMultiple`.
     #[pyo3(signature = (address, subscriber_process_identifier, specs, issue_confirmed_notifications, max_notification_delay=None, lifetime=None))]
     fn subscribe_cov_property_multiple<'py>(
         &self,

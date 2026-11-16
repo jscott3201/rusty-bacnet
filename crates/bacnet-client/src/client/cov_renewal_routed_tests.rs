@@ -42,17 +42,17 @@ fn notification(
 
 /// `received` as the client's notification channel would carry it, from
 /// `mac` with `routed` as its source network and address.
-fn received(mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedCOVNotification {
+fn received(mac: &[u8], routed: Option<(u16, &[u8])>) -> CovEvent {
     let source = routed.map(|(network, address)| NpduAddress {
         network,
         mac_address: MacAddr::from_slice(address),
     });
-    ReceivedCOVNotification::new(
+    CovEvent::Object(ReceivedCOVNotification::new(
         notification(1, ai(1), 60),
         mac,
         &source,
         COVNotificationDelivery::Unconfirmed,
-    )
+    ))
 }
 
 /// Send `apdu` to the client as the router relays it: from `source`.
