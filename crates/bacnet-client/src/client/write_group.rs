@@ -10,8 +10,10 @@ use bacnet_services::write_group::WriteGroupRequest;
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Send a WriteGroup request to `scope` (#2588): every device on this
     /// network, on one remote network, or on every network. The standard
-    /// prefers broadcasts to one network at a time over a global one
-    /// (Clause 15.11).
+    /// lets WriteGroup go by unicast, multicast or broadcast, and prefers
+    /// broadcasts to one network at a time over a global one (Clause
+    /// 15.11); this client sends the unicast ([`Self::write_group_directed`])
+    /// and the broadcasts, not a multicast.
     ///
     /// The service is unconfirmed: this returns once the request is sent, and
     /// no device answers it, so delivery isn't confirmed either. Fails before

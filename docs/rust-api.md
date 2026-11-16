@@ -10771,8 +10771,9 @@ client.unconfirmed_text_message(&mac, &status).await?;
 `write_group` sends a WriteGroup to a `Broadcast` scope: `Local`,
 `Network` 1 to 65534, or `Global`; `write_group_directed` sends it to one
 station, on this network or behind a router (#2588). The standard lets
-WriteGroup go by unicast or broadcast, and prefers broadcasts to one network
-at a time over a global one (Clause 15.11). Either returns once the request
+WriteGroup go by unicast, multicast or broadcast, and prefers broadcasts to
+one network at a time over a global one (Clause 15.11); this client sends
+the unicast and the broadcasts, not a multicast. Either returns once the request
 is sent, since nothing answers it, and fails before sending when the
 request doesn't encode or the network is 0 or 65535. Who-Am-I (Clause 16.11) goes to a
 `Broadcast` scope with `who_am_i`, or to one station with
