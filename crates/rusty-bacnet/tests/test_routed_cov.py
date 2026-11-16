@@ -1,4 +1,5 @@
-"""SubscribeCOV and its cancel to a station behind a router (#2588).
+"""SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple, and
+their cancels, to a station behind a router (#2588).
 
 `subscribe_cov` and `unsubscribe_cov` take a `RoutedTarget` as the routed
 calls of #2612/#2617 do, with the same routing rules (a named router, the
@@ -29,6 +30,9 @@ NEAR = 2588
 FAR = 2589
 STATION = b"\x0a"
 SUBSCRIBE_COV = 5
+SUBSCRIBE_COV_PROPERTY = 28
+SUBSCRIBE_COV_PROPERTY_MULTIPLE = 30
+PV = rb.PropertyIdentifier.PRESENT_VALUE
 PROCESS = 7
 
 
@@ -76,7 +80,7 @@ async def stop(task):
 
 class CovWire:
     """The raw router's side: keeps each request and where it came from,
-    and answers a SubscribeCOV with a SimpleACK from the station."""
+    and answers each confirmed request with a SimpleACK from the station."""
 
     def __init__(self):
         self.requests = []
@@ -89,9 +93,8 @@ class CovWire:
         self.requests.append(request)
         self.client = source
         apdu = request["apdu"]
-        if apdu[0] >> 4 == 0 and apdu[3] == SUBSCRIBE_COV:
-            return [relay(request["dnet"], request["dadr"],
-                          bytes([0x20, apdu[2], SUBSCRIBE_COV]))]
+        if apdu[0] >> 4 == 0:
+            return [relay(request["dnet"], request["dadr"], bytes([0x20, apdu[2], apdu[3]]))]
         return None
 
 
@@ -122,13 +125,13 @@ class RoutedCovWireTests(unittest.IsolatedAsyncioTestCase):
                     finally:
                         await finish(endpoint.close)
 
-    def assert_routed(self, request):
+    def assert_routed(self, request, service=SUBSCRIBE_COV):
         # DNET present, expecting a reply, normal priority, no SNET.
         self.assertEqual(request["control"], 0x24)
         self.assertEqual((request["dnet"], request["dadr"]), (5, STATION))
         self.assertEqual(request["hop_count"], 255)
         self.assertEqual(request["apdu"][0] >> 4, 0)  # Confirmed-Request
-        self.assertEqual(request["apdu"][3], SUBSCRIBE_COV)
+        self.assertEqual(request["apdu"][3], service)
 
     async def test_subscribe_hear_and_cancel_through_the_router(self):
         async def scenario(client):
@@ -165,6 +168,42 @@ class RoutedCovWireTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(cancel["apdu"][4:], cancel_body(PROCESS))
             finally:
                 await stop(task)
+
+        await self.run_both(scenario)
+
+    async def test_property_subscriptions_go_to_the_station(self):
+        async def scenario(client):
+            await asyncio.wait_for(client.subscribe_cov_property(
+                self.target, PROCESS, AI_1, PV, False, 60, cov_increment=0.5), 5)
+            await asyncio.wait_for(client.unsubscribe_cov_property(
+                self.target, PROCESS, AI_1, PV), 5)
+            await asyncio.wait_for(client.subscribe_cov_property_multiple(
+                self.target, PROCESS, [(AI_1, [(PV, None, None, False)])],
+                issue_confirmed_notifications=False, max_notification_delay=5, lifetime=60), 5)
+            subscribe, cancel, multiple = self.wire.requests
+            for request, service in ((subscribe, SUBSCRIBE_COV_PROPERTY),
+                                     (cancel, SUBSCRIBE_COV_PROPERTY),
+                                     (multiple, SUBSCRIBE_COV_PROPERTY_MULTIPLE)):
+                self.assert_routed(request, service)
+            # The process, the object, unconfirmed, 60 s, Present_Value, 0.5.
+            prop = b"\x4e\x09\x55\x4f"
+            self.assertEqual(subscribe["apdu"][4:], cancel_body(PROCESS) + b"\x29\x00\x39\x3c"
+                             + prop + b"\x5c" + struct.pack(">f", 0.5))
+            # A cancel: the same process, object and property, nothing else.
+            self.assertEqual(cancel["apdu"][4:], cancel_body(PROCESS) + prop)
+
+            # Checked before anything is sent: a zero lifetime, and an
+            # address that is neither a str nor a RoutedTarget.
+            self.wire.requests.clear()
+            with self.assertRaisesRegex(ValueError, "1 or more seconds"):
+                client.subscribe_cov_property(self.target, PROCESS, AI_1, PV, False, 0)
+            for call in (lambda to: client.subscribe_cov_property(to, PROCESS, AI_1, PV, False, 60),
+                         lambda to: client.unsubscribe_cov_property(to, PROCESS, AI_1, PV),
+                         lambda to: client.subscribe_cov_property_multiple(
+                             to, PROCESS, [(AI_1, [(PV, None, None, False)])], False, 5, 60)):
+                with self.assertRaisesRegex(TypeError, "str or a RoutedTarget, not int"):
+                    call(7)
+            self.assertEqual(self.wire.requests, [])
 
         await self.run_both(scenario)
 
@@ -325,6 +364,39 @@ class RoutedCovRouterTests(unittest.IsolatedAsyncioTestCase):
                                    apdu_timeout_ms=2000) as client:
             await self.routed_subscription(client, confirmed=False)
             await self.routed_subscription(client, confirmed=True)
+
+    async def test_a_routed_property_subscription_notifies_renews_and_cancels(self):
+        async with rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                                   apdu_timeout_ms=2000) as client:
+            target = self.target()
+            before = await self.counters()
+            queue, task = await collect(client)
+            try:
+                await asyncio.wait_for(client.subscribe_cov_property(
+                    target, PROCESS, AI_1, PV, False, 60), 10)
+                await self.heard(queue, 10.0, False)
+                await self.far.set_present_value_local(AI_1, rb.PropertyValue.real(30.0))
+                await self.heard(queue, 30.0, False)
+                # A renewal: the same subscription again, which notifies once more.
+                await asyncio.wait_for(client.subscribe_cov_property(
+                    target, PROCESS, AI_1, PV, False, 60), 10)
+                await self.heard(queue, 30.0, False)
+                after = await self.counters()
+                self.assertEqual(after["subscriptions_created"],
+                                 before["subscriptions_created"] + 1)
+                self.assertEqual(after["subscriptions_active"], 1)
+                # The cancel to the same target ends it.
+                await asyncio.wait_for(client.unsubscribe_cov_property(
+                    target, PROCESS, AI_1, PV), 10)
+                after = await self.counters()
+                self.assertEqual(after["subscriptions_active"], 0)
+                self.assertEqual(after["subscriptions_cancelled"],
+                                 before["subscriptions_cancelled"] + 1)
+                await self.far.set_present_value_local(AI_1, rb.PropertyValue.real(10.0))
+                with self.assertRaises(asyncio.TimeoutError):
+                    await asyncio.wait_for(queue.get(), 0.5)
+            finally:
+                await stop(task)
 
     async def test_a_cancel_by_another_address_leaves_the_subscription(self):
         # The server keeps the subscription under the address the request

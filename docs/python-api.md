@@ -2345,8 +2345,8 @@ Present_Value no longer produces a flags-only partial report. Declared absence
 omits the companion. Disappearance alone does not trigger; a later present value
 can trigger after a delivered absent observation. Multiple samples each context
 separately under one DB/snapshot borrow and retains existing lifetime fences.
-These server guarantees do not add a Python Single-property API, empty finite
-Multiple contexts, delayed Multiple notifications or general numeric-array reduction.
+These server guarantees do not add empty finite Multiple contexts, delayed
+Multiple notifications or general numeric-array reduction.
 
 #### `subscribe_cov(address, subscriber_process_identifier, monitored_object_identifier, confirmed, lifetime=None)`
 
@@ -2389,6 +2389,40 @@ await client.unsubscribe_cov(
     monitored_object_identifier=ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
 )
 ```
+
+#### `subscribe_cov_property(address, subscriber_process_identifier, monitored_object_identifier, property_identifier, confirmed, lifetime, array_index=None, cov_increment=None)`
+
+Subscribe to COV notifications for one property of an object
+(SubscribeCOVProperty, #2588). `address` is a `str` or a `RoutedTarget`, as
+for `subscribe_cov`. `lifetime` is required, 1 or more seconds: a
+single-property subscription can't be indefinite, so 0 raises `ValueError`
+before anything is sent; renew it by subscribing again, with the same
+target, process, object and property, before it runs out. `array_index`
+names one element of an array property, and `cov_increment` overrides the
+object's own increment for a numeric property. Notifications arrive on
+`cov_notifications()`, as for `subscribe_cov`.
+
+Give each subscription a process identifier of its own: an object
+subscription (`subscribe_cov`) and a property subscription on one object
+with one identifier send notifications that can't be told apart.
+
+```python
+await client.subscribe_cov_property(
+    "192.168.1.100:47808",
+    subscriber_process_identifier=2,
+    monitored_object_identifier=ObjectIdentifier(ObjectType.ANALOG_VALUE, 3),
+    property_identifier=PropertyIdentifier.PRESENT_VALUE,
+    confirmed=False,
+    lifetime=600,
+    cov_increment=0.5,
+)
+```
+
+#### `unsubscribe_cov_property(address, subscriber_process_identifier, monitored_object_identifier, property_identifier, array_index=None)`
+
+Cancel a single-property subscription. Name the target, process, object,
+property and array index the subscription named: the device finds it by
+those and the address the request came from, as for `unsubscribe_cov`.
 
 #### `cov_notifications() -> Awaitable[CovNotificationIterator]`
 
@@ -3398,7 +3432,7 @@ the peer omits that optional ACK member; an explicit class zero remains `0`.
 
 #### `subscribe_cov_property_multiple(address, subscriber_process_identifier, specs, issue_confirmed_notifications, max_notification_delay=None, lifetime=None)`
 
-Subscribe to COV on multiple properties across multiple objects. `issue_confirmed_notifications` is now a required `bool`, including for cancellation requests. This is a breaking Python call-signature change; callers should pass it by keyword as shown below. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`. For whole-context cancellations, pass `specs=[]` and omit both timing fields.
+Subscribe to COV on multiple properties across multiple objects. `address` is a `str` or a `RoutedTarget`, as for `subscribe_cov` (#2588). The client doesn't deliver the notifications such a subscription brings yet: it refuses a ConfirmedCOVNotificationMultiple and drops the unconfirmed form, so none reaches `cov_notifications()` (#2654). `issue_confirmed_notifications` is now a required `bool`, including for cancellation requests. This is a breaking Python call-signature change; callers should pass it by keyword as shown below. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`. For whole-context cancellations, pass `specs=[]` and omit both timing fields.
 
 Each supplied object specification must contain at least one property reference.
 `PropertyIdentifier.ALL`, `PropertyIdentifier.OPTIONAL`, and
@@ -7510,14 +7544,16 @@ endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
 
 ### Routed targets
 
-Nine calls of `BACnetClient` take, where they take `address`, either
+Twelve calls of `BACnetClient` take, where they take `address`, either
 a `str`, which always names a station on the client's own link and is never
 read as `net:mac`, or a `RoutedTarget` naming one behind a router (#2612,
-#2617, #2613, #2588), on a standalone client and an endpoint's alike. The nine
-are `read_property`, `read_property_multiple`, `read_range`,
+#2617, #2613, #2588), on a standalone client and an endpoint's alike. The
+twelve are `read_property`, `read_property_multiple`, `read_range`,
 `read_log_page`, `write_property`, `atomic_read_file`,
-`atomic_write_file`, `subscribe_cov` and `unsubscribe_cov`; the other
-typed calls take a local address only.
+`atomic_write_file`, `subscribe_cov`, `unsubscribe_cov`,
+`subscribe_cov_property`, `unsubscribe_cov_property` and
+`subscribe_cov_property_multiple`; the other typed calls take a local
+address only.
 
 **To scan stations that don't announce themselves (MS/TP slaves), pass
 `router` from `discover_routers()`.** Without it each such station costs one

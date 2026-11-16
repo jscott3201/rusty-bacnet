@@ -89,6 +89,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`BACnetClient::stop`] is not needed.
     ///
     /// ```no_run
+    /// use bacnet_client::client::Broadcast;
     /// use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
     /// use bacnet_transport::loopback::LoopbackTransport;
     ///
@@ -99,10 +100,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///     EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
     /// session.start().await?;
     /// let client = session.full_client()?;
-    /// client.who_is(None).await?;
+    /// client.who_is(Broadcast::Global, None).await?;
     /// session.stop().await?;
     /// // The client is still alive; its calls now fail.
-    /// assert!(client.who_is(None).await.is_err());
+    /// assert!(client.who_is(Broadcast::Global, None).await.is_err());
     /// # Ok(())
     /// # }
     /// ```

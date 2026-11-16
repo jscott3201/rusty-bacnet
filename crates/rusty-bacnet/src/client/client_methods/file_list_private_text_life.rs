@@ -313,17 +313,10 @@ impl BACnetClient {
                 service_number,
                 service_parameters,
             };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
-            let resp = c
-                .confirmed_request(
-                    &mac,
-                    ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER,
-                    &buf,
-                )
+            let ack = c
+                .confirmed_private_transfer(&mac, &req)
                 .await
                 .map_err(to_py_err)?;
-            let ack = PrivateTransferAck::decode(&resp).map_err(to_py_err)?;
             crate::py_async::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("vendor_id", ack.vendor_id)?;
@@ -361,15 +354,9 @@ impl BACnetClient {
                 service_number,
                 service_parameters,
             };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
-            c.unconfirmed_request(
-                &mac,
-                UnconfirmedServiceChoice::UNCONFIRMED_PRIVATE_TRANSFER,
-                &buf,
-            )
-            .await
-            .map_err(to_py_err)?;
+            c.unconfirmed_private_transfer(&mac, &req)
+                .await
+                .map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -409,9 +396,7 @@ impl BACnetClient {
                 message_priority: priority,
                 message,
             };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf).map_err(to_py_err)?;
-            c.confirmed_request(&mac, ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE, &buf)
+            c.confirmed_text_message(&mac, &req)
                 .await
                 .map_err(to_py_err)?;
             Ok(())
@@ -446,15 +431,9 @@ impl BACnetClient {
                 message_priority: priority,
                 message,
             };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf).map_err(to_py_err)?;
-            c.unconfirmed_request(
-                &mac,
-                UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE,
-                &buf,
-            )
-            .await
-            .map_err(to_py_err)?;
+            c.unconfirmed_text_message(&mac, &req)
+                .await
+                .map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -489,9 +468,7 @@ impl BACnetClient {
                 request: op,
                 object_identifier: oid,
             };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf).map_err(to_py_err)?;
-            c.confirmed_request(&mac, ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, &buf)
+            c.life_safety_operation(&mac, &req)
                 .await
                 .map_err(to_py_err)?;
             Ok(())

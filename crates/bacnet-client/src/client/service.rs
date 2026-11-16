@@ -9,17 +9,26 @@ use bacnet_services::alarm_event::{
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
 use bacnet_services::audit::{AuditLogQueryAck, AuditLogQueryRequest, AuditNotificationRequest};
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
+use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 use bacnet_services::device_mgmt::{
     DeviceCommunicationControlRequest, ReinitializeDeviceRequest, TimeSynchronizationRequest,
 };
 use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
 use bacnet_services::file::{AtomicReadFileAck, AtomicReadFileRequest, AtomicWriteFileRequest};
+use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_services::object_mgmt::{CreateObjectAck, CreateObjectRequest, DeleteObjectRequest};
+use bacnet_services::private_transfer::{PrivateTransferAck, PrivateTransferRequest};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::read_range::ReadRangeValidation;
 use bacnet_services::read_range::{ReadRangeAck, ReadRangeReply, ReadRangeRequest};
 use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
+use bacnet_services::text_message::TextMessageRequest;
+use bacnet_services::virtual_terminal::{
+    VTCloseRequest, VTDataAck, VTDataRequest, VTOpenAck, VTOpenRequest,
+};
+use bacnet_services::who_am_i::WhoAmIRequest;
+use bacnet_services::who_has::WhoHasRequest;
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_services::wpm::WritePropertyMultipleRequest;
 use bacnet_services::write_property::WritePropertyRequest;
@@ -73,6 +82,34 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::new();
         service.encode_into(&mut buf)?;
         to.unconfirmed(self, service.choice(), &buf).await
+    }
+
+    /// Broadcast the unconfirmed `service` to `scope`, once: success means
+    /// it was sent. Each scope goes through the broadcast call that sends
+    /// raw octets there, so a node that may not initiate refuses it the
+    /// same way. [`Broadcast::Network`] of 0 or 65535 is refused before
+    /// anything is sent: those are [`Broadcast::Local`] and
+    /// [`Broadcast::Global`].
+    pub(super) async fn tell_all<S: Unconfirmed>(
+        &self,
+        scope: Broadcast,
+        service: S,
+    ) -> Result<(), Error> {
+        let mut buf = BytesMut::new();
+        service.encode_into(&mut buf)?;
+        let choice = service.choice();
+        match scope {
+            Broadcast::Local => self.broadcast_unconfirmed(choice, &buf).await,
+            Broadcast::Network(network @ 1..=0xFFFE) => {
+                self.broadcast_network_unconfirmed(choice, &buf, network)
+                    .await
+            }
+            Broadcast::Network(network) => Err(Error::Encoding(format!(
+                "a network broadcast names one remote network, 1 to 65534, not {network}: \
+                 Broadcast::Local is this network and Broadcast::Global every network"
+            ))),
+            Broadcast::Global => self.broadcast_global_unconfirmed(choice, &buf).await,
+        }
     }
 }
 
@@ -131,6 +168,49 @@ simple! {
         |r, buf| r.encode(buf);
     &AuditNotificationRequest => ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
         |r, buf| r.try_encode(buf);
+    &TextMessageRequest => ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE, |r, buf| r.encode(buf);
+    &LifeSafetyOperationRequest => ConfirmedServiceChoice::LIFE_SAFETY_OPERATION,
+        |r, buf| r.encode(buf);
+    &VTCloseRequest => ConfirmedServiceChoice::VT_CLOSE, |r, buf| r.encode(buf);
+    &SubscribeCOVPropertyMultipleRequest => ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+        |r, buf| r.encode(buf);
+}
+
+/// A service whose ACK is decoded and returned as it is: its encoding
+/// (`$encode` writes `$request`, `self`, into `buf`) and the ACK's type.
+/// Each choice is written out in full, as in [`simple!`].
+macro_rules! acked {
+    ($($request:ty => $choice:expr, $ack:ty, |$this:ident, $buf:ident| $encode:expr;)*) => {$(
+        impl Confirmed for $request {
+            type Answer = $ack;
+            fn choice(&self) -> ConfirmedServiceChoice {
+                $choice
+            }
+            fn encode_into(&self, $buf: &mut BytesMut) -> Result<(), Error> {
+                let $this = self;
+                $encode
+            }
+            fn answer(self, data: Bytes) -> Result<$ack, Error> {
+                <$ack>::decode(&data)
+            }
+        }
+    )*};
+}
+
+acked! {
+    &PrivateTransferRequest => ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER,
+        PrivateTransferAck, |r, buf| {
+            r.encode(buf);
+            Ok(())
+        };
+    &VTOpenRequest => ConfirmedServiceChoice::VT_OPEN, VTOpenAck, |r, buf| {
+        r.encode(buf);
+        Ok(())
+    };
+    &VTDataRequest => ConfirmedServiceChoice::VT_DATA, VTDataAck, |r, buf| {
+        r.encode(buf);
+        Ok(())
+    };
 }
 
 /// AddListElement or RemoveListElement, which share a request.
@@ -318,6 +398,43 @@ impl Unconfirmed for &AuditNotificationRequest {
     }
     fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.try_encode(buf)
+    }
+}
+
+impl Unconfirmed for &PrivateTransferRequest {
+    fn choice(&self) -> UnconfirmedServiceChoice {
+        UnconfirmedServiceChoice::UNCONFIRMED_PRIVATE_TRANSFER
+    }
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.encode(buf);
+        Ok(())
+    }
+}
+
+impl Unconfirmed for &TextMessageRequest {
+    fn choice(&self) -> UnconfirmedServiceChoice {
+        UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE
+    }
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.encode(buf)
+    }
+}
+
+impl Unconfirmed for &WhoAmIRequest {
+    fn choice(&self) -> UnconfirmedServiceChoice {
+        UnconfirmedServiceChoice::WHO_AM_I
+    }
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.encode(buf)
+    }
+}
+
+impl Unconfirmed for WhoHasRequest {
+    fn choice(&self) -> UnconfirmedServiceChoice {
+        UnconfirmedServiceChoice::WHO_HAS
+    }
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.encode(buf)
     }
 }
 

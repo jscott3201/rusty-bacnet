@@ -3,7 +3,7 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (value, _) = decode_application_value(&ack.property_value, 0)?;
     println!("unicast object-name: {value:?}");
 
-    client.who_is(None).await?;
+    client.who_is(Broadcast::Global, None).await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     let devices = client.discovered_devices().await;
     for d in &devices {

@@ -80,7 +80,10 @@ impl SubscribeCOVPropertyMultipleRequest {
         Ok(())
     }
 
-    fn validate(&self) -> Result<(), Error> {
+    /// Check the whole request as [`Self::encode`] does, encoding nothing:
+    /// the timing pair, a non-empty reference list for each object, the
+    /// reference count, and each reference.
+    pub fn validate(&self) -> Result<(), Error> {
         match (self.lifetime, self.max_notification_delay) {
             (None, None) => {}
             (Some(lifetime), Some(max_delay))

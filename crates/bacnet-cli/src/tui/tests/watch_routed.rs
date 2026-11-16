@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bacnet_client::client::Broadcast;
 use bacnet_device_core::write::local::LocalCommandSource;
 use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;
@@ -84,7 +85,7 @@ async fn routed_rows_subscribe_renew_and_cancel_through_the_router() {
 async fn a_routed_row_is_cancelled_after_its_device_leaves_the_table() {
     let (routed, client) = routed_parts(LAB).await;
     let client = Arc::new(client);
-    client.who_is(None).await.unwrap();
+    client.who_is(Broadcast::Global, None).await.unwrap();
     while client.get_device(LAB).await.unwrap().is_none() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

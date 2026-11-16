@@ -105,11 +105,18 @@ pub struct VTCloseRequest {
 }
 
 impl VTCloseRequest {
-    /// Encode the request parameters into `buf`; fails if the identifier list is empty.
-    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+    /// Check the request as [`Self::encode`] does, encoding nothing: the
+    /// identifier list must not be empty.
+    pub fn validate(&self) -> Result<(), Error> {
         if self.list_of_remote_vt_session_identifiers.is_empty() {
             return Err(Error::encode("VTClose requires at least one session identifier"));
         }
+        Ok(())
+    }
+
+    /// Encode the request parameters into `buf`; fails if the identifier list is empty.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
         for &id in &self.list_of_remote_vt_session_identifiers {
             primitives::encode_app_unsigned(buf, id as u64);
         }

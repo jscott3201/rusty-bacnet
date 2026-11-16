@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
+use bacnet_client::client::Broadcast;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
@@ -127,7 +128,7 @@ pub async fn run(_transport: &str, clients: u64, duration_secs: u64) -> Vec<Degr
                     }
                 } else if roll < 95 {
                     // 5% WhoIs
-                    client.who_is(None).await
+                    client.who_is(Broadcast::Global, None).await
                 } else {
                     // 5% ReadProperty on Device object
                     let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();

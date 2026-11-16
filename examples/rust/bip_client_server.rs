@@ -136,7 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- WhoIs discovery ---
     // Both ends share 127.0.0.1 on ports the OS picked, so a broadcast Who-Is
     // would go to the client's own port. Direct it at the server instead; on a
-    // real subnet, `client.who_is(None)` broadcasts it.
+    // real subnet, `client.who_is(Broadcast::Global, None)` broadcasts it.
     client.who_is_directed(&server_mac, None).await?;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let devices = client.discovered_devices().await;

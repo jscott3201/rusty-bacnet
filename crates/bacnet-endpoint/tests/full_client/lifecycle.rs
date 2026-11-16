@@ -85,14 +85,14 @@ async fn the_session_stopping_first_fails_open_requests_and_stops_the_link_under
             )
             .await;
         assert!(late.is_err());
-        assert!(client.who_is(None).await.is_err());
+        assert!(client.who_is(Broadcast::Global, None).await.is_err());
         assert!(
             client
                 .who_is_directed(&Wire::mac(PEER), None)
                 .await
                 .is_err()
         );
-        assert!(client.who_is_network(7, None).await.is_err());
+        assert!(client.who_is(Broadcast::Network(7), None).await.is_err());
         assert!(client.who_is_router_to_network(None, None).await.is_err());
         assert!(client.what_is_network_number(None).await.is_err());
         // Nor does the link itself, reached through the client.

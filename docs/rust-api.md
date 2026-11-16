@@ -9631,7 +9631,8 @@ this network before the number was learned keeps its routed key, and its
 relayed answer still completes it. The peer's
 limits still come from its routed device-table row, so a request past them is
 refused or segmented as for the routed peer.
-`broadcast_network_unconfirmed`, and `who_is_network` and a `write_group` to
+`broadcast_network_unconfirmed`, and a scoped call to `Broadcast::Network`
+(`who_is`, `who_has`, `who_am_i`) and a `write_group` to
 `WriteGroupDestination::RemoteBroadcast` built on it, send a broadcast for that
 number as a local broadcast. While the number is unknown, every destination goes as written.
 Replies, SegmentACKs and Aborts to a routed peer keep the route its PDU
@@ -9731,7 +9732,8 @@ means cancellation. Invalid lifetime-only requests leave the output buffer
 unchanged; the server returns INCONSISTENT_PARAMETERS before object lookup,
 expiry cleanup or subscription changes. Public Rust/Python ordinary subscribe
 methods already supply the mode and retain their optional lifetime signatures.
-Python exposes ordinary COV and PropertyMultiple, not the single-property API.
+Python exposes all three: `subscribe_cov`, `subscribe_cov_property` and
+`subscribe_cov_property_multiple`.
 
 The managed helpers `manage_cov_subscription` and
 `manage_cov_property_subscription` (called on an `Arc<BACnetClient>`) send a
@@ -10270,26 +10272,27 @@ let request = SubscribeCOVPropertyMultipleRequest {
     max_notification_delay: Some(10),
     list_of_cov_subscription_specifications: cov_specs,
 };
-let mut service_data = bytes::BytesMut::new();
-request.encode(&mut service_data)?;
-client
-    .confirmed_request(
-        &mac,
-        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
-        &service_data,
-    )
-    .await?;
+// The client doesn't deliver its COV-multiple notifications yet (#2654).
+client.subscribe_cov_property_multiple(&mac, &request).await?;
 
-// Receive notifications (broadcast channel — multiple consumers OK)
+// Receive the object subscription's notifications (broadcast channel —
+// multiple consumers OK)
 let mut rx = client.cov_notifications();
-let notification: COVNotificationRequest = rx.recv().await?;
+let notification: ReceivedCOVNotification = rx.recv().await?;
 
 // Unsubscribe
 client.unsubscribe_cov(&mac, process_id, oid).await?;
 ```
 
+A SubscribeCOVPropertyMultiple subscription's notifications don't reach
+`cov_notifications` yet: the client refuses a
+ConfirmedCOVNotificationMultiple and drops an
+UnconfirmedCOVNotificationMultiple (#2654).
+
 `SubscribeCOVPropertyMultipleRequest::encode` is fallible and validates the entire
-request before appending bytes. Invalid timing pairs, empty nested reference lists,
+request before appending bytes; `validate` makes the same checks alone, and
+`subscribe_cov_property_multiple` refuses a request that fails them before
+anything is sent. Invalid timing pairs, empty nested reference lists,
 prohibited property selectors and the cumulative reference limit return
 `Error::Encode` without changing the destination buffer. The former `try_encode`
 and panicking `encode` split has been removed. An empty outer list remains encodable
@@ -10299,9 +10302,16 @@ the bundled server materializes an empty subscription context.
 ### Discovery
 
 ```rust
-client.who_is(None).await?;                             // every device, globally
-client.who_is(Some(DeviceInstanceRange::new(1000, 2000)?)).await?; // a range
-client.who_has(WhoHasObject::Name("Zone Temp".into()), None).await?; // every network too
+use bacnet_client::client::Broadcast;
+
+// A broadcast goes to a scope (#2588): Local, Network(1 to 65534) or Global.
+// Network 0 and 65535 are refused before anything is sent.
+client.who_is(Broadcast::Global, None).await?;          // every device, every network
+client.who_is(Broadcast::Local, Some(DeviceInstanceRange::new(1000, 2000)?)).await?; // a range, here
+client.who_is(Broadcast::Network(5), None).await?;      // one remote network
+client.who_is_directed(&mac, None).await?;              // one station
+client.who_has(Broadcast::Global, WhoHasObject::Name("Zone Temp".into()), None).await?;
+client.who_has_directed(&mac, WhoHasObject::Name("Zone Temp".into()), None).await?;
 
 let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>, one per address
 let device = client.get_device(1234).await?;             // Option<DiscoveredDevice>
@@ -10428,9 +10438,15 @@ Who-Has answers and router discovery (#960):
 
 ```rust
 // Send a global Who-Has and collect the I-Haves that answer it for three
-// seconds. bacnet_ops::Client::find asks this network alone unless told.
+// seconds; a scope keeps only the answers from where it asked.
+// bacnet_ops::Client::find asks this network alone unless told.
 let found: Vec<ReceivedIHave> = client
-    .who_has_replies(WhoHasObject::Name("Supply Air Temp".into()), None, Duration::from_secs(3))
+    .who_has_replies(
+        Broadcast::Global,
+        WhoHasObject::Name("Supply Air Temp".into()),
+        None,
+        Duration::from_secs(3),
+    )
     .await?;
 let mut i_haves = client.i_have_events();                // every I-Have, asked for or not
 
@@ -10548,12 +10564,11 @@ let enrollments = client.get_enrollment_summary(&mac, &request).await?;
 
 ### Life Safety
 
-No dedicated client method: build the request and send it with `confirmed_request`.
+`life_safety_operation` sends a LifeSafetyOperation (#2588).
 
 ```rust
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
-use bacnet_types::enums::{ConfirmedServiceChoice, LifeSafetyOperation};
-use bytes::BytesMut;
+use bacnet_types::enums::LifeSafetyOperation;
 
 let request = LifeSafetyOperationRequest {
     requesting_process_identifier: process_id,
@@ -10561,11 +10576,7 @@ let request = LifeSafetyOperationRequest {
     request: LifeSafetyOperation::SILENCE,
     object_identifier: Some(oid),
 };
-let mut service_data = BytesMut::new();
-request.encode(&mut service_data)?;
-client
-    .confirmed_request(&mac, ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, &service_data)
-    .await?;
+client.life_safety_operation(&mac, &request).await?;
 ```
 
 ### File Services
@@ -10714,38 +10725,30 @@ class and code surfaces as `Error::Remote`.
 
 ### Private Transfer
 
-No dedicated client methods: both forms share `PrivateTransferRequest`.
+Both forms take a `PrivateTransferRequest` (#2588):
+`confirmed_private_transfer` returns the decoded `PrivateTransferAck`, and
+`unconfirmed_private_transfer` sends once.
 
 ```rust
-use bacnet_services::private_transfer::{PrivateTransferAck, PrivateTransferRequest};
-use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
-use bytes::BytesMut;
+use bacnet_services::private_transfer::PrivateTransferRequest;
 
 let request = PrivateTransferRequest {
     vendor_id,
     service_number,
     service_parameters: Some(params), // already-encoded parameter bytes
 };
-let mut service_data = BytesMut::new();
-request.encode(&mut service_data);
-let raw = client
-    .confirmed_request(&mac, ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER, &service_data)
-    .await?;
-let ack = PrivateTransferAck::decode(&raw)?;
-
-client
-    .unconfirmed_request(&mac, UnconfirmedServiceChoice::UNCONFIRMED_PRIVATE_TRANSFER, &service_data)
-    .await?;
+let ack = client.confirmed_private_transfer(&mac, &request).await?; // ack.result_block
+client.unconfirmed_private_transfer(&mac, &request).await?;
 ```
 
 ### Text Messages
 
-No dedicated client methods: both forms share `TextMessageRequest`.
+Both forms take a `TextMessageRequest` (#2588): `confirmed_text_message`
+and `unconfirmed_text_message`.
 
 ```rust
 use bacnet_services::text_message::{MessageClass, TextMessageRequest};
-use bacnet_types::enums::{ConfirmedServiceChoice, MessagePriority, UnconfirmedServiceChoice};
-use bytes::BytesMut;
+use bacnet_types::enums::MessagePriority;
 
 let request = TextMessageRequest {
     source_device: device_oid,
@@ -10753,11 +10756,7 @@ let request = TextMessageRequest {
     message_priority: MessagePriority::URGENT,
     message: "Fire alarm".into(),
 };
-let mut service_data = BytesMut::new();
-request.encode(&mut service_data)?;
-client
-    .confirmed_request(&mac, ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE, &service_data)
-    .await?;
+client.confirmed_text_message(&mac, &request).await?;
 
 let status = TextMessageRequest {
     message_class: None,
@@ -10765,11 +10764,7 @@ let status = TextMessageRequest {
     message: "Status update".into(),
     ..request
 };
-let mut service_data = BytesMut::new();
-status.encode(&mut service_data)?;
-client
-    .unconfirmed_request(&mac, UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE, &service_data)
-    .await?;
+client.unconfirmed_text_message(&mac, &status).await?;
 ```
 
 ### Write Group and Who-Am-I
@@ -10778,19 +10773,17 @@ client
 its link address, a `LocalBroadcast`, a `RemoteBroadcast` to network 1 to
 65534, or a `GlobalBroadcast`. It returns once the request is sent, since
 nothing answers it, and fails before sending when the request doesn't encode
-or the remote network is 0 or 65535. Who-Am-I has no dedicated method: build
-the `bacnet_services` request and send it through the generic
-unconfirmed-request API.
+or the remote network is 0 or 65535. Who-Am-I (Clause 16.11) goes to a
+`Broadcast` scope with `who_am_i`, or to one station with
+`who_am_i_directed` (#2588).
 
 ```rust
 use std::num::NonZeroU32;
 
-use bacnet_client::client::WriteGroupDestination;
+use bacnet_client::client::{Broadcast, WriteGroupDestination};
 use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
-use bacnet_types::enums::UnconfirmedServiceChoice;
 use bacnet_types::MacAddr;
-use bytes::BytesMut;
 
 // Channel 5 gets REAL 72.0; channel 6 gets NULL at priority 10.
 let request = WriteGroupRequest {
@@ -10824,49 +10817,38 @@ let who_am_i = WhoAmIRequest {
     model_name: "Controller-X".into(),
     serial_number: "SN-0001".into(),
 };
-let mut service_data = BytesMut::new();
-who_am_i.encode(&mut service_data)?;
-client.broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_AM_I, &service_data).await?;
+client.who_am_i(Broadcast::Local, &who_am_i).await?;
 ```
 
 ### Virtual Terminal
 
-The client has no VT-specific methods. Build the `bacnet_services` request and
-send it with `confirmed_request`. VT-Open carries both the terminal class and
-the caller's own session number (Clause 17.2.1); VT-Close needs at least one
-identifier and `encode` returns an error for an empty list; the VT-Data flag
-goes out as an Unsigned 0 or 1; and a VT-Data ACK is either `AllAccepted` or
-`Partial` with the accepted octet count (Clause 17.4.1.2).
+The typed virtual terminal calls are `vt_open`, `vt_close` and `vt_data`
+(#2588). VT-Open carries both the terminal class and the caller's own
+session number (Clause 17.2.1), and `vt_open` returns the device's
+`VTOpenAck`; VT-Close needs at least one identifier, and `vt_close` refuses
+an empty list before anything is sent (`VTCloseRequest::validate`); the
+VT-Data flag goes out as an Unsigned 0 or 1, and `vt_data` returns the
+`VTDataAck`, either `AllAccepted` or `Partial` with the accepted octet count
+(Clause 17.4.1.2).
 
 ```rust
 use bacnet_services::virtual_terminal::{
-    VTCloseRequest, VTDataAck, VTDataRequest, VTOpenAck, VTOpenRequest,
+    VTCloseRequest, VTDataAck, VTDataRequest, VTOpenRequest,
 };
-use bacnet_types::enums::{ConfirmedServiceChoice, VTClass};
-use bytes::BytesMut;
+use bacnet_types::enums::VTClass;
 
-let mut buf = BytesMut::new();
-VTOpenRequest {
+let open = VTOpenRequest {
     vt_class: VTClass::DEFAULT_TERMINAL,
     local_vt_session_identifier: 5,
-}
-.encode(&mut buf);
-let raw = client
-    .confirmed_request(&mac, ConfirmedServiceChoice::VT_OPEN, &buf)
-    .await?;
-let remote_id = VTOpenAck::decode(&raw)?.remote_vt_session_identifier;
+};
+let remote_id = client.vt_open(&mac, &open).await?.remote_vt_session_identifier;
 
-let mut buf = BytesMut::new();
-VTDataRequest {
+let data = VTDataRequest {
     vt_session_identifier: remote_id,
     vt_new_data: b"hello".to_vec(),
     vt_data_flag: false,
-}
-.encode(&mut buf);
-let raw = client
-    .confirmed_request(&mac, ConfirmedServiceChoice::VT_DATA, &buf)
-    .await?;
-match VTDataAck::decode(&raw)? {
+};
+match client.vt_data(&mac, &data).await? {
     VTDataAck::AllAccepted => {}
     VTDataAck::Partial { accepted_octet_count } => {
         // Resend the octets after the first `accepted_octet_count`.
@@ -10874,14 +10856,10 @@ match VTDataAck::decode(&raw)? {
     }
 }
 
-let mut buf = BytesMut::new();
-VTCloseRequest {
+let close = VTCloseRequest {
     list_of_remote_vt_session_identifiers: vec![remote_id],
-}
-.encode(&mut buf)?;
-client
-    .confirmed_request(&mac, ConfirmedServiceChoice::VT_CLOSE, &buf)
-    .await?;
+};
+client.vt_close(&mac, &close).await?;
 ```
 
 ### Audit Services
@@ -12140,8 +12118,9 @@ Who-Has searches its objects, so an empty list from the default says only
 that nothing on this network has it. `bacnet_ops::raw::who_has(&low_level,
 &scope, &object, range)` sends one on a low-level client and
 `raw::who_has_replies(.., wait)` also collects the `ReceivedIHave`s, with no
-rate cap. `BACnetClient::who_has` and `who_has_replies` stay global
-broadcasts by name: the front ends send through the scope. Every collector
+rate cap. `BACnetClient::who_has` and `who_has_replies` take a `Broadcast`
+scope, and `who_has_replies` keeps the answers from that scope
+(`Broadcast::answered_from`, the rule the front ends' scopes use). Every collector
 keeps one answer per device, object and source address, at most
 `MAX_I_HAVE_REPLIES`; `bacnet_client::client::collect_answers` is that
 collector, for a caller that sends its own Who-Has.
@@ -13393,9 +13372,9 @@ use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
 let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
 session.start().await?;
 let client = session.full_client()?;
-client.who_is(None).await?;
+client.who_is(Broadcast::Global, None).await?;
 session.stop().await?; // the client may still be alive
-assert!(client.who_is(None).await.is_err());
+assert!(client.who_is(Broadcast::Global, None).await.is_err());
 ```
 
 - One full client at a time; another is refused until the first is dropped.

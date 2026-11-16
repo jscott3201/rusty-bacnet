@@ -20,11 +20,9 @@ use bacnet_services::enrollment_summary::{GetEnrollmentSummaryRequest, PriorityF
 use bacnet_services::file::{FileAccessMethod, FileWriteAccessMethod};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_services::object_mgmt::ObjectSpecifier;
-use bacnet_services::private_transfer::{PrivateTransferAck, PrivateTransferRequest};
+use bacnet_services::private_transfer::PrivateTransferRequest;
 use bacnet_services::text_message::{MessageClass, TextMessageRequest};
-use bacnet_services::virtual_terminal::{
-    VTCloseRequest, VTDataAck, VTDataRequest, VTOpenAck, VTOpenRequest,
-};
+use bacnet_services::virtual_terminal::{VTCloseRequest, VTDataRequest, VTOpenRequest};
 use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::who_has::WhoHasObject;
 use bacnet_services::who_is::DeviceInstanceRange;

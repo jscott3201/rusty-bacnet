@@ -4,7 +4,7 @@
 //! APDU -> NPDU -> BVLL -> UDP -> receive -> decode -> respond ->
 //! encode -> UDP -> receive -> decode -> return typed result.
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_encoding::apdu::{
     self, Apdu, ComplexAck, UnconfirmedRequest as UnconfirmedRequestPdu, encode_apdu,
 };
@@ -131,9 +131,12 @@ async fn who_is_broadcast() {
         .unwrap();
 
     // WhoIs is fire-and-forget, so it should succeed immediately
-    client.who_is(None).await.unwrap();
+    client.who_is(Broadcast::Global, None).await.unwrap();
     client
-        .who_is(Some(DeviceInstanceRange::new(1000, 2000).unwrap()))
+        .who_is(
+            Broadcast::Global,
+            Some(DeviceInstanceRange::new(1000, 2000).unwrap()),
+        )
         .await
         .unwrap();
 

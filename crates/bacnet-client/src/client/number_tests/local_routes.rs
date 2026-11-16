@@ -14,8 +14,8 @@
 //! when it first stores a routed row or sends a Who-Is while it is unknown
 //! (#2572), and each test takes that question where it goes.
 use super::*;
-use crate::client::BACnetClient;
 use crate::client::Station;
+use crate::client::{BACnetClient, Broadcast};
 use crate::discovery::RoutedDeviceConfig;
 use bacnet_encoding::{
     apdu::{Apdu, ConfirmedRequest, SegmentAck, SimpleAck, decode_apdu, encode_apdu},
@@ -252,7 +252,10 @@ async fn a_who_is_on_this_network_by_number_goes_as_a_local_broadcast() {
         (false, THIS_NETWORK, Some(THIS_NETWORK)),
     ] {
         let (mut client, _inbound, mut outbound) = client(learned).await;
-        client.who_is_network(network, None).await.unwrap();
+        client
+            .who_is(Broadcast::Network(network), None)
+            .await
+            .unwrap();
         if !learned {
             asked(&mut outbound).await;
         }

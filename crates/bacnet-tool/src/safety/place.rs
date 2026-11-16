@@ -14,7 +14,7 @@
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -382,7 +382,10 @@ pub async fn reach<T: TransportPort + 'static>(
     let Ok(range) = DeviceInstanceRange::new(instance, instance) else {
         return;
     };
-    if let Err(error) = client.who_is_network(address.network(), Some(range)).await {
+    if let Err(error) = client
+        .who_is(Broadcast::Network(address.network()), Some(range))
+        .await
+    {
         tracing::warn!("looking for device {instance} at {address}: {error}");
         return;
     }
@@ -402,7 +405,7 @@ async fn look_for<T: TransportPort + 'static>(client: &BACnetClient<T>, instance
     let Ok(range) = DeviceInstanceRange::new(instance, instance) else {
         return;
     };
-    match client.who_is(Some(range)).await {
+    match client.who_is(Broadcast::Global, Some(range)).await {
         Ok(()) => {
             if !heard.wait(client).await {
                 tracing::warn!("device {instance} did not answer a Who-Is");

@@ -6,14 +6,12 @@ use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, ReceivedIHave, collect_answers};
-use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
+use bacnet_client::client::{BACnetClient, Broadcast, ReceivedIHave, collect_answers};
+use bacnet_services::who_has::WhoHasObject;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::UnconfirmedServiceChoice;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-use bytes::BytesMut;
 
 use super::Client;
 use super::discover::{Ask, Scope, instances};
@@ -138,26 +136,20 @@ impl Scope {
         object: &WhoHasObject,
         range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        WhoHasRequest {
-            range,
-            object: object.clone(),
-        }
-        .encode(&mut buf)?;
-        let service = UnconfirmedServiceChoice::WHO_HAS;
+        let object = object.clone();
         match (self, station) {
             (Self::Local, _) => client
-                .broadcast_unconfirmed(service, &buf)
+                .who_has(Broadcast::Local, object, range)
                 .await
                 .map_err(|error| super::discover::to_local_broadcast(client, error)),
             (Self::Network(network), _) => {
                 client
-                    .broadcast_network_unconfirmed(service, &buf, *network)
+                    .who_has(Broadcast::Network(*network), object, range)
                     .await
             }
-            (Self::Directed(_), Some(mac)) => client.unconfirmed_request(mac, service, &buf).await,
+            (Self::Directed(_), Some(mac)) => client.who_has_directed(mac, object, range).await,
             (Self::Directed(_), None) => unreachable!("a directed Who-Has has its station"),
-            (Self::Global, _) => client.broadcast_global_unconfirmed(service, &buf).await,
+            (Self::Global, _) => client.who_has(Broadcast::Global, object, range).await,
         }
     }
 }

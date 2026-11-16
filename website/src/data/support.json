@@ -569,7 +569,7 @@
     },
     {
       "bit": 18,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "confirmed",
       "label": "ConfirmedPrivateTransfer",
@@ -580,7 +580,7 @@
     },
     {
       "bit": 19,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "confirmed",
       "label": "ConfirmedTextMessage",
@@ -657,7 +657,7 @@
     },
     {
       "bit": 37,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "confirmed",
       "label": "LifeSafetyOperation",
@@ -739,13 +739,13 @@
       "kind": "confirmed",
       "label": "SubscribeCOVProperty",
       "name": "SUBSCRIBE_COV_PROPERTY",
-      "pythonSends": false,
+      "pythonSends": true,
       "serverExecutes": true,
       "serverInitiates": false
     },
     {
       "bit": 41,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": "with_cov",
       "kind": "confirmed",
       "label": "SubscribeCOVPropertyMultiple",
@@ -756,7 +756,7 @@
     },
     {
       "bit": 22,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "confirmed",
       "label": "VT-Close",
@@ -767,7 +767,7 @@
     },
     {
       "bit": 23,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "confirmed",
       "label": "VT-Data",
@@ -778,7 +778,7 @@
     },
     {
       "bit": 21,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "confirmed",
       "label": "VT-Open",
@@ -899,7 +899,7 @@
     },
     {
       "bit": 30,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "unconfirmed",
       "label": "UnconfirmedPrivateTransfer",
@@ -910,7 +910,7 @@
     },
     {
       "bit": 31,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "unconfirmed",
       "label": "UnconfirmedTextMessage",
@@ -921,7 +921,7 @@
     },
     {
       "bit": 47,
-      "clientSends": false,
+      "clientSends": true,
       "endpoint": null,
       "kind": "unconfirmed",
       "label": "Who-Am-I",

@@ -20,7 +20,7 @@ mod node;
 
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, COVNotificationDelivery};
+use bacnet_client::client::{BACnetClient, Broadcast, COVNotificationDelivery};
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::constructed::encode_event_notification;
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
@@ -184,7 +184,7 @@ async fn the_full_server_answers_for_the_node_beside_its_full_client() {
     let node = Wire::mac(NODE);
 
     // The full server answers a Who-Is for the node's Device.
-    lab.other.who_is(None).await.unwrap();
+    lab.other.who_is(Broadcast::Global, None).await.unwrap();
     eventually(WAIT, "the node's I-Am", async || {
         lab.other.discovered_devices().await.iter().any(|device| {
             device.object_identifier.instance_number() == NODE_DEVICE && device.mac_address == node

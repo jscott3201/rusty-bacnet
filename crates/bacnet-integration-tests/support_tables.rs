@@ -74,6 +74,7 @@ const PYTHON_METHOD_SUFFIXES: &[&str] = &[
 /// `BACnetClient` methods in the stub whose name names no service, so they
 /// count for none. Some send a service another method already names
 /// (`discover` and `who_is`, `unsubscribe_cov` and `subscribe_cov`,
+/// `unsubscribe_cov_property` and `subscribe_cov_property`,
 /// `read_log_page` and `read_range`, `export_223_experimental` and the
 /// ReadProperty and ReadPropertyMultiple readers, and `device`, whose
 /// `Device` handle's calls send those two and WriteProperty, #2561); the
@@ -89,6 +90,7 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "stop",
     "discover",
     "unsubscribe_cov",
+    "unsubscribe_cov_property",
     "read_log_page",
     "export_223_experimental",
     "write_policy",

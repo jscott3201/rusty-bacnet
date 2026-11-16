@@ -23,6 +23,8 @@ mod events;
 mod forms;
 mod pins;
 mod property;
+mod remaining;
+mod scope;
 
 pub(super) const CLIENT: &[u8] = &[0x01];
 /// A device on this link.
