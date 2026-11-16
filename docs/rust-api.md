@@ -10272,15 +10272,22 @@ let request = SubscribeCOVPropertyMultipleRequest {
     max_notification_delay: Some(10),
     list_of_cov_subscription_specifications: cov_specs,
 };
+// The client doesn't deliver its COV-multiple notifications yet (#2654).
 client.subscribe_cov_property_multiple(&mac, &request).await?;
 
-// Receive notifications (broadcast channel — multiple consumers OK)
+// Receive the object subscription's notifications (broadcast channel —
+// multiple consumers OK)
 let mut rx = client.cov_notifications();
-let notification: COVNotificationRequest = rx.recv().await?;
+let notification: ReceivedCOVNotification = rx.recv().await?;
 
 // Unsubscribe
 client.unsubscribe_cov(&mac, process_id, oid).await?;
 ```
+
+A SubscribeCOVPropertyMultiple subscription's notifications don't reach
+`cov_notifications` yet: the client refuses a
+ConfirmedCOVNotificationMultiple and drops an
+UnconfirmedCOVNotificationMultiple (#2654).
 
 `SubscribeCOVPropertyMultipleRequest::encode` is fallible and validates the entire
 request before appending bytes; `validate` makes the same checks alone, and
@@ -10431,9 +10438,15 @@ Who-Has answers and router discovery (#960):
 
 ```rust
 // Send a global Who-Has and collect the I-Haves that answer it for three
-// seconds. bacnet_ops::Client::find asks this network alone unless told.
+// seconds; a scope keeps only the answers from where it asked.
+// bacnet_ops::Client::find asks this network alone unless told.
 let found: Vec<ReceivedIHave> = client
-    .who_has_replies(WhoHasObject::Name("Supply Air Temp".into()), None, Duration::from_secs(3))
+    .who_has_replies(
+        Broadcast::Global,
+        WhoHasObject::Name("Supply Air Temp".into()),
+        None,
+        Duration::from_secs(3),
+    )
     .await?;
 let mut i_haves = client.i_have_events();                // every I-Have, asked for or not
 
@@ -10809,7 +10822,7 @@ client.who_am_i(Broadcast::Local, &who_am_i).await?;
 
 ### Virtual Terminal
 
-`vt_open`, `vt_close` and `vt_data` send VT-Open, VT-Close and VT-Data
+The typed virtual terminal calls are `vt_open`, `vt_close` and `vt_data`
 (#2588). VT-Open carries both the terminal class and the caller's own
 session number (Clause 17.2.1), and `vt_open` returns the device's
 `VTOpenAck`; VT-Close needs at least one identifier, and `vt_close` refuses
@@ -12105,8 +12118,9 @@ Who-Has searches its objects, so an empty list from the default says only
 that nothing on this network has it. `bacnet_ops::raw::who_has(&low_level,
 &scope, &object, range)` sends one on a low-level client and
 `raw::who_has_replies(.., wait)` also collects the `ReceivedIHave`s, with no
-rate cap. `BACnetClient::who_has` and `who_has_replies` stay global
-broadcasts by name: the front ends send through the scope. Every collector
+rate cap. `BACnetClient::who_has` and `who_has_replies` take a `Broadcast`
+scope, and `who_has_replies` keeps the answers from that scope
+(`Broadcast::answered_from`, the rule the front ends' scopes use). Every collector
 keeps one answer per device, object and source address, at most
 `MAX_I_HAVE_REPLIES`; `bacnet_client::client::collect_answers` is that
 collector, for a caller that sends its own Who-Has.

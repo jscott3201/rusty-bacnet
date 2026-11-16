@@ -157,10 +157,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Send a Who-Has to `scope` as [`Self::who_has`] does, then collect
-    /// the I-Haves that answer it for `wait` ([`collect_answers`]): one per
-    /// device, object and source address, in the order they arrived, at
-    /// most [`MAX_I_HAVE_REPLIES`]. No answer is an empty list, not an
-    /// error.
+    /// the I-Haves that answer it from that scope for `wait`
+    /// ([`collect_answers`], [`Broadcast::answered_from`]): one per device,
+    /// object and source address, in the order they arrived, at most
+    /// [`MAX_I_HAVE_REPLIES`]. An I-Have from outside the scope, such as
+    /// one a router relays from another network after a local Who-Has, is
+    /// no answer. No answer is an empty list, not an error.
     pub async fn who_has_replies(
         &self,
         scope: Broadcast,
@@ -172,7 +174,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut rx = self.i_have_events();
         self.who_has(scope, object.clone(), range).await?;
         let deadline = tokio::time::Instant::now() + wait;
-        Ok(collect_answers(&mut rx, deadline, &object, range, |_| true).await)
+        let from_scope = |reply: &ReceivedIHave| {
+            let network = reply.source_network.as_ref().map(|from| from.network);
+            scope.answered_from(network, self.network_number())
+        };
+        Ok(collect_answers(&mut rx, deadline, &object, range, from_scope).await)
     }
 }
 

@@ -1,7 +1,6 @@
 //! Stopping the full client and the session in either order, with a request
 //! open, and the reply paths a frame keeps when it expects a reply.
 use super::*;
-use bacnet_client::client::Broadcast;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::port::TransportPort;

@@ -1,12 +1,11 @@
 //! The orchestrator's scenarios.
 
-use bacnet_client::client::Broadcast;
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use bacnet_benchmarks::stress::output::{DegradationPoint, LatencyRecorder};
-use bacnet_client::client::{BACnetClient, DeviceEventKind, Station};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEventKind, Station};
 use bacnet_transport::bip::{BipMode, BipTransport, ForeignDeviceConfig};
 use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

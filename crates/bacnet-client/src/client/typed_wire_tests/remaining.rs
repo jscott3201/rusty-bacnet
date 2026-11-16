@@ -155,3 +155,45 @@ async fn subscribe_cov_property_multiple() {
     pin!("scpm/routed", Answer::Simple, |c| c
         .subscribe_cov_property_multiple(&routed(), &request));
 }
+
+/// The forms with their options left out: PrivateTransfer with no
+/// parameters, TextMessage with no class, LifeSafetyOperation with no
+/// object, and the SubscribeCOVPropertyMultiple cancellation.
+#[tokio::test]
+async fn forms_without_their_options() {
+    let bare = PrivateTransferRequest {
+        vendor_id: 555,
+        service_number: 8,
+        service_parameters: None,
+    };
+    let bare_ack = Answer::Complex(octets(|buf| {
+        PrivateTransferAck {
+            vendor_id: 555,
+            service_number: 8,
+            result_block: None,
+        }
+        .encode(buf)
+    }));
+    pin!("cpt-noparams/local", bare_ack, |c| c
+        .confirmed_private_transfer(PEER, &bare));
+    let classless = text_message(None);
+    pin!("ctm-noclass/local", Answer::Simple, |c| c
+        .confirmed_text_message(PEER, &classless));
+    let every_object = LifeSafetyOperationRequest {
+        requesting_process_identifier: 4,
+        requesting_source: "operator".to_string(),
+        request: LifeSafetyOperation::RESET,
+        object_identifier: None,
+    };
+    pin!("lso-noobject/local", Answer::Simple, |c| c
+        .life_safety_operation(PEER, &every_object));
+    let cancel = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 12,
+        issue_confirmed_notifications: false,
+        lifetime: None,
+        max_notification_delay: None,
+        list_of_cov_subscription_specifications: Vec::new(),
+    };
+    pin!("scpm-cancel/local", Answer::Simple, |c| c
+        .subscribe_cov_property_multiple(PEER, &cancel));
+}

@@ -1,9 +1,9 @@
 //! The MS/TP flags, the port list and the client the CLI builds (#969).
 
-use bacnet_client::client::Broadcast;
 use std::time::Duration;
 
 use crate::destination;
+use bacnet_client::client::Broadcast;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::mstp::{LoopbackSerial, MstpTransport};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

@@ -7,11 +7,10 @@
 //!   it reaches, reads the server through it, and hears the router's
 //!   reject for a network it doesn't know.
 
-use bacnet_client::client::Broadcast;
 use std::time::Duration;
 
 use bacnet_client::client::{
-    BACnetClient, DiscoveredRouter, RoutingTableError, RoutingTableWait, Station,
+    BACnetClient, Broadcast, DiscoveredRouter, RoutingTableError, RoutingTableWait, Station,
 };
 use bacnet_network::layer::{NetworkReport, ReceivedNetworkReport, RoutingTableEntry};
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};

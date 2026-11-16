@@ -12,10 +12,9 @@
 //! confirmed COV notification is acknowledged once, which shows each
 //! answer reached the stack that asked.
 
-use bacnet_client::client::Broadcast;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Station};
+use bacnet_client::client::{BACnetClient, Broadcast, Station};
 use bacnet_network::router::{
     BACnetRouter, RouterApplicationPort, RouterApplicationPorts, RouterOptions, RouterPort,
 };

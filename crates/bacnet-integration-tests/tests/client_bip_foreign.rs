@@ -1,9 +1,8 @@
 //! Loopback-only client foreign registration and broadcast discovery wiring.
-use bacnet_client::client::Broadcast;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, DeviceEventKind};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEventKind};
 use bacnet_encoding::{
     apdu::{Apdu, UnconfirmedRequest, decode_apdu, encode_apdu},
     npdu::{Npdu, decode_npdu, encode_npdu},

@@ -1,5 +1,4 @@
 use super::*;
-use bacnet_client::client::Broadcast;
 use bacnet_types::error::RemoteError;
 
 #[tokio::test]

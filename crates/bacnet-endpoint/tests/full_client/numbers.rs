@@ -2,7 +2,6 @@
 //! client asks for the number, the node's owner answers for it, and neither
 //! does the other's part, whichever started first.
 use super::*;
-use bacnet_client::client::Broadcast;
 use bacnet_encoding::apdu::UnconfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_npdu::NetworkMessageType;

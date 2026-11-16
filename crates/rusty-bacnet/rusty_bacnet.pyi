@@ -5900,7 +5900,10 @@ class BACnetClient:
         anything is sent; renew by subscribing again before it runs out.
         ``array_index`` names one element of an array property;
         ``cov_increment`` overrides the object's own increment for a numeric
-        property. Notifications arrive on ``cov_notifications()``.
+        property. Notifications arrive on ``cov_notifications()``. Give each
+        subscription a process identifier of its own: an object subscription
+        and a property subscription on one object with one identifier send
+        notifications that can't be told apart.
         """
         ...
 
@@ -5936,6 +5939,11 @@ class BACnetClient:
     ) -> Awaitable[None]:
         """Subscribe to COV notifications for multiple properties on multiple objects.
 
+        ``address`` is a ``str`` or a ``RoutedTarget``, as for
+        ``subscribe_cov`` (#2588). The client doesn't deliver the
+        notifications such a subscription brings yet: it refuses a
+        ConfirmedCOVNotificationMultiple and drops the unconfirmed form, so
+        none reaches ``cov_notifications()`` (#2654).
         ``specs`` is ``[(object_id, [(property_id, array_index, cov_increment, timestamped), ...]), ...]``.
         ``issue_confirmed_notifications`` is required, including for cancellation requests.
         For subscriptions and re-subscriptions, ``lifetime`` and ``max_notification_delay`` are both required.

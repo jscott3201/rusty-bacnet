@@ -7,12 +7,11 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a check tool reports on the console
 #![forbid(unsafe_code)]
 
-use bacnet_client::client::Broadcast;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_transport::bip::{BipMode, ForeignDeviceConfig};
 use clap::Parser;
 

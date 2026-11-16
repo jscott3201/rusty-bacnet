@@ -1,7 +1,6 @@
 //! Discovery and reads through the full client, and the high-level calls a
 //! standalone client has.
 use super::*;
-use bacnet_client::client::Broadcast;
 use bacnet_services::file::{FileAccessMethod, FileReadAckMethod};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::PropertyIdentifier;

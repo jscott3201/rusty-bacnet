@@ -199,13 +199,11 @@ impl Scope {
     /// answer to it, as for a Who-Has (`Scope::answered_by`, #2596).
     pub(crate) fn covers(&self, address: &DeviceAddress, own: Option<u16>) -> bool {
         let address = address.clone().localized(own);
+        let network = (!address.is_local()).then(|| address.network());
         match self {
-            Self::Global => true,
-            Self::Local => address.is_local(),
-            Self::Network(network) => match address.is_local() {
-                true => own == Some(*network),
-                false => address.network() == *network,
-            },
+            Self::Local => Broadcast::Local.answered_from(network, own),
+            Self::Network(n) => Broadcast::Network(*n).answered_from(network, own),
+            Self::Global => Broadcast::Global.answered_from(network, own),
             Self::Directed(station) => address == station.clone().localized(own),
         }
     }

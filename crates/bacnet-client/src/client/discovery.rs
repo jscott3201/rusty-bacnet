@@ -112,6 +112,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// serial number in `request`, which should be its Device object's.
     /// A model name or serial number that can't be encoded fails before
     /// anything is sent.
+    ///
+    /// Each call sends one; pacing repeats is the caller's. The standard
+    /// lets a device send a Who-Am-I at any time but not repeat it more
+    /// often than once in five minutes, unless it answers a Who-Is or an
+    /// operator asks for it (Clause 16.11.2).
     pub async fn who_am_i(&self, scope: Broadcast, request: &WhoAmIRequest) -> Result<(), Error> {
         self.tell_all(scope, request).await
     }

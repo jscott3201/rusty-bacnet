@@ -2,12 +2,11 @@
 //! and priority-array slot, relinquish with Null, verify again, exit.
 #![forbid(unsafe_code)]
 
-use bacnet_client::client::Broadcast;
 use std::net::Ipv4Addr;
 use std::process;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Station};
+use bacnet_client::client::{BACnetClient, Broadcast, Station};
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;

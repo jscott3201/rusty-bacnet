@@ -1,7 +1,7 @@
 //! End-to-end integration tests: real BACnetClient ↔ real BACnetServer over loopback UDP.
 #![forbid(unsafe_code)]
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest as ConfirmedRequestPdu, encode_apdu};
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;

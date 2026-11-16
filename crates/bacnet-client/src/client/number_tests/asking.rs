@@ -10,8 +10,7 @@ use super::local_routes::{
     PEER, REMOTE_NETWORK, ROUTER, THIS_NETWORK, i_am, relayed_from, send_to_client,
 };
 use super::*;
-use crate::client::Broadcast;
-use crate::client::{BACnetClient, ClientConfig};
+use crate::client::{BACnetClient, Broadcast, ClientConfig};
 use crate::discovery::RoutedDeviceConfig;
 use bacnet_encoding::apdu::{Apdu, ComplexAck, SimpleAck};
 use bacnet_npdu::NetworkMessageType;

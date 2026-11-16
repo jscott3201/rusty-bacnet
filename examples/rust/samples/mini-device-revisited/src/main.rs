@@ -10,7 +10,6 @@
 //! subnet Who-Is reaches the socket on Linux; advertise the NIC IP in I-Am.
 #![forbid(unsafe_code)]
 
-use bacnet_client::client::Broadcast;
 use bacnet_types::error::RemoteError;
 use std::env;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -20,7 +19,7 @@ use std::time::Duration;
 
 use socket2::{Domain, Protocol, Socket, Type};
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};

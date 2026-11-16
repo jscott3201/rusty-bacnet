@@ -2,8 +2,7 @@
 //! full server accepts binds the whole node (Clause 16.1), and the Device
 //! it serves states what both roles do.
 use super::*;
-use bacnet_client::client::Broadcast;
-use bacnet_client::client::ClientOptions;
+use bacnet_client::client::{Broadcast, ClientOptions};
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_types::constructed::BACnetPropertyValue;
 use bacnet_types::enums::{EnableDisable, ReinitializedState, ServiceSupported};

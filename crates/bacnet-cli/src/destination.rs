@@ -12,12 +12,11 @@
 //! device claims its instance, and an address needs no instance at all.
 //! The BVLL commands, which only go to this network, take [`resolve_mac`].
 
-use bacnet_client::client::Broadcast;
 use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, DeviceEventKind};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;

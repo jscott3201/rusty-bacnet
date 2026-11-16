@@ -11,11 +11,10 @@
 //!
 //! [`Caller::may_look`]: super::desk::Caller::may_look
 
-use bacnet_client::client::Broadcast;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;

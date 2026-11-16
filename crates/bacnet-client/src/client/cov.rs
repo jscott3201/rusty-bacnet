@@ -146,6 +146,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// ([`SubscribeCOVPropertyMultipleRequest::validate`]). A device that
     /// refuses one of the subscriptions says which in the error's
     /// first-failed-subscription detail.
+    ///
+    /// This client doesn't deliver the notifications such a subscription
+    /// brings yet: it refuses a ConfirmedCOVNotificationMultiple and drops
+    /// an UnconfirmedCOVNotificationMultiple, so none reaches
+    /// [`Self::cov_notifications`] (#2654).
     pub async fn subscribe_cov_property_multiple(
         &self,
         to: &(impl ToStation + ?Sized),

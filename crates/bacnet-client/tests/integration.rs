@@ -4,8 +4,7 @@
 //! APDU -> NPDU -> BVLL -> UDP -> receive -> decode -> respond ->
 //! encode -> UDP -> receive -> decode -> return typed result.
 
-use bacnet_client::client::BACnetClient;
-use bacnet_client::client::Broadcast;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_encoding::apdu::{
     self, Apdu, ComplexAck, UnconfirmedRequest as UnconfirmedRequestPdu, encode_apdu,
 };

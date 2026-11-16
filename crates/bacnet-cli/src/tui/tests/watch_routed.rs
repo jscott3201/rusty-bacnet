@@ -2,10 +2,10 @@
 //! rows subscribe by COV, follow the device's changes, are renewed through
 //! the router, and are cancelled on quit.
 
-use bacnet_client::client::Broadcast;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bacnet_client::client::Broadcast;
 use bacnet_device_core::write::local::LocalCommandSource;
 use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;

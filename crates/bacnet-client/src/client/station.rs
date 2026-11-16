@@ -170,6 +170,29 @@ pub enum Broadcast {
     Global,
 }
 
+impl Broadcast {
+    /// Whether an answer heard from `source_network`, the SNET it carried
+    /// (`None` when it came from this network with none), is one this
+    /// scope's broadcast asked for, `own` being the client's network number
+    /// once known: every answer for [`Broadcast::Global`]; for
+    /// [`Broadcast::Local`], one from this network; for
+    /// [`Broadcast::Network`], one from that network. An answer a router
+    /// relays back from `own` is from this network, so a broadcast to
+    /// `own` takes the local answers too. An answer from elsewhere during
+    /// the wait, unasked or another's, is no answer to this one.
+    pub fn answered_from(&self, source_network: Option<u16>, own: Option<u16>) -> bool {
+        let from = source_network.filter(|network| Some(*network) != own);
+        match *self {
+            Self::Global => true,
+            Self::Local => from.is_none(),
+            Self::Network(network) => match from {
+                None => own == Some(network),
+                Some(from) => from == network,
+            },
+        }
+    }
+}
+
 /// A station a typed call takes: a [`Station`], a [`BACnetAddress`] (network
 /// 0 is this link, any other goes through the router its discovery-table
 /// row names), or a MAC on this link (`[u8]`, `[u8; N]`, `Vec<u8>`,

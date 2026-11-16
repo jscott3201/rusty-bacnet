@@ -2402,6 +2402,10 @@ names one element of an array property, and `cov_increment` overrides the
 object's own increment for a numeric property. Notifications arrive on
 `cov_notifications()`, as for `subscribe_cov`.
 
+Give each subscription a process identifier of its own: an object
+subscription (`subscribe_cov`) and a property subscription on one object
+with one identifier send notifications that can't be told apart.
+
 ```python
 await client.subscribe_cov_property(
     "192.168.1.100:47808",
@@ -3428,7 +3432,7 @@ the peer omits that optional ACK member; an explicit class zero remains `0`.
 
 #### `subscribe_cov_property_multiple(address, subscriber_process_identifier, specs, issue_confirmed_notifications, max_notification_delay=None, lifetime=None)`
 
-Subscribe to COV on multiple properties across multiple objects. `address` is a `str` or a `RoutedTarget`, as for `subscribe_cov` (#2588). `issue_confirmed_notifications` is now a required `bool`, including for cancellation requests. This is a breaking Python call-signature change; callers should pass it by keyword as shown below. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`. For whole-context cancellations, pass `specs=[]` and omit both timing fields.
+Subscribe to COV on multiple properties across multiple objects. `address` is a `str` or a `RoutedTarget`, as for `subscribe_cov` (#2588). The client doesn't deliver the notifications such a subscription brings yet: it refuses a ConfirmedCOVNotificationMultiple and drops the unconfirmed form, so none reaches `cov_notifications()` (#2654). `issue_confirmed_notifications` is now a required `bool`, including for cancellation requests. This is a breaking Python call-signature change; callers should pass it by keyword as shown below. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`. For whole-context cancellations, pass `specs=[]` and omit both timing fields.
 
 Each supplied object specification must contain at least one property reference.
 `PropertyIdentifier.ALL`, `PropertyIdentifier.OPTIONAL`, and

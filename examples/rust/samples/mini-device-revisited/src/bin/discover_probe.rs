@@ -1,10 +1,9 @@
 //! One-shot probe for a running mini-device-revisited server.
 #![forbid(unsafe_code)]
-use bacnet_client::client::Broadcast;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

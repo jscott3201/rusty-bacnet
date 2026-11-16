@@ -14,9 +14,8 @@
 //! when it first stores a routed row or sends a Who-Is while it is unknown
 //! (#2572), and each test takes that question where it goes.
 use super::*;
-use crate::client::BACnetClient;
-use crate::client::Broadcast;
 use crate::client::Station;
+use crate::client::{BACnetClient, Broadcast};
 use crate::discovery::RoutedDeviceConfig;
 use bacnet_encoding::{
     apdu::{Apdu, ConfirmedRequest, SegmentAck, SimpleAck, decode_apdu, encode_apdu},

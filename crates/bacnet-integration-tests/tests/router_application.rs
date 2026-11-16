@@ -13,10 +13,9 @@
 //! 9, and hears a network the table lacks refused the way
 //! `BACnetRouter::originate` refuses it.
 
-use bacnet_client::client::Broadcast;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Station};
+use bacnet_client::client::{BACnetClient, Broadcast, Station};
 use bacnet_network::router::{
     BACnetRouter, OriginateError, OriginateFailure, RouterApplicationPort, RouterOptions,
     RouterPort,

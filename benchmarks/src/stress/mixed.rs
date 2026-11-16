@@ -3,12 +3,12 @@
 //! Simulates a building automation workload with weighted service mix:
 //! 60% RP, 15% WP, 10% RPM, 5% COV sub/unsub, 5% WhoIs, 5% other.
 
-use bacnet_client::client::Broadcast;
 use std::time::{Duration, Instant};
 
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
+use bacnet_client::client::Broadcast;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};

@@ -8,6 +8,8 @@
 //! the bindings and ops encoded and the answers they decoded, sent through
 //! `confirmed_request`, `unconfirmed_request` and the broadcast calls,
 //! before those services had typed calls.
+//! The eight of the `forms_without_*` tests were recorded the same way,
+//! through those raw sends, which are dev's, after the typed calls existed.
 
 pub(super) const PINS: &[(&str, &str, &str)] = &[
     (
@@ -141,6 +143,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         r#"Err(Remote(Error { class: ErrorClass::OBJECT, code: ErrorCode::UNKNOWN_OBJECT }))"#,
     ),
     (
+        "cpt-noparams/local",
+        "02 0104020500120a022b1908",
+        r#"Ok(PrivateTransferAck { vendor_id: 555, service_number: 8, result_block: None })"#,
+    ),
+    (
         "cpt/local",
         "02 0104020500120a022b19072e21052f",
         r#"Ok(PrivateTransferAck { vendor_id: 555, service_number: 7, result_block: Some([33, 6]) })"#,
@@ -159,6 +166,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "create/routed",
         "09 012400020105ff0204000a0e09020f",
         r#"Ok(ObjectIdentifier(ObjectType::ANALOG_VALUE, 5))"#,
+    ),
+    (
+        "ctm-noclass/local",
+        "02 0104020500130c0200000929013d0b00636865636b2070756d70",
+        r#"Ok(())"#,
     ),
     (
         "ctm/local",
@@ -231,6 +243,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "log/routed",
         "09 012400020105ff0204001a0c0500000119836e210531026f",
         r#"Err(Remote(Error { class: ErrorClass::OBJECT, code: ErrorCode::UNKNOWN_OBJECT }))"#,
+    ),
+    (
+        "lso-noobject/local",
+        "02 01040205001b09041d09006f70657261746f722904",
+        r#"Ok(())"#,
     ),
     (
         "lso/local",
@@ -326,6 +343,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "rr/routed",
         "09 012400020105ff0204001a0c0500000119833e210131023f",
         r#"Ok(ReadRangeAck { object_identifier: ObjectIdentifier(ObjectType::TREND_LOG, 1), property_identifier: PropertyIdentifier::LOG_BUFFER, property_array_index: None, result_flags: (true, true, false), item_count: 2, item_data: [14, 15, 14, 15], first_sequence_number: None })"#,
+    ),
+    (
+        "scpm-cancel/local",
+        "02 01040205001e090c19004e4f",
+        r#"Ok(())"#,
     ),
     (
         "scpm/local",
@@ -427,6 +449,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         r#"Ok(())"#,
     ),
     (
+        "who-am-i-bcast/own",
+        " 0100100d22022b7505004d582d3175050030303432",
+        r#"Ok(())"#,
+    ),
+    (
         "who-am-i/local",
         "02 0100100d22022b7505004d582d3175050030303432",
         r#"Ok(())"#,
@@ -442,6 +469,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         r#"Ok(())"#,
     ),
     (
+        "who-has-bcast/global-id",
+        " 0120ffff00ff10072c00000001",
+        r#"Ok(())"#,
+    ),
+    (
         "who-has-bcast/local",
         " 01001007090a19143d050070756d70",
         r#"Ok(())"#,
@@ -449,6 +481,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
     (
         "who-has-bcast/network",
         " 0120000200ff1007090a19143d050070756d70",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-has-bcast/own",
+        " 01001007090a19143d050070756d70",
         r#"Ok(())"#,
     ),
     (
@@ -466,6 +503,7 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         " 0120ffff00ff1008090a1914",
         r#"Ok(())"#,
     ),
+    ("who-is-bcast/global-all", " 0120ffff00ff1008", r#"Ok(())"#),
     ("who-is-bcast/local", " 01001008090a1914", r#"Ok(())"#),
     (
         "who-is-bcast/network",

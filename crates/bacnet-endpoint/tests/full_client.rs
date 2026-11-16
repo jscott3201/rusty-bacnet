@@ -31,7 +31,7 @@ mod stop_waits;
 
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Broadcast};
 use bacnet_encoding::apdu::{Apdu, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};

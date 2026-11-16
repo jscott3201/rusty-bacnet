@@ -6,7 +6,7 @@
 use bacnet_services::private_transfer::PrivateTransferRequest;
 use bacnet_services::text_message::TextMessageRequest;
 use bacnet_services::who_am_i::WhoAmIRequest;
-use bacnet_services::who_has::WhoHasObject;
+use bacnet_services::who_has::{IHaveRequest, WhoHasObject};
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_types::enums::MessagePriority;
 use bacnet_types::network_number::NetworkNumber;
@@ -178,4 +178,111 @@ async fn a_restricted_node_or_closed_seat_refuses_every_scope() {
         }
     }
     assert_eq!(wire.sent.len(), 0, "nothing sent");
+}
+
+/// An I-Have from `device` for AI 1 named "pump": from `PEER` on this link,
+/// or relayed by `ROUTER` from `routed`'s network and MAC.
+async fn i_have(wire: &Wire, device: u32, routed: Option<(u16, &[u8])>) {
+    let mut body = BytesMut::new();
+    IHaveRequest {
+        device_identifier: oid(ObjectType::DEVICE, device),
+        object_identifier: oid(ObjectType::ANALOG_INPUT, 1),
+        object_name: "pump".to_string(),
+    }
+    .encode(&mut body)
+    .unwrap();
+    let apdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
+        service_choice: UnconfirmedServiceChoice::I_HAVE,
+        service_request: body.freeze(),
+    });
+    let mut payload = BytesMut::new();
+    encode_apdu(&mut payload, &apdu).unwrap();
+    let npdu = Npdu {
+        source: routed.map(|(network, mac)| NpduAddress {
+            network,
+            mac_address: MacAddr::from_slice(mac),
+        }),
+        payload: payload.freeze(),
+        ..Npdu::default()
+    };
+    let mut buf = BytesMut::new();
+    encode_npdu(&mut buf, &npdu).unwrap();
+    let from = if routed.is_some() { ROUTER } else { PEER };
+    let received = ReceivedNpdu::unverified(
+        buf.freeze(),
+        MacAddr::from_slice(from),
+        false,
+        Vec::new(),
+        None,
+    );
+    wire.inbox.send(received).await.unwrap();
+}
+
+/// A Who-Has's answers are those from the scope asked
+/// ([`Broadcast::answered_from`]): device 1 answers from this link, device
+/// 2 through the router from network 2, and device 3 through it from
+/// network `OWN`, which is this network once the client knows the number.
+#[tokio::test]
+async fn who_has_replies_keep_the_answers_from_the_scope_asked() {
+    let cases: [(Broadcast, Option<u16>, &[u32]); 6] = [
+        (Broadcast::Local, None, &[1]),
+        (Broadcast::Local, Some(OWN), &[1, 3]),
+        (Broadcast::Network(DNET), None, &[2]),
+        (Broadcast::Network(OWN), Some(OWN), &[1, 3]),
+        (Broadcast::Global, None, &[1, 2, 3]),
+        (Broadcast::Global, Some(OWN), &[1, 2, 3]),
+    ];
+    for (scope, own, expected) in cases {
+        let wire = wire().await;
+        let c = &wire.client;
+        if let Some(own) = own {
+            c.network
+                .local_network_number()
+                .publish(NetworkNumber::configured(own).unwrap());
+        }
+        let object = WhoHasObject::Name("pump".to_string());
+        let wait = Duration::from_millis(300);
+        let answer = async {
+            tokio::time::timeout(Duration::from_secs(5), wire.sent.wait_for_len(1))
+                .await
+                .expect("the Who-Has goes out");
+            i_have(&wire, 1, None).await;
+            i_have(&wire, 2, Some((DNET, DADR))).await;
+            i_have(&wire, 3, Some((OWN, &[0x33]))).await;
+        };
+        let (replies, ()) = tokio::join!(c.who_has_replies(scope, object, None, wait), answer);
+        let mut kept: Vec<u32> = replies
+            .unwrap()
+            .iter()
+            .map(|reply| reply.i_have.device_identifier.instance_number())
+            .collect();
+        kept.sort_unstable();
+        assert_eq!(kept, expected, "{scope:?}, own network {own:?}");
+    }
+}
+
+/// The forms the other pins leave out: a Who-Is with no range, a Who-Has
+/// by identifier, and a Who-Has and a Who-Am-I to the client's own
+/// network, which go as local broadcasts.
+#[tokio::test]
+async fn forms_without_a_range_or_to_the_own_network() {
+    let own = || NetworkNumber::configured(OWN).unwrap();
+    pin!("who-is-bcast/global-all", |c| c
+        .who_is(Broadcast::Global, None));
+    let by_id = || WhoHasObject::Identifier(oid(ObjectType::ANALOG_INPUT, 1));
+    pin!("who-has-bcast/global-id", |c| c.who_has(
+        Broadcast::Global,
+        by_id(),
+        None
+    ));
+    let pump = || WhoHasObject::Name("pump".to_string());
+    pin!("who-has-bcast/own", |c| async {
+        c.network.local_network_number().publish(own());
+        c.who_has(Broadcast::Network(OWN), pump(), range()).await
+    });
+    let request = who_am_i_request();
+    pin!("who-am-i-bcast/own", |c| async {
+        c.network.local_network_number().publish(own());
+        c.who_am_i(Broadcast::Network(OWN), &request).await
+    });
 }
