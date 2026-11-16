@@ -358,6 +358,29 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .attach(network, coordinator, roles, capacity)
     }
 
+    /// A seat for a full server on the started link (#2617): the layer and
+    /// `coordinator` shared, and a queue of `capacity` APDUs for what is the
+    /// server's to take. While it is attached it takes the place of the
+    /// endpoint's own request queue (see [`crate::seat`]). One server at a
+    /// time; `coordinator` must be the client seat's when one is attached.
+    /// Fails before start and once the endpoint is stopping.
+    #[doc(hidden)]
+    pub fn server_seat(
+        &self,
+        coordinator: Arc<crate::coordinator::OutboundTransactionCoordinator>,
+        capacity: usize,
+    ) -> Result<crate::seat::ServerSeat<T>, Error> {
+        let not_running = || Error::Encoding("endpoint ingress is not running".into());
+        if self.lifecycle != Lifecycle::Running {
+            return Err(not_running());
+        }
+        let network = self.started.upgrade().ok_or_else(not_running)?;
+        self.seats
+            .as_ref()
+            .ok_or_else(not_running)?
+            .attach_server(network, coordinator, capacity)
+    }
+
     /// What ingress dropped because a queue of its own was full, by class
     /// (#2635). Counts run from [`Self::new`] and stay readable after stop.
     pub fn full_drop_counters(&self) -> IngressDropCounters {
@@ -372,13 +395,22 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .unwrap_or_default()
     }
 
+    /// What ingress has handed to and dropped for the server seat.
+    pub fn server_seat_counters(&self) -> crate::seat::ServerSeatCounters {
+        self.seats
+            .as_ref()
+            .map(|seats| seats.server_counters())
+            .unwrap_or_default()
+    }
+
     /// Cancels classification, stops the network layer, and reports classifier exit.
     ///
-    /// A client seat's queues close first, which ends its client's tasks;
+    /// The seats' queues close first, which ends a seated client's tasks;
     /// then the layer and its transport stop, through the shared reference
-    /// (#2617), whether or not that client itself is still alive. Its
-    /// requests made after that fail with the transport's stopped error, and
-    /// dropping it later changes nothing.
+    /// (#2617), whether or not the seated roles themselves are still alive.
+    /// Their sends after that fail with the transport's stopped error, and
+    /// dropping them later changes nothing. A seated server's own stop is
+    /// best run first: it joins its work and settles its saves.
     pub async fn stop(&mut self) -> Result<ClassifierExit, Error> {
         if !matches!(
             self.lifecycle,

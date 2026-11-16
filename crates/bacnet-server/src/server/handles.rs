@@ -217,6 +217,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .bvlc_client_snapshot()
             .foreign_registration)
     }
+
+    /// Get a snapshot of discovery rate-limiting counters.
+    pub fn discovery_counters(&self) -> DiscoveryCounters {
+        self.discovery_limiter.counters()
+    }
+
+    /// Get a snapshot of COV operational and telemetry counters.
+    pub fn cov_counters(&self) -> CovCounters {
+        self.cov_counters.snapshot()
+    }
+
+    /// Sample lifetime mutation authorization decisions, including after `stop()`.
+    /// Counts decisions, not completed handlers or response delivery; see
+    /// [`MutationDecisionCounters`](crate::mutation::MutationDecisionCounters).
+    pub fn mutation_decision_counters(&self) -> crate::mutation::MutationDecisionCounters {
+        self.mutation_decisions.snapshot()
+    }
+
+    /// Remove COV subscriptions using this current immediate MAC and routed source.
+    /// Cleanup of an obsolete router leaves subscriptions renewed onto another route.
+    /// Only removed entries release their contribution to the shared quota group.
+    pub async fn remove_peer_subscriptions(
+        &self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+    ) -> usize {
+        let mut table = self.cov_table.write().await;
+        table.remove_peer_subscriptions(mac, network)
+    }
 }
 
 #[cfg(test)]

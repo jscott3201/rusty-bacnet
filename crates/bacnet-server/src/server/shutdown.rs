@@ -82,8 +82,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// joins it; after transport cleanup begins, dropping the server lets that
     /// cleanup finish. Local mutation and broadcasts are rejected from the first
     /// stop poll; local reads and database inspection remain available.
+    ///
+    /// A server on a node's seat ([`ServerBuilder::seat`]) does all of this
+    /// but the link's part: the node's other roles answer through the shared
+    /// layer, and the node stops it (#2617).
     pub async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(network) = &self.network {
+        if let Some(network) = self.network.as_ref().filter(|_| self.owns_link()) {
             network.seal_responses();
         }
         self.broadcaster.seal();
@@ -180,6 +184,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if let Some(error) = &self.transport_cleanup_error {
             return Err(Error::Encoding(error.clone()));
         }
+        if !self.owns_link() {
+            // The node's layer, which the node stops: let go of it (#2617).
+            // The seat is free already, its queue's reader joined above.
+            self.network = None;
+            return Ok(());
+        }
         if self.transport_cleanup.is_none()
             && let Some(network) = self.network.take()
         {
@@ -222,7 +232,7 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
     /// keeps the objects alive; let go of it with
     /// [`drop_database_off_runtime`] (#1513).
     fn drop(&mut self) {
-        if let Some(network) = &self.network {
+        if let Some(network) = self.network.as_ref().filter(|_| self.owns_link()) {
             network.seal_responses();
         }
         self.broadcaster.seal();

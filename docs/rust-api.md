@@ -13368,9 +13368,9 @@ assert!(client.who_is(None).await.is_err());
 - Beside a server role the client answers only the COV notifications of its
   own subscriptions. The narrow server role answers a
   ConfirmedEventNotification with a Reject (unrecognized service) while the
-  client still publishes it; the full server will acknowledge it when it
-  takes a seat. A session with no server role leaves the client to answer as
-  a standalone client does.
+  client still publishes it; a full server on the session
+  ([below](#full-server-on-an-endpoint)) acknowledges it. A session with no
+  server role leaves the client to answer as a standalone client does.
 - The session has the one owner of the local network number: the client asks
   What-Is-Network-Number on first need and never answers one.
 - Stopping: one `stop()` stops the session with the client still alive
@@ -13402,6 +13402,61 @@ let session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOS
 assert!(session.bvlc_tables().is_some());
 # Ok::<(), bacnet_types::error::Error>(())
 ```
+
+### Full server on an endpoint
+
+`EndpointSession::full_server(builder)` builds a full `BACnetServer` from a
+`BACnetServer::generic_builder()` on the session's one transport, beside its
+client roles (#2617). It is the server a transport of its own gives: every
+service, policy and counter. While it lives it takes every request the
+session's narrow server role would have taken and answers from its own
+database; the narrow role gets requests again once the server is stopped or
+dropped. The session's `DeviceIdentity`, when it has one, becomes the
+server's, so the node is one device on its address.
+
+```rust
+use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
+use bacnet_server::server::BACnetServer;
+
+let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?
+    .device(identity);
+session.start().await?;
+let mut server = session
+    .full_server(BACnetServer::generic_builder().database(db))
+    .await?;
+let client = session.full_client()?;
+// ... the node answers Who-Is, reads, COV and the rest, and asks others ...
+server.stop().await?; // joins the server's work; the link stays up
+session.stop().await?; // stops the link
+```
+
+- Who answers what: the server answers every request but a
+  ConfirmedCOVNotification, which is the full client's. It acknowledges a
+  ConfirmedEventNotification, of which the full client hears a copy. Both
+  hear every unconfirmed request. An answer goes to the role whose lease it
+  answers, from the session's one pool of invoke IDs, and a requester's
+  Abort or Segment-ACK to the server.
+- Queues: the server's seat holds 256 APDUs in the same three tiers as the
+  client's (unconfirmed requests at most half, confirmed requests all but the
+  last quarter, answers to the server's own requests all of it). The session
+  never waits for it: what finds no room is dropped and counted in
+  `server_seat_counters().full_drops`, and the client's traffic goes on. Past
+  the seat, the server's `RequestAdmissionPolicy` refuses work its handlers
+  have no room for, as it does standalone.
+- The session keeps the one owner of the local network number; the server
+  runs none and takes the number it publishes.
+- Refused: a session with no server role (a full client there answers every
+  request itself), with a source Audit Reporter, with its own COV reporting
+  (`with_cov`), or with a registered Network Port; and a builder with
+  `registered_network_port` or `audit_reporters`. One full server at a time.
+- Stopping: stop the server, then the session. The server's `stop()` joins
+  its work and settles its saves but leaves the link to the session. A
+  session stopped first stops the link all the same; the server's later
+  sends fail with the stopped transport's error, and its own `stop()` still
+  completes.
+- A server built elsewhere can run on any node's seat:
+  `BACnetServer::generic_builder().seat(seat).build()` takes a
+  `bacnet_endpoint_core::seat::ServerSeat`.
 
 ### Endpoint shutdown and the object database
 
