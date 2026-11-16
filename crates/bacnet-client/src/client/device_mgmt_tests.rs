@@ -167,13 +167,9 @@ async fn device_mgmt_confirmed_fields_and_discovered_local_fallback() {
                 Some("control-key".to_owned()),
             ),
         ] {
+            let to = client.resolve_device(INSTANCE).await.unwrap();
             let (result, ()) = tokio::join!(
-                client.device_communication_control_from_device(
-                    INSTANCE,
-                    state,
-                    duration,
-                    password.clone()
-                ),
+                client.device_communication_control(&to, state, duration, password.clone()),
                 async {
                     let request = peer
                         .confirmed(ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL)
@@ -199,8 +195,9 @@ async fn device_mgmt_confirmed_fields_and_discovered_local_fallback() {
                 Some("reinit-key".to_owned()),
             ),
         ] {
+            let to = client.resolve_device(INSTANCE).await.unwrap();
             let (result, ()) = tokio::join!(
-                client.reinitialize_device_from_device(INSTANCE, state, password.clone()),
+                client.reinitialize_device(&to, state, password.clone()),
                 async {
                     let request = peer
                         .confirmed(ConfirmedServiceChoice::REINITIALIZE_DEVICE)
@@ -225,13 +222,9 @@ async fn device_mgmt_confirmed_fields_and_discovered_local_fallback() {
 #[tokio::test(start_paused = true)]
 async fn device_mgmt_confirmed_protocol_errors_and_rejects_are_preserved() {
     let (mut client, mut peer) = site(true).await;
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     let (result, ()) = tokio::join!(
-        client.device_communication_control_from_device(
-            INSTANCE,
-            EnableDisable::ENABLE,
-            None,
-            None
-        ),
+        client.device_communication_control(&to, EnableDisable::ENABLE, None, None),
         async {
             let request = peer
                 .confirmed(ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL)
@@ -253,8 +246,9 @@ async fn device_mgmt_confirmed_protocol_errors_and_rejects_are_preserved() {
             code: ErrorCode::PASSWORD_FAILURE
         }))
     ));
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     let (result, ()) = tokio::join!(
-        client.reinitialize_device_from_device(INSTANCE, ReinitializedState::WARMSTART, None),
+        client.reinitialize_device(&to, ReinitializedState::WARMSTART, None),
         async {
             let request = peer
                 .confirmed(ConfirmedServiceChoice::REINITIALIZE_DEVICE)
@@ -292,12 +286,20 @@ async fn device_mgmt_time_services_send_once_without_reply_and_localize_known_ne
             // Send completes before any peer task runs or answers, even with retries configured.
             if utc {
                 client
-                    .utc_time_synchronization_from_device(INSTANCE, date(), time())
+                    .utc_time_synchronization(
+                        &client.resolve_device(INSTANCE).await.unwrap(),
+                        date(),
+                        time(),
+                    )
                     .await
                     .unwrap();
             } else {
                 client
-                    .time_synchronization_from_device(INSTANCE, date(), time())
+                    .time_synchronization(
+                        &client.resolve_device(INSTANCE).await.unwrap(),
+                        date(),
+                        time(),
+                    )
                     .await
                     .unwrap();
             }
@@ -330,35 +332,8 @@ async fn device_mgmt_time_services_send_once_without_reply_and_localize_known_ne
 #[tokio::test(start_paused = true)]
 async fn device_mgmt_unknown_device_and_invalid_time_routes_send_nothing() {
     let (mut client, mut peer) = site(true).await;
-    assert!(
-        client
-            .device_communication_control_from_device(
-                INSTANCE + 1,
-                EnableDisable::ENABLE,
-                None,
-                None
-            )
-            .await
-            .is_err()
-    );
-    assert!(
-        client
-            .reinitialize_device_from_device(INSTANCE + 1, ReinitializedState::WARMSTART, None)
-            .await
-            .is_err()
-    );
-    assert!(
-        client
-            .time_synchronization_from_device(INSTANCE + 1, date(), time())
-            .await
-            .is_err()
-    );
-    assert!(
-        client
-            .utc_time_synchronization_from_device(INSTANCE + 1, date(), time())
-            .await
-            .is_err()
-    );
+    // An instance the table doesn't hold has no station, so nothing is sent.
+    assert!(client.resolve_device(INSTANCE + 1).await.is_err());
     peer.empty();
     for (network, address) in [
         (0, vec![5]),
@@ -386,18 +361,16 @@ async fn device_mgmt_unknown_device_and_invalid_time_routes_send_nothing() {
             source_network: Some(network),
             source_address: Some(MacAddr::from_slice(&address)),
         });
-        assert!(
-            client
-                .time_synchronization_from_device(INSTANCE + 1, date(), time())
-                .await
-                .is_err()
-        );
-        assert!(
-            client
-                .utc_time_synchronization_from_device(INSTANCE + 1, date(), time())
-                .await
-                .is_err()
-        );
+        // The row names no station a router can reach: refused at the
+        // lookup or before the request goes, either way unsent.
+        for utc in [false, true] {
+            let sent = match client.resolve_device(INSTANCE + 1).await {
+                Ok(to) if utc => client.utc_time_synchronization(&to, date(), time()).await,
+                Ok(to) => client.time_synchronization(&to, date(), time()).await,
+                Err(error) => Err(error),
+            };
+            assert!(sent.is_err(), "{network}:{address:?}");
+        }
         peer.empty();
     }
     client.stop().await.unwrap();
@@ -417,8 +390,8 @@ async fn over_long_or_empty_passwords_fail_before_anything_is_sent() {
         let (mut client, mut peer) = site(routed).await;
         let errors = [
             client
-                .device_communication_control_from_device(
-                    INSTANCE,
+                .device_communication_control(
+                    &client.resolve_device(INSTANCE).await.unwrap(),
                     EnableDisable::DISABLE,
                     None,
                     Some(too_long.clone()),
@@ -426,8 +399,8 @@ async fn over_long_or_empty_passwords_fail_before_anything_is_sent() {
                 .await
                 .unwrap_err(),
             client
-                .reinitialize_device_from_device(
-                    INSTANCE,
+                .reinitialize_device(
+                    &client.resolve_device(INSTANCE).await.unwrap(),
                     ReinitializedState::COLDSTART,
                     Some(too_long.clone()),
                 )

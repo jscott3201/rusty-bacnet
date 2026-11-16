@@ -8,6 +8,7 @@
 //!
 //! Split from `tests.rs`, which is at the 700-LOC cap.
 
+use crate::client::Station;
 use std::time::Instant;
 
 use bacnet_encoding::apdu::{self, Apdu, SegmentAck as SegmentAckPdu, SimpleAck};
@@ -78,10 +79,12 @@ async fn routed_confirmed_request_honors_discovered_peer_max_apdu() {
 
     let request_task = tokio::spawn(async move {
         let result = client
-            .confirmed_request_routed(
-                &router_mac_for_request,
-                remote_network,
-                &remote_mac_for_request,
+            .confirmed_request(
+                &Station::routed(
+                    &router_mac_for_request,
+                    remote_network,
+                    &remote_mac_for_request,
+                ),
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 &service_data,
             )
@@ -181,10 +184,8 @@ async fn routed_confirmed_request_rejects_subminimum_peer_limit() {
         .upsert(routed_peer(3, &router_mac, remote_network, &remote_mac));
 
     let err = client
-        .confirmed_request_routed(
-            &router_mac,
-            remote_network,
-            &remote_mac,
+        .confirmed_request(
+            &Station::routed(&router_mac, remote_network, &remote_mac),
             ConfirmedServiceChoice::READ_PROPERTY,
             &[0x01],
         )
@@ -261,9 +262,10 @@ async fn manual_routed_registration_honors_seeded_peer_limit() {
     assert_eq!(row.max_segments_accepted, None);
 
     // resolve_device yields the router next-hop plus the remote identity.
-    let (next_hop, routing) = client.resolve_device(3003).await.unwrap();
-    assert_eq!(next_hop, router_mac);
-    assert_eq!(routing, Some((remote_network, remote_mac.clone())));
+    assert_eq!(
+        client.resolve_device(3003).await.unwrap(),
+        Station::routed(&router_mac, remote_network, &remote_mac)
+    );
 
     let service_data: Vec<u8> = (0..200u16).map(|i| i as u8).collect();
     let expected_data = service_data.clone();
@@ -272,10 +274,12 @@ async fn manual_routed_registration_honors_seeded_peer_limit() {
 
     let request_task = tokio::spawn(async move {
         let result = client
-            .confirmed_request_routed(
-                &router_mac_for_request,
-                remote_network,
-                &remote_mac_for_request,
+            .confirmed_request(
+                &Station::routed(
+                    &router_mac_for_request,
+                    remote_network,
+                    &remote_mac_for_request,
+                ),
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 &service_data,
             )

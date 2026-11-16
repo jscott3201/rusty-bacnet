@@ -36,7 +36,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use bacnet_client::client::{CovTarget, ManagedCOVSubscription, ManagedCOVSubscriptionEvent};
+use bacnet_client::client::{ManagedCOVSubscription, ManagedCOVSubscriptionEvent, Station};
 use bacnet_transport::port::TransportPort;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::time::Instant;
@@ -81,7 +81,7 @@ struct Row {
     running: Running,
     mode: Mode,
     /// Where its device is, once a start has looked it up.
-    target: Option<CovTarget>,
+    target: Option<Station>,
     /// Removed while starting: cancel once the start ends.
     removing: bool,
     /// Given up because the device of this instance answers elsewhere
@@ -102,7 +102,7 @@ enum Op {
         shared: Arc<Shared>,
         /// What the cancel keeps counted until it ends.
         holder: Holder,
-        target: CovTarget,
+        target: Station,
         managed: Option<ManagedCOVSubscription>,
     },
 }
@@ -302,7 +302,7 @@ impl<T: TransportPort + 'static> Device<T> {
         &mut self,
         shared: &Arc<Shared>,
         holder: Holder,
-        target: CovTarget,
+        target: Station,
         managed: Option<ManagedCOVSubscription>,
     ) {
         self.inner

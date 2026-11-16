@@ -155,7 +155,7 @@ async fn managed_cov_subscription_uses_notification_observed_during_initial_subs
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                CovTarget::local(&peer_mac_for_task),
+                &Station::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -238,7 +238,7 @@ async fn managed_cov_subscription_renews_before_requested_lifetime() {
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                CovTarget::local(&peer_mac_for_task),
+                &Station::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -330,7 +330,7 @@ async fn managed_cov_subscription_uses_observed_time_remaining() {
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                CovTarget::local(&peer_mac_for_task),
+                &Station::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -444,7 +444,7 @@ async fn managed_cov_subscription_stop_cancels_in_flight_renewal() {
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                CovTarget::local(&peer_mac_for_task),
+                &Station::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -509,7 +509,7 @@ async fn managed_cov_subscription_records_failure_without_event_receiver() {
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                CovTarget::local(&peer_mac_for_task),
+                &Station::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -577,7 +577,7 @@ async fn managed_cov_subscription_validates_finite_lifetime_options() {
 
     let zero_lifetime = match Arc::clone(&client)
         .manage_cov_subscription(
-            CovTarget::local(&peer_mac),
+            &Station::local(&peer_mac),
             4003,
             monitored_object,
             false,
@@ -597,7 +597,7 @@ async fn managed_cov_subscription_validates_finite_lifetime_options() {
 
     let oversized_margin = match Arc::clone(&client)
         .manage_cov_subscription(
-            CovTarget::local(&peer_mac),
+            &Station::local(&peer_mac),
             4003,
             monitored_object,
             false,
@@ -618,7 +618,7 @@ async fn managed_cov_subscription_validates_finite_lifetime_options() {
     for capacity in [0, MAX_COV_CHANNEL_CAPACITY + 1] {
         let invalid_capacity = match Arc::clone(&client)
             .manage_cov_subscription(
-                CovTarget::local(&peer_mac),
+                &Station::local(&peer_mac),
                 4003,
                 monitored_object,
                 false,
@@ -677,7 +677,7 @@ async fn managed_cov_property_subscription_renews_with_subscribe_cov_property() 
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_property_subscription(
-                CovTarget::local(&peer_mac_for_task),
+                &Station::local(&peer_mac_for_task),
                 subscription,
                 ManagedCOVSubscriptionOptions::default()
                     .with_renewal_margin(Duration::from_millis(1500)),

@@ -17,8 +17,7 @@ use std::time::{Duration, SystemTime};
 use tokio::time::Instant;
 
 use bacnet_client::client::{
-    BACnetClient, CovPropertySubscription, CovTarget, ManagedCOVSubscription,
-    ManagedCOVSubscriptionOptions, Station,
+    CovPropertySubscription, ManagedCOVSubscription, ManagedCOVSubscriptionOptions, Station,
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
@@ -42,7 +41,7 @@ const CANCEL_WAIT: Duration = Duration::from_secs(30);
 pub(super) struct Started {
     /// Where the device is; `None` when no route to its address is known,
     /// and then nothing was sent.
-    pub(super) target: Option<CovTarget>,
+    pub(super) target: Option<Station>,
     /// The instance the discovery table, or a read by the wildcard
     /// instance, names at the address once the start is answered, if
     /// either does: not what it named when the start began, which a
@@ -98,36 +97,6 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
     }
 }
 
-/// Where a subscription to `station` goes: its MAC on this network, or the
-/// station behind the router on the way.
-///
-/// The `Remote` arm is defensive: [`path_to`] names the router of every
-/// routed station it finds, so it never gives one. A remote station would
-/// go through the router its row in `client`'s discovery table names, as a
-/// request to it would; with no row it has no route and fails with
-/// [`Error::UnknownDevice`], which [`start`] treats as it treats
-/// `path_to`'s own: the point is not asked for, and nothing is sent.
-async fn target_of<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    station: Station,
-) -> Result<CovTarget, Error> {
-    match station {
-        Station::Local { mac } => Ok(CovTarget::local(&mac)),
-        Station::Routed {
-            router,
-            network,
-            mac,
-        } => Ok(CovTarget::routed(&router, network, &mac)),
-        Station::Remote { network, mac } => match client.get_device_at(network, &mac).await {
-            Some(row) => Ok(CovTarget::routed(&row.mac_address, network, &mac)),
-            None => Err(Error::UnknownDevice {
-                device: crate::target::routed_station(network, &mac)
-                    .unwrap_or_else(|| format!("{network}:")),
-            }),
-        },
-    }
-}
-
 /// Note where `shared`'s device is, read the point once, and subscribe
 /// unless the read had no answer or the device refused the service before.
 pub(super) async fn start<T: TransportPort + 'static>(
@@ -139,10 +108,7 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let client = &inner.client;
     let instance = client.instance_at(address).await;
     let known = client.cov_known(address, &point.watched);
-    let target = match path_to(client.low_level(), address).await {
-        Ok(station) => target_of(client.low_level(), station).await,
-        Err(error) => Err(error),
-    };
+    let target = path_to(client.low_level(), address).await;
     // No route: nothing is sent, and the point waits for one.
     let Ok(target) = target else {
         return Started {
@@ -247,7 +213,7 @@ async fn read<T: TransportPort + 'static>(
 /// SubscribeCOVProperty for one property, unconfirmed and finite.
 async fn subscribe<T: TransportPort + 'static>(
     inner: &Inner<T>,
-    (target, address): (CovTarget, &DeviceAddress),
+    (target, address): (Station, &DeviceAddress),
     process: u32,
     point: &Point,
 ) -> Result<ManagedCOVSubscription, Error> {
@@ -264,7 +230,7 @@ async fn subscribe<T: TransportPort + 'static>(
         Watched::Object => {
             Arc::clone(client)
                 .manage_cov_subscription(
-                    target,
+                    &target,
                     process,
                     point.object,
                     false,
@@ -284,7 +250,7 @@ async fn subscribe<T: TransportPort + 'static>(
                 cov_increment: None,
             };
             Arc::clone(client)
-                .manage_cov_property_subscription(target, subscription, managed)
+                .manage_cov_property_subscription(&target, subscription, managed)
                 .await
         }
     }
@@ -357,7 +323,7 @@ pub(super) async fn cancel<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     process: u32,
     point: Point,
-    target: CovTarget,
+    target: Station,
     managed: Option<ManagedCOVSubscription>,
 ) -> bool {
     let client = inner.client.low_level();
@@ -368,20 +334,10 @@ pub(super) async fn cancel<T: TransportPort + 'static>(
             managed.stop().await;
         }
         match point.watched {
-            Watched::Object => {
-                client
-                    .unsubscribe_cov_target(&target, process, point.object)
-                    .await
-            }
+            Watched::Object => client.unsubscribe_cov(&target, process, point.object).await,
             Watched::Property { property, index } => {
                 client
-                    .unsubscribe_cov_property_target(
-                        &target,
-                        process,
-                        point.object,
-                        property,
-                        index,
-                    )
+                    .unsubscribe_cov_property(&target, process, point.object, property, index)
                     .await
             }
         }
@@ -417,7 +373,3 @@ pub(super) async fn locate<T: TransportPort + 'static>(
 ) -> Option<DeviceAddress> {
     inner.client.relocated(instance, &address).await
 }
-
-#[cfg(test)]
-#[path = "jobs_target_tests.rs"]
-mod target_tests;

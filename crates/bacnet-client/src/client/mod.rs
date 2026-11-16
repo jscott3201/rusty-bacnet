@@ -899,7 +899,6 @@ mod builder_options;
 mod cov;
 mod cov_notifications;
 mod cov_renewal;
-mod cov_target;
 mod device_events;
 mod device_mgmt;
 mod discovery;
@@ -955,7 +954,6 @@ pub use cov_notifications::{
 pub use cov_renewal::{
     ManagedCOVSubscription, ManagedCOVSubscriptionEvent, ManagedCOVSubscriptionOptions,
 };
-pub use cov_target::CovTarget;
 pub use event_notifications::{
     DEFAULT_EVENT_CHANNEL_CAPACITY, EventNotificationDelivery, MAX_EVENT_CHANNEL_CAPACITY,
     ReceivedEventNotification,

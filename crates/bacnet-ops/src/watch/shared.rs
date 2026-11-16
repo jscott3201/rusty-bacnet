@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::Waker;
 use std::time::{Duration, SystemTime};
 
-use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
+use bacnet_client::client::{ReceivedCOVNotification, Station};
 use bacnet_types::enums::PropertyIdentifier;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::Instant;
@@ -43,7 +43,7 @@ pub(super) struct EntryState {
     pub(super) snapshot: Snapshot,
     /// Where the device is, once looked up: notifications must come from
     /// there.
-    pub(super) target: Option<CovTarget>,
+    pub(super) target: Option<Station>,
     /// When a notification last set each property's row since the last
     /// first read was folded. A first read folded in later skips the rows
     /// notified at or after it ended: those values are newer (#2169).
@@ -519,15 +519,17 @@ impl Registry {
     }
 
     /// Apply a COV notification to the entry it names; the instant a
-    /// held-back signal is due, the first time one is held back.
+    /// held-back signal is due, the first time one is held back. `own` is
+    /// the client's network number, once known.
     pub(super) fn deliver(
         &self,
         received: &ReceivedCOVNotification,
+        own: Option<u16>,
     ) -> Option<(Instant, Arc<Shared>)> {
         let process = received.notification.subscriber_process_identifier;
         let shared = Arc::clone(self.table().by_process.get(&process)?);
         let mut state = shared.lock();
-        if !dispatch::belongs(&shared.point, state.target.as_ref(), received) {
+        if !dispatch::belongs(&shared.point, state.target.as_ref(), received, own) {
             return None;
         }
         let merged = dispatch::merge(

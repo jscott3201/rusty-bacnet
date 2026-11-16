@@ -7,6 +7,7 @@
 //!
 //! Split from `tests.rs`, which is at the 700-LOC cap.
 
+use crate::client::Station;
 use bacnet_encoding::apdu::{self, Apdu, ComplexAck, SegmentAck as SegmentAckPdu};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::loopback::LoopbackTransport;
@@ -42,10 +43,12 @@ async fn routed_segmented_complex_ack_replies_carry_dnet_dadr() {
     let remote_mac_for_request = remote_mac.clone();
     let request_task = tokio::spawn(async move {
         let result = client
-            .confirmed_request_routed(
-                &router_mac_for_request,
-                remote_network,
-                &remote_mac_for_request,
+            .confirmed_request(
+                &Station::routed(
+                    &router_mac_for_request,
+                    remote_network,
+                    &remote_mac_for_request,
+                ),
                 ConfirmedServiceChoice::READ_PROPERTY,
                 &[0x01],
             )
@@ -141,10 +144,12 @@ async fn routed_reassembly_abort_carries_dnet_dadr() {
     let remote_mac_for_request = remote_mac.clone();
     let request_task = tokio::spawn(async move {
         let result = client
-            .confirmed_request_routed(
-                &router_mac_for_request,
-                remote_network,
-                &remote_mac_for_request,
+            .confirmed_request(
+                &Station::routed(
+                    &router_mac_for_request,
+                    remote_network,
+                    &remote_mac_for_request,
+                ),
                 ConfirmedServiceChoice::READ_PROPERTY,
                 &[0x01],
             )

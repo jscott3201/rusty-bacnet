@@ -7,6 +7,7 @@
 //! goes local; an unconfirmed request still goes, and so does a routed
 //! request whose link DA is the broadcast MAC, since its DNET/DADR name one
 //! device.
+use crate::client::Station;
 use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_network::network_number::LocalNetworkNumber;
@@ -68,10 +69,8 @@ async fn a_confirmed_request_to_the_broadcast_mac_is_refused_before_any_state() 
     // may be the broadcast MAC; it goes out and its transaction times out
     // unanswered.
     let routed = client
-        .confirmed_request_routed(
-            &BROADCAST,
-            5,
-            &[7],
+        .confirmed_request(
+            &Station::routed(&BROADCAST, 5, &[7]),
             ConfirmedServiceChoice::READ_PROPERTY,
             &[0x0C],
         )
@@ -226,10 +225,8 @@ async fn a_routed_request_to_this_networks_broadcast_mac_is_refused() {
     number.publish(NetworkNumber::configured(5).unwrap());
 
     let refused = client
-        .confirmed_request_routed(
-            &PEER,
-            5,
-            &BROADCAST,
+        .confirmed_request(
+            &Station::routed(&PEER, 5, &BROADCAST),
             ConfirmedServiceChoice::READ_PROPERTY,
             &[0x0C],
         )

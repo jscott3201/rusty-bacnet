@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
+use bacnet_client::client::{ReceivedCOVNotification, Station};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -351,17 +351,17 @@ fn notifications_cannot_grow_the_rows() {
             index: Some(8),
         },
     };
-    let target = CovTarget::local(&[2]);
+    let target = Station::local(&[2]);
     let other = notification(
         element.object,
         &[(PropertyIdentifier::PRIORITY_ARRAY, Some(9))],
     );
-    assert!(!dispatch::belongs(&element, Some(&target), &other));
+    assert!(!dispatch::belongs(&element, Some(&target), &other, None));
     let mine = notification(
         element.object,
         &[(PropertyIdentifier::PRIORITY_ARRAY, Some(8))],
     );
-    assert!(dispatch::belongs(&element, Some(&target), &mine));
+    assert!(dispatch::belongs(&element, Some(&target), &mine, None));
     let mut rows = Vec::new();
     dispatch::merge(&mut rows, &element, &[], false, &other);
     assert!(rows.is_empty());
@@ -374,7 +374,7 @@ fn notifications_cannot_grow_the_rows() {
         &[(PropertyIdentifier::PRIORITY_ARRAY, None)],
     );
     array.notification.list_of_values[0].value = [0x00; 16].to_vec();
-    assert!(!dispatch::belongs(&element, Some(&target), &array));
+    assert!(!dispatch::belongs(&element, Some(&target), &array, None));
     let mut kept = rows.clone();
     dispatch::merge(&mut kept, &element, &[], false, &array);
     assert_eq!(kept, rows, "the previous value stays");
@@ -382,7 +382,7 @@ fn notifications_cannot_grow_the_rows() {
         element.object,
         &[(PropertyIdentifier::PRIORITY_ARRAY, None)],
     );
-    assert!(dispatch::belongs(&element, Some(&target), &single));
+    assert!(dispatch::belongs(&element, Some(&target), &single, None));
     let whole = Point {
         watched: Watched::Property {
             property: PropertyIdentifier::PRIORITY_ARRAY,
@@ -390,7 +390,7 @@ fn notifications_cannot_grow_the_rows() {
         },
         ..element.clone()
     };
-    assert!(!dispatch::belongs(&whole, Some(&target), &mine));
+    assert!(!dispatch::belongs(&whole, Some(&target), &mine, None));
 }
 
 /// A property watch that keeps Status_Flags takes in its property
@@ -496,14 +496,14 @@ async fn a_notified_value_clears_the_whole_objects_error() {
         .insert(PROCESS_BASE, Arc::clone(&shared));
     {
         let mut entry = shared.lock();
-        entry.target = Some(CovTarget::local(&[2]));
+        entry.target = Some(Station::local(&[2]));
         entry.failure = Some(crate::format::PropertyError::NoValue);
     }
     let flags = notification(ai(1), &[(PropertyIdentifier::STATUS_FLAGS, None)]);
-    registry.deliver(&flags);
+    registry.deliver(&flags, None);
     assert!(shared.lock().failure.is_some(), "not the watched property");
     let value = notification(ai(1), &[(PropertyIdentifier::PRESENT_VALUE, None)]);
-    registry.deliver(&value);
+    registry.deliver(&value, None);
     assert!(shared.lock().failure.is_none(), "a value of the property");
 }
 

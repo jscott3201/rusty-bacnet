@@ -2355,6 +2355,13 @@ creates an indefinite subscription; positive lifetimes are seconds. Use
 `unsubscribe_cov` to cancel. The client always supplies the required mode,
 including when the lifetime is omitted.
 
+`address` is a `str` on the local link or a `RoutedTarget` for a station
+behind a router (#2588), with the routing rules of
+[Routed targets](#routed-targets). The device keeps the subscription under
+the address the request came from and notifies back through its router, so
+each notification from it has `source_network` and `source_address` set to
+the station's network and MAC, and `source_mac` to the router's.
+
 ```python
 await client.subscribe_cov(
     "192.168.1.100:47808",
@@ -2366,6 +2373,14 @@ await client.subscribe_cov(
 ```
 
 #### `unsubscribe_cov(address, subscriber_process_identifier, monitored_object_identifier)`
+
+`address` is a `str` or a `RoutedTarget`, as for `subscribe_cov`. The device
+finds the subscription by the address the request came from, the process
+and the object, so the cancel must name the target the subscription named:
+the same `RoutedTarget` for one made through a router, the same `str` for
+one made directly. The same device reached another way, such as by its own
+`ip:port` after a routed subscription, sees the cancel come from another
+address: it answers with success and keeps the subscription.
 
 ```python
 await client.unsubscribe_cov(
@@ -7506,14 +7521,14 @@ endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
 
 ### Routed targets
 
-Seven calls of `BACnetClient` take, where they take `address`, either
+Nine calls of `BACnetClient` take, where they take `address`, either
 a `str`, which always names a station on the client's own link and is never
 read as `net:mac`, or a `RoutedTarget` naming one behind a router (#2612,
-#2617, #2613), on a standalone client and an endpoint's alike. The seven
+#2617, #2613, #2588), on a standalone client and an endpoint's alike. The nine
 are `read_property`, `read_property_multiple`, `read_range`,
-`read_log_page`, `write_property`, `atomic_read_file` and
-`atomic_write_file`; the COV subscriptions and the other typed calls take a
-local address only until #2588.
+`read_log_page`, `write_property`, `atomic_read_file`,
+`atomic_write_file`, `subscribe_cov` and `unsubscribe_cov`; the other
+typed calls take a local address only.
 
 **To scan stations that don't announce themselves (MS/TP slaves), pass
 `router` from `discover_routers()`.** Without it each such station costs one

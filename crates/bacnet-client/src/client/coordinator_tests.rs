@@ -1,3 +1,4 @@
+use crate::client::Station;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -141,10 +142,8 @@ async fn client_uses_one_global_generation_safe_pool_across_direct_and_routed_pe
             let destination = index.to_be_bytes().to_vec();
             tokio::spawn(async move {
                 request_client
-                    .confirmed_request_routed(
-                        ROUTER_MAC,
-                        index,
-                        &destination,
+                    .confirmed_request(
+                        &Station::routed(ROUTER_MAC, index, &destination),
                         ConfirmedServiceChoice::READ_PROPERTY,
                         &[0x0C],
                     )

@@ -15,6 +15,7 @@
 //! (#2572), and each test takes that question where it goes.
 use super::*;
 use crate::client::BACnetClient;
+use crate::client::Station;
 use crate::discovery::RoutedDeviceConfig;
 use bacnet_encoding::{
     apdu::{Apdu, ConfirmedRequest, SegmentAck, SimpleAck, decode_apdu, encode_apdu},
@@ -175,11 +176,10 @@ fn local_request(sent: Sent) -> ConfirmedRequest {
 async fn request(learned: bool, network: u16) -> Route {
     let (mut client, inbound, mut outbound) = client(learned).await;
     let (result, route) = bounded(async {
+        let station = Station::routed(&ROUTER, network, &PEER);
         tokio::join!(
-            client.confirmed_request_routed(
-                &ROUTER,
-                network,
-                &PEER,
+            client.confirmed_request(
+                &station,
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 &[0x0C, 0x00, 0x80, 0x00, 0x01],
             ),
@@ -224,9 +224,10 @@ async fn a_device_added_as_routed_on_this_network_is_written_locally() {
             asked(&mut outbound).await;
         }
         let (result, route) = bounded(async {
+            let to = client.resolve_device(9).await.unwrap();
             tokio::join!(
-                client.write_property_to_device(
-                    9,
+                client.write_property(
+                    &to,
                     ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
                     PropertyIdentifier::PRESENT_VALUE,
                     None,
@@ -306,10 +307,8 @@ async fn client_with_routed_row(
 async fn a_routed_row_on_this_network_still_bounds_a_local_request() {
     let (mut client, _inbound, mut outbound) =
         client_with_routed_row(Segmentation::NO_SEGMENTATION).await;
-    let result = bounded(client.confirmed_request_routed(
-        &ROUTER,
-        THIS_NETWORK,
-        &PEER,
+    let result = bounded(client.confirmed_request(
+        &Station::routed(&ROUTER, THIS_NETWORK, &PEER),
         ConfirmedServiceChoice::WRITE_PROPERTY,
         &LONG_WRITE,
     ))
@@ -347,11 +346,10 @@ async fn a_long_request_to_this_network_is_segmented_to_the_peer() {
         }
     };
     let (result, segments) = bounded(async {
+        let station = Station::routed(&ROUTER, THIS_NETWORK, &PEER);
         tokio::join!(
-            client.confirmed_request_routed(
-                &ROUTER,
-                THIS_NETWORK,
-                &PEER,
+            client.confirmed_request(
+                &station,
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 &LONG_WRITE,
             ),
@@ -385,7 +383,11 @@ async fn write_answered_by(
     let request = async {
         if routed {
             client
-                .confirmed_request_routed(&ROUTER, THIS_NETWORK, &PEER, service, &WRITE)
+                .confirmed_request(
+                    &Station::routed(&ROUTER, THIS_NETWORK, &PEER),
+                    service,
+                    &WRITE,
+                )
                 .await
         } else {
             client.confirmed_request(&PEER, service, &WRITE).await
@@ -647,10 +649,8 @@ async fn the_local_row_sizes_and_is_refreshed_by_a_routed_named_request() {
             source_network: None,
             source_address: None,
         });
-    let result = bounded(client.confirmed_request_routed(
-        &ROUTER,
-        THIS_NETWORK,
-        &PEER,
+    let result = bounded(client.confirmed_request(
+        &Station::routed(&ROUTER, THIS_NETWORK, &PEER),
         ConfirmedServiceChoice::WRITE_PROPERTY,
         &LONG_WRITE,
     ))
@@ -663,11 +663,10 @@ async fn the_local_row_sizes_and_is_refreshed_by_a_routed_named_request() {
 
     tokio::time::sleep(Duration::from_secs(1)).await;
     let (result, route) = bounded(async {
+        let station = Station::routed(&ROUTER, THIS_NETWORK, &PEER);
         tokio::join!(
-            client.confirmed_request_routed(
-                &ROUTER,
-                THIS_NETWORK,
-                &PEER,
+            client.confirmed_request(
+                &station,
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 &[0x0C, 0x00, 0x80, 0x00, 0x01],
             ),

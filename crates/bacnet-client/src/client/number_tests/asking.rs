@@ -332,8 +332,9 @@ async fn a_relayed_device_is_one_device_once_the_answer_comes() {
     assert!(device.is_local());
     assert_eq!(device.mac_address.as_slice(), PEER);
 
-    let write = site.client.write_property_to_device(
-        9,
+    let to = site.client.resolve_device(9).await.unwrap();
+    let write = site.client.write_property(
+        &to,
         ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
         PropertyIdentifier::PRESENT_VALUE,
         None,

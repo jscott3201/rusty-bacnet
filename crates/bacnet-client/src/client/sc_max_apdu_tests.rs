@@ -1,3 +1,4 @@
+use crate::client::Station;
 use std::time::Instant;
 
 use bacnet_encoding::apdu::{self, Apdu, SegmentAck, SimpleAck, encode_apdu};
@@ -249,10 +250,9 @@ async fn client_routed_unsegmented_request_accounts_for_npdu_overhead_bucket() {
         .unwrap();
 
     let service_data: Vec<u8> = (0..900).map(|i| (i % 251) as u8).collect();
-    let request_future = client.confirmed_request_routed(
-        &router_mac,
-        remote_network,
-        &remote_mac,
+    let station = Station::routed(&router_mac, remote_network, &remote_mac);
+    let request_future = client.confirmed_request(
+        &station,
         ConfirmedServiceChoice::WRITE_PROPERTY,
         &service_data,
     );

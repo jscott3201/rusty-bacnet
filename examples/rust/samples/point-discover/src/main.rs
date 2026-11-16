@@ -8,7 +8,7 @@ use std::ops::RangeInclusive;
 use std::process;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_services::rpm::ReadResultElement;
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
@@ -171,33 +171,28 @@ fn object_list_bounds(count: u64) -> Result<(u32, usize), bacnet_types::error::E
 
 async fn read_object_list(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device_instance: u32,
+    device: &Station,
     device_oid: ObjectIdentifier,
 ) -> Result<Vec<ObjectIdentifier>, bacnet_types::error::Error> {
     async fn read_prop(
         client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-        device_instance: u32,
+        device: &Station,
         device_oid: ObjectIdentifier,
         index: Option<u32>,
     ) -> Result<bacnet_services::read_property::ReadPropertyACK, bacnet_types::error::Error> {
         client
-            .read_property_from_device(
-                device_instance,
-                device_oid,
-                PropertyIdentifier::OBJECT_LIST,
-                index,
-            )
+            .read_property(device, device_oid, PropertyIdentifier::OBJECT_LIST, index)
             .await
     }
 
     // Many field devices only expose object-list via array index (not as a whole list).
-    if let Ok(ack0) = read_prop(client, device_instance, device_oid, Some(0)).await
+    if let Ok(ack0) = read_prop(client, device, device_oid, Some(0)).await
         && let Some(PropertyValue::Unsigned(count)) = decode_prop(&ack0.property_value)
     {
         let (count, capacity) = object_list_bounds(count)?;
         let mut oids = Vec::with_capacity(capacity);
         for idx in 1..=count {
-            let ack = read_prop(client, device_instance, device_oid, Some(idx)).await?;
+            let ack = read_prop(client, device, device_oid, Some(idx)).await?;
             match decode_prop(&ack.property_value) {
                 Some(PropertyValue::ObjectIdentifier(oid)) => oids.push(oid),
                 other => {
@@ -211,7 +206,7 @@ async fn read_object_list(
     }
 
     // Fallback: single ReadProperty for the full list (sequential object identifiers).
-    let ack = read_prop(client, device_instance, device_oid, None).await?;
+    let ack = read_prop(client, device, device_oid, None).await?;
     let oids = decode_object_identifier_list(&ack.property_value);
     if !oids.is_empty() {
         return Ok(oids);
@@ -253,12 +248,12 @@ fn format_priority_slot(value: &PropertyValue) -> String {
 
 async fn read_current_command_priority(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device_instance: u32,
+    device: &Station,
     oid: ObjectIdentifier,
 ) -> Option<u8> {
     let ack = client
-        .read_property_from_device(
-            device_instance,
+        .read_property(
+            device,
             oid,
             PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             None,
@@ -277,41 +272,26 @@ fn decode_current_command_priority(bytes: &[u8]) -> Option<u8> {
 
 async fn has_priority_array(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device_instance: u32,
+    device: &Station,
     oid: ObjectIdentifier,
 ) -> bool {
     client
-        .read_property_from_device(
-            device_instance,
-            oid,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(0),
-        )
+        .read_property(device, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(0))
         .await
         .is_ok()
         || client
-            .read_property_from_device(
-                device_instance,
-                oid,
-                PropertyIdentifier::PRIORITY_ARRAY,
-                Some(1),
-            )
+            .read_property(device, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(1))
             .await
             .is_ok()
 }
 
 async fn read_priority_array_slots(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device_instance: u32,
+    device: &Station,
     oid: ObjectIdentifier,
 ) -> Vec<(u8, PropertyValue)> {
     if let Ok(ack) = client
-        .read_property_from_device(
-            device_instance,
-            oid,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            None,
-        )
+        .read_property(device, oid, PropertyIdentifier::PRIORITY_ARRAY, None)
         .await
         && let Some(PropertyValue::List(items)) = decode_prop(&ack.property_value)
     {
@@ -331,10 +311,7 @@ async fn read_priority_array_slots(
                 .collect(),
         }];
 
-        let rpm = match client
-            .read_property_multiple_from_device(device_instance, specs)
-            .await
-        {
+        let rpm = match client.read_property_multiple(device, specs).await {
             Ok(r) => r,
             Err(_) => continue,
         };
@@ -348,8 +325,8 @@ async fn read_priority_array_slots(
     if active.is_empty() {
         for priority in 1u8..=16 {
             if let Ok(ack) = client
-                .read_property_from_device(
-                    device_instance,
+                .read_property(
+                    device,
                     oid,
                     PropertyIdentifier::PRIORITY_ARRAY,
                     Some(priority as u32),
@@ -396,7 +373,7 @@ struct CommandablePoint {
 
 async fn scan_priority_arrays(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device_instance: u32,
+    device: &Station,
     rows: &[(ObjectIdentifier, String, String)],
 ) -> Vec<CommandablePoint> {
     let candidates: Vec<_> = rows
@@ -415,12 +392,12 @@ async fn scan_priority_arrays(
 
     let mut results = Vec::new();
     for (oid, name, pv) in candidates {
-        if !has_priority_array(client, device_instance, *oid).await {
+        if !has_priority_array(client, device, *oid).await {
             continue;
         }
 
-        let current_priority = read_current_command_priority(client, device_instance, *oid).await;
-        let priority_slots = read_priority_array_slots(client, device_instance, *oid).await;
+        let current_priority = read_current_command_priority(client, device, *oid).await;
+        let priority_slots = read_priority_array_slots(client, device, *oid).await;
 
         results.push(CommandablePoint {
             oid: *oid,
@@ -530,11 +507,11 @@ fn print_point_line(oid: &ObjectIdentifier, name: &str, pv: &str) {
 
 async fn read_point_name(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device_instance: u32,
+    device: &Station,
     oid: ObjectIdentifier,
 ) -> String {
     match client
-        .read_property_from_device(device_instance, oid, PropertyIdentifier::OBJECT_NAME, None)
+        .read_property(device, oid, PropertyIdentifier::OBJECT_NAME, None)
         .await
     {
         Ok(ack) => decode_prop(&ack.property_value)
@@ -549,16 +526,11 @@ async fn read_point_name(
 
 async fn read_point_present_value(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device_instance: u32,
+    device: &Station,
     oid: ObjectIdentifier,
 ) -> String {
     match client
-        .read_property_from_device(
-            device_instance,
-            oid,
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-        )
+        .read_property(device, oid, PropertyIdentifier::PRESENT_VALUE, None)
         .await
     {
         Ok(ack) => decode_prop(&ack.property_value)
@@ -570,7 +542,7 @@ async fn read_point_present_value(
 
 async fn read_points_batched(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device_instance: u32,
+    device: &Station,
     points: &[ObjectIdentifier],
     batch_size: usize,
 ) -> Vec<(ObjectIdentifier, String, String)> {
@@ -578,10 +550,7 @@ async fn read_points_batched(
 
     for chunk in points.chunks(batch_size.max(1)) {
         let specs = rpm_specs_for_points(chunk);
-        match client
-            .read_property_multiple_from_device(device_instance, specs)
-            .await
-        {
+        match client.read_property_multiple(device, specs).await {
             Ok(rpm) => {
                 for result in rpm.list_of_read_access_results {
                     let oid = result.object_identifier;
@@ -614,8 +583,8 @@ async fn read_points_batched(
                     chunk.len()
                 );
                 for oid in chunk {
-                    let name = read_point_name(client, device_instance, *oid).await;
-                    let pv = read_point_present_value(client, device_instance, *oid).await;
+                    let name = read_point_name(client, device, *oid).await;
+                    let pv = read_point_present_value(client, device, *oid).await;
                     rows.push((*oid, name, pv));
                 }
             }
@@ -732,15 +701,18 @@ async fn main() {
         .expect("device table entry");
     let mac = discovered.mac_address.as_slice();
     let addr = format_bip_mac(mac);
+    let device = match client.resolve_device(args.device).await {
+        Ok(device) => device,
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            let _ = client.stop().await;
+            process::exit(1);
+        }
+    };
 
     // Device object-name
     let device_name = match client
-        .read_property_from_device(
-            args.device,
-            device_oid,
-            PropertyIdentifier::OBJECT_NAME,
-            None,
-        )
+        .read_property(&device, device_oid, PropertyIdentifier::OBJECT_NAME, None)
         .await
     {
         Ok(ack) => decode_prop(&ack.property_value)
@@ -760,7 +732,7 @@ async fn main() {
         args.device
     );
 
-    let object_list = match read_object_list(&client, args.device, device_oid).await {
+    let object_list = match read_object_list(&client, &device, device_oid).await {
         Ok(list) => list,
         Err(e) => {
             eprintln!("ERROR: object-list read failed: {e}");
@@ -782,7 +754,7 @@ async fn main() {
 
     eprintln!("Reading {} point(s)...", points.len());
 
-    let rows = read_points_batched(&client, args.device, &points, 10).await;
+    let rows = read_points_batched(&client, &device, &points, 10).await;
 
     println!("Points ({}):\n", points.len());
     for (oid, name, pv) in &rows {
@@ -790,7 +762,7 @@ async fn main() {
     }
 
     if !args.skip_priority {
-        let priority_results = scan_priority_arrays(&client, args.device, &rows).await;
+        let priority_results = scan_priority_arrays(&client, &device, &rows).await;
         print_priority_scan(&priority_results);
     }
 

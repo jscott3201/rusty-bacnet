@@ -1,3 +1,4 @@
+use crate::client::Station;
 use std::sync::Arc;
 
 use bacnet_encoding::apdu::{self, Apdu, SegmentAck, SimpleAck, encode_apdu};
@@ -70,10 +71,8 @@ pub(super) fn routed_request(
 ) -> JoinHandle<Result<Bytes, Error>> {
     tokio::spawn(async move {
         client
-            .confirmed_request_routed(
-                &router,
-                dnet,
-                &dadr,
+            .confirmed_request(
+                &Station::routed(&router, dnet, &dadr),
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 &service_data,
             )
@@ -301,10 +300,8 @@ async fn subminimum_path_cap_fails_before_registration_or_emission() {
         .unwrap();
 
     let result = client
-        .confirmed_request_routed(
-            &router,
-            DNET,
-            &dadr,
+        .confirmed_request(
+            &Station::routed(&router, DNET, &dadr),
             ConfirmedServiceChoice::READ_PROPERTY,
             &[0x0c],
         )
@@ -337,10 +334,12 @@ async fn configured_capacity_exhaustion_fails_before_registration_or_emission() 
     }
 
     let result = client
-        .confirmed_request_routed(
-            &[0xff, 0xfe],
-            u16::try_from(MAX_ROUTED_PATH_ENTRIES + 1).unwrap(),
-            &[3],
+        .confirmed_request(
+            &Station::routed(
+                &[0xff, 0xfe],
+                u16::try_from(MAX_ROUTED_PATH_ENTRIES + 1).unwrap(),
+                &[3],
+            ),
             ConfirmedServiceChoice::READ_PROPERTY,
             &[0x0c],
         )

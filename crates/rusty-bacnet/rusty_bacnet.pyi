@@ -5844,7 +5844,7 @@ class BACnetClient:
 
     def subscribe_cov(
         self,
-        address: str,
+        address: str | RoutedTarget,
         subscriber_process_identifier: int,
         monitored_object_identifier: ObjectIdentifier,
         confirmed: bool,
@@ -5854,16 +5854,30 @@ class BACnetClient:
 
         lifetime=None or 0 is indefinite; positive values are seconds.
         Use unsubscribe_cov for cancellation. confirmed always supplies the mode.
+        ``address`` is a ``str`` on the local link, or a ``RoutedTarget`` for
+        a station behind a router (#2588), as ``RoutedTarget`` describes. A
+        routed device notifies back through its router, so its notifications
+        have ``source_network`` and ``source_address`` set to the station's
+        network and MAC.
         """
         ...
 
     def unsubscribe_cov(
         self,
-        address: str,
+        address: str | RoutedTarget,
         subscriber_process_identifier: int,
         monitored_object_identifier: ObjectIdentifier,
     ) -> Awaitable[None]:
-        """Cancel a COV subscription."""
+        """Cancel a COV subscription.
+
+        ``address`` is a ``str`` or a ``RoutedTarget``, as for
+        ``subscribe_cov``. The device finds the subscription by the address
+        the request came from and the process and object, so name the target
+        the subscription named: the same ``RoutedTarget``, or the same
+        ``str``. The same device reached another way, such as by its own
+        ``ip:port`` after a routed subscription, answers with success and
+        keeps the subscription.
+        """
         ...
 
     def subscribe_cov_property_multiple(
@@ -9271,10 +9285,10 @@ class ScHub:
 class RoutedTarget:
     """A station on another BACnet network (#2612), where ``BACnetClient``'s
     ``read_property``, ``read_property_multiple``, ``read_range``,
-    ``read_log_page``, ``write_property``, ``atomic_read_file`` and
-    ``atomic_write_file`` take an ``address`` (#2617, #2613); the other
-    typed calls, the COV subscriptions among them, take a local address
-    only until #2588:
+    ``read_log_page``, ``write_property``, ``atomic_read_file``,
+    ``atomic_write_file``, ``subscribe_cov`` and ``unsubscribe_cov`` take
+    an ``address`` (#2617, #2613, #2588); the other typed calls take a local
+    address only:
     ``RoutedTarget(network, address, router=None)``, in that order. A
     ``str`` address always names a station on the local link.
 

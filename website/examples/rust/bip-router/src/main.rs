@@ -175,11 +175,13 @@ async fn read_through_the_router(
             .ok_or("the device answered from this network")?
     )?;
 
-    // Reads by instance go through the router that answered for it.
+    // The instance resolves to the station behind the router that answered
+    // for it, and the read goes through that router.
     let temperature = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)?;
+    let station = client.resolve_device(DEVICE_INSTANCE).await?;
     let ack = client
-        .read_property_from_device(
-            DEVICE_INSTANCE,
+        .read_property(
+            &station,
             temperature,
             PropertyIdentifier::PRESENT_VALUE,
             None,

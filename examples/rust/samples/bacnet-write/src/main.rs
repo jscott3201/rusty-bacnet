@@ -6,7 +6,7 @@ use std::net::Ipv4Addr;
 use std::process;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
@@ -193,11 +193,11 @@ fn print_snapshot(label: &str, oid: &ObjectIdentifier, snap: &PointSnapshot, pri
 
 async fn read_present_value(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device: u32,
+    device: &Station,
     oid: ObjectIdentifier,
 ) -> Result<PropertyValue, bacnet_types::error::Error> {
     let ack = client
-        .read_property_from_device(device, oid, PropertyIdentifier::PRESENT_VALUE, None)
+        .read_property(device, oid, PropertyIdentifier::PRESENT_VALUE, None)
         .await?;
     decode_application_value(&ack.property_value, 0)
         .map(|(v, _)| v)
@@ -206,12 +206,12 @@ async fn read_present_value(
 
 async fn read_priority_slot(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device: u32,
+    device: &Station,
     oid: ObjectIdentifier,
     priority: u8,
 ) -> Result<Option<PropertyValue>, bacnet_types::error::Error> {
     let ack = client
-        .read_property_from_device(
+        .read_property(
             device,
             oid,
             PropertyIdentifier::PRIORITY_ARRAY,
@@ -230,11 +230,11 @@ async fn read_priority_slot(
 
 async fn read_current_command_priority(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device: u32,
+    device: &Station,
     oid: ObjectIdentifier,
 ) -> Option<u8> {
     let ack = client
-        .read_property_from_device(
+        .read_property(
             device,
             oid,
             PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
@@ -254,7 +254,7 @@ fn decode_current_command_priority(bytes: &[u8]) -> Option<u8> {
 
 async fn read_snapshot(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device: u32,
+    device: &Station,
     oid: ObjectIdentifier,
     priority: u8,
 ) -> Result<PointSnapshot, bacnet_types::error::Error> {
@@ -332,7 +332,7 @@ async fn discover_device(
 
 async fn write_present_value(
     client: &BACnetClient<bacnet_transport::bip::BipTransport>,
-    device: u32,
+    device: &Station,
     oid: ObjectIdentifier,
     value: &PropertyValue,
     priority: Option<u8>,
@@ -341,7 +341,7 @@ async fn write_present_value(
     encode_property_value(&mut buf, value)
         .map_err(|e| bacnet_types::error::Error::Encoding(e.to_string()))?;
     client
-        .write_property_to_device(
+        .write_property(
             device,
             oid,
             PropertyIdentifier::PRESENT_VALUE,
@@ -486,8 +486,16 @@ async fn main() {
     };
 
     discover_device(&mut client, &args).await;
+    let device = match client.resolve_device(args.device).await {
+        Ok(device) => device,
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            let _ = client.stop().await;
+            process::exit(1);
+        }
+    };
 
-    let baseline = match read_snapshot(&client, args.device, point_oid, args.priority).await {
+    let baseline = match read_snapshot(&client, &device, point_oid, args.priority).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("ERROR: baseline read failed: {e}");
@@ -509,14 +517,8 @@ async fn main() {
     }
 
     let write_val = PropertyValue::Real(args.value);
-    if let Err(e) = write_present_value(
-        &client,
-        args.device,
-        point_oid,
-        &write_val,
-        Some(args.priority),
-    )
-    .await
+    if let Err(e) =
+        write_present_value(&client, &device, point_oid, &write_val, Some(args.priority)).await
     {
         eprintln!("ERROR: WriteProperty failed: {e}");
         let _ = client.stop().await;
@@ -529,7 +531,7 @@ async fn main() {
     );
     println!("WriteProperty ACK");
 
-    let after_write = match read_snapshot(&client, args.device, point_oid, args.priority).await {
+    let after_write = match read_snapshot(&client, &device, point_oid, args.priority).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("ERROR: verify read after write failed: {e}");
@@ -562,7 +564,7 @@ async fn main() {
         .unwrap_or(PropertyValue::Null);
     if let Err(e) = write_present_value(
         &client,
-        args.device,
+        &device,
         point_oid,
         &restore_val,
         Some(args.priority),
@@ -584,7 +586,7 @@ async fn main() {
     );
     println!("WriteProperty restore ACK");
 
-    let after_revert = match read_snapshot(&client, args.device, point_oid, args.priority).await {
+    let after_revert = match read_snapshot(&client, &device, point_oid, args.priority).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("ERROR: verify read after relinquish failed: {e}");
