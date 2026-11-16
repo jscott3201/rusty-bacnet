@@ -52,13 +52,32 @@ impl From<DccState> for EnableDisable {
 /// a message.
 ///
 /// The setter is private to `dcc_timer`; tests reach it through
-/// `set_for_test`.
+/// `set_for_test`. A server on a node's seat also sets the node's state
+/// with it, so the node's client follows (#2617); that is read only when
+/// the state changes, never by a path that starts a message.
 #[derive(Debug, Default)]
 pub(crate) struct CommState {
     initiation_restricted: AtomicBool,
+    node: Option<bacnet_endpoint_core::seat::ServerDcc>,
 }
 
 impl CommState {
+    /// ENABLE, as at every start, setting `node`'s state too when the
+    /// server is on a node's seat.
+    pub(crate) fn new(node: Option<bacnet_endpoint_core::seat::ServerDcc>) -> Self {
+        Self {
+            initiation_restricted: AtomicBool::new(false),
+            node,
+        }
+    }
+
+    /// The server is going: its node, if any, enables initiation again.
+    pub(crate) fn release_node(&self) {
+        if let Some(node) = &self.node {
+            node.release();
+        }
+    }
+
     /// The current state.
     pub(crate) fn get(&self) -> DccState {
         if self.initiation_restricted() {
@@ -79,6 +98,9 @@ impl CommState {
     pub(super) fn set(&self, state: DccState) {
         self.initiation_restricted
             .store(state.initiation_restricted(), Ordering::Release);
+        if let Some(node) = &self.node {
+            node.set(state.initiation_restricted());
+        }
     }
 
     /// Put the state in place without a DCC request, for tests that need DCC

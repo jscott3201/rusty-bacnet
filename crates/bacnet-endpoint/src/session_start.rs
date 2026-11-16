@@ -64,6 +64,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     Arc::clone(&self.coordinator),
                     self.client_config.clone(),
                 )?;
+                // DeviceCommunicationControl a full server on the node
+                // accepts binds this requester too (#2617).
+                if let Some(dcc) = self.ingress.as_ref().and_then(EndpointIngress::node_dcc) {
+                    requester.follow_node_dcc(&dcc);
+                }
                 let mut handle = ClientRoleHandle::new(&self.shared.token, requester.clone())
                     .with_bip_broadcast(
                         receivers

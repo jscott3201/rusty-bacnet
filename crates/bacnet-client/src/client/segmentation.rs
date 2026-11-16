@@ -512,7 +512,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 service_choice,
                 true,
             )
-            .map_err(|error| Error::Encoding(error.to_string()))?
+            .map_err(Error::from)?
         };
 
         let owner = registration.owner.clone();

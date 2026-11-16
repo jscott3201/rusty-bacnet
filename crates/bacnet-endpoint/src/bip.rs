@@ -158,7 +158,10 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Sets client APDU timeout/retries (session-owned timers).
+    /// Sets the node's APDU timeout and retries (default 6000 ms and 3; see
+    /// [`SessionConfig::apdu_timeout_ms`]): the client roles' request
+    /// timing, and a full server's confirmed notifications and its Device's
+    /// APDU_Timeout and Number_Of_APDU_Retries.
     pub fn client_timers(mut self, timeout_ms: u64, retries: u8) -> Self {
         self.session.apdu_timeout_ms = timeout_ms;
         self.session.apdu_retries = retries;

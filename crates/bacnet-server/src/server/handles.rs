@@ -75,11 +75,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         let db = self.db.read().await;
-        let view = crate::device_view::DeviceReadContext::new(
-            &db,
-            crate::device_view::DeviceExecution::FullServer,
-        )
-        .with_identity(Some(&self.config.device));
+        let view = crate::device_view::DeviceReadContext::new(&db, self.execution)
+            .with_identity(Some(&self.config.device));
         // The local read resolves the Network_Port wildcard to the registered
         // port, but plans a Group's members without it.
         let scope = bacnet_device_core::read::ReadScope {
@@ -197,7 +194,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
         let db = self.db.read().await;
         crate::pics::PicsGenerator::new(&db, &self.config, pics_config)
-            .for_server()
+            .for_server(self.execution)
             .generate()
     }
 }

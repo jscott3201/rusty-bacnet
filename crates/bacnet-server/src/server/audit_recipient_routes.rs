@@ -53,13 +53,31 @@ impl AuditRoutes {
         Ok(routes)
     }
 
-    /// Finalize link facts and configured next hops after start, before shared ownership.
+    /// Finalize link facts and configured next hops after start, before
+    /// shared ownership; a refusal stops the server's own link.
     pub(super) async fn finish<T: TransportPort + 'static>(
-        mut self,
+        self,
         db: &mut ObjectDatabase,
         config: &ServerConfig,
         network: &mut NetworkLayer<T>,
     ) -> Result<Arc<Self>, Error> {
+        match self.settle(db, config, network) {
+            Ok(routes) => Ok(Arc::new(routes)),
+            Err(error) => {
+                let _ = network.stop().await;
+                Err(error)
+            }
+        }
+    }
+
+    /// Take the started link's facts and check the configured next hops
+    /// against them. Leaves the link alone: a node's seat shares it (#2617).
+    pub(super) fn settle<T: TransportPort + 'static>(
+        mut self,
+        db: &mut ObjectDatabase,
+        config: &ServerConfig,
+        network: &NetworkLayer<T>,
+    ) -> Result<Self, Error> {
         if config.audit_reporters.is_some() {
             self.bip_broadcast = network.transport().bip_broadcast_endpoint();
             self.groups = network.transport().group_destinations();
@@ -91,12 +109,9 @@ impl AuditRoutes {
                     }
                 })
             });
-            if let Err(error) = super::audit_recipient::validate(db, config, &self) {
-                let _ = network.stop().await;
-                return Err(error);
-            }
+            super::audit_recipient::validate(db, config, &self)?;
         }
-        Ok(Arc::new(self))
+        Ok(self)
     }
 
     /// Whether `mac` reaches a group of nodes on the started link: a

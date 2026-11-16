@@ -9,19 +9,19 @@ use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 
 /// The requester every injected APDU comes from.
-const PEER: [u8; 1] = [0x11];
+pub(super) const PEER: [u8; 1] = [0x11];
 
 /// A node's link and ingress, with a seat for a server.
-struct Node {
-    ingress: EndpointIngress<TestTransport>,
-    _receivers: IngressReceivers,
-    inbound: mpsc::Sender<ReceivedNpdu>,
-    sent: SendLog,
-    link: TestTransportHandle,
-    coordinator: Arc<OutboundTransactionCoordinator>,
+pub(super) struct Node {
+    pub(super) ingress: EndpointIngress<TestTransport>,
+    pub(super) _receivers: IngressReceivers,
+    pub(super) inbound: mpsc::Sender<ReceivedNpdu>,
+    pub(super) sent: SendLog,
+    pub(super) link: TestTransportHandle,
+    pub(super) coordinator: Arc<OutboundTransactionCoordinator>,
 }
 
-async fn node() -> (Node, ServerSeat<TestTransport>) {
+pub(super) async fn node() -> (Node, ServerSeat<TestTransport>) {
     let (transport, inbound) = TestTransport::inbound(8);
     let (sent, link) = (transport.sent(), transport.handle());
     let mut ingress = EndpointIngress::new(transport, 8);
@@ -84,7 +84,7 @@ fn read_device_name(invoke_id: u8) -> ReceivedNpdu {
 }
 
 /// The APDUs sent to [`PEER`] so far.
-fn answers(sent: &SendLog) -> Vec<Apdu> {
+pub(super) fn answers(sent: &SendLog) -> Vec<Apdu> {
     sent.frames()
         .into_iter()
         .filter(|frame| frame.mac.as_slice() == PEER)
@@ -96,7 +96,7 @@ fn answers(sent: &SendLog) -> Vec<Apdu> {
 }
 
 /// Wait on paused time, a millisecond at a time, for `count` answers.
-async fn answered(sent: &SendLog, count: usize) -> Vec<Apdu> {
+pub(super) async fn answered(sent: &SendLog, count: usize) -> Vec<Apdu> {
     for _ in 0..5_000 {
         let answers = answers(sent);
         if answers.len() >= count {
@@ -192,7 +192,9 @@ async fn a_seat_refuses_what_only_a_link_of_its_own_can_take() {
     let error = refused.err().expect("a registered port is refused");
     assert!(error.to_string().contains("Network Port"), "{error}");
 
-    let (_node, seat) = node().await;
+    // Audit Reporters a seat can take (#2617, PR 2), but one the database
+    // lacks fails the build, which leaves the node's link as it is.
+    let (audited, seat) = node().await;
     let refused = BACnetServer::generic_builder()
         .audit_reporters(AuditReportersConfig {
             reporters: vec![ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap()],
@@ -200,8 +202,8 @@ async fn a_seat_refuses_what_only_a_link_of_its_own_can_take() {
         .seat(seat)
         .build()
         .await;
-    let error = refused.err().expect("Audit Reporters are refused");
-    assert!(error.to_string().contains("Audit Reporters"), "{error}");
+    assert!(refused.is_err(), "a missing Audit Reporter is refused");
+    assert_eq!(audited.link.stops(), 0);
 
     // One link or the other: a transport set first is refused, not
     // dropped unstarted.

@@ -13353,9 +13353,10 @@ together, and a request queue full of I-Ams about 50 KB.
 
 Older and slower peers: a dropped request or answer costs its requester one
 APDU timeout, and a requester with a long timeout or no retries pays it in
-full. The endpoint's own client roles default to `apdu_retries: 0`, so a
-dropped answer fails that call after its timeout. Where bursts are expected,
-raise `queue_capacity`, and `apdu_retries` on the requesting side.
+full. The endpoint's own client roles default to `apdu_timeout_ms: 6000` and
+`apdu_retries: 3` (#2617), so a dropped answer costs that call a timeout
+before its retry. Where bursts are expected, raise `queue_capacity`, and
+`apdu_retries` on the requesting side.
 Standalone `BACnetClient` and `BACnetServer` don't use this classifier.
 
 ### Full client on an endpoint
@@ -13390,6 +13391,9 @@ assert!(client.who_is(None).await.is_err());
   server role leaves the client to answer as a standalone client does.
 - The session has the one owner of the local network number: the client asks
   What-Is-Network-Number on first need and never answers one.
+- The node is one device: a DeviceCommunicationControl a full server on the
+  session accepts binds this client too, and a segmented answer no request
+  of the node's holds comes to it ([below](#full-server-on-an-endpoint)).
 - Stopping: one `stop()` stops the session with the client still alive
   (#2617). It closes the session's roles, ends the client's tasks, fails its
   open requests and stops the link. From then on the client sends nothing:
@@ -13428,8 +13432,8 @@ client roles (#2617). It is the server a transport of its own gives: every
 service, policy and counter. While it lives it takes every request the
 session's narrow server role would have taken and answers from its own
 database; the narrow role gets requests again once the server is stopped or
-dropped. The session's `DeviceIdentity`, when it has one, becomes the
-server's, so the node is one device on its address.
+dropped. The session must have a `DeviceIdentity`: the node is one device on
+its address, with one set of device settings.
 
 ```rust
 use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
@@ -13469,18 +13473,52 @@ session.stop().await?; // stops the link
   while the client's requests fail at once, so a server with many confirmed
   COV notifications in flight can leave the client none.
 - The session keeps the one owner of the local network number; the server
-  runs none and takes the number it publishes.
-- DeviceCommunicationControl binds the whole device (Clause 16.1.2), but on
-  a node today it silences the server alone. After a DISABLE_INITIATION the
-  server accepts, the server initiates nothing (its notifications and its
-  `broadcast_i_am()` are refused), while the full client's requests and the
-  session's own `broadcast_i_am()` still go out. A later step of #2617 makes
-  it hold for the whole node.
+  runs none and takes the number it publishes. Target Audit routes its
+  recipient by that number, so a seated server takes `audit_reporters`.
+- One device, one set of settings: the server serves the node's Device. Its
+  identity is the session's, with Max_APDU_Length_Accepted the smaller of
+  the identity's and the client's `max_apdu_length` (Clause 12.11.18).
+  APDU_Timeout and Number_Of_APDU_Retries are `SessionConfig::apdu_timeout_ms`
+  and `apdu_retries` (default 6000 ms and 3), which the client uses and the
+  server's confirmed notifications use too (`cov_retry_timeout_ms`,
+  `notification_retries`). On a `Both` session Protocol_Services_Supported
+  lists what the client executes (I-Am, I-Have, both COV notifications)
+  beside the server's services. That follows the session's role, not the
+  client attached at the moment: until one is, the server rejects a
+  ConfirmedCOVNotification the Device lists, and a full client on a
+  `ServerOnly` session executes services the Device doesn't list. Following
+  the attached client would cost every ReadProperty a read of shared state.
+  Segmentation_Supported is the identity's and the server follows it; the
+  full client keeps its own segmentation settings until the session builds
+  its server itself, and it can't reassemble a segmented
+  ConfirmedCOVNotification, which it aborts.
+- DeviceCommunicationControl binds the whole node (Clause 16.1). While the
+  server holds a DISABLE_INITIATION it accepted, nothing on the node
+  initiates but I-Am answers to Who-Is and audit notifications, and nothing
+  is sent: the full client's requests and unconfirmed sends, the narrow
+  client's requests and the session's `broadcast_i_am()` fail with
+  `Error::InitiationDisabled { sent: false }`, and the server's own
+  `broadcast_i_am()` with a SERVICES / COMMUNICATION_DISABLED
+  `Error::Remote`, as on a standalone server. A client request already
+  waiting ends with `sent: true` when its retry falls due, as it may have
+  been carried out. Answers and network-layer messages still go. It ends
+  with the control's duration, an ENABLE, an accepted WARMSTART or
+  COLDSTART, or the server's stop or drop. An operator's own tool may start a client
+  outside it with `ClientOptions::with_node_dcc_override(true)`, an override
+  of Clause 16.1 the node warns about in its log.
+- A segmented Complex-ACK, or a Segment-ACK from an answering device, that
+  answers no request of the node's goes to the full client, which aborts it
+  as an idle client does (Clause 5.4.4.1); it takes at most half of the
+  client's queue. Other answers to nothing the node asked stay with the
+  session, which counts them.
 - Refused: a session with no server role (a full client there answers every
-  request itself), with a source Audit Reporter, with its own COV reporting
-  (`with_cov`), or with a registered Network Port; and a builder with a
-  transport of its own, `registered_network_port` or `audit_reporters`. One
-  full server at a time.
+  request itself), with no Device identity, with a source Audit Reporter,
+  with its own COV reporting (`with_cov`), or with a registered Network
+  Port; a builder with a transport of its own or `registered_network_port`;
+  and a builder identity, `cov_retry_timeout_ms` or `notification_retries`,
+  or a database Device's largest APDU or APDU timing, that differs from the
+  node's (a Device that declares the object model's default timing is given
+  the node's). One full server at a time.
 - Stopping: stop the server, then the session. The server's `stop()` joins
   its work and settles its saves but leaves the link to the session. A
   session stopped first stops the link all the same; the server's later
@@ -13489,12 +13527,11 @@ session.stop().await?; // stops the link
 - `full_server` is the way to put a server on a node today. Its builder
   hook, `ServerBuilder::seat`, takes a `bacnet_endpoint_core::seat::ServerSeat`,
   which only an endpoint session makes for now.
-- Where this is going (maintainer decisions on #2617): the node becomes one
-  device in its settings too, with Protocol_Services_Supported the union of
-  both roles' services and Max_APDU_Length_Accepted the smaller of the two;
-  the session builds its full server itself and the narrow server role goes,
-  taking the session's own COV reporting, local writes and persistence with
-  it; and in Python `await endpoint.server()` returns a `BACnetServer`.
+- Where this is going (maintainer decisions on #2617): the session builds its
+  full server itself and the narrow server role goes, taking the session's
+  own COV reporting, local writes and persistence with it; the full client
+  then follows the node's segmentation; and in Python `await
+  endpoint.server()` returns a `BACnetServer`.
 
 ### Endpoint shutdown and the object database
 

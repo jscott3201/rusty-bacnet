@@ -302,7 +302,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 service_choice,
                 false,
             )
-            .map_err(|error| Error::Encoding(error.to_string()))?
+            .map_err(Error::from)?
         };
 
         let owner = registration.owner.clone();
@@ -532,7 +532,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                                 );
                                                 return Err(error);
                                             }
-                                            RequestTimerExpiration::Retry => unreachable!(
+                                            RequestTimerExpiration::Retry
+                                            | RequestTimerExpiration::Withdrawn => unreachable!(
                                                 "final retry-send failure disposition cannot authorize another retry"
                                             ),
                                         }
@@ -546,6 +547,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 }
                                 RequestTimerExpiration::SegmentedResponse { generation } => {
                                     progress = TransactionProgress::SegmentedResponse { generation };
+                                }
+                                // DeviceCommunicationControl restricts the
+                                // node: no retry goes out (#2617).
+                                RequestTimerExpiration::Withdrawn => {
+                                    self.enqueue_transaction_cleanup(
+                                        tsm_mac, invoke_id, owner, false, None,
+                                    );
+                                    return Err(Error::InitiationDisabled { sent: true });
                                 }
                                 RequestTimerExpiration::TimedOut => {
                                     self.enqueue_transaction_cleanup(
@@ -673,11 +682,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// (#2572): the I-Ams about to fill the discovery table may include a
     /// device a router relays back from this network. Only one frame goes
     /// ahead of the Who-Is, and a question that fails to send holds nothing
-    /// back.
-    pub(super) async fn ask_before(&self, service_choice: UnconfirmedServiceChoice) {
+    /// back. The seat is checked again after it: the node may have stopped,
+    /// or restricted initiation, while the question went out (#2617).
+    pub(super) async fn ask_before(
+        &self,
+        service_choice: UnconfirmedServiceChoice,
+    ) -> Result<(), Error> {
         if service_choice == UnconfirmedServiceChoice::WHO_IS {
             self.device_table.asking.first_need(&self.network).await;
+            self.seat_open()?;
         }
+        Ok(())
     }
 
     /// Send an unconfirmed request to the station `to`, once, with no answer
@@ -721,7 +736,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
-        self.ask_before(service_choice).await;
+        self.ask_before(service_choice).await?;
         self.network
             .send_apdu(&buf, destination_mac, false, NetworkPriority::Normal)
             .await
@@ -742,7 +757,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
-        self.ask_before(service_choice).await;
+        self.ask_before(service_choice).await?;
         self.network
             .broadcast_apdu(&buf, false, NetworkPriority::Normal)
             .await
@@ -763,7 +778,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
-        self.ask_before(service_choice).await;
+        self.ask_before(service_choice).await?;
         self.network
             .broadcast_global_apdu(&buf, false, NetworkPriority::Normal)
             .await
@@ -792,7 +807,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // Network 0 and 65535 are refused below, before anything goes: a
         // refused Who-Is asks nothing.
         if matches!(dest_network, 1..=0xFFFE) {
-            self.ask_before(service_choice).await;
+            self.ask_before(service_choice).await?;
         }
         if self.network.local_network_number().get() == Some(dest_network) {
             return self

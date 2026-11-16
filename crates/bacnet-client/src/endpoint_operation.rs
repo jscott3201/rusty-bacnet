@@ -56,7 +56,7 @@ impl PacedEndpointOperation {
                     false,
                     request.terminal_policy(),
                 )
-                .map_err(|error| Error::Encoding(error.to_string()))?;
+                .map_err(Error::from)?;
             // Before the request can be answered: the seat's routing tells
             // this requester's leases from a full client's by the mark.
             tsm.mark_endpoint_requester(registered.0);
@@ -154,6 +154,16 @@ impl PreparedEndpointOperation {
             if let Ok(response) = self.response.try_recv() {
                 *attempted = true;
                 return self.terminal(response);
+            }
+            // A retry the node's DeviceCommunicationControl now restricts
+            // is not sent (#2617); the guard ends the transaction.
+            if attempt > 0
+                && inner
+                    .tsm
+                    .lock()
+                    .is_ok_and(|tsm| tsm.initiation_restricted())
+            {
+                return Err(Error::InitiationDisabled { sent: true });
             }
             let send = inner.egress.admit_owned_apdu(
                 self.encoded.clone(),

@@ -290,6 +290,10 @@ enum SeatShare {
     Copy,
     /// The APDU itself, with its reply authority.
     Whole,
+    /// The APDU itself, answering nothing the node asked: held to the share
+    /// a copy may take, so a flood of these leaves room for the client's
+    /// own answers (#2635).
+    Stray,
 }
 
 /// Whether `apdu` is an Abort (7) or Segment-ACK (4) with the server bit
@@ -297,6 +301,20 @@ enum SeatShare {
 fn from_requester(apdu: &[u8]) -> bool {
     apdu.first()
         .is_some_and(|first| matches!(first >> 4, 4 | 7) && first & 0x01 == 0)
+}
+
+/// Whether `apdu` is a segmented Complex-ACK (3 with the segmented-message
+/// bit) or a Segment-ACK (4) the answering side sent (server bit set). With
+/// no lease to hold one, it is the client's: in its idle state Clause 5.4.4.1
+/// has it abort either. Every other answer no lease holds, a server's Abort
+/// among them, the idle client would only drop, so it stays with the
+/// endpoint's answer queue, which counts it.
+fn client_stray(apdu: &[u8]) -> bool {
+    apdu.first().is_some_and(|first| match first >> 4 {
+        3 => first & 0x08 != 0,
+        4 => first & 0x01 != 0,
+        _ => false,
+    })
 }
 
 /// The role whose lease holds the answer `received`, if any: looked up once
@@ -347,6 +365,10 @@ fn client_share(
         (IngressRoute::TerminalOrSegment, _) if holder == Some(LeaseHolder::Client) => {
             SeatShare::Whole
         }
+        // No lease holds it: a segmented answer is the client's to abort.
+        (IngressRoute::TerminalOrSegment, _) if holder.is_none() && client_stray(apdu) => {
+            SeatShare::Stray
+        }
         (IngressRoute::TerminalOrSegment, _) => SeatShare::None,
     }
 }
@@ -395,6 +417,10 @@ fn share_out(
                     received = seats.offer(client, received.take()?)
                 }
                 SeatShare::Whole => received = None,
+                SeatShare::Stray if seats.takes_stray(client) => {
+                    received = seats.offer(client, received.take()?)
+                }
+                SeatShare::Stray => received = None,
             }
         }
         if let Some(server) = server {

@@ -436,6 +436,9 @@ pub struct BACnetServer<T: TransportPort = AnyTransport> {
     /// `Some` on a node's seat, whose node owns the link (#2617); its seat
     /// takes another server once this drops.
     seated: Option<server_seat::Seated>,
+    /// The Device's execution profile, which local reads and the PICS
+    /// serve too.
+    execution: crate::device_view::DeviceExecution,
 }
 
 /// Cloneable handle for unsolicited I-Am announcements while its server runs.

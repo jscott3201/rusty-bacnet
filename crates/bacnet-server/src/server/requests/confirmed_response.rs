@@ -64,6 +64,7 @@ pub(super) async fn read_property_multiple_observed(
     service_request: &[u8],
     service_ack: &mut BytesMut,
     config: &ServerConfig,
+    execution: DeviceExecution,
     mut completed: impl FnMut(
         &ObjectDatabase,
         ObjectIdentifier,
@@ -76,8 +77,7 @@ pub(super) async fn read_property_multiple_observed(
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
         .map_err(|error| ReadFailure::Service(error.into_request_reject()))?;
     let budget = config.read_property_multiple_budget;
-    let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
-        .with_identity(Some(&config.device));
+    let view = DeviceReadContext::new(&db, execution).with_identity(Some(&config.device));
     let scope = ReadScope {
         work_limit: budget.max_result_elements,
         registered_port: config.registered_network_port,

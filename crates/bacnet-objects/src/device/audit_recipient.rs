@@ -65,6 +65,21 @@ impl DeviceAuthority<'_> {
     pub fn set_configuration_files(&mut self, files: Vec<ObjectIdentifier>) {
         self.0.set_configuration_files(files);
     }
+    /// Declare the APDU_Timeout and Number_Of_APDU_Retries the device runs
+    /// with, which are read-only to the network: a node whose client and
+    /// server share one pair states that pair (#2617). Internal API, as
+    /// [`DeviceAuthority`] is.
+    #[doc(hidden)]
+    pub fn set_apdu_timing(&mut self, apdu_timeout_ms: u32, apdu_retries: u32) {
+        self.0.properties.insert(
+            PropertyIdentifier::APDU_TIMEOUT,
+            PropertyValue::Unsigned(u64::from(apdu_timeout_ms)),
+        );
+        self.0.properties.insert(
+            PropertyIdentifier::NUMBER_OF_APDU_RETRIES,
+            PropertyValue::Unsigned(u64::from(apdu_retries)),
+        );
+    }
     pub fn write_property(
         &mut self,
         property: PropertyIdentifier,

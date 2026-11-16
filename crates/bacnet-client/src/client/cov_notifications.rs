@@ -84,6 +84,7 @@ impl fmt::Debug for ClientOptions {
         f.debug_struct("ClientOptions")
             .field("cov_channel_capacity", &self.cov_channel_capacity)
             .field("confirmed_cov_notification_ack_policy", &"<callback>")
+            .field("node_dcc_override", &self.node_dcc_override)
             .finish()
     }
 }

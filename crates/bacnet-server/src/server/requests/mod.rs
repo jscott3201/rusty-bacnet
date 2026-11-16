@@ -164,6 +164,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             mutation_decisions,
             warnings: _,
             config,
+            execution: _,
         } = &**services;
         let RequestOrigin {
             mac: source_mac,
@@ -256,6 +257,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &req.service_request,
                     &mut ack_buf,
                     config,
+                    services.execution,
                     |db, oid, property, index, result| {
                         read_audits.extend(audit.read_intent(db, oid, property, index, result));
                     },
