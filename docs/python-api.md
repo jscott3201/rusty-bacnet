@@ -7005,7 +7005,10 @@ instance (its broadcast returned, or sent back by a BBMD), which is counted in
 `IAmArrivalIterator.own_echoes` and is no loss in `missed_before`. Any other
 I-Am from its own address is a record: another device there is a conflict to
 see, and behind NAT another site may reuse a private address in the origin a
-BBMD forwards (Annex J.7.5). A standalone `BACnetClient` sends no I-Am, so it
+BBMD forwards (Annex J.7.5). The match is on the address the endpoint sends
+from, so its own I-Am arriving with another source is a record of its own
+device: a broadcast that left by another interface of a host bound to every
+address, or one a BBMD returns with the NAT-mapped origin. A standalone `BACnetClient` sends no I-Am, so it
 leaves nothing out and `own_echoes` stays 0. A BACnet/SC hub never returns a broadcast
 to its sender, and the MS/TP port takes its own echo out. An I-Am whose
 parameters don't decode, or an SC one naming no originating VMAC, counts in

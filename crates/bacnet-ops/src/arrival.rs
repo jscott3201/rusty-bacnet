@@ -46,7 +46,11 @@
 //!   a BBMD. Each is counted in [`IAmArrivals::own_echoes`]. Any other I-Am
 //!   from its own address is a record: another device on that address is a
 //!   conflict to see, and behind NAT another site may reuse this node's
-//!   private address in the origin a BBMD forwards (Annex J.7.5). A client
+//!   private address in the origin a BBMD forwards (Annex J.7.5). The match
+//!   is on the address the node sends from as the stack knows it, so an echo
+//!   that arrives with another source is a record of this node's own device:
+//!   a broadcast that left by another interface of a host bound to every
+//!   address, or one a BBMD returns with the NAT-mapped origin. A client
 //!   that sends no I-Am names nothing, and leaves nothing out. A BACnet/SC
 //!   hub never returns a broadcast to its sender (Annex AB.5.3.3) and the
 //!   MS/TP port takes its own echo out before the tap.
