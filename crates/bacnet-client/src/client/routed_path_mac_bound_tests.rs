@@ -1,5 +1,6 @@
 //! Routed paths refuse MACs past `bacnet_npdu::MAX_MAC_LEN` up front (#1267).
 use super::*;
+use crate::client::Station;
 
 /// A router MAC or forwarding source one octet past the bound fails a routed
 /// request before registration or emission, and the path API refuses such a
@@ -19,10 +20,8 @@ async fn over_long_routed_path_macs_fail_before_registration_or_emission() {
         };
         let mut client = BACnetClient::start(config, transport).await.unwrap();
         let result = client
-            .confirmed_request_routed(
-                &router,
-                DNET,
-                &[3; 6],
+            .confirmed_request(
+                &Station::routed(&router, DNET, &[3; 6]),
                 ConfirmedServiceChoice::READ_PROPERTY,
                 &[0x0c],
             )

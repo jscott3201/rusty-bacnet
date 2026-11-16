@@ -1,4 +1,3 @@
-use super::service::device_target;
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -29,39 +28,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_initial_values: initial_values,
         };
         self.call(to, request).await
-    }
-    /// Delete an object on a discovered device, routing when needed.
-    ///
-    /// Uses the same confirmation and error semantics as [`Self::delete_object`].
-    /// A missing device fails before sending.
-    pub async fn delete_object_from_device(
-        &self,
-        device_instance: u32,
-        object_identifier: bacnet_types::primitives::ObjectIdentifier,
-    ) -> Result<(), Error> {
-        let (mac, routing) = self.resolve_device(device_instance).await?;
-        let request = bacnet_services::object_mgmt::DeleteObjectRequest { object_identifier };
-        self.call_via(device_target(&mac, routing.as_ref()), request)
-            .await
-    }
-
-    /// Create an object on a discovered device, routing when needed.
-    ///
-    /// Retains the initial values and decoded acknowledgement of [`Self::create_object`].
-    /// A missing device fails before sending.
-    pub async fn create_object_from_device(
-        &self,
-        device_instance: u32,
-        object_specifier: bacnet_services::object_mgmt::ObjectSpecifier,
-        initial_values: Vec<bacnet_services::common::BACnetPropertyValue>,
-    ) -> Result<bacnet_types::primitives::ObjectIdentifier, Error> {
-        let (mac, routing) = self.resolve_device(device_instance).await?;
-        let request = bacnet_services::object_mgmt::CreateObjectRequest {
-            object_specifier,
-            list_of_initial_values: initial_values,
-        };
-        self.call_via(device_target(&mac, routing.as_ref()), request)
-            .await
     }
 }
 

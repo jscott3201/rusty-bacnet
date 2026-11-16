@@ -220,8 +220,9 @@ async fn object_mgmt_create_preserves_specifiers_initial_values_and_decodes_repl
             ),
             (ObjectSpecifier::Identifier(object()), vec![], &[][..]),
         ] {
+            let to = client.resolve_device(INSTANCE).await.unwrap();
             let (result, ()) = tokio::join!(
-                client.create_object_from_device(INSTANCE, specifier.clone(), values.clone()),
+                client.create_object(&to, specifier.clone(), values.clone()),
                 async {
                     let request = peer.request(ConfirmedServiceChoice::CREATE_OBJECT).await;
                     assert_eq!(
@@ -253,19 +254,17 @@ async fn object_mgmt_create_preserves_specifiers_initial_values_and_decodes_repl
 async fn object_mgmt_delete_preserves_identity_and_local_fallback() {
     for routed in [true, false] {
         let (mut client, mut peer) = site(routed).await;
-        let (result, ()) = tokio::join!(
-            client.delete_object_from_device(INSTANCE, object()),
-            async {
-                let request = peer.request(ConfirmedServiceChoice::DELETE_OBJECT).await;
-                assert_eq!(
-                    DeleteObjectRequest::decode(&request.service_request).unwrap(),
-                    DeleteObjectRequest {
-                        object_identifier: object()
-                    }
-                );
-                peer.ack(&request).await;
-            }
-        );
+        let to = client.resolve_device(INSTANCE).await.unwrap();
+        let (result, ()) = tokio::join!(client.delete_object(&to, object()), async {
+            let request = peer.request(ConfirmedServiceChoice::DELETE_OBJECT).await;
+            assert_eq!(
+                DeleteObjectRequest::decode(&request.service_request).unwrap(),
+                DeleteObjectRequest {
+                    object_identifier: object()
+                }
+            );
+            peer.ack(&request).await;
+        });
         result.unwrap();
         client.stop().await.unwrap();
         peer.transport.stop().await.unwrap();
@@ -285,19 +284,17 @@ async fn object_mgmt_alarm_preserves_every_field_and_timestamp_choice() {
         .enumerate()
         {
             let expected = alarm_request(index as u32, timestamp, acknowledged_at);
-            let (result, ()) = tokio::join!(
-                client.acknowledge_alarm_from_device(INSTANCE, &expected),
-                async {
-                    let request = peer
-                        .request(ConfirmedServiceChoice::ACKNOWLEDGE_ALARM)
-                        .await;
-                    assert_eq!(
-                        AcknowledgeAlarmRequest::decode(&request.service_request).unwrap(),
-                        expected
-                    );
-                    peer.ack(&request).await;
-                }
-            );
+            let to = client.resolve_device(INSTANCE).await.unwrap();
+            let (result, ()) = tokio::join!(client.acknowledge_alarm(&to, &expected), async {
+                let request = peer
+                    .request(ConfirmedServiceChoice::ACKNOWLEDGE_ALARM)
+                    .await;
+                assert_eq!(
+                    AcknowledgeAlarmRequest::decode(&request.service_request).unwrap(),
+                    expected
+                );
+                peer.ack(&request).await;
+            });
             result.unwrap();
         }
         client.stop().await.unwrap();
@@ -308,12 +305,9 @@ async fn object_mgmt_alarm_preserves_every_field_and_timestamp_choice() {
 #[tokio::test(start_paused = true)]
 async fn object_mgmt_routed_structured_error_protocol_error_reject_and_abort_survive() {
     let (mut client, mut peer) = site(true).await;
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     let (result, ()) = tokio::join!(
-        client.create_object_from_device(
-            INSTANCE,
-            ObjectSpecifier::Identifier(object()),
-            initial_values()
-        ),
+        client.create_object(&to, ObjectSpecifier::Identifier(object()), initial_values()),
         async {
             let request = peer.request(ConfirmedServiceChoice::CREATE_OBJECT).await;
             // Independent error body: property/write-access-denied, initial value 2.
@@ -333,20 +327,18 @@ async fn object_mgmt_routed_structured_error_protocol_error_reject_and_abort_sur
     assert_eq!(class, ErrorClass::PROPERTY);
     assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
     assert_eq!(*detail, ErrorDetail::FirstFailedElementNumber(2));
-    let (result, ()) = tokio::join!(
-        client.delete_object_from_device(INSTANCE, object()),
-        async {
-            let request = peer.request(ConfirmedServiceChoice::DELETE_OBJECT).await;
-            peer.send(Apdu::Error(ErrorPdu {
-                invoke_id: request.invoke_id,
-                service_choice: request.service_choice,
-                error_class: ErrorClass::OBJECT,
-                error_code: ErrorCode::UNKNOWN_OBJECT,
-                error_data: Bytes::new(),
-            }))
-            .await;
-        }
-    );
+    let to = client.resolve_device(INSTANCE).await.unwrap();
+    let (result, ()) = tokio::join!(client.delete_object(&to, object()), async {
+        let request = peer.request(ConfirmedServiceChoice::DELETE_OBJECT).await;
+        peer.send(Apdu::Error(ErrorPdu {
+            invoke_id: request.invoke_id,
+            service_choice: request.service_choice,
+            error_class: ErrorClass::OBJECT,
+            error_code: ErrorCode::UNKNOWN_OBJECT,
+            error_data: Bytes::new(),
+        }))
+        .await;
+    });
     assert!(matches!(
         result,
         Err(Error::Remote(RemoteError::Error {
@@ -356,28 +348,26 @@ async fn object_mgmt_routed_structured_error_protocol_error_reject_and_abort_sur
     ));
     let expected = alarm_request(0, time(), date_time());
     for abort in [false, true] {
-        let (result, ()) = tokio::join!(
-            client.acknowledge_alarm_from_device(INSTANCE, &expected),
-            async {
-                let request = peer
-                    .request(ConfirmedServiceChoice::ACKNOWLEDGE_ALARM)
-                    .await;
-                if abort {
-                    peer.send(Apdu::Abort(AbortPdu {
-                        sent_by_server: true,
-                        invoke_id: request.invoke_id,
-                        abort_reason: AbortReason::OUT_OF_RESOURCES,
-                    }))
-                    .await;
-                } else {
-                    peer.send(Apdu::Reject(RejectPdu {
-                        invoke_id: request.invoke_id,
-                        reject_reason: RejectReason::UNRECOGNIZED_SERVICE,
-                    }))
-                    .await;
-                }
+        let to = client.resolve_device(INSTANCE).await.unwrap();
+        let (result, ()) = tokio::join!(client.acknowledge_alarm(&to, &expected), async {
+            let request = peer
+                .request(ConfirmedServiceChoice::ACKNOWLEDGE_ALARM)
+                .await;
+            if abort {
+                peer.send(Apdu::Abort(AbortPdu {
+                    sent_by_server: true,
+                    invoke_id: request.invoke_id,
+                    abort_reason: AbortReason::OUT_OF_RESOURCES,
+                }))
+                .await;
+            } else {
+                peer.send(Apdu::Reject(RejectPdu {
+                    invoke_id: request.invoke_id,
+                    reject_reason: RejectReason::UNRECOGNIZED_SERVICE,
+                }))
+                .await;
             }
-        );
+        });
         if abort {
             assert!(matches!(
                 result,
@@ -403,32 +393,12 @@ async fn object_mgmt_routed_structured_error_protocol_error_reject_and_abort_sur
 async fn object_mgmt_unknown_device_and_oversized_alarm_send_nothing() {
     let (mut client, mut peer) = site(true).await;
     let mut request = alarm_request(0, time(), date_time());
-    assert!(
-        client
-            .create_object_from_device(
-                INSTANCE + 1,
-                ObjectSpecifier::Identifier(object()),
-                initial_values()
-            )
-            .await
-            .is_err()
-    );
-    assert!(
-        client
-            .delete_object_from_device(INSTANCE + 1, object())
-            .await
-            .is_err()
-    );
-    assert!(
-        client
-            .acknowledge_alarm_from_device(INSTANCE + 1, &request)
-            .await
-            .is_err()
-    );
+    // An instance the table doesn't hold has no station, so nothing is sent.
+    assert!(client.resolve_device(INSTANCE + 1).await.is_err());
     peer.empty();
     request.acknowledgment_source = "x".repeat(2048);
     let result = client
-        .acknowledge_alarm_from_device(INSTANCE, &request)
+        .acknowledge_alarm(&client.resolve_device(INSTANCE).await.unwrap(), &request)
         .await;
     assert!(matches!(
         result,

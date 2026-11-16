@@ -52,15 +52,25 @@ async fn write(
     if path == 0 {
         client.write_property_multiple(&[2], specs).await
     } else {
-        client.write_property_multiple_to_device(path, specs).await
+        client
+            .write_property_multiple(&client.resolve_device(path).await.unwrap(), specs)
+            .await
     }
 }
 
 // The probe below holds the device table lock across the request.
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
-async fn wpm_validation_invalid_direct_local_routed_and_unknown_never_resolve_admit_or_send() {
+async fn wpm_validation_invalid_direct_local_and_routed_never_admit_or_send() {
     let (mut client, peer, mut received) = setup().await;
+    // A caller by instance looks the device up first; one the table doesn't
+    // hold is refused there, before any request exists.
+    assert!(client.resolve_device(999).await.is_err());
+    let stations = [
+        Station::local(&[2]),
+        client.resolve_device(10).await.unwrap(),
+        client.resolve_device(11).await.unwrap(),
+    ];
     let mut cases = vec![vec![]];
     let mut empty = specs(None);
     empty[0].list_of_properties.clear();
@@ -85,13 +95,13 @@ async fn wpm_validation_invalid_direct_local_routed_and_unknown_never_resolve_ad
         cases.push(late);
     }
     for invalid in cases {
-        for path in [0, 10, 11, 999] {
+        for station in &stations {
             // A blocking lock now: a path that took it would hang this
             // thread instead of timing out, and nextest ends the test.
             let _lookup = client.device_table.lock();
             let error = timeout(
                 Duration::from_secs(1),
-                write(&client, path, invalid.clone()),
+                client.write_property_multiple(station, invalid.clone()),
             )
             .await
             .unwrap()

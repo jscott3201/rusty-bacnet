@@ -185,8 +185,9 @@ async fn device_file_reads_preserve_raw_and_decoded_stream_and_record_acks() {
         let (mut client, mut peer) = site(routed).await;
         for (access, expected) in [(stream(), stream_ack()), (record(), record_ack())] {
             let bytes = encoded(&expected);
+            let to = client.resolve_device(INSTANCE).await.unwrap();
             let (result, ()) = tokio::join!(
-                client.atomic_read_file_from_device(INSTANCE, file(), access.clone()),
+                client.atomic_read_file(&to, file(), access.clone()),
                 async {
                     let request = peer.request(ConfirmedServiceChoice::ATOMIC_READ_FILE).await;
                     assert_read(&request, &access);
@@ -194,8 +195,9 @@ async fn device_file_reads_preserve_raw_and_decoded_stream_and_record_acks() {
                 }
             );
             assert_eq!(result.unwrap(), bytes);
+            let to = client.resolve_device(INSTANCE).await.unwrap();
             let (result, ()) = tokio::join!(
-                client.atomic_read_file_decoded_from_device(INSTANCE, file(), access.clone()),
+                client.atomic_read_file_decoded(&to, file(), access.clone()),
                 async {
                     let request = peer.request(ConfirmedServiceChoice::ATOMIC_READ_FILE).await;
                     assert_read(&request, &access);
@@ -205,13 +207,11 @@ async fn device_file_reads_preserve_raw_and_decoded_stream_and_record_acks() {
             assert_eq!(result.unwrap(), expected);
         }
         // The raw API intentionally preserves an undecodable service payload.
-        let (result, ()) = tokio::join!(
-            client.atomic_read_file_from_device(INSTANCE, file(), stream()),
-            async {
-                let request = peer.request(ConfirmedServiceChoice::ATOMIC_READ_FILE).await;
-                peer.ack(&request, Bytes::from_static(&[0xff])).await;
-            }
-        );
+        let to = client.resolve_device(INSTANCE).await.unwrap();
+        let (result, ()) = tokio::join!(client.atomic_read_file(&to, file(), stream()), async {
+            let request = peer.request(ConfirmedServiceChoice::ATOMIC_READ_FILE).await;
+            peer.ack(&request, Bytes::from_static(&[0xff])).await;
+        });
         assert_eq!(result.unwrap().as_ref(), &[0xff]);
         client.stop().await.unwrap();
         peer.transport.stop().await.unwrap();
@@ -257,8 +257,9 @@ async fn routed_decoded_file_read_refuses_wrong_arm_oversized_and_malformed_acks
         (stream(), Bytes::from_static(&[0x11, 0x0e])),
         (stream(), Bytes::from(trailing)),
     ] {
+        let to = client.resolve_device(INSTANCE).await.unwrap();
         let (result, ()) = tokio::join!(
-            client.atomic_read_file_decoded_from_device(INSTANCE, file(), access.clone()),
+            client.atomic_read_file_decoded(&to, file(), access.clone()),
             async {
                 let request = peer.request(ConfirmedServiceChoice::ATOMIC_READ_FILE).await;
                 assert_read(&request, &access);
@@ -308,8 +309,9 @@ async fn device_file_writes_preserve_stream_append_and_record_request_and_raw_ac
             }
             .encode(&mut bytes);
             let bytes = bytes.freeze();
+            let to = client.resolve_device(INSTANCE).await.unwrap();
             let (result, ()) = tokio::join!(
-                client.atomic_write_file_from_device(INSTANCE, file(), access.clone()),
+                client.atomic_write_file(&to, file(), access.clone()),
                 async {
                     let request = peer
                         .request(ConfirmedServiceChoice::ATOMIC_WRITE_FILE)
@@ -340,49 +342,30 @@ async fn routed_file_services_preserve_protocol_errors_and_missing_device_sends_
         file_start_position: 0,
         file_data: vec![1],
     };
-    assert!(
-        client
-            .atomic_read_file_from_device(INSTANCE + 1, file(), stream())
-            .await
-            .is_err()
-    );
-    assert!(
-        client
-            .atomic_read_file_decoded_from_device(INSTANCE + 1, file(), record())
-            .await
-            .is_err()
-    );
-    assert!(
-        client
-            .atomic_write_file_from_device(INSTANCE + 1, file(), write.clone())
-            .await
-            .is_err()
-    );
+    // An instance the table doesn't hold has no station, so nothing is sent.
+    assert!(client.resolve_device(INSTANCE + 1).await.is_err());
     assert!(peer.frames.try_recv().is_err());
     assert!(peer.destinations.try_recv().is_err());
-    let (raw, ()) = tokio::join!(
-        client.atomic_read_file_from_device(INSTANCE, file(), stream()),
-        async {
-            let request = peer.request(ConfirmedServiceChoice::ATOMIC_READ_FILE).await;
-            peer.error(&request).await;
-        }
-    );
+    let to = client.resolve_device(INSTANCE).await.unwrap();
+    let (raw, ()) = tokio::join!(client.atomic_read_file(&to, file(), stream()), async {
+        let request = peer.request(ConfirmedServiceChoice::ATOMIC_READ_FILE).await;
+        peer.error(&request).await;
+    });
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     let (decoded, ()) = tokio::join!(
-        client.atomic_read_file_decoded_from_device(INSTANCE, file(), record()),
+        client.atomic_read_file_decoded(&to, file(), record()),
         async {
             let request = peer.request(ConfirmedServiceChoice::ATOMIC_READ_FILE).await;
             peer.error(&request).await;
         }
     );
-    let (written, ()) = tokio::join!(
-        client.atomic_write_file_from_device(INSTANCE, file(), write),
-        async {
-            let request = peer
-                .request(ConfirmedServiceChoice::ATOMIC_WRITE_FILE)
-                .await;
-            peer.error(&request).await;
-        }
-    );
+    let to = client.resolve_device(INSTANCE).await.unwrap();
+    let (written, ()) = tokio::join!(client.atomic_write_file(&to, file(), write), async {
+        let request = peer
+            .request(ConfirmedServiceChoice::ATOMIC_WRITE_FILE)
+            .await;
+        peer.error(&request).await;
+    });
     for error in [raw.unwrap_err(), decoded.unwrap_err(), written.unwrap_err()] {
         assert!(
             matches!(

@@ -274,7 +274,10 @@ async fn a_segmented_reply_each_way() {
     while site.to_station.try_recv().is_ok() {}
     let ack = site
         .client
-        .read_property_multiple_from_device(REMOTE, all_of(REMOTE))
+        .read_property_multiple(
+            &site.client.resolve_device(REMOTE).await.unwrap(),
+            all_of(REMOTE),
+        )
         .await
         .unwrap();
     assert!(
@@ -323,7 +326,12 @@ async fn who_is_finds_servers_on_both_sides() {
     assert_eq!(hosted.source_network, None, "the router's own, not routed");
     let ack = site
         .remote_client
-        .read_property_from_device(HOSTED, sensor(), PropertyIdentifier::OBJECT_NAME, None)
+        .read_property(
+            &site.remote_client.resolve_device(HOSTED).await.unwrap(),
+            sensor(),
+            PropertyIdentifier::OBJECT_NAME,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -352,7 +360,13 @@ async fn confirmed_notifications_are_acknowledged_to_their_sender() {
     found(&site.client, REMOTE).await;
     let mut routed = site.client.cov_notifications();
     site.client
-        .subscribe_cov_to_device(REMOTE, 2, sensor(), true, Some(300))
+        .subscribe_cov(
+            &site.client.resolve_device(REMOTE).await.unwrap(),
+            2,
+            sensor(),
+            true,
+            Some(300),
+        )
         .await
         .unwrap();
 

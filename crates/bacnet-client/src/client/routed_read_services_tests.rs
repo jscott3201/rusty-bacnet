@@ -200,22 +200,20 @@ fn assert_record(records: LogRecords) {
 async fn routed_event_information_preserves_cursor_and_decodes_the_ack() {
     let (mut client, mut peer) = site(true).await;
     for cursor in [None, Some(log())] {
-        let (result, ()) = tokio::join!(
-            client.get_event_information_from_device(INSTANCE, cursor),
-            async {
-                let request = peer
-                    .request(ConfirmedServiceChoice::GET_EVENT_INFORMATION)
-                    .await;
-                assert_eq!(
-                    GetEventInformationRequest::decode(&request.service_request)
-                        .unwrap()
-                        .last_received_object_identifier,
-                    cursor
-                );
-                peer.reply(&request, Bytes::from_static(&[0x0e, 0x0f, 0x19, 0]))
-                    .await;
-            }
-        );
+        let to = client.resolve_device(INSTANCE).await.unwrap();
+        let (result, ()) = tokio::join!(client.get_event_information(&to, cursor), async {
+            let request = peer
+                .request(ConfirmedServiceChoice::GET_EVENT_INFORMATION)
+                .await;
+            assert_eq!(
+                GetEventInformationRequest::decode(&request.service_request)
+                    .unwrap()
+                    .last_received_object_identifier,
+                cursor
+            );
+            peer.reply(&request, Bytes::from_static(&[0x0e, 0x0f, 0x19, 0]))
+                .await;
+        });
         let ack = result.unwrap();
         assert!(ack.list_of_event_summaries.is_empty());
         assert!(!ack.more_events);
@@ -228,9 +226,10 @@ async fn routed_event_information_preserves_cursor_and_decodes_the_ack() {
 async fn routed_read_range_preserves_strict_lenient_and_decode_failures() {
     let (mut client, mut peer) = site(true).await;
     let expected = request();
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     let (result, ()) = tokio::join!(
-        client.read_range_from_device(
-            INSTANCE,
+        client.read_range(
+            &to,
             log(),
             PropertyIdentifier::LOG_BUFFER,
             None,
@@ -252,17 +251,15 @@ async fn routed_read_range_preserves_strict_lenient_and_decode_failures() {
         ))
     ));
     for mode in [ReadRangeValidation::Strict, ReadRangeValidation::Lenient] {
-        let (result, ()) = tokio::join!(
-            client.read_range_from_device_with(INSTANCE, &expected, mode),
-            async {
-                let request = peer.request(ConfirmedServiceChoice::READ_RANGE).await;
-                assert_eq!(
-                    ReadRangeRequest::decode(&request.service_request).unwrap(),
-                    expected
-                );
-                peer.reply(&request, encode_range(&range_ack(0))).await;
-            }
-        );
+        let to = client.resolve_device(INSTANCE).await.unwrap();
+        let (result, ()) = tokio::join!(client.read_range_with(&to, &expected, mode), async {
+            let request = peer.request(ConfirmedServiceChoice::READ_RANGE).await;
+            assert_eq!(
+                ReadRangeRequest::decode(&request.service_request).unwrap(),
+                expected
+            );
+            peer.reply(&request, encode_range(&range_ack(0))).await;
+        });
         if mode == ReadRangeValidation::Strict {
             assert!(matches!(
                 result,
@@ -278,13 +275,11 @@ async fn routed_read_range_preserves_strict_lenient_and_decode_failures() {
             );
             assert_record(reply.ack.log_records().unwrap().unwrap());
         }
-        let (result, ()) = tokio::join!(
-            client.read_range_from_device_with(INSTANCE, &expected, mode),
-            async {
-                let request = peer.request(ConfirmedServiceChoice::READ_RANGE).await;
-                peer.reply(&request, Bytes::from_static(&[0x0c, 0])).await;
-            }
-        );
+        let to = client.resolve_device(INSTANCE).await.unwrap();
+        let (result, ()) = tokio::join!(client.read_range_with(&to, &expected, mode), async {
+            let request = peer.request(ConfirmedServiceChoice::READ_RANGE).await;
+            peer.reply(&request, Bytes::from_static(&[0x0c, 0])).await;
+        });
         assert!(
             matches!(
                 result,
@@ -301,8 +296,9 @@ async fn routed_read_range_preserves_strict_lenient_and_decode_failures() {
 #[tokio::test(start_paused = true)]
 async fn routed_log_page_uses_one_route_snapshot_for_counts_and_range() {
     let (mut client, mut peer) = site(true).await;
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     let (result, ()) = tokio::join!(
-        client.read_log_page_from_device(INSTANCE, log(), LogCursor::Oldest, 1),
+        client.read_log_page(&to, log(), LogCursor::Oldest, 1),
         async {
             for (index, property) in [
                 PropertyIdentifier::TOTAL_RECORD_COUNT,
@@ -366,22 +362,21 @@ async fn reply_count(peer: &Peer, request: &ConfirmedRequest, property: Property
 #[tokio::test(start_paused = true)]
 async fn read_service_device_methods_keep_local_devices_direct() {
     let (mut client, mut peer) = site(false).await;
-    let (result, ()) = tokio::join!(
-        client.get_event_information_from_device(INSTANCE, None),
-        async {
-            let request = peer
-                .request(ConfirmedServiceChoice::GET_EVENT_INFORMATION)
-                .await;
-            assert!(request.service_request.is_empty());
-            peer.reply(&request, Bytes::from_static(&[0x0e, 0x0f, 0x19, 0]))
-                .await;
-        }
-    );
+    let to = client.resolve_device(INSTANCE).await.unwrap();
+    let (result, ()) = tokio::join!(client.get_event_information(&to, None), async {
+        let request = peer
+            .request(ConfirmedServiceChoice::GET_EVENT_INFORMATION)
+            .await;
+        assert!(request.service_request.is_empty());
+        peer.reply(&request, Bytes::from_static(&[0x0e, 0x0f, 0x19, 0]))
+            .await;
+    });
     let ack = result.unwrap();
     assert!(ack.list_of_event_summaries.is_empty() && !ack.more_events);
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     let (result, ()) = tokio::join!(
-        client.read_range_from_device(
-            INSTANCE,
+        client.read_range(
+            &to,
             log(),
             PropertyIdentifier::LOG_BUFFER,
             None,
@@ -397,8 +392,9 @@ async fn read_service_device_methods_keep_local_devices_direct() {
         }
     );
     assert_record(result.unwrap().log_records().unwrap().unwrap());
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     let (result, ()) = tokio::join!(
-        client.read_log_page_from_device(INSTANCE, log(), LogCursor::Oldest, 1),
+        client.read_log_page(&to, log(), LogCursor::Oldest, 1),
         async {
             for property in [
                 PropertyIdentifier::TOTAL_RECORD_COUNT,
@@ -428,47 +424,19 @@ async fn read_service_device_methods_keep_local_devices_direct() {
 #[tokio::test(start_paused = true)]
 async fn missing_read_service_device_and_invalid_page_fail_without_traffic() {
     let (mut client, mut peer) = site(true).await;
+    // An instance the table doesn't hold has no station, so nothing is sent.
     assert!(
         client
-            .get_event_information_from_device(INSTANCE + 1, None)
+            .resolve_device(INSTANCE + 1)
             .await
             .unwrap_err()
             .to_string()
             .contains("not in device table")
     );
+    let to = client.resolve_device(INSTANCE).await.unwrap();
     assert!(
         client
-            .read_range_from_device(
-                INSTANCE + 1,
-                log(),
-                PropertyIdentifier::LOG_BUFFER,
-                None,
-                request().range
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("not in device table")
-    );
-    assert!(
-        client
-            .read_range_from_device_with(INSTANCE + 1, &request(), ReadRangeValidation::Lenient)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("not in device table")
-    );
-    assert!(
-        client
-            .read_log_page_from_device(INSTANCE + 1, log(), LogCursor::Oldest, 1)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("not in device table")
-    );
-    assert!(
-        client
-            .read_log_page_from_device(INSTANCE, log(), LogCursor::Oldest, 0)
+            .read_log_page(&to, log(), LogCursor::Oldest, 0)
             .await
             .is_err()
     );
@@ -504,7 +472,8 @@ async fn summaries_route_when_the_device_is_routed_and_decode() {
     };
     for routed in [true, false] {
         let (mut client, mut peer) = site(routed).await;
-        let (result, ()) = tokio::join!(client.get_alarm_summary_from_device(INSTANCE), async {
+        let to = client.resolve_device(INSTANCE).await.unwrap();
+        let (result, ()) = tokio::join!(client.get_alarm_summary(&to), async {
             let request = peer
                 .request(ConfirmedServiceChoice::GET_ALARM_SUMMARY)
                 .await;
@@ -521,21 +490,18 @@ async fn summaries_route_when_the_device_is_routed_and_decode() {
             std::slice::from_ref(&entry),
             "routed {routed}"
         );
-        let (result, ()) = tokio::join!(
-            client.get_enrollment_summary_from_device(INSTANCE, &filters),
-            async {
-                let request = peer
-                    .request(ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY)
-                    .await;
-                assert_eq!(
-                    GetEnrollmentSummaryRequest::decode(&request.service_request).unwrap(),
-                    filters
-                );
-                let mut ack = BytesMut::new();
-                GetEnrollmentSummaryAck { entries: vec![] }.encode(&mut ack);
-                peer.reply(&request, ack.freeze()).await;
-            }
-        );
+        let (result, ()) = tokio::join!(client.get_enrollment_summary(&to, &filters), async {
+            let request = peer
+                .request(ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY)
+                .await;
+            assert_eq!(
+                GetEnrollmentSummaryRequest::decode(&request.service_request).unwrap(),
+                filters
+            );
+            let mut ack = BytesMut::new();
+            GetEnrollmentSummaryAck { entries: vec![] }.encode(&mut ack);
+            peer.reply(&request, ack.freeze()).await;
+        });
         assert!(result.unwrap().entries.is_empty(), "routed {routed}");
         client.stop().await.unwrap();
         peer.transport.stop().await.unwrap();

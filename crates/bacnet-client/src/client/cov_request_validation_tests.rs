@@ -21,15 +21,11 @@ async fn subscribe_cov_invalid_typed_requests_do_not_admit_or_send() {
                 lifetime: Some(lifetime),
             };
             let target = if routed {
-                ConfirmedTarget::Routed {
-                    router_mac: &[2],
-                    dest_network: 42,
-                    dest_mac: &[3],
-                }
+                Station::routed(&[2], 42, &[3])
             } else {
-                ConfirmedTarget::Local { mac: &[2] }
+                Station::local(&[2])
             };
-            let error = timeout(Duration::from_secs(1), client.call_via(target, request))
+            let error = timeout(Duration::from_secs(1), client.call(&target, request))
                 .await
                 .unwrap()
                 .unwrap_err();

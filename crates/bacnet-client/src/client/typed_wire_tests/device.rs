@@ -18,15 +18,15 @@ async fn device_communication_control() {
     pin!("dcc/local", Answer::Simple, |c| c
         .device_communication_control(PEER, off, Some(5), pw()));
     pin!("dcc/local", Answer::Simple, |c| c
-        .device_communication_control_from_device(
-            LOCAL,
+        .device_communication_control(
+            &c.resolve_device(LOCAL).await.unwrap(),
             off,
             Some(5),
             pw()
         ));
     pin!("dcc/routed", Answer::Simple, |c| c
-        .device_communication_control_from_device(
-            REMOTE,
+        .device_communication_control(
+            &c.resolve_device(REMOTE).await.unwrap(),
             off,
             Some(5),
             pw()
@@ -42,10 +42,16 @@ async fn reinitialize_device() {
         warm,
         pw()
     ));
-    pin!("reinit/local", Answer::Simple, |c| c
-        .reinitialize_device_from_device(LOCAL, warm, pw()));
-    pin!("reinit/routed", Answer::Simple, |c| c
-        .reinitialize_device_from_device(REMOTE, warm, pw()));
+    pin!("reinit/local", Answer::Simple, |c| c.reinitialize_device(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        warm,
+        pw()
+    ));
+    pin!("reinit/routed", Answer::Simple, |c| c.reinitialize_device(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        warm,
+        pw()
+    ));
     pin!("reinit-error/local", Answer::Error, |c| c
         .reinitialize_device(PEER, warm, None));
 }
@@ -66,16 +72,28 @@ const TIME: Time = Time {
 #[tokio::test]
 async fn time_synchronization() {
     pin!("ts/local", |c| c.time_synchronization(PEER, DATE, TIME));
-    pin!("ts/local", |c| c
-        .time_synchronization_from_device(LOCAL, DATE, TIME));
-    pin!("ts/routed", |c| c
-        .time_synchronization_from_device(REMOTE, DATE, TIME));
+    pin!("ts/local", |c| c.time_synchronization(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        DATE,
+        TIME
+    ));
+    pin!("ts/routed", |c| c.time_synchronization(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        DATE,
+        TIME
+    ));
     pin!("uts/local", |c| c
         .utc_time_synchronization(PEER, DATE, TIME));
-    pin!("uts/local", |c| c
-        .utc_time_synchronization_from_device(LOCAL, DATE, TIME));
-    pin!("uts/routed", |c| c
-        .utc_time_synchronization_from_device(REMOTE, DATE, TIME));
+    pin!("uts/local", |c| c.utc_time_synchronization(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        DATE,
+        TIME
+    ));
+    pin!("uts/routed", |c| c.utc_time_synchronization(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        DATE,
+        TIME
+    ));
 }
 
 #[tokio::test]
@@ -93,19 +111,22 @@ async fn create_and_delete_object() {
         by_type(),
         Vec::new()
     ));
-    pin!("create/local", created.clone(), |c| c
-        .create_object_from_device(LOCAL, by_type(), Vec::new()));
-    pin!("create/routed", created, |c| c.create_object_from_device(
-        REMOTE,
+    pin!("create/local", created.clone(), |c| c.create_object(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        by_type(),
+        Vec::new()
+    ));
+    pin!("create/routed", created, |c| c.create_object(
+        &c.resolve_device(REMOTE).await.unwrap(),
         by_type(),
         Vec::new()
     ));
     pin!("delete/local", Answer::Simple, |c| c
         .delete_object(PEER, av5));
     pin!("delete/local", Answer::Simple, |c| c
-        .delete_object_from_device(LOCAL, av5));
+        .delete_object(&c.resolve_device(LOCAL).await.unwrap(), av5));
     pin!("delete/routed", Answer::Simple, |c| c
-        .delete_object_from_device(REMOTE, av5));
+        .delete_object(&c.resolve_device(REMOTE).await.unwrap(), av5));
 }
 
 fn acknowledgement() -> AcknowledgeAlarmRequest {
@@ -124,10 +145,14 @@ async fn acknowledge_alarm() {
     let ack = acknowledgement();
     pin!("ack-alarm/local", Answer::Simple, |c| c
         .acknowledge_alarm(PEER, &ack));
-    pin!("ack-alarm/local", Answer::Simple, |c| c
-        .acknowledge_alarm_from_device(LOCAL, &ack));
-    pin!("ack-alarm/routed", Answer::Simple, |c| c
-        .acknowledge_alarm_from_device(REMOTE, &ack));
+    pin!("ack-alarm/local", Answer::Simple, |c| c.acknowledge_alarm(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        &ack
+    ));
+    pin!("ack-alarm/routed", Answer::Simple, |c| c.acknowledge_alarm(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        &ack
+    ));
 }
 
 #[tokio::test]
@@ -185,24 +210,29 @@ async fn atomic_read_file() {
         file(),
         window()
     ));
-    pin!("arf/local", ack.clone(), |c| c
-        .atomic_read_file_from_device(LOCAL, file(), window()));
-    pin!("arf/routed", ack.clone(), |c| c
-        .atomic_read_file_from_device(REMOTE, file(), window()));
+    pin!("arf/local", ack.clone(), |c| c.atomic_read_file(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        file(),
+        window()
+    ));
+    pin!("arf/routed", ack.clone(), |c| c.atomic_read_file(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        file(),
+        window()
+    ));
     pin!("arf-decoded/local", ack.clone(), |c| c
         .atomic_read_file_decoded(PEER, file(), window()));
     pin!("arf-decoded/local", ack.clone(), |c| c
-        .atomic_read_file_decoded_from_device(
-            LOCAL,
+        .atomic_read_file_decoded(
+            &c.resolve_device(LOCAL).await.unwrap(),
             file(),
             window()
         ));
-    pin!("arf-decoded/routed", ack, |c| c
-        .atomic_read_file_decoded_from_device(
-            REMOTE,
-            file(),
-            window()
-        ));
+    pin!("arf-decoded/routed", ack, |c| c.atomic_read_file_decoded(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        file(),
+        window()
+    ));
 }
 
 /// Four octets for a window of three: the decoded read refuses them every
@@ -218,8 +248,8 @@ async fn atomic_read_file_answer_is_checked() {
     pin!("arf-decoded-over/local", over.clone(), |c| c
         .atomic_read_file_decoded(PEER, file(), window()));
     pin!("arf-decoded-over/routed", over, |c| c
-        .atomic_read_file_decoded_from_device(
-            REMOTE,
+        .atomic_read_file_decoded(
+            &c.resolve_device(REMOTE).await.unwrap(),
             file(),
             window()
         ));
@@ -244,10 +274,13 @@ async fn atomic_write_file() {
         file(),
         data()
     ));
-    pin!("awf/local", ack.clone(), |c| c
-        .atomic_write_file_from_device(LOCAL, file(), data()));
-    pin!("awf/routed", ack, |c| c.atomic_write_file_from_device(
-        REMOTE,
+    pin!("awf/local", ack.clone(), |c| c.atomic_write_file(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        file(),
+        data()
+    ));
+    pin!("awf/routed", ack, |c| c.atomic_write_file(
+        &c.resolve_device(REMOTE).await.unwrap(),
         file(),
         data()
     ));

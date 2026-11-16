@@ -115,31 +115,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         to.confirmed(self, service_choice, service_data).await
     }
 
-    /// Test shorthand: a confirmed request through the router at
-    /// `router_mac` to the station at `dest_mac` on `dest_network`, the
-    /// target a [`Station::Routed`] names. #2588 PR 2: removed with the
-    /// by-instance family, its tests moving onto `Station::routed`.
-    #[cfg(test)]
-    pub(super) async fn confirmed_request_routed(
-        &self,
-        router_mac: &[u8],
-        dest_network: u16,
-        dest_mac: &[u8],
-        service_choice: ConfirmedServiceChoice,
-        service_data: &[u8],
-    ) -> Result<Bytes, Error> {
-        self.confirmed_request_inner(
-            ConfirmedTarget::Routed {
-                router_mac,
-                dest_network,
-                dest_mac,
-            },
-            service_choice,
-            service_data,
-        )
-        .await
-    }
-
     pub(super) async fn confirmed_request_inner(
         &self,
         target: ConfirmedTarget<'_>,

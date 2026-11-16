@@ -9602,8 +9602,8 @@ A routed confirmed request goes to one device on one remote network (#1278).
 DNET must be in 1..=65534, since 0 names no network and 65535 is the global
 broadcast, and the DADR must hold at least one octet, since an empty DADR has
 the remote router broadcast the request. Every routed confirmed request (a
-typed call or `confirmed_request` to a remote `Station` or address, the
-`_from_device` and `_to_device` methods, the routed COV subscriptions) refuses
+typed call or `confirmed_request` to a remote `Station` or address, a
+station from `resolve_device`, the routed COV subscriptions) refuses
 any of them with `Error::Encoding` before the path is reserved or a
 transaction registered. Both configuration methods use the same DNET check,
 `add_routed_device` refuses such a peer, and the endpoint requester refuses
@@ -9715,11 +9715,11 @@ server's `CovSubscriptionTable`, `AtomicCovCounters` and the in-flight
 tracker, and `bacnet_server::server` no longer re-exports `CovPolicy` or
 `CovCounters`.
 
-Single-property `subscribe_cov_property` and `subscribe_cov_property_to_device`
-require a `std::num::NonZeroU32` lifetime in seconds; 28,800 seconds and the full
-positive `u32` range are accepted. Use their explicit `unsubscribe_...` methods
-for cancellation. The typed `SubscribeCOVPropertyRequest::encode` returns `Result`
-and validates the entire subscribe/cancel field pairing before appending bytes.
+Single-property `subscribe_cov_property` requires a `std::num::NonZeroU32`
+lifetime in seconds; 28,800 seconds and the full positive `u32` range are
+accepted. Cancel with `unsubscribe_cov_property`. The typed
+`SubscribeCOVPropertyRequest::encode` returns `Result` and validates the entire
+subscribe/cancel field pairing before appending bytes.
 The server rejects a missing member of the confirmed/lifetime pair as
 INCONSISTENT_PARAMETERS (the selected syntax interpretation), and paired zero
 lifetime as SERVICES/VALUE_OUT_OF_RANGE, before lookup or subscription mutation.
@@ -9735,13 +9735,21 @@ Python exposes ordinary COV and PropertyMultiple, not the single-property API.
 
 The managed helpers `manage_cov_subscription` and
 `manage_cov_property_subscription` (called on an `Arc<BACnetClient>`) send a
-finite subscription and renew it before it expires. They take a
-`bacnet_client::client::CovTarget` (#1790): `CovTarget::local(mac)`,
-`CovTarget::routed(router_mac, network, address)` or
-`CovTarget::of_device(&device)`, and match notifications by that source
-network and address. The helpers only renew: after
-`ManagedCOVSubscription::stop`, cancel at the same target with
-`unsubscribe_cov_target` or `unsubscribe_cov_property_target`.
+finite subscription and renew it before it expires. They take the station
+as every typed call does (#1790, #2588): a MAC, a `BACnetAddress` or a
+`Station`, such as the one `resolve_device(instance)` gives. A device keeps
+a subscription under the address the request came from and notifies back
+through its router, so the helpers match notifications by the station's
+network and MAC, whatever router relays them; `Station::is_source_of` is
+that rule, for an application matching its own. A station named by its
+address goes through the router its discovery-table row names when the
+subscription starts, and every renewal keeps that router, so a row the
+purge takes later doesn't end the subscription. The helpers only renew: to
+end a subscription, keep a clone of `ManagedCOVSubscription::station()` (the
+station with that route, `Local` or `Routed`), call
+`ManagedCOVSubscription::stop`, then cancel to that station with
+`unsubscribe_cov` or `unsubscribe_cov_property`. A cancel to the bare
+address looks the row up again and fails once the purge has taken it.
 
 The full server owns the served Device execution profile. Every Device's
 `Protocol_Services_Supported` reports the fixed `EXECUTED_SERVICES`, with the
@@ -10312,7 +10320,7 @@ naming another instance at a known address replaces its row; for an I-Am,
 `device_events()` reports `Lost` for the old instance and `Discovered` for
 the new. Two addresses
 claiming one instance each keep a row, reachable by its address, while
-`get_device` and every `_from_device`/`_to_device` call refuse the instance
+`get_device` and `resolve_device` refuse the instance
 with `Error::AmbiguousDevice`, which lists both. `device_collision_events()`
 reports each change to such a contest, the end included.
 
@@ -10403,9 +10411,18 @@ keeps its answer check (the ReadProperty identity and the AtomicReadFile
 window, for example) whatever form names the station; the checks are the
 client's own, and `confirmed_request` returns the answer's octets unchecked.
 
-The by-instance calls (`read_property_from_device` and the other
-`_from_device` and `_to_device` forms) still look the instance up in the
-table first.
+A call to a device by instance starts with `resolve_device(instance)`,
+which looks the instance up in the table and returns the `Station` its row
+names: `Local` for a device heard on this network, or `Routed` through the
+router that relayed its I-Am. The batch helpers (`read_property_from_devices`
+and the others) look each row's instance up the same way. Since the lookup
+comes first, an unknown or contested instance is refused before the
+request's own checks run (#2588):
+
+```rust
+let device = client.resolve_device(1005).await?;
+let ack = client.read_property(&device, object, PropertyIdentifier::PRESENT_VALUE, None).await?;
+```
 
 Who-Has answers and router discovery (#960):
 
@@ -10499,8 +10516,9 @@ client.acknowledge_alarm(&mac, &ack).await?;
 
 `get_event_information`, `get_alarm_summary` and `get_enrollment_summary`
 send GetEventInformation, GetAlarmSummary and GetEnrollmentSummary and
-return the decoded ACKs; their `_from_device` forms take a discovered
-device instance and route through its router when it has one. While a
+return the decoded ACKs; to ask a discovered device by instance, pass the
+station `resolve_device` gives, which goes through its router when it has
+one. While a
 `GetEventInformationAck` has `more_events` set, ask again from its last
 summary's object. For display, `bacnet_ops::format::alarms`
 names the states, bits and timestamps of all three, and its

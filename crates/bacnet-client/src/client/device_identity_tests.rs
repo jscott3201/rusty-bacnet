@@ -26,7 +26,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
-use super::{BACnetClient, DeviceEventKind, DeviceReadRequest, Station};
+use super::{BACnetClient, DeviceEventKind, DeviceReadRequest, DeviceRpmRequest, Station};
 
 const CLIENT: [u8; 1] = [0x01];
 const PEER: [u8; 1] = [0x02];
@@ -221,10 +221,7 @@ async fn two_claimants_are_listed_reachable_by_address_and_refused_by_instance()
         )
         .await
         .unwrap();
-    let refused = client
-        .read_property_from_device(INSTANCE, object(), present, None)
-        .await
-        .unwrap_err();
+    let refused = client.resolve_device(INSTANCE).await.unwrap_err();
     assert!(
         matches!(&refused, Error::AmbiguousDevice { instance: INSTANCE, candidates }
             if candidates[..] == [local(), routed()]),
@@ -242,7 +239,12 @@ async fn two_claimants_are_listed_reachable_by_address_and_refused_by_instance()
     assert_eq!(collision.claimants[0].address(), Some(local()));
     for instance in [INSTANCE, 2002] {
         client
-            .read_property_from_device(instance, object(), present, None)
+            .read_property(
+                &client.resolve_device(instance).await.unwrap(),
+                object(),
+                present,
+                None,
+            )
             .await
             .unwrap();
     }
@@ -297,16 +299,21 @@ async fn a_device_that_keeps_answering_outlives_a_silent_one() {
     );
     assert_eq!(addresses(&client).await, [local()]);
     client
-        .read_property_from_device(INSTANCE, object(), present, None)
+        .read_property(
+            &client.resolve_device(INSTANCE).await.unwrap(),
+            object(),
+            present,
+            None,
+        )
         .await
         .unwrap();
 
     client.stop().await.unwrap();
 }
 
-/// Every entry point refuses an ambiguous instance: a batch fails that
-/// entry alone and reads the others, and ReadPropertyMultiple sends nothing
-/// for it either.
+/// An ambiguous instance is refused wherever it is looked up: a batch fails
+/// that entry alone and reads the others, and the lookup a call by
+/// instance starts with sends nothing either.
 #[tokio::test]
 async fn every_entry_point_refuses_an_ambiguous_instance() {
     let (mut client, peer) = start().await;
@@ -348,10 +355,26 @@ async fn every_entry_point_refuses_an_ambiguous_instance() {
             property_array_index: None,
         }],
     };
-    let refused = client
-        .read_property_multiple_from_device(INSTANCE, vec![spec])
-        .await
-        .unwrap_err();
+    let mut results = client
+        .read_property_multiple_from_devices(
+            vec![DeviceRpmRequest {
+                device_instance: INSTANCE,
+                specs: vec![spec],
+            }],
+            None,
+        )
+        .await;
+    assert!(
+        matches!(
+            results.pop().map(|result| result.result),
+            Some(Err(Error::AmbiguousDevice {
+                instance: INSTANCE,
+                ..
+            }))
+        ),
+        "the RPM batch refuses it"
+    );
+    let refused = client.resolve_device(INSTANCE).await.unwrap_err();
     assert!(
         matches!(
             refused,

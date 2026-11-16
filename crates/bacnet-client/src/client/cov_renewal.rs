@@ -121,6 +121,7 @@ pub enum ManagedCOVSubscriptionEvent {
 
 /// Handle for a managed finite COV subscription renewal task.
 pub struct ManagedCOVSubscription {
+    station: Station,
     events_tx: broadcast::Sender<ManagedCOVSubscriptionEvent>,
     last_event: Arc<StdMutex<Option<ManagedCOVSubscriptionEvent>>>,
     stop_tx: Option<oneshot::Sender<()>>,
@@ -128,6 +129,17 @@ pub struct ManagedCOVSubscription {
 }
 
 impl ManagedCOVSubscription {
+    /// The station the subscription went to, with the route fixed when it
+    /// started: [`Station::Local`] or [`Station::Routed`]. Cancel to it
+    /// after [`Self::stop`] (clone it first, since `stop` takes the
+    /// handle): the device keeps the subscription under the client's
+    /// address as this route delivers it, and a cancel to the station's
+    /// bare address would look its discovery-table row up again, which
+    /// fails once the purge has taken it.
+    pub fn station(&self) -> &Station {
+        &self.station
+    }
+
     /// Subscribe to lifetime observations and renewal outcomes.
     pub fn events(&self) -> broadcast::Receiver<ManagedCOVSubscriptionEvent> {
         self.events_tx.subscribe()
@@ -215,9 +227,8 @@ impl ManagedRequest {
     async fn send<T: TransportPort + 'static>(
         self,
         client: &BACnetClient<T>,
-        target: &CovTarget,
+        target: &Station,
     ) -> Result<(), Error> {
-        let target = target.confirmed();
         match self {
             Self::Object {
                 subscriber_process_identifier,
@@ -231,33 +242,44 @@ impl ManagedRequest {
                     Some(confirmed),
                     Some(lifetime),
                 );
-                client.call_via(target, request).await
+                client.call(target, request).await
             }
-            Self::Property(subscription) => {
-                client.call_via(target, subscription.into_request()).await
-            }
+            Self::Property(subscription) => client.call(target, subscription.into_request()).await,
         }
     }
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Start a managed finite SubscribeCOV renewal task for the device at
-    /// `target`, on this network or behind a router.
+    /// Start a managed finite SubscribeCOV renewal task for the station
+    /// `to`, on this network or behind a router, in any form a typed call
+    /// takes.
     ///
     /// The helper sends the initial SubscribeCOV request, then renews the same
     /// subscription before expiry. It also listens to [`Self::cov_notifications`]
     /// and moves the renewal earlier when matching notifications report a lower
     /// `time_remaining` than the requested lifetime-based schedule. A
-    /// notification matches when it comes from `target`'s address (see
-    /// [`CovTarget`]) and names this subscription's process and object.
-    /// The helper only renews; after [`ManagedCOVSubscription::stop`], cancel
-    /// with [`Self::unsubscribe_cov_target`].
+    /// notification matches when it comes from the station's address, the
+    /// one the device keeps the subscription under (its network and MAC,
+    /// whatever router it came through), and names this subscription's
+    /// process and object. Every renewal goes the way the first request
+    /// went: through the router named, or, for a station named by its
+    /// address ([`Station::Remote`]), through the router its discovery-table
+    /// row named when the subscription started, so the purge taking that
+    /// row later (a device silent past its age limit while it only
+    /// notifies) doesn't end the subscription. With no row for such a
+    /// station, this fails with [`Error::UnknownDevice`] before anything is
+    /// sent.
+    ///
+    /// The helper only renews. To end the subscription, keep a clone of
+    /// [`ManagedCOVSubscription::station`], call
+    /// [`ManagedCOVSubscription::stop`], then cancel with
+    /// [`Self::unsubscribe_cov`] to that station.
     ///
     /// This method takes `Arc<Self>` so the renewal task can keep the client alive.
     /// Call it as `Arc::clone(&client).manage_cov_subscription(...)`.
     pub async fn manage_cov_subscription(
         self: Arc<Self>,
-        target: CovTarget,
+        to: &(impl ToStation + ?Sized),
         subscriber_process_identifier: u32,
         monitored_object_identifier: bacnet_types::primitives::ObjectIdentifier,
         confirmed: bool,
@@ -275,28 +297,33 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             confirmed,
             lifetime,
         };
-        self.manage(target, request, options).await
+        self.manage(to.station(), request, options).await
     }
 
     /// Start a managed finite SubscribeCOVProperty renewal task for the
-    /// device at `target`: [`Self::manage_cov_subscription`] for one property.
+    /// station `to`: [`Self::manage_cov_subscription`] for one property.
     ///
     /// Every renewal repeats `subscription` as given, its lifetime included.
     /// The helper only renews; after [`ManagedCOVSubscription::stop`], cancel
-    /// with [`Self::unsubscribe_cov_property_target`].
+    /// with [`Self::unsubscribe_cov_property`] to
+    /// [`ManagedCOVSubscription::station`].
     pub async fn manage_cov_property_subscription(
         self: Arc<Self>,
-        target: CovTarget,
+        to: &(impl ToStation + ?Sized),
         subscription: CovPropertySubscription,
         options: ManagedCOVSubscriptionOptions,
     ) -> Result<ManagedCOVSubscription, Error> {
-        self.manage(target, ManagedRequest::Property(subscription), options)
-            .await
+        self.manage(
+            to.station(),
+            ManagedRequest::Property(subscription),
+            options,
+        )
+        .await
     }
 
     async fn manage(
         self: Arc<Self>,
-        target: CovTarget,
+        target: Station,
         request: ManagedRequest,
         options: ManagedCOVSubscriptionOptions,
     ) -> Result<ManagedCOVSubscription, Error> {
@@ -304,6 +331,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         options.validate(lifetime)?;
         let (subscriber_process_identifier, monitored_object_identifier) = request.identity();
 
+        // The route is fixed once, for the first request and every renewal.
+        let target = self.with_fixed_route(target)?;
+        let station = target.clone();
         let mut notifications = self.cov_notifications();
 
         request.send(&self, &target).await?;
@@ -409,6 +439,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
 
         Ok(ManagedCOVSubscription {
+            station,
             events_tx,
             last_event,
             stop_tx: Some(stop_tx),
@@ -435,7 +466,7 @@ fn publish_managed_cov_event(
 /// each other's renewals.
 fn matches_managed_cov_notification(
     received: &ReceivedCOVNotification,
-    target: &CovTarget,
+    target: &Station,
     local_network: Option<u16>,
     subscriber_process_identifier: u32,
     monitored_object_identifier: bacnet_types::primitives::ObjectIdentifier,
@@ -443,7 +474,7 @@ fn matches_managed_cov_notification(
 ) -> bool {
     received.notification.subscriber_process_identifier == subscriber_process_identifier
         && received.notification.monitored_object_identifier == monitored_object_identifier
-        && target.sent(received, local_network)
+        && target.is_source_of(received, local_network)
         && property.is_none_or(|property| {
             received
                 .notification
