@@ -1205,7 +1205,7 @@ request of a page, the count reads included, goes there.
 ```python
 def atomic_read_file(
     self,
-    address: str,
+    address: str | RoutedTarget,
     file_identifier: ObjectIdentifier,
     access_method: str,
     start_position: int = 0,
@@ -1220,14 +1220,17 @@ Returns the decoded acknowledgment: `access_method`, `end_of_file`,
 then `start_position` and `data` for stream access, or
 `start_record`, `record_count` and `records` for record access.
 An acknowledgment in the other access method, or with more octets or
-records than requested, raises BacnetError.
+records than requested, raises BacnetError. `address` is a `str`
+on the local link, or a `RoutedTarget` for a station behind a
+router (#2613), as `RoutedTarget` describes: the answer, segmented
+or not, and a reject, error or abort come back as from a local read.
 
 ### BACnetClient.atomic_write_file
 
 ```python
 def atomic_write_file(
     self,
-    address: str,
+    address: str | RoutedTarget,
     file_identifier: ObjectIdentifier,
     access_method: str,
     start_position: int = 0,
@@ -1243,6 +1246,8 @@ Returns the decoded acknowledgment: `access_method`, then
 `start_position` for stream access or `start_record` for record
 access, where the device says the write took place. An
 acknowledgment in the other access method raises BacnetError.
+`address` is a `str` or a `RoutedTarget`, as for
+`atomic_read_file` (#2613).
 
 ### BACnetClient.add_list_element
 
