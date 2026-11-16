@@ -7366,11 +7366,14 @@ endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
 
 ### Routed targets
 
-`BACnetClient`'s `read_property`, `read_property_multiple`, `read_range`,
-`read_log_page` and `write_property` take, where they take `address`, either
+Seven calls of `BACnetClient` take, where they take `address`, either
 a `str`, which always names a station on the client's own link and is never
 read as `net:mac`, or a `RoutedTarget` naming one behind a router (#2612,
-#2617), on a standalone client and an endpoint's alike.
+#2617, #2613), on a standalone client and an endpoint's alike. The seven
+are `read_property`, `read_property_multiple`, `read_range`,
+`read_log_page`, `write_property`, `atomic_read_file` and
+`atomic_write_file`; the COV subscriptions and the other typed calls take a
+local address only until #2588.
 
 **To scan stations that don't announce themselves (MS/TP slaves), pass
 `router` from `discover_routers()`.** Without it each such station costs one
@@ -7423,11 +7426,10 @@ The answer the router relays from the station completes the call. A
 request no one answers ends as a typed call's does, with `BacnetAbortError`
 for the transaction's timeout. Routed calls are paced as direct ones are,
 and every request of a `read_log_page`, the count reads included, goes to
-the same target. `atomic_read_file` and `atomic_write_file` take one too
-(#2613). The other services take no `RoutedTarget` yet: reach a
-routed device through `device(target)` handles or the `_from_device` and
-`_to_device` forms, by its instance (#2588 brings a routed form to every
-service).
+the same target. To reach a routed device with a service that takes no
+`RoutedTarget` yet, use a `device(target)` handle or the `_from_device`
+and `_to_device` forms, by its instance (#2588 brings a routed form to
+every service).
 
 `RoutedTarget` is frozen, compares and hashes by its network and octets
 however they were written, and copies and pickles. A bad value raises
@@ -7472,8 +7474,8 @@ on the endpoint's link. Its calls keep their names and result shapes:
 | a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the client stopped while it waited |
 | an endpoint with `source_audit_reporter`: audited reads | `NotImplementedError` until source Audit moves to the full client (#2617 step 3) |
 
-Not yet routed on the full client: the COV subscriptions and the other typed calls take a local address only;
-reach a routed device through a `device()` handle or the `_from_device` and
+Not yet routed on the full client: the COV subscriptions and the other
+typed calls take a local address only; reach a routed device through a `device()` handle or the `_from_device` and
 `_to_device` forms. #2588 brings a routed form to every service.
 
 ### Migration: separately-constructed client/server to endpoint

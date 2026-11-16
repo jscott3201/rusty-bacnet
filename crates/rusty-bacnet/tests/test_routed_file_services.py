@@ -117,7 +117,7 @@ class RoutedFileWireTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.router.close)
         self.target = rb.RoutedTarget(5, STATION, router=self.router.address)
 
-    async def run_both(self, scenario):
+    async def run_both(self, scenario, timeout_ms=2000):
         """`scenario` on a standalone client, then on an endpoint's."""
         for kind in ("standalone", "endpoint"):
             with self.subTest(client=kind):
@@ -126,12 +126,12 @@ class RoutedFileWireTests(unittest.IsolatedAsyncioTestCase):
                 if kind == "standalone":
                     async with rb.BACnetClient(interface="127.0.0.1", port=0,
                                                broadcast_address="127.0.0.1",
-                                               apdu_timeout_ms=2000) as client:
+                                               apdu_timeout_ms=timeout_ms) as client:
                         await scenario(client)
                 else:
                     endpoint = rb.BipEndpoint(NEAR, interface="127.0.0.1", port=0,
                                               broadcast_address="127.0.0.1",
-                                              apdu_timeout_ms=2000)
+                                              apdu_timeout_ms=timeout_ms)
                     await asyncio.wait_for(endpoint.start(), 10)
                     try:
                         await scenario(await endpoint.client())
@@ -208,7 +208,10 @@ class RoutedFileWireTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reject_error_and_abort_keep_their_detail(self):
         answers = {
-            "reject": lambda invoke: bytes([0x60, invoke, 9]),         # unrecognized service? 9 = unrecognized
+            # Reject reason 9 is "unrecognized service"; abort reason 4 is
+            # "segmentation not supported"; the error is class 2 (object),
+            # code 0x1F (unknown object).
+            "reject": lambda invoke: bytes([0x60, invoke, 9]),
             "error": lambda invoke: bytes([0x50, invoke, READ_FILE, 0x91, 0x02, 0x91, 0x1F]),
             "abort": lambda invoke: bytes([0x71, invoke, 4]),
         }
@@ -236,27 +239,27 @@ class RoutedFileWireTests(unittest.IsolatedAsyncioTestCase):
         await self.run_both(scenario)
 
     async def test_an_answer_the_request_doesnt_fit_raises(self):
-        # More octets than asked for, the other access method, more records
-        # than asked for: each is refused as a direct read refuses it.
-        answers = [
-            stream_ack(0, b"0123456789", False),
-            record_ack(0, [b"a"], False),
+        # Each is refused as a direct read refuses it: more octets than
+        # asked for, more records than asked for, and the other access method
+        # in each direction.
+        cases = [
+            ("stream", dict(requested_octet_count=4), stream_ack(0, b"0123456789", False)),
+            ("record", dict(requested_record_count=2),
+             record_ack(0, [b"a", b"", b"c"], False)),
+            ("stream", dict(requested_octet_count=4), record_ack(0, [b"a"], False)),
+            ("record", dict(requested_record_count=2), stream_ack(0, b"ab", False)),
         ]
+        current = []
         self.wire.script = lambda request, invoke, service, body: [
-            bytes([0x30, invoke, service]) + answers.pop(0)]
+            bytes([0x30, invoke, service]) + current[0]]
 
         async def scenario(client):
-            answers[:] = [stream_ack(0, b"0123456789", False), record_ack(0, [b"a"], False),
-                          stream_ack(0, b"ab", False)]
-            with self.assertRaises(rb.BacnetError):
-                await asyncio.wait_for(client.atomic_read_file(
-                    self.target, FILE_1, "stream", requested_octet_count=4), 5)
-            with self.assertRaises(rb.BacnetError):
-                await asyncio.wait_for(client.atomic_read_file(
-                    self.target, FILE_1, "stream", requested_octet_count=4), 5)
-            with self.assertRaises(rb.BacnetError):
-                await asyncio.wait_for(client.atomic_read_file(
-                    self.target, FILE_1, "record", requested_record_count=4), 5)
+            for method, window, ack in cases:
+                with self.subTest(method=method, ack=ack):
+                    current[:] = [ack]
+                    with self.assertRaises(rb.BacnetError):
+                        await asyncio.wait_for(client.atomic_read_file(
+                            self.target, FILE_1, method, **window), 5)
 
         await self.run_both(scenario)
 
@@ -326,9 +329,9 @@ class RoutedFileWireTests(unittest.IsolatedAsyncioTestCase):
         async def scenario(client):
             with self.assertRaises(rb.BacnetAbortError):
                 await asyncio.wait_for(client.atomic_read_file(
-                    self.target, FILE_1, "stream", requested_octet_count=4), 15)
+                    self.target, FILE_1, "stream", requested_octet_count=4), 5)
 
-        await self.run_both(scenario)
+        await self.run_both(scenario, timeout_ms=300)
 
 
 class LearnedFileRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -421,7 +424,7 @@ class RoutedFileRouterTests(unittest.IsolatedAsyncioTestCase):
         self.router_address = ports[0].address
         self.far = rb.BACnetServer(FAR, interface="127.0.0.1", port=0,
                                    broadcast_address="127.0.0.1",
-                                   segmentation_supported=rb.Segmentation.SEGMENTED_TRANSMIT,
+                                   segmentation_supported=rb.Segmentation.SEGMENTED_BOTH,
                                    foreign_device=rb.ForeignDevice(ports[1].address, ttl=60))
         self.far.add_file(4, "Large")
         self.far.set_file_data(4, bytes(range(256)) * 12)  # 3072 octets
@@ -431,6 +434,7 @@ class RoutedFileRouterTests(unittest.IsolatedAsyncioTestCase):
         self.far.set_file_access_method(2, "record")
         self.far.set_file_records(2, [b"one", b"", b"three"])
         self.far.add_file(3, "Writable")
+        self.far.add_file(5, "Large writable")
         await asyncio.wait_for(self.far.start(), 10)
         self.addAsyncCleanup(finish, self.far.stop)
         await accepted_registration(self.far)
@@ -488,6 +492,61 @@ class RoutedFileRouterTests(unittest.IsolatedAsyncioTestCase):
         async with rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
                                    apdu_timeout_ms=2000) as client:
             await self.read_segmented(client, target)
+
+    async def write_segmented(self, client, target):
+        # A 3072-octet write is larger than one APDU: it is sent segmented
+        # through the router, and the far file holds it.
+        payload = bytes(range(255, -1, -1)) * 12
+        file_5 = rb.ObjectIdentifier(O.FILE, 5)
+        for to, name in ((target, "routed"), (self.far_address, "direct")):
+            with self.subTest(write=name):
+                result = await asyncio.wait_for(client.atomic_write_file(
+                    to, file_5, "stream", start_position=0, file_data=payload), 15)
+                self.assertEqual(result, {"access_method": "stream", "start_position": 0})
+                back = await client.atomic_read_file(
+                    self.far_address, file_5, "stream", start_position=0,
+                    requested_octet_count=3072)
+                self.assertEqual(back["data"], payload)
+                await client.atomic_write_file(
+                    self.far_address, file_5, "stream", start_position=0, file_data=b"")
+
+    async def edge_cases(self, client, target):
+        # A negative read start and a write to a missing file are the device's
+        # errors, routed or direct;
+        # an empty write is what the device says it is, routed or direct.
+        for call in (
+            lambda to: client.atomic_read_file(to, FILE_1, "stream", start_position=-1,
+                                               requested_octet_count=4),
+            # A start of -1 is a legal append for a write, so the write's
+            # refusal is a file that isn't there.
+            lambda to: client.atomic_write_file(to, rb.ObjectIdentifier(O.FILE, 99), "stream",
+                                                start_position=0, file_data=b"x"),
+        ):
+            with self.assertRaises(rb.BacnetProtocolError) as routed:
+                await asyncio.wait_for(call(target), 10)
+            with self.assertRaises(rb.BacnetProtocolError) as direct:
+                await call(self.far_address)
+            self.assertEqual((routed.exception.error_class, routed.exception.error_code),
+                             (direct.exception.error_class, direct.exception.error_code))
+        empty = await asyncio.wait_for(client.atomic_write_file(
+            target, rb.ObjectIdentifier(O.FILE, 3), "stream", start_position=0,
+            file_data=b""), 10)
+        self.assertEqual(empty, await client.atomic_write_file(
+            self.far_address, rb.ObjectIdentifier(O.FILE, 3), "stream", start_position=0,
+            file_data=b""))
+
+    async def test_a_large_write_is_segmented_and_edge_cases_match_direct(self):
+        target = rb.RoutedTarget(5, self.far_address, router=self.router_address)
+        endpoint = rb.BipEndpoint(NEAR, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.0.0.1", apdu_timeout_ms=2000)
+        async with endpoint:
+            client = await endpoint.client()
+            await self.write_segmented(client, target)
+            await self.edge_cases(client, target)
+        async with rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                                   apdu_timeout_ms=2000) as client:
+            await self.write_segmented(client, target)
+            await self.edge_cases(client, target)
 
     async def test_routed_file_reads_match_direct_ones(self):
         target = rb.RoutedTarget(5, self.far_address, router=self.router_address)

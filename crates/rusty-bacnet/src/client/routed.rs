@@ -1,6 +1,7 @@
-//! A `RoutedTarget` as the target of a typed call (#2617): `read_property`,
-//! `read_property_multiple`, `read_range`, `read_log_page` and
-//! `write_property`, `atomic_read_file` and `atomic_write_file` take one where they take an address, on a standalone
+//! A `RoutedTarget` as the target of a typed call (#2617, #2613):
+//! `read_property`, `read_property_multiple`, `read_range`, `read_log_page`,
+//! `write_property`, `atomic_read_file` and `atomic_write_file` take one
+//! where they take an address, on a standalone
 //! client and on one from `endpoint.client()` alike, as the narrow endpoint
 //! client did (#2612). Each call goes through the client's own routed
 //! requests, so it is paced, sized and segmented as every other request is.
