@@ -25,6 +25,7 @@ mod pins;
 mod property;
 mod remaining;
 mod scope;
+mod write_group;
 
 pub(super) const CLIENT: &[u8] = &[0x01];
 /// A device on this link.
