@@ -719,6 +719,23 @@ before start and after stop; a router application client
 (`transport="router"`) has no link of its own and raises
 ValueError. Stop ends the iterator; a restart needs a new one.
 
+### BACnetClient.i_am_arrivals
+
+```python
+def i_am_arrivals(self, capacity: int = 1024) -> Awaitable[IAmArrivalIterator]
+```
+
+Follow every I-Am this client's own transport receives from now
+on (B/IP, B/IPv6, SC or MS/TP), one `IAmArrival` each (#2612),
+from a tap queue of `capacity` frames of every kind (1 to 65536,
+else ValueError). A standalone client sends no I-Am, so nothing is
+left out: an I-Am from its own address (another node using it, or
+one a NAT site reuses) is a record. A client an endpoint's
+`client()` returns follows the endpoint's rule, and is how
+`ScEndpoint` and `MstpEndpoint` give arrivals. RuntimeError before start and after stop;
+a router application client raises ValueError. Stop ends the
+iterator.
+
 ### BACnetClient.discovered_devices
 
 ```python
@@ -1961,6 +1978,80 @@ def __anext__(self) -> Awaitable[Frame]
 ```
 
 ### FrameIterator.aclose
+
+```python
+def aclose(self) -> Awaitable[None]
+```
+
+Idempotently stop this subscription, without stopping its owner.
+
+## IAmArrival
+
+One I-Am the owner's link handed it, frozen at arrival (#2612).
+
+Every I-Am frame received is a record, in arrival order: repeats, and
+two devices claiming one instance at different addresses, included.
+`link_sender` is who put the frame on this node's link, in
+`Frame.peer`'s form; `link_source` is the source MAC the stack takes,
+in the address form the calls take on that link (`"ip:port"`,
+`"bip6:0x0004D2"`, an SC VMAC in colon hex, `"mstp:5"`). See "I-Am
+arrivals" in docs/python-api.md for who is who on each link. The
+parameters are kept as sent, odd ones included. A record compares,
+hashes, copies and pickles by its fields.
+
+The tap shows frames before the stack filters them, so a record does
+not prove the discovery table took the I-Am.
+
+Properties:
+
+- `monotonic: float`: Arrival time on `time.monotonic()`'s clock and origin, as `Frame.monotonic` (with its Windows note).
+- `timestamp: float`: Arrival time as POSIX seconds from the wall clock, as `Frame.timestamp`.
+- `link: Literal["bip", "ipv6", "sc", "mstp", "other"]`: The link, as `Frame.link`.
+- `object_identifier: ObjectIdentifier`: The I-Am's device identifier, of the type it was sent with, as `DiscoveredDevice.object_identifier`; `.instance` is the device instance.
+- `max_apdu_length: int`: Max APDU length accepted, as sent (below 50 included).
+- `segmentation_supported: Segmentation`: Segmentation supported, as sent (a value outside the enumeration included).
+- `vendor_id: int`: Vendor identifier, as sent.
+- `link_sender: str`: Who put the frame on this node's link, as `Frame.peer` writes it: the UDP source on B/IP and B/IPv6 (for a Forwarded-NPDU the BBMD that forwarded it), `"primary"` or `"failover"` on SC, the source station in decimal on MS/TP.
+- `link_source: str`: The source MAC the stack takes for the frame: the origin a Forwarded-NPDU carries, else the sender, on B/IP; the source VMAC on B/IPv6 (the original source's when forwarded); the originating VMAC on SC; the source station on MS/TP. The router when `source_network` is set: the next hop back, which a node may take as that network's router (Clauses 6.5.3, 6.5.4).
+- `original_source: Optional[str]`: The originating node's `"ip:port"` or `"[ip]:port"` a BBMD wrote into a B/IP or B/IPv6 Forwarded-NPDU; None otherwise.
+- `forwarded: bool`: True when the frame carried an origin other than its sender: a BBMD forwarded it. Never on SC or MS/TP.
+- `source_network: Optional[int]`: SNET, when a router relayed the I-Am from another network.
+- `source_address: Optional[bytes]`: SADR, the device's MAC on `source_network`.
+- `broadcast: bool`: A link broadcast or a broadcast on a network. False for an MS/TP I-Am one station unicast to another, which the bus lets this station hear.
+- `device_address: Optional[str]`: The device's address as `BACnetClient.device()` takes it: `link_source` for a device on this link, `"5:0x07"` for one a router relayed. None when those name no one station. The calls that take an `address` don't take `"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`, `read_range`, `read_log_page` and `write_property` take `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`.
+- `next_hop_router: Optional[str]`: The router that relayed it, when `source_network` is set: its `link_source`.
+- `forwarding_bbmd: Optional[str]`: The BBMD that forwarded it, when `forwarded`: its `link_sender`.
+- `missed_before: int`: Frames of any kind this subscription lost just before this record, as `Frame.missed_before`: the tap cannot tell which of them held an I-Am. Summed over the records received, plus any lost after the last one, it is `IAmArrivalIterator.missed`. An own echo left out is no loss and adds nothing.
+
+## IAmArrivalIterator
+
+A bounded subscription to the I-Ams the owner's link hands it,
+with `FrameIterator`'s semantics: the queue holds frames of every kind
+(`capacity`), a full queue drops new frames, a cancelled read keeps
+the next record, and close or owner shutdown wakes pending reads. It
+never keeps the owner's socket alive. With a subscriber the transport
+copies every frame once, as for `frames()`; the decode runs where the
+records are read, never on the transport's path.
+
+Properties:
+
+- `missed: int`: Frames of any kind lost so far, live, as `FrameIterator.missed`. Readable after close.
+- `malformed: int`: Inbound I-Am frames read so far that made no record: parameters that don't decode, or an SC message naming no originating VMAC. `frames()` and `decode_frame` show who sent one and why it failed. A frame whose headers don't decode is not counted: it is not known to hold an I-Am. Readable after close.
+- `own_echoes: int`: The owner's own I-Ams come back to it, read so far and left out: on a `BipEndpoint` and on the client its `client()` returns, those from the endpoint's own address naming its own device instance, whether its broadcast returned or a BBMD sent it back. Always 0 on a standalone `BACnetClient`, which sends no I-Am and leaves nothing out. Readable after close.
+
+### IAmArrivalIterator.__aiter__
+
+```python
+def __aiter__(self) -> IAmArrivalIterator
+```
+
+### IAmArrivalIterator.__anext__
+
+```python
+def __anext__(self) -> Awaitable[IAmArrival]
+```
+
+### IAmArrivalIterator.aclose
 
 ```python
 def aclose(self) -> Awaitable[None]

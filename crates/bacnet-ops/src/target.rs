@@ -367,10 +367,16 @@ pub enum AddressStyle {
 impl AddressStyle {
     /// The style of `transport`'s addresses.
     pub fn of<T: TransportPort + 'static>(transport: &T) -> Self {
-        match transport.data_link() {
-            Some(DataLink::Bip6) => Self::Bip6,
-            Some(DataLink::Mstp) => Self::Mstp,
-            Some(DataLink::Sc) => Self::Hex,
+        transport.data_link().map_or(Self::Bip, Self::of_link)
+    }
+
+    /// The style of the addresses on `link`: six octets are `ip:port`
+    /// except on BACnet/SC, where they are a VMAC.
+    pub fn of_link(link: DataLink) -> Self {
+        match link {
+            DataLink::Bip6 => Self::Bip6,
+            DataLink::Mstp => Self::Mstp,
+            DataLink::Sc => Self::Hex,
             _ => Self::Bip,
         }
     }

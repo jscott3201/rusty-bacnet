@@ -5,6 +5,7 @@
 use bacnet_encoding::apdu::{self, Apdu};
 use bacnet_encoding::npdu;
 use bacnet_services::who_is::IAmRequest;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::UnconfirmedServiceChoice;
 use bytes::Bytes;
 
@@ -15,6 +16,8 @@ pub struct DecodedNpdu {
     pub is_network_message: bool,
     /// SNET, when a router added one.
     pub source_network: Option<u16>,
+    /// SADR, beside [`Self::source_network`]: the station on that network.
+    pub source_address: Option<MacAddr>,
     /// DNET, for a routed or globally broadcast NPDU.
     pub dest_network: Option<u16>,
     /// The network-layer message type, for a network message.
@@ -43,8 +46,9 @@ pub struct DecodedApdu {
     /// What went wrong: an Error's class and code, a Reject's or an
     /// Abort's reason.
     pub problem: Option<String>,
-    /// The device instance an I-Am announces.
-    pub device: Option<u32>,
+    /// An I-Am's parameters, for an Unconfirmed-Request whose service is
+    /// I-Am: as decoded, or why they don't decode. `None` for any other PDU.
+    pub i_am: Option<Result<IAmRequest, String>>,
 }
 
 /// Decode the NPDU layer a BVLL message carries.
@@ -52,6 +56,7 @@ pub fn decode_npdu_layer(npdu: Bytes) -> Result<DecodedNpdu, String> {
     let npdu_result = npdu::decode_npdu(npdu).map_err(|e| format!("NPDU decode error: {e}"))?;
 
     let source_network = npdu_result.source.as_ref().map(|a| a.network);
+    let source_address = npdu_result.source.as_ref().map(|a| a.mac_address.clone());
     let dest_network = npdu_result.destination.as_ref().map(|a| a.network);
 
     let apdu = if !npdu_result.is_network_message() && !npdu_result.payload.is_empty() {
@@ -63,6 +68,7 @@ pub fn decode_npdu_layer(npdu: Bytes) -> Result<DecodedNpdu, String> {
     Ok(DecodedNpdu {
         is_network_message: npdu_result.is_network_message(),
         source_network,
+        source_address,
         dest_network,
         network_message_type: npdu_result.message_type.map(|kind| kind.to_raw()),
         broadcast: npdu_result
@@ -87,7 +93,7 @@ fn decode_apdu_layer(npdu_data: &npdu::Npdu) -> Result<DecodedApdu, String> {
             service_name: format!("{}", cr.service_choice),
             service: service(&cr.service_choice),
             problem: None,
-            device: None,
+            i_am: None,
         },
         Apdu::UnconfirmedRequest(ref ur) => DecodedApdu {
             pdu_type: "Unconfirmed-Request".to_string(),
@@ -96,10 +102,8 @@ fn decode_apdu_layer(npdu_data: &npdu::Npdu) -> Result<DecodedApdu, String> {
             service_name: format!("{}", ur.service_choice),
             service: service(&ur.service_choice),
             problem: None,
-            device: (ur.service_choice == UnconfirmedServiceChoice::I_AM)
-                .then(|| IAmRequest::decode(&ur.service_request).ok())
-                .flatten()
-                .map(|i_am| i_am.object_identifier.instance_number()),
+            i_am: (ur.service_choice == UnconfirmedServiceChoice::I_AM)
+                .then(|| IAmRequest::decode(&ur.service_request).map_err(|e| e.to_string())),
         },
         Apdu::SimpleAck(ref sa) => DecodedApdu {
             pdu_type: "Simple-ACK".to_string(),
@@ -108,7 +112,7 @@ fn decode_apdu_layer(npdu_data: &npdu::Npdu) -> Result<DecodedApdu, String> {
             service_name: format!("{}-ACK", sa.service_choice),
             service: service(&sa.service_choice),
             problem: None,
-            device: None,
+            i_am: None,
         },
         Apdu::ComplexAck(ref ca) => DecodedApdu {
             pdu_type: "Complex-ACK".to_string(),
@@ -117,7 +121,7 @@ fn decode_apdu_layer(npdu_data: &npdu::Npdu) -> Result<DecodedApdu, String> {
             service_name: format!("{}-ACK", ca.service_choice),
             service: service(&ca.service_choice),
             problem: None,
-            device: None,
+            i_am: None,
         },
         Apdu::SegmentAck(ref sa) => DecodedApdu {
             pdu_type: "Segment-ACK".to_string(),
@@ -126,7 +130,7 @@ fn decode_apdu_layer(npdu_data: &npdu::Npdu) -> Result<DecodedApdu, String> {
             service_name: "SegmentACK".to_string(),
             service: None,
             problem: None,
-            device: None,
+            i_am: None,
         },
         Apdu::Error(ref ep) => DecodedApdu {
             pdu_type: "Error".to_string(),
@@ -135,7 +139,7 @@ fn decode_apdu_layer(npdu_data: &npdu::Npdu) -> Result<DecodedApdu, String> {
             service_name: format!("{}-Error", ep.service_choice),
             service: service(&ep.service_choice),
             problem: Some(format!("{}:{}", ep.error_class, ep.error_code)),
-            device: None,
+            i_am: None,
         },
         Apdu::Reject(ref rp) => DecodedApdu {
             pdu_type: "Reject".to_string(),
@@ -144,7 +148,7 @@ fn decode_apdu_layer(npdu_data: &npdu::Npdu) -> Result<DecodedApdu, String> {
             service_name: format!("Reject({})", rp.reject_reason),
             service: None,
             problem: Some(format!("reject {}", rp.reject_reason)),
-            device: None,
+            i_am: None,
         },
         Apdu::Abort(ref ap) => DecodedApdu {
             pdu_type: "Abort".to_string(),
@@ -153,7 +157,7 @@ fn decode_apdu_layer(npdu_data: &npdu::Npdu) -> Result<DecodedApdu, String> {
             service_name: format!("Abort({})", ap.abort_reason),
             service: None,
             problem: Some(format!("abort {}", ap.abort_reason)),
-            device: None,
+            i_am: None,
         },
     };
 

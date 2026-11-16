@@ -54,7 +54,7 @@ def __init__(
     segmentation: Optional[Segmentation] = None,
     services: Optional[list[int]] = None,
     device_uuid: Optional[Union[bytes, bytearray]] = None,
-    queue_capacity: int = 16,
+    queue_capacity: int = 256,
     apdu_timeout_ms: int = 6000,
     apdu_retries: int = 0,
     registered_network_port: Optional[int] = None,
@@ -380,6 +380,19 @@ beside both roles' traffic, `capacity` frames queued at most (1 to
 65536, else ValueError). RuntimeError before start and after close.
 Close ends the iterator; a restart needs a new one.
 
+### BipEndpoint.i_am_arrivals
+
+```python
+def i_am_arrivals(self, capacity: int = 1024) -> Awaitable[IAmArrivalIterator]
+```
+
+Follow every I-Am the endpoint's socket receives from now on, as
+`BACnetClient.i_am_arrivals` does (#2612). The endpoint's own I-Am
+come back to it, from its own address and naming its own device
+instance, is left out and counted in `own_echoes`; another
+instance from that address is a record. RuntimeError before start
+and after close. Close ends the iterator.
+
 ### BipEndpoint.read_bdt
 
 ```python
@@ -499,7 +512,7 @@ def __init__(
     max_apdu: int = 1476,
     segmentation: Optional[Segmentation] = None,
     services: Optional[list[int]] = None,
-    queue_capacity: int = 16,
+    queue_capacity: int = 256,
     read_work_limit: int = 256,
     min_request_interval_ms: int = 0,
     on_reinitialize: Optional[ReinitializeHandler] = None,
@@ -873,7 +886,7 @@ def __init__(
     segmentation: Optional[Segmentation] = None,
     services: Optional[list[int]] = None,
     device_uuid: Optional[Union[bytes, bytearray]] = None,
-    queue_capacity: int = 16,
+    queue_capacity: int = 256,
     apdu_timeout_ms: int = 6000,
     apdu_retries: int = 0,
     *,
@@ -1272,6 +1285,20 @@ Keys:
 
 Bounded endpoint snapshot: liveness, identity, transport, leases, policy counts.
 
+The `*_full_drops` keys count what a full queue had no room for, by
+class; a full queue never ends the session (#2635).
+`unconfirmed_full_drops` counts unconfirmed requests (I-Am, Who-Is,
+notifications) past their share of the request queue, which keeps a
+quarter for confirmed requests; `confirmed_full_drops` confirmed
+requests for the endpoint's own roles dropped unanswered, which their
+requesters send again (one the client's seat refuses counts in
+`client_seat_full_drops`);
+`answer_full_drops` answers and segments (one no lease holds may not
+take the last quarter of the answer queue); `policy_full_drops`
+refused APDUs (malformed, an unknown PDU type). Each queue of
+`queue_capacity` 2 or more keeps at least one slot in reserve; a
+capacity of 1 keeps none.
+
 Keys:
 
 - `is_running: bool`
@@ -1286,8 +1313,12 @@ Keys:
 - `no_client_role: int`
 - `unclaimed_terminal: int`
 - `responder_declined: int`
+- `unconfirmed_full_drops: int`
+- `confirmed_full_drops: int`
+- `answer_full_drops: int`
+- `policy_full_drops: int`
 - `client_seat_apdus: int`: APDUs handed to the client on the link (#2617), over the session's run.
-- `client_seat_full_drops: int`: APDUs dropped at once because that client's queue was full; never waited for.
+- `client_seat_full_drops: int`: APDUs the client's queue refused, never waited for: those it had no room for, and those its tiers held back (copies of unconfirmed requests use at most half of it, confirmed requests to the client all but the quarter kept for its answers). On an endpoint with no server role, a confirmed request refused here is counted here, not in `confirmed_full_drops`.
 - `client_seat_control_full_drops: int`: Network controls dropped the same way.
 
 ## ReadRangeResult

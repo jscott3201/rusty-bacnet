@@ -213,7 +213,9 @@ impl PyBipEndpoint {
     ///         narrow endpoint reality; wider profiles need the full server).
     ///     device_uuid: Optional 16-byte UUID (zeros allowed for BIP-only;
     ///         stored into DEVICE_UUID, single identity source).
-    ///     queue_capacity: Bounded queue capacity (must be >0).
+    ///     queue_capacity: Bounded queue capacity (must be >0, default 256).
+    ///         A full queue drops and counts what it has no room for
+    ///         (`status()`'s `*_full_drops`); it never ends the session.
     ///     apdu_timeout_ms / apdu_retries: Client timers.
     ///     read_work_limit: Keyword-only. Result rows one ReadProperty served
     ///         by the server role may expand (must be >0, default 256): its
@@ -286,7 +288,7 @@ impl PyBipEndpoint {
         segmentation=None,
         services=None,
         device_uuid=None,
-        queue_capacity=16,
+        queue_capacity=256,
         apdu_timeout_ms=6000,
         apdu_retries=0,
         registered_network_port=None,
@@ -542,6 +544,32 @@ impl PyBipEndpoint {
         })
     }
 
+    /// Subscribe to a record of every I-Am the endpoint's socket receives,
+    /// as `BACnetClient.i_am_arrivals` does, leaving out and counting its
+    /// own I-Am come back to it: from its own address, of its own device
+    /// instance. Close ends every subscription, waking pending reads.
+    #[pyo3(signature = (capacity=1024))]
+    fn i_am_arrivals<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
+        let capacity = crate::frames::capacity(capacity)?;
+        let clock = crate::frames::Clock::get(py)?;
+        let lifecycle = self.lifecycle.clone();
+        let frames = self.frames.clone();
+        let instance = self.config.identity.instance();
+        crate::py_async::future_into_py(py, async move {
+            let guard = lifecycle.session.lock().await;
+            let not_started = || PyRuntimeError::new_err("endpoint not started");
+            let session = guard.as_ref().ok_or_else(not_started)?;
+            let receiver = session.frames(capacity).ok_or_else(not_started)?;
+            let own = session.bip_local_address().ok_or_else(not_started)?;
+            Ok(crate::i_am_arrivals::subscribe(
+                &frames,
+                receiver,
+                Some((own.into(), instance)),
+                clock,
+            ))
+        })
+    }
+
     /// The `BACnetClient` on this endpoint's socket (#2617): the standalone
     /// class, with all its calls, on the endpoint's one address. While it
     /// runs, each call returns the same object; once its `stop()` has
@@ -641,6 +669,10 @@ impl PyBipEndpoint {
                 dict.set_item("no_client_role", snapshot.0.no_client_role)?;
                 dict.set_item("unclaimed_terminal", snapshot.0.unclaimed_terminal)?;
                 dict.set_item("responder_declined", snapshot.0.responder_declined)?;
+                dict.set_item("unconfirmed_full_drops", snapshot.0.unconfirmed_full_drops)?;
+                dict.set_item("confirmed_full_drops", snapshot.0.confirmed_full_drops)?;
+                dict.set_item("answer_full_drops", snapshot.0.answer_full_drops)?;
+                dict.set_item("policy_full_drops", snapshot.0.policy_full_drops)?;
                 snapshot.4.add_to(&dict)?;
                 Ok(dict.into_any().unbind())
             })

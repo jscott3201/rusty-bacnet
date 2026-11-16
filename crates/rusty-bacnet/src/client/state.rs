@@ -99,6 +99,10 @@ pub(crate) struct ClientState {
     /// Why the last stop failed, until a stop is tried again: an endpoint
     /// asked for a client then says so (#2617).
     stop_failure: std::sync::Mutex<Option<String>>,
+    /// The device instance of the endpoint this client is seated on, set
+    /// at the seat: its I-Am arrivals leave out that device's own I-Am come
+    /// back, as the endpoint's do (#2612).
+    own_instance: std::sync::OnceLock<u32>,
 }
 
 /// Where a client on an endpoint's link stands, for the endpoint deciding
@@ -132,14 +136,24 @@ impl ClientState {
     /// has: the default write policy, and a bare instance asked for on this
     /// network alone. Called once, before the Python object is handed out,
     /// so the slot is never contended; `false` if it was already filled.
-    pub(crate) fn seat(&self, core: CoreClient) -> bool {
+    /// `own_instance` is the endpoint's device instance, when it has one.
+    pub(crate) fn seat(&self, core: CoreClient, own_instance: Option<u32>) -> bool {
         match self.client.try_write() {
             Ok(mut slot) if slot.is_none() => {
                 *slot = Some(Started::new(core, bacnet_ops::WritePolicy::default(), None));
+                if let Some(instance) = own_instance {
+                    let _ = self.own_instance.set(instance);
+                }
                 true
             }
             _ => false,
         }
+    }
+
+    /// The device instance of the endpoint this client is seated on;
+    /// `None` for a standalone client, which sends no I-Am.
+    pub(crate) fn own_instance(&self) -> Option<u32> {
+        self.own_instance.get().copied()
     }
 
     /// Record why the last stop failed, or that a new stop is under way.

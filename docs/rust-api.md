@@ -12666,6 +12666,67 @@ Object_Name instead of saying its read failed. An Object_List read
 element by element that fails part way is an error now, where the export
 used to return an inventory with `stopped` set and no objects.
 
+### I-Am arrivals
+
+`bacnet_ops::arrival` (#2612) gives one `IAmArrival` for every I-Am a
+transport's link hands this node, from its frame tap: in arrival order, repeats
+and an instance claimed at two addresses included. It works on any owner of a
+tap: a standalone client (`client.transport()`), a client seated on an
+endpoint, or an endpoint alone. The frames are read with `bacnet_ops::decode`,
+the decoder behind `decode_frame` and the capture view:
+
+```rust
+use bacnet_ops::arrival::IAmArrivals;
+
+let link = client.transport();
+// An endpoint, which sends I-Ams, names its socket and instance; a
+// client, which sends none, leaves `with_own` out.
+let mut arrivals = IAmArrivals::new(link.frame_tap().subscribe_with_capacity(256))
+    .with_own(own_socket, own_instance);
+while let Some(arrival) = arrivals.recv().await {
+    let instance = arrival.i_am.object_identifier.instance_number();
+    println!("{instance} at {:?} via {:?}, {:?} lost before", arrival.device_address(),
+        arrival.forwarding_bbmd(), arrival.missed_before);
+}
+```
+
+Each record holds `timestamp` and `monotonic_timestamp` (the tap's), `link`,
+`i_am` (the decoded `IAmRequest`, odd values kept as sent), and who sent it:
+`link_sender` (the tap's `TapPeer`: the UDP source, for a Forwarded-NPDU the
+BBMD; the hub connection; the source station), `link_source` (the source MAC
+the stack takes: a Forwarded-NPDU's origin, Annex J.2.5, else the UDP source;
+the source VMAC on B/IPv6, the original source's when forwarded, Annex U.2.9;
+the originating VMAC on SC, Annex AB.5.3; the station on MS/TP),
+`original_source`, `forwarded` (an origin other than the link sender),
+`source_network` (SNET and SADR, Clause 6.2.2; `link_source` is then the
+router, Clause 6.5.4, which a node may take as that network's router, Clause
+6.5.3), `broadcast` (link or network) and `missed_before`. `device_address()`,
+`next_hop_router()` and `forwarding_bbmd()` say it as a scanner asks it.
+`IAmArrival::from_frame` reads one `TappedFrame`.
+
+Outbound frames are no records. `with_own(address, instance)`, for a node
+that sends I-Ams, leaves out its own I-Am come back to it, one whose origin is
+`address` and whose device is `instance`, and counts it in `own_echoes()`; it
+is no loss in `missed_before`. Another I-Am from that address is a record: a
+conflict, or another NAT site reusing a private address (Annex J.7.5). Without
+`with_own` nothing is left out. An I-Am whose parameters don't decode, or an SC
+one naming no originating VMAC, counts in `malformed()`; the tap's frames show
+who sent it and why. A read decodes at most `SKIP_BATCH` frames that are no
+record before it yields. On MS/TP the station hears the whole bus, so an I-Am
+between two other stations is a record. Ethernet frames are not read yet (the
+decoder has no Clause 7 framing). The tap shows frames before the stack
+filters them, so a record does not prove the discovery table took the I-Am.
+The receiver's capacity counts frames of every kind; a full queue drops the
+newest, and `missed()` and `missed_before` count them. With a subscriber the
+transport copies every frame once; the decode runs in the reading task.
+
+To carry what the records need, `decode_npdu_layer`'s `DecodedApdu` now holds
+the I-Am's decoded parameters (`i_am: Option<Result<IAmRequest, String>>`, in
+place of `device: Option<u32>`; take the instance from
+`i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`), and
+`decode::frame::Link` the typed origin (`origin`) and the source MAC the frame
+names (`source_mac`).
+
 ### Moved to bacnet-tool
 
 The tool-only modules left `bacnet-ops` in #2560, with no re-exports left
@@ -13223,6 +13284,62 @@ B/IPv6 has no endpoint builder: compose `EndpointSession::new` over a
 `Bip6Transport` (see [Registered B/IPv6 Network Port](#registered-bipv6-network-port)).
 Ethernet has no endpoint builder: keep the standalone path there. Do not expect
 identical administration across data links.
+
+### Endpoint queues under a burst
+
+The session's ingress never waits for its queues, and a full one never ends
+the session (#2635). What finds no room is dropped and counted by class in
+`policy_counters()` (`unconfirmed_full_drops`, `confirmed_full_drops`,
+`answer_full_drops`, `policy_full_drops`; `EndpointIngress::full_drop_counters`
+underneath). One log line per `DROP_LOG_INTERVAL` (10 s) reports the drops
+since the last: at debug level when they were all unconfirmed requests (a
+large discovery is routine), as a warning otherwise; the drops after the
+last line are reported when the session stops.
+
+Each queue keeps a reserve, a quarter of it and at least one slot from a
+capacity of two up, that the traffic it can best spare may not take:
+
+- An Unconfirmed-Request opens no transaction and is answered by nobody, so
+  it may not take the request queue's reserve, which stays for confirmed
+  requests: a global Who-Is's I-Ams, or a device that floods them, can't
+  crowd out a peer's read.
+- A Confirmed-Request that finds no room gets no answer. This tier only
+  queues; refusing work with an answer is the server role's, at its own
+  admission. A silent drop lets the requester's retry (Clause 5.3.1) succeed
+  once a passing burst is over, where an Abort (OUT_OF_RESOURCES, Clause
+  18.10) would end the transaction, and most clients don't retry one. On
+  MS/TP the dropped request's reply sender is released, so the MAC sends
+  Reply Postponed at once.
+- Answers have a queue requests can't fill. An answer no lease holds may not
+  take its reserve, which stays for answers to the session's own requests
+  (the session's coordinator is asked only when the queue is that full, and
+  the look claims nothing). An answer that still finds no room is dropped:
+  its request ends by its timeout and retries, as if the link had lost it,
+  and a source-audited operation records TIMEOUT.
+- A full client's seat has three tiers. Unconfirmed-Request copies fill at
+  most half of its 256 slots; Confirmed-Requests to the client (its COV
+  notifications and, on a node with no server role, every one) all but the
+  last quarter; answers to the client's requests all of them. The seat
+  counts what it refused, what its tiers held back included, in
+  `client_seat_counters().full_drops`, and a Confirmed-Request it refuses is
+  counted there, not in `confirmed_full_drops`. The seat's answers never use
+  the session's answer queue, whose reserve (64 slots at the default
+  capacity, 4 at 16) keeps the session's own answers from a flood of
+  strays.
+
+A capacity of 1 keeps no reserve. `SessionConfig::queue_capacity` (default
+256, as deep as the network layer's receive queue) sizes the request, answer
+and policy queues and the egress channel. A queued item takes a slot of at
+most 192 bytes (176 to 184 on a 64-bit target) plus its NPDU or APDU, which
+B/IP copies to its own size, so the four queues hold at most about 1.7 MB
+together, and a request queue full of I-Ams about 50 KB.
+
+Older and slower peers: a dropped request or answer costs its requester one
+APDU timeout, and a requester with a long timeout or no retries pays it in
+full. The endpoint's own client roles default to `apdu_retries: 0`, so a
+dropped answer fails that call after its timeout. Where bursts are expected,
+raise `queue_capacity`, and `apdu_retries` on the requesting side.
+Standalone `BACnetClient` and `BACnetServer` don't use this classifier.
 
 ### Full client on an endpoint
 

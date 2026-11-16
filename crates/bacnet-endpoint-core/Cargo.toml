@@ -22,10 +22,12 @@ bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-transport.workspace = true
 bacnet-network.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
+tracing.workspace = true
 
 [dev-dependencies]
 bacnet-transport = { workspace = true, features = ["test-support"] }
 bytes = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

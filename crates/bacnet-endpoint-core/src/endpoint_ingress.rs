@@ -34,7 +34,10 @@ use egress::{NetworkServiceCommand, NetworkServicePayload, send_network_service_
 
 #[path = "endpoint_routing.rs"]
 mod routing;
-use routing::{ControlTee, IngressQueues, next_apdu, route_received};
+use crate::coordinator::OutboundTransactionCoordinator;
+pub(crate) use routing::reserve;
+use routing::{ControlTee, IngressDrops, IngressQueues, next_apdu, route_received};
+pub use routing::{DROP_LOG_INTERVAL, IngressDropCounters};
 
 /// Destination selected for one decoded APDU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,15 +48,15 @@ pub enum IngressRoute {
     TerminalOrSegment,
 }
 
-/// Why an APDU could not be delivered to a role queue.
+/// Why an APDU could not be delivered to a role queue. A full role queue
+/// is no reason: what it has no room for is dropped and counted
+/// ([`IngressDropCounters`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyReason {
     /// APDU decoding failed.
     MalformedApdu,
     /// The APDU type nibble is outside the Standard-defined range.
     UnsupportedPduType(u8),
-    /// The selected bounded role queue was full.
-    RouteFull(IngressRoute),
     /// The selected role queue had no receiver.
     RouteClosed(IngressRoute),
     /// A confirmed request from a link-layer address that is a group
@@ -110,16 +113,15 @@ pub struct IngressReceivers {
     pub seat_number: crate::seat::SeatNumber,
 }
 
-/// Terminal state reported by the classifier task.
+/// Terminal state reported by the classifier task. A full queue is none:
+/// traffic never ends classification by its volume (#2635).
 #[derive(Debug)]
 pub enum ClassifierExit {
     /// Explicit endpoint cancellation won the receive race.
     Cancelled,
     /// The network layer closed its APDU stream.
     InputClosed,
-    /// A full policy queue prevented lossless reclamation.
-    PolicyRouteFull(Box<PolicyOutcome>),
-    /// The policy queue was closed.
+    /// The policy queue was closed: its owner is gone.
     PolicyRouteClosed(Box<PolicyOutcome>),
 }
 
@@ -143,6 +145,10 @@ pub struct EndpointIngress<T: TransportPort> {
     /// shares (#2617).
     started: std::sync::Weak<NetworkLayer<T>>,
     seats: Option<Arc<SeatSlot>>,
+    /// What a full queue dropped, readable in any state.
+    drops: Arc<IngressDrops>,
+    /// See [`Self::with_coordinator`].
+    coordinator: Option<Arc<OutboundTransactionCoordinator>>,
     queue_capacity: usize,
     lifecycle: Lifecycle,
     cancel_tx: Option<oneshot::Sender<()>>,
@@ -157,12 +163,24 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             network: Some(NetworkLayer::new(transport)),
             started: std::sync::Weak::new(),
             seats: None,
+            drops: Arc::default(),
+            coordinator: None,
             queue_capacity,
             lifecycle: Lifecycle::Ready,
             cancel_tx: None,
             session_task: None,
             egress_open: None,
         }
+    }
+
+    /// The endpoint's pool of invoke IDs (#2635): once the answer queue is
+    /// down to its last quarter, an answer none of `coordinator`'s leases
+    /// holds is dropped, so it can't take a slot from one that a lease
+    /// holds. The look claims nothing. Without a coordinator every answer
+    /// is treated alike.
+    pub fn with_coordinator(mut self, coordinator: Arc<OutboundTransactionCoordinator>) -> Self {
+        self.coordinator = Some(coordinator);
+        self
     }
 
     /// Pre-start link capability; never retains or exposes a transport reference.
@@ -264,6 +282,8 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             terminal_tx,
             policy_tx,
             seats: Arc::clone(&seats),
+            drops: Arc::clone(&self.drops),
+            coordinator: self.coordinator.clone(),
         };
         let controls_tee = ControlTee {
             layer: layer_controls,
@@ -336,6 +356,12 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .as_ref()
             .ok_or_else(not_running)?
             .attach(network, coordinator, roles, capacity)
+    }
+
+    /// What ingress dropped because a queue of its own was full, by class
+    /// (#2635). Counts run from [`Self::new`] and stay readable after stop.
+    pub fn full_drop_counters(&self) -> IngressDropCounters {
+        self.drops.counters()
     }
 
     /// What ingress has handed to and dropped for the client seat.
@@ -411,6 +437,8 @@ impl<T: TransportPort> Drop for EndpointIngress<T> {
         if let Some(task) = self.session_task.take() {
             task.abort();
         }
+        // An aborted session task reports no tail of its own.
+        let _ = self.drops.flush();
     }
 }
 
@@ -471,6 +499,9 @@ async fn session_task<T: TransportPort + 'static>(
             SessionEvent::Egress(None) => receive_egress = false,
         }
     };
+    // Drops since the last log line are reported now, not left waiting
+    // for a next drop that won't come (#2635).
+    let _ = queues.drops.flush();
 
     egress_open.store(false, Ordering::Release);
     egress_rx.close();

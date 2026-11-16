@@ -447,12 +447,6 @@ async fn full_and_closed_role_routes_are_explicit_and_stop_does_not_block() {
 
     inject(&handle, &[0x00, 0x05, 0x01, 0x0c]).await;
     inject(&handle, &[0x00, 0x05, 0x02, 0x0c]).await;
-    let full = receive(&mut policies).await;
-    assert_eq!(
-        full.reason,
-        PolicyReason::RouteFull(IngressRoute::InboundRequest)
-    );
-    assert_eq!(full.received.apdu[2], 2);
 
     drop(terminal);
     inject(&handle, &[0x20, 0x03, 0x0c]).await;
@@ -462,6 +456,10 @@ async fn full_and_closed_role_routes_are_explicit_and_stop_does_not_block() {
         PolicyReason::RouteClosed(IngressRoute::TerminalOrSegment)
     );
     assert_eq!(closed.received.apdu[1], 3);
+    // The request the full queue had no room for was dropped and counted,
+    // and never handed to policy.
+    assert_eq!(endpoint.full_drop_counters().confirmed_full_drops, 1);
+    assert!(policies.try_recv().is_err());
 
     timeout(WAIT, endpoint.stop())
         .await
@@ -473,41 +471,14 @@ async fn full_and_closed_role_routes_are_explicit_and_stop_does_not_block() {
     assert!(policies.recv().await.is_none());
 }
 
-#[tokio::test]
-async fn full_policy_route_returns_the_unrouted_envelope_on_reclaim() {
-    let (transport, handle) = test_transport();
-    let mut endpoint = EndpointIngress::new(transport, 1);
-    let mut ingress = endpoint.start().await.unwrap();
-
-    inject(&handle, &[0x00, 0x05, 0x01, 0x0c]).await;
-    inject(&handle, &[0x00, 0x05, 0x02, 0x0c]).await;
-    inject(&handle, &[0x00, 0x05, 0x03, 0x0c]).await;
-
-    assert!(
-        timeout(WAIT, ingress.terminal_or_segment.recv())
-            .await
-            .expect("classifier did not stop when its policy route filled")
-            .is_none()
-    );
-
-    let exit = timeout(WAIT, endpoint.stop()).await.unwrap().unwrap();
-    match exit {
-        ClassifierExit::PolicyRouteFull(outcome) => {
-            assert_eq!(
-                outcome.reason,
-                PolicyReason::RouteFull(IngressRoute::InboundRequest)
-            );
-            assert_eq!(outcome.received.apdu[2], 3);
-        }
-        other => panic!("unexpected classifier exit: {other:?}"),
-    }
-    assert_eq!(handle.stops(), 1);
-    drop(ingress);
-}
-
 #[path = "endpoint_ingress_lifecycle_tests.rs"]
 mod lifecycle;
 
 /// The client seat: who receives what, and how the link stops (#2617).
 #[path = "endpoint_seat_tests.rs"]
 mod seat;
+
+/// What a full queue does: dropped and counted by class, never the end of
+/// the session (#2635).
+#[path = "endpoint_full_queue_tests.rs"]
+mod full_queue;

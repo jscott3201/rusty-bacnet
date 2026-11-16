@@ -1,5 +1,43 @@
 //! Which queue one received APDU goes to: the endpoint's own request and
 //! answer queues, and a full client's seat when one is attached (#2617).
+//!
+//! # A full queue (#2635)
+//!
+//! The classifier never waits for a queue, and a full one never ends the
+//! session: what finds no room is dropped and counted by class
+//! ([`IngressDropCounters`]), and logged at most once per
+//! [`DROP_LOG_INTERVAL`]. Dropping an envelope releases its one-use reply
+//! sender, which on MS/TP has the MAC send Reply Postponed at once, as the
+//! policy owner does for an outcome it takes.
+//!
+//! Each queue keeps a [`reserve`] (a quarter of it, at least one slot from
+//! two up) that the traffic it can best spare may not take:
+//!
+//! - An Unconfirmed-Request opens no transaction and nobody answers it, so it
+//!   may fill the request queue only down to the reserve: a burst of them
+//!   (the I-Ams a global Who-Is brings) leaves room for the confirmed
+//!   requests the server role owes an answer.
+//! - A Confirmed-Request that finds no room is dropped without an answer.
+//!   This tier only queues; answering is the server role's, which refuses
+//!   work at its own admission. A silent drop lets the requester's retry
+//!   (Clause 5.3.1) succeed once a passing burst is over, where an Abort
+//!   would end the transaction, and most clients don't retry one.
+//! - An answer no lease holds may fill the answer queue only down to the
+//!   reserve, so it can't take the last slots from an answer to one of the
+//!   endpoint's own requests (found by a look at the coordinator that claims
+//!   nothing, only once the queue is that full). An answer that still finds
+//!   no room is dropped: its lease ends by its owner's timeout and retry, as
+//!   if the link had lost it.
+//! - The client seat has three tiers: copies of Unconfirmed-Requests stop
+//!   at half of it, Confirmed-Requests to the client at its reserve, and
+//!   answers to the client's requests may fill it
+//!   ([`SeatSlot::takes`](crate::seat::SeatSlot::takes)).
+//! - An APDU the classifier refuses goes to the policy queue, and is dropped
+//!   when that is full.
+use std::sync::atomic::AtomicU64;
+use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
+
 use super::*;
 use crate::coordinator::LeaseHolder;
 use crate::seat::{Attached, SeatSlot};
@@ -9,6 +47,223 @@ const CONFIRMED_COV_NOTIFICATION: u8 = 1;
 /// ConfirmedEventNotification, as a confirmed service choice octet.
 const CONFIRMED_EVENT_NOTIFICATION: u8 = 2;
 
+/// The least time between two log lines about full-queue drops: a flood is
+/// reported, but its report can't become one.
+pub const DROP_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The slots of a queue of `capacity` that the traffic it can best spare
+/// may not take: a quarter, and at least one from a capacity of two up. A
+/// queue of one has none.
+pub(crate) fn reserve(capacity: usize) -> usize {
+    if capacity < 2 {
+        0
+    } else {
+        (capacity / 4).max(1)
+    }
+}
+
+/// Whether only `queue`'s [`reserve`] is left.
+pub(crate) fn down_to_reserve<T>(queue: &mpsc::Sender<T>) -> bool {
+    queue.capacity() <= reserve(queue.max_capacity())
+}
+
+/// Whether one of `coordinator`'s leases holds the answer `received`. Looks,
+/// claims nothing. With no coordinator every answer counts as held.
+///
+/// It reads only the peer and the invoke ID. A Segment-ACK or Abort a
+/// requester sends (server bit clear) is about a request this node serves,
+/// not a lease: one that happens to match a lease counts as held, and any
+/// other as a stray. Harmless while the narrow server never segments;
+/// revisit when the full server takes a seat (#2617 step 4).
+fn held_by_lease(
+    coordinator: Option<&OutboundTransactionCoordinator>,
+    received: &ReceivedApdu,
+    local_network: Option<u16>,
+) -> bool {
+    let Some(coordinator) = coordinator else {
+        return true;
+    };
+    received.apdu.get(1).is_some_and(|invoke_id| {
+        coordinator
+            .holder_of_source(
+                &received.source_mac,
+                received.source_network.as_ref(),
+                local_network,
+                *invoke_id,
+            )
+            .is_some()
+    })
+}
+
+/// What ingress dropped because a queue was full, by class, since the
+/// endpoint was made. Each count saturates. The client seat's own drops are
+/// in [`ClientSeatCounters`](crate::seat::ClientSeatCounters).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct IngressDropCounters {
+    /// Unconfirmed-Requests past their share of the request queue.
+    pub unconfirmed_full_drops: u64,
+    /// Confirmed-Requests for the endpoint's own roles that its full request
+    /// queue had no room for; none was answered. One that goes to a client
+    /// seat instead (a COV notification to the client, or any on an
+    /// endpoint with no server role) and finds no room there is counted in
+    /// [`ClientSeatCounters::full_drops`](crate::seat::ClientSeatCounters::full_drops).
+    pub confirmed_full_drops: u64,
+    /// Answers and segments (Simple-ACK, Complex-ACK, Error, Reject, Abort,
+    /// Segment-ACK) the full answer queue had no room for: those no lease
+    /// holds once only its reserve was left, and any once it was full.
+    pub answer_full_drops: u64,
+    /// Refused APDUs (malformed, an unknown PDU type, a confirmed request
+    /// from a group address) the full policy queue had no room for.
+    pub policy_full_drops: u64,
+}
+
+impl IngressDropCounters {
+    fn total(&self) -> u64 {
+        self.unconfirmed_full_drops
+            .saturating_add(self.confirmed_full_drops)
+            .saturating_add(self.answer_full_drops)
+            .saturating_add(self.policy_full_drops)
+    }
+
+    /// The drops since `earlier`, class by class.
+    fn since(&self, earlier: &Self) -> Self {
+        Self {
+            unconfirmed_full_drops: self
+                .unconfirmed_full_drops
+                .saturating_sub(earlier.unconfirmed_full_drops),
+            confirmed_full_drops: self
+                .confirmed_full_drops
+                .saturating_sub(earlier.confirmed_full_drops),
+            answer_full_drops: self
+                .answer_full_drops
+                .saturating_sub(earlier.answer_full_drops),
+            policy_full_drops: self
+                .policy_full_drops
+                .saturating_sub(earlier.policy_full_drops),
+        }
+    }
+}
+
+/// What one log line about drops reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DropReport {
+    /// The drops since the line before.
+    pub(super) dropped: u64,
+    /// Whether any of them was more than an Unconfirmed-Request, so the line
+    /// is a warning; unconfirmed drops alone are routine (a large discovery)
+    /// and go out at debug level.
+    pub(super) warned: bool,
+}
+
+/// The class a full-queue drop is counted under.
+#[derive(Clone, Copy)]
+pub(super) enum Dropped {
+    Unconfirmed,
+    Confirmed,
+    Answer,
+    Policy,
+}
+
+/// When each kind of drop line last went out, and the counts the last line
+/// of either kind covered.
+#[derive(Default)]
+struct DropLog {
+    /// The last debug line: unconfirmed drops alone, routine.
+    debug: Option<tokio::time::Instant>,
+    /// The last warning: any other class. A debug line never delays one.
+    warn: Option<tokio::time::Instant>,
+    reported: IngressDropCounters,
+}
+
+/// Ingress's full-queue drop counts, shared with the endpoint's owner.
+#[derive(Default)]
+pub(super) struct IngressDrops {
+    unconfirmed: AtomicU64,
+    confirmed: AtomicU64,
+    answer: AtomicU64,
+    policy: AtomicU64,
+    logged: Mutex<DropLog>,
+}
+
+impl IngressDrops {
+    pub(super) fn counters(&self) -> IngressDropCounters {
+        IngressDropCounters {
+            unconfirmed_full_drops: self.unconfirmed.load(Ordering::Relaxed),
+            confirmed_full_drops: self.confirmed.load(Ordering::Relaxed),
+            answer_full_drops: self.answer.load(Ordering::Relaxed),
+            policy_full_drops: self.policy.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Count one drop, and log the drops no line has reported yet when the
+    /// last line of their kind is at least [`DROP_LOG_INTERVAL`] old: a
+    /// warning when any is more than an Unconfirmed-Request, a debug line
+    /// otherwise. Each kind keeps its own interval. Returns what was logged.
+    pub(super) fn add(&self, class: Dropped) -> Option<DropReport> {
+        let counter = match class {
+            Dropped::Unconfirmed => &self.unconfirmed,
+            Dropped::Confirmed => &self.confirmed,
+            Dropped::Answer => &self.answer,
+            Dropped::Policy => &self.policy,
+        };
+        let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            count.checked_add(1)
+        });
+        self.report(false)
+    }
+
+    /// Log the drops no line has reported yet, if any: when classification
+    /// ends, so the tail of a burst is reported without a timer.
+    pub(super) fn flush(&self) -> Option<DropReport> {
+        self.report(true)
+    }
+
+    fn report(&self, force: bool) -> Option<DropReport> {
+        let now = tokio::time::Instant::now();
+        let mut log = self.logged.lock().unwrap_or_else(PoisonError::into_inner);
+        let counters = self.counters();
+        let since = counters.since(&log.reported);
+        let dropped = since.total();
+        if dropped == 0 {
+            return None;
+        }
+        let warned = dropped != since.unconfirmed_full_drops;
+        let last = if warned { log.warn } else { log.debug };
+        if !force && last.is_some_and(|at| now.duration_since(at) < DROP_LOG_INTERVAL) {
+            return None;
+        }
+        // A warning covers the unconfirmed drops too, so it also counts as
+        // the debug line of its interval.
+        log.debug = Some(now);
+        if warned {
+            log.warn = Some(now);
+        }
+        log.reported = counters;
+        drop(log);
+        macro_rules! line {
+            ($level:ident) => {
+                tracing::$level!(
+                    dropped,
+                    unconfirmed = since.unconfirmed_full_drops,
+                    confirmed = since.confirmed_full_drops,
+                    answers = since.answer_full_drops,
+                    refused = since.policy_full_drops,
+                    "endpoint ingress dropped {dropped} APDUs a full queue had no room for \
+                     since its last report; it reports again at most every {} s",
+                    DROP_LOG_INTERVAL.as_secs()
+                )
+            };
+        }
+        if warned {
+            line!(warn);
+        } else {
+            line!(debug);
+        }
+        Some(DropReport { dropped, warned })
+    }
+}
+
 /// Senders for the queues a classified inbound APDU can be routed to.
 pub(super) struct IngressQueues {
     pub(super) inbound_tx: mpsc::Sender<ReceivedApdu>,
@@ -16,6 +271,11 @@ pub(super) struct IngressQueues {
     pub(super) policy_tx: mpsc::Sender<PolicyOutcome>,
     /// The client seat, when one is attached.
     pub(super) seats: Arc<SeatSlot>,
+    /// What a full queue dropped.
+    pub(super) drops: Arc<IngressDrops>,
+    /// The endpoint's invoke-ID pool, whose leases' answers come before
+    /// answers no lease holds.
+    pub(super) coordinator: Option<Arc<OutboundTransactionCoordinator>>,
 }
 
 /// What the seat takes of one APDU.
@@ -93,10 +353,12 @@ pub(super) fn route_received(
         terminal_tx,
         policy_tx,
         seats,
+        drops,
+        coordinator,
     } = queues;
     let route = match classify(&received, transport) {
         Ok(route) => route,
-        Err(reason) => return send_policy(policy_tx, PolicyOutcome { reason, received }),
+        Err(reason) => return send_policy(policy_tx, drops, PolicyOutcome { reason, received }),
     };
 
     let mut received = Some(received);
@@ -105,30 +367,61 @@ pub(super) fn route_received(
         match seat_share(attached, route, apdu, local_network) {
             SeatShare::None => {}
             SeatShare::Copy => {
-                let _ = seats.offer(attached, seat_copy(apdu));
+                if seats.takes(attached, apdu) {
+                    let _ = seats.offer(attached, seat_copy(apdu));
+                }
             }
-            // A seat whose client is gone gives the APDU back, and it goes
-            // the way it would with no seat.
-            SeatShare::Whole => received = seats.offer(attached, received.take()?),
+            // The seat's alone: dropped when it has no room, never handed
+            // to the endpoint in the client's place. A seat whose client is
+            // gone gives the APDU back, and it goes the way it would with
+            // no seat.
+            SeatShare::Whole if seats.takes(attached, apdu) => {
+                received = seats.offer(attached, received.take()?)
+            }
+            SeatShare::Whole => received = None,
         }
         Some(())
     });
     let received = received?;
 
-    let send_result = match route {
-        IngressRoute::InboundRequest => inbound_tx.try_send(received),
-        IngressRoute::TerminalOrSegment => terminal_tx.try_send(received),
-    };
-    if let Err(error) = send_result {
-        let (reason, received) = match error {
-            mpsc::error::TrySendError::Full(received) => (PolicyReason::RouteFull(route), received),
-            mpsc::error::TrySendError::Closed(received) => {
-                (PolicyReason::RouteClosed(route), received)
+    let (queue, class) = match route {
+        IngressRoute::InboundRequest => {
+            if !received.apdu.first().is_some_and(|first| first >> 4 == 1) {
+                (inbound_tx, Dropped::Confirmed)
+            } else if down_to_reserve(inbound_tx) {
+                drops.add(Dropped::Unconfirmed);
+                return None;
+            } else {
+                (inbound_tx, Dropped::Unconfirmed)
             }
-        };
-        return send_policy(policy_tx, PolicyOutcome { reason, received });
+        }
+        IngressRoute::TerminalOrSegment => {
+            // Only once the queue is that full is the coordinator asked.
+            if down_to_reserve(terminal_tx)
+                && !held_by_lease(coordinator.as_deref(), &received, local_network)
+            {
+                drops.add(Dropped::Answer);
+                return None;
+            }
+            (terminal_tx, Dropped::Answer)
+        }
+    };
+    match queue.try_send(received) {
+        Ok(()) => None,
+        // The envelope drops here, and its reply sender with it.
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            drops.add(class);
+            None
+        }
+        Err(mpsc::error::TrySendError::Closed(received)) => send_policy(
+            policy_tx,
+            drops,
+            PolicyOutcome {
+                reason: PolicyReason::RouteClosed(route),
+                received,
+            },
+        ),
     }
-    None
 }
 
 fn classify(
@@ -162,14 +455,18 @@ fn classify(
     }
 }
 
+/// Hand `outcome` to the policy owner. A full policy queue drops and counts
+/// it; only a closed one, whose owner is gone, ends classification.
 fn send_policy(
     policy_tx: &mpsc::Sender<PolicyOutcome>,
+    drops: &IngressDrops,
     outcome: PolicyOutcome,
 ) -> Option<ClassifierExit> {
     match policy_tx.try_send(outcome) {
         Ok(()) => None,
-        Err(mpsc::error::TrySendError::Full(outcome)) => {
-            Some(ClassifierExit::PolicyRouteFull(Box::new(outcome)))
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            drops.add(Dropped::Policy);
+            None
         }
         Err(mpsc::error::TrySendError::Closed(outcome)) => {
             Some(ClassifierExit::PolicyRouteClosed(Box::new(outcome)))

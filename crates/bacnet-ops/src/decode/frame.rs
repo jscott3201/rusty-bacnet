@@ -6,6 +6,7 @@
 //! layers are the same everywhere and go through [`super::decode_npdu_layer`].
 //! [`summarize_npdu`] reads an NPDU given without its link.
 
+use std::net::{SocketAddr, SocketAddrV6};
 use std::ops::Range;
 
 use crate::octets::hex_sep;
@@ -16,6 +17,7 @@ use bacnet_transport::mstp::codec::{FrameType, decode_frame, decode_frame_in_pla
 use bacnet_transport::sc_frame::{
     ScBvlcResult, ScFunction, decode_sc_bvlc_result, decode_sc_message, is_broadcast_vmac,
 };
+use bacnet_types::MacAddr;
 use bacnet_types::enums::ErrorCode;
 use bytes::Bytes;
 
@@ -137,6 +139,14 @@ pub struct Link {
     /// The originating node's address a forwarded message carries; see
     /// [`FrameSummary::original_source`].
     pub original_source: Option<String>,
+    /// [`Self::original_source`] as an address.
+    pub origin: Option<SocketAddr>,
+    /// The source MAC the frame itself names, as the stack writes a MAC on
+    /// the link: a B/IPv6 source VMAC (the original source's, in a message
+    /// a BBMD relays), a BACnet/SC originating VMAC, an MS/TP source
+    /// station, and on B/IP a Forwarded-NPDU's origin as six octets. `None`
+    /// where the frame names none: then the source is whoever sent it.
+    pub source_mac: Option<MacAddr>,
     /// A NAK, or why the header doesn't decode.
     pub problem: Option<String>,
     /// Whether the link header refused to decode, so `npdu` is unknown
@@ -173,6 +183,8 @@ pub fn link(framing: Framing, frame: &[u8]) -> Link {
         source: None,
         destination: None,
         original_source: None,
+        origin: None,
+        source_mac: None,
         problem: None,
         malformed: false,
         npdu: None,
@@ -211,7 +223,12 @@ fn bip(frame: &[u8], link: &mut Link) -> Result<(), String> {
             link.problem = Some(format!("NAK {}", kebab(code)));
         }
         parsed => {
-            link.original_source = parsed.origin().map(|address| address.to_string());
+            if let Some(origin) = parsed.origin() {
+                link.original_source = Some(origin.to_string());
+                link.origin = Some(origin.into());
+                let mac = bvll::encode_bip_mac(origin.ip().octets(), origin.port());
+                link.source_mac = Some(MacAddr::from_slice(&mac));
+            }
             if let Some(npdu) = parsed.npdu() {
                 let start = 4 + offset_in(&message.payload, npdu);
                 link.npdu = Some(Npdu::At(start..start + npdu.len()));
@@ -225,8 +242,12 @@ fn bip6(frame: &[u8], link: &mut Link) -> Result<(), String> {
     let message = decode_bvll6(frame).map_err(|e| e.to_string())?;
     link.name = kebab(message.function());
     link.source = Some(format_vmac_text(message.source_vmac()));
+    link.source_mac = Some(MacAddr::from_slice(&message.source_vmac().octets()));
     link.destination = message.destination_vmac().map(format_vmac_text);
     link.original_source = message.origin().map(|address| address.to_string());
+    link.origin = message
+        .origin()
+        .map(|address| SocketAddrV6::new(address.ip, address.port, 0, 0).into());
     link.broadcast = matches!(
         message,
         Bvll6::OriginalBroadcastNpdu { .. }
@@ -255,6 +276,7 @@ fn sc(frame: &[u8], link: &mut Link) -> Result<(), String> {
     }
     link.name = kebab(format!("{:?}", message.function));
     link.source = message.originating_vmac.map(|v| hex_sep(&v, ":"));
+    link.source_mac = message.originating_vmac.map(|v| MacAddr::from_slice(&v));
     link.destination = message.destination_vmac.map(|v| hex_sep(&v, ":"));
     link.broadcast = message
         .destination_vmac
@@ -287,6 +309,7 @@ fn mstp(frame: &[u8], link: &mut Link) -> Result<(), String> {
             .map_or_else(|| format!("type {}", frame_type.to_raw()), kebab);
         link.destination = Some(format!("mstp:{}", frame[3]));
         link.source = Some(format!("mstp:{}", frame[4]));
+        link.source_mac = Some(MacAddr::from_slice(&frame[4..5]));
         link.broadcast = frame[3] == 255;
     }
     let frame_type = FrameType::from_raw(*frame.get(2).ok_or("shorter than a header")?);
@@ -371,7 +394,10 @@ fn network_layer(summary: &mut FrameSummary, npdu: Bytes) {
                 summary.invoke_id = apdu.invoke_id;
                 summary.service = apdu.service.map(kebab);
                 summary.problem = apdu.problem.map(kebab);
-                summary.device = apdu.device;
+                summary.device = apdu
+                    .i_am
+                    .and_then(Result::ok)
+                    .map(|i_am| i_am.object_identifier.instance_number());
             }
         }
         Err(error) => {

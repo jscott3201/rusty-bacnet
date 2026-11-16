@@ -329,6 +329,7 @@ mod client_methods {
     mod file_list_private_text_life;
     mod foreign_registration;
     mod frames;
+    mod i_am_arrivals;
     mod lifecycle;
     mod log_read;
     mod object_device_alarm;
