@@ -101,7 +101,10 @@ impl Site {
     /// frame's MAC, through the router with the station as SNET/SADR when
     /// the request was routed. `error` answers with an Error PDU.
     async fn answer(&self, index: usize, error: bool) -> SentFrame {
-        self.sent.wait_for_len(index + 1).await;
+        // A request that never goes out fails here, not by hanging.
+        tokio::time::timeout(Duration::from_secs(5), self.sent.wait_for_len(index + 1))
+            .await
+            .expect("the request was sent");
         let frame = self.sent.frame(index);
         let npdu = frame.decode_npdu();
         let Apdu::ConfirmedRequest(request) = frame.apdu() else {
