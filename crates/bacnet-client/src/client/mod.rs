@@ -1079,6 +1079,8 @@ mod transport_access_tests;
 #[cfg(test)]
 mod typed_error_wire_tests;
 #[cfg(test)]
+mod typed_wire_tests;
+#[cfg(test)]
 mod wpm_validation_tests;
 #[cfg(test)]
 mod write_priority_tests;
