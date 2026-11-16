@@ -4,6 +4,10 @@
 //! Seven are newer, for calls that had no form to record them from: the
 //! routed forms of AddListElement, RemoveListElement, the two Audit
 //! notifications and AuditLogQuery, and the directed Who-Is both ways.
+//! The pins of `remaining.rs` and `scope.rs` were recorded from the octets
+//! the bindings and ops encoded and the answers they decoded, sent through
+//! `confirmed_request`, `unconfirmed_request` and the broadcast calls,
+//! before those services had typed calls.
 
 pub(super) const PINS: &[(&str, &str, &str)] = &[
     (
@@ -132,6 +136,21 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         r#"Ok(())"#,
     ),
     (
+        "cpt-error/local",
+        "02 0104020500120a022b19072e21052f",
+        r#"Err(Remote(Error { class: ErrorClass::OBJECT, code: ErrorCode::UNKNOWN_OBJECT }))"#,
+    ),
+    (
+        "cpt/local",
+        "02 0104020500120a022b19072e21052f",
+        r#"Ok(PrivateTransferAck { vendor_id: 555, service_number: 7, result_block: Some([33, 6]) })"#,
+    ),
+    (
+        "cpt/routed",
+        "09 012400020105ff020400120a022b19072e21052f",
+        r#"Ok(PrivateTransferAck { vendor_id: 555, service_number: 7, result_block: Some([33, 6]) })"#,
+    ),
+    (
         "create/local",
         "02 01040205000a0e09020f",
         r#"Ok(ObjectIdentifier(ObjectType::ANALOG_VALUE, 5))"#,
@@ -140,6 +159,16 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "create/routed",
         "09 012400020105ff0204000a0e09020f",
         r#"Ok(ObjectIdentifier(ObjectType::ANALOG_VALUE, 5))"#,
+    ),
+    (
+        "ctm/local",
+        "02 0104020500130c020000091e1d06006d61696e741f29013d0b00636865636b2070756d70",
+        r#"Ok(())"#,
+    ),
+    (
+        "ctm/routed",
+        "09 012400020105ff020400130c020000091e1d06006d61696e741f29013d0b00636865636b2070756d70",
+        r#"Ok(())"#,
     ),
     (
         "dcc/local",
@@ -202,6 +231,16 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "log/routed",
         "09 012400020105ff0204001a0c0500000119836e210531026f",
         r#"Err(Remote(Error { class: ErrorClass::OBJECT, code: ErrorCode::UNKNOWN_OBJECT }))"#,
+    ),
+    (
+        "lso/local",
+        "02 01040205001b09041d09006f70657261746f7229023c05400002",
+        r#"Ok(())"#,
+    ),
+    (
+        "lso/routed",
+        "09 012400020105ff0204001b09041d09006f70657261746f7229023c05400002",
+        r#"Ok(())"#,
     ),
     (
         "reinit-error/local",
@@ -288,6 +327,16 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "09 012400020105ff0204001a0c0500000119833e210131023f",
         r#"Ok(ReadRangeAck { object_identifier: ObjectIdentifier(ObjectType::TREND_LOG, 1), property_identifier: PropertyIdentifier::LOG_BUFFER, property_array_index: None, result_flags: (true, true, false), item_count: 2, item_data: [14, 15, 14, 15], first_sequence_number: None })"#,
     ),
+    (
+        "scpm/local",
+        "02 01040205001e090c19002a025839054e0c000000011e0e09550f1c3f00000029011f4f",
+        r#"Ok(())"#,
+    ),
+    (
+        "scpm/routed",
+        "09 012400020105ff0204001e090c19002a025839054e0c000000011e0e09550f1c3f00000029011f4f",
+        r#"Ok(())"#,
+    ),
     ("ts/local", "02 01001006a47e0b0f07b40c1e0500", r#"Ok(())"#),
     (
         "ts/routed",
@@ -314,12 +363,116 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "09 012000020105ff1009a47e0b0f07b40c000000",
         r#"Ok(())"#,
     ),
+    ("upt/local", "02 010010040a022b19072e21052f", r#"Ok(())"#),
+    (
+        "upt/routed",
+        "09 012000020105ff10040a022b19072e21052f",
+        r#"Ok(())"#,
+    ),
+    (
+        "utm/local",
+        "02 010010050c020000091e09031f29013d0b00636865636b2070756d70",
+        r#"Ok(())"#,
+    ),
+    (
+        "utm/routed",
+        "09 012000020105ff10050c020000091e09031f29013d0b00636865636b2070756d70",
+        r#"Ok(())"#,
+    ),
     ("uts/local", "02 01001009a47e0b0f07b40c1e0500", r#"Ok(())"#),
     (
         "uts/routed",
         "09 012000020105ff1009a47e0b0f07b40c1e0500",
         r#"Ok(())"#,
     ),
+    ("vt-close/local", "02 010402050016211d211e", r#"Ok(())"#),
+    (
+        "vt-close/routed",
+        "09 012400020105ff02040016211d211e",
+        r#"Ok(())"#,
+    ),
+    (
+        "vt-data/local",
+        "02 010402050017211d636c730d2101",
+        r#"Ok(Partial { accepted_octet_count: 2 })"#,
+    ),
+    (
+        "vt-data/routed",
+        "09 012400020105ff02040017211d636c730d2101",
+        r#"Ok(Partial { accepted_octet_count: 2 })"#,
+    ),
+    (
+        "vt-open/local",
+        "02 01040205001591032105",
+        r#"Ok(VTOpenAck { remote_vt_session_identifier: 29 })"#,
+    ),
+    (
+        "vt-open/routed",
+        "09 012400020105ff0204001591032105",
+        r#"Ok(VTOpenAck { remote_vt_session_identifier: 29 })"#,
+    ),
+    (
+        "who-am-i-bcast/global",
+        " 0120ffff00ff100d22022b7505004d582d3175050030303432",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-am-i-bcast/local",
+        " 0100100d22022b7505004d582d3175050030303432",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-am-i-bcast/network",
+        " 0120000200ff100d22022b7505004d582d3175050030303432",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-am-i/local",
+        "02 0100100d22022b7505004d582d3175050030303432",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-am-i/routed",
+        "09 012000020105ff100d22022b7505004d582d3175050030303432",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-has-bcast/global",
+        " 0120ffff00ff1007090a19143d050070756d70",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-has-bcast/local",
+        " 01001007090a19143d050070756d70",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-has-bcast/network",
+        " 0120000200ff1007090a19143d050070756d70",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-has/local",
+        "02 01001007090a19143d050070756d70",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-has/routed",
+        "09 012000020105ff1007090a19143d050070756d70",
+        r#"Ok(())"#,
+    ),
+    (
+        "who-is-bcast/global",
+        " 0120ffff00ff1008090a1914",
+        r#"Ok(())"#,
+    ),
+    ("who-is-bcast/local", " 01001008090a1914", r#"Ok(())"#),
+    (
+        "who-is-bcast/network",
+        " 0120000200ff1008090a1914",
+        r#"Ok(())"#,
+    ),
+    ("who-is-bcast/own", " 01001008090a1914", r#"Ok(())"#),
     ("who-is/local", "02 01001008", r#"Ok(())"#),
     ("who-is/routed", "09 012000020105ff1008", r#"Ok(())"#),
     (
