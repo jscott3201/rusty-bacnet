@@ -15,7 +15,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use bacnet_endpoint::session::EndpointSession;
-use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::app_transport::AppTransport;
@@ -179,22 +179,13 @@ impl Running {
 
 /// What `await endpoint.client()` awaits on an endpoint whose link takes
 /// `transport`'s addresses (`"bip"`, `"sc"` or `"mstp"`): the
-/// `BACnetClient` on the endpoint's link. An endpoint with a source Audit
-/// Reporter raises NotImplementedError at the call: its client arrives when
-/// Audit moves to the full client (#2617 step 3).
+/// `BACnetClient` on the endpoint's link. On an endpoint with a source
+/// Audit Reporter, the session audits its reads and writes (#2617).
 pub(crate) fn client(
     py: Python<'_>,
     session: Arc<tokio::sync::Mutex<Option<Running>>>,
     transport: &'static str,
-    audited: bool,
 ) -> PyResult<impl Future<Output = PyResult<Py<BACnetClient>>> + Send + 'static> {
-    if audited {
-        return Err(PyNotImplementedError::new_err(
-            "an endpoint with a source Audit Reporter has no client yet: its requests would \
-             not be audited. The client on an audited endpoint arrives when source Audit \
-             moves to the full client (#2617 step 3)",
-        ));
-    }
     // Made here, with the interpreter attached, and filled under the
     // session lock; unused when a client already runs.
     let candidate = Py::new(py, BACnetClient::seated(transport))?;

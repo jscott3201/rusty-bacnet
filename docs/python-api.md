@@ -7241,10 +7241,22 @@ async with BipEndpoint(1001, interface="192.168.1.10", broadcast_address="192.16
   endpoint's `connection_events()`, whose first call holds the events from
   the start. **MS/TP:** its requests wait for this node's token, as the
   server role's answers do.
-- **Source Audit.** An endpoint built with `source_audit_reporter` has no
-  client yet: `endpoint.client()` raises `NotImplementedError`, since the
-  full client's requests would not be audited. That arrives when source
-  Audit moves to the full client (#2617 step 3).
+- **Source Audit.** On an endpoint built with `source_audit_reporter`, the
+  client's reads and writes are audited (#2617): `read_property`,
+  `read_property_multiple`, `read_range`, `read_log_page`,
+  `atomic_read_file`, `audit_log_query`, `write_property`,
+  `write_property_multiple`, `atomic_write_file` and the list writes, each
+  target its own record, sent to the Device's Audit recipient. A write with
+  a `priority` is a command at that priority, which the Reporter's
+  Audit_Priority_Filter applies to and the record names; one without is not
+  filtered by priority. Once admitted, a request belongs to the endpoint: a
+  cancelled call loses neither the request nor its record. At most 64 are
+  held at once; past them a call waits for a slot, and its timeout starts
+  once it is admitted. A request the Reporter doesn't select goes
+  unrecorded. Not audited yet: `write_group`, subscriptions, object and
+  device management, alarm acknowledgment and life safety. An operation cut
+  off by the endpoint's close, or by the client's `stop()`, is not
+  recorded.
 
 Python endpoint server roles execute and advertise ReadProperty, plus
 ReinitializeDevice when built with `on_reinitialize` (the keywords and rules of
@@ -7384,9 +7396,8 @@ Reporter (#2348, #2357), the Python side of the Rust session's
 reports the ReinitializeDevice resets, backup steps and restore steps it
 carries out for peers and each `report_device_reset_local()` call, each
 filtered by the Reporter's Audit_Level and Auditable_Operations, and sends
-the records to the Device's Audit recipient. Such an endpoint has no client
-until source Audit moves to the full client (#2617 step 3):
-`endpoint.client()` raises `NotImplementedError` (see
+the records to the Device's Audit recipient. It also audits the reads and
+writes of the endpoint's client (#2617; see
 [The endpoint's client](#the-endpoints-client)).
 
 ```python
@@ -7652,7 +7663,7 @@ on the endpoint's link. Its calls keep their names and result shapes:
 | `service_scope()` | gone: the client initiates every service it has a call for |
 | a request no one answered: `BacnetTimeoutError` | `BacnetAbortError` for the transaction's timeout, as a typed call raises it |
 | a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the client stopped while it waited |
-| an endpoint with `source_audit_reporter`: audited reads | `NotImplementedError` until source Audit moves to the full client (#2617 step 3) |
+| an endpoint with `source_audit_reporter`: audited reads and `write_property(..., commandability=...)` | the same reads, audited, plus the other reads and writes listed under [The endpoint's client](#the-endpoints-client); a write's `priority` makes it a command at that priority |
 
 Not yet routed on the full client: the COV subscriptions and the other
 typed calls take a local address only; reach a routed device through a `device()` handle or the `_from_device` and

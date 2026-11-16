@@ -601,6 +601,15 @@ struct SegmentAckRoute {
 /// so `BACnetClient` alone names a client over any built-in transport;
 /// `BACnetClient<BipTransport>` and the like name one over a concrete
 /// transport.
+//
+// A new field here must be considered in `source_audit::runner` (#2617),
+// which builds from these fields the copy of a client that runs an audited
+// request: the copy shares the state the request path must share (the TSM,
+// the layer, the discovery table, the routed paths, the segment-ack routes,
+// the cleanup channel) and keeps its own pacer and no task. The compiler
+// only checks that every field is set there, not that it is shared rightly,
+// and a field the request path reads but the copy gets wrong changes what
+// an audited request does without failing a build.
 pub struct BACnetClient<T: TransportPort = AnyTransport> {
     config: ClientConfig,
     network: Arc<NetworkLayer<T>>,
@@ -919,6 +928,12 @@ mod segmentation_abort;
 mod segmentation_context;
 mod segmented_request;
 mod service;
+mod source_audit;
+mod source_audit_targets;
+#[doc(hidden)]
+pub use source_audit::{AuditedRequest, SourceAuditor};
+#[doc(hidden)]
+pub use source_audit_targets::{AuditTarget, AuditedOutcome};
 mod station;
 mod summaries;
 mod transaction_cleanup;
@@ -990,6 +1005,8 @@ mod dispatch_turn_tests;
 mod event_notification_tests;
 #[cfg(test)]
 pub(crate) mod fake_device;
+#[cfg(test)]
+mod future_size_tests;
 #[cfg(test)]
 mod group_source_request_tests;
 #[cfg(test)]

@@ -84,7 +84,9 @@ async fn the_session_stopping_first_fails_open_requests_and_stops_the_link_under
                 None,
             )
             .await;
-        assert!(late.is_err());
+        // A confirmed request says what an unconfirmed send says.
+        let late = late.unwrap_err().to_string();
+        assert!(late.contains("seat has closed"), "{late}");
         assert!(client.who_is(Broadcast::Global, None).await.is_err());
         assert!(
             client
@@ -284,7 +286,7 @@ async fn dropping_the_session_ends_the_client_and_the_last_owner_releases_the_li
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_full_client_needs_a_running_session_with_no_source_audit() {
+async fn a_full_client_needs_a_running_session() {
     let wire = Wire::new();
     let config = SessionConfig::default();
     let mut session =
@@ -296,13 +298,13 @@ async fn a_full_client_needs_a_running_session_with_no_source_audit() {
     session.stop().await.unwrap();
     assert!(session.full_client().is_err(), "after stop");
 
-    // The full client's requests are not audited, so a session that audits
-    // what it initiates has none.
+    // A session with a source Audit Reporter has one too once it runs; its
+    // reads and writes are audited (#2617).
     let audited = EndpointSession::new(wire.port(OTHER).build(), SessionRole::ClientOnly, config)
         .unwrap()
         .with_source_audit_reporter(oid(ObjectType::AUDIT_REPORTER, 1));
-    let error = audited.full_client().err().expect("refused");
-    assert!(error.to_string().contains("source Audit Reporter"));
+    let error = audited.full_client().err().expect("not running");
+    assert!(error.to_string().contains("not running"));
 }
 
 /// The session's stop must not wait on the full client's dispatch task: one

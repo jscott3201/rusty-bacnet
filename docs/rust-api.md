@@ -13378,8 +13378,8 @@ assert!(client.who_is(Broadcast::Global, None).await.is_err());
 ```
 
 - One full client at a time; another is refused until the first is dropped.
-- A session with a source Audit Reporter refuses a full client, whose
-  requests would not be audited.
+- With a source Audit Reporter, the client's reads and writes are audited
+  ([below](#source-audit-of-the-full-client)).
 - Beside a server role the client answers only the COV notifications of its
   own subscriptions. The narrow server role answers a
   ConfirmedEventNotification with a Reject (unrecognized service) while the
@@ -13420,6 +13420,80 @@ let session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOS
 assert!(session.bvlc_tables().is_some());
 # Ok::<(), bacnet_types::error::Error>(())
 ```
+
+### Source Audit of the full client
+
+On a session with a source Audit Reporter
+(`with_source_audit_reporter`), the full client's requests of the services
+Table 19-5 maps to READ and WRITE go through that Reporter (#2617):
+ReadProperty, ReadPropertyMultiple, ReadRange, AtomicReadFile, AuditLogQuery,
+WriteProperty, WritePropertyMultiple, AtomicWriteFile, AddListElement and
+RemoveListElement, whichever call sends them: typed, raw, routed or through
+`bacnet_ops`. Each is admitted as the narrow requester's operations are (the
+Reporter's Audit_Level, Auditable_Operations and Audit_Priority_Filter, the
+Device's recipient, one station direct or behind a router) and then belongs
+to the session: a caller that goes away loses neither the request nor its
+records, since the client retries with the same invoke ID and the records
+carry the real answer. At most 64 are held at once; past them a request
+waits for a slot in its caller's task, with nothing spawned for it, and its
+timeout starts once it is admitted. A stop or the caller going away ends the
+wait with nothing sent. A request waiting for a slot keeps the turn at its
+destination it was given before it waited (`min_request_interval_ms`), so two
+requests to one device that both waited can go out together when slots free.
+A request the Reporter doesn't select, or with no recipient, goes unaudited
+in the caller's task.
+
+- Each target is its own record (Clause 19.6.5): one per reference of a
+  ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or
+  OPTIONAL; one per write of a WritePropertyMultiple, where those before a
+  refused write succeeded and the rest carry its error. A file operation and
+  an Audit Log query name no property, and a file write no value.
+- A write sent with a priority is a command at that priority: the
+  Audit_Priority_Filter applies and the record names the priority. One sent
+  without a priority is not filtered by priority and names none. There is no
+  commandability argument.
+- Records carry the narrow requester's fields for the same operations, but
+  for these differences:
+  - a write without a priority names none and isn't filtered by priority,
+    where the narrow requester's commandable write named 16 and was filtered
+    at 16;
+  - a ReadRange answer that names what was read is a success whichever rule
+    of its page a strict caller refuses it for (the narrow requester
+    recorded the refusal as OTHER);
+  - every Abort for a TSM timeout records TIMEOUT: the client reports its own
+    wait running out that way, and a peer's Abort with that reason can't be
+    told from it without a cost on every request (the narrow requester
+    recorded a peer's as ABORT_TSM_TIMEOUT);
+  - the 65th request at once waits for a slot, where the narrow requester
+    refused it;
+  - a ReadPropertyMultiple of ALL, REQUIRED or OPTIONAL, or of a wildcard
+    object, which the narrow requester refused, is recorded per value its
+    answer reports, and so is an answer that decodes but doesn't follow the
+    request reference by reference (the narrow requester failed it).
+- A raw request of an audited service that doesn't decode is refused before
+  it is sent: what it names can't be reported. Not audited yet on an audited
+  session: WriteGroup, subscriptions, object and device management, alarm
+  acknowledgment and life safety.
+- What is recorded when something else ends the operation: one cut off by
+  a stop, of the session or of the client, is not recorded; one the node's
+  DeviceCommunicationControl refuses before it was sent is not recorded
+  either, since nothing reached the target and Clause 19.6.1 warns against
+  needless notification load; one already sent whose retry the control
+  withholds is recorded as failed, with SERVICES, COMMUNICATION_DISABLED.
+- DeviceCommunicationControl does not reach an audited session yet: a
+  session with a source Audit Reporter refuses a full server, and only a
+  full server on the session sets the node's state. Once the server seat
+  takes source Audit (a later step of #2617), DISABLE_INITIATION will
+  refuse an audited request as every request is, with
+  `InitiationDisabled { sent: false }`: before it takes a slot, and, when
+  it was waiting for a slot or for the database, before it takes a
+  sequence number. One the control catches after that, before the request
+  registers, is refused there, unsent and unrecorded, and its sequence
+  number is left unused. One already sent whose retry is withheld ends with
+  `InitiationDisabled { sent: true }`. A client started with
+  `with_node_dcc_override` is audited as usual.
+- None of this costs a standalone client anything: an audited client's
+  requests leave the request path at the test registration already makes.
 
 ### Full server on an endpoint
 

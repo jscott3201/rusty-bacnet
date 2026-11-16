@@ -598,12 +598,11 @@ class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):
                                        P.PRESENT_VALUE), 10)
             self.assertEqual((await endpoint.status())["active_leases"], 0)
 
-    async def test_an_audited_endpoint_has_no_client_until_step_3(self):
-        # Until source Audit moves to the full client (#2617 step 3), an
-        # endpoint with a source Audit Reporter refuses endpoint.client():
-        # the full client's requests would not be audited. Step 3 restores
-        # this test as it was before #2617: the endpoint's routed reads
-        # recorded in the sink's Audit Log, naming the station.
+    async def test_routed_reads_and_writes_are_audited_naming_the_station(self):
+        # Restored from before #2617 on the full client (step 3): the
+        # endpoint's routed reads are recorded in the sink's Audit Log,
+        # naming the station, and so is a routed write, as a command at
+        # the priority it was sent with.
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         sink = rb.BACnetServer(SINK, interface="127.0.0.1", port=0,
@@ -624,16 +623,44 @@ class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):
             foreign_device=rb.ForeignDevice(self.router_address, ttl=60))
         endpoint.add_audit_reporter(
             1, "Source", audit_level="audit_all",
-            auditable_operations=1 << rb.AuditOperation.READ.to_raw(),
+            auditable_operations=(1 << rb.AuditOperation.READ.to_raw())
+            | (1 << rb.AuditOperation.WRITE.to_raw()),
             issue_confirmed_notifications=True)
-        async with endpoint:
-            # Refused at the call, before anything is sent.
-            with self.assertRaisesRegex(NotImplementedError, "step 3"):
-                endpoint.client()
-            # The endpoint still serves and still reads BBMD tables.
-            self.assertTrue((await endpoint.server()).is_session_alive())
-            self.assertTrue((await endpoint.status())["is_running"])
+        query = {"audit_log": rb.ObjectIdentifier(O.AUDIT_LOG, 1),
+                 "query_parameters": {"kind": "by_source", "successful_actions_only": 0,
+                                      "source_device_identifier": rb.ObjectIdentifier(O.DEVICE, NEAR)},
+                 "requested_count": 32}
+        async with endpoint, rb.BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1") as client:
+            await accepted_registration(endpoint)
+            role = await endpoint.client()
+            await role.read_property(self.target, AI_1, P.PRESENT_VALUE)
+            # With no router the client learns the route; its read is
+            # audited naming the same station.
+            await role.read_property(rb.RoutedTarget(5, self.far_address), AI_1, P.PRESENT_VALUE)
+            # A page from the oldest record: three count reads and a ReadRange.
+            page = await role.read_log_page(self.target, LOG)
+            self.assertTrue(page["done"])
+            await role.write_property(self.target, AI_1, P.DESCRIPTION,
+                                      rb.PropertyValue.character_string("audited"), priority=8)
 
+            async def records():
+                result = await client.audit_log_query_typed(sink_address, query)
+                return [entry["record"]["datum"]["audit_notification"]
+                        for entry in result["records"]]
+            async with asyncio.timeout(5):
+                while len(found := await records()) < 7:
+                    await asyncio.sleep(0.02)
+        station = {"kind": "address", "network_number": 5, "mac_address": mac(self.far_address)}
+        self.assertEqual(len(found), 7)
+        for record in found:
+            self.assertEqual(record["target_device"], station)
+        reads = [record for record in found if record["operation"] == rb.AuditOperation.READ]
+        self.assertEqual(len(reads), 6)
+        self.assertEqual(sorted({str(record["target_object"]) for record in reads}),
+                         sorted({str(AI_1), str(LOG)}))
+        [write] = [record for record in found if record["operation"] == rb.AuditOperation.WRITE]
+        self.assertEqual(str(write["target_object"]), str(AI_1))
+        self.assertEqual(write["target_priority"], 8)
 
 if __name__ == "__main__":
     unittest.main()

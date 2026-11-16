@@ -5,6 +5,5 @@ section: Migration notes
   their names on the `BACnetClient` from `endpoint.client()`; drop
   `write_property`'s `commandability=` and `service_scope()` (table in
   [docs/python-api.md](docs/python-api.md#migration-endpointclient-to-the-endpoints-bacnetclient-2617)).
-  With `source_audit_reporter`, `client()` raises `NotImplementedError` until
-  #2617 step 3. (For maintainers, remove in step 3: step 3 gates the next
-  release.)
+  With `source_audit_reporter`, a write's `priority` makes it a command at
+  that priority for Audit.

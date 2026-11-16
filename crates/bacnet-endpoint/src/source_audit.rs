@@ -42,6 +42,9 @@ use routers::{SourceRoute, SourceRouters};
 mod delivery;
 #[path = "source_audit_failures.rs"]
 mod failures;
+#[path = "source_audit_seated.rs"]
+mod seated;
+pub(crate) use seated::SeatAuditor;
 
 pub(crate) struct SourceAudit {
     /// Released off the runtime by whichever caller, worker or session
@@ -291,14 +294,7 @@ impl SourceAudit {
         };
         // A routed destination on this network goes to the station directly
         // (#1403), as pacing localized it, so it is audited as the direct
-        // operation it is. One on another network must name one station there
-        // by the rule a routed binding meets (#2371), and the record names
-        // it by that network and MAC.
-        let message = if runtime.routes.is_bip() {
-            "audited operation requires direct B/IP IPv4 unicast or a routed station"
-        } else {
-            "audited operation requires direct unicast on the link or a routed station"
-        };
+        // operation it is.
         let (target_network, destination_mac) = match operation.destination() {
             EndpointApduDestination::Direct { destination_mac } => (0, destination_mac.clone()),
             EndpointApduDestination::Routed {
@@ -309,28 +305,10 @@ impl SourceAudit {
             | EndpointApduDestination::RoutedViaLocalBroadcast {
                 destination_network,
                 destination_mac,
-            } if routers::routed_unicast(*destination_network, destination_mac) => {
-                (*destination_network, destination_mac.clone())
-            }
-            _ => return Err(Error::Encoding(message.into())),
+            } if *destination_network != 0 => (*destination_network, destination_mac.clone()),
+            _ => return Err(Error::Encoding(one_station_rule(&runtime).into())),
         };
-        let unicast = if target_network != 0 {
-            true
-        } else if runtime.routes.is_bip() {
-            let (ip, port) = decode_bip_mac(&destination_mac)?;
-            let ip = Ipv4Addr::from(ip);
-            !(ip.is_unspecified()
-                || ip.is_multicast()
-                || ip.is_broadcast()
-                || ip == self.broadcast
-                || port == 0)
-        } else {
-            // Another link: a direct unicast MAC there (#2357).
-            runtime.routes.link().unicast(&destination_mac)
-        };
-        if !unicast {
-            return Err(Error::Encoding(message.into()));
-        }
+        self.one_station(&runtime, target_network, &destination_mac)?;
         let device = self.device;
         if db.local_device().identifier() != Some(device) {
             status.set_configured(false);
@@ -448,6 +426,37 @@ impl SourceAudit {
             .map_err(|_| Error::Encoding("endpoint shutdown".into()))?
     }
 
+    /// An audited operation goes to one station: a direct unicast on the
+    /// link, or one station on another network, by the rule a routed
+    /// binding meets (#2371), which the record names by that network and
+    /// MAC.
+    fn one_station(
+        &self,
+        runtime: &SourceRecipient,
+        network: u16,
+        mac: &[u8],
+    ) -> Result<(), Error> {
+        let unicast = if network != 0 {
+            routers::routed_unicast(network, mac)
+        } else if runtime.routes.is_bip() {
+            let (ip, port) = decode_bip_mac(mac)?;
+            let ip = Ipv4Addr::from(ip);
+            !(ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || ip == self.broadcast
+                || port == 0)
+        } else {
+            // Another link: a direct unicast MAC there (#2357).
+            runtime.routes.link().unicast(mac)
+        };
+        if unicast {
+            Ok(())
+        } else {
+            Err(Error::Encoding(one_station_rule(runtime).into()))
+        }
+    }
+
     /// Report an operation carried out on this device as a whole, such as
     /// an accepted ReinitializeDevice reset, backup or restore step (Clause
     /// 19.6, Table 19-5, #1564), with `source` as its requester. With no
@@ -559,6 +568,15 @@ impl SourceAudit {
             result: None,
         };
         delivery::admit(self, &owner, confirmed, route, record, completion, failure);
+    }
+}
+
+/// What an audited operation to anything but one station is refused with.
+fn one_station_rule(runtime: &SourceRecipient) -> &'static str {
+    if runtime.routes.is_bip() {
+        "audited operation requires direct B/IP IPv4 unicast or a routed station"
+    } else {
+        "audited operation requires direct unicast on the link or a routed station"
     }
 }
 

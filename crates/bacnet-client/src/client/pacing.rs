@@ -21,7 +21,7 @@
 //! from the device's shared pool.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
@@ -115,6 +115,12 @@ pub(crate) struct RequestPacer {
     interval: Duration,
     capacity: usize,
     lanes: Mutex<Lanes>,
+    /// The client's part in its node's source Audit (#2617), set once on a
+    /// seated client whose node audits it and on each copy that runs one of
+    /// its requests. It lives here, in the allocation each client has to
+    /// itself and every request passes first, so a client is no larger for
+    /// it; the request path reads it only where a registration is refused.
+    pub(super) audit: OnceLock<super::source_audit::Role>,
 }
 
 /// Held for the life of a request that went; dropping it, when the request
@@ -126,6 +132,18 @@ pub(crate) struct PaceGuard {
     /// The pacer, the destination, the lane's generation and the request's
     /// ticket; `None` when the pacer doesn't pace.
     sent: Option<(Arc<RequestPacer>, PaceKey, u64, u64)>,
+}
+
+impl PaceGuard {
+    /// Move the request's turn out, leaving a guard that ends none: for a
+    /// segmented request its node audits, which only borrows its caller's
+    /// guard (#2617).
+    #[cold]
+    pub(crate) fn take(&mut self) -> Self {
+        Self {
+            sent: self.sent.take(),
+        }
+    }
 }
 
 impl Drop for PaceGuard {
@@ -155,6 +173,7 @@ impl RequestPacer {
             interval,
             capacity,
             lanes: Mutex::new(Lanes::default()),
+            audit: OnceLock::new(),
         }
     }
 
