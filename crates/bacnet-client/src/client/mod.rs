@@ -952,7 +952,6 @@ pub use routing_table::{
 };
 use station::ConfirmedTarget;
 pub use station::{Broadcast, Station, ToStation};
-pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]
 mod acknowledge_alarm_tests;

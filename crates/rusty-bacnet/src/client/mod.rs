@@ -9,7 +9,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
 use bacnet_client::client;
-use bacnet_client::client::WriteGroupDestination;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_services::common::BACnetPropertyValue;

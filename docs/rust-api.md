@@ -9632,9 +9632,8 @@ relayed answer still completes it. The peer's
 limits still come from its routed device-table row, so a request past them is
 refused or segmented as for the routed peer.
 `broadcast_network_unconfirmed`, and a scoped call to `Broadcast::Network`
-(`who_is`, `who_has`, `who_am_i`) and a `write_group` to
-`WriteGroupDestination::RemoteBroadcast` built on it, send a broadcast for that
-number as a local broadcast. While the number is unknown, every destination goes as written.
+built on it (`who_is`, `who_has`, `who_am_i`, `write_group`), send a broadcast
+for that number as a local broadcast. While the number is unknown, every destination goes as written.
 Replies, SegmentACKs and Aborts to a routed peer keep the route its PDU
 arrived by.
 
@@ -10769,21 +10768,22 @@ client.unconfirmed_text_message(&mac, &status).await?;
 
 ### Write Group and Who-Am-I
 
-`write_group` sends a WriteGroup to a `WriteGroupDestination`: one `Device` by
-its link address, a `LocalBroadcast`, a `RemoteBroadcast` to network 1 to
-65534, or a `GlobalBroadcast`. It returns once the request is sent, since
-nothing answers it, and fails before sending when the request doesn't encode
-or the remote network is 0 or 65535. Who-Am-I (Clause 16.11) goes to a
+`write_group` sends a WriteGroup to a `Broadcast` scope: `Local`,
+`Network` 1 to 65534, or `Global`; `write_group_directed` sends it to one
+station, on this network or behind a router (#2588). The standard lets
+WriteGroup go by unicast or broadcast, and prefers broadcasts to one network
+at a time over a global one (Clause 15.11). Either returns once the request
+is sent, since nothing answers it, and fails before sending when the
+request doesn't encode or the network is 0 or 65535. Who-Am-I (Clause 16.11) goes to a
 `Broadcast` scope with `who_am_i`, or to one station with
 `who_am_i_directed` (#2588).
 
 ```rust
 use std::num::NonZeroU32;
 
-use bacnet_client::client::{Broadcast, WriteGroupDestination};
+use bacnet_client::client::Broadcast;
 use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
-use bacnet_types::MacAddr;
 
 // Channel 5 gets REAL 72.0; channel 6 gets NULL at priority 10.
 let request = WriteGroupRequest {
@@ -10803,13 +10803,9 @@ let request = WriteGroupRequest {
     ],
     inhibit_delay: Some(false),
 };
-client
-    .write_group(&WriteGroupDestination::Device(MacAddr::from_slice(&mac)), &request)
-    .await?;
+client.write_group_directed(&mac, &request).await?;
 // The same change list for every device on network 5.
-client
-    .write_group(&WriteGroupDestination::RemoteBroadcast(5), &request)
-    .await?;
+client.write_group(Broadcast::Network(5), &request).await?;
 
 // Who-Am-I is usually broadcast.
 let who_am_i = WhoAmIRequest {

@@ -12,6 +12,8 @@
 //! through those raw sends, which are dev's, after the typed calls existed.
 //! The `wg/` pins were recorded from `write_group` to each
 //! `WriteGroupDestination` before WriteGroup took a `Broadcast` scope.
+//! `wg/routed` is newer, recorded from `write_group_directed`: no
+//! destination named a station behind a router.
 
 pub(super) const PINS: &[(&str, &str, &str)] = &[
     (
@@ -458,6 +460,11 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
     (
         "wg/own",
         " 0100100a091719082e090c4442860000090d190a002f3900",
+        r#"Ok(())"#,
+    ),
+    (
+        "wg/routed",
+        "09 012000020105ff100a091719082e090c4442860000090d190a002f3900",
         r#"Ok(())"#,
     ),
     (
