@@ -18,6 +18,7 @@ use tokio::time::Instant;
 
 use bacnet_client::client::{
     CovPropertySubscription, CovTarget, ManagedCOVSubscription, ManagedCOVSubscriptionOptions,
+    Station,
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
@@ -31,7 +32,7 @@ use super::support::{CovSupport, fills_table, refuses_service};
 use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
 use crate::client::{device_error, failed_locally, unreachable};
-use crate::device::{DeviceAddress, Path};
+use crate::device::{DeviceAddress, path_to};
 use crate::format::{PropertyError, RawRow};
 
 /// How long one cancel may take before it is given up.
@@ -97,16 +98,18 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
     }
 }
 
-/// Where a subscription along `path` goes: the station's MAC on this
-/// network, or its station behind the router on the way.
-fn target_of(path: &Path) -> CovTarget {
-    match path {
-        Path::Local(mac) => CovTarget::local(mac),
-        Path::Routed {
+/// Where a subscription to `station` goes: its MAC on this network, or the
+/// station behind the router on the way. `None` for a station with no
+/// router found, which [`path_to`] never gives.
+fn target_of(station: &Station) -> Option<CovTarget> {
+    match station {
+        Station::Local { mac } => Some(CovTarget::local(mac)),
+        Station::Routed {
             router,
             network,
             mac,
-        } => CovTarget::routed(router, *network, mac),
+        } => Some(CovTarget::routed(router, *network, mac)),
+        _ => None,
     }
 }
 
@@ -121,7 +124,12 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let client = &inner.client;
     let instance = client.instance_at(address).await;
     let known = client.cov_known(address, &point.watched);
-    let Ok(path) = Path::to(client.low_level(), address).await else {
+    let target = path_to(client.low_level(), address)
+        .await
+        .ok()
+        .as_ref()
+        .and_then(target_of);
+    let Some(target) = target else {
         return Started {
             target: None,
             instance,
@@ -131,7 +139,6 @@ pub(super) async fn start<T: TransportPort + 'static>(
             cov: known,
         };
     };
-    let target = target_of(&path);
     // Before anything is sent: the device may notify as soon as it takes
     // the subscription, before this job is back with the scheduler, and
     // the receiver only takes notifications from where the device is.

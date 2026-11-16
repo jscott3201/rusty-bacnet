@@ -39,27 +39,10 @@ impl BACnetClient {
                 }
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
-                    let c = high.low_level();
-                    match target.path(&high, &inner.route_misses).await? {
-                        routed::Path::Local(mac) => {
-                            c.read_property(&mac, oid, pid, array_index).await
-                        }
-                        routed::Path::Via {
-                            router,
-                            network,
-                            station,
-                        } => {
-                            c.read_property_routed(
-                                &router,
-                                network,
-                                &station,
-                                oid,
-                                pid,
-                                array_index,
-                            )
-                            .await
-                        }
-                    }
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .read_property(&to, oid, pid, array_index)
+                        .await
                 }
             }
             .map_err(to_py_err)?;
@@ -114,32 +97,10 @@ impl BACnetClient {
                 }
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
-                    let c = high.low_level();
-                    match target.path(&high, &inner.route_misses).await? {
-                        routed::Path::Local(mac) => {
-                            c.write_property(&mac, oid, pid, array_index, value, priority)
-                                .await
-                        }
-                        path => {
-                            let request = bacnet_services::write_property::WritePropertyRequest {
-                                object_identifier: oid,
-                                property_identifier: pid,
-                                property_array_index: array_index,
-                                property_value: value,
-                                priority,
-                            };
-                            let mut buf = BytesMut::new();
-                            request.encode(&mut buf).map_err(to_py_err)?;
-                            routed::confirmed(
-                                c,
-                                &path,
-                                ConfirmedServiceChoice::WRITE_PROPERTY,
-                                &buf,
-                            )
-                            .await
-                            .map(drop)
-                        }
-                    }
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .write_property(&to, oid, pid, array_index, value, priority)
+                        .await
                 }
             }
             .map_err(to_py_err)?;
@@ -259,30 +220,10 @@ impl BACnetClient {
                 }
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
-                    let c = high.low_level();
-                    match target.path(&high, &inner.route_misses).await? {
-                        routed::Path::Local(mac) => {
-                            c.read_property_multiple(&mac, rust_specs).await
-                        }
-                        path => {
-                            use bacnet_services::rpm::{
-                                ReadPropertyMultipleACK, ReadPropertyMultipleRequest,
-                            };
-                            let request = ReadPropertyMultipleRequest {
-                                list_of_read_access_specs: rust_specs,
-                            };
-                            let mut buf = BytesMut::new();
-                            request.encode(&mut buf).map_err(to_py_err)?;
-                            routed::confirmed(
-                                c,
-                                &path,
-                                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
-                                &buf,
-                            )
-                            .await
-                            .and_then(|answer| ReadPropertyMultipleACK::decode(&answer))
-                        }
-                    }
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .read_property_multiple(&to, rust_specs)
+                        .await
                 }
             }
             .map_err(to_py_err)?;

@@ -17,7 +17,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_services::rpm::ReadAccessResult;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
@@ -26,7 +26,7 @@ use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::{ReadVia, RpmFailure, failed_locally, rpm_failure, unreachable};
-use crate::device::{DeviceAddress, Path};
+use crate::device::{DeviceAddress, path_to};
 use crate::format::{PropertyError, RawRow};
 use crate::limits::RequestLimits;
 
@@ -135,7 +135,7 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
     stop: &AtomicBool,
 ) -> Result<Batched<K>, Error> {
     let started_rpm = rpm;
-    let path = Path::to(client, device).await?;
+    let path = path_to(client, device).await?;
     let path = &path;
     let mut read = Batched {
         rows: Vec::with_capacity(rows.len()),
@@ -281,7 +281,7 @@ enum End {
 async fn one_by_one<K, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
-    (device, path): (&DeviceAddress, &Path),
+    (device, path): (&DeviceAddress, &Station),
     row: &BatchRow<K>,
     stop: &AtomicBool,
 ) -> (Vec<RawRow>, Option<End>) {
@@ -291,8 +291,8 @@ async fn one_by_one<K, T: TransportPort + 'static>(
             return (rows, Some(End::Cancelled));
         }
         let turn = limits.turn(device).await;
-        let read = path
-            .read_property(client, row.object, property, index)
+        let read = client
+            .read_property(path, row.object, property, index)
             .await;
         drop(turn);
         let value = match read {
@@ -310,7 +310,7 @@ async fn one_by_one<K, T: TransportPort + 'static>(
 async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
-    (device, path): (&DeviceAddress, &Path),
+    (device, path): (&DeviceAddress, &Station),
     batch: &[BatchRow<K>],
 ) -> Result<Vec<(K, Result<Vec<RawRow>, Missing>)>, Error> {
     let specs = batch
@@ -330,7 +330,7 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
         })
         .collect();
     let turn = limits.turn(device).await;
-    let ack = path.read_property_multiple(client, specs).await;
+    let ack = client.read_property_multiple(path, specs).await;
     drop(turn);
     let ack = ack?;
     // Each row takes a result not yet taken that names its object,

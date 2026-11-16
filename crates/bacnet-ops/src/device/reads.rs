@@ -8,6 +8,7 @@
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use bacnet_client::client::Station;
 use bacnet_client::log_reader::{LogCursor, LogPage, read_log_page};
 use bacnet_services::alarm_event::GetEventInformationAck;
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
@@ -17,7 +18,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{Device, DeviceAddress, Path};
+use super::{Device, DeviceAddress, path_to};
 use crate::client::batch::{self, BatchRow, Batched, Missing};
 use crate::client::{
     DEVICE_PROPERTIES, DeviceSummary, Halt, ListRead, Naming, PagedLog, ReadVia, RpmFailure,
@@ -262,7 +263,7 @@ impl<T: TransportPort + 'static> Device<T> {
     ) -> Result<LogPage, OpsError> {
         sent!(self, |at| {
             let limits = self.client.limits();
-            let path = Path::to(self.client.low_level(), at).await?;
+            let path = path_to(self.client.low_level(), at).await?;
             let _turn = limits.turn(at).await;
             let requester = PagedLog {
                 client: self.client.low_level(),
@@ -276,9 +277,9 @@ impl<T: TransportPort + 'static> Device<T> {
         })
     }
 
-    /// The path to `at`, and the device's turn there.
-    pub(super) async fn turn_at(&self, at: &DeviceAddress) -> Result<(Path, Turn), Error> {
-        let path = Path::to(self.client.low_level(), at).await?;
+    /// The station `at` names, and the device's turn there.
+    pub(super) async fn turn_at(&self, at: &DeviceAddress) -> Result<(Station, Turn), Error> {
+        let path = path_to(self.client.low_level(), at).await?;
         Ok((path, self.client.limits().turn(at).await))
     }
 
@@ -293,7 +294,7 @@ impl<T: TransportPort + 'static> Device<T> {
         let client = self.client.low_level();
         sent!(self, |at| {
             let (path, _turn) = self.turn_at(at).await?;
-            path.event_information(client, after).await
+            client.get_event_information(&path, after).await
         })
     }
 
@@ -303,7 +304,7 @@ impl<T: TransportPort + 'static> Device<T> {
         let client = self.client.low_level();
         sent!(self, |at| {
             let (path, _turn) = self.turn_at(at).await?;
-            path.alarm_summary(client).await
+            client.get_alarm_summary(&path).await
         })
     }
 
@@ -315,7 +316,7 @@ impl<T: TransportPort + 'static> Device<T> {
         let client = self.client.low_level();
         sent!(self, |at| {
             let (path, _turn) = self.turn_at(at).await?;
-            path.enrollment_summary(client, request).await
+            client.get_enrollment_summary(&path, request).await
         })
     }
 

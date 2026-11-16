@@ -3,13 +3,12 @@
 
 use bacnet_client::client::BACnetClient;
 use bacnet_services::common::BACnetPropertyValue;
-use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
-use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{ConfirmedServiceChoice, PropertyIdentifier};
+use bacnet_types::constructed::BACnetAddress;
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
-use bytes::BytesMut;
 use serde_json::{Value, json};
 
 use super::{Outcome, Planned, Preview};
@@ -59,15 +58,9 @@ pub(super) async fn send<T: TransportPort + 'static>(
             }),
         }
     }
-    let request = WritePropertyMultipleRequest {
-        list_of_write_access_specs: specs,
-    };
-    let mut buf = BytesMut::new();
-    let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
-    let result = match request.encode(&mut buf) {
-        Ok(()) => confirmed(client, &preview.address, service, &buf).await,
-        Err(error) => Err(error),
-    };
+    let result = client
+        .write_property_multiple(&BACnetAddress::from(&preview.address), specs)
+        .await;
     batch_outcomes(items, &result)
 }
 
@@ -80,36 +73,17 @@ pub(super) async fn write_property<T: TransportPort + 'static>(
     value: Vec<u8>,
     priority: Option<u8>,
 ) -> Result<(), Error> {
-    let (object_identifier, property_identifier, property_array_index) = target;
-    let request = WritePropertyRequest {
-        object_identifier,
-        property_identifier,
-        property_array_index,
-        property_value: value,
-        priority,
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf)?;
-    confirmed(
-        client,
-        address,
-        ConfirmedServiceChoice::WRITE_PROPERTY,
-        &buf,
-    )
-    .await
-}
-
-/// One confirmed request to `address`, its acknowledgement's data dropped.
-async fn confirmed<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    address: &DeviceAddress,
-    service: ConfirmedServiceChoice,
-    data: &[u8],
-) -> Result<(), Error> {
+    let (object, property, index) = target;
     client
-        .confirmed_request_to(&address.into(), service, data)
+        .write_property(
+            &BACnetAddress::from(address),
+            object,
+            property,
+            index,
+            value,
+            priority,
+        )
         .await
-        .map(drop)
 }
 
 /// Each write's outcome from one WritePropertyMultiple result: the ones

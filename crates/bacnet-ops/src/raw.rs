@@ -36,7 +36,7 @@ pub use crate::inventory::read::{InventoryHalt, read_inventory, read_point_recor
 pub use crate::client::read::{
     Halt, Reader, RpmFailure, rpm_failure, rpm_rows, timed_out, unreachable,
 };
-use crate::device::{DeviceAddress, Path};
+use crate::device::{DeviceAddress, path_to};
 use crate::limits::{RequestLimits, Turn};
 
 /// The turn at `device`'s gate under `limits`, for a request the caller
@@ -53,7 +53,7 @@ pub async fn turn<T: TransportPort + 'static>(
     limits: &RequestLimits,
     device: &DeviceAddress,
 ) -> Result<Turn, Error> {
-    Path::to(client, device).await?;
+    path_to(client, device).await?;
     let gate = device.clone().localized(client.network_number());
     Ok(limits.turn(&gate).await)
 }

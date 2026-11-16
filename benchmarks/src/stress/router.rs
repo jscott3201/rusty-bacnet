@@ -15,7 +15,7 @@
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_server::server::BACnetServer;
 use bacnet_services::read_property::ReadPropertyACK;
@@ -65,7 +65,7 @@ impl Path {
 #[derive(Clone)]
 enum Target {
     Direct(Vec<u8>),
-    Routed { router: Vec<u8>, mac: Vec<u8> },
+    Routed(Station),
 }
 
 /// What has to be stopped when the scenario ends.
@@ -150,10 +150,8 @@ async fn start(path: Path, baud: u32) -> (Running, Target) {
                     })
                     .collect();
                 if let Some(router) = start_router(ports).await {
-                    let target = Target::Routed {
-                        router: bip_mac(port_1),
-                        mac,
-                    };
+                    let target =
+                        Target::Routed(Station::routed(&bip_mac(port_1), SERVER_NET, &mac));
                     return (Running::Bip(router, server), target);
                 }
             }
@@ -184,10 +182,7 @@ async fn start(path: Path, baud: u32) -> (Running, Target) {
                     .build()
                     .await
                     .unwrap();
-                let target = Target::Routed {
-                    router: bip_mac(port_1),
-                    mac: vec![1],
-                };
+                let target = Target::Routed(Station::routed(&bip_mac(port_1), SERVER_NET, &[1]));
                 return (Running::Mstp(router, server), target);
             }
             panic!("no loopback UDP port the router could bind");
@@ -213,11 +208,7 @@ async fn read(
     let property = PropertyIdentifier::PRESENT_VALUE;
     match target {
         Target::Direct(mac) => client.read_property(mac, oid, property, None).await,
-        Target::Routed { router, mac } => {
-            client
-                .read_property_routed(router, SERVER_NET, mac, oid, property, None)
-                .await
-        }
+        Target::Routed(station) => client.read_property(station, oid, property, None).await,
     }
 }
 

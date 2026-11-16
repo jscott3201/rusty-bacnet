@@ -47,8 +47,10 @@ impl BACnetClient {
                 }
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
-                    let path = target.path(&high, &inner.route_misses).await?;
-                    routed::read_range(high.low_level(), &path, &request, validation).await
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .read_range_with(&to, &request, validation)
+                        .await
                 }
             }
             .map_err(to_py_err)?;
@@ -83,27 +85,10 @@ impl BACnetClient {
                 }
                 routed::Address::Routed(target) => {
                     let high = state::high_level(&inner).await?;
-                    let c = high.low_level();
-                    match target.path(&high, &inner.route_misses).await? {
-                        routed::Path::Local(mac) => {
-                            c.read_log_page(&mac, log, cursor, page_size).await
-                        }
-                        routed::Path::Via {
-                            router,
-                            network,
-                            station,
-                        } => {
-                            let requester = routed::RoutedLog {
-                                core: c,
-                                network,
-                                station: &station,
-                            };
-                            bacnet_client::log_reader::read_log_page(
-                                &requester, &router, log, cursor, page_size,
-                            )
-                            .await
-                        }
-                    }
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .read_log_page(&to, log, cursor, page_size)
+                        .await
                 }
             }
             .map_err(to_py_err)?;

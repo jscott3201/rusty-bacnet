@@ -13,7 +13,7 @@
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
@@ -282,16 +282,18 @@ impl<T: TransportPort + 'static> Device<T> {
             property,
             index,
         } = order.property;
-        let mut request = BytesMut::new();
-        WritePropertyRequest {
+        let request = WritePropertyRequest {
             object_identifier: object,
             property_identifier: property,
             property_array_index: index,
             property_value: order.value.raw.clone(),
             priority: order.priority.map(Priority::get),
-        }
-        .encode(&mut request)
-        .map_err(OpsError::Client)?;
+        };
+        // The check the write's encoding makes, before the address is
+        // found: a following handle may ask the network for it.
+        request
+            .encode(&mut BytesMut::new())
+            .map_err(OpsError::Client)?;
         let address = self.target().await?;
         let result = self.write_at(&address, &request).await;
         // No route: nothing was sent. A timeout is never sent again.
@@ -308,13 +310,24 @@ impl<T: TransportPort + 'static> Device<T> {
             .map_err(|error| OpsError::at(&address, error))
     }
 
-    /// One confirmed WriteProperty `request` to `at`, in the device's turn.
-    async fn write_at(&self, at: &DeviceAddress, request: &[u8]) -> Result<(), Error> {
+    /// One WriteProperty of `request` to `at`, in the device's turn.
+    async fn write_at(
+        &self,
+        at: &DeviceAddress,
+        request: &WritePropertyRequest,
+    ) -> Result<(), Error> {
         let (path, _turn) = self.turn_at(at).await?;
-        let service = ConfirmedServiceChoice::WRITE_PROPERTY;
-        path.confirmed(self.client.low_level(), service, request)
+        self.client
+            .low_level()
+            .write_property(
+                &path,
+                request.object_identifier,
+                request.property_identifier,
+                request.property_array_index,
+                request.property_value.clone(),
+                request.priority,
+            )
             .await
-            .map(drop)
     }
 }
 
