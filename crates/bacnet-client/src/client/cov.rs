@@ -1,3 +1,4 @@
+use super::service::device_target;
 use super::*;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_types::enums::PropertyIdentifier;
@@ -52,21 +53,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    pub(super) async fn send_subscribe_cov_request(
-        &self,
-        target: ConfirmedTarget<'_>,
-        request: SubscribeCOVRequest,
-    ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request_inner(target, ConfirmedServiceChoice::SUBSCRIBE_COV, &buf)
-            .await?;
-
-        Ok(())
-    }
-
     fn subscribe_cov_property_request(
         subscriber_process_identifier: u32,
         monitored_object_identifier: ObjectIdentifier,
@@ -85,21 +71,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             monitored_property_array_index,
             cov_increment,
         }
-    }
-
-    pub(super) async fn send_subscribe_cov_property_request(
-        &self,
-        target: ConfirmedTarget<'_>,
-        request: SubscribeCOVPropertyRequest,
-    ) -> Result<(), Error> {
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request_inner(target, ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY, &buf)
-            .await?;
-
-        Ok(())
     }
 
     /// Subscribe to COV notifications for an object on the station `to`.
@@ -139,20 +110,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
-        if let Some((dnet, dadr)) = routing {
-            self.send_subscribe_cov_request(
-                ConfirmedTarget::Routed {
-                    router_mac: &mac,
-                    dest_network: dnet,
-                    dest_mac: &dadr,
-                },
-                request,
-            )
-            .await
-        } else {
-            self.send_subscribe_cov_request(ConfirmedTarget::Local { mac: &mac }, request)
-                .await
-        }
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Cancel a COV subscription on the station `to`.
@@ -188,20 +146,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
-        if let Some((dnet, dadr)) = routing {
-            self.send_subscribe_cov_request(
-                ConfirmedTarget::Routed {
-                    router_mac: &mac,
-                    dest_network: dnet,
-                    dest_mac: &dadr,
-                },
-                request,
-            )
-            .await
-        } else {
-            self.send_subscribe_cov_request(ConfirmedTarget::Local { mac: &mac }, request)
-                .await
-        }
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Subscribe to COV notifications for a single property on the station
@@ -226,20 +171,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((dnet, dadr)) = routing {
-            self.send_subscribe_cov_property_request(
-                ConfirmedTarget::Routed {
-                    router_mac: &mac,
-                    dest_network: dnet,
-                    dest_mac: &dadr,
-                },
-                request,
-            )
-            .await
-        } else {
-            self.send_subscribe_cov_property_request(ConfirmedTarget::Local { mac: &mac }, request)
-                .await
-        }
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Cancel a single-property COV subscription on the station `to`.
@@ -286,20 +218,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request.validate()?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
-        if let Some((dnet, dadr)) = routing {
-            self.send_subscribe_cov_property_request(
-                ConfirmedTarget::Routed {
-                    router_mac: &mac,
-                    dest_network: dnet,
-                    dest_mac: &dadr,
-                },
-                request,
-            )
-            .await
-        } else {
-            self.send_subscribe_cov_property_request(ConfirmedTarget::Local { mac: &mac }, request)
-                .await
-        }
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Cancel a COV subscription at `target`, the device a
@@ -319,8 +238,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             None,
             None,
         );
-        self.send_subscribe_cov_request(target.confirmed(), request)
-            .await
+        self.call_via(target.confirmed(), request).await
     }
 
     /// Cancel a single-property COV subscription at `target`:
@@ -343,8 +261,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             monitored_property_array_index,
             None,
         );
-        self.send_subscribe_cov_property_request(target.confirmed(), request)
-            .await
+        self.call_via(target.confirmed(), request).await
     }
 
     /// Get a receiver for incoming COV notifications. Each call returns a new

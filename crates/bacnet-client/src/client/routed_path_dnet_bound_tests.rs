@@ -1,5 +1,6 @@
 //! A routed confirmed request names one device on one remote network (#1278).
 use super::*;
+use crate::client::Station;
 use crate::discovery::{DiscoveredDevice, RoutedDeviceConfig};
 use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, Segmentation, UnconfirmedServiceChoice};
@@ -75,7 +76,7 @@ async fn routed_confirmed_request_to_no_single_device_fails_before_any_state() {
                 .await
                 .map(drop),
             client
-                .read_property_routed(&ROUTER, dnet, &dadr, object(), pv, None)
+                .read_property(&Station::routed(&ROUTER, dnet, &dadr), object(), pv, None)
                 .await
                 .map(drop),
             client

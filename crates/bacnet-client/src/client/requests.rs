@@ -115,9 +115,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         to.confirmed(self, service_choice, service_data).await
     }
 
-    /// A confirmed request through the router at `router_mac` to the
-    /// station at `dest_mac` on `dest_network`, as a [`Station::Routed`]
-    /// goes. The by-instance calls send this way.
+    /// Test shorthand: a confirmed request through the router at
+    /// `router_mac` to the station at `dest_mac` on `dest_network`, the
+    /// target a [`Station::Routed`] names. #2588 PR 2: removed with the
+    /// by-instance family, its tests moving onto `Station::routed`.
+    #[cfg(test)]
     pub(super) async fn confirmed_request_routed(
         &self,
         router_mac: &[u8],
@@ -160,17 +162,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             check_routed_unicast(dest_network, dest_mac.len())?;
         }
         let target = named.localized(self.network.local_network_number().get());
-        // With no DNET, a group destination is a local broadcast, which
-        // carries no confirmed request (Clause 6.3, #1479).
-        if let ConfirmedTarget::Local { mac } = target
-            && self.network.transport().is_group_destination(mac)
-        {
-            return Err(Error::Encoding(
-                "a confirmed request goes to one device, not to a broadcast or group \
+        if let ConfirmedTarget::Local { mac } = target {
+            // An empty MAC names no one station: refused as an address on
+            // network 0 with no MAC is, whichever form named it (#2588).
+            Self::station_of(0, mac)?;
+            // With no DNET, a group destination is a local broadcast, which
+            // carries no confirmed request (Clause 6.3, #1479).
+            if self.network.transport().is_group_destination(mac) {
+                return Err(Error::Encoding(
+                    "a confirmed request goes to one device, not to a broadcast or group \
                      address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
                      Clause 6.3)"
-                    .into(),
-            ));
+                        .into(),
+                ));
+            }
         }
         let routed_forwarded_npci_len = match target {
             ConfirmedTarget::Local { .. } => None,
@@ -697,13 +702,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         to.unconfirmed(self, service_choice, service_data).await
     }
 
-    /// An unconfirmed request to `destination_mac` on this link.
+    /// An unconfirmed request to `destination_mac` on this link: one
+    /// station, so an empty MAC, which is the link's broadcast, is refused
+    /// as an address on network 0 with no MAC is (#2588).
     pub(super) async fn unconfirmed_local(
         &self,
         destination_mac: &[u8],
         service_choice: UnconfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<(), Error> {
+        Self::station_of(0, destination_mac)?;
         self.seat_open()?;
         let pdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
             service_choice,

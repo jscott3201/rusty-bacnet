@@ -11,7 +11,6 @@
 //! may have been applied, so it is never sent again.
 
 use bacnet_encoding::primitives::encode_property_value;
-use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -277,30 +276,13 @@ impl<T: TransportPort + 'static> Device<T> {
     /// Send `order` as one WriteProperty at the device's gate: the address
     /// it went to.
     async fn send_write(&self, order: &Order) -> Result<DeviceAddress, OpsError> {
-        let PropertyRef {
-            object,
-            property,
-            index,
-        } = order.property;
-        let request = WritePropertyRequest {
-            object_identifier: object,
-            property_identifier: property,
-            property_array_index: index,
-            property_value: order.value.raw.clone(),
-            priority: order.priority.map(Priority::get),
-        };
-        // The check the write's encoding makes, before the address is
-        // found: a following handle may ask the network for it.
-        request
-            .encode(&mut BytesMut::new())
-            .map_err(OpsError::Client)?;
         let address = self.target().await?;
-        let result = self.write_at(&address, &request).await;
+        let result = self.write_at(&address, order).await;
         // No route: nothing was sent. A timeout is never sent again.
         if matches!(result, Err(Error::UnknownDevice { .. }))
             && let Some(to) = self.retry(&address, &result).await?
         {
-            let result = self.write_at(&to, &request).await;
+            let result = self.write_at(&to, order).await;
             return result
                 .map(|()| to.clone())
                 .map_err(|e| OpsError::at(&to, e));
@@ -310,22 +292,27 @@ impl<T: TransportPort + 'static> Device<T> {
             .map_err(|error| OpsError::at(&address, error))
     }
 
-    /// One WriteProperty of `request` to `at`, in the device's turn.
-    async fn write_at(
-        &self,
-        at: &DeviceAddress,
-        request: &WritePropertyRequest,
-    ) -> Result<(), Error> {
+    /// One WriteProperty of `order` to `at`, in the device's turn. The
+    /// client encodes it once and refuses what it can't encode before
+    /// anything goes to the device; `order` already holds a checked
+    /// priority and a value its own encoder wrote, so that refusal is the
+    /// legacy EventParameters form alone.
+    async fn write_at(&self, at: &DeviceAddress, order: &Order) -> Result<(), Error> {
         let (path, _turn) = self.turn_at(at).await?;
+        let PropertyRef {
+            object,
+            property,
+            index,
+        } = order.property;
         self.client
             .low_level()
             .write_property(
                 &path,
-                request.object_identifier,
-                request.property_identifier,
-                request.property_array_index,
-                request.property_value.clone(),
-                request.priority,
+                object,
+                property,
+                index,
+                order.value.raw.clone(),
+                order.priority.map(Priority::get),
             )
             .await
     }

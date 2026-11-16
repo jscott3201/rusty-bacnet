@@ -1,4 +1,5 @@
 //! ReadRange: one page, checked strictly or leniently against its request.
+use super::service::{Range, device_target};
 use super::*;
 
 use bacnet_services::read_range::{
@@ -53,7 +54,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) -> Result<ReadRangeReply, Error> {
         self.call(
             to,
-            super::service::Range {
+            Range {
                 request,
                 validation,
             },
@@ -95,12 +96,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         validation: ReadRangeValidation,
     ) -> Result<ReadRangeReply, Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((network, address)) = routing {
-            self.read_range_routed(&mac, network, &address, request, validation)
-                .await
-        } else {
-            self.read_range_with(&mac, request, validation).await
-        }
+        let range = Range {
+            request,
+            validation,
+        };
+        self.call_via(device_target(&mac, &routing), range).await
     }
 
     /// Read one log page from a discovered device, routing every subrequest.
@@ -128,29 +128,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             self.read_log_page(&mac, log, cursor, page_size).await
         }
     }
-
-    /// One routed range with the same decoding and validation as the local path.
-    async fn read_range_routed(
-        &self,
-        router_mac: &[u8],
-        network: u16,
-        address: &[u8],
-        request: &ReadRangeRequest,
-        validation: ReadRangeValidation,
-    ) -> Result<ReadRangeReply, Error> {
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-        let response = self
-            .confirmed_request_routed(
-                router_mac,
-                network,
-                address,
-                ConfirmedServiceChoice::READ_RANGE,
-                &buf,
-            )
-            .await?;
-        ReadRangeReply::check(request, ReadRangeAck::decode(&response)?, validation)
-    }
 }
 
 /// A page's remote station, fixed across metadata reads and range retries.
@@ -160,6 +137,20 @@ struct RoutedLogRequester<'a, T: TransportPort> {
     address: &'a [u8],
 }
 
+impl<'a, T: TransportPort> RoutedLogRequester<'a, T> {
+    /// The station through the router the reader names.
+    fn target<'r>(&self, router_mac: &'r [u8]) -> ConfirmedTarget<'r>
+    where
+        'a: 'r,
+    {
+        ConfirmedTarget::Routed {
+            router_mac,
+            dest_network: self.network,
+            dest_mac: self.address,
+        }
+    }
+}
+
 impl<T: TransportPort + 'static> LogRequester for RoutedLogRequester<'_, T> {
     async fn read_unsigned(
         &self,
@@ -167,9 +158,14 @@ impl<T: TransportPort + 'static> LogRequester for RoutedLogRequester<'_, T> {
         log: ObjectIdentifier,
         property: PropertyIdentifier,
     ) -> Result<u64, Error> {
+        let request = bacnet_services::read_property::ReadPropertyRequest {
+            object_identifier: log,
+            property_identifier: property,
+            property_array_index: None,
+        };
         let ack = self
             .client
-            .read_property_routed(router_mac, self.network, self.address, log, property, None)
+            .call_via(self.target(router_mac), request)
             .await?;
         crate::log_reader::unsigned_value(&ack.property_value)
     }
@@ -179,15 +175,11 @@ impl<T: TransportPort + 'static> LogRequester for RoutedLogRequester<'_, T> {
         router_mac: &[u8],
         request: &ReadRangeRequest,
     ) -> Result<ReadRangeReply, Error> {
-        self.client
-            .read_range_routed(
-                router_mac,
-                self.network,
-                self.address,
-                request,
-                ReadRangeValidation::Lenient,
-            )
-            .await
+        let range = Range {
+            request,
+            validation: ReadRangeValidation::Lenient,
+        };
+        self.client.call_via(self.target(router_mac), range).await
     }
 }
 

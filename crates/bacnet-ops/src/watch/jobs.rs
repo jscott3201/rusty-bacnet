@@ -17,8 +17,8 @@ use std::time::{Duration, SystemTime};
 use tokio::time::Instant;
 
 use bacnet_client::client::{
-    CovPropertySubscription, CovTarget, ManagedCOVSubscription, ManagedCOVSubscriptionOptions,
-    Station,
+    BACnetClient, CovPropertySubscription, CovTarget, ManagedCOVSubscription,
+    ManagedCOVSubscriptionOptions, Station,
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
@@ -99,17 +99,28 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
 }
 
 /// Where a subscription to `station` goes: its MAC on this network, or the
-/// station behind the router on the way. `None` for a station with no
-/// router found, which [`path_to`] never gives.
-fn target_of(station: &Station) -> Option<CovTarget> {
+/// station behind the router on the way. A remote station that names no
+/// router goes through the one its row in `client`'s discovery table names,
+/// as a request to it would; with no row it has no route
+/// ([`Error::UnknownDevice`], as [`path_to`] fails).
+async fn target_of<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    station: Station,
+) -> Result<CovTarget, Error> {
     match station {
-        Station::Local { mac } => Some(CovTarget::local(mac)),
+        Station::Local { mac } => Ok(CovTarget::local(&mac)),
         Station::Routed {
             router,
             network,
             mac,
-        } => Some(CovTarget::routed(router, *network, mac)),
-        _ => None,
+        } => Ok(CovTarget::routed(&router, network, &mac)),
+        Station::Remote { network, mac } => match client.get_device_at(network, &mac).await {
+            Some(row) => Ok(CovTarget::routed(&row.mac_address, network, &mac)),
+            None => Err(Error::UnknownDevice {
+                device: crate::target::routed_station(network, &mac)
+                    .unwrap_or_else(|| format!("{network}:")),
+            }),
+        },
     }
 }
 
@@ -124,12 +135,12 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let client = &inner.client;
     let instance = client.instance_at(address).await;
     let known = client.cov_known(address, &point.watched);
-    let target = path_to(client.low_level(), address)
-        .await
-        .ok()
-        .as_ref()
-        .and_then(target_of);
-    let Some(target) = target else {
+    let target = match path_to(client.low_level(), address).await {
+        Ok(station) => target_of(client.low_level(), station).await,
+        Err(error) => Err(error),
+    };
+    // No route: nothing is sent, and the point waits for one.
+    let Ok(target) = target else {
         return Started {
             target: None,
             instance,
@@ -402,3 +413,7 @@ pub(super) async fn locate<T: TransportPort + 'static>(
 ) -> Option<DeviceAddress> {
     inner.client.relocated(instance, &address).await
 }
+
+#[cfg(test)]
+#[path = "jobs_target_tests.rs"]
+mod target_tests;

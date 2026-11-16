@@ -74,6 +74,62 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service.encode_into(&mut buf)?;
         to.unconfirmed(self, service.choice(), &buf).await
     }
+
+    /// [`Self::call`] to a target already resolved: the by-instance calls'
+    /// row and the managed COV subscriptions' [`CovTarget`].
+    pub(super) async fn call_via<S: Confirmed>(
+        &self,
+        target: ConfirmedTarget<'_>,
+        service: S,
+    ) -> Result<S::Answer, Error> {
+        self.send_via(target, Encoded::new(service)?).await
+    }
+
+    /// Send a service encoded beforehand to `target` and check its answer.
+    pub(super) async fn send_via<S: Confirmed>(
+        &self,
+        target: ConfirmedTarget<'_>,
+        encoded: Encoded<S>,
+    ) -> Result<S::Answer, Error> {
+        let Encoded { service, data } = encoded;
+        let answer = self
+            .confirmed_request_inner(target, service.choice(), &data)
+            .await?;
+        service.answer(answer)
+    }
+}
+
+/// A service with its request encoded, for a call that refuses a request it
+/// can't encode before it looks the device up.
+pub(super) struct Encoded<S> {
+    service: S,
+    data: BytesMut,
+}
+
+impl<S: Confirmed> Encoded<S> {
+    /// `service`'s request, encoded.
+    pub(super) fn new(service: S) -> Result<Self, Error> {
+        let mut data = BytesMut::new();
+        service.encode_into(&mut data)?;
+        Ok(Self { service, data })
+    }
+}
+
+/// Where a by-instance call goes: to the row's MAC, or through it as the
+/// router to the station `routing` names. #2588 PR 2: removed with the
+/// by-instance family.
+pub(super) fn device_target<'a>(
+    mac: &'a [u8],
+    routing: &'a Option<(u16, Vec<u8>)>,
+) -> ConfirmedTarget<'a> {
+    match routing {
+        Some((network, address)) => ConfirmedTarget::Routed {
+            router_mac: mac,
+            dest_network: *network,
+            dest_mac: address,
+        },
+        None => ConfirmedTarget::Local { mac },
+    }
 }
 
 /// A service whose answer is taken as its raw service data, unchecked.

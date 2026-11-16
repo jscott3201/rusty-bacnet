@@ -23,9 +23,9 @@ use bacnet_types::constructed::BACnetAddress;
 /// type every typed call takes in its [`ToStation`] form.
 ///
 /// A [`BACnetAddress`] and a MAC are stations too, and a call takes them as
-/// they are; this type adds a router named by the caller.
+/// they are; this type adds a router named by the caller. The three forms
+/// are all there are, so a caller can match every one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum Station {
     /// A station on this link, at its MAC.
     Local {
@@ -459,7 +459,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// The checks every address takes before any request state: a MAC that
     /// names one station, and for a remote network one a router can carry.
-    fn station_of(network: u16, mac: &[u8]) -> Result<(), Error> {
+    pub(super) fn station_of(network: u16, mac: &[u8]) -> Result<(), Error> {
         if mac.is_empty() {
             return Err(Error::Encoding(format!(
                 "network {network} with an empty MAC is a broadcast, not one station"

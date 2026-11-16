@@ -1,4 +1,4 @@
-use super::service::ListChange;
+use super::service::{ListChange, Raw, device_target};
 use super::*;
 #[cfg(test)]
 use crate::acks::validate_atomic_read_file_ack;
@@ -24,21 +24,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request: &bacnet_services::alarm_event::AcknowledgeAlarmRequest,
     ) -> Result<(), Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((network, address)) = routing {
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf)?;
-            self.confirmed_request_routed(
-                &mac,
-                network,
-                &address,
-                ConfirmedServiceChoice::ACKNOWLEDGE_ALARM,
-                &buf,
-            )
-            .await?;
-            Ok(())
-        } else {
-            self.acknowledge_alarm(&mac, request).await
-        }
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Read file data from the station `to` (stream or record access), the
@@ -53,7 +39,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             file_identifier,
             access,
         };
-        self.call(to, super::service::Raw(request)).await
+        self.call(to, Raw(request)).await
     }
 
     /// Read and strictly decode one AtomicReadFile ACK window from the
@@ -88,24 +74,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         access: bacnet_services::file::FileAccessMethod,
     ) -> Result<Bytes, Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((network, address)) = routing {
-            let request = bacnet_services::file::AtomicReadFileRequest {
-                file_identifier,
-                access,
-            };
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf);
-            self.confirmed_request_routed(
-                &mac,
-                network,
-                &address,
-                ConfirmedServiceChoice::ATOMIC_READ_FILE,
-                &buf,
-            )
+        let request = bacnet_services::file::AtomicReadFileRequest {
+            file_identifier,
+            access,
+        };
+        self.call_via(device_target(&mac, &routing), Raw(request))
             .await
-        } else {
-            self.atomic_read_file(&mac, file_identifier, access).await
-        }
     }
 
     /// Read one checked file window from a discovered device, routing if needed.
@@ -119,11 +93,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         file_identifier: bacnet_types::primitives::ObjectIdentifier,
         access: bacnet_services::file::FileAccessMethod,
     ) -> Result<bacnet_services::file::AtomicReadFileAck, Error> {
-        let requested_access = access.clone();
-        let response = self
-            .atomic_read_file_from_device(device_instance, file_identifier, access)
-            .await?;
-        crate::acks::atomic_read_file(&requested_access, &response)
+        let (mac, routing) = self.resolve_device(device_instance).await?;
+        let request = bacnet_services::file::AtomicReadFileRequest {
+            file_identifier,
+            access,
+        };
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Write file data to the station `to` (stream or record access), the
@@ -152,24 +127,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         access: bacnet_services::file::FileWriteAccessMethod,
     ) -> Result<Bytes, Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((network, address)) = routing {
-            let request = bacnet_services::file::AtomicWriteFileRequest {
-                file_identifier,
-                access,
-            };
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf);
-            self.confirmed_request_routed(
-                &mac,
-                network,
-                &address,
-                ConfirmedServiceChoice::ATOMIC_WRITE_FILE,
-                &buf,
-            )
-            .await
-        } else {
-            self.atomic_write_file(&mac, file_identifier, access).await
-        }
+        let request = bacnet_services::file::AtomicWriteFileRequest {
+            file_identifier,
+            access,
+        };
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Add elements to a list property on the station `to`.

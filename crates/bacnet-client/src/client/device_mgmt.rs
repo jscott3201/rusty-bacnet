@@ -1,3 +1,4 @@
+use super::service::device_target;
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -66,27 +67,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         password: Option<String>,
     ) -> Result<(), Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((network, address)) = routing {
-            let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
-                time_duration,
-                enable_disable,
-                password,
-            };
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf)?;
-            self.confirmed_request_routed(
-                &mac,
-                network,
-                &address,
-                ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
-                &buf,
-            )
-            .await?;
-            Ok(())
-        } else {
-            self.device_communication_control(&mac, enable_disable, time_duration, password)
-                .await
-        }
+        let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
+            time_duration,
+            enable_disable,
+            password,
+        };
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Send ReinitializeDevice to a discovered device, routing when needed.
@@ -100,26 +86,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         password: Option<String>,
     ) -> Result<(), Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((network, address)) = routing {
-            let request = bacnet_services::device_mgmt::ReinitializeDeviceRequest {
-                reinitialized_state,
-                password,
-            };
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf)?;
-            self.confirmed_request_routed(
-                &mac,
-                network,
-                &address,
-                ConfirmedServiceChoice::REINITIALIZE_DEVICE,
-                &buf,
-            )
-            .await?;
-            Ok(())
-        } else {
-            self.reinitialize_device(&mac, reinitialized_state, password)
-                .await
-        }
+        let request = bacnet_services::device_mgmt::ReinitializeDeviceRequest {
+            reinitialized_state,
+            password,
+        };
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Send local time synchronization to a discovered device, routing when needed.
@@ -168,18 +139,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: UnconfirmedServiceChoice,
     ) -> Result<(), Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        let request = bacnet_services::device_mgmt::TimeSynchronizationRequest { date, time };
-        let mut data = BytesMut::new();
-        request.encode(&mut data);
+        let clock = clock(service_choice, date, time);
         match routing {
-            None => self.unconfirmed_request(&mac, service_choice, &data).await,
+            None => self.tell(&mac[..], clock).await,
+            // Routed as an address: through the router its row names.
             Some((network, address)) => {
                 let station = bacnet_types::constructed::BACnetAddress {
                     network_number: network,
                     mac_address: MacAddr::from_slice(&address),
                 };
-                self.unconfirmed_request(&station, service_choice, &data)
-                    .await
+                self.tell(&station, clock).await
             }
         }
     }

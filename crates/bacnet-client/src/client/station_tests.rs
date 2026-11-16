@@ -277,6 +277,71 @@ async fn no_route_and_no_station_fail_before_sending() {
     assert!(site.sent.is_empty());
 }
 
+/// An empty MAC on this link names no one station, whichever form names it
+/// (an address on network 0, a local `Station`, a bare MAC): confirmed or
+/// not, each is refused with the same error, and nothing is sent.
+#[tokio::test(start_paused = true)]
+async fn an_empty_local_mac_is_refused_alike_in_every_form() {
+    let site = site().await;
+    let empty: &[u8] = &[];
+    let (read, notice) = (
+        ConfirmedServiceChoice::READ_PROPERTY,
+        UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
+    );
+    let text = |error: Error| match error {
+        Error::Encoding(text) => text,
+        other => panic!("not an encoding error: {other:?}"),
+    };
+    let (by_address, by_station) = (address(0, empty), Station::local(empty));
+    let refusals = [
+        text(
+            site.client
+                .confirmed_request(&by_address, read, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .confirmed_request(&by_station, read, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .confirmed_request(empty, read, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .unconfirmed_request(&by_address, notice, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .unconfirmed_request(&by_station, notice, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .unconfirmed_request(empty, notice, &[])
+                .await
+                .unwrap_err(),
+        ),
+    ];
+    assert!(
+        refusals.iter().all(|refusal| *refusal == refusals[0]),
+        "{refusals:?}"
+    );
+    assert_eq!(
+        refusals[0],
+        "network 0 with an empty MAC is a broadcast, not one station"
+    );
+    assert!(site.sent.is_empty());
+}
+
 /// An instance claimed at two addresses: the by-instance call is refused
 /// as ambiguous, and each address reaches its own station.
 #[tokio::test(start_paused = true)]

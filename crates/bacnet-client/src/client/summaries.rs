@@ -1,6 +1,7 @@
 //! GetEventInformation, GetAlarmSummary and GetEnrollmentSummary, sent and
 //! decoded (#2077).
 
+use super::service::{AlarmSummary, Encoded, device_target};
 use super::*;
 
 use bacnet_services::alarm_event::{GetEventInformationAck, GetEventInformationRequest};
@@ -32,15 +33,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_instance: u32,
         last_received_object_identifier: Option<ObjectIdentifier>,
     ) -> Result<GetEventInformationAck, Error> {
-        let buf = event_information_request(last_received_object_identifier);
-        let ack = self
-            .confirmed_request_to_device(
-                device_instance,
-                ConfirmedServiceChoice::GET_EVENT_INFORMATION,
-                &buf,
-            )
-            .await?;
-        GetEventInformationAck::decode(&ack)
+        let request = Encoded::new(GetEventInformationRequest {
+            last_received_object_identifier,
+        })?;
+        let (mac, routing) = self.resolve_device(device_instance).await?;
+        self.send_via(device_target(&mac, &routing), request).await
     }
 
     /// GetAlarmSummary to the station `to`, its answer decoded.
@@ -57,14 +54,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         &self,
         device_instance: u32,
     ) -> Result<GetAlarmSummaryAck, Error> {
-        let ack = self
-            .confirmed_request_to_device(
-                device_instance,
-                ConfirmedServiceChoice::GET_ALARM_SUMMARY,
-                &[],
-            )
-            .await?;
-        GetAlarmSummaryAck::decode(&ack)
+        let (mac, routing) = self.resolve_device(device_instance).await?;
+        self.call_via(device_target(&mac, &routing), AlarmSummary)
+            .await
     }
 
     /// GetEnrollmentSummary to the station `to`, its answer decoded. A
@@ -85,47 +77,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_instance: u32,
         request: &GetEnrollmentSummaryRequest,
     ) -> Result<GetEnrollmentSummaryAck, Error> {
-        let mut buf = BytesMut::new();
-        request.try_encode(&mut buf)?;
-        let ack = self
-            .confirmed_request_to_device(
-                device_instance,
-                ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
-                &buf,
-            )
-            .await?;
-        GetEnrollmentSummaryAck::decode(&ack)
-    }
-
-    /// A confirmed request to a discovered device: through its router when
-    /// the table holds one, and otherwise to its MAC.
-    async fn confirmed_request_to_device(
-        &self,
-        device_instance: u32,
-        service_choice: ConfirmedServiceChoice,
-        service_data: &[u8],
-    ) -> Result<Bytes, Error> {
+        // A filter out of range fails before the lookup.
+        let request = Encoded::new(request)?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        match routing {
-            Some((network, address)) => {
-                self.confirmed_request_routed(&mac, network, &address, service_choice, service_data)
-                    .await
-            }
-            None => {
-                self.confirmed_request(&mac, service_choice, service_data)
-                    .await
-            }
-        }
+        self.send_via(device_target(&mac, &routing), request).await
     }
-}
-
-fn event_information_request(
-    last_received_object_identifier: Option<ObjectIdentifier>,
-) -> BytesMut {
-    let mut buf = BytesMut::new();
-    GetEventInformationRequest {
-        last_received_object_identifier,
-    }
-    .encode(&mut buf);
-    buf
 }

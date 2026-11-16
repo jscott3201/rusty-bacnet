@@ -1,3 +1,4 @@
+use super::service::device_target;
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -39,22 +40,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         object_identifier: bacnet_types::primitives::ObjectIdentifier,
     ) -> Result<(), Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((network, address)) = routing {
-            let request = bacnet_services::object_mgmt::DeleteObjectRequest { object_identifier };
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf);
-            self.confirmed_request_routed(
-                &mac,
-                network,
-                &address,
-                ConfirmedServiceChoice::DELETE_OBJECT,
-                &buf,
-            )
-            .await?;
-            Ok(())
-        } else {
-            self.delete_object(&mac, object_identifier).await
-        }
+        let request = bacnet_services::object_mgmt::DeleteObjectRequest { object_identifier };
+        self.call_via(device_target(&mac, &routing), request).await
     }
 
     /// Create an object on a discovered device, routing when needed.
@@ -68,33 +55,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         initial_values: Vec<bacnet_services::common::BACnetPropertyValue>,
     ) -> Result<bacnet_types::primitives::ObjectIdentifier, Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
-        if let Some((network, address)) = routing {
-            let request = bacnet_services::object_mgmt::CreateObjectRequest {
-                object_specifier,
-                list_of_initial_values: initial_values,
-            };
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf)?;
-            let ack = self
-                .confirmed_request_routed(
-                    &mac,
-                    network,
-                    &address,
-                    ConfirmedServiceChoice::CREATE_OBJECT,
-                    &buf,
-                )
-                .await?;
-            created_object(&ack)
-        } else {
-            self.create_object(&mac, object_specifier, initial_values)
-                .await
-        }
+        let request = bacnet_services::object_mgmt::CreateObjectRequest {
+            object_specifier,
+            list_of_initial_values: initial_values,
+        };
+        self.call_via(device_target(&mac, &routing), request).await
     }
-}
-
-/// The object a CreateObject-ACK names.
-fn created_object(ack: &[u8]) -> Result<bacnet_types::primitives::ObjectIdentifier, Error> {
-    bacnet_services::object_mgmt::CreateObjectAck::decode(ack).map(|ack| ack.object_identifier)
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ use bacnet_types::constructed::{BACnetAddress, PropertyReference, ReadAccessSpec
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
 
 use super::*;
+use crate::client::station::Station;
 use crate::log_reader::LogCursor;
 
 /// 21.0 as an application-tagged REAL.
@@ -52,10 +53,9 @@ async fn read_property() {
         PV,
         None
     ));
-    pin!("rp/routed", ack, |c| c.read_property_routed(
-        ROUTER,
-        DNET,
-        DADR,
+    let routed = Station::routed(ROUTER, DNET, DADR);
+    pin!("rp/routed", ack, |c| c.read_property(
+        &routed,
         ai1(),
         PV,
         None
@@ -72,10 +72,9 @@ async fn read_property_answer_is_checked() {
         PV,
         None
     ));
-    pin!("rp-mismatch/routed", other, |c| c.read_property_routed(
-        ROUTER,
-        DNET,
-        DADR,
+    let routed = Station::routed(ROUTER, DNET, DADR);
+    pin!("rp-mismatch/routed", other, |c| c.read_property(
+        &routed,
         ai1(),
         PV,
         None
@@ -295,8 +294,9 @@ async fn generic_requests() {
         wp,
         &data
     ));
+    let routed = Station::routed(ROUTER, DNET, DADR);
     pin!("generic/routed", Answer::Simple, |c| c
-        .confirmed_request_routed(ROUTER, DNET, DADR, wp, &data));
+        .confirmed_request(&routed, wp, &data));
     pin!("generic/routed", Answer::Simple, |c| c.confirmed_request(
         &station(DNET, DADR),
         wp,
