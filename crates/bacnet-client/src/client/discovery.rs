@@ -8,10 +8,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// [`Station::Routed`] through the router the row's I-Am came through
     /// (#2588). A call by instance is this and the call:
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use bacnet_client::client::BACnetClient;
+    /// # use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    /// # use bacnet_types::primitives::ObjectIdentifier;
+    /// # async fn example(client: &BACnetClient) -> Result<(), bacnet_types::error::Error> {
+    /// let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)?;
+    /// let device = client.resolve_device(1234).await?;
     /// let ack = client
-    ///     .read_property(&client.resolve_device(1234).await?, object, property, None)
+    ///     .read_property(&device, object, PropertyIdentifier::PRESENT_VALUE, None)
     ///     .await?;
+    /// # Ok(()) }
     /// ```
     ///
     /// The lookup comes first, so its error comes before any the request's
