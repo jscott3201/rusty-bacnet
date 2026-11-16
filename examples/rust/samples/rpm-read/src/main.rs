@@ -269,6 +269,14 @@ async fn main() {
     };
 
     discover_device(&mut client, &args).await;
+    let device = match client.resolve_device(args.device).await {
+        Ok(device) => device,
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            let _ = client.stop().await;
+            process::exit(1);
+        }
+    };
 
     let specs: Vec<ReadAccessSpecification> = point_oids
         .iter()
@@ -296,10 +304,7 @@ async fn main() {
         specs.len()
     );
 
-    let rpm = match client
-        .read_property_multiple_from_device(args.device, specs)
-        .await
-    {
+    let rpm = match client.read_property_multiple(&device, specs).await {
         Ok(ack) => ack,
         Err(e) => {
             eprintln!("ERROR: RPM failed: {e}");

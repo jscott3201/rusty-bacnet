@@ -195,7 +195,13 @@ async fn subscribe_cov_to_device_uses_routed_addressing() {
 
     let request_task = tokio::spawn(async move {
         let result = client
-            .subscribe_cov_to_device(2001, 77, monitored_object, true, Some(120))
+            .subscribe_cov(
+                &client.resolve_device(2001).await.unwrap(),
+                77,
+                monitored_object,
+                true,
+                Some(120),
+            )
             .await;
         client.stop().await.unwrap();
         result
@@ -249,7 +255,11 @@ async fn unsubscribe_cov_to_device_uses_routed_addressing() {
 
     let request_task = tokio::spawn(async move {
         let result = client
-            .unsubscribe_cov_to_device(2002, 78, monitored_object)
+            .unsubscribe_cov(
+                &client.resolve_device(2002).await.unwrap(),
+                78,
+                monitored_object,
+            )
             .await;
         client.stop().await.unwrap();
         result
@@ -362,8 +372,8 @@ async fn subscribe_cov_property_to_device_uses_routed_addressing() {
 
     let request_task = tokio::spawn(async move {
         let result = client
-            .subscribe_cov_property_to_device(
-                2003,
+            .subscribe_cov_property(
+                &client.resolve_device(2003).await.unwrap(),
                 CovPropertySubscription {
                     subscriber_process_identifier: 80,
                     monitored_object_identifier: monitored_object,
@@ -491,8 +501,8 @@ async fn unsubscribe_cov_property_to_device_uses_routed_addressing() {
 
     let request_task = tokio::spawn(async move {
         let result = client
-            .unsubscribe_cov_property_to_device(
-                2004,
+            .unsubscribe_cov_property(
+                &client.resolve_device(2004).await.unwrap(),
                 82,
                 monitored_object,
                 PropertyIdentifier::PRESENT_VALUE,

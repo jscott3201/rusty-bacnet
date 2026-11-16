@@ -950,7 +950,7 @@ finds the instance that was there (#2560).
 ```python
 def subscribe_cov(
     self,
-    address: str,
+    address: str | RoutedTarget,
     subscriber_process_identifier: int,
     monitored_object_identifier: ObjectIdentifier,
     confirmed: bool,
@@ -962,19 +962,29 @@ Subscribe to Change-of-Value notifications for an object.
 
 lifetime=None or 0 is indefinite; positive values are seconds.
 Use unsubscribe\_cov for cancellation. confirmed always supplies the mode.
+`address` is a `str` on the local link, or a `RoutedTarget` for
+a station behind a router (#2588), as `RoutedTarget` describes. A
+routed device notifies back through its router, so its notifications
+have `source_network` and `source_address` set to the station's
+network and MAC.
 
 ### BACnetClient.unsubscribe_cov
 
 ```python
 def unsubscribe_cov(
     self,
-    address: str,
+    address: str | RoutedTarget,
     subscriber_process_identifier: int,
     monitored_object_identifier: ObjectIdentifier,
 ) -> Awaitable[None]
 ```
 
 Cancel a COV subscription.
+
+`address` is a `str` or a `RoutedTarget`, as for
+`subscribe_cov`: the device finds the subscription by the address
+the request came from and the process and object, so cancel to the
+station the subscription went to.
 
 ### BACnetClient.subscribe_cov_property_multiple
 

@@ -10,7 +10,7 @@ use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::test_transport::{SendLog, SentFrame, TestTransport};
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, Segmentation};
 use bacnet_types::error::SegmentationError;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -342,18 +342,14 @@ async fn an_empty_local_mac_is_refused_alike_in_every_form() {
     assert!(site.sent.is_empty());
 }
 
-/// An instance claimed at two addresses: the by-instance call is refused
+/// An instance claimed at two addresses: the lookup by instance is refused
 /// as ambiguous, and each address reaches its own station.
 #[tokio::test(start_paused = true)]
 async fn an_address_reaches_a_station_whose_instance_is_contested() {
     let site = site().await;
     site.add(row(0, STATION, 1476));
     site.add(row(DNET, DADR, 1476));
-    let object = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
-    let by_instance = site
-        .client
-        .read_property_from_device(INSTANCE, object, PropertyIdentifier::PRESENT_VALUE, None)
-        .await;
+    let by_instance = site.client.resolve_device(INSTANCE).await;
     assert!(
         matches!(by_instance, Err(Error::AmbiguousDevice { .. })),
         "{by_instance:?}"

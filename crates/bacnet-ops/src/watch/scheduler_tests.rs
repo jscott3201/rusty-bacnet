@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use bacnet_client::client::{COVNotificationDelivery, CovTarget, ReceivedCOVNotification};
+use bacnet_client::client::{COVNotificationDelivery, ReceivedCOVNotification, Station};
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetPropertyValue;
@@ -536,7 +536,7 @@ fn a_routed_device_is_matched_by_its_address() {
         device: DeviceAddress::new(10, &[3]).unwrap(),
         ..object(ai(1))
     };
-    let target = CovTarget::routed(&[2], 10, &[3]);
+    let target = Station::routed(&[2], 10, &[3]);
     let belongs =
         |received: &ReceivedCOVNotification| dispatch::belongs(&point, Some(&target), received);
     // Through its router, as the instance match would take it.

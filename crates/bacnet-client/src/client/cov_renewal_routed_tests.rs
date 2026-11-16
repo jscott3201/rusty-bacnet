@@ -1,6 +1,6 @@
-//! Managed COV subscriptions to a routed device (#1790): requests carry the
-//! device's network and address, and only notifications from that address
-//! move the renewal.
+//! Managed COV subscriptions to a routed device (#1790, #2588): requests
+//! carry the device's network and address, only notifications from that
+//! address move the renewal, and the cancel goes to the same station.
 
 use super::*;
 use bacnet_encoding::apdu::{SimpleAck, UnconfirmedRequest, decode_apdu, encode_apdu};
@@ -119,10 +119,29 @@ async fn ack(router: &LoopbackTransport, invoke_id: u8) {
     relay(router, Some((NETWORK, &STATION)), ack).await;
 }
 
-/// The subscription and its renewals go through the router to the station,
-/// and a notification moves the renewal only when it comes from the
-/// station's network and address: not from another station on that
-/// network, nor from a local device whose MAC equals the station address.
+/// The device-table row of device 100, heard through `ROUTER` from
+/// `routed`, or on this link when `routed` is `None`.
+fn device(routed: Option<(u16, &[u8])>) -> DiscoveredDevice {
+    DiscoveredDevice {
+        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 100).unwrap(),
+        mac_address: MacAddr::from_slice(&ROUTER),
+        max_apdu_length: 480,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
+        max_segments_accepted: None,
+        vendor_id: 0,
+        last_seen: std::time::Instant::now(),
+        last_announced: None,
+        source_network: routed.map(|(network, _)| network),
+        source_address: routed.map(|(_, address)| MacAddr::from_slice(address)),
+    }
+}
+
+/// The subscription to a device by instance, and its renewals, go through
+/// the router to the station, and a notification moves the renewal only
+/// when it comes from the station's network and address: not from another
+/// station on that network, nor from a local device whose MAC equals the
+/// station address. After stop, the cancel goes to the same station for the
+/// same process and object.
 #[tokio::test(start_paused = true)]
 async fn a_routed_subscription_renews_through_the_router_and_follows_its_station() {
     let (client_transport, mut router) = LoopbackTransport::pair(CLIENT.to_vec(), ROUTER.to_vec());
@@ -135,12 +154,19 @@ async fn a_routed_subscription_renews_through_the_router_and_follows_its_station
             .await
             .unwrap(),
     );
+    client
+        .device_table
+        .lock()
+        .upsert(device(Some((NETWORK, &STATION))));
+    let to = client.resolve_device(100).await.unwrap();
+    assert_eq!(to, Station::routed(&ROUTER, NETWORK, &STATION));
     let start = tokio::spawn({
         let client = Arc::clone(&client);
+        let to = to.clone();
         async move {
             client
                 .manage_cov_subscription(
-                    CovTarget::routed(&ROUTER, NETWORK, &STATION),
+                    &to,
                     9,
                     ai(1),
                     false,
@@ -187,6 +213,23 @@ async fn a_routed_subscription_renews_through_the_router_and_follows_its_station
     );
 
     managed.stop().await;
+    let cancel = tokio::spawn({
+        let client = Arc::clone(&client);
+        async move { client.unsubscribe_cov(&to, 9, ai(1)).await }
+    });
+    let (invoke_id, request) = routed_subscribe(&mut rx).await;
+    assert_eq!(
+        (
+            request.subscriber_process_identifier,
+            request.monitored_object_identifier,
+            request.issue_confirmed_notifications,
+            request.lifetime,
+        ),
+        (9, ai(1), None, None),
+        "a cancel: the same process and object, no mode or lifetime"
+    );
+    ack(&router, invoke_id).await;
+    cancel.await.unwrap().unwrap();
     let Ok(mut client) = Arc::try_unwrap(client) else {
         panic!("managed subscription kept a client reference after stop");
     };
@@ -196,7 +239,7 @@ async fn a_routed_subscription_renews_through_the_router_and_follows_its_station
 
 #[test]
 fn a_local_target_takes_only_its_mac_with_no_source_network() {
-    let target = CovTarget::local(&[0x05]);
+    let target = Station::local(&[0x05]);
     assert!(target.sent(&received(&[0x05], None), None));
     assert!(!target.sent(&received(&[0x06], None), None));
     assert!(!target.sent(&received(&[0x05], Some((NETWORK, &[0x05]))), None));
@@ -204,7 +247,7 @@ fn a_local_target_takes_only_its_mac_with_no_source_network() {
 
 #[test]
 fn a_routed_target_takes_its_network_and_station_through_any_router() {
-    let target = CovTarget::routed(&ROUTER, NETWORK, &STATION);
+    let target = Station::routed(&ROUTER, NETWORK, &STATION);
     assert!(target.sent(&received(&ROUTER, Some((NETWORK, &STATION))), None));
     // Another router on the way back still names the same station.
     assert!(target.sent(&received(&[0x09], Some((NETWORK, &STATION))), None));
@@ -215,28 +258,19 @@ fn a_routed_target_takes_its_network_and_station_through_any_router() {
     // a local device (#1358).
     assert!(target.sent(&received(&STATION, None), Some(NETWORK)));
     assert!(!target.sent(&received(&STATION, None), Some(8)));
+    // An address, with the router left to the table, matches the same way.
+    let remote = Station::remote(NETWORK, &STATION);
+    assert!(remote.sent(&received(&[0x09], Some((NETWORK, &STATION))), None));
+    assert!(!remote.sent(&received(&ROUTER, Some((NETWORK, &[0x06]))), None));
+    assert!(!remote.sent(&received(&STATION, None), None));
+    assert!(remote.sent(&received(&STATION, None), Some(NETWORK)));
 }
 
 #[test]
 fn a_discovered_device_is_routed_when_its_i_am_came_through_a_router() {
-    let device = |routed: Option<(u16, &[u8])>| DiscoveredDevice {
-        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 100).unwrap(),
-        mac_address: MacAddr::from_slice(&ROUTER),
-        max_apdu_length: 480,
-        segmentation_supported: Segmentation::NO_SEGMENTATION,
-        max_segments_accepted: None,
-        vendor_id: 0,
-        last_seen: std::time::Instant::now(),
-        last_announced: None,
-        source_network: routed.map(|(network, _)| network),
-        source_address: routed.map(|(_, address)| MacAddr::from_slice(address)),
-    };
     assert_eq!(
-        CovTarget::of_device(&device(Some((NETWORK, &STATION)))),
-        CovTarget::routed(&ROUTER, NETWORK, &STATION)
+        Station::from(&device(Some((NETWORK, &STATION)))),
+        Station::routed(&ROUTER, NETWORK, &STATION)
     );
-    assert_eq!(
-        CovTarget::of_device(&device(None)),
-        CovTarget::local(&ROUTER)
-    );
+    assert_eq!(Station::from(&device(None)), Station::local(&ROUTER));
 }

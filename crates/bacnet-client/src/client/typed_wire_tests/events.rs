@@ -31,10 +31,14 @@ async fn get_event_information() {
     let after = Some(oid(ObjectType::BINARY_INPUT, 3));
     pin!("gei/local", ack.clone(), |c| c
         .get_event_information(PEER, after));
-    pin!("gei/local", ack.clone(), |c| c
-        .get_event_information_from_device(LOCAL, after));
-    pin!("gei/routed", ack, |c| c
-        .get_event_information_from_device(REMOTE, after));
+    pin!("gei/local", ack.clone(), |c| c.get_event_information(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        after
+    ));
+    pin!("gei/routed", ack, |c| c.get_event_information(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        after
+    ));
 }
 
 #[tokio::test]
@@ -47,9 +51,9 @@ async fn get_alarm_summary() {
     }));
     pin!("gas/local", ack.clone(), |c| c.get_alarm_summary(PEER));
     pin!("gas/local", ack.clone(), |c| c
-        .get_alarm_summary_from_device(LOCAL));
+        .get_alarm_summary(&c.resolve_device(LOCAL).await.unwrap()));
     pin!("gas/routed", ack, |c| c
-        .get_alarm_summary_from_device(REMOTE));
+        .get_alarm_summary(&c.resolve_device(REMOTE).await.unwrap()));
 }
 
 #[tokio::test]
@@ -70,10 +74,14 @@ async fn get_enrollment_summary() {
     }));
     pin!("ges/local", ack.clone(), |c| c
         .get_enrollment_summary(PEER, &request));
-    pin!("ges/local", ack.clone(), |c| c
-        .get_enrollment_summary_from_device(LOCAL, &request));
-    pin!("ges/routed", ack, |c| c
-        .get_enrollment_summary_from_device(REMOTE, &request));
+    pin!("ges/local", ack.clone(), |c| c.get_enrollment_summary(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        &request
+    ));
+    pin!("ges/routed", ack, |c| c.get_enrollment_summary(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        &request
+    ));
 }
 
 fn ai1() -> ObjectIdentifier {
@@ -89,15 +97,15 @@ async fn subscribe_cov() {
         true,
         Some(300)
     ));
-    pin!("cov/local", Answer::Simple, |c| c.subscribe_cov_to_device(
-        LOCAL,
+    pin!("cov/local", Answer::Simple, |c| c.subscribe_cov(
+        &c.resolve_device(LOCAL).await.unwrap(),
         9,
         ai1(),
         true,
         Some(300)
     ));
-    pin!("cov/routed", Answer::Simple, |c| c.subscribe_cov_to_device(
-        REMOTE,
+    pin!("cov/routed", Answer::Simple, |c| c.subscribe_cov(
+        &c.resolve_device(REMOTE).await.unwrap(),
         9,
         ai1(),
         true,
@@ -108,10 +116,16 @@ async fn subscribe_cov() {
         9,
         ai1()
     ));
-    pin!("cov-cancel/local", Answer::Simple, |c| c
-        .unsubscribe_cov_to_device(LOCAL, 9, ai1()));
-    pin!("cov-cancel/routed", Answer::Simple, |c| c
-        .unsubscribe_cov_to_device(REMOTE, 9, ai1()));
+    pin!("cov-cancel/local", Answer::Simple, |c| c.unsubscribe_cov(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        9,
+        ai1()
+    ));
+    pin!("cov-cancel/routed", Answer::Simple, |c| c.unsubscribe_cov(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        9,
+        ai1()
+    ));
 }
 
 fn subscription() -> CovPropertySubscription {
@@ -130,23 +144,27 @@ fn subscription() -> CovPropertySubscription {
 async fn subscribe_cov_property() {
     pin!("covp/local", Answer::Simple, |c| c
         .subscribe_cov_property(PEER, subscription()));
-    pin!("covp/local", Answer::Simple, |c| c
-        .subscribe_cov_property_to_device(LOCAL, subscription()));
-    pin!("covp/routed", Answer::Simple, |c| c
-        .subscribe_cov_property_to_device(REMOTE, subscription()));
+    pin!("covp/local", Answer::Simple, |c| c.subscribe_cov_property(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        subscription()
+    ));
+    pin!("covp/routed", Answer::Simple, |c| c.subscribe_cov_property(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        subscription()
+    ));
     pin!("covp-cancel/local", Answer::Simple, |c| c
         .unsubscribe_cov_property(PEER, 9, ai1(), PV, Some(2)));
     pin!("covp-cancel/local", Answer::Simple, |c| c
-        .unsubscribe_cov_property_to_device(
-            LOCAL,
+        .unsubscribe_cov_property(
+            &c.resolve_device(LOCAL).await.unwrap(),
             9,
             ai1(),
             PV,
             Some(2)
         ));
     pin!("covp-cancel/routed", Answer::Simple, |c| c
-        .unsubscribe_cov_property_to_device(
-            REMOTE,
+        .unsubscribe_cov_property(
+            &c.resolve_device(REMOTE).await.unwrap(),
             9,
             ai1(),
             PV,

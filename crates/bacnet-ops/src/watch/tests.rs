@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
+use bacnet_client::client::{ReceivedCOVNotification, Station};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -351,7 +351,7 @@ fn notifications_cannot_grow_the_rows() {
             index: Some(8),
         },
     };
-    let target = CovTarget::local(&[2]);
+    let target = Station::local(&[2]);
     let other = notification(
         element.object,
         &[(PropertyIdentifier::PRIORITY_ARRAY, Some(9))],
@@ -496,7 +496,7 @@ async fn a_notified_value_clears_the_whole_objects_error() {
         .insert(PROCESS_BASE, Arc::clone(&shared));
     {
         let mut entry = shared.lock();
-        entry.target = Some(CovTarget::local(&[2]));
+        entry.target = Some(Station::local(&[2]));
         entry.failure = Some(crate::format::PropertyError::NoValue);
     }
     let flags = notification(ai(1), &[(PropertyIdentifier::STATUS_FLAGS, None)]);

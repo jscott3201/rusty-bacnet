@@ -3,34 +3,40 @@ use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Resolve a device instance to its MAC address and optional routing info.
+    /// The station the discovery table holds for `device_instance`, for any
+    /// typed call: [`Station::Local`] at the row's MAC, or
+    /// [`Station::Routed`] through the router the row's I-Am came through
+    /// (#2588). A call by instance is this and the call:
     ///
-    /// Fails with [`Error::AmbiguousDevice`] when two or more addresses
-    /// claim the instance; the device's address names it then.
+    /// ```ignore
+    /// let ack = client
+    ///     .read_property(&client.resolve_device(1234).await?, object, property, None)
+    ///     .await?;
+    /// ```
     ///
-    /// # Snapshot/coherence contract
+    /// The lookup comes first, so its error comes before any the request's
+    /// own checks would give.
     ///
-    /// This returns an address/routing snapshot taken under one
-    /// [`DeviceTable`] lock; the lock is released before any network I/O.
-    /// The request's later capability lookup (Max APDU/segmentation) takes a
-    /// second lock, so a table update between the two reads can make the
-    /// capability decision observe a newer entry than the address snapshot.
-    /// This is an intentional non-atomic snapshot boundary, not a promise
-    /// that both reads use the same row forever; holding the lock across the
-    /// request would serialize all in-flight requests.
-    pub(super) async fn resolve_device(
-        &self,
-        device_instance: u32,
-    ) -> Result<(Vec<u8>, Option<(u16, Vec<u8>)>), Error> {
-        let dt = self.device_table.lock();
-        let device = dt.find(device_instance)?.ok_or_else(|| {
+    /// # Errors
+    ///
+    /// [`Error::AmbiguousDevice`] when two or more addresses claim the
+    /// instance (the device's address names it then), and an error naming
+    /// the instance when the table holds none.
+    ///
+    /// # Snapshot
+    ///
+    /// The station is the row as it was under one [`DeviceTable`] lock,
+    /// released before anything is sent. A request to it takes the row at
+    /// its address again for the device's Max APDU and segmentation, so a
+    /// table update in between can size the request by a newer row than
+    /// the one that placed it; holding the lock across the request would
+    /// serialize every request.
+    pub async fn resolve_device(&self, device_instance: u32) -> Result<Station, Error> {
+        let table = self.device_table.lock();
+        let device = table.find(device_instance)?.ok_or_else(|| {
             Error::Encoding(format!("device {device_instance} not in device table"))
         })?;
-        let routing = match (&device.source_network, &device.source_address) {
-            (Some(snet), Some(sadr)) => Some((*snet, sadr.to_vec())),
-            _ => None,
-        };
-        Ok((device.mac_address.to_vec(), routing))
+        Ok(Station::from(device))
     }
 
     // -----------------------------------------------------------------------

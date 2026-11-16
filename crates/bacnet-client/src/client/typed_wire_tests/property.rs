@@ -41,14 +41,14 @@ async fn read_property() {
         PV,
         None
     ));
-    pin!("rp/local", ack.clone(), |c| c.read_property_from_device(
-        LOCAL,
+    pin!("rp/local", ack.clone(), |c| c.read_property(
+        &c.resolve_device(LOCAL).await.unwrap(),
         ai1(),
         PV,
         None
     ));
-    pin!("rp/routed", ack.clone(), |c| c.read_property_from_device(
-        REMOTE,
+    pin!("rp/routed", ack.clone(), |c| c.read_property(
+        &c.resolve_device(REMOTE).await.unwrap(),
         ai1(),
         PV,
         None
@@ -116,10 +116,14 @@ async fn read_property_multiple() {
     }));
     pin!("rpm/local", ack.clone(), |c| c
         .read_property_multiple(PEER, rpm_specs()));
-    pin!("rpm/local", ack.clone(), |c| c
-        .read_property_multiple_from_device(LOCAL, rpm_specs()));
-    pin!("rpm/routed", ack, |c| c
-        .read_property_multiple_from_device(REMOTE, rpm_specs()));
+    pin!("rpm/local", ack.clone(), |c| c.read_property_multiple(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        rpm_specs()
+    ));
+    pin!("rpm/routed", ack, |c| c.read_property_multiple(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        rpm_specs()
+    ));
 }
 
 /// 72.5 as an application-tagged REAL.
@@ -137,16 +141,16 @@ async fn write_property() {
         value(),
         Some(8)
     ));
-    pin!("wp/local", Answer::Simple, |c| c.write_property_to_device(
-        LOCAL,
+    pin!("wp/local", Answer::Simple, |c| c.write_property(
+        &c.resolve_device(LOCAL).await.unwrap(),
         ao1,
         PV,
         None,
         value(),
         Some(8)
     ));
-    pin!("wp/routed", Answer::Simple, |c| c.write_property_to_device(
-        REMOTE,
+    pin!("wp/routed", Answer::Simple, |c| c.write_property(
+        &c.resolve_device(REMOTE).await.unwrap(),
         ao1,
         PV,
         None,
@@ -179,10 +183,14 @@ fn wpm_specs() -> Vec<WriteAccessSpecification> {
 async fn write_property_multiple() {
     pin!("wpm/local", Answer::Simple, |c| c
         .write_property_multiple(PEER, wpm_specs()));
-    pin!("wpm/local", Answer::Simple, |c| c
-        .write_property_multiple_to_device(LOCAL, wpm_specs()));
-    pin!("wpm/routed", Answer::Simple, |c| c
-        .write_property_multiple_to_device(REMOTE, wpm_specs()));
+    pin!("wpm/local", Answer::Simple, |c| c.write_property_multiple(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        wpm_specs()
+    ));
+    pin!("wpm/routed", Answer::Simple, |c| c.write_property_multiple(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        wpm_specs()
+    ));
 }
 
 fn trend_log() -> ObjectIdentifier {
@@ -229,15 +237,15 @@ async fn read_range() {
         None,
         range()
     ));
-    pin!("rr/local", range_ack(2), |c| c.read_range_from_device(
-        LOCAL,
+    pin!("rr/local", range_ack(2), |c| c.read_range(
+        &c.resolve_device(LOCAL).await.unwrap(),
         log,
         buffer,
         None,
         range()
     ));
-    pin!("rr/routed", range_ack(2), |c| c.read_range_from_device(
-        REMOTE,
+    pin!("rr/routed", range_ack(2), |c| c.read_range(
+        &c.resolve_device(REMOTE).await.unwrap(),
         log,
         buffer,
         None,
@@ -256,10 +264,16 @@ async fn read_range_answer_is_checked() {
         .read_range_with(PEER, &request, strict));
     pin!("rr-lenient/local", range_ack(3), |c| c
         .read_range_with(PEER, &request, lenient));
-    pin!("rr-strict/routed", range_ack(3), |c| c
-        .read_range_from_device_with(REMOTE, &request, strict));
-    pin!("rr-lenient/routed", range_ack(3), |c| c
-        .read_range_from_device_with(REMOTE, &request, lenient));
+    pin!("rr-strict/routed", range_ack(3), |c| c.read_range_with(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        &request,
+        strict
+    ));
+    pin!("rr-lenient/routed", range_ack(3), |c| c.read_range_with(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        &request,
+        lenient
+    ));
 }
 
 /// A page from a sequence number starts with its ReadRange; the device's
@@ -270,10 +284,18 @@ async fn read_log_page() {
     let from = LogCursor::Sequence(5);
     pin!("log/local", Answer::Error, |c| c
         .read_log_page(PEER, log, from, 2));
-    pin!("log/local", Answer::Error, |c| c
-        .read_log_page_from_device(LOCAL, log, from, 2));
-    pin!("log/routed", Answer::Error, |c| c
-        .read_log_page_from_device(REMOTE, log, from, 2));
+    pin!("log/local", Answer::Error, |c| c.read_log_page(
+        &c.resolve_device(LOCAL).await.unwrap(),
+        log,
+        from,
+        2
+    ));
+    pin!("log/routed", Answer::Error, |c| c.read_log_page(
+        &c.resolve_device(REMOTE).await.unwrap(),
+        log,
+        from,
+        2
+    ));
 }
 
 fn station(network: u16, mac: &[u8]) -> BACnetAddress {

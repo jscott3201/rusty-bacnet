@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
+use bacnet_client::client::{ReceivedCOVNotification, Station};
 use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetPropertyValue;
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -106,11 +106,12 @@ pub(super) async fn run(
 }
 
 /// True when `received` is for `point`: from its device's address (see
-/// [`CovTarget`]), about its object, and for a property watch, carrying
+/// [`Station`]: its network and MAC, whatever router it came through),
+/// about its object, and for a property watch, carrying
 /// that property.
 pub(super) fn belongs(
     point: &Point,
-    target: Option<&CovTarget>,
+    target: Option<&Station>,
     received: &ReceivedCOVNotification,
 ) -> bool {
     let notification = &received.notification;
@@ -131,17 +132,15 @@ pub(super) fn belongs(
             && received.source_mac == *mac
     };
     match target {
-        Some(CovTarget::Local { mac }) => local_from(mac),
+        Some(Station::Local { mac }) => local_from(mac),
         // A routed device on the client's own network is sent to as a
         // local one, and may answer from its address as the MAC.
-        Some(CovTarget::Routed {
-            network, address, ..
-        }) => {
+        Some(Station::Remote { network, mac } | Station::Routed { network, mac, .. }) => {
             (received.source_network == Some(*network)
-                && received.source_address.as_ref() == Some(address))
-                || local_from(address)
+                && received.source_address.as_ref() == Some(mac))
+                || local_from(mac)
         }
-        _ => false,
+        None => false,
     }
 }
 

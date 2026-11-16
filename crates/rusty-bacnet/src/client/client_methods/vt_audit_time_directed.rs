@@ -326,7 +326,8 @@ impl BACnetClient {
     }
 
     // -----------------------------------------------------------------------
-    // Auto-routing (_from_device) variants
+    // Auto-routing (_from_device) variants: each looks the instance up in
+    // the discovery table, then sends to the station the row names.
     // -----------------------------------------------------------------------
 
     /// Read a property from a device by instance number (auto-routing).
@@ -347,8 +348,9 @@ impl BACnetClient {
 
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
+            let to = c.resolve_device(device_instance).await.map_err(to_py_err)?;
             let ack = c
-                .read_property_from_device(device_instance, oid, pid, array_index)
+                .read_property(&to, oid, pid, array_index)
                 .await
                 .map_err(to_py_err)?;
             let value = decode_read_ack(&ack).map_err(to_py_err)?;
@@ -369,8 +371,9 @@ impl BACnetClient {
 
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
+            let to = c.resolve_device(device_instance).await.map_err(to_py_err)?;
             let ack = c
-                .read_property_multiple_from_device(device_instance, rust_specs)
+                .read_property_multiple(&to, rust_specs)
                 .await
                 .map_err(to_py_err)?;
             crate::py_async::attach(|py| rpm_ack_to_py(py, ack))
@@ -400,7 +403,8 @@ impl BACnetClient {
 
         let future = async move {
             let c = started(&inner).await?;
-            c.write_property_to_device(device_instance, oid, pid, array_index, encoded, priority)
+            let to = c.resolve_device(device_instance).await.map_err(to_py_err)?;
+            c.write_property(&to, oid, pid, array_index, encoded, priority)
                 .await
                 .map_err(to_py_err)?;
             Ok(())
@@ -421,7 +425,8 @@ impl BACnetClient {
 
         let future = async move {
             let c = started(&inner).await?;
-            c.write_property_multiple_to_device(device_instance, rust_specs)
+            let to = c.resolve_device(device_instance).await.map_err(to_py_err)?;
+            c.write_property_multiple(&to, rust_specs)
                 .await
                 .map_err(to_py_err)?;
             Ok(())

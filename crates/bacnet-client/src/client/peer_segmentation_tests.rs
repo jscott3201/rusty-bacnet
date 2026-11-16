@@ -12,6 +12,7 @@
 //!
 //! New file: `tests.rs` is over the 700-LOC cap.
 
+use crate::client::Station;
 use std::time::Instant;
 
 use bacnet_encoding::apdu::{self, Apdu, SegmentAck as SegmentAckPdu, SimpleAck};
@@ -290,10 +291,12 @@ async fn authoritative_routed_no_segmentation_refuses_segmented_request() {
     let remote_mac_for_request = remote_mac.clone();
     let request_task = tokio::spawn(async move {
         client
-            .confirmed_request_routed(
-                &router_mac_for_request,
-                remote_network,
-                &remote_mac_for_request,
+            .confirmed_request(
+                &Station::routed(
+                    &router_mac_for_request,
+                    remote_network,
+                    &remote_mac_for_request,
+                ),
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 &service_data,
             )

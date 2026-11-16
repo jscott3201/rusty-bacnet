@@ -96,6 +96,56 @@ impl From<BACnetAddress> for Station {
     }
 }
 
+impl From<&DiscoveredDevice> for Station {
+    /// Where a discovered device answers: through the router its I-Am came
+    /// through when that I-Am carried a source network and address, else
+    /// at its MAC on this link.
+    fn from(device: &DiscoveredDevice) -> Self {
+        match (device.source_network, &device.source_address) {
+            (Some(network), Some(mac)) => Self::Routed {
+                router: device.mac_address.clone(),
+                network,
+                mac: mac.clone(),
+            },
+            _ => Self::Local {
+                mac: device.mac_address.clone(),
+            },
+        }
+    }
+}
+
+impl Station {
+    /// True when `received` came from this station. A device keeps a
+    /// subscription under the address the request came from (Clause
+    /// 13.14.2) and sends its notifications from its own (Clauses 13.6.1
+    /// and 13.7.1), so a notification belongs when it comes from the same
+    /// address: the MAC with no source network for a local station, the
+    /// source network and address for a remote one. The router it came
+    /// through is no part of that address and isn't compared. A remote
+    /// station on this client's own network (`local_network`, once
+    /// learned) is sent to as a local one, so its notifications may come
+    /// with no source network, from its address as the MAC.
+    pub(super) fn sent(
+        &self,
+        received: &ReceivedCOVNotification,
+        local_network: Option<u16>,
+    ) -> bool {
+        let local_from = |mac: &MacAddr| {
+            received.source_network.is_none()
+                && received.source_address.is_none()
+                && received.source_mac == *mac
+        };
+        match self {
+            Self::Local { mac } => local_from(mac),
+            Self::Remote { network, mac } | Self::Routed { network, mac, .. } => {
+                (received.source_network == Some(*network)
+                    && received.source_address.as_ref() == Some(mac))
+                    || (local_network == Some(*network) && local_from(mac))
+            }
+        }
+    }
+}
+
 /// A station a typed call takes: a [`Station`], a [`BACnetAddress`] (network
 /// 0 is this link, any other goes through the router its discovery-table
 /// row names), or a MAC on this link (`[u8]`, `[u8; N]`, `Vec<u8>`,
@@ -127,6 +177,10 @@ mod sealed {
             service_choice: UnconfirmedServiceChoice,
             service_data: &'a [u8],
         ) -> impl Future<Output = Result<(), Error>> + Send + 'a;
+
+        /// The station as an owned [`Station`], for one that outlives the
+        /// call, such as a managed COV subscription's.
+        fn station(&self) -> Station;
     }
 
     impl Sealed for [u8] {
@@ -151,6 +205,10 @@ mod sealed {
         ) -> impl Future<Output = Result<(), Error>> + Send + 'a {
             client.unconfirmed_local(self, service_choice, service_data)
         }
+
+        fn station(&self) -> Station {
+            Station::local(self)
+        }
     }
 
     /// A MAC by another name: as `[u8]`.
@@ -173,6 +231,10 @@ mod sealed {
                     service_data: &'a [u8],
                 ) -> impl Future<Output = Result<(), Error>> + Send + 'a {
                     self[..].unconfirmed(client, service_choice, service_data)
+                }
+
+                fn station(&self) -> Station {
+                    self[..].station()
                 }
             }
         )*};
@@ -201,6 +263,10 @@ mod sealed {
             service_data: &'a [u8],
         ) -> impl Future<Output = Result<(), Error>> + Send + 'a {
             (**self).unconfirmed(client, service_choice, service_data)
+        }
+
+        fn station(&self) -> Station {
+            (**self).station()
         }
     }
 
@@ -231,6 +297,10 @@ mod sealed {
                 service_choice,
                 service_data,
             )
+        }
+
+        fn station(&self) -> Station {
+            Station::from(self.clone())
         }
     }
 
@@ -290,6 +360,10 @@ mod sealed {
                         .await
                 }
             }
+        }
+
+        fn station(&self) -> Station {
+            self.clone()
         }
     }
 }

@@ -1,4 +1,3 @@
-use super::service::device_target;
 use super::*;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_types::enums::PropertyIdentifier;
@@ -91,29 +90,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.call(to, request).await
     }
 
-    /// Subscribe to COV notifications for a discovered device, auto-routing if needed.
-    pub async fn subscribe_cov_to_device(
-        &self,
-        device_instance: u32,
-        subscriber_process_identifier: u32,
-        monitored_object_identifier: ObjectIdentifier,
-        confirmed: bool,
-        lifetime: Option<u32>,
-    ) -> Result<(), Error> {
-        let request = Self::subscribe_cov_request(
-            subscriber_process_identifier,
-            monitored_object_identifier,
-            Some(confirmed),
-            lifetime,
-        );
-
-        request.validate()?;
-        let (mac, routing) = self.resolve_device(device_instance).await?;
-
-        self.call_via(device_target(&mac, routing.as_ref()), request)
-            .await
-    }
-
     /// Cancel a COV subscription on the station `to`.
     pub async fn unsubscribe_cov(
         &self,
@@ -130,27 +106,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.call(to, request).await
     }
 
-    /// Cancel a COV subscription for a discovered device, auto-routing if needed.
-    pub async fn unsubscribe_cov_to_device(
-        &self,
-        device_instance: u32,
-        subscriber_process_identifier: u32,
-        monitored_object_identifier: ObjectIdentifier,
-    ) -> Result<(), Error> {
-        let request = Self::subscribe_cov_request(
-            subscriber_process_identifier,
-            monitored_object_identifier,
-            None,
-            None,
-        );
-
-        request.validate()?;
-        let (mac, routing) = self.resolve_device(device_instance).await?;
-
-        self.call_via(device_target(&mac, routing.as_ref()), request)
-            .await
-    }
-
     /// Subscribe to COV notifications for a single property on the station
     /// `to`. Lifetime must be positive; use `unsubscribe_cov_property` for
     /// cancellation.
@@ -160,21 +115,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         subscription: CovPropertySubscription,
     ) -> Result<(), Error> {
         self.call(to, subscription.into_request()).await
-    }
-
-    /// Subscribe to COV notifications for a single property on a discovered device,
-    /// auto-routing if needed. Lifetime must be positive; cancellation has a separate method.
-    pub async fn subscribe_cov_property_to_device(
-        &self,
-        device_instance: u32,
-        subscription: CovPropertySubscription,
-    ) -> Result<(), Error> {
-        let request = subscription.into_request();
-
-        request.validate()?;
-        let (mac, routing) = self.resolve_device(device_instance).await?;
-        self.call_via(device_target(&mac, routing.as_ref()), request)
-            .await
     }
 
     /// Cancel a single-property COV subscription on the station `to`.
@@ -196,76 +136,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             None,
         );
         self.call(to, request).await
-    }
-
-    /// Cancel a single-property COV subscription for a discovered device,
-    /// auto-routing if needed.
-    pub async fn unsubscribe_cov_property_to_device(
-        &self,
-        device_instance: u32,
-        subscriber_process_identifier: u32,
-        monitored_object_identifier: ObjectIdentifier,
-        monitored_property_identifier: PropertyIdentifier,
-        monitored_property_array_index: Option<u32>,
-    ) -> Result<(), Error> {
-        let request = Self::subscribe_cov_property_request(
-            subscriber_process_identifier,
-            monitored_object_identifier,
-            None,
-            None,
-            monitored_property_identifier,
-            monitored_property_array_index,
-            None,
-        );
-
-        request.validate()?;
-        let (mac, routing) = self.resolve_device(device_instance).await?;
-
-        self.call_via(device_target(&mac, routing.as_ref()), request)
-            .await
-    }
-
-    /// Cancel a COV subscription at `target`, the device a
-    /// [`manage_cov_subscription`](Self::manage_cov_subscription) went to.
-    /// The cancel goes the way the subscription did, with no device-table
-    /// lookup, so it reaches the same device even if the table has since
-    /// dropped or moved its entry.
-    pub async fn unsubscribe_cov_target(
-        &self,
-        target: &CovTarget,
-        subscriber_process_identifier: u32,
-        monitored_object_identifier: ObjectIdentifier,
-    ) -> Result<(), Error> {
-        let request = Self::subscribe_cov_request(
-            subscriber_process_identifier,
-            monitored_object_identifier,
-            None,
-            None,
-        );
-        self.call_via(target.confirmed(), request).await
-    }
-
-    /// Cancel a single-property COV subscription at `target`:
-    /// [`unsubscribe_cov_target`](Self::unsubscribe_cov_target) for one
-    /// property.
-    pub async fn unsubscribe_cov_property_target(
-        &self,
-        target: &CovTarget,
-        subscriber_process_identifier: u32,
-        monitored_object_identifier: ObjectIdentifier,
-        monitored_property_identifier: PropertyIdentifier,
-        monitored_property_array_index: Option<u32>,
-    ) -> Result<(), Error> {
-        let request = Self::subscribe_cov_property_request(
-            subscriber_process_identifier,
-            monitored_object_identifier,
-            None,
-            None,
-            monitored_property_identifier,
-            monitored_property_array_index,
-            None,
-        );
-        self.call_via(target.confirmed(), request).await
     }
 
     /// Get a receiver for incoming COV notifications. Each call returns a new

@@ -7,56 +7,80 @@ impl BACnetClient {
     // -----------------------------------------------------------------------
 
     /// Subscribe to COV notifications for an object.
+    /// `address` is a local address or a `RoutedTarget`, as for
+    /// `read_property` (#2588). A routed device notifies through its
+    /// router, so a notification from it has `source_network` and
+    /// `source_address` set to the station's network and MAC.
     #[pyo3(signature = (address, subscriber_process_identifier, monitored_object_identifier, confirmed, lifetime=None))]
     fn subscribe_cov<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         subscriber_process_identifier: u32,
         monitored_object_identifier: PyObjectIdentifier,
         confirmed: bool,
         lifetime: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let address = routed::Address::of(address)?;
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let oid = monitored_object_identifier.to_rust();
+        let process = subscriber_process_identifier;
 
         let future = async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            c.subscribe_cov(
-                &mac,
-                subscriber_process_identifier,
-                oid,
-                confirmed,
-                lifetime,
-            )
-            .await
+            match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.subscribe_cov(&mac, process, oid, confirmed, lifetime)
+                        .await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level()
+                        .subscribe_cov(&to, process, oid, confirmed, lifetime)
+                        .await
+                }
+            }
             .map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Unsubscribe from COV notifications for an object.
+    /// Unsubscribe from COV notifications for an object. `address` is a
+    /// local address or a `RoutedTarget`, as for `subscribe_cov`: the
+    /// device finds the subscription by the address it saw the request
+    /// from, so a cancel goes to the station the subscription went to.
     #[pyo3(signature = (address, subscriber_process_identifier, monitored_object_identifier))]
     fn unsubscribe_cov<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         subscriber_process_identifier: u32,
         monitored_object_identifier: PyObjectIdentifier,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let address = routed::Address::of(address)?;
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let oid = monitored_object_identifier.to_rust();
+        let process = subscriber_process_identifier;
 
         let future = async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            c.unsubscribe_cov(&mac, subscriber_process_identifier, oid)
-                .await
-                .map_err(to_py_err)?;
+            match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let c = started(&inner).await?;
+                    c.unsubscribe_cov(&mac, process, oid).await
+                }
+                routed::Address::Routed(target) => {
+                    let high = state::high_level(&inner).await?;
+                    let to = target.path(&high, &inner.route_misses).await?;
+                    high.low_level().unsubscribe_cov(&to, process, oid).await
+                }
+            }
+            .map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))

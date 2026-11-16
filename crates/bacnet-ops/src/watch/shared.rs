@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::Waker;
 use std::time::{Duration, SystemTime};
 
-use bacnet_client::client::{CovTarget, ReceivedCOVNotification};
+use bacnet_client::client::{ReceivedCOVNotification, Station};
 use bacnet_types::enums::PropertyIdentifier;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::Instant;
@@ -43,7 +43,7 @@ pub(super) struct EntryState {
     pub(super) snapshot: Snapshot,
     /// Where the device is, once looked up: notifications must come from
     /// there.
-    pub(super) target: Option<CovTarget>,
+    pub(super) target: Option<Station>,
     /// When a notification last set each property's row since the last
     /// first read was folded. A first read folded in later skips the rows
     /// notified at or after it ended: those values are newer (#2169).

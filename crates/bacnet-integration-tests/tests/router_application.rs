@@ -297,8 +297,8 @@ async fn a_device_found_by_who_is_is_read_by_its_instance() {
     for instance in [INSTANCE, REMOTE_INSTANCE] {
         let ack = site
             .client
-            .read_property_from_device(
-                instance,
+            .read_property(
+                &site.client.resolve_device(instance).await.unwrap(),
                 supply_air(),
                 PropertyIdentifier::OBJECT_NAME,
                 None,
@@ -324,8 +324,8 @@ async fn a_segmented_reply_is_reassembled() {
     while site.to_station.try_recv().is_ok() {}
     let ack = site
         .client
-        .read_property_multiple_from_device(
-            INSTANCE,
+        .read_property_multiple(
+            &site.client.resolve_device(INSTANCE).await.unwrap(),
             vec![ReadAccessSpecification {
                 object_identifier: device(),
                 list_of_property_references: vec![PropertyReference {

@@ -65,7 +65,7 @@ async fn renewals_wait_for_and_hold_the_gate() {
         async move {
             client
                 .manage_cov_subscription(
-                    CovTarget::local(&PEER),
+                    &Station::local(&PEER),
                     7,
                     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
                     false,

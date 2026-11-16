@@ -694,10 +694,12 @@ async fn routed_segmented_request_uses_routed_tsm_key() {
 
     let request_task = tokio::spawn(async move {
         let result = client
-            .confirmed_request_routed(
-                &router_mac_for_request,
-                remote_network,
-                &remote_mac_for_request,
+            .confirmed_request(
+                &Station::routed(
+                    &router_mac_for_request,
+                    remote_network,
+                    &remote_mac_for_request,
+                ),
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 &service_data,
             )
