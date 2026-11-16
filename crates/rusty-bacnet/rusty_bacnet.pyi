@@ -4931,7 +4931,8 @@ class IAmArrival:
         router relayed. None when those name no one station. The calls that
         take an ``address`` don't take ``"5:0x07"``: for a routed record,
         ``read_property``, ``read_property_multiple``, ``read_range``,
-        ``read_log_page`` and ``write_property`` take
+        ``read_log_page``, ``write_property``, ``atomic_read_file`` and
+        ``atomic_write_file`` take
         ``RoutedTarget(rec.source_network, rec.source_address,
         router=rec.next_hop_router)``."""
         ...

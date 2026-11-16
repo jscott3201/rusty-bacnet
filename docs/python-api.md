@@ -7016,7 +7016,8 @@ in the scanner's terms:
 For a device on this link, `device_address` is also what the calls that take
 an `address` (`read_property` and the rest) take. Those calls don't take
 `"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`,
-`read_range`, `read_log_page` and `write_property` take
+`read_range`, `read_log_page`, `write_property`, `atomic_read_file` and
+`atomic_write_file` take
 `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`
 (see [Routed targets](#routed-targets)); `device()` takes either.
 
