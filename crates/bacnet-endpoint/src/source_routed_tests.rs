@@ -163,6 +163,20 @@ impl Site {
     /// The session's Reporter records `operations`, confirmed or not, to
     /// Device 999, bound behind the router.
     async fn start(confirmed: bool, operations: &[AuditOperation]) -> Self {
+        let config = SessionConfig {
+            apdu_timeout_ms: 1_000,
+            apdu_retries: 0,
+            ..SessionConfig::default()
+        };
+        Self::start_with(confirmed, operations, config).await
+    }
+
+    /// [`Site::start`], with the session's `config`.
+    async fn start_with(
+        confirmed: bool,
+        operations: &[AuditOperation],
+        config: SessionConfig,
+    ) -> Self {
         let (mut near, router_near) =
             LoopbackTransport::pair(SESSION.to_vec(), ROUTER_NEAR.to_vec());
         let unicasts = near.record_unicast_destinations();
@@ -198,25 +212,17 @@ impl Site {
                 None,
             )
             .unwrap();
-        let mut session = EndpointSession::new(
-            near,
-            SessionRole::Both,
-            SessionConfig {
-                apdu_timeout_ms: 1_000,
-                apdu_retries: 0,
-                ..SessionConfig::default()
-            },
-        )
-        .unwrap()
-        .with_database(db)
-        .with_source_audit_routed_device_binding(
-            oid(ObjectType::DEVICE, 999),
-            REMOTE,
-            MacAddr::from_slice(&STATION),
-        )
-        .with_source_audit_reporter(selected())
-        .with_device_writes(Arc::new(|_| true))
-        .with_reinitialize(|_, _| Ok(()));
+        let mut session = EndpointSession::new(near, SessionRole::Both, config)
+            .unwrap()
+            .with_database(db)
+            .with_source_audit_routed_device_binding(
+                oid(ObjectType::DEVICE, 999),
+                REMOTE,
+                MacAddr::from_slice(&STATION),
+            )
+            .with_source_audit_reporter(selected())
+            .with_device_writes(Arc::new(|_| true))
+            .with_reinitialize(|_, _| Ok(()));
         session.start().await.unwrap();
         let mut peer = NetworkLayer::new(station);
         let rx = peer.start().await.unwrap();
@@ -589,3 +595,6 @@ async fn a_refused_record_keeps_its_router() {
 
 #[path = "source_routed_change_tests.rs"]
 mod change;
+
+#[path = "source_routed_segmented_tests.rs"]
+mod segmented;
