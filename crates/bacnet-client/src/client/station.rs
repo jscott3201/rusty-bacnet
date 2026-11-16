@@ -127,8 +127,15 @@ impl Station {
     /// a local one, so its notifications may come with no source network,
     /// from its address as the MAC.
     ///
+    /// A station named on network 0 is on this link, so its notifications
+    /// come with no source network too.
+    ///
     /// The managed COV helpers match notifications by this rule.
-    pub fn sent(&self, received: &ReceivedCOVNotification, local_network: Option<u16>) -> bool {
+    pub fn is_source_of(
+        &self,
+        received: &ReceivedCOVNotification,
+        local_network: Option<u16>,
+    ) -> bool {
         let local_from = |mac: &MacAddr| {
             received.source_network.is_none()
                 && received.source_address.is_none()
@@ -139,7 +146,7 @@ impl Station {
             Self::Remote { network, mac } | Self::Routed { network, mac, .. } => {
                 (received.source_network == Some(*network)
                     && received.source_address.as_ref() == Some(mac))
-                    || (local_network == Some(*network) && local_from(mac))
+                    || ((*network == 0 || local_network == Some(*network)) && local_from(mac))
             }
         }
     }
@@ -544,19 +551,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         Ok(())
     }
 
-    /// How a request reaches the station at `mac` on `network`: locally on
-    /// network 0 or this client's own network, else through the router its
-    /// discovery-table row names. Checked before any request state is
-    /// taken.
-    /// `to` with its route fixed now: a station named by its address on
-    /// another network ([`Station::Remote`]) becomes [`Station::Routed`]
-    /// through the router its discovery-table row names, and any other
-    /// station is `to` as it is. With no row, [`Error::UnknownDevice`], as
-    /// a request to it would fail, before anything is sent.
+    /// `to` with its route fixed now, as [`Station::Local`] or
+    /// [`Station::Routed`]: a station named by its address
+    /// ([`Station::Remote`]) is local on network 0 or this client's own
+    /// network, and otherwise goes through the router its discovery-table
+    /// row names; any other station is `to` as it is. With no row,
+    /// [`Error::UnknownDevice`], as a request to it would fail, before
+    /// anything is sent.
     pub(super) fn with_fixed_route(&self, to: Station) -> Result<Station, Error> {
         match to {
             Station::Remote { network, mac } => match self.route_to(network, &mac)? {
-                Route::Local => Ok(Station::Remote { network, mac }),
+                Route::Local => Ok(Station::Local { mac }),
                 Route::Via(router) => Ok(Station::Routed {
                     router,
                     network,
@@ -567,6 +572,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
+    /// How a request reaches the station at `mac` on `network`: locally on
+    /// network 0 or this client's own network, else through the router its
+    /// discovery-table row names. Checked before any request state is
+    /// taken.
     fn route_to(&self, network: u16, mac: &[u8]) -> Result<Route, Error> {
         Self::station_of(network, mac)?;
         if network == 0 || self.network.local_network_number().get() == Some(network) {

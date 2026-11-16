@@ -9717,8 +9717,9 @@ tracker, and `bacnet_server::server` no longer re-exports `CovPolicy` or
 
 Single-property `subscribe_cov_property` requires a `std::num::NonZeroU32`
 lifetime in seconds; 28,800 seconds and the full positive `u32` range are
-accepted. Cancel with `unsubscribe_cov_property`. The typed `SubscribeCOVPropertyRequest::encode` returns `Result`
-and validates the entire subscribe/cancel field pairing before appending bytes.
+accepted. Cancel with `unsubscribe_cov_property`. The typed
+`SubscribeCOVPropertyRequest::encode` returns `Result` and validates the entire
+subscribe/cancel field pairing before appending bytes.
 The server rejects a missing member of the confirmed/lifetime pair as
 INCONSISTENT_PARAMETERS (the selected syntax interpretation), and paired zero
 lifetime as SERVICES/VALUE_OUT_OF_RANGE, before lookup or subscription mutation.
@@ -9739,12 +9740,16 @@ as every typed call does (#1790, #2588): a MAC, a `BACnetAddress` or a
 `Station`, such as the one `resolve_device(instance)` gives. A device keeps
 a subscription under the address the request came from and notifies back
 through its router, so the helpers match notifications by the station's
-network and MAC, whatever router relays them. A station named by its
+network and MAC, whatever router relays them; `Station::is_source_of` is
+that rule, for an application matching its own. A station named by its
 address goes through the router its discovery-table row names when the
 subscription starts, and every renewal keeps that router, so a row the
-purge takes later doesn't end the subscription. The helpers only renew: after
-`ManagedCOVSubscription::stop`, cancel to the same station with
-`unsubscribe_cov` or `unsubscribe_cov_property`.
+purge takes later doesn't end the subscription. The helpers only renew: to
+end a subscription, keep a clone of `ManagedCOVSubscription::station()` (the
+station with that route, `Local` or `Routed`), call
+`ManagedCOVSubscription::stop`, then cancel to that station with
+`unsubscribe_cov` or `unsubscribe_cov_property`. A cancel to the bare
+address looks the row up again and fails once the purge has taken it.
 
 The full server owns the served Device execution profile. Every Device's
 `Protocol_Services_Supported` reports the fixed `EXECUTED_SERVICES`, with the

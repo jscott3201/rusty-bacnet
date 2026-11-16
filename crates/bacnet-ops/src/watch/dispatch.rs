@@ -105,7 +105,7 @@ pub(super) async fn run(
 }
 
 /// True when `received` is for `point`: from its device's address, by
-/// the client's rule ([`Station::sent`]: its network and MAC, whatever
+/// the client's rule ([`Station::is_source_of`]: its network and MAC, whatever
 /// router it came through, or its MAC alone once `own`, the client's
 /// network number, says the device is on this network), about its object,
 /// and for a property watch, carrying that property.
@@ -127,7 +127,7 @@ pub(super) fn belongs(
     {
         return false;
     }
-    target.is_some_and(|target| target.sent(received, own))
+    target.is_some_and(|target| target.is_source_of(received, own))
 }
 
 /// Whether `value` is one a point keeps: for an object watch, any value

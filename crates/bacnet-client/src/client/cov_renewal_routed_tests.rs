@@ -268,6 +268,21 @@ async fn an_address_keeps_the_router_it_started_with_after_its_row_goes() {
         "{refused:?}"
     );
     assert!(rx.try_recv().is_err(), "nothing sent without a route");
+    // An address on this link, by network 0 or the client's own number
+    // once known, is fixed as the local station.
+    let fixed = |to: Station| client.with_fixed_route(to).unwrap();
+    assert_eq!(
+        fixed(Station::remote(0, &STATION)),
+        Station::local(&STATION)
+    );
+    client
+        .network
+        .local_network_number()
+        .publish(bacnet_types::network_number::NetworkNumber::configured(8).unwrap());
+    assert_eq!(
+        fixed(Station::remote(8, &STATION)),
+        Station::local(&STATION)
+    );
 
     client
         .device_table
@@ -302,7 +317,30 @@ async fn an_address_keeps_the_router_it_started_with_after_its_row_goes() {
         }
     );
 
+    // The cancel goes to the station the subscription went to, through the
+    // same router, with the table still empty; to the bare address it has
+    // no route.
+    let station = managed.station().clone();
+    assert_eq!(station, Station::routed(&ROUTER, NETWORK, &STATION));
     managed.stop().await;
+    let refused = client.unsubscribe_cov(&to, 9, ai(1)).await.err();
+    assert!(
+        matches!(refused, Some(Error::UnknownDevice { .. })),
+        "{refused:?}"
+    );
+    let cancel = tokio::spawn({
+        let client = Arc::clone(&client);
+        async move { client.unsubscribe_cov(&station, 9, ai(1)).await }
+    });
+    let (invoke_id, request) = routed_subscribe(&mut rx).await;
+    assert_eq!(
+        (request.issue_confirmed_notifications, request.lifetime),
+        (None, None),
+        "a cancel"
+    );
+    ack(&router, invoke_id).await;
+    cancel.await.unwrap().unwrap();
+
     let Ok(mut client) = Arc::try_unwrap(client) else {
         panic!("managed subscription kept a client reference after stop");
     };
@@ -313,30 +351,36 @@ async fn an_address_keeps_the_router_it_started_with_after_its_row_goes() {
 #[test]
 fn a_local_target_takes_only_its_mac_with_no_source_network() {
     let target = Station::local(&[0x05]);
-    assert!(target.sent(&received(&[0x05], None), None));
-    assert!(!target.sent(&received(&[0x06], None), None));
-    assert!(!target.sent(&received(&[0x05], Some((NETWORK, &[0x05]))), None));
+    assert!(target.is_source_of(&received(&[0x05], None), None));
+    assert!(!target.is_source_of(&received(&[0x06], None), None));
+    assert!(!target.is_source_of(&received(&[0x05], Some((NETWORK, &[0x05]))), None));
 }
 
 #[test]
 fn a_routed_target_takes_its_network_and_station_through_any_router() {
     let target = Station::routed(&ROUTER, NETWORK, &STATION);
-    assert!(target.sent(&received(&ROUTER, Some((NETWORK, &STATION))), None));
+    assert!(target.is_source_of(&received(&ROUTER, Some((NETWORK, &STATION))), None));
     // Another router on the way back still names the same station.
-    assert!(target.sent(&received(&[0x09], Some((NETWORK, &STATION))), None));
-    assert!(!target.sent(&received(&ROUTER, Some((NETWORK, &[0x06]))), None));
-    assert!(!target.sent(&received(&ROUTER, Some((8, &STATION))), None));
-    assert!(!target.sent(&received(&STATION, None), None));
+    assert!(target.is_source_of(&received(&[0x09], Some((NETWORK, &STATION))), None));
+    assert!(!target.is_source_of(&received(&ROUTER, Some((NETWORK, &[0x06]))), None));
+    assert!(!target.is_source_of(&received(&ROUTER, Some((8, &STATION))), None));
+    assert!(!target.is_source_of(&received(&STATION, None), None));
     // Once this network is known to be the target's, the station answers as
     // a local device (#1358).
-    assert!(target.sent(&received(&STATION, None), Some(NETWORK)));
-    assert!(!target.sent(&received(&STATION, None), Some(8)));
+    assert!(target.is_source_of(&received(&STATION, None), Some(NETWORK)));
+    assert!(!target.is_source_of(&received(&STATION, None), Some(8)));
+    // An address on network 0 is on this link: its notifications come with
+    // no source network.
+    let here = Station::remote(0, &STATION);
+    assert!(here.is_source_of(&received(&STATION, None), None));
+    assert!(!here.is_source_of(&received(&[0x06], None), None));
+    assert!(!here.is_source_of(&received(&ROUTER, Some((NETWORK, &STATION))), None));
     // An address, with the router left to the table, matches the same way.
     let remote = Station::remote(NETWORK, &STATION);
-    assert!(remote.sent(&received(&[0x09], Some((NETWORK, &STATION))), None));
-    assert!(!remote.sent(&received(&ROUTER, Some((NETWORK, &[0x06]))), None));
-    assert!(!remote.sent(&received(&STATION, None), None));
-    assert!(remote.sent(&received(&STATION, None), Some(NETWORK)));
+    assert!(remote.is_source_of(&received(&[0x09], Some((NETWORK, &STATION))), None));
+    assert!(!remote.is_source_of(&received(&ROUTER, Some((NETWORK, &[0x06]))), None));
+    assert!(!remote.is_source_of(&received(&STATION, None), None));
+    assert!(remote.is_source_of(&received(&STATION, None), Some(NETWORK)));
 }
 
 #[test]
