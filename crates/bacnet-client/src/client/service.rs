@@ -31,6 +31,7 @@ use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::who_has::WhoHasRequest;
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_services::wpm::WritePropertyMultipleRequest;
+use bacnet_services::write_group::WriteGroupRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -432,6 +433,15 @@ impl Unconfirmed for &WhoAmIRequest {
 impl Unconfirmed for WhoHasRequest {
     fn choice(&self) -> UnconfirmedServiceChoice {
         UnconfirmedServiceChoice::WHO_HAS
+    }
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.encode(buf)
+    }
+}
+
+impl Unconfirmed for &WriteGroupRequest {
+    fn choice(&self) -> UnconfirmedServiceChoice {
+        UnconfirmedServiceChoice::WRITE_GROUP
     }
     fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.encode(buf)

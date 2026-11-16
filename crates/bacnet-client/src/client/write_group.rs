@@ -7,58 +7,35 @@
 use super::*;
 use bacnet_services::write_group::WriteGroupRequest;
 
-/// Where [`BACnetClient::write_group`] sends a request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WriteGroupDestination {
-    /// One device, by its address on the local network.
-    Device(MacAddr),
-    /// Every device on the local network.
-    LocalBroadcast,
-    /// Every device on one remote network (1 to 65534), through its router.
-    RemoteBroadcast(u16),
-    /// Every device on every network (DNET 65535).
-    GlobalBroadcast,
-}
-
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Send a WriteGroup request to `destination`.
+    /// Send a WriteGroup request to `scope` (#2588): every device on this
+    /// network, on one remote network, or on every network. The standard
+    /// lets WriteGroup go by unicast, multicast or broadcast, and prefers
+    /// broadcasts to one network at a time over a global one (Clause
+    /// 15.11); this client sends the unicast ([`Self::write_group_directed`])
+    /// and the broadcasts, not a multicast.
     ///
     /// The service is unconfirmed: this returns once the request is sent, and
     /// no device answers it, so delivery isn't confirmed either. Fails before
     /// anything is sent when `request` doesn't encode (see
-    /// [`WriteGroupRequest::encode`]) or a remote network number is 0 or
-    /// 65535; use [`WriteGroupDestination::GlobalBroadcast`] for every
-    /// network.
+    /// [`WriteGroupRequest::encode`]) or the scope is
+    /// [`Broadcast::Network`] 0 or 65535, which name no one network.
     pub async fn write_group(
         &self,
-        destination: &WriteGroupDestination,
+        scope: Broadcast,
         request: &WriteGroupRequest,
     ) -> Result<(), Error> {
-        if let WriteGroupDestination::RemoteBroadcast(network) = destination
-            && !(1..u16::MAX).contains(network)
-        {
-            return Err(Error::Encoding(format!(
-                "WriteGroup remote network {network} out of range 1-65534"
-            )));
-        }
-        let mut service = BytesMut::new();
-        request.encode(&mut service)?;
-        let choice = UnconfirmedServiceChoice::WRITE_GROUP;
-        match destination {
-            WriteGroupDestination::Device(mac) => {
-                self.unconfirmed_request(mac, choice, &service).await
-            }
-            WriteGroupDestination::LocalBroadcast => {
-                self.broadcast_unconfirmed(choice, &service).await
-            }
-            WriteGroupDestination::RemoteBroadcast(network) => {
-                self.broadcast_network_unconfirmed(choice, &service, *network)
-                    .await
-            }
-            WriteGroupDestination::GlobalBroadcast => {
-                self.broadcast_global_unconfirmed(choice, &service).await
-            }
-        }
+        self.tell_all(scope, request).await
+    }
+
+    /// Send a WriteGroup request to the station `to` alone, as
+    /// [`Self::write_group`] does to a scope.
+    pub async fn write_group_directed(
+        &self,
+        to: &(impl ToStation + ?Sized),
+        request: &WriteGroupRequest,
+    ) -> Result<(), Error> {
+        self.tell(to, request).await
     }
 }
 

@@ -43,7 +43,6 @@ use bacnet_types::enums::{
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 
 use super::cov::CovPropertySubscription;
-use super::write_group::WriteGroupDestination;
 
 const CLIENT_MAC: [u8; 1] = [0x01];
 const PEER: [u8; 1] = [0x02];
@@ -203,8 +202,8 @@ async fn send_everything(client: &BACnetClient<LoopbackTransport>) {
         .await
         .unwrap();
     client
-        .write_group(
-            &WriteGroupDestination::Device(MacAddr::from_slice(&PEER)),
+        .write_group_directed(
+            &PEER,
             &WriteGroupRequest {
                 group_number: NonZeroU32::new(1).unwrap(),
                 write_priority: 8,
