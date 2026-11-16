@@ -433,6 +433,9 @@ pub struct BACnetServer<T: TransportPort = AnyTransport> {
     /// Follow-up fanout after acknowledged confirmed COV reports (#896).
     cov_revisit_task: Option<JoinHandle<()>>,
     local_mac: MacAddr,
+    /// `Some` on a node's seat, whose node owns the link (#2617); its seat
+    /// takes another server once this drops.
+    seated: Option<server_seat::Seated>,
 }
 
 /// Cloneable handle for unsolicited I-Am announcements while its server runs.
@@ -600,7 +603,9 @@ mod enrollment_summary_tests;
 mod request_peer;
 mod request_services;
 mod request_tasks;
+mod server_seat;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
+pub use server_seat::SeatedServerBuilder;
 mod shutdown;
 pub use shutdown::drop_database_off_runtime;
 
@@ -836,37 +841,6 @@ mod value_cov_increment_tests;
 mod value_source_local_tests;
 #[cfg(test)]
 mod warn_spy;
-
-impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Get a snapshot of discovery rate-limiting counters.
-    pub fn discovery_counters(&self) -> DiscoveryCounters {
-        self.discovery_limiter.counters()
-    }
-
-    /// Get a snapshot of COV operational and telemetry counters.
-    pub fn cov_counters(&self) -> CovCounters {
-        self.cov_counters.snapshot()
-    }
-
-    /// Sample lifetime mutation authorization decisions, including after `stop()`.
-    /// Counts decisions, not completed handlers or response delivery; see
-    /// [`MutationDecisionCounters`](crate::mutation::MutationDecisionCounters).
-    pub fn mutation_decision_counters(&self) -> crate::mutation::MutationDecisionCounters {
-        self.mutation_decisions.snapshot()
-    }
-
-    /// Remove COV subscriptions using this current immediate MAC and routed source.
-    /// Cleanup of an obsolete router leaves subscriptions renewed onto another route.
-    /// Only removed entries release their contribution to the shared quota group.
-    pub async fn remove_peer_subscriptions(
-        &self,
-        mac: &[u8],
-        network: Option<&NpduAddress>,
-    ) -> usize {
-        let mut table = self.cov_table.write().await;
-        table.remove_peer_subscriptions(mac, network)
-    }
-}
 
 #[cfg(test)]
 mod cov_identity_completion_tests;

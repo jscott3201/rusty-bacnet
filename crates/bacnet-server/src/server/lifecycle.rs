@@ -10,6 +10,7 @@ pub(super) mod tail;
 mod period;
 use super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task as spawn_operation;
 use super::heap_futures::boxed;
+use super::server_seat::{Apdus as _, Link, Own, Started};
 use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
 
 #[path = "start_outputs.rs"]
@@ -26,24 +27,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         clock_config: Option<ClockConfig>,
         configured_device_bindings: Vec<DeviceBinding>,
     ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<Self, Error>>>> {
-        boxed(|| {
-            Self::start_on_heap(
-                config,
-                db,
-                transport,
-                clock_config,
-                configured_device_bindings,
-            )
-        })
+        Self::start_on_link(
+            config,
+            db,
+            Own(transport),
+            clock_config,
+            configured_device_bindings,
+        )
     }
 
-    async fn start_on_heap(
+    /// [`Self::start_with_clock_mode_and_bindings`] on any [`Link`]: a
+    /// transport of the server's own, or a node's seat (#2617).
+    pub(super) fn start_on_link<L: Link<T>>(
+        config: ServerConfig,
+        db: ObjectDatabase,
+        link: L,
+        clock_config: Option<ClockConfig>,
+        configured_device_bindings: Vec<DeviceBinding>,
+    ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<Self, Error>>>> {
+        boxed(|| Self::start_on_heap(config, db, link, clock_config, configured_device_bindings))
+    }
+
+    async fn start_on_heap<L: Link<T>>(
         mut config: ServerConfig,
         mut db: ObjectDatabase,
-        transport: T,
+        link: L,
         clock_config: Option<ClockConfig>,
         configured_device_bindings: Vec<DeviceBinding>,
     ) -> Result<Self, Error> {
+        let transport = link.transport();
         if let Some(profile) = &mut config.audit_reporters {
             profile.canonicalize()?;
         }
@@ -53,14 +65,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Max_APDU_Length_Accepted is fixed here for the server's life; a
         // later fall in the transport's capacity leaves it as is, and each
         // reply is sized to its route instead (#2093).
-        super::network_port::validate_apdu_capacity(&mut config, &transport)?;
+        super::network_port::validate_apdu_capacity(&mut config, transport)?;
         crate::local_device::validate_startup(&db, &config.device)?;
         crate::local_device::bind_database(&mut db, &config.device);
         let is_group = |mac: &[u8]| transport.is_group_destination(mac);
         let device_bindings =
             DeviceBindingTable::from_configured(configured_device_bindings, is_group)?;
-        let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, &transport)?;
-        super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
+        let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, transport)?;
+        super::audit_forwarder::initialize(&db, &config, &device_bindings, transport);
         let receive_timeout = super::segmented_receive::validate_segment_timeout(&config)?;
         // Settled now: every owner from here on shares it (#1521).
         let config = Arc::new(config);
@@ -81,12 +93,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut outputs = start_outputs::StartedOutputs::start(db);
         let membership = crate::membership::install_waker(outputs.db());
 
-        let (network, mut apdu_rx, audit_routes, network_controls) =
-            boxed(|| super::network_port::start(outputs.db(), &config, transport, audit_routes))
-                .await?;
+        let Started {
+            network,
+            apdus: mut apdu_rx,
+            audit_routes,
+            controls: network_controls,
+            notification_transactions,
+            seated,
+        } = boxed(|| link.start(outputs.db(), &config, audit_routes)).await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
-        let network = Arc::new(network);
         // The limiter keeps this startup identity; changing Device membership
         // later does not rebind it.
         let device_instance = Some(config.device.instance());
@@ -103,7 +119,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let cov_in_flight = Arc::new(Semaphore::new(255));
         let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
-        let notification_transactions = NotificationTransactions::new();
         let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
         let device_bindings = Arc::new(RwLock::new(device_bindings));
         let comm_state = Arc::new(CommState::default()); // ENABLE at every start
@@ -123,11 +138,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let target_audit = match target_audit {
             Ok(runtime) => runtime,
             Err(error) => {
-                let network = Arc::try_unwrap(network).map_err(|_| {
-                    Error::Encoding("startup cleanup has an unexpected network owner".into())
-                })?;
-                boxed(|| super::network_port::StartingNetwork::from_network(network).cleanup())
-                    .await?;
+                L::abandon(network).await?;
                 return Err(error);
             }
         };
@@ -803,6 +814,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             binary_lighting_operation_task,
             cov_revisit_task,
             local_mac,
+            seated,
         };
         boxed(|| server.execute_initial_staging_plans()).await;
         outputs.complete();

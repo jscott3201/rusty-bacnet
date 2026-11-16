@@ -104,10 +104,10 @@ async fn drop_reports_the_drops_no_line_has_reported() {
 
 /// Which answers count as held by a lease at the answer queue's reserve: a
 /// segment, a Segment-ACK and an Abort from the answering side for the
-/// lease, and, by peer and invoke ID alone, a requester's Segment-ACK that
-/// happens to match it; a requester's Abort that matches none is a stray.
+/// lease. A requester's Segment-ACK or Abort is about a request the node
+/// serves, so none is held, whatever lease its invoke ID matches (#2640).
 #[tokio::test(start_paused = true)]
-async fn the_lease_look_reads_only_the_peer_and_the_invoke_id() {
+async fn the_lease_look_holds_only_the_answering_sides_pdus() {
     use crate::coordinator::{
         CanonicalPeer, LeaseMetadata, OutboundTransactionCoordinator, TerminalPolicy,
     };
@@ -146,17 +146,16 @@ async fn the_lease_look_reads_only_the_peer_and_the_invoke_id() {
     let queued: Vec<Vec<u8>> = std::iter::from_fn(|| ingress.terminal_or_segment.try_recv().ok())
         .map(|received| received.apdu.to_vec())
         .collect();
-    assert_eq!(queued.len(), 16);
+    assert_eq!(queued.len(), 15);
     assert_eq!(
         queued[12..],
         [
             segment.to_vec(),
             segment_ack_from_server.to_vec(),
             abort_from_server.to_vec(),
-            segment_ack_from_requester.to_vec(),
         ]
     );
-    assert_eq!(endpoint.full_drop_counters().answer_full_drops, 2);
+    assert_eq!(endpoint.full_drop_counters().answer_full_drops, 3);
     endpoint.stop().await.unwrap();
 }
 

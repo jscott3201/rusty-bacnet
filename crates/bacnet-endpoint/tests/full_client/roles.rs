@@ -11,6 +11,15 @@ use bacnet_types::enums::{
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 use std::sync::Arc;
 
+/// The next notification `receiver` hears, failing after [`WAIT`] rather
+/// than hanging when none comes.
+async fn next<T: Clone>(receiver: &mut tokio::sync::broadcast::Receiver<T>) -> T {
+    tokio::time::timeout(WAIT, receiver.recv())
+        .await
+        .expect("no notification within the wait")
+        .unwrap()
+}
+
 /// The invoke IDs of the node's Confirmed-Requests for `service`, in order.
 fn requests(log: &SendLog, service: ConfirmedServiceChoice) -> Vec<u8> {
     apdus(log)
@@ -38,7 +47,7 @@ async fn a_client_request_and_a_server_notification_share_one_invoke_id_pool() {
         .subscribe_cov(&node, 7, ai1(), true, Some(600))
         .await
         .unwrap();
-    heard.recv().await.unwrap();
+    next(&mut heard).await;
     eventually(WAIT, "the first notification acknowledged", async || {
         lab.session.active_leases() == 0
     })
@@ -83,7 +92,7 @@ async fn a_client_request_and_a_server_notification_share_one_invoke_id_pool() {
         lab.wire.release(&node);
         assert!(read.await.unwrap().is_ok());
         assert_eq!(
-            heard.recv().await.unwrap().delivery,
+            next(&mut heard).await.delivery,
             COVNotificationDelivery::Confirmed
         );
         eventually(WAIT, "the notification acknowledged", async || {
@@ -175,14 +184,14 @@ async fn a_confirmed_cov_notification_reaches_the_full_clients_subscription() {
         .subscribe_cov(&peer, 9, ai1(), true, Some(600))
         .await
         .unwrap();
-    let first = notifications.recv().await.unwrap();
+    let first = next(&mut notifications).await;
     assert_eq!(first.delivery, COVNotificationDelivery::Confirmed);
     assert_eq!(first.source_mac, peer);
     lab.peer
         .set_present_value_local(&ai1(), PropertyValue::Real(30.0))
         .await
         .unwrap();
-    let second = notifications.recv().await.unwrap();
+    let second = next(&mut notifications).await;
     assert_eq!(second.notification.subscriber_process_identifier, 9);
 
     // The client acknowledged each one, once, and the node's server role

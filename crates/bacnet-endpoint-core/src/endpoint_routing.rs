@@ -1,5 +1,7 @@
 //! Which queue one received APDU goes to: the endpoint's own request and
-//! answer queues, and a full client's seat when one is attached (#2617).
+//! answer queues, a full client's seat and a full server's seat when they
+//! are attached (#2617). The server seat, attached, takes the place of the
+//! request queue.
 //!
 //! # A full queue (#2635)
 //!
@@ -28,10 +30,10 @@
 //!   nothing, only once the queue is that full). An answer that still finds
 //!   no room is dropped: its lease ends by its owner's timeout and retry, as
 //!   if the link had lost it.
-//! - The client seat has three tiers: copies of Unconfirmed-Requests stop
-//!   at half of it, Confirmed-Requests to the client at its reserve, and
-//!   answers to the client's requests may fill it
-//!   ([`SeatSlot::takes`](crate::seat::SeatSlot::takes)).
+//! - Each seat has three tiers: Unconfirmed-Requests stop at half of it,
+//!   Confirmed-Requests at its reserve, and answers to the role's own
+//!   requests (and, on the server seat, a requester's Abort or Segment-ACK)
+//!   may fill it ([`SeatSlot::takes`](crate::seat::SeatSlot::takes)).
 //! - An APDU the classifier refuses goes to the policy queue, and is dropped
 //!   when that is full.
 use std::sync::atomic::AtomicU64;
@@ -70,11 +72,9 @@ pub(crate) fn down_to_reserve<T>(queue: &mpsc::Sender<T>) -> bool {
 /// Whether one of `coordinator`'s leases holds the answer `received`. Looks,
 /// claims nothing. With no coordinator every answer counts as held.
 ///
-/// It reads only the peer and the invoke ID. A Segment-ACK or Abort a
-/// requester sends (server bit clear) is about a request this node serves,
-/// not a lease: one that happens to match a lease counts as held, and any
-/// other as a stray. Harmless while the narrow server never segments;
-/// revisit when the full server takes a seat (#2617 step 4).
+/// A Segment-ACK or Abort a requester sends (server bit clear) is about a
+/// request this node serves, not about a lease: none counts as held,
+/// whatever lease its invoke ID happens to match (#2640).
 fn held_by_lease(
     coordinator: Option<&OutboundTransactionCoordinator>,
     received: &ReceivedApdu,
@@ -83,6 +83,9 @@ fn held_by_lease(
     let Some(coordinator) = coordinator else {
         return true;
     };
+    if from_requester(&received.apdu) {
+        return false;
+    }
     received.apdu.get(1).is_some_and(|invoke_id| {
         coordinator
             .holder_of_source(
@@ -96,18 +99,19 @@ fn held_by_lease(
 }
 
 /// What ingress dropped because a queue was full, by class, since the
-/// endpoint was made. Each count saturates. The client seat's own drops are
-/// in [`ClientSeatCounters`](crate::seat::ClientSeatCounters).
+/// endpoint was made. Each count saturates. The seats' own drops are in
+/// [`ClientSeatCounters`](crate::seat::ClientSeatCounters) and
+/// [`ServerSeatCounters`](crate::seat::ServerSeatCounters).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct IngressDropCounters {
     /// Unconfirmed-Requests past their share of the request queue.
     pub unconfirmed_full_drops: u64,
     /// Confirmed-Requests for the endpoint's own roles that its full request
-    /// queue had no room for; none was answered. One that goes to a client
-    /// seat instead (a COV notification to the client, or any on an
-    /// endpoint with no server role) and finds no room there is counted in
-    /// [`ClientSeatCounters::full_drops`](crate::seat::ClientSeatCounters::full_drops).
+    /// queue had no room for; none was answered. One that goes to a seat
+    /// instead (a COV notification to the client, any on an endpoint with no
+    /// server role, or any while a full server is seated) and finds no room
+    /// there is counted in that seat's counters.
     pub confirmed_full_drops: u64,
     /// Answers and segments (Simple-ACK, Complex-ACK, Error, Reject, Abort,
     /// Segment-ACK) the full answer queue had no room for: those no lease
@@ -269,7 +273,7 @@ pub(super) struct IngressQueues {
     pub(super) inbound_tx: mpsc::Sender<ReceivedApdu>,
     pub(super) terminal_tx: mpsc::Sender<ReceivedApdu>,
     pub(super) policy_tx: mpsc::Sender<PolicyOutcome>,
-    /// The client seat, when one is attached.
+    /// The client and server seats, when attached.
     pub(super) seats: Arc<SeatSlot>,
     /// What a full queue dropped.
     pub(super) drops: Arc<IngressDrops>,
@@ -278,7 +282,7 @@ pub(super) struct IngressQueues {
     pub(super) coordinator: Option<Arc<OutboundTransactionCoordinator>>,
 }
 
-/// What the seat takes of one APDU.
+/// What a seat takes of one APDU.
 enum SeatShare {
     /// Nothing: the endpoint's own queues take it, as with no seat.
     None,
@@ -288,14 +292,42 @@ enum SeatShare {
     Whole,
 }
 
-/// The seat's share of a valid APDU, from its first octets (see
-/// [`crate::seat`]). Only an answer's lease is looked up, and nothing is
-/// claimed.
-fn seat_share(
-    attached: &Attached,
+/// Whether `apdu` is an Abort (7) or Segment-ACK (4) with the server bit
+/// clear: one a requester sent, about a request this node serves.
+fn from_requester(apdu: &[u8]) -> bool {
+    apdu.first()
+        .is_some_and(|first| matches!(first >> 4, 4 | 7) && first & 0x01 == 0)
+}
+
+/// The role whose lease holds the answer `received`, if any: looked up once
+/// for both seats, claiming nothing. Requests and a requester's Abort or
+/// Segment-ACK have none.
+fn lease_holder(
+    coordinator: &OutboundTransactionCoordinator,
     route: IngressRoute,
     received: &ReceivedApdu,
     local_network: Option<u16>,
+) -> Option<LeaseHolder> {
+    if route != IngressRoute::TerminalOrSegment || from_requester(&received.apdu) {
+        return None;
+    }
+    received.apdu.get(1).and_then(|invoke_id| {
+        coordinator.holder_of_source(
+            &received.source_mac,
+            received.source_network.as_ref(),
+            local_network,
+            *invoke_id,
+        )
+    })
+}
+
+/// The client seat's share of a valid APDU, from its first octets and the
+/// answer's lease holder (see [`crate::seat`]).
+fn client_share(
+    attached: &Attached,
+    route: IngressRoute,
+    received: &ReceivedApdu,
+    holder: Option<LeaseHolder>,
 ) -> SeatShare {
     let apdu = &received.apdu;
     let first = apdu.first().copied().unwrap_or(0);
@@ -312,25 +344,74 @@ fn seat_share(
                 _ => SeatShare::None,
             }
         }
-        // An Abort (7) or Segment-ACK (4) with the server bit clear came
-        // from a requester: it is about a request this node serves.
-        (IngressRoute::TerminalOrSegment, 4 | 7) if first & 0x01 == 0 => SeatShare::None,
-        (IngressRoute::TerminalOrSegment, _) => {
-            let holder = apdu.get(1).and_then(|invoke_id| {
-                attached.coordinator.holder_of_source(
-                    &received.source_mac,
-                    received.source_network.as_ref(),
-                    local_network,
-                    *invoke_id,
-                )
-            });
-            if holder == Some(LeaseHolder::Client) {
-                SeatShare::Whole
-            } else {
-                SeatShare::None
-            }
+        (IngressRoute::TerminalOrSegment, _) if holder == Some(LeaseHolder::Client) => {
+            SeatShare::Whole
+        }
+        (IngressRoute::TerminalOrSegment, _) => SeatShare::None,
+    }
+}
+
+/// Whether the server seat takes what the client seat left of a valid APDU:
+/// every request (it takes the endpoint's request queue's place), a
+/// requester's Abort or Segment-ACK, and an answer to the server's own
+/// request.
+fn server_takes(route: IngressRoute, received: &ReceivedApdu, holder: Option<LeaseHolder>) -> bool {
+    match route {
+        IngressRoute::InboundRequest => true,
+        IngressRoute::TerminalOrSegment => {
+            holder == Some(LeaseHolder::Server) || from_requester(&received.apdu)
         }
     }
+}
+
+/// Offer what is left of `received` to the seats attached (see
+/// [`crate::seat`]). What comes back is the endpoint's own queues'; `None`
+/// when a seat took it, or dropped it as the seat's alone.
+fn share_out(
+    seats: &SeatSlot,
+    route: IngressRoute,
+    received: ReceivedApdu,
+    local_network: Option<u16>,
+) -> Option<ReceivedApdu> {
+    let mut received = Some(received);
+    seats.with(|client, server| {
+        let holder = client.or(server).and_then(|seat| {
+            lease_holder(&seat.coordinator, route, received.as_ref()?, local_network)
+        });
+        if let Some(client) = client {
+            let apdu = received.as_ref()?;
+            match client_share(client, route, apdu, holder) {
+                SeatShare::None => {}
+                SeatShare::Copy => {
+                    if seats.takes(client, apdu) {
+                        let _ = seats.offer(client, seat_copy(apdu));
+                    }
+                }
+                // The seat's alone: dropped when it has no room, never
+                // handed to another role in the client's place. A seat whose
+                // client is gone gives the APDU back, and it goes the way it
+                // would with no seat.
+                SeatShare::Whole if seats.takes(client, apdu) => {
+                    received = seats.offer(client, received.take()?)
+                }
+                SeatShare::Whole => received = None,
+            }
+        }
+        if let Some(server) = server {
+            let apdu = received.as_ref()?;
+            if server_takes(route, apdu, holder) {
+                // As for the client: dropped when it has no room, and given
+                // back only when the server is gone.
+                received = if seats.takes(server, apdu) {
+                    seats.offer(server, received.take()?)
+                } else {
+                    None
+                };
+            }
+        }
+        Some(())
+    });
+    received
 }
 
 /// The seat's copy of an APDU another role answers: the same octets, and no
@@ -361,28 +442,7 @@ pub(super) fn route_received(
         Err(reason) => return send_policy(policy_tx, drops, PolicyOutcome { reason, received }),
     };
 
-    let mut received = Some(received);
-    seats.with(|attached| {
-        let apdu = received.as_ref()?;
-        match seat_share(attached, route, apdu, local_network) {
-            SeatShare::None => {}
-            SeatShare::Copy => {
-                if seats.takes(attached, apdu) {
-                    let _ = seats.offer(attached, seat_copy(apdu));
-                }
-            }
-            // The seat's alone: dropped when it has no room, never handed
-            // to the endpoint in the client's place. A seat whose client is
-            // gone gives the APDU back, and it goes the way it would with
-            // no seat.
-            SeatShare::Whole if seats.takes(attached, apdu) => {
-                received = seats.offer(attached, received.take()?)
-            }
-            SeatShare::Whole => received = None,
-        }
-        Some(())
-    });
-    let received = received?;
+    let received = share_out(seats, route, received, local_network)?;
 
     let (queue, class) = match route {
         IngressRoute::InboundRequest => {
@@ -476,7 +536,8 @@ fn send_policy(
 
 /// The layer's network controls, which only its APDU receive queues, shared
 /// out: the endpoint's Number owner when the link takes the Number controls,
-/// and a copy for the client seat when one is attached. Without either, a
+/// and a copy for the client seat when one is attached; the server seat
+/// takes none. Without either, a
 /// control is discarded, as the layer discards one nobody asked for.
 pub(super) struct ControlTee {
     pub(super) layer: mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>,

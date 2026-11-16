@@ -1,68 +1,86 @@
-//! The client seat: what a full client is handed to run on an endpoint's
-//! link beside the endpoint's own roles (#2617).
+//! The seats: what a full client and a full server are handed to run on an
+//! endpoint's link beside the endpoint's own roles (#2617).
 //!
 //! An endpoint owns one transport, one [`NetworkLayer`] and one
-//! [`OutboundTransactionCoordinator`]. A [`ClientSeat`] shares the last two
-//! with a client that would otherwise make its own, and gives it the APDUs
-//! and network controls that are its to take. Nothing is encoded again and
-//! no invoke ID is translated: the client sends on the shared layer itself,
-//! and leases its invoke IDs from the shared coordinator, so they are unique
-//! across the node.
+//! [`OutboundTransactionCoordinator`]. A [`ClientSeat`] or a [`ServerSeat`]
+//! shares the last two with a role that would otherwise make its own, and
+//! gives it the APDUs (and, to the client, the network controls) that are
+//! its to take. Nothing is encoded again and no invoke ID is translated:
+//! each role sends on the shared layer itself, and leases its invoke IDs
+//! from the shared coordinator, so they are unique across the node. Both
+//! seats of one endpoint share one coordinator.
 //!
 //! # Who receives what
 //!
 //! Endpoint ingress decides from an APDU's first octets, after its own
-//! validity checks:
+//! validity checks. The server seat, while it is attached, takes the place
+//! of the endpoint's own request queue: what that queue would take goes to
+//! the full server instead, and the endpoint's narrow server role gets it
+//! again only once the full server is gone.
 //!
-//! - an Unconfirmed-Request goes to the endpoint's request queue, and a copy
-//!   with no reply authority to the seat;
-//! - a Confirmed-Request goes to the endpoint's request queue, for its
-//!   server role. A ConfirmedCOVNotification goes to the seat instead, with
-//!   its reply authority. A ConfirmedEventNotification goes to the server
-//!   role, and a copy with no reply authority to the seat. On an endpoint
-//!   with no server role every Confirmed-Request goes to the seat;
+//! - an Unconfirmed-Request goes to the server role (the server seat, or
+//!   the endpoint's request queue), and a copy with no reply authority to
+//!   the client seat;
+//! - a Confirmed-Request goes to the server role. A ConfirmedCOVNotification
+//!   goes to the client seat instead, with its reply authority. A
+//!   ConfirmedEventNotification goes to the server role, and a copy with no
+//!   reply authority to the client seat. On an endpoint with no server role
+//!   every Confirmed-Request goes to the client seat;
 //! - an answer (Simple-ACK, Complex-ACK and its segments, Error, Reject, and
-//!   an Abort or Segment-ACK sent by the answering side) goes to the seat
-//!   when [`OutboundTransactionCoordinator::holder_of_source`] names a full
-//!   client's lease for its source and invoke ID, and to the endpoint's
-//!   answer queue otherwise, where an answer no lease claims is counted and
-//!   dropped;
-//! - an Abort or Segment-ACK sent by a requester goes to the endpoint's
-//!   answer queue;
-//! - every network control goes to the seat, beside the endpoint's own
-//!   Number owner.
+//!   an Abort or Segment-ACK sent by the answering side) goes to the seat of
+//!   the role [`OutboundTransactionCoordinator::holder_of_source`] names for
+//!   its source and invoke ID: the client seat for a full client's lease,
+//!   the server seat for a server's (any [`LeaseOwner::Notification`]
+//!   lease, so the node must leave the server seat the only role that makes
+//!   them). Any other goes to the endpoint's answer queue, where an answer
+//!   no lease claims is counted and dropped;
+//! - an Abort or Segment-ACK sent by a requester is about a request the
+//!   node serves: it goes to the server seat, or to the endpoint's answer
+//!   queue when there is none;
+//! - every network control goes to the client seat, beside the endpoint's
+//!   own Number owner. The server seat gets none: the node's one Number
+//!   owner answers for the network number.
 //!
-//! Ingress never waits for the seat. An APDU or control that finds the
-//! seat's queue full is dropped and counted ([`ClientSeatCounters`]), so a
-//! client that stops reading holds nothing else up.
+//! [`LeaseOwner::Notification`]: crate::coordinator::LeaseOwner::Notification
 //!
-//! The queue has three tiers (#2635), so what the client can best spare
-//! finds it full first:
+//! Ingress never waits for a seat. An APDU or control that finds a seat's
+//! queue full is dropped and counted ([`ClientSeatCounters`],
+//! [`ServerSeatCounters`]), so a role that stops reading holds nothing else
+//! up, the other role included.
 //!
-//! - copies of Unconfirmed-Requests (I-Ams, Who-Is, notifications) may fill
-//!   it only down to half of it;
-//! - Confirmed-Requests to the client (its COV notifications, a copy of an
-//!   event notification, and every one on a node with no server role) may
-//!   fill it down to its last quarter, the reserve each endpoint queue
-//!   keeps;
-//! - answers to the client's requests may fill all of it.
+//! Each seat's queue has three tiers (#2635), so what the role can best
+//! spare finds it full first:
 //!
-//! A burst of I-Ams from the client's own discovery then shuts out neither
-//! its COV notifications nor its answers. Each tier keeps a slot of its
+//! - Unconfirmed-Requests (I-Ams, Who-Is, notifications) may fill it only
+//!   down to half of it;
+//! - Confirmed-Requests may fill it down to its last quarter, the reserve
+//!   each endpoint queue keeps;
+//! - answers to the role's own requests, and a requester's Abort or
+//!   Segment-ACK, may fill all of it.
+//!
+//! A burst of I-Ams from the node's own discovery then shuts out neither
+//! role's confirmed requests nor its answers. Each tier keeps a slot of its
 //! own where the capacity allows: one slot for all at a capacity of 1;
-//! copies one and answers one at 2; one each at 3; 2, 1 and 1 at 4; and at
-//! the default 256, 128, 64 and 64.
+//! unconfirmed one and answers one at 2; one each at 3; 2, 1 and 1 at 4;
+//! and at the client seat's 256, 128, 64 and 64.
+//!
+//! The server seat's queue is as deep as the endpoint's request queue,
+//! whose place it takes (the endpoint's queue capacity), and its tiers
+//! scale with it. At a capacity of 2 its confirmed requests share the
+//! answers' slot instead, so a confirmed request behind an unconfirmed one
+//! still finds room, as it does in the request queue (#2635).
 //!
 //! # Lifetime
 //!
-//! The endpoint stops the link. Its stop closes the seat's queues and aborts
-//! the client's tasks, which the client names when it starts
-//! ([`SeatHolds::abort_on_stop`]), then waits for each task's [`SeatHold`]
-//! before it stops the layer, so none of them is still at work: a task in
-//! the middle of a turn can't hold the stop up. A client that is still alive
-//! keeps its own reference to the layer, and the layer stops all the same,
-//! through that shared reference (#2617): the client's later requests fail
-//! with the transport's stopped error, and its drop changes nothing.
+//! The endpoint stops the link. Its stop closes the seats' queues and aborts
+//! the tasks a role names when it starts ([`SeatHolds::abort_on_stop`]),
+//! then waits for each task's [`SeatHold`] before it stops the layer, so
+//! none of them is still at work: a task in the middle of a turn can't hold
+//! the stop up. A role that is still alive keeps its own reference to the
+//! layer, and the layer stops all the same, through that shared reference
+//! (#2617): the role's later sends fail with the transport's stopped error,
+//! and its drop changes nothing. A full server names no task and takes no
+//! hold: it has a graceful stop of its own, best run before the endpoint's.
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -109,29 +127,29 @@ impl SeatRoles {
 #[derive(Clone, Debug)]
 pub struct SeatHold(#[allow(dead_code)] mpsc::Sender<()>);
 
-/// What the endpoint knows of the client on a seat.
+/// What the endpoint knows of the role on a seat.
 #[derive(Default)]
-struct SeatedClient {
-    /// The client's tasks, aborted when the endpoint stops.
+struct SeatedRole {
+    /// The role's tasks, aborted when the endpoint stops.
     tasks: Vec<tokio::task::AbortHandle>,
-    /// Dead once the client itself is dropped.
+    /// Dead once the role itself is dropped.
     alive: Option<Weak<dyn Any + Send + Sync>>,
 }
 
-/// A seat's line back to its endpoint: the [`SeatHold`]s of the client's
-/// tasks, the tasks themselves, and whether the client still lives. It is
-/// not a hold itself, so a seat nobody started a client on doesn't keep the
+/// A seat's line back to its endpoint: the [`SeatHold`]s of the role's
+/// tasks, the tasks themselves, and whether the role still lives. It is
+/// not a hold itself, so a seat nobody started a role on doesn't keep the
 /// endpoint's stop waiting.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct SeatHolds {
     holds: mpsc::WeakSender<()>,
-    client: Arc<Mutex<SeatedClient>>,
+    role: Arc<Mutex<SeatedRole>>,
 }
 
 impl SeatHolds {
-    fn client(&self) -> std::sync::MutexGuard<'_, SeatedClient> {
-        self.client.lock().unwrap_or_else(PoisonError::into_inner)
+    fn role(&self) -> std::sync::MutexGuard<'_, SeatedRole> {
+        self.role.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A hold for one task, or `None` once the endpoint is stopping.
@@ -142,14 +160,14 @@ impl SeatHolds {
     /// Have the endpoint's stop abort `task`, which keeps the layer: the
     /// stop then never waits on that task's own progress.
     pub fn abort_on_stop(&self, task: tokio::task::AbortHandle) {
-        self.client().tasks.push(task);
+        self.role().tasks.push(task);
     }
 
-    /// The client lives while `client` can be upgraded. Once it can't, the
-    /// endpoint takes another client at once, without waiting for the
-    /// dropped one's tasks to finish ending.
-    pub fn alive_while(&self, client: Weak<dyn Any + Send + Sync>) {
-        self.client().alive = Some(client);
+    /// The role lives while `role` can be upgraded. Once it can't, the
+    /// endpoint takes another role on this seat at once, without waiting
+    /// for the dropped one's tasks to finish ending.
+    pub fn alive_while(&self, role: Weak<dyn Any + Send + Sync>) {
+        self.role().alive = Some(role);
     }
 }
 
@@ -207,6 +225,30 @@ impl<T: TransportPort> std::fmt::Debug for ClientSeat<T> {
     }
 }
 
+/// What a full server is handed in place of a transport: see the
+/// [module docs](self). Its parts are for the server that runs on it.
+#[non_exhaustive]
+pub struct ServerSeat<T: TransportPort> {
+    /// The node's started network layer. The seat never stops it.
+    #[doc(hidden)]
+    pub network: Arc<NetworkLayer<T>>,
+    /// The node's one pool of invoke IDs.
+    #[doc(hidden)]
+    pub coordinator: Arc<OutboundTransactionCoordinator>,
+    /// The APDUs that are the server's.
+    #[doc(hidden)]
+    pub apdus: mpsc::Receiver<ReceivedApdu>,
+    /// The line back to the endpoint.
+    #[doc(hidden)]
+    pub holds: SeatHolds,
+}
+
+impl<T: TransportPort> std::fmt::Debug for ServerSeat<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerSeat").finish_non_exhaustive()
+    }
+}
+
 /// What ingress did for the client seat since the endpoint started. Each
 /// count saturates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -224,25 +266,61 @@ pub struct ClientSeatCounters {
     pub control_full_drops: u64,
 }
 
+/// What ingress did for the server seat since the endpoint started. Each
+/// count saturates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ServerSeatCounters {
+    /// APDUs handed to the seat. Counted as the seat's queue takes them:
+    /// what a server finds still queued when it stops, or takes after it
+    /// began stopping, it drops unanswered, and that is counted here, not
+    /// in [`Self::full_drops`].
+    pub apdus: u64,
+    /// APDUs the seat refused: those its full queue had no room for, and
+    /// those its tiers held back for what the server can spare less (see
+    /// the [module docs](self)). A Confirmed-Request counted here got no
+    /// answer: its requester's retry is its recovery. The endpoint's own
+    /// counts never count what the server seat refused.
+    pub full_drops: u64,
+}
+
+/// Which of the endpoint's two seats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Role {
+    Client = 0,
+    Server = 1,
+}
+
+impl Role {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Client => "client",
+            Self::Server => "server",
+        }
+    }
+}
+
 /// The senders of one attached seat.
 pub(crate) struct Attached {
     pub(crate) apdus: mpsc::Sender<ReceivedApdu>,
-    pub(crate) controls: mpsc::Sender<ReceivedNetworkControl>,
+    /// The client's copy of each network control; the server seat has none.
+    controls: Option<mpsc::Sender<ReceivedNetworkControl>>,
     pub(crate) coordinator: Arc<OutboundTransactionCoordinator>,
     pub(crate) roles: SeatRoles,
-    client: Arc<Mutex<SeatedClient>>,
+    role: Role,
+    seated: Arc<Mutex<SeatedRole>>,
 }
 
 impl Attached {
-    fn client(&self) -> std::sync::MutexGuard<'_, SeatedClient> {
-        self.client.lock().unwrap_or_else(PoisonError::into_inner)
+    fn seated(&self) -> std::sync::MutexGuard<'_, SeatedRole> {
+        self.seated.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Whether the seat still has, or may still get, a client: its queue is
-    /// open, and the client that started on it has not been dropped.
+    /// Whether the seat still has, or may still get, a role: its queue is
+    /// open, and the role that started on it has not been dropped.
     fn occupied(&self) -> bool {
         let dropped = self
-            .client()
+            .seated()
             .alive
             .as_ref()
             .is_some_and(|alive| alive.strong_count() == 0);
@@ -251,29 +329,38 @@ impl Attached {
 }
 
 struct State {
-    attached: Option<Attached>,
+    /// By [`Role`].
+    seats: [Option<Attached>; 2],
     /// Mints each seat's [`SeatHold`]; gone once the endpoint is stopping.
     holds: Option<mpsc::Sender<()>>,
 }
 
-/// The endpoint's one place for a client seat, shared by its owner, which
-/// attaches seats, and its ingress task, which routes to the one attached.
+/// One seat's counts.
+#[derive(Default)]
+struct Counts {
+    apdus: AtomicU64,
+    full_drops: AtomicU64,
+}
+
+/// The endpoint's places for a client seat and a server seat, shared by its
+/// owner, which attaches seats, and its ingress task, which routes to those
+/// attached.
 pub(crate) struct SeatSlot {
     state: Mutex<State>,
-    /// Whether a seat is attached, so an endpoint with none takes no lock
+    /// Whether any seat is attached, so an endpoint with none takes no lock
     /// for an APDU or a control. A seat counts from the next APDU after it
     /// attaches.
     attached: AtomicBool,
     number: SeatNumber,
-    apdus: AtomicU64,
-    full_drops: AtomicU64,
+    /// By [`Role`].
+    counts: [Counts; 2],
     control_full_drops: AtomicU64,
 }
 
-/// The free slots of a seat of `capacity` that copies of
-/// Unconfirmed-Requests leave: twice the
-/// [`reserve`](crate::endpoint_ingress::reserve), so they fill at most half
-/// of a seat of 8 or more, but never all of it, so they keep a slot too.
+/// The free slots of a seat of `capacity` that Unconfirmed-Requests leave:
+/// twice the [`reserve`](crate::endpoint_ingress::reserve), so they fill at
+/// most half of a seat of 8 or more, but never all of it, so they keep a
+/// slot too.
 pub(crate) fn copy_floor(capacity: usize) -> usize {
     (2 * crate::endpoint_ingress::reserve(capacity)).min(capacity.saturating_sub(1))
 }
@@ -284,19 +371,25 @@ fn add(counter: &AtomicU64) {
     });
 }
 
+/// The parts of one seat [`SeatSlot::attach`] made.
+struct Made {
+    apdus: mpsc::Receiver<ReceivedApdu>,
+    controls: Option<mpsc::Receiver<ReceivedNetworkControl>>,
+    holds: SeatHolds,
+}
+
 impl SeatSlot {
     /// An empty slot, and the receiver that ends when every hold is gone.
     pub(crate) fn new() -> (Arc<Self>, mpsc::Receiver<()>) {
         let (holds, held) = mpsc::channel(1);
         let slot = Arc::new(Self {
             state: Mutex::new(State {
-                attached: None,
+                seats: [None, None],
                 holds: Some(holds),
             }),
             attached: AtomicBool::new(false),
             number: SeatNumber::default(),
-            apdus: AtomicU64::new(0),
-            full_drops: AtomicU64::new(0),
+            counts: Default::default(),
             control_full_drops: AtomicU64::new(0),
         });
         (slot, held)
@@ -311,15 +404,24 @@ impl SeatSlot {
     }
 
     pub(crate) fn counters(&self) -> ClientSeatCounters {
+        let counts = &self.counts[Role::Client as usize];
         ClientSeatCounters {
-            apdus: self.apdus.load(Ordering::Relaxed),
-            full_drops: self.full_drops.load(Ordering::Relaxed),
+            apdus: counts.apdus.load(Ordering::Relaxed),
+            full_drops: counts.full_drops.load(Ordering::Relaxed),
             control_full_drops: self.control_full_drops.load(Ordering::Relaxed),
         }
     }
 
-    /// Make the seat on `network`. One client at a time: a second seat is
-    /// refused until the first one's client has dropped its queues.
+    pub(crate) fn server_counters(&self) -> ServerSeatCounters {
+        let counts = &self.counts[Role::Server as usize];
+        ServerSeatCounters {
+            apdus: counts.apdus.load(Ordering::Relaxed),
+            full_drops: counts.full_drops.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Make the client's seat on `network`. One client at a time: a second
+    /// seat is refused until the first one's client has dropped its queues.
     pub(crate) fn attach<T: TransportPort>(
         &self,
         network: Arc<NetworkLayer<T>>,
@@ -327,70 +429,139 @@ impl SeatSlot {
         roles: SeatRoles,
         capacity: usize,
     ) -> Result<ClientSeat<T>, Error> {
+        let made = self.make(Role::Client, &coordinator, roles, capacity)?;
+        Ok(ClientSeat {
+            network,
+            coordinator,
+            apdus: made.apdus,
+            controls: made.controls.expect("a client seat's controls"),
+            roles,
+            number: self.number.clone(),
+            holds: made.holds,
+        })
+    }
+
+    /// Make the server's seat on `network`. One server at a time, as for
+    /// the client.
+    pub(crate) fn attach_server<T: TransportPort>(
+        &self,
+        network: Arc<NetworkLayer<T>>,
+        coordinator: Arc<OutboundTransactionCoordinator>,
+        capacity: usize,
+    ) -> Result<ServerSeat<T>, Error> {
+        let made = self.make(Role::Server, &coordinator, SeatRoles::default(), capacity)?;
+        Ok(ServerSeat {
+            network,
+            coordinator,
+            apdus: made.apdus,
+            holds: made.holds,
+        })
+    }
+
+    fn make(
+        &self,
+        role: Role,
+        coordinator: &Arc<OutboundTransactionCoordinator>,
+        roles: SeatRoles,
+        capacity: usize,
+    ) -> Result<Made, Error> {
         if capacity == 0 {
-            return Err(Error::Encoding(
-                "client seat queue capacity must be greater than zero".into(),
-            ));
+            return Err(Error::Encoding(format!(
+                "{} seat queue capacity must be greater than zero",
+                role.name()
+            )));
         }
         let mut state = self.state();
         let Some(holds) = state.holds.as_ref().map(mpsc::Sender::downgrade) else {
             return Err(Error::Encoding("endpoint shutdown".into()));
         };
-        if state.attached.as_ref().is_some_and(Attached::occupied) {
+        if state.seats[role as usize]
+            .as_ref()
+            .is_some_and(Attached::occupied)
+        {
+            return Err(Error::Encoding(format!(
+                "the endpoint already has a full {}: drop it before making another",
+                role.name()
+            )));
+        }
+        // Answers go to a seat by the lease its coordinator names, so every
+        // role on one node leases from the same pool.
+        let other = &state.seats[1 - role as usize];
+        if other
+            .as_ref()
+            .is_some_and(|other| other.occupied() && !Arc::ptr_eq(&other.coordinator, coordinator))
+        {
             return Err(Error::Encoding(
-                "the endpoint already has a full client: drop it before making another".into(),
+                "every seat on one endpoint shares its pool of invoke IDs".into(),
             ));
         }
         let (apdu_tx, apdus) = mpsc::channel(capacity);
-        let (control_tx, controls) = mpsc::channel(CLIENT_SEAT_CONTROL_QUEUE);
-        let client = Arc::new(Mutex::new(SeatedClient::default()));
-        state.attached = Some(Attached {
+        let (control_tx, controls) = match role {
+            Role::Client => {
+                let (tx, rx) = mpsc::channel(CLIENT_SEAT_CONTROL_QUEUE);
+                (Some(tx), Some(rx))
+            }
+            Role::Server => (None, None),
+        };
+        let seated = Arc::new(Mutex::new(SeatedRole::default()));
+        state.seats[role as usize] = Some(Attached {
             apdus: apdu_tx,
             controls: control_tx,
-            coordinator: Arc::clone(&coordinator),
+            coordinator: Arc::clone(coordinator),
             roles,
-            client: Arc::clone(&client),
+            role,
+            seated: Arc::clone(&seated),
         });
         self.attached.store(true, Ordering::Relaxed);
-        Ok(ClientSeat {
-            network,
-            coordinator,
+        Ok(Made {
             apdus,
             controls,
-            roles,
-            number: self.number.clone(),
-            holds: SeatHolds { holds, client },
+            holds: SeatHolds {
+                holds,
+                role: seated,
+            },
         })
     }
 
-    /// Close the seat's queues, abort its client's tasks and make no more
+    /// Close the seats' queues, abort their roles' tasks and make no more
     /// seats: the endpoint is stopping.
     pub(crate) fn close(&self) {
         let mut state = self.state();
         self.attached.store(false, Ordering::Relaxed);
-        if let Some(attached) = state.attached.take() {
-            for task in attached.client().tasks.drain(..) {
+        for attached in state.seats.iter_mut().filter_map(Option::take) {
+            for task in attached.seated().tasks.drain(..) {
                 task.abort();
             }
         }
         state.holds = None;
     }
 
-    /// Run `route` with the attached seat, if a live one is attached.
-    pub(crate) fn with<R>(&self, route: impl FnOnce(&Attached) -> R) -> Option<R> {
+    /// Run `route` with the attached client and server seats, if any seat
+    /// is attached. A seat whose queue has closed (its role's reader is
+    /// gone) is let go of first, so `route` doesn't see it; one whose role
+    /// was dropped but whose queue is still open is still offered to, as
+    /// its reader may yet drain it.
+    pub(crate) fn with<R>(
+        &self,
+        route: impl FnOnce(Option<&Attached>, Option<&Attached>) -> R,
+    ) -> Option<R> {
         if !self.attached.load(Ordering::Relaxed) {
             return None;
         }
         let mut state = self.state();
-        if state
-            .attached
-            .as_ref()
-            .is_some_and(|attached| attached.apdus.is_closed())
-        {
-            state.attached = None;
+        for seat in &mut state.seats {
+            if seat
+                .as_ref()
+                .is_some_and(|attached| attached.apdus.is_closed())
+            {
+                *seat = None;
+            }
+        }
+        if state.seats.iter().all(Option::is_none) {
             self.attached.store(false, Ordering::Relaxed);
         }
-        state.attached.as_ref().map(route)
+        let [client, server] = &state.seats;
+        Some(route(client.as_ref(), server.as_ref()))
     }
 
     /// Whether the seat takes `received`, or a copy of it, now: whether more
@@ -401,42 +572,47 @@ impl SeatSlot {
         let capacity = attached.apdus.max_capacity();
         let floor = match received.apdu.first().map(|first| first >> 4) {
             Some(1) => copy_floor(capacity),
+            // Too small for three tiers: the server seat's confirmed
+            // requests keep the request queue's rule (#2635) and may take
+            // the last slot.
+            Some(0) if attached.role == Role::Server && capacity < 3 => 0,
             Some(0) => crate::endpoint_ingress::reserve(capacity),
             _ => return true,
         };
         if attached.apdus.capacity() <= floor {
-            add(&self.full_drops);
+            add(&self.counts[attached.role as usize].full_drops);
             return false;
         }
         true
     }
 
     /// Hand `received` to the seat without waiting. A full queue drops and
-    /// counts it. It comes back only when the seat's client is gone.
+    /// counts it. It comes back only when the seat's role is gone.
     pub(crate) fn offer(
         &self,
         attached: &Attached,
         received: ReceivedApdu,
     ) -> Option<ReceivedApdu> {
+        let counts = &self.counts[attached.role as usize];
         match attached.apdus.try_send(received) {
             Ok(()) => {
-                add(&self.apdus);
+                add(&counts.apdus);
                 None
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
-                add(&self.full_drops);
+                add(&counts.full_drops);
                 None
             }
             Err(mpsc::error::TrySendError::Closed(received)) => Some(received),
         }
     }
 
-    /// Hand a copy of `control` to the seat, if one is attached, without
-    /// waiting.
+    /// Hand a copy of `control` to the client seat, if one is attached,
+    /// without waiting.
     pub(crate) fn offer_control(&self, control: &ReceivedNetworkControl) {
-        self.with(|attached| {
-            if let Err(mpsc::error::TrySendError::Full(_)) =
-                attached.controls.try_send(control.clone())
+        self.with(|client, _| {
+            if let Some(controls) = client.and_then(|client| client.controls.as_ref())
+                && let Err(mpsc::error::TrySendError::Full(_)) = controls.try_send(control.clone())
             {
                 add(&self.control_full_drops);
             }

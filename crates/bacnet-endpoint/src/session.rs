@@ -77,6 +77,8 @@ mod source_profile;
 pub(crate) use source_profile::{RoutedBindings, check_link_bindings};
 #[path = "session_seat.rs"]
 mod seat;
+#[path = "session_server_seat.rs"]
+mod server_seat;
 #[path = "source_reporter.rs"]
 pub(crate) mod source_reporter;
 #[path = "session_start.rs"]

@@ -50,9 +50,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// server role doesn't execute ConfirmedEventNotification, so the node
     /// answers one with a Reject (unrecognized service) while the client
     /// still publishes it to its `event_notifications()`; a notifier that
-    /// needs the acknowledgment gets it when the full server takes a seat
-    /// (#2617 step 4). A session with no server role leaves the client to
-    /// answer as a standalone one does, acknowledgment included.
+    /// needs the acknowledgment gets it from a
+    /// [`full_server`](Self::full_server). A session with no server role
+    /// leaves the client to answer as a standalone one does, acknowledgment
+    /// included.
     ///
     /// **A client that falls behind.** The session never waits for the
     /// client: what its seat's queue has no room for is dropped and counted
