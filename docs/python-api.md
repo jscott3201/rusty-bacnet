@@ -6933,6 +6933,109 @@ transcript of summaries. The input
 octets and `Frame.octets` remain unredacted, including any service parameters
 they contain; this API does not apply the CLI capture's password masking.
 
+### I-Am arrivals
+
+`BACnetClient.i_am_arrivals(capacity=1024)` and
+`BipEndpoint.i_am_arrivals(capacity=1024)` return an awaitable for an
+`IAmArrivalIterator`: one frozen `IAmArrival` for every I-Am the owner's link
+hands it, in the order they came (#2612). The discovery table keeps one row an
+address and reports only changes to it; this keeps every arrival, repeats and
+two devices claiming one instance included, with the time it came and who put
+it on the link. A scanner can time the answers to its Who-Is, list the
+addresses claiming an instance, and tell a forwarding BBMD or a router from
+the device:
+
+```python
+arrivals = await client.i_am_arrivals()
+await client.who_is(scope="192.168.1.10")
+arrival = await anext(arrivals)
+print(arrival.object_identifier.instance, arrival.device_address,
+      arrival.monotonic, arrival.forwarding_bbmd, arrival.next_hop_router)
+```
+
+Each record holds the I-Am as the device sent it (`object_identifier`, as on
+`DiscoveredDevice`,
+`max_apdu_length`, `segmentation_supported`, `vendor_id`: another object type,
+a max APDU below 50, vendor 0 and a segmentation value outside the enumeration
+are kept), `monotonic` and `timestamp` as `Frame` takes them, `link`, and who
+sent it:
+
+| `link` | `link_sender`: who put it on this node's link | `link_source`: the source MAC the stack takes | `forwarded` |
+|---|---|---|---|
+| `"bip"` | the datagram's source, `"ip:port"`: for a Forwarded-NPDU the BBMD | the origin a Forwarded-NPDU carries (Annex J.2.5), else the sender | a Forwarded-NPDU whose origin is not its sender |
+| `"ipv6"` | the datagram's source, `"[ip]:port"` | the source VMAC, `"bip6:0x0004D2"`: the original source's in a Forwarded-NPDU (Annex U.2.9) | the same |
+| `"sc"` | the hub connection, `"primary"` or `"failover"` | the originating VMAC the hub fills in (Annex AB.5.3), `"02:00:00:00:00:04"` | never |
+| `"mstp"` | the source station, `"5"` | the source station, `"mstp:5"` | never |
+
+`link_sender` is in `Frame.peer`'s form; `link_source` is in the form the
+calls' `address` takes on that link. `original_source` is the origin's
+`"ip:port"` or `"[ip]:port"` a Forwarded-NPDU carries. When a router relayed the
+I-Am from another network, `source_network` and `source_address` are its SNET
+and SADR (Clause 6.2.2), and `link_source` is the router that put them there
+(Clause 6.5.4): the next hop back, which a node may take as that network's
+router (Clause 6.5.3). `broadcast` is a link broadcast, or a network one (a DNET
+of 65535 or an empty DADR) however the link carried it. Three accessors say it
+in the scanner's terms:
+
+- `device_address`: the device as `device()` takes it, `link_source` for one
+  on this link, `"5:0x07"` for one behind a router;
+- `next_hop_router`: `link_source` when routed, else None;
+- `forwarding_bbmd`: `link_sender` when `forwarded`, else None.
+
+For a device on this link, `device_address` is also what the calls that take
+an `address` (`read_property` and the rest) take. Those calls don't take
+`"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`,
+`read_range`, `read_log_page` and `write_property` take
+`RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`
+(see [Routed targets](#routed-targets)); `device()` takes either.
+
+Records compare, hash, copy and pickle by their fields.
+
+Where it works: `BACnetClient.i_am_arrivals()` on a standalone client on any
+link, and on the client an endpoint's `client()` returns, `BipEndpoint`,
+`ScEndpoint` and `MstpEndpoint` alike (it reads that endpoint's link);
+`BipEndpoint.i_am_arrivals()` on the endpoint itself. `ScEndpoint` and
+`MstpEndpoint` have no method of their own: use their client's. Each stream
+ends when its owner stops: a client's at its `stop()` or its endpoint's close,
+an endpoint's at the endpoint's close.
+
+What is not a record: a frame this node sends; and, on a `BipEndpoint` or the
+client its `client()` returns, the endpoint's own I-Am come back to it, one from its own address naming its own device
+instance (its broadcast returned, or sent back by a BBMD), which is counted in
+`IAmArrivalIterator.own_echoes` and is no loss in `missed_before`. Any other
+I-Am from its own address is a record: another device there is a conflict to
+see, and behind NAT another site may reuse a private address in the origin a
+BBMD forwards (Annex J.7.5). The match is on the address the endpoint sends
+from, so its own I-Am arriving with another source is a record of its own
+device: a broadcast that left by another interface of a host bound to every
+address, or one a BBMD returns with the NAT-mapped origin. A standalone `BACnetClient` sends no I-Am, so it
+leaves nothing out and `own_echoes` stays 0. A BACnet/SC hub never returns a broadcast
+to its sender, and the MS/TP port takes its own echo out. An I-Am whose
+parameters don't decode, or an SC one naming no originating VMAC, counts in
+`IAmArrivalIterator.malformed`; to see who sent it and why it failed, read the
+same traffic with `frames()` and `decode_frame`. A frame whose headers don't
+decode is not known to be an I-Am and counts nowhere; `frames()` shows it. An
+I-Am is never
+confirmed or segmented (Clauses 20.1.3, 21). On MS/TP the station hears the
+whole bus, so an I-Am one station unicasts to another is a record too, with
+`broadcast` false.
+
+The records come from the frame tap, with `FrameIterator`'s semantics: the
+queue holds `capacity` frames of every kind (1 to 65536), a full queue drops
+new frames, and `missed_before` and `missed` count the frames lost, of any
+kind, since the tap cannot tell which held an I-Am. Cancelling a read keeps the
+next record; `aclose()`, stopping a client or closing an endpoint ends the
+iterator and wakes pending reads, and an iterator never keeps its owner alive.
+Two limits:
+
+- the tap shows frames before the stack filters them, so a record does not
+  prove the discovery table took the I-Am (a Forwarded-NPDU a foreign device
+  refuses from an untrusted BBMD is a record);
+- with a subscriber the transport copies every frame once, as for `frames()`;
+  the decode runs where the records are read, never on the transport's path,
+  and a read yields after 32 frames that are no record, so a burst of other
+  traffic doesn't hold it. `missed` is read with the GIL released.
+
 ## Endpoint (one transport, both roles)
 
 `BipEndpoint`, `ScEndpoint`, and `MstpEndpoint` own one transport above both

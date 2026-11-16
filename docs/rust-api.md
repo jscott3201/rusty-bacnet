@@ -12666,6 +12666,67 @@ Object_Name instead of saying its read failed. An Object_List read
 element by element that fails part way is an error now, where the export
 used to return an inventory with `stopped` set and no objects.
 
+### I-Am arrivals
+
+`bacnet_ops::arrival` (#2612) gives one `IAmArrival` for every I-Am a
+transport's link hands this node, from its frame tap: in arrival order, repeats
+and an instance claimed at two addresses included. It works on any owner of a
+tap: a standalone client (`client.transport()`), a client seated on an
+endpoint, or an endpoint alone. The frames are read with `bacnet_ops::decode`,
+the decoder behind `decode_frame` and the capture view:
+
+```rust
+use bacnet_ops::arrival::IAmArrivals;
+
+let link = client.transport();
+// An endpoint, which sends I-Ams, names its socket and instance; a
+// client, which sends none, leaves `with_own` out.
+let mut arrivals = IAmArrivals::new(link.frame_tap().subscribe_with_capacity(256))
+    .with_own(own_socket, own_instance);
+while let Some(arrival) = arrivals.recv().await {
+    let instance = arrival.i_am.object_identifier.instance_number();
+    println!("{instance} at {:?} via {:?}, {:?} lost before", arrival.device_address(),
+        arrival.forwarding_bbmd(), arrival.missed_before);
+}
+```
+
+Each record holds `timestamp` and `monotonic_timestamp` (the tap's), `link`,
+`i_am` (the decoded `IAmRequest`, odd values kept as sent), and who sent it:
+`link_sender` (the tap's `TapPeer`: the UDP source, for a Forwarded-NPDU the
+BBMD; the hub connection; the source station), `link_source` (the source MAC
+the stack takes: a Forwarded-NPDU's origin, Annex J.2.5, else the UDP source;
+the source VMAC on B/IPv6, the original source's when forwarded, Annex U.2.9;
+the originating VMAC on SC, Annex AB.5.3; the station on MS/TP),
+`original_source`, `forwarded` (an origin other than the link sender),
+`source_network` (SNET and SADR, Clause 6.2.2; `link_source` is then the
+router, Clause 6.5.4, which a node may take as that network's router, Clause
+6.5.3), `broadcast` (link or network) and `missed_before`. `device_address()`,
+`next_hop_router()` and `forwarding_bbmd()` say it as a scanner asks it.
+`IAmArrival::from_frame` reads one `TappedFrame`.
+
+Outbound frames are no records. `with_own(address, instance)`, for a node
+that sends I-Ams, leaves out its own I-Am come back to it, one whose origin is
+`address` and whose device is `instance`, and counts it in `own_echoes()`; it
+is no loss in `missed_before`. Another I-Am from that address is a record: a
+conflict, or another NAT site reusing a private address (Annex J.7.5). Without
+`with_own` nothing is left out. An I-Am whose parameters don't decode, or an SC
+one naming no originating VMAC, counts in `malformed()`; the tap's frames show
+who sent it and why. A read decodes at most `SKIP_BATCH` frames that are no
+record before it yields. On MS/TP the station hears the whole bus, so an I-Am
+between two other stations is a record. Ethernet frames are not read yet (the
+decoder has no Clause 7 framing). The tap shows frames before the stack
+filters them, so a record does not prove the discovery table took the I-Am.
+The receiver's capacity counts frames of every kind; a full queue drops the
+newest, and `missed()` and `missed_before` count them. With a subscriber the
+transport copies every frame once; the decode runs in the reading task.
+
+To carry what the records need, `decode_npdu_layer`'s `DecodedApdu` now holds
+the I-Am's decoded parameters (`i_am: Option<Result<IAmRequest, String>>`, in
+place of `device: Option<u32>`; take the instance from
+`i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`), and
+`decode::frame::Link` the typed origin (`origin`) and the source MAC the frame
+names (`source_mac`).
+
 ### Moved to bacnet-tool
 
 The tool-only modules left `bacnet-ops` in #2560, with no re-exports left

@@ -1362,8 +1362,8 @@ raises at once without asking again, unless an I-Am from it arrives
 first; calls made together for one station share one Who-Is. To scan
 stations that never announce themselves, such as MS/TP slaves, pass
 `router` from `BACnetClient.discover_routers()`: without it each
-costs one 3-second Who-Is wait. A station on the client's own network, once it knows the number,
-is sent to directly either way. Other values raise ValueError, a type
+costs one 3-second Who-Is wait. A station on the client's own network,
+once it knows the number, is sent to directly either way. Other values raise ValueError, a type
 other than `str` or `bytes` TypeError, and so does a call in another
 order, since `network` takes an `int`.
 

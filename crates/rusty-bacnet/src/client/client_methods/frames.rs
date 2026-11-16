@@ -2,8 +2,6 @@
 
 use super::super::*;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::data_link::DataLink;
-use std::net::SocketAddr;
 
 #[pymethods]
 impl BACnetClient {
@@ -28,20 +26,11 @@ impl BACnetClient {
             let link = transport
                 .data_link()
                 .ok_or_else(|| PyValueError::new_err("this transport names no data link"))?;
-            let mac = transport.local_mac();
-            let socket = match link {
-                DataLink::Bip => bacnet_transport::bvll::decode_bip_mac(mac)
-                    .ok()
-                    .map(|(ip, port)| SocketAddr::from((ip, port))),
-                DataLink::Bip6 => transport
-                    .bip6_transport()
-                    .and_then(|bip6| bip6.local_address())
-                    .map(SocketAddr::V6),
-                _ => None,
-            };
-            let address = crate::frames::local_address(link, mac, socket).ok_or_else(|| {
-                PyRuntimeError::new_err("the client's transport reports no local address")
-            })?;
+            let socket = crate::frames::link_socket(transport);
+            let address = crate::frames::local_address(link, transport.local_mac(), socket)
+                .ok_or_else(|| {
+                    PyRuntimeError::new_err("the client's transport reports no local address")
+                })?;
             Ok(inner
                 .frames
                 .subscribe(tap.subscribe_with_capacity(capacity), address, clock))

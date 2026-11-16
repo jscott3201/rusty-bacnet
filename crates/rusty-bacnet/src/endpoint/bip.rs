@@ -542,6 +542,32 @@ impl PyBipEndpoint {
         })
     }
 
+    /// Subscribe to a record of every I-Am the endpoint's socket receives,
+    /// as `BACnetClient.i_am_arrivals` does, leaving out and counting its
+    /// own I-Am come back to it: from its own address, of its own device
+    /// instance. Close ends every subscription, waking pending reads.
+    #[pyo3(signature = (capacity=1024))]
+    fn i_am_arrivals<'py>(&self, py: Python<'py>, capacity: usize) -> PyResult<Bound<'py, PyAny>> {
+        let capacity = crate::frames::capacity(capacity)?;
+        let clock = crate::frames::Clock::get(py)?;
+        let lifecycle = self.lifecycle.clone();
+        let frames = self.frames.clone();
+        let instance = self.config.identity.instance();
+        crate::py_async::future_into_py(py, async move {
+            let guard = lifecycle.session.lock().await;
+            let not_started = || PyRuntimeError::new_err("endpoint not started");
+            let session = guard.as_ref().ok_or_else(not_started)?;
+            let receiver = session.frames(capacity).ok_or_else(not_started)?;
+            let own = session.bip_local_address().ok_or_else(not_started)?;
+            Ok(crate::i_am_arrivals::subscribe(
+                &frames,
+                receiver,
+                Some((own.into(), instance)),
+                clock,
+            ))
+        })
+    }
+
     /// The `BACnetClient` on this endpoint's socket (#2617): the standalone
     /// class, with all its calls, on the endpoint's one address. While it
     /// runs, each call returns the same object; once its `stop()` has

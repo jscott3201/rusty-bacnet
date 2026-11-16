@@ -26,12 +26,14 @@ from rusty_bacnet import (
     BACnetTimeStamp,
     BitString,
     FrameSummary,
+    IAmArrival,
     Multicast,
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
     PropertyValue,
     RoutedTarget,
+    Segmentation,
     TagNode,
     Value,
     WritePolicy,
@@ -127,6 +129,21 @@ def samples() -> dict[type, list[Any]]:
             decode_frame(b"\x81", "bip"),
             decode_frame(bytes.fromhex("8202000b00010201001008"), "ipv6"),
             decode_frame(bytes.fromhex("55ff000201000073"), "mstp"),
+        ],
+        # Copied by its fields (#2612): a direct I-Am at the low edges, and
+        # a routed, forwarded one with every field at its high edge.
+        IAmArrival: [
+            IAmArrival._rebuild(  # type: ignore[attr-defined]
+                0.0, 0.0, "bip", ObjectIdentifier(ObjectType.DEVICE, 0), 50,
+                Segmentation.NO_SEGMENTATION, 0, "127.0.0.1:47808", "127.0.0.1:47808",
+                None, False, None, None, False, "127.0.0.1:47808", 0,
+            ),
+            IAmArrival._rebuild(  # type: ignore[attr-defined]
+                1.5e9, -0.5, "ipv6", ObjectIdentifier(ObjectType.from_raw(1023), 4194303),
+                2**32 - 1, Segmentation.from_raw(255), 65535, "[2001:db8::1]:65535",
+                "bip6:0xFFFFFF", "[2001:db8::3]:47808", True, 65534, bytes(range(18)),
+                True, "65534:0x000102030405060708090A0B0C0D0E0F1011", 2**64 - 1,
+            ),
         ],
         Multicast: [
             Multicast("239.255.66.1"),

@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::task::{Context, Poll};
 use std::time::{Instant, SystemTime};
 
 use bacnet_transport::tap::{FrameTapReceiver, TapDirection, TapPeer, TappedFrame};
@@ -75,7 +76,7 @@ impl Clock {
     /// `at` in `time.monotonic()` seconds. The offset is exact in
     /// nanoseconds and the conversion to a float never decreases, so later
     /// instants never read earlier.
-    fn seconds(self, at: Instant) -> f64 {
+    pub(crate) fn seconds(self, at: Instant) -> f64 {
         let nanos = |duration: std::time::Duration| {
             i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX)
         };
@@ -88,7 +89,7 @@ impl Clock {
 }
 
 /// `at` as POSIX seconds, negative before 1970.
-fn posix_seconds(at: SystemTime) -> f64 {
+pub(crate) fn posix_seconds(at: SystemTime) -> f64 {
     match at.duration_since(SystemTime::UNIX_EPOCH) {
         Ok(since) => since.as_secs_f64(),
         Err(before) => -before.duration().as_secs_f64(),
@@ -204,7 +205,7 @@ pub(crate) fn link_token(link: DataLink) -> &'static str {
 /// hub connection the message went over, `"primary"` or `"failover"` as
 /// `ScEvent.hub` names it (the VMACs are in the BVLC-SC header); the MS/TP
 /// station in decimal; an Ethernet MAC in colon hex.
-fn peer_text(peer: TapPeer) -> String {
+pub(crate) fn peer_text(peer: TapPeer) -> String {
     match peer {
         TapPeer::Udp(address) => address.to_string(),
         TapPeer::ScHub(hub) => crate::sc_events::hub_name(hub).into(),
@@ -235,16 +236,55 @@ pub(crate) fn local_address(
     Some(text.into())
 }
 
-struct SourceState {
-    receiver: Mutex<Option<FrameTapReceiver>>,
+/// `transport`'s own UDP socket address on B/IP and B/IPv6, which its
+/// peers see as the source of what it sends; `None` on other links.
+pub(crate) fn link_socket(transport: &bacnet_transport::any::AnyTransport) -> Option<SocketAddr> {
+    use bacnet_transport::port::TransportPort;
+    match transport.data_link()? {
+        DataLink::Bip => bacnet_transport::bvll::decode_bip_mac(transport.local_mac())
+            .ok()
+            .map(|(ip, port)| SocketAddr::from((ip, port))),
+        DataLink::Bip6 => transport
+            .bip6_transport()
+            .and_then(|bip6| bip6.local_address())
+            .map(SocketAddr::V6),
+        _ => None,
+    }
+}
+
+/// What a subscription reads: the tap's receiver, or a stream built over
+/// one (`i_am_arrivals.rs`). Its items carry the gap in front of them.
+pub(crate) trait TapStream: Send + 'static {
+    /// What each read yields.
+    type Item: Send + 'static;
+    /// Poll for the next item; cancel safe.
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Item>>;
+    /// Frames lost to the full queue so far.
+    fn dropped(&self) -> u64;
+}
+
+impl TapStream for FrameTapReceiver {
+    type Item = TappedFrame;
+
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<TappedFrame>> {
+        self.poll_recv(cx)
+    }
+
+    fn dropped(&self) -> u64 {
+        FrameTapReceiver::dropped(self)
+    }
+}
+
+struct SourceState<R> {
+    receiver: Mutex<Option<R>>,
     closed: Notify,
     /// Preserve the final count after the receiver is released.
     final_missed: std::sync::atomic::AtomicU64,
-    /// What the last frame converted reported, for the next one.
+    /// What the last item converted reported, for the next one.
     carry: Mutex<Carry>,
 }
 
-/// The gap the last converted frame reported, and the stream's lost count
+/// The gap the last converted item reported, and the stream's lost count
 /// when it was converted. A leaf lock: held only for the arithmetic.
 #[derive(Default)]
 struct Carry {
@@ -252,19 +292,19 @@ struct Carry {
     lost: u64,
 }
 
-impl SourceState {
-    fn receiver(&self) -> MutexGuard<'_, Option<FrameTapReceiver>> {
+impl<R: TapStream> SourceState<R> {
+    fn receiver(&self) -> MutexGuard<'_, Option<R>> {
         self.receiver.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The `missed_before` of a fresh frame whose queue gap is `queue_gap`,
+    /// The `missed_before` of a fresh item whose queue gap is `queue_gap`,
     /// when the stream has lost `lost` deliveries so far.
     ///
-    /// One delivery is in flight at a time, and a frame is converted only
+    /// One delivery is in flight at a time, and an item is converted only
     /// once the delivery before it settled, so a loss counted since the
-    /// last conversion lost that last frame: the frame and the gap it
+    /// last conversion lost that last item: the item and the gap it
     /// reported both fall in front of this one. The sum of `missed_before`
-    /// over the frames Python received, plus whatever was lost after the
+    /// over the items Python received, plus whatever was lost after the
     /// last of them, is then the iterator's `missed`.
     fn missed_before(&self, queue_gap: u64, lost: u64) -> u64 {
         let mut carry = self.carry.lock().unwrap_or_else(PoisonError::into_inner);
@@ -290,53 +330,148 @@ impl SourceState {
     fn missed(&self) -> u64 {
         self.receiver().as_ref().map_or_else(
             || self.final_missed.load(std::sync::atomic::Ordering::Relaxed),
-            FrameTapReceiver::dropped,
+            R::dropped,
         )
     }
 }
 
-#[derive(Clone)]
-struct FrameSource(Arc<SourceState>);
+struct TapSource<R>(Arc<SourceState<R>>);
 
-impl EventSource<TappedFrame> for FrameSource {
-    async fn recv(&mut self) -> Result<TappedFrame, RecvError> {
+impl<R> Clone for TapSource<R> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<R: TapStream> EventSource<R::Item> for TapSource<R> {
+    async fn recv(&mut self) -> Result<R::Item, RecvError> {
         let closed = self.0.closed.notified();
         tokio::pin!(closed);
         closed.as_mut().enable();
         tokio::select! {
             biased;
             () = &mut closed => Err(RecvError::Closed),
-            frame = std::future::poll_fn(|cx| {
+            item = std::future::poll_fn(|cx| {
                 match self.0.receiver().as_mut() {
-                    Some(receiver) => receiver.poll_recv(cx),
-                    None => std::task::Poll::Ready(None),
+                    Some(receiver) => receiver.poll_next(cx),
+                    None => Poll::Ready(None),
                 }
-            }) => frame.ok_or(RecvError::Closed),
+            }) => item.ok_or(RecvError::Closed),
         }
     }
 }
 
-struct Subscription {
-    stream: LossyReceiver<TappedFrame, FrameSource>,
-    source: FrameSource,
+/// One iterator's subscription: its stream of deliveries over the source.
+pub(crate) struct Subscription<R: TapStream> {
+    stream: LossyReceiver<R::Item, TapSource<R>>,
+    source: TapSource<R>,
 }
 
-impl Subscription {
+impl<R: TapStream> Subscription<R> {
     fn close(&self) {
         self.stream.close();
         self.source.0.close();
     }
+
+    /// Items lost so far, live: dropped by the full queue or lost on the
+    /// way to Python, including any lost after the last item read. It
+    /// stays readable after close.
+    pub(crate) fn missed(&self) -> u64 {
+        self.source.0.missed() + self.stream.missed()
+    }
+
+    /// The next delivery, as [`Self::anext`] takes it: for tests.
+    #[cfg(test)]
+    pub(crate) fn stream_next(
+        &self,
+    ) -> (
+        impl std::future::Future<Output = Option<crate::event_stream::Next<R::Item>>>
+        + Send
+        + 'static
+        + use<R>,
+        Arc<dyn crate::py_async::PutBack>,
+    ) {
+        self.stream.next()
+    }
+
+    /// What a read's future needs to report a fresh item's gap.
+    pub(crate) fn gaps(&self) -> Gaps<R> {
+        Gaps {
+            source: self.source.clone(),
+            lost: self.stream.lost(),
+        }
+    }
+
+    /// `__anext__`: the next item, converted by `convert` with the gap in
+    /// front of it, or `StopAsyncIteration` naming `what` once it ends.
+    pub(crate) fn anext<'py, T>(
+        &self,
+        py: Python<'py>,
+        what: &'static str,
+        convert: impl FnOnce(R::Item, &Gaps<R>) -> T + Send + 'static,
+    ) -> PyResult<Bound<'py, PyAny>>
+    where
+        T: for<'a> IntoPyObject<'a> + Send + 'static,
+    {
+        let (next, put_back) = self.stream.next();
+        let gaps = self.gaps();
+        crate::py_async::future_into_py_or_put_back(
+            py,
+            async move {
+                next.await
+                    .map(|next| next.map(|item| convert(item, &gaps)))
+                    .ok_or_else(|| PyStopAsyncIteration::new_err(format!("{what} ended")))
+            },
+            put_back,
+        )
+    }
+
+    /// `aclose`: stop observing, discard queued items and wake pending
+    /// reads. The owner and its requests are left alone.
+    pub(crate) fn aclose<'py>(self: &Arc<Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let subscription = Arc::clone(self);
+        crate::py_async::future_into_py(py, async move {
+            subscription.close();
+            Ok(())
+        })
+    }
 }
 
-impl Drop for Subscription {
+impl<R: TapStream> Drop for Subscription<R> {
     fn drop(&mut self) {
         self.close();
     }
 }
 
-/// An owner's weak subscriptions: observers never keep the owner alive.
+/// A read's view of the gaps: the source and the stream's lost count, never
+/// the subscription, so a pending read doesn't keep a dropped iterator open.
+pub(crate) struct Gaps<R> {
+    source: TapSource<R>,
+    lost: Lost,
+}
+
+impl<R: TapStream> Gaps<R> {
+    /// The `missed_before` of a fresh item whose queue gap is `queue_gap`.
+    pub(crate) fn missed_before(&self, queue_gap: u64) -> u64 {
+        self.source.0.missed_before(queue_gap, self.lost.get())
+    }
+}
+
+/// A subscription as its owner holds it, to end it.
+trait Close: Send + Sync {
+    fn close(&self);
+}
+
+impl<R: TapStream> Close for Subscription<R> {
+    fn close(&self) {
+        Subscription::close(self);
+    }
+}
+
+/// An owner's weak subscriptions, to frames and to streams over them:
+/// observers never keep the owner alive.
 #[derive(Default)]
-pub(crate) struct FrameSubscriptions(Mutex<Vec<Weak<Subscription>>>);
+pub(crate) struct FrameSubscriptions(Mutex<Vec<Weak<dyn Close>>>);
 
 impl FrameSubscriptions {
     pub(crate) fn subscribe(
@@ -345,8 +480,17 @@ impl FrameSubscriptions {
         local_address: Arc<str>,
         clock: Clock,
     ) -> PyFrameIterator {
-        let source = FrameSource(Arc::new(SourceState {
-            receiver: Mutex::new(Some(receiver)),
+        PyFrameIterator {
+            subscription: self.open(receiver),
+            local_address,
+            clock,
+        }
+    }
+
+    /// A subscription to `stream`, which the owner's close ends.
+    pub(crate) fn open<R: TapStream>(&self, stream: R) -> Arc<Subscription<R>> {
+        let source = TapSource(Arc::new(SourceState {
+            receiver: Mutex::new(Some(stream)),
             closed: Notify::new(),
             final_missed: Default::default(),
             carry: Mutex::default(),
@@ -355,14 +499,11 @@ impl FrameSubscriptions {
             stream: LossyReceiver::from_source(source.clone()),
             source,
         });
+        let weak: Weak<dyn Close> = Arc::downgrade(&subscription) as Weak<dyn Close>;
         let mut subscriptions = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         subscriptions.retain(|old| old.strong_count() != 0);
-        subscriptions.push(Arc::downgrade(&subscription));
-        PyFrameIterator {
-            subscription,
-            local_address,
-            clock,
-        }
+        subscriptions.push(weak);
+        subscription
     }
 
     /// End the current generation; a later owner restart may subscribe anew.
@@ -384,43 +525,24 @@ impl Drop for FrameSubscriptions {
 /// A bounded subscription to the observing owner's existing transport.
 #[pyclass(name = "FrameIterator", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyFrameIterator {
-    subscription: Arc<Subscription>,
+    subscription: Arc<Subscription<FrameTapReceiver>>,
     local_address: Arc<str>,
     clock: Clock,
-}
-
-/// What a read's future needs to turn a tapped frame into a Python
-/// `Frame`. It holds the source and the stream's lost count, never the
-/// subscription, so a pending read doesn't keep a dropped iterator open.
-struct Converter {
-    source: FrameSource,
-    lost: Lost,
-    local_address: Arc<str>,
-    clock: Clock,
-}
-
-impl Converter {
-    fn frame(&self, frame: TappedFrame) -> PyFrame {
-        let missed_before = self
-            .source
-            .0
-            .missed_before(frame.missed_before, self.lost.get());
-        PyFrame {
-            monotonic: self.clock.seconds(frame.monotonic_timestamp),
-            frame,
-            local_address: self.local_address.clone(),
-            missed_before,
-        }
-    }
 }
 
 impl PyFrameIterator {
-    fn converter(&self) -> Converter {
-        Converter {
-            source: self.subscription.source.clone(),
-            lost: self.subscription.stream.lost(),
-            local_address: self.local_address.clone(),
-            clock: self.clock,
+    /// What a read's future needs to turn a tapped frame into a Python
+    /// `Frame`. It keeps nothing of the iterator.
+    fn converter(
+        &self,
+    ) -> impl FnOnce(TappedFrame, &Gaps<FrameTapReceiver>) -> PyFrame + Send + 'static + use<> {
+        let local_address = self.local_address.clone();
+        let clock = self.clock;
+        move |frame, gaps| PyFrame {
+            missed_before: gaps.missed_before(frame.missed_before),
+            monotonic: clock.seconds(frame.monotonic_timestamp),
+            frame,
+            local_address,
         }
     }
 }
@@ -432,36 +554,24 @@ impl PyFrameIterator {
     }
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let (next, put_back) = self.subscription.stream.next();
-        let convert = self.converter();
-        crate::py_async::future_into_py_or_put_back(
-            py,
-            async move {
-                next.await
-                    .map(|next| next.map(|frame| convert.frame(frame)))
-                    .ok_or_else(|| PyStopAsyncIteration::new_err("frame observation ended"))
-            },
-            put_back,
-        )
+        self.subscription
+            .anext(py, "frame observation", self.converter())
     }
 
     /// Frames lost so far, live: dropped by the full queue (which keeps
     /// the oldest frames) or lost on the way to Python, including any lost
     /// after the last frame read. The count remains readable after close.
     #[getter]
-    fn missed(&self) -> u64 {
-        self.subscription.source.0.missed() + self.subscription.stream.missed()
+    fn missed(&self, py: Python<'_>) -> u64 {
+        // The GIL is released: a read in progress holds the receiver.
+        py.detach(|| self.subscription.missed())
     }
 
     /// Stop observation, discard queued frames and wake pending reads.
     /// An already admitted native delivery may still complete its Python Future.
     /// This does not stop the owner or cancel its protocol requests.
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let subscription = self.subscription.clone();
-        crate::py_async::future_into_py(py, async move {
-            subscription.close();
-            Ok(())
-        })
+        self.subscription.aclose(py)
     }
 
     fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {

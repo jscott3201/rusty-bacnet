@@ -380,6 +380,19 @@ beside both roles' traffic, `capacity` frames queued at most (1 to
 65536, else ValueError). RuntimeError before start and after close.
 Close ends the iterator; a restart needs a new one.
 
+### BipEndpoint.i_am_arrivals
+
+```python
+def i_am_arrivals(self, capacity: int = 1024) -> Awaitable[IAmArrivalIterator]
+```
+
+Follow every I-Am the endpoint's socket receives from now on, as
+`BACnetClient.i_am_arrivals` does (#2612). The endpoint's own I-Am
+come back to it, from its own address and naming its own device
+instance, is left out and counted in `own_echoes`; another
+instance from that address is a record. RuntimeError before start
+and after close. Close ends the iterator.
+
 ### BipEndpoint.read_bdt
 
 ```python

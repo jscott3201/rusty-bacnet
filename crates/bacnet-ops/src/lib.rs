@@ -42,6 +42,10 @@
 //!   own request jobs, failing with the low-level client's errors;
 //! - [`export`]: an inventory in another model's terms, so far an
 //!   experimental Standard 223 point list in Turtle (#2436);
+//! - [`arrival`]: every I-Am this node receives, one [`IAmArrival`] per
+//!   frame from the transport's frame tap ([`IAmArrivals`]), with its
+//!   arrival time and who put it on the link: the device, a forwarding
+//!   BBMD or a router;
 //! - [`watch`]: watching points: [`Client::watch`] gives a [`Watch`], a
 //!   stream of each point's [`Update`]s (its latest value, how it came, and
 //!   how its watch goes, [`CovSupport`] included), over the watch hub, one
@@ -54,6 +58,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+pub mod arrival;
 pub mod client;
 pub mod decode;
 pub mod device;
@@ -71,6 +76,7 @@ pub mod target;
 pub mod watch;
 pub mod write;
 
+pub use arrival::{IAmArrival, IAmArrivals};
 pub use client::{Client, Discover, Find, ResolveScope, Scope};
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
