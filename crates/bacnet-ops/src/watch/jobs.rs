@@ -17,7 +17,8 @@ use std::time::{Duration, SystemTime};
 use tokio::time::Instant;
 
 use bacnet_client::client::{
-    CovPropertySubscription, CovTarget, ManagedCOVSubscription, ManagedCOVSubscriptionOptions,
+    BACnetClient, CovPropertySubscription, CovTarget, ManagedCOVSubscription,
+    ManagedCOVSubscriptionOptions, Station,
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
@@ -31,7 +32,7 @@ use super::support::{CovSupport, fills_table, refuses_service};
 use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
 use crate::client::{device_error, failed_locally, unreachable};
-use crate::device::{DeviceAddress, Path};
+use crate::device::{DeviceAddress, path_to};
 use crate::format::{PropertyError, RawRow};
 
 /// How long one cancel may take before it is given up.
@@ -97,16 +98,33 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
     }
 }
 
-/// Where a subscription along `path` goes: the station's MAC on this
-/// network, or its station behind the router on the way.
-fn target_of(path: &Path) -> CovTarget {
-    match path {
-        Path::Local(mac) => CovTarget::local(mac),
-        Path::Routed {
+/// Where a subscription to `station` goes: its MAC on this network, or the
+/// station behind the router on the way.
+///
+/// The `Remote` arm is defensive: [`path_to`] names the router of every
+/// routed station it finds, so it never gives one. A remote station would
+/// go through the router its row in `client`'s discovery table names, as a
+/// request to it would; with no row it has no route and fails with
+/// [`Error::UnknownDevice`], which [`start`] treats as it treats
+/// `path_to`'s own: the point is not asked for, and nothing is sent.
+async fn target_of<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    station: Station,
+) -> Result<CovTarget, Error> {
+    match station {
+        Station::Local { mac } => Ok(CovTarget::local(&mac)),
+        Station::Routed {
             router,
             network,
             mac,
-        } => CovTarget::routed(router, *network, mac),
+        } => Ok(CovTarget::routed(&router, network, &mac)),
+        Station::Remote { network, mac } => match client.get_device_at(network, &mac).await {
+            Some(row) => Ok(CovTarget::routed(&row.mac_address, network, &mac)),
+            None => Err(Error::UnknownDevice {
+                device: crate::target::routed_station(network, &mac)
+                    .unwrap_or_else(|| format!("{network}:")),
+            }),
+        },
     }
 }
 
@@ -121,7 +139,12 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let client = &inner.client;
     let instance = client.instance_at(address).await;
     let known = client.cov_known(address, &point.watched);
-    let Ok(path) = Path::to(client.low_level(), address).await else {
+    let target = match path_to(client.low_level(), address).await {
+        Ok(station) => target_of(client.low_level(), station).await,
+        Err(error) => Err(error),
+    };
+    // No route: nothing is sent, and the point waits for one.
+    let Ok(target) = target else {
         return Started {
             target: None,
             instance,
@@ -131,7 +154,6 @@ pub(super) async fn start<T: TransportPort + 'static>(
             cov: known,
         };
     };
-    let target = target_of(&path);
     // Before anything is sent: the device may notify as soon as it takes
     // the subscription, before this job is back with the scheduler, and
     // the receiver only takes notifications from where the device is.
@@ -395,3 +417,7 @@ pub(super) async fn locate<T: TransportPort + 'static>(
 ) -> Option<DeviceAddress> {
     inner.client.relocated(instance, &address).await
 }
+
+#[cfg(test)]
+#[path = "jobs_target_tests.rs"]
+mod target_tests;

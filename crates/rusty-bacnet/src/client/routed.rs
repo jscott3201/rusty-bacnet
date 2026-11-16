@@ -20,25 +20,15 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use bacnet_client::log_reader::{LogRequester, unsigned_value};
+use bacnet_client::client::Station;
 use bacnet_ops::{DeviceAddress, OpsError};
-use bacnet_services::file::{
-    AtomicReadFileAck, AtomicReadFileRequest, AtomicWriteFileRequest, FileAccessMethod,
-    FileWriteAccessMethod,
-};
-use bacnet_services::read_range::ReadRangeValidation;
-use bacnet_services::read_range::{ReadRangeAck, ReadRangeReply, ReadRangeRequest};
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{ConfirmedServiceChoice, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
-use bytes::Bytes;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 use tokio::sync::watch;
 
-use super::CoreClient;
 use crate::errors::to_py_err;
 use crate::high_level::OpsClient;
 use crate::types::{PeerAddresses, PyRoutedTarget};
@@ -86,18 +76,6 @@ pub(super) struct Routed {
     router: Option<Vec<u8>>,
 }
 
-/// How one routed call reaches its station.
-pub(super) enum Path {
-    /// Directly: the station is on this client's own network.
-    Local(Vec<u8>),
-    /// Through the router at `router` on the local link.
-    Via {
-        router: Vec<u8>,
-        network: u16,
-        station: Vec<u8>,
-    },
-}
-
 impl Routed {
     /// The path to the station on `client`'s link. A named router that is
     /// a broadcast or group address on the local link raises BacnetError:
@@ -106,7 +84,7 @@ impl Routed {
     /// the station's network when there is no row (`device()`'s rule);
     /// with none after that, BacnetLookupError, and `misses` keeps the
     /// station so a call soon after raises at once instead of asking again.
-    pub(super) async fn path(self, client: &OpsClient, misses: &RecentMisses) -> PyResult<Path> {
+    pub(super) async fn path(self, client: &OpsClient, misses: &RecentMisses) -> PyResult<Station> {
         let core = client.low_level();
         if let Some(router) = self.router {
             if core.transport().is_group_destination(&router) {
@@ -117,11 +95,7 @@ impl Routed {
                         .into(),
                 )));
             }
-            return Ok(Path::Via {
-                router,
-                network: self.network,
-                station: self.station,
-            });
+            return Ok(Station::routed(&router, self.network, &self.station));
         }
         let address =
             DeviceAddress::new(self.network, &self.station).map_err(PyValueError::new_err)?;
@@ -181,7 +155,7 @@ impl Routed {
                     .await
                     .map_err(|error| crate::high_level::ops_err(error, style))?,
             );
-            return Ok(Path::Local(self.station));
+            return Ok(Station::local(&self.station));
         }
         let row = at.row(core).await.ok_or_else(|| {
             crate::errors::lookup_error(
@@ -189,11 +163,11 @@ impl Routed {
                 crate::errors::Lookup::unknown(at.to_string()),
             )
         })?;
-        Ok(Path::Via {
-            router: row.mac_address.to_vec(),
-            network: self.network,
-            station: self.station,
-        })
+        Ok(Station::routed(
+            &row.mac_address,
+            self.network,
+            &self.station,
+        ))
     }
 }
 
@@ -206,17 +180,17 @@ pub(crate) const MISS_MEMORY: Duration = Duration::from_secs(30);
 const MISS_ROWS: usize = 256;
 
 /// A station behind a router: its network and its MAC there.
-type Station = (u16, Vec<u8>);
+type StationKey = (u16, Vec<u8>);
 
 /// Stations behind a router that didn't answer the client's Who-Is, and
 /// when, and the lookups in flight (#2617). Std mutexes, held only to look
 /// up, add or remove, never across an await.
 #[derive(Default)]
 pub(super) struct RecentMisses {
-    missed: Mutex<HashMap<Station, Instant>>,
+    missed: Mutex<HashMap<StationKey, Instant>>,
     /// One lookup per station: a call that finds one here waits for what
     /// it finds.
-    asking: Mutex<HashMap<Station, watch::Receiver<Option<Found>>>>,
+    asking: Mutex<HashMap<StationKey, watch::Receiver<Option<Found>>>>,
 }
 
 /// What one lookup found, for the calls that waited on it.
@@ -240,7 +214,7 @@ enum Turn<'a> {
 /// leaves the map; a call that waited on an unfinished one asks itself.
 struct Asking<'a> {
     misses: &'a RecentMisses,
-    station: Station,
+    station: StationKey,
     found: watch::Sender<Option<Found>>,
 }
 
@@ -264,7 +238,7 @@ impl Drop for Asking<'_> {
 
 impl RecentMisses {
     /// Join the lookup in flight for `station`, or start it.
-    fn turn(&self, station: &Station) -> Turn<'_> {
+    fn turn(&self, station: &StationKey) -> Turn<'_> {
         let mut asking = self.asking.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(answer) = asking.get(station) {
             return Turn::Wait(answer.clone());
@@ -279,7 +253,7 @@ impl RecentMisses {
     }
 
     /// Whether `station` missed within [`MISS_MEMORY`] of `now`.
-    fn recent(&self, station: &Station, now: Instant) -> bool {
+    fn recent(&self, station: &StationKey, now: Instant) -> bool {
         let misses = self.missed.lock().unwrap_or_else(PoisonError::into_inner);
         misses
             .get(station)
@@ -288,7 +262,7 @@ impl RecentMisses {
 
     /// Keep `station` as missed at `now`, dropping misses past
     /// [`MISS_MEMORY`] and, at [`MISS_ROWS`], the oldest.
-    fn remember(&self, station: Station, now: Instant) {
+    fn remember(&self, station: StationKey, now: Instant) {
         let mut misses = self.missed.lock().unwrap_or_else(PoisonError::into_inner);
         misses.retain(|_, &mut missed| now.saturating_duration_since(missed) < MISS_MEMORY);
         if misses.len() >= MISS_ROWS
@@ -303,7 +277,7 @@ impl RecentMisses {
     }
 
     /// Forget `station`: it answered.
-    fn forget(&self, station: &Station) {
+    fn forget(&self, station: &StationKey) {
         self.missed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -347,113 +321,6 @@ fn no_route(at: &DeviceAddress, network: u16, asked: Asked) -> PyErr {
         ),
         crate::errors::Lookup::unknown(at.to_string()),
     )
-}
-
-/// One confirmed request on `path`, its answer's service data returned.
-pub(super) async fn confirmed(
-    core: &CoreClient,
-    path: &Path,
-    service: ConfirmedServiceChoice,
-    data: &[u8],
-) -> Result<Bytes, Error> {
-    match path {
-        Path::Local(mac) => core.confirmed_request(mac, service, data).await,
-        Path::Via {
-            router,
-            network,
-            station,
-        } => {
-            core.confirmed_request_routed(router, *network, station, service, data)
-                .await
-        }
-    }
-}
-
-/// One ReadRange on `path`, checked against `request` under `validation`,
-/// as `read_range_with` checks a local one.
-pub(super) async fn read_range(
-    core: &CoreClient,
-    path: &Path,
-    request: &ReadRangeRequest,
-    validation: ReadRangeValidation,
-) -> Result<ReadRangeReply, Error> {
-    let mut buf = bytes::BytesMut::new();
-    request.encode(&mut buf)?;
-    let answer = confirmed(core, path, ConfirmedServiceChoice::READ_RANGE, &buf).await?;
-    ReadRangeReply::check(request, ReadRangeAck::decode(&answer)?, validation)
-}
-
-/// One AtomicReadFile on `path`, its answer decoded and checked against
-/// `access` as `atomic_read_file_decoded` checks a local one: the same
-/// access method, and no more octets or records than asked for.
-pub(super) async fn atomic_read_file(
-    core: &CoreClient,
-    path: &Path,
-    file_identifier: ObjectIdentifier,
-    access: FileAccessMethod,
-) -> Result<AtomicReadFileAck, Error> {
-    let request = AtomicReadFileRequest {
-        file_identifier,
-        access,
-    };
-    let mut buf = bytes::BytesMut::new();
-    request.encode(&mut buf);
-    let answer = confirmed(core, path, ConfirmedServiceChoice::ATOMIC_READ_FILE, &buf).await?;
-    bacnet_client::acks::atomic_read_file(&request.access, &answer)
-}
-
-/// One AtomicWriteFile on `path`, its raw answer returned as the local
-/// `atomic_write_file` returns it.
-pub(super) async fn atomic_write_file(
-    core: &CoreClient,
-    path: &Path,
-    file_identifier: ObjectIdentifier,
-    access: FileWriteAccessMethod,
-) -> Result<Bytes, Error> {
-    let request = AtomicWriteFileRequest {
-        file_identifier,
-        access,
-    };
-    let mut buf = bytes::BytesMut::new();
-    request.encode(&mut buf);
-    confirmed(core, path, ConfirmedServiceChoice::ATOMIC_WRITE_FILE, &buf).await
-}
-
-/// The log reader's requests to one station behind a router: each read
-/// and range goes to `station` on `network` through the router the reader
-/// names, which is the path's.
-pub(super) struct RoutedLog<'a> {
-    pub(super) core: &'a CoreClient,
-    pub(super) network: u16,
-    pub(super) station: &'a [u8],
-}
-
-impl LogRequester for RoutedLog<'_> {
-    async fn read_unsigned(
-        &self,
-        router: &[u8],
-        log: ObjectIdentifier,
-        property: PropertyIdentifier,
-    ) -> Result<u64, Error> {
-        let ack = self
-            .core
-            .read_property_routed(router, self.network, self.station, log, property, None)
-            .await?;
-        unsigned_value(&ack.property_value)
-    }
-
-    async fn read_range_lenient(
-        &self,
-        router: &[u8],
-        request: &ReadRangeRequest,
-    ) -> Result<ReadRangeReply, Error> {
-        let path = Path::Via {
-            router: router.to_vec(),
-            network: self.network,
-            station: self.station.to_vec(),
-        };
-        read_range(self.core, &path, request, ReadRangeValidation::Lenient).await
-    }
 }
 
 #[cfg(test)]

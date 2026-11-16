@@ -12,14 +12,11 @@ use bacnet_client::client;
 use bacnet_client::client::WriteGroupDestination;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
-use bacnet_services::alarm_summary::GetAlarmSummaryAck;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
-use bacnet_services::enrollment_summary::{
-    GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest, PriorityFilter,
-};
+use bacnet_services::enrollment_summary::{GetEnrollmentSummaryRequest, PriorityFilter};
 use bacnet_services::file::{FileAccessMethod, FileWriteAccessMethod};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_services::object_mgmt::ObjectSpecifier;

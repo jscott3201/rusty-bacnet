@@ -95,7 +95,7 @@ use bacnet_transport::port::TransportPort;
 pub use self::address::DeviceAddress;
 use self::follow::Followed;
 pub(crate) use self::follow::Follows;
-pub(crate) use self::route::Path;
+pub(crate) use self::route::path_to;
 use crate::client::{Client, lock};
 use crate::error::OpsError;
 

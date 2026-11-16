@@ -1,8 +1,6 @@
-//! Decoding an acknowledgement and checking it answers its request, as the
-//! client's typed calls do, for a request sent through a generic one such
-//! as [`BACnetClient::confirmed_request_to`](crate::client::BACnetClient::confirmed_request_to).
-//! The typed calls use these same checks, so a request sent either way is
-//! held to one rule.
+//! Decoding an acknowledgement and checking it answers its request: the
+//! answer checks of the typed calls' service descriptions (#2588), which
+//! every way of sending a request shares.
 
 use bacnet_services::file::{AtomicReadFileAck, FileAccessMethod, FileReadAckMethod};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
@@ -16,7 +14,7 @@ use bacnet_types::{enums::ObjectType, error::Error, primitives::ObjectIdentifier
 /// # Errors
 ///
 /// A decoding error for an answer that doesn't decode or doesn't match.
-pub fn read_property(
+pub(crate) fn read_property(
     request: &ReadPropertyRequest,
     bytes: &[u8],
 ) -> Result<ReadPropertyACK, Error> {
@@ -60,7 +58,7 @@ pub fn read_property(
 /// # Errors
 ///
 /// A decoding error for an answer that doesn't decode or doesn't match.
-pub fn atomic_read_file(
+pub(crate) fn atomic_read_file(
     access: &FileAccessMethod,
     bytes: &[u8],
 ) -> Result<AtomicReadFileAck, Error> {

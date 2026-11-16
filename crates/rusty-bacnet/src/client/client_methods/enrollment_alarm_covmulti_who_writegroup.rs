@@ -51,13 +51,10 @@ impl BACnetClient {
                 priority_filter: pf,
                 notification_class_filter,
             };
-            let mut buf = BytesMut::new();
-            req.try_encode(&mut buf).map_err(to_py_err)?;
-            let resp = c
-                .confirmed_request(&mac, ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY, &buf)
+            let ack = c
+                .get_enrollment_summary(&mac, &req)
                 .await
                 .map_err(to_py_err)?;
-            let ack = GetEnrollmentSummaryAck::decode(&resp).map_err(to_py_err)?;
             crate::py_async::attach(|py| {
                 let list = pyo3::types::PyList::empty(py);
                 for entry in &ack.entries {
@@ -106,11 +103,7 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, async move {
             let mac = peers.parse(&address)?;
             let c = started(&inner).await?;
-            let resp = c
-                .confirmed_request(&mac, ConfirmedServiceChoice::GET_ALARM_SUMMARY, &[])
-                .await
-                .map_err(to_py_err)?;
-            let ack = GetAlarmSummaryAck::decode(&resp).map_err(to_py_err)?;
+            let ack = c.get_alarm_summary(&mac).await.map_err(to_py_err)?;
             crate::py_async::attach(|py| {
                 let list = pyo3::types::PyList::empty(py);
                 for entry in &ack.entries {

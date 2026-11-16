@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_network::router::{
     BACnetRouter, OriginateError, OriginateFailure, RouterApplicationPort, RouterOptions,
     RouterPort,
@@ -227,10 +227,8 @@ async fn read_name(
     station: u8,
 ) -> Result<PropertyValue, Error> {
     let ack = client
-        .read_property_routed(
-            &[0xEE],
-            network,
-            &[station],
+        .read_property(
+            &Station::routed(&[0xEE], network, &[station]),
             supply_air(),
             PropertyIdentifier::OBJECT_NAME,
             None,
@@ -249,16 +247,11 @@ async fn the_routers_client_reads_a_device_through_its_table() {
 
     // Side by side: two transactions in flight at once, each matched to
     // its own reply.
+    let station = Station::routed(&[0xEE], 2, &[STATION]);
     let (first, second) = tokio::join!(
         read_name(&site.client, 2, STATION),
-        site.client.read_property_routed(
-            &[0xEE],
-            2,
-            &[STATION],
-            device(),
-            PropertyIdentifier::OBJECT_NAME,
-            None,
-        )
+        site.client
+            .read_property(&station, device(), PropertyIdentifier::OBJECT_NAME, None,)
     );
     assert_eq!(first.unwrap(), PropertyValue::CharacterString(NAME.into()));
     assert_eq!(

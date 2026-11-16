@@ -81,10 +81,10 @@ fn row(network: u16, mac: &[u8], max_apdu: u32) -> DiscoveredDevice {
 
 impl Site {
     /// A WriteProperty of `octets` octets of service data to `to`.
-    async fn write(&self, to: BACnetAddress, octets: usize) -> Result<Bytes, Error> {
+    async fn write(&self, to: impl ToStation, octets: usize) -> Result<Bytes, Error> {
         let data = vec![0u8; octets];
         self.client
-            .confirmed_request_to(&to, ConfirmedServiceChoice::WRITE_PROPERTY, &data)
+            .confirmed_request(&to, ConfirmedServiceChoice::WRITE_PROPERTY, &data)
             .await
     }
 
@@ -101,7 +101,10 @@ impl Site {
     /// frame's MAC, through the router with the station as SNET/SADR when
     /// the request was routed. `error` answers with an Error PDU.
     async fn answer(&self, index: usize, error: bool) -> SentFrame {
-        self.sent.wait_for_len(index + 1).await;
+        // A request that never goes out fails here, not by hanging.
+        tokio::time::timeout(Duration::from_secs(5), self.sent.wait_for_len(index + 1))
+            .await
+            .expect("the request was sent");
         let frame = self.sent.frame(index);
         let npdu = frame.decode_npdu();
         let Apdu::ConfirmedRequest(request) = frame.apdu() else {
@@ -239,7 +242,7 @@ async fn no_route_and_no_station_fail_before_sending() {
     let site = site().await;
     let unknown = site
         .client
-        .confirmed_request_to(
+        .confirmed_request(
             &address(3, &[7]),
             ConfirmedServiceChoice::READ_PROPERTY,
             &[],
@@ -251,7 +254,7 @@ async fn no_route_and_no_station_fail_before_sending() {
     );
     let unknown = site
         .client
-        .unconfirmed_request_to(
+        .unconfirmed_request(
             &address(3, &[7]),
             UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
             &[],
@@ -264,13 +267,78 @@ async fn no_route_and_no_station_fail_before_sending() {
     for nobody in [address(0, &[]), address(DNET, &[]), address(u16::MAX, DADR)] {
         let refused = site
             .client
-            .confirmed_request_to(&nobody, ConfirmedServiceChoice::READ_PROPERTY, &[])
+            .confirmed_request(&nobody, ConfirmedServiceChoice::READ_PROPERTY, &[])
             .await;
         assert!(
             matches!(refused, Err(Error::Encoding(_))),
             "{nobody:?}: {refused:?}"
         );
     }
+    assert!(site.sent.is_empty());
+}
+
+/// An empty MAC on this link names no one station, whichever form names it
+/// (an address on network 0, a local `Station`, a bare MAC): confirmed or
+/// not, each is refused with the same error, and nothing is sent.
+#[tokio::test(start_paused = true)]
+async fn an_empty_local_mac_is_refused_alike_in_every_form() {
+    let site = site().await;
+    let empty: &[u8] = &[];
+    let (read, notice) = (
+        ConfirmedServiceChoice::READ_PROPERTY,
+        UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
+    );
+    let text = |error: Error| match error {
+        Error::Encoding(text) => text,
+        other => panic!("not an encoding error: {other:?}"),
+    };
+    let (by_address, by_station) = (address(0, empty), Station::local(empty));
+    let refusals = [
+        text(
+            site.client
+                .confirmed_request(&by_address, read, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .confirmed_request(&by_station, read, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .confirmed_request(empty, read, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .unconfirmed_request(&by_address, notice, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .unconfirmed_request(&by_station, notice, &[])
+                .await
+                .unwrap_err(),
+        ),
+        text(
+            site.client
+                .unconfirmed_request(empty, notice, &[])
+                .await
+                .unwrap_err(),
+        ),
+    ];
+    assert!(
+        refusals.iter().all(|refusal| *refusal == refusals[0]),
+        "{refusals:?}"
+    );
+    assert_eq!(
+        refusals[0],
+        "network 0 with an empty MAC is a broadcast, not one station"
+    );
     assert!(site.sent.is_empty());
 }
 
@@ -310,11 +378,11 @@ async fn an_unconfirmed_request_goes_to_the_station() {
     site.add(row(DNET, DADR, 1476));
     let service = UnconfirmedServiceChoice::TIME_SYNCHRONIZATION;
     site.client
-        .unconfirmed_request_to(&address(0, STATION), service, &[1, 2])
+        .unconfirmed_request(&address(0, STATION), service, &[1, 2])
         .await
         .unwrap();
     site.client
-        .unconfirmed_request_to(&address(DNET, DADR), service, &[1, 2])
+        .unconfirmed_request(&address(DNET, DADR), service, &[1, 2])
         .await
         .unwrap();
     let frames = site.sent.frames();
@@ -348,12 +416,82 @@ async fn an_address_on_the_own_network_is_local() {
     assert_eq!(sent_to(&frame), (STATION.to_vec(), None));
     let refused = site
         .client
-        .unconfirmed_request_to(
+        .unconfirmed_request(
             &address(77, BROADCAST),
             UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
             &[],
         )
         .await;
     assert!(matches!(refused, Err(Error::Encoding(_))), "{refused:?}");
+    assert_eq!(site.sent.len(), before + 1);
+}
+
+/// A named router needs no row: the request goes through it, even when a
+/// row names another router for the station, while the same station with
+/// no router named and no row fails before sending.
+#[tokio::test(start_paused = true)]
+async fn a_named_router_needs_no_row_and_wins_over_the_rows() {
+    let site = site().await;
+    let named = Station::routed(OTHER, 3, &[7]);
+    let (result, frame) = tokio::join!(site.write(&named, 8), site.answer(0, false));
+    result.unwrap();
+    assert_eq!(sent_to(&frame), (OTHER.to_vec(), Some((3, vec![7]))));
+    let unknown = site.write(Station::remote(3, &[7]), 8).await;
+    assert!(
+        matches!(unknown, Err(Error::UnknownDevice { .. })),
+        "{unknown:?}"
+    );
+    site.add(row(DNET, DADR, 1476));
+    let (result, frame) = tokio::join!(
+        site.write(Station::routed(OTHER, DNET, DADR), 8),
+        site.answer(1, false)
+    );
+    result.unwrap();
+    assert_eq!(
+        sent_to(&frame),
+        (OTHER.to_vec(), Some((DNET, DADR.to_vec())))
+    );
+    site.client
+        .unconfirmed_request(
+            &Station::routed(OTHER, DNET, DADR),
+            UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
+            &[1, 2],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        sent_to(&site.sent.frame(2)),
+        (OTHER.to_vec(), Some((DNET, DADR.to_vec())))
+    );
+    assert_eq!(site.sent.len(), 3);
+}
+
+/// A named router to this client's own network, once it knows the number,
+/// is the station on this link: no router, no DNET. An unconfirmed request
+/// there must name one station, and a routed station must be one a router
+/// can carry, before anything is sent.
+#[tokio::test(start_paused = true)]
+async fn a_named_router_to_the_own_network_goes_local() {
+    let site = site().await;
+    site.learn(77).await;
+    let before = site.sent.len();
+    let (result, frame) = tokio::join!(
+        site.write(Station::routed(ROUTER, 77, STATION), 8),
+        site.answer(before, false)
+    );
+    result.unwrap();
+    assert_eq!(sent_to(&frame), (STATION.to_vec(), None));
+    let service = UnconfirmedServiceChoice::TIME_SYNCHRONIZATION;
+    for nobody in [
+        Station::routed(ROUTER, 77, BROADCAST),
+        Station::routed(ROUTER, DNET, &[]),
+        Station::routed(ROUTER, u16::MAX, DADR),
+    ] {
+        let refused = site.client.unconfirmed_request(&nobody, service, &[]).await;
+        assert!(
+            matches!(refused, Err(Error::Encoding(_))),
+            "{nobody:?}: {refused:?}"
+        );
+    }
     assert_eq!(site.sent.len(), before + 1);
 }

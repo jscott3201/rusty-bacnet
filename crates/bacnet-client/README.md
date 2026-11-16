@@ -108,6 +108,13 @@ that the acknowledgement matches the requested object, property and array
 index. Decode it for your property's expected type; the Who-Is byte literal
 above is not a property-value decoder.
 
+Every typed call takes the station it goes to first: a MAC on this link, a
+`BACnetAddress` (network 0 is this link; another network goes through the
+router the discovery table names for the address), or a
+[`client::Station`], which can also name the router itself
+([`client::ToStation`] lists the forms). Each call keeps its encoding and
+its answer checks whichever form names the station.
+
 Keep the client owner until requests finish, then call
 [`client::BACnetClient::stop`]. Stop aborts and joins its dispatch and local
 network-number work, cancels transactions and stops the owned transport. A

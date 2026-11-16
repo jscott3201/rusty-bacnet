@@ -2,7 +2,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 
-pub mod acks;
+mod acks;
 pub mod client;
 pub mod discovery;
 mod endpoint_requester;

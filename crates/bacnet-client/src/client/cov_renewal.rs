@@ -231,12 +231,10 @@ impl ManagedRequest {
                     Some(confirmed),
                     Some(lifetime),
                 );
-                client.send_subscribe_cov_request(target, request).await
+                client.call_via(target, request).await
             }
             Self::Property(subscription) => {
-                client
-                    .send_subscribe_cov_property_request(target, subscription.into_request())
-                    .await
+                client.call_via(target, subscription.into_request()).await
             }
         }
     }

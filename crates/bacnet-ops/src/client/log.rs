@@ -21,15 +21,14 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_client::log_reader::{LogRequester, unsigned_value};
-use bacnet_services::read_range::{ReadRangeReply, ReadRangeRequest};
+use bacnet_services::read_range::{ReadRangeReply, ReadRangeRequest, ReadRangeValidation};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::device::Path;
 use crate::limits::RequestLimits;
 
 #[cfg(doc)]
@@ -68,7 +67,7 @@ impl Naming {
 pub(crate) struct PagedLog<'a, T: TransportPort + 'static> {
     pub(crate) client: &'a BACnetClient<T>,
     pub(crate) limits: &'a RequestLimits,
-    pub(crate) path: Path,
+    pub(crate) path: Station,
     pub(crate) network: u16,
     /// Set until the first request, which the page's turn paid for.
     pub(crate) first: AtomicBool,
@@ -91,8 +90,8 @@ impl<T: TransportPort + 'static> LogRequester for PagedLog<'_, T> {
     ) -> Result<u64, Error> {
         self.charge().await;
         let ack = self
-            .path
-            .read_property(self.client, log, property, None)
+            .client
+            .read_property(&self.path, log, property, None)
             .await?;
         unsigned_value(&ack.property_value)
     }
@@ -103,6 +102,8 @@ impl<T: TransportPort + 'static> LogRequester for PagedLog<'_, T> {
         request: &ReadRangeRequest,
     ) -> Result<ReadRangeReply, Error> {
         self.charge().await;
-        self.path.read_range_lenient(self.client, request).await
+        self.client
+            .read_range_with(&self.path, request, ReadRangeValidation::Lenient)
+            .await
     }
 }

@@ -867,43 +867,6 @@ impl ScClientBuilder {
     }
 }
 
-/// Routing target for confirmed requests.
-#[derive(Clone, Copy)]
-enum ConfirmedTarget<'a> {
-    Local {
-        mac: &'a [u8],
-    },
-    Routed {
-        router_mac: &'a [u8],
-        dest_network: u16,
-        dest_mac: &'a [u8],
-    },
-}
-
-impl<'a> ConfirmedTarget<'a> {
-    /// The device's address as the discovery table keys it: network 0 and
-    /// the MAC for a local target.
-    fn station(&self) -> (u16, &'a [u8]) {
-        match *self {
-            Self::Local { mac } => (0, mac),
-            Self::Routed {
-                dest_network,
-                dest_mac,
-                ..
-            } => (dest_network, dest_mac),
-        }
-    }
-
-    fn additional_npdu_header_len(&self) -> u16 {
-        match self {
-            Self::Local { .. } => 0,
-            Self::Routed { dest_mac, .. } => u16::try_from(dest_mac.len())
-                .unwrap_or(u16::MAX)
-                .saturating_add(4),
-        }
-    }
-}
-
 fn max_apdu_bucket_at_or_below(limit: u16) -> Option<u16> {
     bacnet_encoding::apdu::max_apdu_header_at_or_below(u32::from(limit)).ok()
 }
@@ -955,6 +918,7 @@ mod segmentation;
 mod segmentation_abort;
 mod segmentation_context;
 mod segmented_request;
+mod service;
 mod station;
 mod summaries;
 mod transaction_cleanup;
@@ -987,6 +951,8 @@ pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
 pub use routing_table::{
     DEFAULT_ROUTING_TABLE_MAX_ENTRIES, RoutingTable, RoutingTableError, RoutingTableWait,
 };
+use station::ConfirmedTarget;
+pub use station::{Station, ToStation};
 pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]
@@ -1081,6 +1047,8 @@ mod tests;
 mod transport_access_tests;
 #[cfg(test)]
 mod typed_error_wire_tests;
+#[cfg(test)]
+mod typed_wire_tests;
 #[cfg(test)]
 mod wpm_validation_tests;
 #[cfg(test)]

@@ -4110,9 +4110,9 @@ as on any link.
 let started = BACnetRouter::start(ports, RouterOptions::new()).await?;
 let (router, port, _controls) = started.into_application_port();
 let client = BACnetClient::generic_builder().transport(port).build().await?;
-// Station 5 on network 2: the router MAC argument is ignored.
+// Station 5 on network 2: the router MAC is ignored.
 let ack = client
-    .read_property_routed(&[0], 2, &[5], object, PropertyIdentifier::PRESENT_VALUE, None)
+    .read_property(&Station::routed(&[0], 2, &[5]), object, PropertyIdentifier::PRESENT_VALUE, None)
     .await?;
 ```
 
@@ -9601,9 +9601,9 @@ the path, and both configuration methods refuse such a router MAC too.
 A routed confirmed request goes to one device on one remote network (#1278).
 DNET must be in 1..=65534, since 0 names no network and 65535 is the global
 broadcast, and the DADR must hold at least one octet, since an empty DADR has
-the remote router broadcast the request. `confirmed_request_routed` and every
-routed confirmed method built on it (`read_property_routed`, the
-`_from_device` and `_to_device` methods, the routed COV subscriptions) refuse
+the remote router broadcast the request. Every routed confirmed request (a
+typed call or `confirmed_request` to a remote `Station` or address, the
+`_from_device` and `_to_device` methods, the routed COV subscriptions) refuses
 any of them with `Error::Encoding` before the path is reserved or a
 transaction registered. Both configuration methods use the same DNET check,
 `add_routed_device` refuses such a peer, and the endpoint requester refuses
@@ -10368,27 +10368,44 @@ its next I-Am; one registered with `add_routed_device` never announces, so
 register it again. A row a device's own I-Am, heard with no SNET,
 refreshed stays.
 
-A station is reached by its address too, which is how one of two devices
-sharing an instance is reached (#2560):
+Every typed call takes the station it goes to as its first argument, in any
+of three forms (#2588), which is how one of two devices sharing an instance
+is reached (#2560):
 
 ```rust
+use bacnet_client::client::Station;
 use bacnet_types::constructed::BACnetAddress;
 
+// A MAC on this link, as a slice, array, Vec or MacAddr: sent to as it is.
+let ack = client.read_property(&mac, object, PropertyIdentifier::PRESENT_VALUE, None).await?;
+// An address: network 0 is this link; another network goes through the
+// router the discovery table's row at the address names.
 let station = BACnetAddress { network_number: 2, mac_address: MacAddr::from_slice(&[0x05]) };
-let ack = client.confirmed_request_to(&station, ConfirmedServiceChoice::READ_PROPERTY, &request).await?;
-let read = bacnet_client::acks::read_property(&read_request, &ack)?; // checked as read_property checks
-client.unconfirmed_request_to(&station, UnconfirmedServiceChoice::TIME_SYNCHRONIZATION, &data).await?;
+client.write_property(&station, object, PropertyIdentifier::PRESENT_VALUE, None, value, Some(8)).await?;
+// Through a router you name: no table row needed (an MS/TP slave never sends an I-Am).
+let behind = Station::routed(&router_mac, 2, &[0x05]);
+client.time_synchronization(&behind, date, time).await?;
+client.confirmed_request(&behind, ConfirmedServiceChoice::READ_PROPERTY, &request).await?;
 ```
 
-Network 0 is a station on this network, at its MAC; another network's
-station goes through the router its discovery-table row names, and an
-address on the client's own network, once it has learned the number, is
-the local station. Both take the existing request path, so the row at the
-address bounds the request (Max APDU, segmentation) and an answer keeps it
-alive; with no row a local station gets the configured limits, and a remote
-one has no route and fails with `Error::UnknownDevice` before anything is
-sent. `bacnet_client::acks` holds the ReadProperty and AtomicReadFile answer
-checks the typed calls use.
+`Station` is the one address type: `Local { mac }`, `Remote { network, mac }`
+(the router from the table, as a `BACnetAddress`) and `Routed { router,
+network, mac }`. The `ToStation` trait is sealed; it takes a `Station`, a
+`BACnetAddress`, the MAC types and a reference to any of them. A station on
+the client's own network, once it has learned the number, is the station at
+that MAC on this link, whichever form names it. Every form takes the same
+request path, so the row at the address bounds the request (Max APDU,
+segmentation) and an answer keeps it alive; with no row a local station gets
+the configured limits, and a remote one with no router named has no route
+and fails with `Error::UnknownDevice` before anything is sent. A MAC costs
+nothing extra: the request goes to it with no table lookup. Each typed call
+keeps its answer check (the ReadProperty identity and the AtomicReadFile
+window, for example) whatever form names the station; the checks are the
+client's own, and `confirmed_request` returns the answer's octets unchecked.
+
+The by-instance calls (`read_property_from_device` and the other
+`_from_device` and `_to_device` forms) still look the instance up in the
+table first.
 
 Who-Has answers and router discovery (#960):
 
