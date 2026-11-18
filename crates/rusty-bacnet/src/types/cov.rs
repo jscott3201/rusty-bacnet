@@ -269,11 +269,11 @@ enum PyCovEvent {
     Multiple(PyCovNotificationMultiple),
 }
 
-impl From<CovEvent> for PyCovEvent {
-    fn from(event: CovEvent) -> Self {
+impl From<COVEvent> for PyCovEvent {
+    fn from(event: COVEvent) -> Self {
         match event {
-            CovEvent::Object(inner) => Self::Object(PyCovNotification { inner }),
-            CovEvent::Multiple(inner) => Self::Multiple(PyCovNotificationMultiple { inner }),
+            COVEvent::Object(inner) => Self::Object(PyCovNotification { inner }),
+            COVEvent::Multiple(inner) => Self::Multiple(PyCovNotificationMultiple { inner }),
         }
     }
 }
@@ -300,10 +300,10 @@ impl<'py> IntoPyObject<'py> for PyCovEvent {
 /// cancelled while it was being delivered comes back on the next call
 /// (#1858).
 #[pyclass(name = "CovNotificationIterator", module = "rusty_bacnet", frozen)]
-pub struct PyCovNotificationIterator(LossyReceiver<CovEvent>);
+pub struct PyCovNotificationIterator(LossyReceiver<COVEvent>);
 
 impl PyCovNotificationIterator {
-    pub fn new(rx: broadcast::Receiver<CovEvent>) -> Self {
+    pub fn new(rx: broadcast::Receiver<COVEvent>) -> Self {
         Self(LossyReceiver::new(rx))
     }
 }

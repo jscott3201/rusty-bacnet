@@ -467,7 +467,7 @@ fn publish_managed_cov_event(
 /// values, so two subscriptions to one object under one process identifier
 /// don't move each other's renewals.
 fn matches_managed_cov_notification(
-    received: &CovEvent,
+    received: &COVEvent,
     target: &Station,
     local_network: Option<u16>,
     subscriber_process_identifier: u32,

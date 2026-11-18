@@ -11,7 +11,7 @@
 
 #![allow(clippy::print_stdout)] // an example demonstrates itself by printing
 
-use bacnet_client::client::{BACnetClient, CovEvent};
+use bacnet_client::client::{BACnetClient, COVEvent};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
             match event {
-                CovEvent::Object(notif) => {
+                COVEvent::Object(notif) => {
                     println!(
                         "  COV (process {}): object={:?}, values={} properties",
                         notif.notification.subscriber_process_identifier,
@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("    {:?}", val.property_identifier);
                     }
                 }
-                CovEvent::Multiple(notif) => {
+                COVEvent::Multiple(notif) => {
                     println!(
                         "  COV-multiple (process {}): {} objects",
                         notif.notification.subscriber_process_identifier,

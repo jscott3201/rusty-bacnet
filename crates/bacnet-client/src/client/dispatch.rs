@@ -402,8 +402,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     return;
                 }
                 if is_confirmed_cov_notification(req.service_choice) {
-                    let multiple = req.service_choice
-                        == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE;
                     Self::receive_confirmed_cov_notification(
                         network,
                         cov_tx,
@@ -412,7 +410,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         source_network,
                         reply,
                         req,
-                        multiple,
                         decode_warning,
                     )
                     .await;
@@ -484,8 +481,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         source_mac,
                         source_network,
                         &req.service_request,
-                        req.service_choice
-                            == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+                        req.service_choice,
                         decode_warning,
                     );
                 } else if req.service_choice
@@ -660,6 +656,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 fn is_confirmed_cov_notification(service: ConfirmedServiceChoice) -> bool {
     service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
         || service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+}
+
+/// Whether a confirmed COV notification is the several-object form
+/// (Clause 13.17). Named here, with the other services the client receives.
+pub(super) fn is_confirmed_cov_multiple(service: ConfirmedServiceChoice) -> bool {
+    service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+}
+
+/// Whether an unconfirmed COV notification is the several-object form
+/// (Clause 13.18).
+pub(super) fn is_unconfirmed_cov_multiple(service: UnconfirmedServiceChoice) -> bool {
+    service == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE
 }
 
 /// Whether a seated client beside a server role answers `request` itself:

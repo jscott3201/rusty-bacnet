@@ -23,8 +23,8 @@ pub(super) fn cov_notification(process_id: u32) -> COVNotificationRequest {
     }
 }
 
-fn received_cov_notification(process_id: u32) -> CovEvent {
-    CovEvent::Object(ReceivedCOVNotification::new(
+fn received_cov_notification(process_id: u32) -> COVEvent {
+    COVEvent::Object(ReceivedCOVNotification::new(
         cov_notification(process_id),
         &[],
         &None,

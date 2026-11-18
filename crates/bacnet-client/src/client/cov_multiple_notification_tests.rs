@@ -1,6 +1,6 @@
 //! The client executes both COV-multiple notification services (#2654,
 //! Clauses 13.17 and 13.18): each is published on `cov_notifications()` as
-//! [`CovEvent::Multiple`], in arrival order beside the single-object ones,
+//! [`COVEvent::Multiple`], in arrival order beside the single-object ones,
 //! and the confirmed form is answered as a ConfirmedCOVNotification is.
 use super::cov_notification_tests::{
     cov_notification, receive_peer_npdu_apdu, send_cov_notification,
@@ -113,7 +113,7 @@ struct Pair {
     client: BACnetClient<LoopbackTransport>,
     peer: LoopbackTransport,
     peer_rx: mpsc::Receiver<ReceivedNpdu>,
-    events: broadcast::Receiver<CovEvent>,
+    events: broadcast::Receiver<COVEvent>,
 }
 
 const CLIENT: [u8; 1] = [0x61];
@@ -140,7 +140,7 @@ impl Pair {
         send_cov_notification(&self.peer, &CLIENT, apdu, routed).await;
     }
 
-    async fn next_event(&mut self) -> CovEvent {
+    async fn next_event(&mut self) -> COVEvent {
         timeout(Duration::from_secs(2), self.events.recv())
             .await
             .expect("timed out waiting for a COV notification")
@@ -149,7 +149,7 @@ impl Pair {
 
     async fn next_multiple(&mut self) -> ReceivedCOVNotificationMultiple {
         match self.next_event().await {
-            CovEvent::Multiple(received) => received,
+            COVEvent::Multiple(received) => received,
             other => panic!("expected a COV-multiple notification, got {other:?}"),
         }
     }
@@ -351,6 +351,60 @@ fn timestamp_without_times() -> Bytes {
     Bytes::from(octets)
 }
 
+/// A COVNotificationMultiple whose values carry a time of change though the
+/// notification has no timestamp.
+fn times_without_timestamp() -> Bytes {
+    let mut octets = encoded(&multiple(35, true)).to_vec();
+    // [3] { Date, Time }: an opening tag, two 5-octet values, a closing tag.
+    let at = octets.iter().position(|octet| *octet == 0x3e).unwrap();
+    octets.drain(at..at + 12);
+    Bytes::from(octets)
+}
+
+#[tokio::test]
+async fn a_timestamp_and_time_of_change_mismatch_is_acknowledged_and_published() {
+    let mut pair = pair(ClientOptions::default()).await;
+    for (invoke_id, (body, has_timestamp, has_times)) in (0x70..).zip([
+        (timestamp_without_times(), true, false),
+        (times_without_timestamp(), false, true),
+    ]) {
+        pair.send(
+            confirmed(
+                invoke_id,
+                ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+                body.clone(),
+            ),
+            None,
+        )
+        .await;
+        let received = pair.next_multiple().await;
+        assert_eq!(received.delivery, COVNotificationDelivery::Confirmed);
+        assert_eq!(received.notification.timestamp.is_some(), has_timestamp);
+        assert!(
+            received
+                .notification
+                .list_of_cov_notifications
+                .iter()
+                .flat_map(|o| &o.list_of_values)
+                .all(|v| v.time_of_change.is_some() == has_times)
+        );
+        assert_simple_ack(pair.answer().await.1, invoke_id);
+
+        pair.send(
+            unconfirmed(
+                UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+                body,
+            ),
+            None,
+        )
+        .await;
+        let received = pair.next_multiple().await;
+        assert_eq!(received.delivery, COVNotificationDelivery::Unconfirmed);
+    }
+    pair.assert_quiet().await;
+    pair.stop().await;
+}
+
 #[tokio::test]
 async fn a_malformed_multiple_is_rejected_or_dropped_as_the_single_form_is() {
     let mut pair = pair(ClientOptions::default()).await;
@@ -365,11 +419,6 @@ async fn a_malformed_multiple_is_rejected_or_dropped_as_the_single_form_is() {
         (
             Bytes::from_static(&[0x09, 0x22, 0x1B, 0x02, 0x00, 0x64]),
             RejectReason::INVALID_DATA_ENCODING,
-        ),
-        // A timestamp with no time of change beside it.
-        (
-            timestamp_without_times(),
-            RejectReason::PARAMETER_OUT_OF_RANGE,
         ),
     ];
     for (invoke_id, (body, reason)) in (0x60..).zip(cases.clone()) {
@@ -410,13 +459,13 @@ async fn the_ack_policy_answers_both_confirmed_forms() {
     let options = ClientOptions::default().with_confirmed_cov_notification_ack_policy(|event| {
         assert_eq!(event.delivery(), COVNotificationDelivery::Confirmed);
         match event {
-            CovEvent::Object(_) => ConfirmedCOVNotificationResponse::Ack,
-            CovEvent::Multiple(received)
+            COVEvent::Object(_) => ConfirmedCOVNotificationResponse::Ack,
+            COVEvent::Multiple(received)
                 if received.notification.subscriber_process_identifier == 35 =>
             {
                 ConfirmedCOVNotificationResponse::Reject(RejectReason::OTHER)
             }
-            CovEvent::Multiple(_) => ConfirmedCOVNotificationResponse::NoResponse,
+            COVEvent::Multiple(_) => ConfirmedCOVNotificationResponse::NoResponse,
         }
     });
     let mut pair = pair(options).await;
@@ -540,7 +589,7 @@ fn a_station_matches_a_multiple_by_its_source_as_it_matches_one_object() {
         network: 7,
         mac_address: MacAddr::from_slice(&[0x0a]),
     });
-    let event = CovEvent::Multiple(ReceivedCOVNotificationMultiple::new(
+    let event = COVEvent::Multiple(ReceivedCOVNotificationMultiple::new(
         multiple(1, false),
         &[0x09],
         &source,
@@ -550,7 +599,7 @@ fn a_station_matches_a_multiple_by_its_source_as_it_matches_one_object() {
     assert!(Station::remote(7, &[0x0a]).is_source_of(&event, None));
     assert!(!Station::remote(7, &[0x0b]).is_source_of(&event, None));
     assert!(!Station::local(&[0x09]).is_source_of(&event, None));
-    let local = CovEvent::Multiple(ReceivedCOVNotificationMultiple::new(
+    let local = COVEvent::Multiple(ReceivedCOVNotificationMultiple::new(
         multiple(1, false),
         &[0x0a],
         &None,
@@ -559,4 +608,43 @@ fn a_station_matches_a_multiple_by_its_source_as_it_matches_one_object() {
     assert!(Station::local(&[0x0a]).is_source_of(&local, None));
     assert!(Station::remote(7, &[0x0a]).is_source_of(&local, Some(7)));
     assert!(!Station::remote(7, &[0x0a]).is_source_of(&local, None));
+}
+
+#[test]
+fn the_event_reports_the_initiating_device_of_either_kind() {
+    for instance in [7, 4_000] {
+        let device = oid(ObjectType::DEVICE, instance);
+        let object = COVEvent::Object(ReceivedCOVNotification::new(
+            COVNotificationRequest {
+                initiating_device_identifier: device,
+                ..cov_notification(1)
+            },
+            &[],
+            &None,
+            COVNotificationDelivery::Unconfirmed,
+        ));
+        let several = COVEvent::Multiple(ReceivedCOVNotificationMultiple::new(
+            COVNotificationMultipleRequest {
+                initiating_device_identifier: device,
+                ..multiple(1, false)
+            },
+            &[],
+            &None,
+            COVNotificationDelivery::Unconfirmed,
+        ));
+        assert_eq!(object.initiating_device_identifier(), device);
+        assert_eq!(several.initiating_device_identifier(), device);
+        // The by-value accessors split the kinds the same way.
+        assert!(object.clone().into_multiple().is_none());
+        assert!(object.into_object().is_some());
+        assert!(several.clone().into_object().is_none());
+        assert_eq!(
+            several
+                .into_multiple()
+                .unwrap()
+                .notification
+                .initiating_device_identifier,
+            device
+        );
+    }
 }

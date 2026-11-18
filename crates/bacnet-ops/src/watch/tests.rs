@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bacnet_client::client::{CovEvent, ReceivedCOVNotification, Station};
+use bacnet_client::client::{COVEvent, ReceivedCOVNotification, Station};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -283,8 +283,8 @@ async fn joining_as_the_last_leaves_keeps_one_live_subscription() {
 }
 
 /// `received` as the client's stream carries it.
-pub(super) fn event(received: &ReceivedCOVNotification) -> CovEvent {
-    CovEvent::Object(received.clone())
+pub(super) fn event(received: &ReceivedCOVNotification) -> COVEvent {
+    COVEvent::Object(received.clone())
 }
 
 /// A notification for `point`'s object, from the lab device's MAC,
@@ -503,7 +503,7 @@ async fn cov_multiple_notifications_are_counted_and_left_alone() {
         .by_process
         .insert(PROCESS_BASE, Arc::clone(&shared));
     shared.lock().target = Some(Station::local(&[2]));
-    let multiple = CovEvent::Multiple(ReceivedCOVNotificationMultiple {
+    let multiple = COVEvent::Multiple(ReceivedCOVNotificationMultiple {
         notification: COVNotificationMultipleRequest {
             subscriber_process_identifier: PROCESS_BASE,
             initiating_device_identifier: oid(ObjectType::DEVICE, LAB),

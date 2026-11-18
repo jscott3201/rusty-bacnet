@@ -1,6 +1,6 @@
 //! End-to-end integration tests for the BACnet client that require a real server.
 
-use bacnet_client::client::{BACnetClient, COVNotificationDelivery, CovEvent};
+use bacnet_client::client::{BACnetClient, COVEvent, COVNotificationDelivery};
 use bacnet_encoding::primitives::encode_app_real;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::database::ObjectDatabase;
@@ -160,7 +160,7 @@ async fn ao_server() -> (BACnetServer<bacnet_transport::bip::BipTransport>, Vec<
 /// AO:1's Present_Value as the next COV notification, a COV-multiple one
 /// from device 1234 for `process`, reports it.
 async fn next_multiple(
-    rx: &mut tokio::sync::broadcast::Receiver<CovEvent>,
+    rx: &mut tokio::sync::broadcast::Receiver<COVEvent>,
     process: u32,
     confirmed: bool,
 ) -> COVNotificationValue {
@@ -168,7 +168,7 @@ async fn next_multiple(
         .await
         .expect("timed out waiting for a COV-multiple notification")
         .expect("COV channel closed");
-    let CovEvent::Multiple(received) = event else {
+    let COVEvent::Multiple(received) = event else {
         panic!("expected a COV-multiple notification: {event:?}");
     };
     let expected = if confirmed {
@@ -207,7 +207,7 @@ async fn next_multiple(
 
 /// A SubscribeCOVPropertyMultiple to AO:1's Present_Value: confirmed and
 /// timestamped, then unconfirmed and not (#2654). Each subscription's
-/// notifications reach `cov_notifications()` as `CovEvent::Multiple`, and
+/// notifications reach `cov_notifications()` as `COVEvent::Multiple`, and
 /// none comes once it is cancelled.
 #[tokio::test]
 async fn cov_property_multiple_notifies_and_cancels() {

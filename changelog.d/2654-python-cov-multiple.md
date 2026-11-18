@@ -1,7 +1,7 @@
 ---
-section: Added
+section: Changed
 ---
-- **Python API:** `cov_notifications()` also yields `CovNotificationMultiple`,
-  the decoded objects, values and times of change a
-  `subscribe_cov_property_multiple` subscription reports; both classes gain
-  `kind`, `"object"` or `"multiple"` (#2654).
+- **Breaking (Python API):** `cov_notifications()` also yields
+  `CovNotificationMultiple`, with or without a `subscribe_cov_property_multiple`
+  subscription (an unsubscribed broadcast); both classes gain `kind`,
+  `"object"` or `"multiple"` (#2654).

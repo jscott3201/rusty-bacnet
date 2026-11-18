@@ -47,7 +47,7 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
     /// ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple alike.
     pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&CovEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.options = self
             .options
@@ -122,7 +122,7 @@ impl BipClientBuilder {
     /// ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple alike.
     pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&CovEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.options = self
             .options
@@ -211,7 +211,7 @@ impl Bip6ClientBuilder {
     /// ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple alike.
     pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&CovEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.options = self
             .options
@@ -268,7 +268,7 @@ impl ScClientBuilder {
     /// ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple alike.
     pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&CovEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.options = self
             .options

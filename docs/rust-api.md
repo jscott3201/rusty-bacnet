@@ -10278,11 +10278,11 @@ client.subscribe_cov_property_multiple(&mac, &request).await?;
 // (multiple consumers OK), in the order they arrive.
 let mut rx = client.cov_notifications();
 match rx.recv().await? {
-    CovEvent::Object(received) => {
+    COVEvent::Object(received) => {
         // ConfirmedCOVNotification or UnconfirmedCOVNotification.
         let _values = &received.notification.list_of_values;
     }
-    CovEvent::Multiple(received) => {
+    COVEvent::Multiple(received) => {
         // ConfirmedCOVNotificationMultiple or
         // UnconfirmedCOVNotificationMultiple: each object's changed values,
         // with their time of change when the subscription asked for it.
@@ -10296,19 +10296,26 @@ match rx.recv().await? {
 client.unsubscribe_cov(&mac, process_id, oid).await?;
 ```
 
-`cov_notifications()` yields a `CovEvent`: `Object(ReceivedCOVNotification)`
+`cov_notifications()` yields a `COVEvent`: `Object(ReceivedCOVNotification)`
 for the notifications SubscribeCOV and SubscribeCOVProperty subscriptions
 bring, or `Multiple(ReceivedCOVNotificationMultiple)` for those of a
 SubscribeCOVPropertyMultiple subscription (#2654). Both carry the same
-source fields and delivery, and `CovEvent` reads the fields they share
+source fields and delivery, and `COVEvent` reads the fields they share
 (`subscriber_process_identifier()`, `time_remaining()`, `source_mac()` and
 so on); `Station::is_source_of` matches either by its source. The client
 acknowledges a confirmed notification of either form whether or not it knows
 the subscription, and publishes it; `confirmed_cov_notification_ack_policy`
-sees the `CovEvent` and may answer otherwise. A notification sent again,
+sees the `COVEvent` and may answer otherwise. A notification sent again,
 its answer lost, is acknowledged and published again. A segmented confirmed
 notification is aborted unread (#2646). `ManagedCOVSubscription` renews
 SubscribeCOV and SubscribeCOVProperty subscriptions only.
+
+`COVNotificationMultipleRequest::decode` is lenient about times: the clause
+asks for a notification's top-level timestamp and its values' times of change
+to be present together or absent together, but a notification with one and
+not the other decodes, is acknowledged when confirmed, and is published with
+the times it carried. `encode` stays strict and refuses to write such a
+mismatch (#2654).
 
 `SubscribeCOVPropertyMultipleRequest::encode` is fallible and validates the entire
 request before appending bytes; `validate` makes the same checks alone, and

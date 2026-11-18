@@ -148,7 +148,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// first-failed-subscription detail.
     ///
     /// The notifications such a subscription brings arrive on
-    /// [`Self::cov_notifications`] as [`CovEvent::Multiple`], beside the
+    /// [`Self::cov_notifications`] as [`COVEvent::Multiple`], beside the
     /// single-object ones, in the order they came.
     pub async fn subscribe_cov_property_multiple(
         &self,
@@ -159,8 +159,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Get a receiver for incoming COV notifications of both forms: about one
-    /// object ([`CovEvent::Object`]: ConfirmedCOVNotification and
-    /// UnconfirmedCOVNotification) or about several ([`CovEvent::Multiple`]:
+    /// object ([`COVEvent::Object`]: ConfirmedCOVNotification and
+    /// UnconfirmedCOVNotification) or about several ([`COVEvent::Multiple`]:
     /// ConfirmedCOVNotificationMultiple and UnconfirmedCOVNotificationMultiple),
     /// in the order they arrive. Each call returns a new independent receiver.
     ///
@@ -171,7 +171,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// [`ClientOptions::with_confirmed_cov_notification_ack_policy`] to
     /// answer otherwise. A notification the sender sends again, its answer
     /// lost, is published again.
-    pub fn cov_notifications(&self) -> broadcast::Receiver<CovEvent> {
+    pub fn cov_notifications(&self) -> broadcast::Receiver<COVEvent> {
         self.cov_tx.subscribe()
     }
 }

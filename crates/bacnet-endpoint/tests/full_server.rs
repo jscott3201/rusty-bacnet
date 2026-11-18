@@ -361,7 +361,7 @@ async fn each_answer_goes_to_the_role_that_asked() {
     // Each notification arrives, confirmed, and is acknowledged before the
     // next change.
     let acknowledged = async |heard: &mut tokio::sync::broadcast::Receiver<_>, what: &str| {
-        let notification: bacnet_client::client::CovEvent =
+        let notification: bacnet_client::client::COVEvent =
             tokio::time::timeout(WAIT, heard.recv())
                 .await
                 .unwrap_or_else(|_| panic!("no notification {what}"))

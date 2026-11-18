@@ -132,7 +132,7 @@ impl Station {
     ///
     /// Both kinds of notification are matched alike, by the source fields
     /// they share. The managed COV helpers match notifications by this rule.
-    pub fn is_source_of(&self, received: &CovEvent, local_network: Option<u16>) -> bool {
+    pub fn is_source_of(&self, received: &COVEvent, local_network: Option<u16>) -> bool {
         let (source_network, source_address) =
             (received.source_network(), received.source_address());
         let local_from = |mac: &MacAddr| {

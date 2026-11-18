@@ -155,6 +155,12 @@ impl COVNotificationMultipleRequest {
     }
 
     /// Decode the notification from `data`; errors on missing, malformed or truncated fields.
+    ///
+    /// The decoder is lenient about timestamps (Clause 13.17.1.1.4 asks for a
+    /// top-level timestamp and per-value times of change together or not at
+    /// all): a notification with one but not the other decodes, carrying the
+    /// times it had. [`encode`](Self::encode) stays strict and refuses to
+    /// write such a mismatch.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -199,7 +205,6 @@ impl COVNotificationMultipleRequest {
 
         let mut items = Vec::new();
         let mut total_values = 0usize;
-        let mut has_time_of_change = false;
         loop {
             if offset >= data.len() {
                 return Err(Error::missing(
@@ -348,7 +353,6 @@ impl COVNotificationMultipleRequest {
                         ));
                     }
                     time_of_change = Some(decoded_time);
-                    has_time_of_change = true;
                     offset = end;
                 }
 
@@ -367,12 +371,6 @@ impl COVNotificationMultipleRequest {
             });
         }
         expect_end(data, offset, offset, "COVNotificationMultiple")?;
-        if timestamp.is_some() != has_time_of_change {
-            return Err(reject(
-                RejectReason::PARAMETER_OUT_OF_RANGE,
-                "COVNotificationMultiple timestamp/time-of-change mismatch",
-            ));
-        }
 
         Ok(Self {
             subscriber_process_identifier,

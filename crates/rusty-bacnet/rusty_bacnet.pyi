@@ -6029,7 +6029,14 @@ class BACnetClient:
         (several objects, from ``subscribe_cov_property_multiple``). The client
         acknowledges a confirmed one of either kind whether or not it knows the
         subscription; match one by its ``subscriber_process_identifier`` and
-        source."""
+        source.
+        An unsubscribed sender's broadcast can bring a
+        ``CovNotificationMultiple`` too, so check ``kind`` (or use
+        ``isinstance``) before reading a ``CovNotification``'s fields. A
+        segmented COV-multiple request is answered with an Abort (the client
+        does not support segmentation; tracked in #2646), and a confirmed
+        notification sent again, its answer lost, is published again.
+        """
         ...
 
     # --- Object management ---

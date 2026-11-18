@@ -13,7 +13,7 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use tokio::sync::broadcast;
 
 use bacnet_client::client::{
-    COVNotificationDelivery, CovEvent, ReceivedCOVNotification, ReceivedCOVNotificationMultiple,
+    COVEvent, COVNotificationDelivery, ReceivedCOVNotification, ReceivedCOVNotificationMultiple,
 };
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_encoding::primitives::encode_property_value;

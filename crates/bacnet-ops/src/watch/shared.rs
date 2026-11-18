@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::Waker;
 use std::time::{Duration, SystemTime};
 
-use bacnet_client::client::{CovEvent, Station};
+use bacnet_client::client::{COVEvent, Station};
 use bacnet_types::enums::PropertyIdentifier;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::Instant;
@@ -527,7 +527,7 @@ impl Registry {
     /// `own` is the client's network number, once known.
     pub(super) fn deliver(
         &self,
-        event: &CovEvent,
+        event: &COVEvent,
         own: Option<u16>,
     ) -> Option<(Instant, Arc<Shared>)> {
         let received = event.object()?;

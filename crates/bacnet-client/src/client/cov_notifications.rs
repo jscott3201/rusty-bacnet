@@ -29,7 +29,7 @@ pub enum ConfirmedCOVNotificationResponse {
 /// Callback used to choose how to answer a confirmed COV notification, of
 /// either form, after decode.
 pub type ConfirmedCOVNotificationAckPolicy =
-    Arc<dyn Fn(&CovEvent) -> ConfirmedCOVNotificationResponse + Send + Sync>;
+    Arc<dyn Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync>;
 
 /// A decoded inbound COV notification about one object
 /// (ConfirmedCOVNotification or UnconfirmedCOVNotification) plus
@@ -73,7 +73,7 @@ pub struct ReceivedCOVNotificationMultiple {
 /// One item of [`BACnetClient::cov_notifications`]: a COV notification of
 /// either form, in the order the client received them.
 #[derive(Debug, Clone, PartialEq)]
-pub enum CovEvent {
+pub enum COVEvent {
     /// About one object: what SubscribeCOV and SubscribeCOVProperty
     /// subscriptions bring.
     Object(ReceivedCOVNotification),
@@ -129,7 +129,7 @@ impl ReceivedCOVNotificationMultiple {
     }
 }
 
-impl CovEvent {
+impl COVEvent {
     /// The single-object notification, if this is one.
     pub fn object(&self) -> Option<&ReceivedCOVNotification> {
         match self {
@@ -143,6 +143,14 @@ impl CovEvent {
         match self {
             Self::Object(received) => Some(received),
             Self::Multiple(_) => None,
+        }
+    }
+
+    /// The several-object notification, if this is one, by value.
+    pub fn into_multiple(self) -> Option<ReceivedCOVNotificationMultiple> {
+        match self {
+            Self::Object(_) => None,
+            Self::Multiple(received) => Some(received),
         }
     }
 
@@ -210,32 +218,39 @@ impl CovEvent {
         }
     }
 
-    /// Decode a COV notification of either form: the one-object services
-    /// when `multiple` is false, the several-object ones otherwise. A
-    /// failure carries the Reject reason a confirmed request answers it
+    /// Decode a several-object COV notification
+    /// (ConfirmedCOVNotificationMultiple or UnconfirmedCOVNotificationMultiple).
+    /// A failure carries the Reject reason a confirmed request answers it
     /// with, the one the server gives the same syntax fault (#1446); an
     /// unconfirmed request's is unused.
-    fn decode(
+    fn decode_multiple(
         data: &[u8],
-        multiple: bool,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
         delivery: COVNotificationDelivery,
     ) -> Result<Self, (Error, RejectReason)> {
-        if multiple {
-            let notification = COVNotificationMultipleRequest::decode(data).map_err(|error| {
-                let reason = error
-                    .reject_reason()
-                    .unwrap_or(RejectReason::INVALID_DATA_ENCODING);
-                (error, reason)
-            })?;
-            return Ok(Self::Multiple(ReceivedCOVNotificationMultiple::new(
-                notification,
-                source_mac,
-                source_network,
-                delivery,
-            )));
-        }
+        let notification = COVNotificationMultipleRequest::decode(data).map_err(|error| {
+            let reason = error
+                .reject_reason()
+                .unwrap_or(RejectReason::INVALID_DATA_ENCODING);
+            (error, reason)
+        })?;
+        Ok(Self::Multiple(ReceivedCOVNotificationMultiple::new(
+            notification,
+            source_mac,
+            source_network,
+            delivery,
+        )))
+    }
+
+    /// Decode a one-object COV notification, as [`Self::decode_multiple`]
+    /// does the several-object kind.
+    fn decode_object(
+        data: &[u8],
+        source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
+        delivery: COVNotificationDelivery,
+    ) -> Result<Self, (Error, RejectReason)> {
         let notification = COVNotificationRequest::decode_detailed(data).map_err(|error| {
             let reason = error.reject_reason();
             (error.into_error(), reason)
@@ -254,8 +269,9 @@ pub(crate) fn default_confirmed_cov_notification_ack_policy() -> ConfirmedCOVNot
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Execute a ConfirmedCOVNotification, or with `multiple` a
-    /// ConfirmedCOVNotificationMultiple (Clauses 13.7 and 13.17): publish it
+    /// Execute a ConfirmedCOVNotification or a
+    /// ConfirmedCOVNotificationMultiple (Clauses 13.7 and 13.17), as `req`'s
+    /// service choice says: publish it
     /// on `cov_tx` and answer as the policy says, or reject it when it
     /// doesn't decode. The client keeps no list of its subscriptions, so a
     /// notification for one it doesn't know is published and acknowledged
@@ -265,18 +281,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn receive_confirmed_cov_notification(
         network: &Arc<NetworkLayer<T>>,
-        cov_tx: &broadcast::Sender<CovEvent>,
+        cov_tx: &broadcast::Sender<COVEvent>,
         policy: &ConfirmedCOVNotificationAckPolicy,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
         reply: InboundReply,
         req: ConfirmedRequestPdu,
-        multiple: bool,
         decode_warning: &WarnThrottle,
     ) {
-        let response = match CovEvent::decode(
+        let multiple = super::dispatch::is_confirmed_cov_multiple(req.service_choice);
+        let decode = if multiple {
+            COVEvent::decode_multiple
+        } else {
+            COVEvent::decode_object
+        };
+        let response = match decode(
             &req.service_request,
-            multiple,
             source_mac,
             source_network,
             COVNotificationDelivery::Confirmed,
@@ -313,20 +333,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 }
 
-/// Execute an UnconfirmedCOVNotification, or with `multiple` an
-/// UnconfirmedCOVNotificationMultiple (Clauses 13.8 and 13.18): publish it
-/// on `cov_tx`, or drop it with a warning when it doesn't decode.
+/// Execute an UnconfirmedCOVNotification or an
+/// UnconfirmedCOVNotificationMultiple (Clauses 13.8 and 13.18), as
+/// `service_choice` says: publish it on `cov_tx`, or drop it with a warning
+/// when it doesn't decode.
 pub(super) fn receive_unconfirmed_cov_notification(
-    cov_tx: &broadcast::Sender<CovEvent>,
+    cov_tx: &broadcast::Sender<COVEvent>,
     source_mac: &[u8],
     source_network: &Option<NpduAddress>,
     data: &[u8],
-    multiple: bool,
+    service_choice: UnconfirmedServiceChoice,
     decode_warning: &WarnThrottle,
 ) {
-    match CovEvent::decode(
+    let multiple = super::dispatch::is_unconfirmed_cov_multiple(service_choice);
+    let decode = if multiple {
+        COVEvent::decode_multiple
+    } else {
+        COVEvent::decode_object
+    };
+    match decode(
         data,
-        multiple,
         source_mac,
         source_network,
         COVNotificationDelivery::Unconfirmed,
@@ -355,7 +381,7 @@ impl ClientOptions {
     /// ConfirmedCOVNotificationMultiple alike.
     pub fn with_confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&CovEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.confirmed_cov_notification_ack_policy = Arc::new(policy);
         self

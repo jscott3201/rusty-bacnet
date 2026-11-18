@@ -467,6 +467,7 @@ pub(super) fn session<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
             "requests": stats.requests,
             "throttled_ms": u64::try_from(stats.throttled.as_millis()).unwrap_or(u64::MAX),
             "lagged": stats.lagged,
+            "cov_multiple_ignored": stats.cov_multiple_ignored,
             "lifetime_s": hub.options().lifetime.secs(),
         });
     }

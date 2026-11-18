@@ -15,7 +15,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bacnet_client::client::{CovEvent, ReceivedCOVNotification, Station};
+use bacnet_client::client::{COVEvent, ReceivedCOVNotification, Station};
 use bacnet_types::constructed::BACnetPropertyValue;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
@@ -47,7 +47,7 @@ pub(super) struct Heard {
 /// channel.
 pub(super) async fn run(
     registry: Arc<Registry>,
-    mut notifications: broadcast::Receiver<CovEvent>,
+    mut notifications: broadcast::Receiver<COVEvent>,
     heard: Heard,
     mut stop: watch::Receiver<bool>,
 ) {
@@ -64,8 +64,8 @@ pub(super) async fn run(
             biased;
             _ = stop.wait_for(|stopped| *stopped) => break,
             received = notifications.recv() => match received {
-                Ok(event @ CovEvent::Object(_)) => held.extend(registry.deliver(&event, own())),
-                Ok(CovEvent::Multiple(_)) => {
+                Ok(event @ COVEvent::Object(_)) => held.extend(registry.deliver(&event, own())),
+                Ok(COVEvent::Multiple(_)) => {
                     registry.cov_multiple_ignored.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(RecvError::Lagged(missed)) => {
@@ -120,7 +120,7 @@ pub(super) async fn run(
 pub(super) fn belongs(
     point: &Point,
     target: Option<&Station>,
-    event: &CovEvent,
+    event: &COVEvent,
     own: Option<u16>,
 ) -> bool {
     let Some(received) = event.object() else {

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::destination::Destination;
 use bacnet_client::client::{
-    BACnetClient, COVNotificationDelivery, CovEvent, ReceivedCOVNotification,
+    BACnetClient, COVEvent, COVNotificationDelivery, ReceivedCOVNotification,
 };
 use bacnet_ops::target::routed_station;
 use bacnet_transport::port::TransportPort;
@@ -140,11 +140,11 @@ pub async fn subscribe_cmd<T: TransportPort + 'static>(
                 renew_at = renew_every.map(|every| tokio::time::Instant::now() + every);
             }
             result = rx.recv() => match result {
-                Ok(CovEvent::Object(notification)) => print_cov_notification(&notification, format),
+                Ok(COVEvent::Object(notification)) => print_cov_notification(&notification, format),
                 // A COV-multiple notification answers a
                 // SubscribeCOVPropertyMultiple, which this command never
                 // sends: nothing it watches.
-                Ok(CovEvent::Multiple(_)) => {}
+                Ok(COVEvent::Multiple(_)) => {}
                 Err(RecvError::Lagged(n)) => {
                     output::print_error(&format!("Missed {n} notifications (buffer overflow)"));
                 }

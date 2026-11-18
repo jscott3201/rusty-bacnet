@@ -2485,7 +2485,12 @@ yields both kinds of notification, a `CovNotification` about one object and
 a `CovNotificationMultiple` about several, in the order they arrived. The
 client acknowledges a confirmed notification of either kind whether or not it
 knows the subscription, so match one by its `subscriber_process_identifier`
-and source.
+and source. An unsubscribed sender's broadcast can bring a
+`CovNotificationMultiple` too, so check `kind` (or `isinstance`) before
+reading a `CovNotification`'s fields. A segmented COV-multiple request is
+answered with an Abort (the client does not support segmentation; tracked in
+#2646), and a confirmed notification sent again, its answer lost, is
+published again.
 
 ```python
 notifications = await client.cov_notifications()
