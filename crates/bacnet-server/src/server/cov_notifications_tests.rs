@@ -246,17 +246,15 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
     let network = Arc::new(NetworkLayer::new(transport));
 
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
 
     let mut db = ObjectDatabase::new();
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::new(1234, 0)
             .expect("valid Device identity")
             .with_name("COV-Multiple-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
-    device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(
         AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
@@ -362,19 +360,17 @@ async fn capture_timestamped_cov_multiple(
     let network = Arc::new(NetworkLayer::new(transport));
 
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
     let mut db = ObjectDatabase::new();
     if let Some(frame) = clock_frame {
         db.set_clock_reader(Some(StdArc::new(FixedClock(frame))));
     }
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::new(1234, 0)
             .expect("valid Device identity")
             .with_name("Timestamped-COV-Multiple-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
-    device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(
         AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
@@ -499,19 +495,17 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
     let network = Arc::new(NetworkLayer::new(transport));
     let transactions = NotificationTransactions::new();
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
     let single_mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]);
     let multiple_mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC2]);
 
     let mut db = clocked_test_database();
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::new(1234, 0)
             .expect("valid Device identity")
             .with_name("Confirmed-COV-Retry-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
-    device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(
         AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),

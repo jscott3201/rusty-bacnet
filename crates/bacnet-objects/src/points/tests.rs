@@ -226,11 +226,12 @@ pub(super) fn read_back(database: &ObjectDatabase, object: ObjectIdentifier) -> 
     }
 }
 
+/// The Device's Object_List, as the read services serve it: the database
+/// keeps it for the local Device (#2669).
 fn object_list(database: &ObjectDatabase, device: ObjectIdentifier) -> Vec<ObjectIdentifier> {
-    let Ok(PropertyValue::List(entries)) = database
-        .get(&device)
-        .expect("the Device")
-        .read_property(P::OBJECT_LIST, None)
+    let served = database.get(&device).expect("the Device");
+    assert!(database.keeps_device_property(served, P::OBJECT_LIST));
+    let Ok(PropertyValue::List(entries)) = database.read_device_property(P::OBJECT_LIST, None)
     else {
         panic!("the Device serves no Object_List");
     };

@@ -301,7 +301,7 @@ pub fn evaluate_event_enrollments_for_delivery(
 
         let mut monitored_value = None;
         if matches!(fault_algorithm, SupportedFaultAlgorithm::OutOfRange { .. }) {
-            match monitored_obj.read_property(monitored_prop, monitored.array_index) {
+            match db.read_object_property(monitored_obj, monitored_prop, monitored.array_index) {
                 Ok(value) => monitored_value = Some(value),
                 Err(error)
                     if monitored.array_index.is_some() && invalid_indexed_target_error(&error) =>
@@ -402,27 +402,41 @@ pub fn evaluate_event_enrollments_for_delivery(
 
         let monitored_value = match monitored_value {
             Some(value) => value,
-            None => match monitored_obj.read_property(monitored_prop, monitored.array_index) {
-                Ok(value) => value,
-                Err(error)
-                    if monitored.array_index.is_some() && invalid_indexed_target_error(&error) =>
+            None => {
+                match db.read_object_property(monitored_obj, monitored_prop, monitored.array_index)
                 {
-                    queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
-                    queue_reliability_transition(
-                        &mut updates,
-                        &subject,
-                        Some(monitored_oid),
-                        Reliability::CONFIGURATION_ERROR,
-                        EventEnrollmentReliabilityCause::Configuration,
-                        CapturedReferencedValue::Unavailable,
-                    );
-                    continue;
+                    Ok(value) => value,
+                    Err(error)
+                        if monitored.array_index.is_some()
+                            && invalid_indexed_target_error(&error) =>
+                    {
+                        queue_invalid_reference(
+                            &mut updates,
+                            *oid,
+                            eval_state_supported,
+                            eval_source,
+                        );
+                        queue_reliability_transition(
+                            &mut updates,
+                            &subject,
+                            Some(monitored_oid),
+                            Reliability::CONFIGURATION_ERROR,
+                            EventEnrollmentReliabilityCause::Configuration,
+                            CapturedReferencedValue::Unavailable,
+                        );
+                        continue;
+                    }
+                    Err(_) => {
+                        queue_observation_gap(
+                            &mut updates,
+                            *oid,
+                            eval_state_supported,
+                            eval_source,
+                        );
+                        continue;
+                    }
                 }
-                Err(_) => {
-                    queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
-                    continue;
-                }
-            },
+            }
         };
 
         queue_evaluation_ownership(

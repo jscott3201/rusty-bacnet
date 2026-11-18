@@ -315,8 +315,9 @@ fn project_event_enrollment_reliability(
             CapturedReferencedValue::Unavailable => None,
             // An index on a scalar reads the whole value, as before objects
             // refused that index themselves (#2274).
-            CapturedReferencedValue::NotEvaluated => monitored
-                .read_property(
+            CapturedReferencedValue::NotEvaluated => db
+                .read_object_property(
+                    monitored,
                     reference.property_identifier,
                     reference.array_index.filter(|_| {
                         bacnet_objects::property_metadata::is_array_property(

@@ -450,22 +450,10 @@ impl Lab {
         self.add_object(Box::new(point)).await;
     }
 
-    /// Add `object` to the lab device, listed in its Object_List.
+    /// Add `object` to the lab device, which lists it last in its
+    /// Object_List.
     pub(crate) async fn add_object(&self, object: Box<dyn BACnetObject>) {
-        let mut db = self.server.database().write().await;
-        db.add(object).unwrap();
-        // The Device's Object_List names its objects; list the new one.
-        let device = bacnet_types::primitives::ObjectIdentifier::new(
-            bacnet_types::enums::ObjectType::DEVICE,
-            LAB,
-        )
-        .unwrap();
-        let mut objects = db.list_objects();
-        objects.sort_by_key(|o| (o.object_type() != device.object_type(), o.instance_number()));
-        db.get_mut(&device)
-            .and_then(|device| device.device_authority_internal())
-            .expect("the lab Device")
-            .set_object_list(objects);
+        self.server.database().write().await.add(object).unwrap();
     }
 
     /// Requests sent so far.

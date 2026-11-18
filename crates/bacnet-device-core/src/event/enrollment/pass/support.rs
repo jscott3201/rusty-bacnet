@@ -41,7 +41,7 @@ pub(super) fn read_setpoint(
     if reference.property_array_index.is_some() && !is_array_property(object, property) {
         return SetpointRead::Unusable;
     }
-    match object.read_property(property, reference.property_array_index) {
+    match db.read_object_property(object, property, reference.property_array_index) {
         Ok(value) => extract_real(&value)
             .map(SetpointRead::Value)
             .unwrap_or(SetpointRead::Unusable),

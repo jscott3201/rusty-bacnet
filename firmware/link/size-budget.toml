@@ -848,6 +848,27 @@
 # riscv32imac), about 4 KB under what its budget rows were taken from. The
 # reporting and enrollment budgets are --suggest's again.
 
+# On 2026-11-18 (#2669, Rust 1.99.0, dev at 612be0858) the database keeps
+# the local Device's Object_List and Database_Revision, which the read plan
+# and the property references now read from it; a rename moves the
+# revision, and a File added or removed during a backup or a restore
+# doesn't. Before, these images served the list as built after any
+# application add or remove. As flash, dev then this change; RAM, the
+# memmove counts and the 32 images without a database unchanged:
+#
+#   thumbv7m      objects 142892, 143952     points 184096, 185068
+#                 reporting 253444, 254172   enrollment 325788, 326768
+#   thumbv7em     objects 142716, 143768     points 184028, 185004
+#                 reporting 252532, 253540   enrollment 325532, 326628
+#   riscv32imac   objects 171530, 172618     points 220706, 221886
+#                 reporting 307622, 308622   enrollment 395846, 396650
+#
+# 728 to 1180 octets of flash. On thumbv7m's objects image the largest
+# parts are the database's read of the two properties (about 450), the
+# read plan's row source (114) and the list, rename and backup upkeep in
+# `add`, `remove` and the write path (about 280), with the Device's own
+# list code 212 less. Every budget stays.
+
 [thumbv7m-none-eabi.mstp]
 text = 18320
 rodata = 1184

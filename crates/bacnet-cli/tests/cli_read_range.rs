@@ -68,7 +68,7 @@ fn alarm() -> EventNotificationRequest {
 /// A server on loopback holding Trend Log 1, Event Log 1 and Trend Log
 /// Multiple 1, each with records.
 async fn server() -> BACnetServer<BipTransport> {
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::default().with_name("read-range"),
         ..DeviceConfig::default()
     })
@@ -185,9 +185,6 @@ async fn server() -> BACnetServer<BipTransport> {
         Box::new(state_log(6, ObjectType::BINARY_VALUE)),
     ];
     let objects: Vec<Box<dyn BACnetObject>> = objects.into_iter().chain(state_objects()).collect();
-    let mut list = vec![device.object_identifier()];
-    list.extend(objects.iter().map(|object| object.object_identifier()));
-    device.set_object_list(list);
 
     let mut db = ObjectDatabase::new();
     db.add(Box::new(device)).unwrap();

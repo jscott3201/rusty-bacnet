@@ -16,7 +16,7 @@ expression: text
 "│ Object types      64 supported             ││ out-of-service                  false                                  │"
 "│ Max APDU          1476                     ││ units                           degrees-fahrenheit                     │"
 "│ Segmentation      no-segmentation          ││ cov-increment                   0                                      │"
-"│ Database revision 0                        ││ high-limit                      80                                     │"
+"│ Database revision 8                        ││ high-limit                      80                                     │"
 "└────────────────────────────────────────────┘│ low-limit                       45                                     │"
 "┌ Objects (8) ───────────────────────────────┐│ deadband                        1                                      │"
 "│ analog-input (1)                           ││ limit-enable                    low-limit-enable | high-limit-enable   │"

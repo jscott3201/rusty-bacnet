@@ -224,12 +224,11 @@ fn a_device_without_segmentation_is_not_asked_for_a_segment_timeout() {
         .unwrap();
 }
 
-/// The Device's Object_List in `db`.
+/// The Device's Object_List in `db`, as the read services serve it: the
+/// database keeps it for the local Device (#2669).
 fn object_list(db: &ObjectDatabase, device: ObjectIdentifier) -> PropertyValue {
-    db.get(&device)
-        .unwrap()
-        .read_property(P::OBJECT_LIST, None)
-        .unwrap()
+    assert!(db.keeps_device_property(db.get(&device).unwrap(), P::OBJECT_LIST));
+    db.read_device_property(P::OBJECT_LIST, None).unwrap()
 }
 
 #[test]

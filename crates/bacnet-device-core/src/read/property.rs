@@ -1,7 +1,8 @@
 //! ReadProperty, and the single-property reads ReadRange and a host's
 //! local read share with it: plan the read, then read the plan.
-use super::group::{self, GroupMembers};
+use super::group;
 use super::rpm::{self, PlannedRow};
+use super::source::RowSource;
 use super::{LiveLists, ReadFailure, ReadOverlay, ReadScope};
 use bacnet_encoding::constructed::check_property_value;
 use bacnet_encoding::primitives::encode_property_value;
@@ -43,7 +44,7 @@ impl PropertyPlan {
             property_identifier: property,
             property_array_index: array_index,
         };
-        let members = match stored {
+        let source = match stored {
             Some(stored) => {
                 let served = overlay.and_then(|overlay| overlay.view(stored));
                 let object: &dyn BACnetObject = served
@@ -51,11 +52,11 @@ impl PropertyPlan {
                     .map_or(stored, |served| served as &dyn BACnetObject);
                 group::plan_property(db, scope, overlay, object, &reference)?
             }
-            None => None,
+            None => RowSource::Object,
         };
         Ok(Self {
             lookup_oid,
-            row: PlannedRow { reference, members },
+            row: PlannedRow { reference, source },
         })
     }
 
@@ -65,10 +66,11 @@ impl PropertyPlan {
         rpm::live_cov_selection(db, [(self.lookup_oid, &self.row)])
     }
 
-    /// The planned members of a Group whose whole Present_Value the plan
-    /// reads, for a host that reads the row itself (ReadRange).
-    pub fn into_members(self) -> Option<GroupMembers> {
-        self.row.members
+    /// Where the planned row takes its value from, for a host that reads
+    /// the row itself (ReadRange) with
+    /// [`read_served_property`](super::group::read_served_property).
+    pub fn into_source(self) -> RowSource {
+        self.row.source
     }
 }
 
@@ -116,7 +118,9 @@ pub fn read_property_ack<O: ReadOverlay>(
 /// Evaluate one planned property read with ReadProperty error precedence:
 /// unknown object, then non-array index using the effective property
 /// definition, then the overlay's view or raw object's reader, except that a
-/// Group's Present_Value is rebuilt from the members its plan holds.
+/// Group's Present_Value is rebuilt from the members its plan holds and the
+/// local Device's Object_List and Database_Revision come from the database
+/// ([`RowSource`]).
 pub fn read_value<O: ReadOverlay>(
     db: &ObjectDatabase,
     overlay: Option<&O>,
@@ -124,7 +128,7 @@ pub fn read_value<O: ReadOverlay>(
 ) -> Result<PropertyValue, Error> {
     let PropertyPlan {
         lookup_oid,
-        row: PlannedRow { reference, members },
+        row: PlannedRow { reference, source },
     } = plan;
     let property = reference.property_identifier;
     let array_index = reference.property_array_index;
@@ -145,7 +149,7 @@ pub fn read_value<O: ReadOverlay>(
     // reads the property's value type.
     check_read_array_index(object, property, array_index)?;
 
-    group::read_served_property(db, overlay, object, property, array_index, members)
+    group::read_served_property(db, overlay, object, property, array_index, source)
 }
 
 fn read_property_decoded<O: ReadOverlay>(

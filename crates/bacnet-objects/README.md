@@ -97,9 +97,10 @@ mutating a database object directly.
 ## Device identity and executor ownership
 
 Use [`DeviceIdentity`] and [`device_identity::build_database_with_extra`] when
-assembling a server database. The helper installs the Device and configured
-Network Ports, and seeds the Device's Object_List with the extra application
-objects. Adding a standalone analog object alone does not create a Device.
+assembling a server database. The helper installs the Device, configured
+Network Ports and the extra application objects. The database keeps the
+Device's Object_List and Database_Revision, which follow every later add and
+remove. Adding a standalone analog object alone does not create a Device.
 [`points::build_database`] builds the same database from a plain-data point
 list (`bacnet_types::points`), checking every identifier and name first.
 

@@ -6058,6 +6058,63 @@ Enrollment evaluation (monitored, setpoint and fault references) both resolve
 references through it, so a FLOATING_LIMIT setpoint naming this device is read
 and reported like an unqualified one (#1184).
 
+#### Object_List and Database_Revision
+
+The database keeps the local Device's Object_List and Database_Revision
+(#2669), since no object can see the database it is in. Every read service
+serves them from it: a running server, an endpoint's server, `read_local`
+and a `bacnet-device-core` responder in firmware. So the list follows every
+object added under a new identifier and every object removed, whether a
+peer's CreateObject or DeleteObject did it or the application did through
+`add` and `remove`, and there is nothing for the application to keep in step.
+
+- **Order.** `ObjectDatabase::object_list` is the order: the Devices first
+  (normally just the one) in the order they were added, then every other
+  object in the order it was added. An object replaced under its identifier
+  keeps its place; one removed and added again goes last. A database from
+  `build_database_with_extra` lists the Device, its Network Ports, then the
+  extra objects; the point-list builder lists the points in list order.
+- **Reads.** Index 0 (the count) and any one index read straight from the
+  list without building it; only a whole read walks it, once. Past the end
+  is PROPERTY / INVALID_ARRAY_INDEX.
+- **Database_Revision** (Clause 12.11.35) moves by one with each add of a new
+  identifier, each removal and each rename, from 0 for a new database, so a
+  database built with three objects starts at 3. A rename is an Object_Name
+  written by WriteProperty, WritePropertyMultiple or a local write
+  (`ObjectDatabase::update_name_index` after the application's own write),
+  or `add` replacing an object under another name; writing the name an
+  object already has doesn't count. A CreateObject moves it once, even when
+  an initial value names the object. A refused write, a refused add and a
+  CreateObject refused after its object was added leave it alone; a
+  WritePropertyMultiple keeps a rename it made before a later write failed.
+- **Backup and restore.** While the local Device's Backup_And_Restore_State
+  isn't IDLE, adding, removing or renaming a File leaves the revision alone,
+  whoever does it: a peer's CreateObject or DeleteObject, or the
+  application's own `add` and `remove`. Those are the configuration Files
+  the procedures create and delete, which the standard keeps out of the
+  revision (Clauses 12.11.35 and 19.1). So an application carrying out a
+  backup or restore sets the Device's state first, as the procedures need
+  anyway, and the database does the rest. Ending a successful restore
+  doesn't yet set the revision from its value before the restore
+  (Clause 19.1.3.4); that is a follow-up.
+- **Across restarts.** The revision isn't saved: after a restart it starts
+  again from the built database's count, so it can repeat a value a client
+  cached before the restart. An application that keeps it reads
+  `ObjectDatabase::database_revision` after the operations that can move it
+  (there is no change notification), saves it, and sets it back with
+  `ObjectDatabase::set_database_revision` once the database is built.
+- **References.** What follows a reference to a local property reads
+  through `ObjectDatabase::read_object_property`, so it sees what a peer
+  reads: the Trend Log poller, the Averaging sampler, a Pulse Converter's
+  Input_Reference, Event_Algorithm_Inhibit_Ref, an Event Enrollment's
+  monitored and setpoint values and its notification's referenced value, a
+  Channel member's datatype and an audit record's current value. The
+  built-in Device reports no COV, so a COV subscription to it is refused as
+  before.
+- **On its own.** A `DeviceObject` read directly, outside the database,
+  lists only itself and reads Database_Revision 0. Read either through the
+  database with `ObjectDatabase::read_object_property`, as a peer would.
+
 #### Databases with several Devices
 
 A BACnet device has one Device object (Clause 12.11), but a database may hold
@@ -6092,7 +6149,9 @@ several. The database selects the lowest instance independently of insertion ord
   must match it. While an Audit runtime is active the database refuses a new
   Device and keeps this one, so the choice holds for the runtime's life.
 - **Other Devices** take no part. Their recipient, APDU_Timeout and declared
-  services are plain object data.
+  services are plain object data, and each lists only itself in its
+  Object_List; the local Device's Object_List names every Device in the
+  database, ahead of the other objects (#2669).
 
 No Device can have the wildcard instance: `ObjectDatabase::add` refuses
 instance 4194303 for every object (Clause 12.1.1, #2171), so a selected

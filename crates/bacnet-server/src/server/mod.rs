@@ -787,6 +787,8 @@ mod notification_initiator_tests;
 #[cfg(test)]
 mod notification_transactions_tests;
 #[cfg(test)]
+mod object_list_wire_tests;
+#[cfg(test)]
 mod program_state_application_tests;
 #[cfg(test)]
 mod pulse_converter_cov_tests;

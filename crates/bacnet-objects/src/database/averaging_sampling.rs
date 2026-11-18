@@ -50,7 +50,7 @@ impl ObjectDatabase {
                 // An index on anything but an array fails, as ReadProperty's
                 // gate makes it; object read arms may ignore the index.
                 .filter(|target| index.is_none() || is_array_property(*target, property))
-                .and_then(|target| target.read_property(property, index).ok());
+                .and_then(|target| self.read_object_property(target, property, index).ok());
             let Some(input) = self.get_mut(&oid).and_then(|object| object.local_input()) else {
                 continue;
             };

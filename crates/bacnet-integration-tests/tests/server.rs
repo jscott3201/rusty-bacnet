@@ -34,7 +34,7 @@ async fn make_server_with_dcc_policy(
     let mut db = ObjectDatabase::new();
 
     // Device object (instance 1234)
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::new(1234, 555)
             .expect("valid Device identity")
             .with_name("Integration Test Device")
@@ -50,13 +50,6 @@ async fn make_server_with_dcc_policy(
 
     // BinaryValue (instance 1, default = inactive)
     let bv = BinaryValueObject::new(1, "Fan Status").unwrap();
-
-    let ai_oid = ai.object_identifier();
-    let bv_oid = bv.object_identifier();
-    let dev_oid = device.object_identifier();
-
-    // Update device object-list
-    device.set_object_list(vec![dev_oid, ai_oid, bv_oid]);
 
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(ai)).unwrap();

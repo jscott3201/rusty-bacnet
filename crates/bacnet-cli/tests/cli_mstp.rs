@@ -149,7 +149,6 @@ mod pty {
     use bacnet_objects::analog::AnalogInputObject;
     use bacnet_objects::database::ObjectDatabase;
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
-    use bacnet_objects::traits::BACnetObject;
     use bacnet_server::server::BACnetServer;
     use bacnet_transport::mstp::{MstpConfig, MstpTransport, SerialPort};
     use bacnet_types::enums::EngineeringUnits;
@@ -193,7 +192,7 @@ mod pty {
         let identity = DeviceIdentity::new(4001, 260)
             .and_then(|identity| identity.with_max_apdu(480))
             .unwrap();
-        let mut device = DeviceObject::new(DeviceConfig {
+        let device = DeviceObject::new(DeviceConfig {
             identity: identity.clone(),
             ..Default::default()
         })
@@ -201,7 +200,6 @@ mod pty {
         let mut ai2 =
             AnalogInputObject::new(2, "Outside Air", EngineeringUnits::DEGREES_FAHRENHEIT).unwrap();
         ai2.set_present_value(51.0);
-        device.set_object_list(vec![device.object_identifier(), ai2.object_identifier()]);
         let mut db = ObjectDatabase::new();
         db.add(Box::new(device)).unwrap();
         db.add(Box::new(ai2)).unwrap();

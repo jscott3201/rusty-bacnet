@@ -26,6 +26,7 @@
 use super::budget::{ReadFailure, Work};
 use super::property;
 use super::rpm::{self, PlannedObject, PlannedRow};
+use super::source::RowSource;
 use super::{ReadOverlay, ReadScope};
 use alloc::vec::Vec;
 use bacnet_encoding::constructed::decode_read_access_specification;
@@ -61,54 +62,60 @@ pub(crate) fn plan_property<O: ReadOverlay>(
     overlay: Option<&O>,
     object: &dyn BACnetObject,
     reference: &PropertyReference,
-) -> Result<Option<GroupMembers>, ReadFailure> {
+) -> Result<RowSource, ReadFailure> {
     let mut work = Work::new(scope.work_limit);
     // This read's own row, as a one-property ReadPropertyMultiple counts it.
     work.charge()?;
-    plan_members(db, scope, overlay, object, reference, &mut work)
+    plan_source(db, scope, overlay, object, reference, &mut work)
 }
 
-/// Read `property` of a found object the way the single-property services
-/// serve it. A Group's whole Present_Value is rebuilt from the `members` the
-/// read planned; every other read is the object's own answer (the
-/// host's, when `object` is a served view).
+/// Read `property` of a found object the way the read services serve it,
+/// from the `source` its plan chose: a Group's whole Present_Value is
+/// rebuilt from its members, the local Device's Object_List and
+/// Database_Revision come from the database, and every other read is the
+/// object's own answer (the host's, when `object` is a served view).
+#[inline]
 pub fn read_served_property<O: ReadOverlay>(
     db: &ObjectDatabase,
     overlay: Option<&O>,
     object: &dyn BACnetObject,
     property: PropertyIdentifier,
     array_index: Option<u32>,
-    members: Option<GroupMembers>,
+    source: RowSource,
 ) -> Result<PropertyValue, Error> {
-    match members {
-        Some(members) => value(db, overlay, members),
-        None => object.read_property(property, array_index),
+    match source {
+        RowSource::Object => object.read_property(property, array_index),
+        RowSource::Group(members) => value(db, overlay, members),
+        RowSource::Database => db.read_device_property(property, array_index),
     }
 }
 
-/// The members, when `reference` reads the whole Present_Value of `object`
-/// and `object` is a Group; `None` for any other row. Each member is planned
-/// as ReadPropertyMultiple plans one specification, and every member row is
-/// charged to `work`.
-pub(crate) fn plan_members<O: ReadOverlay>(
+/// Where the row `reference` of `object` takes its value from: a Group's
+/// members, when it reads the whole Present_Value of a Group, each planned
+/// as ReadPropertyMultiple plans one specification with every member row
+/// charged to `work`; the database, for a property it keeps
+/// ([`RowSource::kept`]); the object itself for any other row.
+pub(crate) fn plan_source<O: ReadOverlay>(
     db: &ObjectDatabase,
     scope: &ReadScope,
     overlay: Option<&O>,
     object: &dyn BACnetObject,
     reference: &PropertyReference,
     work: &mut Work,
-) -> Result<Option<GroupMembers>, ReadFailure> {
-    if reference.property_identifier != PropertyIdentifier::PRESENT_VALUE
-        || reference.property_array_index.is_some()
+) -> Result<RowSource, ReadFailure> {
+    if reference.property_identifier != PropertyIdentifier::PRESENT_VALUE {
+        return Ok(RowSource::kept(db, object, reference.property_identifier));
+    }
+    if reference.property_array_index.is_some()
         || object.object_identifier().object_type() != ObjectType::GROUP
     {
-        return Ok(None);
+        return Ok(RowSource::Object);
     }
     let planned = match members(object) {
         Ok(specs) => Ok(rpm::plan_specs(db, scope, overlay, &specs, work, false)?),
         Err(error) => Err(error),
     };
-    Ok(Some(GroupMembers(planned)))
+    Ok(RowSource::Group(GroupMembers(planned)))
 }
 
 /// One ReadAccessResult per member, in List_Of_Group_Members order.
