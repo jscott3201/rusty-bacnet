@@ -294,7 +294,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                     // A reference already waiting keeps its place.
                     Err(Refusal::InFlight) => {
-                        revisits.keep_waiting([sub.key().clone()]);
+                        revisits.keep_waiting(sub.key());
                         None
                     }
                     Err(Refusal::Other) => None,

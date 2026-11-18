@@ -81,12 +81,16 @@ impl CovSubscriptionTable {
 
     /// Create a new COV subscription table with a custom policy and counters.
     pub fn with_policy(policy: CovPolicy, counters: Arc<AtomicCovCounters>) -> Self {
-        let timed =
-            timed_store::HistoryStore::new(DEFAULT_TIMED_APDU_LENGTH, Arc::clone(&counters));
+        let revisits = Arc::new(CovRevisits::new(Arc::clone(&counters)));
+        let timed = timed_store::HistoryStore::new(
+            DEFAULT_TIMED_APDU_LENGTH,
+            Arc::clone(&counters),
+            Arc::clone(&revisits),
+        );
         Self {
             core: CovTable::new(policy),
             wakes: BTreeMap::new(),
-            revisits: Arc::new(CovRevisits::new(Arc::clone(&counters))),
+            revisits,
             counters,
             in_flight: Arc::new(CovInFlightTracker::default()),
             dispatch_turn: 0,
@@ -99,7 +103,11 @@ impl CovSubscriptionTable {
     /// Bound each Multiple context's pending timestamped changes by what one
     /// notification of this maximum APDU length can carry.
     pub fn with_max_apdu_length(mut self, max_apdu_length: usize) -> Self {
-        self.timed = timed_store::HistoryStore::new(max_apdu_length, Arc::clone(&self.counters));
+        self.timed = timed_store::HistoryStore::new(
+            max_apdu_length,
+            Arc::clone(&self.counters),
+            Arc::clone(&self.revisits),
+        );
         self
     }
 

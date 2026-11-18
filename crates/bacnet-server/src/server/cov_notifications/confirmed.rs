@@ -154,19 +154,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         })
     }
 
-    /// `report`, a COV-multiple context's, was refused (#2661). Its
-    /// timestamped history, deferred parts included, goes back to its
-    /// references first. Refused an invoke ID, every reference of the
-    /// context is then owed a look once one comes back: a split report's
-    /// later parts as much as its first, which alone it carried. Refused an
-    /// in-flight slot, those already waiting keep their places. No other
-    /// lock is held here; the references are read live under the table's,
-    /// so one cancelled meanwhile isn't queued.
-    async fn after_refusal(
-        handles: &CovFanoutHandles<'_, '_, T>,
-        report: ConfirmedReport,
-        refusal: Refusal,
-    ) {
+    /// `report`, a COV-multiple context's, was refused an invoke ID
+    /// (#2661). Its timestamped history, deferred parts included, goes back
+    /// to its references first; then every reference of the context is owed
+    /// a look once an ID comes back: a split report's later parts as much as
+    /// its first, which alone it carried. No other lock is held here; the
+    /// references are read live under the table's, so one cancelled
+    /// meanwhile isn't queued.
+    async fn owe_context(handles: &CovFanoutHandles<'_, '_, T>, report: ConfirmedReport) {
         let context = report.route.key().multiple_context().cloned();
         let carried: Vec<_> = report.keys().collect();
         drop(report);
@@ -175,13 +170,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Some(context) => table.context_keys(context),
             None => carried,
         };
-        match refusal {
-            Refusal::InvokeId => {
-                table.revisits().owe(keys);
-            }
-            Refusal::InFlight => table.revisits().keep_waiting(keys),
-            Refusal::Other => {}
-        }
+        table.revisits().owe(keys);
     }
 
     /// Admit `report` against the peer and global in-flight limits, an invoke
@@ -198,10 +187,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let label = report.label();
         let lease = match Self::admit_confirmed(handles, &report.route, report.service, label) {
             Ok(lease) => lease,
-            // Boxed, and only on a refusal: inline, its wait would add the
-            // whole report to every fanout's future, on the request path.
-            Err(refusal @ (Refusal::InvokeId | Refusal::InFlight)) => {
-                return Box::pin(Self::after_refusal(handles, report, refusal)).await;
+            // Boxed, and only on a refusal: inline, either wait would add
+            // the whole report to every fanout's future, on the request path.
+            Err(Refusal::InvokeId) => {
+                return Box::pin(Self::owe_context(handles, report)).await;
+            }
+            // Its history goes back first; then those of its references
+            // being looked at for an invoke ID keep their places. Usually
+            // none is: the check is the revisits' lock alone, reached
+            // through the histories with no table guard and no await.
+            Err(Refusal::InFlight) => {
+                let context = report.route.key().multiple_context().cloned();
+                drop(report);
+                if let Some(context) = context {
+                    handles.timed.revisits().keep_context_waiting(&context);
+                }
+                return;
             }
             Err(Refusal::Other) => return,
         };

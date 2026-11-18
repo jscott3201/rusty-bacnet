@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use bacnet_device_core::cov::CovSubscriptionKey;
+use bacnet_device_core::cov::{CovSubscriptionKey, MultipleContextKey};
 use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 
@@ -107,10 +107,13 @@ impl OwedIds {
         }
     }
 
-    /// Queue `key` again in its place if it has one: it waits, or is being
-    /// looked at. Whether it was queued.
-    fn requeue(&mut self, key: CovSubscriptionKey) -> bool {
-        self.places.contains_key(&key) && self.owe(key)
+    /// Queue `key` again in its place if it has one and is out of the
+    /// queue, being looked at. Whether it was queued.
+    fn requeue(&mut self, key: &CovSubscriptionKey) -> bool {
+        self.places
+            .get(key)
+            .is_some_and(|place| !self.queue.contains_key(place))
+            && self.owe(key.clone())
     }
 
     /// Take the references `admit` lets go, oldest first, for a look; each
@@ -132,16 +135,20 @@ impl OwedIds {
             .collect()
     }
 
-    /// The look at `keys` is over: those it didn't owe an ID again give
-    /// up their places.
-    fn looked(&mut self, keys: &[CovSubscriptionKey]) {
+    /// The look at `keys` is over: those it didn't queue again give up
+    /// their places. Whether it queued any again.
+    fn looked(&mut self, keys: &[CovSubscriptionKey]) -> bool {
+        let mut again = false;
         for key in keys {
-            if let Some(place) = self.places.get(key)
-                && !self.queue.contains_key(place)
-            {
-                self.places.remove(key);
+            if let Some(place) = self.places.get(key) {
+                if self.queue.contains_key(place) {
+                    again = true;
+                } else {
+                    self.places.remove(key);
+                }
             }
         }
+        again
     }
 
     /// Drop `key`'s wait or look; whether it was waiting.
@@ -205,28 +212,48 @@ impl CovRevisits {
     /// once one comes back (#2661), and wake the wait for one. Whether any
     /// wasn't waiting already.
     pub(crate) fn owe(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) -> bool {
-        self.queue(keys, OwedIds::owe)
-    }
-
-    /// Keep waiting those of `keys` that wait for an invoke ID already,
-    /// whose look an in-flight limit refused: each in its place, looked at
-    /// again once its peer has room. Others, a first send among them, are
-    /// left as the limit left them.
-    pub(crate) fn keep_waiting(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) {
-        self.queue(keys, OwedIds::requeue);
-    }
-
-    fn queue(
-        &self,
-        keys: impl IntoIterator<Item = CovSubscriptionKey>,
-        mut queue: impl FnMut(&mut OwedIds, CovSubscriptionKey) -> bool,
-    ) -> bool {
         let mut pending = self.pending();
         let mut added = 0;
         for key in keys {
-            added += usize::from(queue(&mut pending.owed, key));
+            added += usize::from(pending.owed.owe(key));
         }
         drop(pending);
+        self.count_queued(added)
+    }
+
+    /// `key`'s look met an in-flight limit: if it was waiting for an
+    /// invoke ID, it keeps its place, looked at again once there is room.
+    /// A first send is left as the limit left it (#533).
+    pub(crate) fn keep_waiting(&self, key: &CovSubscriptionKey) {
+        let again = self.pending().owed.requeue(key);
+        self.count_queued(usize::from(again));
+    }
+
+    /// [`Self::keep_waiting`] for the references of `context` being looked
+    /// at, without listing the context's: usually none waits, and the
+    /// check is the lock alone.
+    pub(crate) fn keep_context_waiting(&self, context: &MultipleContextKey) {
+        let mut pending = self.pending();
+        if pending.owed.places.is_empty() {
+            return;
+        }
+        let looked_at: Vec<_> = pending
+            .owed
+            .places
+            .keys()
+            .filter(|key| key.multiple_context() == Some(context))
+            .cloned()
+            .collect();
+        let again = looked_at
+            .iter()
+            .filter(|key| pending.owed.requeue(key))
+            .count();
+        drop(pending);
+        self.count_queued(again);
+    }
+
+    /// Count `added` references queued, and wake the wait for room.
+    fn count_queued(&self, added: usize) -> bool {
         count(&self.counters.owed_id_revisits_queued, added);
         if added != 0 {
             self.owed_wake.notify_one();
@@ -258,9 +285,10 @@ impl CovRevisits {
     }
 
     /// The look at `keys`, which [`Self::take_owed`] gave, is over: those
-    /// it owed an ID again wait in their old places; the rest leave.
-    pub(crate) fn looked(&self, keys: &[CovSubscriptionKey]) {
-        self.pending().owed.looked(keys);
+    /// it queued again, refused for want of room, wait in their old places;
+    /// the rest leave. Whether any was queued again.
+    pub(crate) fn looked(&self, keys: &[CovSubscriptionKey]) -> bool {
+        self.pending().owed.looked(keys)
     }
 
     /// The references waiting for an invoke ID, oldest first.

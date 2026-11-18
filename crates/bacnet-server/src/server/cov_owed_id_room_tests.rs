@@ -119,6 +119,105 @@ async fn a_look_refused_by_a_slot_taken_meanwhile_keeps_its_wait() {
     }
 }
 
+/// A first send refused by the peer's in-flight limit is not queued: it
+/// waits for its next fanout, a deliberate throttle (#533; whether it
+/// should wait too is open on #2671). Ordinary form.
+#[tokio::test(start_paused = true)]
+async fn a_first_send_refused_by_the_peer_limit_is_not_owed() {
+    let mut h = with_peer_limit(1).await;
+    subscribed_on(&mut h, 1, av1()).await;
+    let slot = tracker(&h)
+        .await
+        .try_acquire(peer(), 1, &h.server.cov_in_flight)
+        .unwrap();
+    h.write_local(42.0).await;
+    h.settle().await;
+    assert!(owed(&h).await.is_empty(), "a first send is not owed");
+    assert_eq!(throttled(&h), 1);
+    drop(slot);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    h.no_notification().await;
+    assert_eq!(owed_counts(&h), (0, 0, 0));
+}
+
+/// The same for a confirmed COV-multiple context.
+#[tokio::test(start_paused = true)]
+async fn a_first_send_refused_by_the_peer_limit_is_not_owed_multiple() {
+    let mut h = with_peer_limit(1).await;
+    h.subscribe_specs(true, vec![(av1(), vec![(PV, false)])])
+        .await;
+    h.notification().await;
+    h.ack().await;
+    h.settle().await;
+    let slot = tracker(&h)
+        .await
+        .try_acquire(peer(), 1, &h.server.cov_in_flight)
+        .unwrap();
+    h.write_local(42.0).await;
+    h.settle().await;
+    assert!(owed(&h).await.is_empty(), "a first send is not owed");
+    assert_eq!(throttled(&h), 1);
+    drop(slot);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    h.no_notification().await;
+    assert_eq!(owed_counts(&h), (0, 0, 0));
+}
+
+/// A first send refused by the pool of 255 is not queued either.
+#[tokio::test(start_paused = true)]
+async fn a_first_send_refused_by_the_pool_is_not_owed() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    subscribed_on(&mut h, 1, av1()).await;
+    let tracker = tracker(&h).await;
+    let other = CovRecipient::from_endpoint(&[7], None);
+    let mut pool: Vec<_> = (0..255)
+        .map(|_| {
+            tracker
+                .try_acquire(other.clone(), usize::MAX, &h.server.cov_in_flight)
+                .unwrap()
+        })
+        .collect();
+    h.write_local(42.0).await;
+    h.settle().await;
+    assert!(owed(&h).await.is_empty());
+    drop(pool.pop());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    h.no_notification().await;
+    assert_eq!(owed_counts(&h), (0, 0, 0));
+}
+
+/// A wrong estimate of the room (here, one that admits everything) has
+/// looks refused for want of a slot: each waits for room to come back
+/// before the next pass, so the attempts stay bounded by what ends, and
+/// the reference still goes.
+#[tokio::test(start_paused = true)]
+async fn a_look_refused_for_room_waits_for_room_before_the_next_pass() {
+    let mut h = with_peer_limit(1).await;
+    subscribed_on(&mut h, 1, av1()).await;
+    subscribed_on(&mut h, 2, av1()).await;
+    let mut held = lease_all(&h);
+    h.write_local(42.0).await;
+    owed_gap::overtake();
+    drop(held.pop());
+    drop(held.pop());
+    // Yields, not sleeps, until the count is checked: a pass that retried
+    // at once would keep paused time from advancing, and the test would
+    // hang instead of failing here.
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(throttled(&h), 1, "refused once, then waits for room");
+    assert_eq!(owed(&h).await.len(), 1);
+    assert_eq!(h.cov_notification().await.subscriber_process_identifier, 1);
+
+    // The Ack frees an ID, then the slot: at most a pass each.
+    h.ack().await;
+    let second = h.cov_notification().await;
+    assert_eq!(second.subscriber_process_identifier, 2);
+    assert_eq!(pv_of(&second), real(42.0));
+    assert!(throttled(&h) <= 2, "{} attempts refused", throttled(&h));
+}
+
 /// Six references of one peer owed, two allowed in flight, every ID freed
 /// at once: two go, and each Ack lets the next go, in the order owed. No
 /// reservation is refused by the peer's limit, however long they wait.

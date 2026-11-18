@@ -7410,8 +7410,9 @@ async with endpoint:
   server holds at most 64 at once for its confirmed COV, event and Audit
   notifications. Past them a confirmed COV notification waits for one to
   come back and then goes, if its value still differs from what the
-  subscriber last acknowledged (#2661); one that its subscriber's in-flight
-  limit refuses first waits for the next change.
+  subscriber last acknowledged (#2661). A first report refused by the
+  subscriber's in-flight limit or the pool of 255 still waits for its next
+  fanout.
 - **Callables.** A `mutation_policy` callable runs on Tokio's blocking pool
   while its request waits, so a slow one delays only its own request, as
   on a standalone server. The callables run with no lock held

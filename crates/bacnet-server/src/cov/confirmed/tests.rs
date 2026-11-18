@@ -469,9 +469,9 @@ fn owed_references_keep_their_places() {
     // keeps its place too; a first send (`d`, served) is not queued.
     let looked = revisits.take_owed(|key| key != &c && key != &a);
     assert_eq!(looked, [b.clone(), d.clone()]);
-    revisits.keep_waiting([b.clone()]);
+    revisits.keep_waiting(&b);
     revisits.looked(&looked);
-    revisits.keep_waiting([d.clone()]);
+    revisits.keep_waiting(&d);
     assert_eq!(revisits.owed(), [c.clone(), b.clone(), a.clone()]);
 
     assert!(table.unsubscribe(&b));
