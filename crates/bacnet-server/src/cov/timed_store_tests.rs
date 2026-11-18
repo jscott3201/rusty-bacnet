@@ -76,7 +76,10 @@ fn seconds(changes: &[TimedChange]) -> Vec<u8> {
 
 fn store() -> (HistoryStore, Arc<AtomicCovCounters>) {
     let counters = Arc::new(AtomicCovCounters::default());
-    (HistoryStore::new(1476, Arc::clone(&counters)), counters)
+    (
+        HistoryStore::new(1476, Arc::clone(&counters), Arc::default()),
+        counters,
+    )
 }
 
 /// A claim of every pending change of `k`'s generation 1.
@@ -336,7 +339,7 @@ async fn a_lodged_claim_is_settled_by_its_worker_or_at_its_deadline() {
 #[test]
 fn a_sections_drops_past_the_kept_reports_are_counted_for_one_line() {
     // A device so small that its ceiling holds two of these changes.
-    let small = HistoryStore::new(60, Arc::new(AtomicCovCounters::default()));
+    let small = HistoryStore::new(60, Arc::default(), Arc::default());
     let k = key(1, 1);
     let mut histories = small.lock();
     histories.reset(&k, 1, 0);

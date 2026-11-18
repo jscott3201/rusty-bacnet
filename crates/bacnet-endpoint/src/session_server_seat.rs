@@ -134,9 +134,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// once: its confirmed notifications (COV, event and Audit, the source
     /// Audit's records among them) and the reads its runs make. Past that,
     /// each does what it does when the pool is empty: an event notification
-    /// waits for an ID, a COV notification is skipped with a warning (the
-    /// subscriber hears the next change), an Audit record is counted lost.
-    /// The client's requests find the rest.
+    /// waits for an ID, a COV notification's subscription waits for one of
+    /// the server's IDs to come back and is then looked at again (as the
+    /// session's own COV reporting, [`with_cov`](Self::with_cov), queued
+    /// it), an Audit record is counted lost. The client's requests find the
+    /// rest.
     ///
     /// **DeviceCommunicationControl binds the node.** The standard has it
     /// bind the whole device (Clause 16.1). While the server holds a
