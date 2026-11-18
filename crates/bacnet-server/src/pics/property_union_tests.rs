@@ -279,7 +279,7 @@ fn pics_device_union_applies_execution_view_to_every_instance() {
     let pics_config = PicsConfig::default();
     let raw = PicsGenerator::new(&db, &config, &pics_config).generate();
     let served = PicsGenerator::new(&db, &config, &pics_config)
-        .for_server(crate::device_view::DeviceExecution::FullServer)
+        .for_server(crate::device_view::DeviceExecution::FullServer { time_sync: true })
         .generate();
     let property = |pics: &Pics, p| {
         pics.supported_object_types

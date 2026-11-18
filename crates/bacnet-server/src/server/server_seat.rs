@@ -103,7 +103,8 @@ pub(super) struct Started<T: TransportPort, A> {
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     pub(super) seated: Option<Seated>,
     /// The Device's execution profile: the server's alone, or on a node
-    /// with a client role the node's (#2617).
+    /// with a client role the node's, with time synchronization as the
+    /// server's policy executes it (#2617).
     pub(super) execution: DeviceExecution,
     /// On a seat, the server's hold on the node's DeviceCommunicationControl
     /// state.
@@ -159,7 +160,7 @@ impl<T: TransportPort + 'static> Link<T> for Own<T> {
             controls,
             notification_transactions: NotificationTransactions::new(),
             seated: None,
-            execution: DeviceExecution::FullServer,
+            execution: DeviceExecution::server(false, &config.time_sync_policy),
             dcc: None,
             number: None,
         })
@@ -218,10 +219,10 @@ impl<T: TransportPort + 'static> Link<T> for Seat<T> {
                 super::notification_transactions::SEAT_LEASES,
             ),
             seated: Some(Seated::new(&holds)),
-            execution: match node {
-                Some(node) if node.client => DeviceExecution::Node,
-                _ => DeviceExecution::FullServer,
-            },
+            execution: DeviceExecution::server(
+                node.is_some_and(|node| node.client),
+                &config.time_sync_policy,
+            ),
             dcc: Some(dcc),
             number: Some(number),
         })

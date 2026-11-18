@@ -380,7 +380,7 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
     use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     let mut db = ObjectDatabase::new();
     db.add(Box::new(CustomDevice { oid: device() })).unwrap();
-    let view = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+    let view = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
     let request = |property| ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
             object_identifier: device(),

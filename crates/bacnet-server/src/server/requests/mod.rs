@@ -354,8 +354,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     services.live_tables(),
                     &req,
                     config,
-                    effective_max_apdu,
-                    segmented_response_available,
+                    services.execution,
+                    (!segmented_response_available).then_some(effective_max_apdu),
                     |db, target, property, index, result| {
                         read_audits.extend(audit.completed_read_intent(
                             db,

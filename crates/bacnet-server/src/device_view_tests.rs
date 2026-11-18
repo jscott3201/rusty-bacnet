@@ -34,7 +34,7 @@ fn every_read_query_has_a_forwarding_check() {
 #[test]
 fn the_view_forwards_every_read_query() {
     let db = ObjectDatabase::new();
-    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::ANALOG_VALUE, log.clone());
     let view = context.object(&probe);
@@ -51,7 +51,7 @@ fn a_device_keeps_its_owned_answers_and_forwards_every_other_query() {
     // executor-owned properties and keep them out of any frozen copy.
     const OWNED: [&str; 1] = ["property_metadata"];
     let db = ObjectDatabase::new();
-    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::DEVICE, log.clone());
     let view = context.object(&probe);
@@ -81,7 +81,7 @@ fn a_device_keeps_its_owned_answers_and_forwards_every_other_query() {
 #[test]
 fn a_read_view_lends_no_batch_capability() {
     let db = ObjectDatabase::new();
-    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::ACCESS_POINT, log.clone());
     let mut view = context.object(&probe);
@@ -113,7 +113,7 @@ fn the_view_rows_answer_shapes_and_writability_as_its_old_overrides_did() {
     );
     let properties: Vec<P> = properties.collect();
     for execution in [
-        DeviceExecution::FullServer,
+        DeviceExecution::FullServer { time_sync: true },
         DeviceExecution::endpoint(true, true, true),
     ] {
         for identity in [None, Some(&identity)] {
