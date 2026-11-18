@@ -257,6 +257,17 @@ fn only_a_timeout_is_a_timeout() {
         bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED,
     )));
     assert!(!timed_out(&abort));
+    // An OpsError's source skips the client error it wraps.
+    let ops: CliResult = Err(Box::new(bacnet_ops::OpsError::from(
+        bacnet_types::error::Error::abort(bacnet_types::enums::AbortReason::TSM_TIMEOUT),
+    )));
+    assert!(timed_out(&ops));
+    let refused: CliResult = Err(Box::new(bacnet_ops::OpsError::from(
+        bacnet_types::error::Error::abort(
+            bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED,
+        ),
+    )));
+    assert!(!timed_out(&refused));
     let other: CliResult = Err("device 5:1234 did not answer".into());
     assert!(!timed_out(&other));
     assert!(!timed_out(&Ok(())));

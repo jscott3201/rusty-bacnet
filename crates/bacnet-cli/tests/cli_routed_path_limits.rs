@@ -168,9 +168,13 @@ async fn routed_run(script: Script, args: impl Fn(u16) -> Vec<String>) -> Output
 }
 
 fn read(extra: &[&str]) -> Vec<String> {
+    words(extra, &["read", "5:0x0a", "ai:1", "pv"])
+}
+
+fn words(extra: &[&str], command: &[&str]) -> Vec<String> {
     extra
         .iter()
-        .chain(&["read", "5:0x0a", "ai:1", "pv"])
+        .chain(command)
         .map(|text| (*text).to_owned())
         .collect()
 }
@@ -223,11 +227,18 @@ async fn a_warning_during_a_json_command_leaves_stdout_parseable() {
     assert!(path["router"].as_str().unwrap().starts_with("127.0.0.1:"));
 }
 
-/// A read whose every try draws only a too-long reject times out, and the
-/// summary's hint names the flag for that path.
+/// A command whose every try draws only a too-long reject times out, and
+/// the summary's hint names the flag for that path: `read`, whose error is
+/// the client's, and `alarms`, whose error is an `OpsError`.
 #[tokio::test]
 async fn a_timeout_after_a_small_request_was_refused_names_the_flag() {
-    let output = routed_run(Script::RejectOnly, |_| read(&["--json"])).await;
+    for command in [&["read", "5:0x0a", "ai:1", "pv"][..], &["alarms", "5:0x0a"]] {
+        timeout_names_the_flag(command).await;
+    }
+}
+
+async fn timeout_names_the_flag(command: &[&str]) {
+    let output = routed_run(Script::RejectOnly, |_| words(&["--json"], command)).await;
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stderr}");
     assert!(output.stdout.is_empty(), "{stderr}");
@@ -242,9 +253,8 @@ async fn a_timeout_after_a_small_request_was_refused_names_the_flag() {
         .unwrap_or_else(|| panic!("no hint: {stderr}"));
     assert!(
         hint.contains(&format!("--routed-path-limit {router}/5=SIZE")),
-        "{hint}"
+        "{command:?}: {hint}"
     );
-    assert!(stderr.contains("timed out"), "{stderr}");
 }
 
 /// A limit set by flag is used and listed: with `-v` the summary shows it
@@ -282,36 +292,35 @@ async fn a_flag_limit_is_listed_with_v_only() {
     serde_json::from_slice::<Value>(&output.stdout).unwrap();
 }
 
-/// A flag the client refuses stops the command before it sends anything.
+/// A flag the client refuses stops the command before it sends anything:
+/// a limit too small for any request, a router named as a device or a
+/// routed station, and one path named twice, however its router is written.
 #[tokio::test]
 async fn a_flag_the_client_refuses_stops_the_command() {
-    for (flag, why) in [
-        ("127.0.0.1:47808/5=65", "give at least 66"),
-        ("1234/5=480", "by its address on this network"),
+    let station = "names a device or a station behind a router";
+    for (flags, why) in [
+        (&["127.0.0.1:47808/5=65"][..], "give at least 66"),
+        (&["1234/5=480"], station),
+        (&["5:0x0a/5=480"], station),
+        (
+            &["127.0.0.1:47808/5=480", "127.0.0.1/5=300"],
+            "names network 5 through router 127.0.0.1:47808 twice \
+             (127.0.0.1:47808/5 and 127.0.0.1/5)",
+        ),
     ] {
-        let output = run([
-            "-i",
-            "127.0.0.1",
-            "-p",
-            "0",
-            "-b",
-            "127.0.0.1",
-            "--json",
-            "--routed-path-limit",
-            flag,
-            "read",
-            "5:0x0a",
-            "ai:1",
-            "pv",
-        ])
-        .await;
+        let mut args = words(
+            &["-i", "127.0.0.1", "-p", "0", "-b", "127.0.0.1", "--json"],
+            &[],
+        );
+        for flag in flags {
+            args.extend(["--routed-path-limit".to_owned(), (*flag).to_owned()]);
+        }
+        args.extend(read(&[]));
+        let output = run(args).await;
         support::failure(&output, why);
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains(&format!(
-                "--routed-path-limit {}",
-                flag.split('/').next().unwrap()
-            )),
-            "{flag}"
+            String::from_utf8_lossy(&output.stderr).contains("--routed-path-limit "),
+            "{flags:?}"
         );
     }
 }

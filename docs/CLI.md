@@ -190,12 +190,13 @@ bacnet --routed-path-limit 192.168.1.20:47808/5=128 read 5:1234 ai:1 pv
 `ROUTER` is the router's address on this network in any target form,
 `ip:port` or `ip` on B/IP, `mstp:N` on MS/TP, `bip6:0x...` or `[ipv6]:port` on
 B/IPv6, hex octets on BACnet/SC, as `whois-router` prints it; `NETWORK` is 1
-to 65534. Repeat the flag for more paths. A limit below 228 is taken; one that
-leaves no request the 50-octet minimum APDU after the routed header (under 66
-on B/IP, 61 on MS/TP) is refused before anything is sent, and so is a router
-named by a device instance. A path's limit lasts for the run only. `tui`,
-`mcp`, plain `bacnet` and the commands that send nothing refuse the flag
-rather than ignore it.
+to 65534. Repeat the flag for more paths, each path once. A limit below 228 is
+taken; one that leaves no request the 50-octet minimum APDU after the routed
+header (under 66 on B/IP, 61 on MS/TP) is refused before the command sends
+anything, and so are a router named as a device or as a station behind a
+router (`1234`, `5:0x0a`) and one path named twice, however its router is
+written. A path's limit lasts for the run only. `tui`, `mcp`, plain `bacnet`,
+`capture`, `sc-check` and `mstp-ports` refuse the flag rather than ignore it.
 
 After the command, the CLI prints the client's routed paths to stderr when
 something happened that the command line didn't ask for: a path learned a

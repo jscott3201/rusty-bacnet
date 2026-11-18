@@ -105,11 +105,13 @@ pub(crate) async fn around<T: TransportPort + 'static>(
     format: OutputFormat,
     command: impl Future<Output = CliResult>,
 ) -> CliResult {
+    let mut paths: Vec<(Vec<u8>, &LimitArg)> = Vec::with_capacity(cli.routed_path_limit.len());
     for limit in &cli.routed_path_limit {
         let mac = address_mac(
             client.transport(),
             &limit.router,
-            "a router is named by its address on this network, not a device instance",
+            "it names a device or a station behind a router; give the router's own address \
+             on this network, as whois-router prints it",
         )
         .await
         .map_err(|reason| {
@@ -119,8 +121,27 @@ pub(crate) async fn around<T: TransportPort + 'static>(
                 crate::destination::with_link_flag(reason)
             )
         })?;
+        if let Some((_, first)) = paths
+            .iter()
+            .find(|(other, first)| *other == mac && first.network == limit.network)
+        {
+            return Err(format!(
+                "--routed-path-limit names network {} through router {} twice ({}/{} and {}/{}); \
+                 give each path once",
+                limit.network,
+                AddressStyle::of(client.transport()).format(&mac),
+                first.router,
+                first.network,
+                limit.router,
+                limit.network
+            )
+            .into());
+        }
+        paths.push((mac, limit));
+    }
+    for (mac, limit) in &paths {
         client
-            .configure_routed_path_max_npdu(&mac, limit.network, limit.max_npdu)
+            .configure_routed_path_max_npdu(mac, limit.network, limit.max_npdu)
             .await
             .map_err(|error| format!("--routed-path-limit {}: {error}", limit.router))?;
     }
@@ -134,17 +155,24 @@ pub(crate) async fn around<T: TransportPort + 'static>(
 
 /// Whether the command failed because a request timed out: the client's
 /// own timeout or the state machine's, as [`bacnet_ops::raw::timed_out`]
-/// reads them, anywhere in the error's chain.
+/// reads them, anywhere in the error's chain, or an [`OpsError`] that says
+/// so. Its `source()` skips the client error it wraps, so it is asked
+/// itself.
+///
+/// [`OpsError`]: bacnet_ops::OpsError
 fn timed_out(outcome: &CliResult) -> bool {
     let Err(error) = outcome else {
         return false;
     };
     let mut next: Option<&(dyn std::error::Error + 'static)> = Some(&**error);
     while let Some(error) = next {
-        if error
+        let client = error
             .downcast_ref::<bacnet_types::error::Error>()
-            .is_some_and(bacnet_ops::raw::timed_out)
-        {
+            .is_some_and(bacnet_ops::raw::timed_out);
+        let ops = error
+            .downcast_ref::<bacnet_ops::OpsError>()
+            .is_some_and(bacnet_ops::OpsError::timed_out);
+        if client || ops {
             return true;
         }
         next = error.source();

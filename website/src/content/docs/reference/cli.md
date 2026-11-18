@@ -57,7 +57,7 @@ BACnet command-line tool.
 
 ## Global options
 
-These options go before or after the command. Each command also takes `-h` or `--help`.
+These options go before or after the command, except `--routed-path-limit`, `--no-tui` and `--version`, which go before it. Each command also takes `-h` or `--help`.
 
 - `--allow-write`: Let commands that change a device run: writes, object and file changes, alarm acknowledgment, time sync and unregister, and (with --yes or a typed confirmation) communication control and reinitialize. The TUI ignores it: its writes need an armed write session.
 - `--yes`: Confirm communication control and reinitialize without typing the target; they need it when stdin is not a terminal.
