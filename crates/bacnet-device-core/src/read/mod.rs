@@ -12,10 +12,12 @@ mod budget;
 pub mod group;
 mod property;
 mod rpm;
+mod source;
 
 pub use budget::{ReadFailure, ReadPropertyMultipleBudget};
 pub use property::{PropertyPlan, plan_property, read_property_ack, read_value, resolve_target};
 pub use rpm::RpmPlan;
+pub use source::RowSource;
 
 /// Plain per-request read settings, apart from how objects are served.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

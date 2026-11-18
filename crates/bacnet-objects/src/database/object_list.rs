@@ -1,0 +1,163 @@
+//! The local Device's Object_List and Database_Revision, which the database
+//! keeps (#2669).
+//!
+//! An object can't see the database it is in, so a Device object can't list
+//! the objects beside it or tell when that set changed. The database holds
+//! the one record of its objects, so it keeps both properties itself: every
+//! [`add`](ObjectDatabase::add) of a new identifier and every
+//! [`remove`](ObjectDatabase::remove) updates the list and moves the
+//! revision, whether a peer's CreateObject or DeleteObject or the
+//! application made it. The read services (`bacnet-device-core`'s read
+//! plan) serve the two properties of the [local
+//! Device](ObjectDatabase::local_device) from here
+//! ([`keeps_device_property`](ObjectDatabase::keeps_device_property)), so a
+//! running server, an endpoint and a firmware responder all answer from it.
+//! A Device object read on its own, outside those services, knows only
+//! itself: its Object_List names just the Device, and its
+//! Database_Revision stays 0.
+
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+
+use super::ObjectDatabase;
+use crate::traits::BACnetObject;
+
+impl ObjectDatabase {
+    /// Every object the database holds, in Object_List order: the Devices
+    /// first (normally just the one) in the order they were added, then
+    /// every other object in the order it was added. An object replaced
+    /// under its identifier keeps its place; one removed and added again
+    /// goes last among its kind. It yields [`len`](Self::len) identifiers.
+    ///
+    /// The local Device's Object_List (Clause 12.11.16) reads as this,
+    /// through every read service. A database built with
+    /// [`build_database_with_extra`](crate::device_identity::build_database_with_extra)
+    /// lists the Device, its Network Ports, then the extra objects.
+    pub fn object_list(&self) -> impl Iterator<Item = ObjectIdentifier> + '_ {
+        self.devices().iter().chain(&self.order).copied()
+    }
+
+    /// The Devices, which lead Object_List, in the order they were added:
+    /// the type index's. Keeping them out of `order` lets a Device join
+    /// without an insert ahead of the rest, which would link one more copy
+    /// routine into firmware images (`memmove_functions`, #2669).
+    fn devices(&self) -> &[ObjectIdentifier] {
+        self.type_index
+            .get(&ObjectType::DEVICE)
+            .map_or(&[], |devices| devices.as_slice())
+    }
+
+    /// Database_Revision (Clause 12.11.35): it moves by one each time an
+    /// object is added under a new identifier or removed, from 0 for a new
+    /// database, so a database built with three objects starts at 3. It
+    /// wraps past `u32::MAX`. Replacing an object under its identifier
+    /// doesn't move it.
+    pub fn database_revision(&self) -> u32 {
+        self.revision
+    }
+
+    /// Set [`database_revision`](Self::database_revision), for an
+    /// application that keeps the revision across restarts: set the saved
+    /// value once the database is built, and save it again whenever it
+    /// changes. Later adds and removes count on from it.
+    pub fn set_database_revision(&mut self, revision: u32) {
+        self.revision = revision;
+    }
+
+    /// Whether the read services serve `property` of `object` from the
+    /// database rather than the object: Object_List and Database_Revision
+    /// of the [local Device](Self::local_device). Read the value with
+    /// [`read_device_property`](Self::read_device_property). Any other
+    /// property is answered without asking `object` anything.
+    pub fn keeps_device_property(
+        &self,
+        object: &dyn BACnetObject,
+        property: PropertyIdentifier,
+    ) -> bool {
+        if !matches!(
+            property,
+            PropertyIdentifier::OBJECT_LIST | PropertyIdentifier::DATABASE_REVISION
+        ) {
+            return false;
+        }
+        let oid = object.object_identifier();
+        oid.object_type() == ObjectType::DEVICE && self.local_device().identifier() == Some(oid)
+    }
+
+    /// The local Device's Object_List or Database_Revision as a read of it
+    /// answers. Object_List whole lists [`object_list`](Self::object_list);
+    /// index 0 is its length and index `n` its `n`th entry, neither of
+    /// which builds the list; past the end is PROPERTY /
+    /// INVALID_ARRAY_INDEX. Database_Revision takes no index. Any other
+    /// property is PROPERTY / UNKNOWN_PROPERTY.
+    // Out of line and cold: the read services call it only for the two
+    // properties, and keeping it out of their per-row code keeps a row that
+    // reads anything else as cheap as before (#2669).
+    #[cold]
+    #[inline(never)]
+    pub fn read_device_property(
+        &self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        match (property, array_index) {
+            (PropertyIdentifier::OBJECT_LIST, None) => {
+                #[cfg(test)]
+                tests::count_whole_read();
+                Ok(PropertyValue::List(
+                    self.object_list()
+                        .map(PropertyValue::ObjectIdentifier)
+                        .collect(),
+                ))
+            }
+            (PropertyIdentifier::OBJECT_LIST, Some(0)) => {
+                Ok(PropertyValue::Unsigned(self.len() as u64))
+            }
+            (PropertyIdentifier::OBJECT_LIST, Some(index)) => {
+                let devices = self.devices();
+                (index as usize)
+                    .checked_sub(1)
+                    .and_then(|at| match at.checked_sub(devices.len()) {
+                        None => devices.get(at),
+                        Some(rest) => self.order.get(rest),
+                    })
+                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
+                    .ok_or(property_error(ErrorCode::INVALID_ARRAY_INDEX))
+            }
+            (PropertyIdentifier::DATABASE_REVISION, None) => {
+                Ok(PropertyValue::Unsigned(u64::from(self.revision)))
+            }
+            (PropertyIdentifier::DATABASE_REVISION, Some(_)) => {
+                Err(property_error(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
+            }
+            _ => Err(property_error(ErrorCode::UNKNOWN_PROPERTY)),
+        }
+    }
+
+    /// List `oid`, just added under a new identifier, after the rest; a
+    /// Device is listed by the type index already.
+    pub(super) fn list_added(&mut self, oid: ObjectIdentifier) {
+        if oid.object_type() != ObjectType::DEVICE {
+            self.order.push(oid);
+        }
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Take `oid`, just removed, off the list. `retain`, as the type index
+    /// does, so a removal links no copy routine of its own into firmware.
+    pub(super) fn list_removed(&mut self, oid: &ObjectIdentifier) {
+        if oid.object_type() != ObjectType::DEVICE {
+            self.order.retain(|listed| listed != oid);
+        }
+        self.revision = self.revision.wrapping_add(1);
+    }
+}
+
+fn property_error(code: ErrorCode) -> Error {
+    Error::protocol(ErrorClass::PROPERTY, code)
+}
+
+#[cfg(test)]
+#[path = "object_list_tests.rs"]
+mod tests;

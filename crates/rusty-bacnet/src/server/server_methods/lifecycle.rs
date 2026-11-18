@@ -244,17 +244,12 @@ impl BACnetServer {
                     .map_err(to_py_err)?;
             }
 
-            // Collect object identifiers for device object-list
-            let dev_oid = device.object_identifier();
-            let mut object_list = vec![dev_oid];
-
-            // Move pending objects into the database
+            // Move pending objects into the database. The Device's
+            // Object_List is the database's own: the Device, then the
+            // objects in the order they were added (#2669).
             for obj in objects {
-                object_list.push(obj.object_identifier());
                 db.add(obj).map_err(refused_object)?;
             }
-
-            device.set_object_list(object_list);
             db.add(Box::new(device)).map_err(refused_object)?;
 
             let transport = match (prepared_transport, router) {

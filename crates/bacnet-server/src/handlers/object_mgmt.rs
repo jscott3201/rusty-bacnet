@@ -75,6 +75,7 @@ pub(crate) fn handle_create_object_observed(
     if let ObjectSpecifier::Identifier(oid) = request.object_specifier {
         *target = Some(oid);
     }
+    let revision = db.database_revision();
     let created_oid =
         create(db, constructors, &request, target).map_err(CreateObjectRefusal::Failed)?;
     // What the type takes only at creation (#2179): the registration's
@@ -88,10 +89,12 @@ pub(crate) fn handle_create_object_observed(
         command_origin,
     };
 
-    // Apply initial values; on failure, remove the created object.
+    // Apply initial values; on failure, remove the created object. Nothing
+    // was created, so Database_Revision goes back to where it was (#2669).
     for (position, pv) in apply_sizes_first(db, &creating, &request) {
         if let Err(refusal) = initialize(db, &creating, pv) {
             let _ = db.remove(&created_oid);
+            db.set_database_revision(revision);
             return Err(refusal.of_initial_value(position));
         }
     }

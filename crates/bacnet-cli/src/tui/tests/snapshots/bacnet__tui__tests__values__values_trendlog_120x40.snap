@@ -16,7 +16,7 @@ expression: text
 "│ Object types      64 supported             ││ log-buffer                   (read-access-denied)                      │"
 "│ Max APDU          1476                     ││ record-count                 0                                         │"
 "│ Segmentation      no-segmentation          ││ total-record-count           0                                         │"
-"│ Database revision 0                        ││ status-flags                 none                                      │"
+"│ Database revision 8                        ││ status-flags                 none                                      │"
 "└────────────────────────────────────────────┘│ event-state                  normal                                    │"
 "┌ Objects (8) ───────────────────────────────┐│ reliability                  no-fault-detected                         │"
 "│ analog-input (1)                           ││ logging-type                 polled                                    │"

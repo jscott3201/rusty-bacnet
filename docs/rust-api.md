@@ -6081,6 +6081,39 @@ Enrollment evaluation (monitored, setpoint and fault references) both resolve
 references through it, so a FLOATING_LIMIT setpoint naming this device is read
 and reported like an unqualified one (#1184).
 
+#### Object_List and Database_Revision
+
+The database keeps the local Device's Object_List and Database_Revision
+(#2669), since no object can see the database it is in. Every read service
+serves them from it: a running server, an endpoint's server, `read_local`
+and a `bacnet-device-core` responder in firmware. So the list follows every
+object added under a new identifier and every object removed, whether a
+peer's CreateObject or DeleteObject did it or the application did through
+`add` and `remove`, and there is nothing for the application to keep in step.
+
+- **Order.** `ObjectDatabase::object_list` is the order: the Devices first
+  (normally just the one) in the order they were added, then every other
+  object in the order it was added. An object replaced under its identifier
+  keeps its place; one removed and added again goes last. A database from
+  `build_database_with_extra` lists the Device, its Network Ports, then the
+  extra objects; the point-list builder lists the points in list order.
+- **Reads.** Index 0 (the count) and any one index read straight from the
+  list without building it; only a whole read walks it, once. Past the end
+  is PROPERTY / INVALID_ARRAY_INDEX.
+- **Database_Revision** (Clause 12.11.35) moves by one with each add of a new
+  identifier and each removal, from 0 for a new database, so a database built
+  with three objects starts at 3. A replaced object, a refused add and a
+  CreateObject refused after its object was added (an initial value it
+  couldn't take) leave it alone. An application that keeps the revision
+  across restarts sets the saved value with
+  `ObjectDatabase::set_database_revision` once the database is built. A
+  rename and a restore don't move it yet.
+- **On its own.** A `DeviceObject` read directly, outside the read services,
+  lists only itself and reads Database_Revision 0, as do the local
+  references that read it straight from the object (a Trend Log, an Event
+  Enrollment or a COV subscription naming the Device's Object_List). The
+  database's own answer is `ObjectDatabase::read_device_property`.
+
 #### Databases with several Devices
 
 A BACnet device has one Device object (Clause 12.11), but a database may hold
@@ -6115,7 +6148,9 @@ several. The database selects the lowest instance independently of insertion ord
   must match it. While an Audit runtime is active the database refuses a new
   Device and keeps this one, so the choice holds for the runtime's life.
 - **Other Devices** take no part. Their recipient, APDU_Timeout and declared
-  services are plain object data.
+  services are plain object data, and each lists only itself in its
+  Object_List; the local Device's Object_List names every Device in the
+  database, ahead of the other objects (#2669).
 
 No Device can have the wildcard instance: `ObjectDatabase::add` refuses
 instance 4194303 for every object (Clause 12.1.1, #2171), so a selected

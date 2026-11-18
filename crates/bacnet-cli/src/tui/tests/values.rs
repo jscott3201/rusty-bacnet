@@ -174,16 +174,13 @@ fn plant() -> ObjectDatabase {
         Box::new(schedule),
         Box::new(log),
     ];
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: lab_identity(PLANT),
         vendor_name: "Rusty Lab".into(),
         model_name: "Bench-1".into(),
         ..Default::default()
     })
     .unwrap();
-    let mut list = vec![device.object_identifier()];
-    list.extend(objects.iter().map(|object| object.object_identifier()));
-    device.set_object_list(list);
     let mut db = ObjectDatabase::new();
     db.add(Box::new(device)).unwrap();
     for object in objects {

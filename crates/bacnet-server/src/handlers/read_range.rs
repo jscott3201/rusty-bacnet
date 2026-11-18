@@ -2,7 +2,8 @@ use bacnet_objects::property_metadata::{is_array_property, is_list_property};
 use std::ops::Range;
 
 use super::*;
-use bacnet_device_core::read::group::{self, GroupMembers};
+use bacnet_device_core::read::RowSource;
+use bacnet_device_core::read::group;
 use bacnet_device_core::read::{PropertyPlan, ReadScope};
 use bacnet_objects::log_buffer::{LogRecordIdentity, TimestampKey};
 use bacnet_objects::traits::BACnetObject;
@@ -156,7 +157,7 @@ pub fn handle_read_range(
     };
     let request = ReadRangeRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let plan = plan_read_range(db, &ReadScope::UNLIMITED, None, &request).map_err(unlimited)?;
-    let selected = prepare_read_range(db, None, request, plan.into_members()).map_err(unlimited)?;
+    let selected = prepare_read_range(db, None, request, plan.into_source()).map_err(unlimited)?;
     append_read_range_ack_with(
         &selected.request,
         &selected.items,
@@ -218,7 +219,7 @@ pub(crate) fn read_range_request_observed(
     let target = request.object_identifier;
     let property = request.property_identifier;
     let index = request.property_array_index;
-    let result = prepare_read_range(db, view, request, plan.into_members()).and_then(|selected| {
+    let result = prepare_read_range(db, view, request, plan.into_source()).and_then(|selected| {
         page::append_page_with(&selected, response, budget, encode_property_value)
     });
     let result = match result {
@@ -250,7 +251,7 @@ fn read_range_items(
     view: Option<&DeviceReadContext<'_>>,
     object: &dyn BACnetObject,
     request: &ReadRangeRequest,
-    members: Option<GroupMembers>,
+    source: RowSource,
 ) -> Result<Vec<PropertyValue>, ReadRangeFailure> {
     let property = request.property_identifier;
     let index = request.property_array_index;
@@ -262,7 +263,7 @@ fn read_range_items(
             ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
         )));
     }
-    let value = group::read_served_property(db, view, object, property, index, members)?;
+    let value = group::read_served_property(db, view, object, property, index, source)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
     if index.is_some() || !is_list_property(object, property) {
@@ -284,7 +285,7 @@ fn prepare_read_range<'a>(
     db: &'a ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: ReadRangeRequest,
-    members: Option<GroupMembers>,
+    source: RowSource,
 ) -> Result<PreparedReadRange<'a>, ReadRangeFailure> {
     let stored = db.get(&request.object_identifier).ok_or(Error::protocol(
         ErrorClass::OBJECT,
@@ -295,7 +296,7 @@ fn prepare_read_range<'a>(
     let (items, mut buffer_identities) = match logs::log_buffer(stored, &request)? {
         Some((items, identities)) => (items, Some(identities)),
         None => (
-            RangeItems::Values(read_range_items(db, view, object, &request, members)?),
+            RangeItems::Values(read_range_items(db, view, object, &request, source)?),
             None,
         ),
     };

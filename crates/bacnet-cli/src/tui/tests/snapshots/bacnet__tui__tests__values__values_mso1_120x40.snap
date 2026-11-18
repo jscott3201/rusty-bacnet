@@ -16,7 +16,7 @@ expression: text
 "│ Object types      64 supported             ││ event-detection-enable          false                                  │"
 "│ Max APDU          1476                     ││ event-enable                    none                                   │"
 "│ Segmentation      no-segmentation          ││ time-delay                      0                                      │"
-"│ Database revision 0                        ││ time-delay-normal               0                                      │"
+"│ Database revision 8                        ││ time-delay-normal               0                                      │"
 "└────────────────────────────────────────────┘│ notify-type                     alarm                                  │"
 "┌ Objects (8) ───────────────────────────────┐│ notification-class              0                                      │"
 "│ analog-input (1)                           ││ acked-transitions               to-offnormal | to-fault | to-normal    │"

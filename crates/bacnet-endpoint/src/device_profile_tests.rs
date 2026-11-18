@@ -85,7 +85,6 @@ fn profiled_database(
     .unwrap();
     object.set_services_supported(identity.services());
     object.set_device_uuid(identity.device_uuid());
-    object.set_object_list(vec![selected]);
     object
         .set_profile(ObjectProfile {
             tags: tags.then(|| vec![BACnetNameValue::semantic("exhaust")]),

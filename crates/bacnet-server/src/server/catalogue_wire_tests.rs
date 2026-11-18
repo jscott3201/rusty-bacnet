@@ -329,7 +329,7 @@ async fn every_catalogue_type_reads_all_required_and_optional_over_the_wire() {
                     .iter()
                     .find(|row| row.property_identifier == result.property_identifier)
                     .unwrap();
-                if let Err(failure) = values::check(object, row, result) {
+                if let Err(failure) = values::check(&db, object, row, result) {
                     failures.push(format!(
                         "{oid:?} {:?}: {failure}",
                         result.property_identifier

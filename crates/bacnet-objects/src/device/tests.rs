@@ -198,55 +198,6 @@ fn object_list_array_index() {
 }
 
 #[test]
-fn set_object_list() {
-    let mut dev = make_device();
-    let dev_oid = dev.object_identifier();
-    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let ai2 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
-    dev.set_object_list(vec![dev_oid, ai1, ai2]);
-
-    // arrayIndex absent: returns the full array
-    let val = dev
-        .read_property(PropertyIdentifier::OBJECT_LIST, None)
-        .unwrap();
-    assert_eq!(
-        val,
-        PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(dev_oid),
-            PropertyValue::ObjectIdentifier(ai1),
-            PropertyValue::ObjectIdentifier(ai2),
-        ])
-    );
-
-    // arrayIndex 0: returns the count
-    let count = dev
-        .read_property(PropertyIdentifier::OBJECT_LIST, Some(0))
-        .unwrap();
-    assert_eq!(count, PropertyValue::Unsigned(3));
-}
-
-/// The Device held as a `dyn BACnetObject`, as a database holds it.
-#[test]
-fn set_object_list_through_the_device_authority() {
-    let mut dev: Box<dyn BACnetObject> = Box::new(make_device());
-    let dev_oid = dev.object_identifier();
-    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-
-    dev.device_authority_internal()
-        .expect("the Device has an authority")
-        .set_object_list(vec![dev_oid, ai1]);
-
-    assert_eq!(
-        dev.read_property(PropertyIdentifier::OBJECT_LIST, None)
-            .unwrap(),
-        PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(dev_oid),
-            PropertyValue::ObjectIdentifier(ai1),
-        ])
-    );
-}
-
-#[test]
 fn set_system_status_through_the_device_authority() {
     let mut dev: Box<dyn BACnetObject> = Box::new(make_device());
     assert_eq!(

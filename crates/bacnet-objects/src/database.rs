@@ -19,6 +19,7 @@ mod input_references;
 mod local_device;
 mod membership;
 mod network_port;
+mod object_list;
 mod trend_poll;
 pub use local_device::LocalDevice;
 #[doc(hidden)]
@@ -47,6 +48,11 @@ pub struct ObjectDatabase {
     name_index: HashMap<String, ObjectIdentifier>,
     /// Type index: object type → set of ObjectIdentifiers for fast enumeration.
     type_index: HashMap<ObjectType, Vec<ObjectIdentifier>>,
+    /// Every object but the Devices, in the order added: Object_List after
+    /// the Devices, which the local Device serves (#2669; `object_list`).
+    order: Vec<ObjectIdentifier>,
+    /// Database_Revision, which moves with each add and remove (#2669).
+    revision: u32,
     /// Event Enrollment objects whose private evaluator state must be reset
     /// before it can be used again.
     invalid_enrollment_eval_state: HashSet<ObjectIdentifier>,
@@ -96,6 +102,8 @@ impl ObjectDatabase {
             network_port: None,
             name_index: HashMap::new(),
             type_index: HashMap::new(),
+            order: Vec::new(),
+            revision: 0,
             invalid_enrollment_eval_state: HashSet::new(),
             enrollment_eval_sources: HashMap::new(),
             membership: membership::MembershipQueue::default(),
@@ -129,6 +137,11 @@ impl ObjectDatabase {
     /// replaced object is dropped here, under the caller's borrow, and
     /// dropping an object with storage waits for the saves it queued
     /// earlier (see [`crate::durable`]).
+    ///
+    /// An object added under a new identifier joins the local Device's
+    /// Object_List and moves Database_Revision
+    /// ([`object_list`](Self::object_list), #2669); a replaced one keeps its
+    /// place and leaves the revision alone.
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
         let identifier = object.object_identifier();
         ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;
@@ -172,6 +185,7 @@ impl ObjectDatabase {
                 .entry(oid.object_type())
                 .or_default()
                 .push(oid);
+            self.list_added(oid);
         }
         self.membership_changed(oid, true);
         Ok(())
@@ -391,7 +405,9 @@ impl ObjectDatabase {
     /// timed object retires ([`Timed::retire`], as
     /// [`Retirement::Removed`]) before it is handed back, so a Load Control
     /// ends a request under way, tells its application to stop and saves
-    /// the ended request (#2479).
+    /// the ended request (#2479). A removed object leaves the local
+    /// Device's Object_List and moves Database_Revision
+    /// ([`object_list`](Self::object_list), #2669).
     ///
     /// [`Timed::retire`]: crate::traits::Timed::retire
     pub fn remove(
@@ -423,6 +439,7 @@ impl ObjectDatabase {
                 if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
                     type_set.retain(|o| o != oid);
                 }
+                self.list_removed(oid);
                 self.audit_membership_changed(*oid, false);
                 retire(obj.as_mut(), Retirement::Removed);
                 self.commander_removed(*oid, obj.as_mut());

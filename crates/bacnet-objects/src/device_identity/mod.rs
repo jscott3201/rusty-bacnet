@@ -423,8 +423,9 @@ impl DeviceIdentity {
     /// Constructs the ObjectDatabase (Device + Network-Port + DEVICE_UUID).
     ///
     /// Truth direction: identity -> database. For extra application objects
-    /// use [`build_database_with_extra`]: it seeds `Object_List` with
-    /// Device + ports + extras upfront so no post-add mutation is needed.
+    /// use [`build_database_with_extra`]. The Device's Object_List is the
+    /// database's own ([`ObjectDatabase::object_list`]): the Device, then the
+    /// ports.
     pub fn build_database(&self) -> Result<ObjectDatabase, Error> {
         let mut device = DeviceObject::new(DeviceConfig {
             identity: self.clone(),
@@ -434,16 +435,11 @@ impl DeviceIdentity {
         })?;
         device.set_services_supported(&self.services);
         device.set_device_uuid(self.device_uuid);
-        let device_oid = device.object_identifier();
 
-        let mut oids = vec![device_oid];
         let mut ports = Vec::new();
         for entry in &self.network_ports {
-            let port = entry.build_object()?;
-            oids.push(port.object_identifier());
-            ports.push(port);
+            ports.push(entry.build_object()?);
         }
-        device.set_object_list(oids);
 
         let mut db = ObjectDatabase::new();
         db.add(Box::new(device))?;
@@ -456,10 +452,11 @@ impl DeviceIdentity {
 
 /// Builds a database from an identity plus extra application objects.
 ///
-/// Truth direction stays identity-first: the Device `Object_List` is seeded
-/// with Device + ports + every extra OID upfront, so no post-add mutation
-/// (and no device/network-port fork) is needed. Extra objects are boxed
-/// `BACnetObject`s (e.g. Analog Input for proofs).
+/// Truth direction stays identity-first. The Device's Object_List is the
+/// database's own ([`ObjectDatabase::object_list`]), which follows every
+/// later add and remove: the Device, the ports, then the extra objects in
+/// order. Extra objects are boxed `BACnetObject`s (e.g. Analog Input for
+/// proofs).
 ///
 /// ```
 /// use bacnet_objects::device_identity::{build_database_with_extra, DeviceIdentity};
@@ -498,8 +495,8 @@ pub fn build_database_with_extra(
         oids.push(obj.object_identifier());
     }
     // The database replaces an object added under an identifier it already
-    // holds, which would drop the Device or a declared port and leave the
-    // identifier listed twice. Refuse before anything is added (#2250).
+    // holds, which would silently drop the Device, a declared port or an
+    // earlier extra object. Refuse before anything is added (#2250).
     let mut seen = crate::collections::HashSet::with_capacity(oids.len());
     if !oids.iter().all(|oid| seen.insert(*oid)) {
         return Err(Error::protocol(
@@ -507,7 +504,6 @@ pub fn build_database_with_extra(
             bacnet_types::enums::ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
         ));
     }
-    device.set_object_list(oids);
 
     let mut db = ObjectDatabase::new();
     db.add(Box::new(device))?;

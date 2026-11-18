@@ -24,6 +24,10 @@ mod node;
 #[path = "full_server/refusals.rs"]
 mod refusals;
 
+/// The node's Device lists what its database holds (#2669).
+#[path = "full_server/object_list.rs"]
+mod object_list;
+
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, Broadcast, COVNotificationDelivery};
