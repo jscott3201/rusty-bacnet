@@ -233,8 +233,8 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             received_event_log: Arc::default(),
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
             warnings: Arc::default(),
+            execution: crate::device_view::DeviceExecution::server(false, &config.time_sync_policy),
             config,
-            execution: crate::device_view::DeviceExecution::FullServer,
         }
     }
 }

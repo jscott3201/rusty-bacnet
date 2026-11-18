@@ -837,6 +837,8 @@ pub(crate) mod test_transport;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod time_sync_services_tests;
+#[cfg(test)]
 mod timer_state_change_tests;
 #[cfg(test)]
 mod timer_task_tests;

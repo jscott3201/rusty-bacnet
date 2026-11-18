@@ -469,8 +469,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 /// (Clause 13.5), received event notifications, which Notification
 /// Forwarder objects pass on, a received I-Am, and text messages (Clauses
 /// 16.5 and 16.6). With time synchronization off, Protocol_Services_Supported
-/// still lists TimeSynchronization and UTCTimeSynchronization, as it does
-/// for any server whose `TimeSyncPolicy` is disabled.
+/// lists neither TimeSynchronization nor UTCTimeSynchronization, as for any
+/// server whose `TimeSyncPolicy` is disabled (Clause 12.11.14).
 ///
 /// It is an ordinary builder: set budgets, handlers, a COV policy and the
 /// rest on it as on any. A later `policy` call replaces the stance's

@@ -40,17 +40,25 @@ pub(crate) const NODE_CLIENT_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
 ];
 
+/// What the Device's Protocol_Services_Supported lists, fixed when the
+/// server starts and carried by every read (two octets).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeviceExecution {
-    FullServer,
+    /// A full server. With `time_sync` it executes TimeSynchronization and
+    /// UTCTimeSynchronization once a Device clock is installed: its policy
+    /// [executes](crate::server::TimeSyncPolicy::executes) them (#2617).
+    FullServer { time_sync: bool },
     /// A full server on a node's seat beside the node's client role, which
     /// executes [`NODE_CLIENT_SERVICES`] too: the Device lists what the
-    /// whole node executes (Clause 12.11.14).
-    Node,
+    /// whole node executes (Clause 12.11.14). `time_sync` as for
+    /// [`FullServer`](Self::FullServer).
+    Node { time_sync: bool },
     /// An endpoint's responder: ReadProperty, and each service its session
     /// enabled.
     Endpoint(EndpointServices),
 }
+
+const _: () = assert!(std::mem::size_of::<DeviceExecution>() == 2);
 
 /// The services an endpoint's responder runs beside ReadProperty, packed
 /// into one octet, so the execution profile a read carries is two octets.
@@ -85,15 +93,38 @@ impl EndpointServices {
 }
 
 impl DeviceExecution {
+    /// A full server's profile, beside a node's client role when `node`,
+    /// executing time synchronization as `policy` does.
+    pub(crate) fn server(node: bool, policy: &crate::server::TimeSyncPolicy) -> Self {
+        let time_sync = policy.executes();
+        if node {
+            Self::Node { time_sync }
+        } else {
+            Self::FullServer { time_sync }
+        }
+    }
+
     /// An endpoint's responder's profile: see [`EndpointServices::new`].
     pub(crate) fn endpoint(writes: bool, reinitialize: bool, cov: bool) -> Self {
         Self::Endpoint(EndpointServices::new(writes, reinitialize, cov))
     }
 
+    /// Whether the profile executes both time-synchronization services
+    /// once a Device clock is installed; an endpoint's responder never does.
+    fn time_sync(self) -> bool {
+        match self {
+            Self::FullServer { time_sync } | Self::Node { time_sync } => time_sync,
+            Self::Endpoint(_) => false,
+        }
+    }
+
+    /// What the profile executes, with both time-synchronization services
+    /// only when it executes them and `clock`, a Device clock, is installed.
     pub(crate) fn services(self, clock: bool) -> impl Iterator<Item = ServiceSupported> {
+        let clock = clock && self.time_sync();
         let services = match self {
-            Self::FullServer => EXECUTED_SERVICES.to_vec(),
-            Self::Node => EXECUTED_SERVICES
+            Self::FullServer { .. } => EXECUTED_SERVICES.to_vec(),
+            Self::Node { .. } => EXECUTED_SERVICES
                 .iter()
                 .chain(NODE_CLIENT_SERVICES)
                 .copied()
@@ -131,7 +162,7 @@ impl DeviceExecution {
     fn cov_lists(self) -> &'static [P] {
         match self {
             Self::Endpoint(enabled) if !enabled.has(EndpointServices::COV) => &[],
-            Self::FullServer | Self::Node | Self::Endpoint(_) => &[
+            Self::FullServer { .. } | Self::Node { .. } | Self::Endpoint(_) => &[
                 P::ACTIVE_COV_SUBSCRIPTIONS,
                 P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
             ],
@@ -177,13 +208,12 @@ impl<'a> DeviceReadContext<'a> {
             identity: self.identity,
         }
     }
-    /// Only full-server service bits depend on clock availability. Cache both
-    /// answers for this request; Device time values and metadata stay live.
+    /// Only a server's time-synchronization bits depend on clock
+    /// availability, and only while it executes those services. Cache the
+    /// clock answer for this request; Device time values and metadata stay
+    /// live.
     fn clock_available(&self) -> bool {
-        matches!(
-            self.execution,
-            DeviceExecution::FullServer | DeviceExecution::Node
-        ) && *self.clock.get_or_init(|| self.db.clock_frame().is_some())
+        self.execution.time_sync() && *self.clock.get_or_init(|| self.db.clock_frame().is_some())
     }
     pub(crate) fn with_identity(
         mut self,
