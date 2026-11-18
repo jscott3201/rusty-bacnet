@@ -48,6 +48,8 @@ use crate::seat::{Attached, SeatSlot};
 const CONFIRMED_COV_NOTIFICATION: u8 = 1;
 /// ConfirmedEventNotification, as a confirmed service choice octet.
 const CONFIRMED_EVENT_NOTIFICATION: u8 = 2;
+/// ConfirmedCOVNotificationMultiple, as a confirmed service choice octet.
+const CONFIRMED_COV_NOTIFICATION_MULTIPLE: u8 = 31;
 
 /// The least time between two log lines about full-queue drops: a flood is
 /// reported, but its report can't become one.
@@ -357,7 +359,11 @@ fn client_share(
             // size when the request is segmented.
             let service = if first & 0x08 == 0 { 3 } else { 5 };
             match apdu.get(service).copied() {
-                Some(CONFIRMED_COV_NOTIFICATION) => SeatShare::Whole,
+                // A COV notification of either form is about the client's
+                // own subscription: the client answers it (#2654).
+                Some(CONFIRMED_COV_NOTIFICATION | CONFIRMED_COV_NOTIFICATION_MULTIPLE) => {
+                    SeatShare::Whole
+                }
                 Some(CONFIRMED_EVENT_NOTIFICATION) => SeatShare::Copy,
                 _ => SeatShare::None,
             }

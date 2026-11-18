@@ -1019,10 +1019,13 @@ Whether a relinquish at `priority` may go.
 
 ## CovNotification
 
-A Change-of-Value notification received from a remote device.
+A Change-of-Value notification about one object received from a remote
+device: a ConfirmedCOVNotification or UnconfirmedCOVNotification, which
+`subscribe_cov` and `subscribe_cov_property` subscriptions bring.
 
 Properties:
 
+- `kind: Literal["object"]`: `"object"`; a `CovNotificationMultiple` reads `"multiple"`.
 - `subscriber_process_identifier: int`
 - `initiating_device_identifier: ObjectIdentifier`
 - `monitored_object_identifier: ObjectIdentifier`
@@ -1033,9 +1036,32 @@ Properties:
 - `source_address: Optional[bytes]`
 - `values: Any`: List of property value change entries: dicts with `property_id`, `array_index` and `value`. `value` is a `PropertyValue` shaped as a read result is, or `bytes` when the octets' framing is broken.
 
+## CovNotificationMultiple
+
+A Change-of-Value notification about several objects received from a
+remote device: a ConfirmedCOVNotificationMultiple or
+UnconfirmedCOVNotificationMultiple, which `subscribe_cov_property_multiple`
+subscriptions bring (#2654). It arrives on `cov_notifications()` beside
+`CovNotification` objects, in the order they came.
+
+Properties:
+
+- `kind: Literal["multiple"]`: `"multiple"`; a `CovNotification` reads `"object"`.
+- `subscriber_process_identifier: int`
+- `initiating_device_identifier: ObjectIdentifier`
+- `time_remaining: int`
+- `timestamp: Optional[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]`: When the last change the notification conveys happened, as `((year, month, day, day_of_week), (hour, minute, second, hundredths))`, the year in full; `None` when no value carries a time of change.
+- `delivery: str`
+- `source_mac: bytes`
+- `source_network: Optional[int]`
+- `source_address: Optional[bytes]`
+- `objects: Any`: The objects reported, in order: dicts with `monitored_object_identifier` and `values`. Each value is a dict with `property_id`, `array_index`, `value` (as in `CovNotification.values`) and `time_of_change`, an `(hour, minute, second, hundredths)` tuple, or `None` when the subscription didn't ask for timestamps. One property may appear more than once, a timestamped one changing several times.
+
 ## CovNotificationIterator
 
-Async iterator yielding `CovNotification` objects. One that falls behind
+Async iterator yielding `CovNotification` and
+`CovNotificationMultiple` objects, in the order they arrived; `kind`
+tells them apart. One that falls behind
 the client's COV channel loses the oldest and adds them to `missed`. A
 cancel that lands while a notification is being delivered, as a timed-out
 `asyncio.wait_for` does, puts it back: the next `__anext__` returns it
@@ -1058,7 +1084,7 @@ def __aiter__(self) -> CovNotificationIterator
 ### CovNotificationIterator.__anext__
 
 ```python
-def __anext__(self) -> Awaitable[CovNotification]
+def __anext__(self) -> Awaitable[CovNotification | CovNotificationMultiple]
 ```
 
 ## IHave

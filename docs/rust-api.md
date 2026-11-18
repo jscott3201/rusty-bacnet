@@ -4175,7 +4175,8 @@ let client = BACnetClient::generic_builder().transport(ports.client).build().awa
 The router shares out what it delivers to its application:
 
 - A Confirmed-Request goes to the server, with two exceptions. A
-  ConfirmedCOVNotification goes to the client alone. A
+  ConfirmedCOVNotification or ConfirmedCOVNotificationMultiple goes to the
+  client alone. A
   ConfirmedEventNotification goes to both: the client hears it, and the server
   takes it for its Notification Forwarders. The server's answer is the one
   sent; the client's is dropped. When the server's port can't take it (not
@@ -10271,22 +10272,50 @@ let request = SubscribeCOVPropertyMultipleRequest {
     max_notification_delay: Some(10),
     list_of_cov_subscription_specifications: cov_specs,
 };
-// The client doesn't deliver its COV-multiple notifications yet (#2654).
 client.subscribe_cov_property_multiple(&mac, &request).await?;
 
-// Receive the object subscription's notifications (broadcast channel —
-// multiple consumers OK)
+// Receive both subscriptions' notifications on one broadcast channel
+// (multiple consumers OK), in the order they arrive.
 let mut rx = client.cov_notifications();
-let notification: ReceivedCOVNotification = rx.recv().await?;
+match rx.recv().await? {
+    COVEvent::Object(received) => {
+        // ConfirmedCOVNotification or UnconfirmedCOVNotification.
+        let _values = &received.notification.list_of_values;
+    }
+    COVEvent::Multiple(received) => {
+        // ConfirmedCOVNotificationMultiple or
+        // UnconfirmedCOVNotificationMultiple: each object's changed values,
+        // with their time of change when the subscription asked for it.
+        for object in &received.notification.list_of_cov_notifications {
+            let _changes = &object.list_of_values;
+        }
+    }
+}
 
 // Unsubscribe
 client.unsubscribe_cov(&mac, process_id, oid).await?;
 ```
 
-A SubscribeCOVPropertyMultiple subscription's notifications don't reach
-`cov_notifications` yet: the client refuses a
-ConfirmedCOVNotificationMultiple and drops an
-UnconfirmedCOVNotificationMultiple (#2654).
+`cov_notifications()` yields a `COVEvent`: `Object(ReceivedCOVNotification)`
+for the notifications SubscribeCOV and SubscribeCOVProperty subscriptions
+bring, or `Multiple(ReceivedCOVNotificationMultiple)` for those of a
+SubscribeCOVPropertyMultiple subscription (#2654). Both carry the same
+source fields and delivery, and `COVEvent` reads the fields they share
+(`subscriber_process_identifier()`, `time_remaining()`, `source_mac()` and
+so on); `Station::is_source_of` matches either by its source. The client
+acknowledges a confirmed notification of either form whether or not it knows
+the subscription, and publishes it; `confirmed_cov_notification_ack_policy`
+sees the `COVEvent` and may answer otherwise. A notification sent again,
+its answer lost, is acknowledged and published again. A segmented confirmed
+notification is aborted unread (#2646). `ManagedCOVSubscription` renews
+SubscribeCOV and SubscribeCOVProperty subscriptions only.
+
+`COVNotificationMultipleRequest::decode` is lenient about times: the clause
+asks for a notification's top-level timestamp and its values' times of change
+to be present together or absent together, but a notification with one and
+not the other decodes, is acknowledged when confirmed, and is published with
+the times it carried. `encode` stays strict and refuses to write such a
+mismatch (#2654).
 
 `SubscribeCOVPropertyMultipleRequest::encode` is fallible and validates the entire
 request before appending bytes; `validate` makes the same checks alone, and
@@ -13541,7 +13570,8 @@ session.stop().await?; // stops the server, then the link
   again; the server's stop error is the stop's. Dropping the session drops
   the server, which aborts its work and lets the database go off the runtime.
 - Who answers what: the server answers every request but a
-  ConfirmedCOVNotification, which is the full client's. It acknowledges a
+  ConfirmedCOVNotification or ConfirmedCOVNotificationMultiple, which is the
+  full client's. It acknowledges a
   ConfirmedEventNotification, of which the full client hears a copy. Both
   hear every unconfirmed request. An answer goes to the role whose lease it
   answers, from the session's one pool of invoke IDs, and a requester's
@@ -13594,16 +13624,17 @@ session.stop().await?; // stops the server, then the link
   and `apdu_retries` (default 6000 ms and 3), which the client uses and the
   server's confirmed notifications use too (`cov_retry_timeout_ms`,
   `notification_retries`). On a `Both` session Protocol_Services_Supported
-  lists what the client executes (I-Am, I-Have, both COV notifications)
-  beside the server's services, whatever the identity's service list says.
-  That follows the session's role, not the client attached at the moment:
-  until one is, the server rejects a ConfirmedCOVNotification the Device
-  lists, and a full client on a `ServerOnly` session executes services the
-  Device doesn't list. Following the attached client would cost every
-  ReadProperty a read of shared state. Segmentation_Supported is the
-  identity's and the server follows it; the full client keeps its own
-  segmentation settings for now (a later step of #2617), and it can't
-  reassemble a segmented ConfirmedCOVNotification, which it aborts.
+  lists what the client executes (I-Am, I-Have, and the COV notifications
+  of one object and of several, both forms of each) beside the server's
+  services, whatever the identity's service list says. That follows the
+  session's role, not the client attached at the moment: until one is, the
+  server rejects a ConfirmedCOVNotification the Device lists, and a full
+  client on a `ServerOnly` session executes services the Device doesn't
+  list. Following the attached client would cost every ReadProperty a read
+  of shared state. Segmentation_Supported is the identity's and the server
+  follows it; the full client keeps its own segmentation settings for now
+  (a later step of #2617), and it can't reassemble a segmented
+  ConfirmedCOVNotification, which it aborts.
 - DeviceCommunicationControl binds the whole node (Clause 16.1). While the
   server holds a DISABLE_INITIATION it accepted, nothing on the node
   initiates but I-Am answers to Who-Is and audit notifications, and nothing

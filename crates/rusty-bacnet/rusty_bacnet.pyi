@@ -3527,7 +3527,14 @@ class WritePolicy:
 
 
 class CovNotification:
-    """A Change-of-Value notification received from a remote device."""
+    """A Change-of-Value notification about one object received from a remote
+    device: a ConfirmedCOVNotification or UnconfirmedCOVNotification, which
+    ``subscribe_cov`` and ``subscribe_cov_property`` subscriptions bring."""
+
+    @property
+    def kind(self) -> Literal["object"]:
+        """``"object"``; a ``CovNotificationMultiple`` reads ``"multiple"``."""
+        ...
 
     @property
     def subscriber_process_identifier(self) -> int: ...
@@ -3563,8 +3570,67 @@ class CovNotification:
     def __repr__(self) -> str: ...
 
 
+class CovNotificationMultiple:
+    """A Change-of-Value notification about several objects received from a
+    remote device: a ConfirmedCOVNotificationMultiple or
+    UnconfirmedCOVNotificationMultiple, which ``subscribe_cov_property_multiple``
+    subscriptions bring (#2654). It arrives on ``cov_notifications()`` beside
+    ``CovNotification`` objects, in the order they came."""
+
+    @property
+    def kind(self) -> Literal["multiple"]:
+        """``"multiple"``; a ``CovNotification`` reads ``"object"``."""
+        ...
+
+    @property
+    def subscriber_process_identifier(self) -> int: ...
+
+    @property
+    def initiating_device_identifier(self) -> ObjectIdentifier: ...
+
+    @property
+    def time_remaining(self) -> int: ...
+
+    @property
+    def timestamp(
+        self,
+    ) -> Optional[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]:
+        """When the last change the notification conveys happened, as
+        ``((year, month, day, day_of_week), (hour, minute, second,
+        hundredths))``, the year in full; ``None`` when no value carries a
+        time of change."""
+        ...
+
+    @property
+    def delivery(self) -> str: ...
+
+    @property
+    def source_mac(self) -> bytes: ...
+
+    @property
+    def source_network(self) -> Optional[int]: ...
+
+    @property
+    def source_address(self) -> Optional[bytes]: ...
+
+    @property
+    def objects(self) -> Any:
+        """The objects reported, in order: dicts with
+        ``monitored_object_identifier`` and ``values``. Each value is a dict
+        with ``property_id``, ``array_index``, ``value`` (as in
+        ``CovNotification.values``) and ``time_of_change``, an ``(hour,
+        minute, second, hundredths)`` tuple, or ``None`` when the
+        subscription didn't ask for timestamps. One property may appear more
+        than once, a timestamped one changing several times."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
 class CovNotificationIterator:
-    """Async iterator yielding ``CovNotification`` objects. One that falls behind
+    """Async iterator yielding ``CovNotification`` and
+    ``CovNotificationMultiple`` objects, in the order they arrived; ``kind``
+    tells them apart. One that falls behind
     the client's COV channel loses the oldest and adds them to ``missed``. A
     cancel that lands while a notification is being delivered, as a timed-out
     ``asyncio.wait_for`` does, puts it back: the next ``__anext__`` returns it
@@ -3575,7 +3641,7 @@ class CovNotificationIterator:
     client stops."""
 
     def __aiter__(self) -> CovNotificationIterator: ...
-    def __anext__(self) -> Awaitable[CovNotification]: ...
+    def __anext__(self) -> Awaitable[CovNotification | CovNotificationMultiple]: ...
     @property
     def missed(self) -> int:
         """Notifications lost so far: because this iterator fell behind,
@@ -5940,10 +6006,9 @@ class BACnetClient:
         """Subscribe to COV notifications for multiple properties on multiple objects.
 
         ``address`` is a ``str`` or a ``RoutedTarget``, as for
-        ``subscribe_cov`` (#2588). The client doesn't deliver the
-        notifications such a subscription brings yet: it refuses a
-        ConfirmedCOVNotificationMultiple and drops the unconfirmed form, so
-        none reaches ``cov_notifications()`` (#2654).
+        ``subscribe_cov`` (#2588). The notifications such a subscription
+        brings arrive on ``cov_notifications()`` as ``CovNotificationMultiple``
+        objects.
         ``specs`` is ``[(object_id, [(property_id, array_index, cov_increment, timestamped), ...]), ...]``.
         ``issue_confirmed_notifications`` is required, including for cancellation requests.
         For subscriptions and re-subscriptions, ``lifetime`` and ``max_notification_delay`` are both required.
@@ -5959,7 +6024,19 @@ class BACnetClient:
         ...
 
     def cov_notifications(self) -> Awaitable[CovNotificationIterator]:
-        """Get an async iterator for incoming COV notifications."""
+        """Get an async iterator for incoming COV notifications of both kinds:
+        ``CovNotification`` (one object) and ``CovNotificationMultiple``
+        (several objects, from ``subscribe_cov_property_multiple``). The client
+        acknowledges a confirmed one of either kind whether or not it knows the
+        subscription; match one by its ``subscriber_process_identifier`` and
+        source.
+        An unsubscribed sender's broadcast can bring a
+        ``CovNotificationMultiple`` too, so check ``kind`` (or use
+        ``isinstance``) before reading a ``CovNotification``'s fields. A
+        segmented COV-multiple request is answered with an Abort (the client
+        does not support segmentation; tracked in #2646), and a confirmed
+        notification sent again, its answer lost, is published again.
+        """
         ...
 
     # --- Object management ---
