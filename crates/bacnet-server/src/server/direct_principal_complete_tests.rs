@@ -273,6 +273,7 @@ async fn direct_principal_reinitialize_context_carries_the_admitted_identity() {
     );
     let admitted = f.capture(&mut a, &request).await;
     let identity = admitted.provenance.direct_sc_identity().unwrap();
+    let provenance = admitted.provenance.clone();
     f.feed(admitted).await;
     let response = f.response().await;
     assert!(
@@ -280,6 +281,9 @@ async fn direct_principal_reinitialize_context_carries_the_admitted_identity() {
         "got {response:?}"
     );
     let context = observed.lock().unwrap().pop().unwrap();
+    // The admitted provenance is passed through whole, not rebuilt.
+    assert_eq!(context.provenance, provenance);
+    assert_eq!(context.invoke_id, 45);
     assert_eq!(context.direct_sc_identity(), Some(identity));
     assert_eq!(context.source_mac.as_ref(), PEER_MAC);
     assert_eq!(

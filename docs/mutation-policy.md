@@ -64,9 +64,9 @@ example one `FnPolicy` chain. The `MutationAuthorizer`,
 `UnconfirmedAuditNotificationAuthorizer` aliases are gone. The shared endpoint's
 Device-write callback (`mutation::DeviceWriteAuthorizer` in 0.14 and 0.15) is gone
 too (#2617): an endpoint session runs this server, so its policy decides those
-writes as well. Decision counters behave as before: only a policy that decides mutations makes the server
-decode a mutation for authorization first, as an installed mutation authorizer
-did.
+writes as well. Decision counters behave as before: only a policy that decides
+mutations makes the server decode a mutation for authorization first, as an
+installed mutation authorizer did.
 
 ## Mutation policy modes
 

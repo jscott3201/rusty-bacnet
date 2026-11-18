@@ -454,7 +454,8 @@ impl DeviceObject {
 
     /// Provision independent optional Tags, Profile_Location and Profile_Name
     /// rows before registration. A server permits Tags writes as its mutation
-    /// policy allows. The profile text is network read-only. Invalid configuration leaves the old profile unchanged.
+    /// policy allows. The profile text is network read-only. Invalid
+    /// configuration leaves the old profile unchanged.
     pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
         self.profile.provision(profile)
     }

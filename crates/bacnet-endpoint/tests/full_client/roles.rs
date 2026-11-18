@@ -180,6 +180,77 @@ async fn the_narrow_requester_and_the_full_client_work_at_once() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_peer_request_with_the_clients_outstanding_invoke_id_reaches_the_server() {
+    // The client's lease is a (peer, invoke ID) pair in one direction; a
+    // Confirmed-Request from that peer under the same number is the peer's
+    // own transaction, so the server answers it and the client's lease is
+    // left alone for the answer that is still to come.
+    let lab = lab(SessionRole::Both).await;
+    let client = Arc::new(lab.session.full_client().unwrap());
+    let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
+    let coordinator = lab.session.coordinator();
+
+    // The client's read waits at the peer.
+    lab.wire.hold(&peer);
+    let (reader, to) = (Arc::clone(&client), peer.clone());
+    let read = tokio::spawn(async move {
+        reader
+            .read_property(&to, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
+            .await
+    });
+    eventually(WAIT, "the client's read held at the peer", async || {
+        lab.wire.held(&peer) == 1
+    })
+    .await;
+    let ids = requests(&lab.node_sent, ConfirmedServiceChoice::READ_PROPERTY);
+    let [id] = ids[..] else {
+        panic!("one read from the node: {ids:?}");
+    };
+    let held = || coordinator.holder_of(&CanonicalPeer::direct(&peer), id);
+    assert_eq!(held(), Some(LeaseHolder::Client));
+
+    // The peer asks the node under the same invoke ID.
+    let device = oid(ObjectType::DEVICE, NODE_DEVICE);
+    let request = confirmed(
+        id,
+        ConfirmedServiceChoice::READ_PROPERTY,
+        &read_name(device),
+    );
+    lab.wire
+        .deliver(&node, wire::frame(&peer, npdu_of(&request, true), false));
+    let answered = || {
+        apdus(&lab.node_sent).into_iter().any(|(to, apdu)| {
+            to == peer
+                && matches!(apdu, Apdu::ComplexAck(ack)
+                    if ack.invoke_id == id
+                        && ack.service_choice == ConfirmedServiceChoice::READ_PROPERTY)
+        })
+    };
+    eventually(WAIT, "the server's answer under that ID", async || {
+        answered()
+    })
+    .await;
+    assert_eq!(
+        held(),
+        Some(LeaseHolder::Client),
+        "the client's lease stays"
+    );
+    assert!(!read.is_finished());
+
+    // The peer's answer to the client then completes the client's read.
+    lab.wire.release(&peer);
+    let value = read.await.unwrap().unwrap();
+    assert_eq!(value.object_identifier, ai1());
+    assert_eq!(value.property_identifier, PropertyIdentifier::PRESENT_VALUE);
+    assert_eq!(held(), None);
+    assert_eq!(lab.session.active_leases(), 0);
+    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+
+    drop(client);
+    stop(lab).await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_confirmed_cov_notification_reaches_the_full_clients_subscription() {
     let lab = lab(SessionRole::Both).await;
     let client = lab.session.full_client().unwrap();
