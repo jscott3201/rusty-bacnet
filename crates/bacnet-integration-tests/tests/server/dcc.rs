@@ -123,7 +123,9 @@ async fn dcc_disable_initiation_allows_rp_blocks_cov() {
     let initial_notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for initial COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(
         initial_notification
             .notification
@@ -150,7 +152,9 @@ async fn dcc_disable_initiation_allows_rp_blocks_cov() {
     let received = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.notification.monitored_object_identifier, ao_oid);
 
     // Now set DCC DISABLE_INITIATION
@@ -240,7 +244,9 @@ async fn dcc_enable_restores_normal_operation() {
     let initial_notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for initial COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(
         initial_notification
             .notification
@@ -301,7 +307,9 @@ async fn dcc_enable_restores_normal_operation() {
     let received = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for COV notification after re-enable")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.notification.monitored_object_identifier, ao_oid);
 
     client.stop().await.unwrap();

@@ -41,9 +41,13 @@ async def main():
         )
         print("Subscribed to COV on AI:1")
 
-        # Start a listener task
+        # Start a listener task. The iterator yields a CovNotification about
+        # one object, or a CovNotificationMultiple about several (from
+        # subscribe_cov_property_multiple); `kind` tells them apart.
         async def listen_for_changes():
-            async for notif in client.cov_notifications():
+            async for notif in await client.cov_notifications():
+                if notif.kind != "object":
+                    continue
                 obj = notif.monitored_object_identifier
                 print(f"\n  COV from {obj}:")
                 for v in notif.values:

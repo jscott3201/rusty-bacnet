@@ -35,8 +35,7 @@ async fn client_cov_ack_reject_silence_and_stale_application_delivery() {
     let ca = TestCa::new();
     let (mut f, port) = Fixture::new(&ca).await;
     let options = ClientOptions::default().with_confirmed_cov_notification_ack_policy(|n| match n
-        .notification
-        .subscriber_process_identifier
+        .subscriber_process_identifier()
     {
         2 => ConfirmedCOVNotificationResponse::Reject(RejectReason::OTHER),
         3 => ConfirmedCOVNotificationResponse::NoResponse,
@@ -51,7 +50,7 @@ async fn client_cov_ack_reject_silence_and_stale_application_delivery() {
         let admitted = f.capture(&mut a, &cov(process), routed()).await;
         f.feed(admitted).await;
         let received = bounded(notifications.recv()).await.unwrap();
-        assert_eq!(received.notification.subscriber_process_identifier, process);
+        assert_eq!(received.subscriber_process_identifier(), process);
         match process {
             1 => assert!(matches!(f.response(&a).await.1, Apdu::SimpleAck(r) if r.invoke_id == 1)),
             2 => assert!(
@@ -70,16 +69,14 @@ async fn client_cov_ack_reject_silence_and_stale_application_delivery() {
         bounded(notifications.recv())
             .await
             .unwrap()
-            .notification
-            .subscriber_process_identifier,
+            .subscriber_process_identifier(),
         4
     );
     assert_eq!(
         bounded(notifications.recv())
             .await
             .unwrap()
-            .notification
-            .subscriber_process_identifier,
+            .subscriber_process_identifier(),
         5
     );
     assert!(matches!(f.response(&b).await.1, Apdu::SimpleAck(r) if r.invoke_id == 5));

@@ -5,6 +5,10 @@ use bacnet_client::client::COVNotificationDelivery;
 use bacnet_encoding::constructed::encode_event_notification;
 use bacnet_endpoint_core::coordinator::{CanonicalPeer, LeaseHolder};
 use bacnet_services::alarm_event::EventNotificationRequest;
+use bacnet_services::cov_multiple::{
+    COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+};
+use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, EventState, EventType, NotifyType, PropertyIdentifier, RejectReason,
 };
@@ -92,7 +96,7 @@ async fn a_client_request_and_a_server_notification_share_one_invoke_id_pool() {
         lab.wire.release(&node);
         assert!(read.await.unwrap().is_ok());
         assert_eq!(
-            next(&mut heard).await.delivery,
+            next(&mut heard).await.delivery(),
             COVNotificationDelivery::Confirmed
         );
         eventually(WAIT, "the notification acknowledged", async || {
@@ -185,14 +189,15 @@ async fn a_confirmed_cov_notification_reaches_the_full_clients_subscription() {
         .await
         .unwrap();
     let first = next(&mut notifications).await;
-    assert_eq!(first.delivery, COVNotificationDelivery::Confirmed);
-    assert_eq!(first.source_mac, peer);
+    assert_eq!(first.delivery(), COVNotificationDelivery::Confirmed);
+    assert_eq!(first.source_mac(), &peer);
+    assert!(first.object().is_some());
     lab.peer
         .set_present_value_local(&ai1(), PropertyValue::Real(30.0))
         .await
         .unwrap();
     let second = next(&mut notifications).await;
-    assert_eq!(second.notification.subscriber_process_identifier, 9);
+    assert_eq!(second.subscriber_process_identifier(), 9);
 
     // The client acknowledged each one, once, and the node's server role
     // answered neither: the peer had no cause to send one again.
@@ -220,6 +225,96 @@ async fn a_confirmed_cov_notification_reaches_the_full_clients_subscription() {
         .len(),
         2
     );
+
+    drop(client);
+    stop(lab).await;
+}
+
+/// A SubscribeCOVPropertyMultiple to the peer's AI-1 and AV-1, their
+/// Present_Values, with confirmed notifications, timestamped when
+/// `timestamped`.
+fn present_values(process: u32, timestamped: bool) -> SubscribeCOVPropertyMultipleRequest {
+    let reference = COVReference {
+        monitored_property: PropertyReference {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+        },
+        cov_increment: None,
+        timestamped,
+    };
+    SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: process,
+        issue_confirmed_notifications: true,
+        lifetime: Some(600),
+        max_notification_delay: Some(1),
+        list_of_cov_subscription_specifications: [ai1(), oid(ObjectType::ANALOG_VALUE, 1)]
+            .into_iter()
+            .map(|object| COVSubscriptionSpecification {
+                monitored_object_identifier: object,
+                list_of_cov_references: vec![reference.clone()],
+            })
+            .collect(),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_confirmed_cov_multiple_notification_reaches_the_full_client() {
+    // Beside the node's server role, the classifier hands the full client a
+    // ConfirmedCOVNotificationMultiple as it does a ConfirmedCOVNotification
+    // (#2654): the client acknowledges it, and the server role sees none.
+    let lab = lab(SessionRole::Both).await;
+    let client = lab.session.full_client().unwrap();
+    let peer = Wire::mac(PEER);
+    let mut notifications = client.cov_notifications();
+
+    client
+        .subscribe_cov_property_multiple(&peer, &present_values(10, true))
+        .await
+        .unwrap();
+    let first = next(&mut notifications).await;
+    let received = first.multiple().expect("a COV-multiple notification");
+    assert_eq!(received.delivery, COVNotificationDelivery::Confirmed);
+    assert_eq!(received.source_mac, peer);
+    assert_eq!(received.notification.subscriber_process_identifier, 10);
+    assert!(received.notification.timestamp.is_some());
+    lab.peer
+        .set_present_value_local(&ai1(), PropertyValue::Real(30.0))
+        .await
+        .unwrap();
+    let second = next(&mut notifications).await;
+    assert_eq!(second.subscriber_process_identifier(), 10);
+    assert!(second.multiple().is_some_and(|received| {
+        received
+            .notification
+            .list_of_cov_notifications
+            .iter()
+            .any(|object| object.monitored_object_identifier == ai1())
+    }));
+
+    // Each was acknowledged once, by the client, and the peer had no cause
+    // to send one again.
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let multiple = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE;
+    let answers: Vec<Apdu> = apdus(&lab.node_sent)
+        .into_iter()
+        .map(|(_, apdu)| apdu)
+        .filter(|apdu| !matches!(apdu, Apdu::ConfirmedRequest(_)))
+        .collect();
+    let sent = requests(&lab.peer_sent, multiple);
+    let distinct: std::collections::BTreeSet<_> = sent.iter().collect();
+    assert!(sent.len() >= 2, "{sent:?}");
+    assert_eq!(
+        distinct.len(),
+        sent.len(),
+        "a notification went twice: {sent:?}"
+    );
+    assert_eq!(answers.len(), sent.len(), "{answers:?}");
+    for answer in answers {
+        let Apdu::SimpleAck(ack) = answer else {
+            panic!("not a Simple-ACK: {answer:?}");
+        };
+        assert_eq!(ack.service_choice, multiple);
+    }
 
     drop(client);
     stop(lab).await;

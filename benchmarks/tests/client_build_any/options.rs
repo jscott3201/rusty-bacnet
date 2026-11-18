@@ -31,7 +31,7 @@ macro_rules! configured {
             .cov_channel_capacity(1)
             .event_channel_capacity(2)
             .confirmed_cov_notification_ack_policy(|received| {
-                assert_eq!(received.delivery, COVNotificationDelivery::Confirmed);
+                assert_eq!(received.delivery(), COVNotificationDelivery::Confirmed);
                 ConfirmedCOVNotificationResponse::Reject(RejectReason::OTHER)
             })
     };
@@ -119,14 +119,7 @@ async fn options<T: TransportPort + 'static, P: TransportPort>(
         );
     }
     assert_eq!(cov.recv().await.unwrap_err(), RecvError::Lagged(2));
-    assert_eq!(
-        cov.recv()
-            .await
-            .unwrap()
-            .notification
-            .subscriber_process_identifier,
-        3
-    );
+    assert_eq!(cov.recv().await.unwrap().subscriber_process_identifier(), 3);
     // Existing event-notification fixture: process 42, device 100, AI 7,
     // sequence 5, out-of-range alarm. Every response synchronizes dispatch.
     let event_payload = Bytes::from_static(&[

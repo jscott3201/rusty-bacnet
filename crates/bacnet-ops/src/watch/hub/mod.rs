@@ -167,6 +167,13 @@ pub struct HubStats {
     pub throttled: Duration,
     /// COV notifications lost because the hub's receiver fell behind.
     pub lagged: u64,
+    /// COV-multiple notifications (ConfirmedCOVNotificationMultiple and
+    /// UnconfirmedCOVNotificationMultiple) the hub heard and left alone. It
+    /// subscribes per object or property, never with
+    /// SubscribeCOVPropertyMultiple, so none answers one of its watches; they
+    /// still reach the client's other receivers
+    /// ([`BACnetClient::cov_notifications`](bacnet_client::client::BACnetClient::cov_notifications)).
+    pub cov_multiple_ignored: u64,
     /// Cancels queued or running: subscriptions the devices may still hold
     /// for points no longer watched.
     pub cancelling: usize,
@@ -494,6 +501,7 @@ impl<T: TransportPort + 'static> Hub<T> {
             requests: self.inner.account.requests(),
             throttled: self.inner.account.throttled(),
             lagged: registry.lagged.load(Ordering::Relaxed),
+            cov_multiple_ignored: registry.cov_multiple_ignored.load(Ordering::Relaxed),
             cancelling: registry.cancelling.load(Ordering::Relaxed),
         }
     }

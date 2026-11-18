@@ -36,8 +36,8 @@ fn received_cov_notification(
     monitored_object_identifier: ObjectIdentifier,
     time_remaining: u32,
     source_mac: &[u8],
-) -> ReceivedCOVNotification {
-    ReceivedCOVNotification::new(
+) -> COVEvent {
+    COVEvent::Object(ReceivedCOVNotification::new(
         cov_notification(
             subscriber_process_identifier,
             monitored_object_identifier,
@@ -46,7 +46,7 @@ fn received_cov_notification(
         source_mac,
         &None,
         COVNotificationDelivery::Unconfirmed,
-    )
+    ))
 }
 
 async fn send_local_simple_ack<T: TransportPort>(

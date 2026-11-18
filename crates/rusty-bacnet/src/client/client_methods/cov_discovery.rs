@@ -194,7 +194,9 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Get an async iterator yielding incoming COV notifications.
+    /// Get an async iterator yielding incoming COV notifications of both
+    /// kinds, `CovNotification` and `CovNotificationMultiple`, in arrival
+    /// order.
     fn cov_notifications<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
