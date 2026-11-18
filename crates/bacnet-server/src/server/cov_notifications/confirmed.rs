@@ -4,8 +4,10 @@
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
 use crate::cov::timed_store::{ClaimGuard, LodgedClaim};
+use crate::server::notification_transactions::NotificationReserveError;
 use bacnet_device_core::cov::{BeginRefusal, Delivery, PreparedCovCompletion};
 use bacnet_device_core::cov::{CovObservation, CovSubscriptionKey};
+use bacnet_endpoint_core::coordinator::ReserveError;
 
 /// A confirmed notification ready for admission.
 pub(in crate::server) struct ConfirmedReport {
@@ -74,17 +76,30 @@ pub(in crate::server) struct ConfirmedSend {
     pub(in crate::server) begun: tokio::time::Instant,
 }
 
+/// Why [`BACnetServer::admit_confirmed`] gave a report nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::server) enum Refusal {
+    /// An in-flight limit, or a pool that is closed: counted or logged,
+    /// and the report's references wait for their next fanout.
+    Slot,
+    /// Every invoke ID the server may hold is leased: the report's
+    /// references are owed a look once one comes back (#2661).
+    InvokeId,
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Admit a confirmed report to `route` against the peer and global
     /// in-flight limits and an invoke ID. A refusal is counted or logged,
-    /// and the report isn't sent. Synchronous: it takes leaf mutexes only,
-    /// so the Single fanout calls it under its database and table guards.
+    /// and the report isn't sent; the caller owes its references a look
+    /// when it was refused an invoke ID. Synchronous: it takes leaf mutexes
+    /// only, so the Single fanout calls it under its database and table
+    /// guards.
     pub(in crate::server) fn admit_confirmed(
         handles: &CovFanoutHandles<'_, '_, T>,
         route: &CovSubscriptionSnapshot,
         service: ConfirmedServiceChoice,
         label: &'static str,
-    ) -> Option<ConfirmedLease> {
+    ) -> Result<ConfirmedLease, Refusal> {
         let &CovFanoutHandles {
             ctx,
             in_flight_tracker,
@@ -101,14 +116,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 counters
                     .notifications_throttled_peer
                     .fetch_add(1, Ordering::Relaxed);
-                return None;
+                return Err(Refusal::Slot);
             }
             Err(InFlightAcquireError::GlobalPoolExhausted) => {
                 warn!(
                     object = ?route.monitored_object_identifier,
                     "255 confirmed COV notifications in-flight, skipping {label}"
                 );
-                return None;
+                return Err(Refusal::Slot);
             }
         };
         let (operation, result_rx) = match ctx
@@ -116,16 +131,32 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .reserve(Self::canonical_cov_peer(route), service)
         {
             Ok(reservation) => reservation,
+            Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => {
+                warn!(
+                    object = ?route.monitored_object_identifier,
+                    "No free invoke ID for confirmed {label}; it goes once one comes back"
+                );
+                return Err(Refusal::InvokeId);
+            }
             Err(error) => {
-                warn!(%error, "No free invoke ID for confirmed {label}");
-                return None;
+                warn!(%error, "No invoke ID for confirmed {label}");
+                return Err(Refusal::Slot);
             }
         };
-        Some(ConfirmedLease {
+        Ok(ConfirmedLease {
             guard,
             operation,
             result_rx,
         })
+    }
+
+    /// `report` was refused an invoke ID: its timestamped history goes
+    /// back to its references first, then they are owed a look once an ID
+    /// comes back (#2661). No other lock is held here.
+    async fn owe_invoke_id(handles: &CovFanoutHandles<'_, '_, T>, report: ConfirmedReport) {
+        let keys: Vec<_> = report.keys().collect();
+        drop(report);
+        handles.ctx.cov_table.read().await.revisits().owe(keys);
     }
 
     /// Admit `report` against the peer and global in-flight limits, an invoke
@@ -140,9 +171,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) {
         let counters = handles.counters;
         let label = report.label();
-        let Some(lease) = Self::admit_confirmed(handles, &report.route, report.service, label)
-        else {
-            return;
+        let lease = match Self::admit_confirmed(handles, &report.route, report.service, label) {
+            Ok(lease) => lease,
+            // Boxed, and only on a refusal: inline, its wait would add the
+            // whole report to every fanout's future, on the request path.
+            Err(Refusal::InvokeId) => return Box::pin(Self::owe_invoke_id(handles, report)).await,
+            Err(Refusal::Slot) => return,
         };
         let buf = match encode(lease.invoke_id()) {
             Ok(buf) => buf,

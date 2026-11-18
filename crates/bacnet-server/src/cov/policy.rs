@@ -54,6 +54,18 @@ pub struct AtomicCovCounters {
     /// subscriber. The value is not queued: the reference is evaluated again
     /// at its next fanout, and each report that leaves it out counts once.
     pub untimed_references_oversized: AtomicU64,
+    /// References queued for a look because their confirmed report found
+    /// no invoke ID free (#2661): once per wait, however often refused
+    /// meanwhile. Not in [`CovCounters`] yet, so the server's API doesn't
+    /// report these three. `queued` is `delivered` plus `dropped` plus
+    /// those still waiting.
+    pub(crate) owed_id_revisits_queued: AtomicU64,
+    /// Of those, handed to the fanout once an ID came back.
+    pub(crate) owed_id_revisits_delivered: AtomicU64,
+    /// Of those, dropped while they waited: the subscription was
+    /// cancelled, expired, removed or replaced (a replacement reports for
+    /// itself).
+    pub(crate) owed_id_revisits_dropped: AtomicU64,
 }
 
 impl AtomicCovCounters {

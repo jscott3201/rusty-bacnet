@@ -86,7 +86,7 @@ impl CovSubscriptionTable {
         Self {
             core: CovTable::new(policy),
             wakes: BTreeMap::new(),
-            revisits: Arc::default(),
+            revisits: Arc::new(CovRevisits::new(Arc::clone(&counters))),
             counters,
             in_flight: Arc::new(CovInFlightTracker::default()),
             dispatch_turn: 0,
@@ -354,6 +354,12 @@ impl CovSubscriptionTable {
             runtime_clock::core_now(),
         );
         self.settle();
+        // A listed reference replaces its old self, which waits no more for
+        // an invoke ID: the context's initial report covers it (#2661).
+        if let Ok(accepted) = &accepted {
+            self.revisits
+                .forget_owed(accepted.iter().map(CovSubscriptionSnapshot::key));
+        }
         accepted
     }
 
@@ -591,7 +597,8 @@ impl CovSubscriptionTable {
             .context_idle(context, snapshots, runtime_clock::core_now())
     }
 
-    /// References owed a fresh evaluation after an acknowledgment.
+    /// References owed a fresh evaluation: after an acknowledgment or a
+    /// fence, or once an invoke ID comes back (#2661).
     pub(crate) fn revisits(&self) -> &Arc<CovRevisits> {
         &self.revisits
     }
@@ -608,6 +615,12 @@ impl CovSubscriptionTable {
         // Nothing changed: no counter, history or wake-up to touch.
         if published.is_empty() && fenced.is_empty() && !counted(&counts) {
             return;
+        }
+        // A replacement reports for itself: its old self waits no more for
+        // an invoke ID (#2661).
+        if !published.is_empty() {
+            self.revisits
+                .forget_owed(published.iter().map(CovSubscriptionSnapshot::key));
         }
         self.counters.add(&counts);
         bacnet_device_core::cov::timed::follow_table(

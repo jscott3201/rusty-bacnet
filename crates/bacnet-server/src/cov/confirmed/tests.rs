@@ -426,6 +426,48 @@ async fn revisits_drain_once_and_forget_removed_references() {
     assert_eq!(revisits.next().await, vec![a.key().clone()]);
 }
 
+/// References owed an invoke ID (#2661) wait once each, in the order first
+/// owed; one refused again during its look keeps its place, one served
+/// gives it up, and one removed while it waits is dropped and counted.
+#[test]
+fn owed_references_keep_their_places() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut table = CovSubscriptionTable::new();
+    let keys: Vec<_> = (1..=4)
+        .map(|process| {
+            let mut sub = single();
+            sub.subscriber_process_identifier = process;
+            table.subscribe(sub).unwrap().key().clone()
+        })
+        .collect();
+    let [a, b, c, d] = <[_; 4]>::try_from(keys).unwrap();
+    let revisits = Arc::clone(table.revisits());
+    assert!(revisits.owe([c.clone(), a.clone(), b.clone()]));
+    assert!(!revisits.owe([a.clone()]), "one wait per reference");
+    assert_eq!(revisits.owed(), [c.clone(), a.clone(), b.clone()]);
+
+    // Two IDs free: the two oldest are looked at; `c` is refused again.
+    let looked = revisits.take_owed(2);
+    assert_eq!(looked, [c.clone(), a.clone()]);
+    assert!(revisits.owe([c.clone()]));
+    revisits.looked(&looked);
+    assert_eq!(revisits.owed(), [c.clone(), b.clone()], "`c` first again");
+    // `a` was served: owed again later, it waits behind the others.
+    revisits.owe([d.clone(), a.clone()]);
+    assert_eq!(
+        revisits.owed(),
+        [c.clone(), b.clone(), d.clone(), a.clone()]
+    );
+
+    assert!(table.unsubscribe(&b));
+    assert_eq!(revisits.owed(), [c, d, a]);
+    let counters = table.counters();
+    assert_eq!(counters.owed_id_revisits_queued.load(Relaxed), 6);
+    assert_eq!(counters.owed_id_revisits_delivered.load(Relaxed), 2);
+    assert_eq!(counters.owed_id_revisits_dropped.load(Relaxed), 1);
+    assert_eq!(revisits.take_owed(0), Vec::new(), "no ID, no look");
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_replaced_marker_stops_its_flight() {
     let mut table = CovSubscriptionTable::new();

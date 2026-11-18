@@ -106,9 +106,10 @@ impl<T: TransportPort + 'static> CovFanout<T> {
 
     /// Fan out again each reference whose confirmed report was acknowledged,
     /// so changes held back while it was outstanding reach the subscriber
-    /// (#896), and each context whose queued timestamped changes reached
-    /// their Max_Notification_Delay deadline (#856). Runs until the server
-    /// aborts it.
+    /// (#896), each context whose queued timestamped changes reached
+    /// their Max_Notification_Delay deadline (#856), and each reference
+    /// whose confirmed report found no invoke ID free, once one comes back
+    /// (#2661). Runs until the server aborts it.
     pub(super) async fn run_revisits(self) {
         use futures_util::FutureExt;
         let (revisits, timed) = {
@@ -116,11 +117,14 @@ impl<T: TransportPort + 'static> CovFanout<T> {
             (Arc::clone(table.revisits()), table.timed().clone())
         };
         loop {
-            // Neither wait loses work when the other wins: revisits stay
-            // queued, and a due context comes back after its spacing.
-            let keys = tokio::select! {
-                keys = revisits.next() => keys,
-                keys = timed.next_due() => keys,
+            // No wait loses work when another wins: revisits stay queued, a
+            // due context comes back after its spacing, and references owed
+            // an ID keep their places. Each takes what it returns in the
+            // poll that returns it, and none holds a lock.
+            let (keys, owed) = tokio::select! {
+                keys = revisits.next() => (keys, false),
+                keys = timed.next_due() => (keys, false),
+                keys = owed_look(&revisits, &self.notification_transactions) => (keys, true),
             };
             let ctx = self.notify_context();
             let batch = BACnetServer::<T>::fire_cov_revisits(&ctx, &keys);
@@ -135,6 +139,40 @@ impl<T: TransportPort + 'static> CovFanout<T> {
                     "COV follow-up fanout panicked; those references report on their next fanout"
                 );
             }
+            if owed {
+                revisits.looked(&keys);
+            }
+        }
+    }
+}
+
+/// Wait until references owed an invoke ID can be looked at again, and take
+/// as many as there are IDs free, oldest first (#2661). Each look follows a
+/// lease ending, or a reference owed while IDs were free, so at the limit
+/// it waits rather than spins: a reference refused again keeps its place
+/// for the next ID. While none is owed it waits for one to be, and an ID
+/// coming back costs nothing. Cancel-safe: references are taken only in the
+/// poll that returns them.
+async fn owed_look(
+    revisits: &crate::cov::CovRevisits,
+    ids: &NotificationTransactions,
+) -> Vec<bacnet_device_core::cov::CovSubscriptionKey> {
+    loop {
+        let owed = revisits.owed_notified();
+        if !revisits.owes_invoke_id() {
+            owed.await;
+            continue;
+        }
+        // Made before the count, so a lease that ends after it still ends
+        // this wait.
+        let released = ids.released();
+        let keys = revisits.take_owed(ids.free_invoke_ids());
+        if !keys.is_empty() {
+            return keys;
+        }
+        tokio::select! {
+            () = released => {}
+            () = owed => {}
         }
     }
 }

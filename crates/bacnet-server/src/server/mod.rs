@@ -679,6 +679,10 @@ mod cov_multiple_context_order_tests;
 #[cfg(test)]
 mod cov_notifications_tests;
 #[cfg(test)]
+mod cov_owed_id_forms_tests;
+#[cfg(test)]
+mod cov_owed_id_tests;
+#[cfg(test)]
 mod cov_quota_tests;
 #[cfg(test)]
 mod cov_stalled_send_tests;

@@ -9967,6 +9967,28 @@ outstanding for the transport's send bounds plus the retry cycle. The standard
 ends delivery with the confirmed-request retries (Clause 5.4.4); reporting again
 after a hold-off is local policy.
 
+A confirmed report also needs an invoke ID. The server's confirmed event, COV
+and Audit notifications and the reads its runs make share one pool of 256; on an
+endpoint session's seat the server holds at most 64 of the node's. When none is
+free, the report is not sent and the baselines stay, and
+its coordinate (the subscription, or the COV-multiple context through the
+references the report would have carried) waits for an ID (#2661). The server
+watches the pool while anything waits: as IDs come back it looks at as many
+waiting coordinates as there are IDs free, in the order they were refused,
+through the usual fanout. A coordinate whose value is back at its baseline
+sends nothing; one that changed again reports its current value once.
+A coordinate waits once however often it is refused, and keeps its place when
+other work takes the freed ID first. Nothing is tried again while no ID is
+free, so a server at its limit doesn't spin. A cancelled, expired or removed
+subscription stops waiting, and so does one a re-subscription replaces, which
+sends its own initial report (waiting in its turn when it finds no ID).
+Timestamped history refused with its report goes back to its references and
+leaves with the next report, once. `stop()` ends the wait with the server.
+The in-flight limits (`max_confirmed_in_flight_per_peer`, 255 in all) and the
+fanout budget still drop a report until its next fanout, and DCC drops the look
+as it does any fanout. The standard doesn't say what a server does when it
+cannot start a confirmed notification; this is local policy.
+
 A replaced ordinary or SubscribeCOVProperty subscription starts unmarked, as does
 a context whose route changes or which is re-subscribed with a non-empty list
 while it is busy. The old incarnation's report stops retrying and can no longer
@@ -13619,10 +13641,10 @@ session.stop().await?; // stops the server, then the link
   Audit notifications (the session's source Audit records among them) and the
   reads its runs make. Past that each does what it does when the pool is
   empty: a confirmed event notification waits for an ID, an Audit record is
-  counted lost, and a confirmed COV notification is skipped with a warning;
-  the subscriber hears the next change. The endpoint's own COV reporting
-  (`with_cov`) queued its notifications past its 64 instead. The client's
-  requests find the rest of the pool.
+  counted lost, and a confirmed COV notification's subscription waits for one
+  of the server's IDs to come back and is then looked at again (#2661), as
+  the endpoint's own COV reporting (`with_cov`) queued its notifications past
+  its 64. The client's requests find the rest of the pool.
 - The session keeps the one owner of the local network number; the server
   runs none and takes the number it publishes. Target Audit routes its
   recipient by that number, so a seated server takes `audit_reporters`.

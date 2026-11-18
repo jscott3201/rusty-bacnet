@@ -1,14 +1,17 @@
 //! The server's side of a confirmed COV report (#896): the worker's wake-up
-//! for a fence, and the queue of references owed a fresh evaluation. The
-//! flight itself is plain state in the table; `flight.rs` has the policy.
+//! for a fence, and the queues of references owed a fresh evaluation, now
+//! or once an invoke ID comes back (#2661). The flight itself is plain
+//! state in the table; `flight.rs` has the policy.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use bacnet_device_core::cov::CovSubscriptionKey;
 use tokio::sync::Notify;
+use tokio::sync::futures::Notified;
 
-use super::Token;
+use super::{AtomicCovCounters, Token};
 
 /// The outstanding confirmed report of one notification, as its worker
 /// holds it: the token its outcome goes back with
@@ -46,15 +49,114 @@ impl ConfirmedFlight {
 /// evaluating again. The server drains them in a background task and fans them
 /// out through the usual path, which reports only what differs from each
 /// baseline.
+///
+/// Beside them wait the references whose confirmed report found no invoke
+/// ID free (#2661), each looked at again once IDs come back, oldest first,
+/// and only as many at a time as there are IDs free, so a wait at the limit
+/// never spins.
 #[derive(Debug, Default)]
 pub(crate) struct CovRevisits {
-    pending: Mutex<HashSet<CovSubscriptionKey>>,
+    pending: Mutex<Pending>,
     wake: Notify,
+    /// Wakes the wait for invoke IDs when a reference is owed one.
+    owed_wake: Notify,
+    counters: Arc<AtomicCovCounters>,
+}
+
+/// What [`CovRevisits`] holds under its one lock.
+#[derive(Debug, Default)]
+struct Pending {
+    /// References owed a look now.
+    now: HashSet<CovSubscriptionKey>,
+    /// References owed a look once an invoke ID comes back.
+    owed: OwedIds,
+}
+
+/// References whose confirmed report found no invoke ID free, in the order
+/// each was first owed one (#2661). A reference holds one place however
+/// often it is refused, and keeps it through a look that is refused again,
+/// as when other work takes the freed ID first.
+#[derive(Debug, Default)]
+struct OwedIds {
+    /// The references waiting, by place.
+    queue: BTreeMap<u64, CovSubscriptionKey>,
+    /// The place of each reference waiting or being looked at.
+    places: HashMap<CovSubscriptionKey, u64>,
+    next: u64,
+}
+
+impl OwedIds {
+    /// Queue `key` in its place; whether it wasn't waiting already.
+    fn owe(&mut self, key: CovSubscriptionKey) -> bool {
+        let place = match self.places.get(&key) {
+            Some(&place) => place,
+            None => {
+                let place = self.next;
+                self.next += 1;
+                self.places.insert(key.clone(), place);
+                place
+            }
+        };
+        match self.queue.entry(place) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(key);
+                true
+            }
+            std::collections::btree_map::Entry::Occupied(_) => false,
+        }
+    }
+
+    /// Take up to `count` references, oldest first, for a look; each
+    /// keeps its place until [`Self::looked`].
+    fn take(&mut self, count: usize) -> Vec<CovSubscriptionKey> {
+        let mut keys = Vec::new();
+        while keys.len() < count {
+            let Some((_, key)) = self.queue.pop_first() else {
+                break;
+            };
+            keys.push(key);
+        }
+        keys
+    }
+
+    /// The look at `keys` is over: those it didn't owe an ID again give
+    /// up their places.
+    fn looked(&mut self, keys: &[CovSubscriptionKey]) {
+        for key in keys {
+            if let Some(place) = self.places.get(key)
+                && !self.queue.contains_key(place)
+            {
+                self.places.remove(key);
+            }
+        }
+    }
+
+    /// Drop `key`'s wait or look; whether it was waiting.
+    fn forget(&mut self, key: &CovSubscriptionKey) -> bool {
+        self.places
+            .remove(key)
+            .is_some_and(|place| self.queue.remove(&place).is_some())
+    }
+}
+
+/// Add `count` to `counter`, when there is anything to add.
+fn count(counter: &AtomicU64, count: usize) {
+    if count != 0 {
+        counter.fetch_add(count as u64, Ordering::Relaxed);
+    }
 }
 
 impl CovRevisits {
-    fn pending(&self) -> MutexGuard<'_, HashSet<CovSubscriptionKey>> {
-        // A panic while holding this lock leaves only a set of keys.
+    /// Revisits counted in `counters`.
+    pub(super) fn new(counters: Arc<AtomicCovCounters>) -> Self {
+        Self {
+            counters,
+            ..Self::default()
+        }
+    }
+
+    fn pending(&self) -> MutexGuard<'_, Pending> {
+        // A panic while holding this lock leaves only keys and places.
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -66,9 +168,9 @@ impl CovRevisits {
             return;
         }
         let mut pending = self.pending();
-        let before = pending.len();
-        pending.extend(keys);
-        let added = pending.len() > before;
+        let before = pending.now.len();
+        pending.now.extend(keys);
+        let added = pending.now.len() > before;
         drop(pending);
         if added {
             self.wake.notify_one();
@@ -78,7 +180,7 @@ impl CovRevisits {
     /// Wait for queued references and take them all.
     pub(crate) async fn next(&self) -> Vec<CovSubscriptionKey> {
         loop {
-            let keys: Vec<_> = self.pending().drain().collect();
+            let keys: Vec<_> = self.pending().now.drain().collect();
             if !keys.is_empty() {
                 return keys;
             }
@@ -86,15 +188,85 @@ impl CovRevisits {
         }
     }
 
+    /// Owe `keys`, whose confirmed report found no invoke ID free, a look
+    /// once one comes back (#2661), and wake the wait for one. Whether any
+    /// wasn't waiting already.
+    pub(crate) fn owe(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) -> bool {
+        let mut pending = self.pending();
+        let mut added = 0;
+        for key in keys {
+            added += usize::from(pending.owed.owe(key));
+        }
+        drop(pending);
+        count(&self.counters.owed_id_revisits_queued, added);
+        if added != 0 {
+            self.owed_wake.notify_one();
+        }
+        added != 0
+    }
+
+    /// Completes once a reference is owed an invoke ID after this is made,
+    /// or at once if one was since the last wait.
+    pub(crate) fn owed_notified(&self) -> Notified<'_> {
+        self.owed_wake.notified()
+    }
+
+    /// Whether any reference waits for an invoke ID.
+    pub(crate) fn owes_invoke_id(&self) -> bool {
+        !self.pending().owed.queue.is_empty()
+    }
+
+    /// Take up to `free` of the references waiting for an invoke ID,
+    /// oldest first, for a look; [`Self::looked`] ends it.
+    pub(crate) fn take_owed(&self, free: usize) -> Vec<CovSubscriptionKey> {
+        let keys = self.pending().owed.take(free);
+        count(&self.counters.owed_id_revisits_delivered, keys.len());
+        keys
+    }
+
+    /// The look at `keys`, which [`Self::take_owed`] gave, is over: those
+    /// it owed an ID again wait in their old places; the rest leave.
+    pub(crate) fn looked(&self, keys: &[CovSubscriptionKey]) {
+        self.pending().owed.looked(keys);
+    }
+
+    /// The references waiting for an invoke ID, oldest first.
+    #[cfg(test)]
+    pub(crate) fn owed(&self) -> Vec<CovSubscriptionKey> {
+        self.pending().owed.queue.values().cloned().collect()
+    }
+
     /// Queued references, without taking them.
     #[cfg(test)]
     pub(crate) fn queued(&self) -> HashSet<CovSubscriptionKey> {
-        self.pending().clone()
+        self.pending().now.clone()
     }
 
-    /// Drop a removed reference's pending evaluation.
+    /// Drop a removed reference's pending evaluation, now or for an ID.
     pub(super) fn forget(&self, key: &CovSubscriptionKey) {
-        self.pending().remove(key);
+        let mut pending = self.pending();
+        pending.now.remove(key);
+        let dropped = pending.owed.forget(key);
+        drop(pending);
+        count(
+            &self.counters.owed_id_revisits_dropped,
+            usize::from(dropped),
+        );
+    }
+
+    /// Drop the waits for an invoke ID of references a subscription just
+    /// replaced: each reports for itself.
+    pub(super) fn forget_owed<'a>(&self, keys: impl IntoIterator<Item = &'a CovSubscriptionKey>) {
+        let mut pending = self.pending();
+        if pending.owed.places.is_empty() {
+            return;
+        }
+        let dropped = keys
+            .into_iter()
+            .filter(|key| pending.owed.forget(key))
+            .count();
+        drop(pending);
+        count(&self.counters.owed_id_revisits_dropped, dropped);
     }
 }
 
