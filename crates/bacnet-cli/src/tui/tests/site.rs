@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,6 +34,7 @@ use tokio::task::JoinHandle;
 
 use super::lab::{lab_database, lab_identity};
 use super::*;
+use crate::heap::boxed;
 use crate::tui::app::{Link, OpState};
 use crate::tui::worker::session::SessionOptions;
 use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, session};
@@ -489,7 +491,19 @@ impl Site {
 
     /// `servers` and a connected client at 10.0.0.1 with `limits`, its
     /// session run with `options`.
-    pub(super) async fn start_with_options(
+    ///
+    /// Boxed, as [`Self::stop`] is: a debug build keeps a copy of every
+    /// future a test awaits in the test's poll frame, under everything the
+    /// test then does (#2656).
+    pub(super) fn start_with_options(
+        servers: Vec<Server>,
+        limits: ClientLimits,
+        options: SessionOptions,
+    ) -> Pin<Box<impl Future<Output = Self>>> {
+        boxed(move || Self::start_inline(servers, limits, options))
+    }
+
+    async fn start_inline(
         servers: Vec<Server>,
         limits: ClientLimits,
         options: SessionOptions,
@@ -524,15 +538,15 @@ impl Site {
                     .on_reinitialize(|_, _| Ok(())),
                 None => builder,
             };
-            started.push(bounded(Box::pin(builder.build())).await.unwrap());
+            started.push(bounded(boxed(|| builder.build())).await.unwrap());
         }
         let client = BACnetClient::generic_builder()
             .transport(hub_port(&hub, [10, 0, 0, 1], Quirks::default()))
             .apdu_timeout_ms(2_000)
             .max_apdu_length(limits.max_apdu)
             .segmented_response_accepted(limits.segmented);
-        let client = bounded(Box::pin(client.build())).await.unwrap();
-        Self::launch(hub, started, client, options).await
+        let client = bounded(boxed(|| client.build())).await.unwrap();
+        boxed(|| Self::launch(hub, started, client, options)).await
     }
 
     /// Serve `client`'s session with `options`, beside `servers` on `hub`,
@@ -699,14 +713,20 @@ impl Site {
         }
     }
 
-    pub(super) async fn stop(mut self) {
+    /// Quit, then stop the servers and any router. Boxed, as
+    /// [`Self::start_with_options`] is.
+    pub(super) fn stop(self) -> Pin<Box<impl Future<Output = ()>>> {
+        boxed(move || self.stop_inline())
+    }
+
+    async fn stop_inline(mut self) {
         // Dropping the command sender stops the worker, which stops the client.
         self.quit().await;
         for server in &mut self.servers {
-            bounded(server.stop()).await.unwrap();
+            bounded(boxed(|| server.stop())).await.unwrap();
         }
         if let Some(routed) = self.routed.take() {
-            routed.stop().await;
+            boxed(|| routed.stop()).await;
         }
     }
 }
