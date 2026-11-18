@@ -7,8 +7,7 @@
 //!
 //! Each step states how many notifications it calls for, so a change both
 //! sides get wrong the same way fails too. The steps are in
-//! `tests/support/local_write_cases.rs`, which the endpoint session runs as
-//! well (#2468).
+//! `tests/support/local_write_cases.rs`.
 use super::*;
 use bacnet_device_core::cov::Delivery;
 use bacnet_device_core::report::Bindings;
@@ -18,7 +17,7 @@ use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{EventState, Reliability};
 use cases::{Change, Outcome, READ_BACK, Step};
 
-/// The cases every host runs, which bacnet-endpoint includes too.
+/// The cases both hosts run.
 #[path = "../../../../tests/support/local_write_cases.rs"]
 pub(super) mod cases;
 mod change_back;

@@ -1,7 +1,6 @@
 //! ReinitializeDevice (Clause 16.4): the application handler that carries a
 //! request out, the requester context it receives, the builder setters for
-//! the handler and the password, and the guarded reply the full server and
-//! endpoint sessions share.
+//! the handler and the password, and the server's guarded reply.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -11,8 +10,8 @@ use bacnet_types::enums::{AuditOperation, ReinitializedState};
 use super::*;
 use bacnet_device_core::reply::error_apdu;
 
-/// Carries out a ReinitializeDevice request (Clause 16.4) on a full server or
-/// an endpoint session.
+/// Carries out a ReinitializeDevice request (Clause 16.4) on a full server,
+/// standalone or on an endpoint session.
 ///
 /// It is called only for a request that decoded, passed its password check
 /// and names a state the clause defines. `Ok(())` sends the SimpleACK; an
@@ -39,8 +38,7 @@ use bacnet_device_core::reply::error_apdu;
 ///   timer and resumes held COV, even if the reply later fails.
 /// - **Be quick.** It runs synchronously on a runtime worker with the object
 ///   database write-locked, so every other request waits for it. Hand slow
-///   work, such as writing backup files, to a task. On an endpoint session a
-///   blocking handler stalls the whole session. Never wait on another task
+///   work, such as writing backup files, to a task. Never wait on another task
 ///   or thread from it (a `block_on`, a channel receive, a join): if that
 ///   work needs the database, the server deadlocks.
 /// - **Database edits are raw.** On a full server, changes made through the
@@ -95,9 +93,9 @@ pub type ReinitializeHandler =
 
 /// Records an accepted ReinitializeDevice request on an endpoint session
 /// (#1564): the Table 19-5 operation and the requester, called under the
-/// database guard once the request is accepted. The session supplies it
-/// when its Audit Reporter is configured, to its narrow server role or to
-/// the full server on its seat (#2617).
+/// database guard once the request is accepted. The session gives it to the
+/// full server on its seat when its source Audit Reporter is configured
+/// (#2617).
 pub type EndpointReinitializeAudit = Arc<
     dyn Fn(&mut ObjectDatabase, AuditOperation, &bacnet_objects::device::AuditWriteSource)
         + Send
@@ -272,8 +270,9 @@ impl ReinitializeContext {
         self.provenance.direct_sc_identity()
     }
 
-    /// The requester as an endpoint's Audit record names it: its address,
-    /// the originating one when routed, with the request's invoke ID.
+    /// The requester as an endpoint's source Audit record names it: its
+    /// address, the originating one when routed, with the request's invoke
+    /// ID.
     pub(in crate::server) fn audit_source(&self) -> bacnet_objects::device::AuditWriteSource {
         use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
         let (network_number, mac_address) = match &self.source_network {
@@ -334,8 +333,6 @@ impl Requester {
 /// state, then run `handler` with the database write-locked. A valid request
 /// with no handler is refused with SERVICES / SERVICE_REQUEST_DENIED.
 ///
-/// `still_open` runs once the write lock is held, so an owner that closed
-/// while the request waited refuses it before the handler runs.
 /// `on_accepted` runs only once the request is accepted, meaning the handler
 /// accepted it and any Network Port activation succeeded, under the same
 /// guard and with no suspension before the reply is built: the place for the
@@ -350,7 +347,6 @@ pub(in crate::server) async fn response(
     password: &Option<String>,
     handler: Option<&ReinitializeHandler>,
     requester: Requester,
-    still_open: impl FnOnce() -> Result<(), Error>,
     on_accepted: impl FnOnce(&ReinitializeContext, &mut ObjectDatabase),
 ) -> (Apdu, AfterReply) {
     let outcome = match handlers::handle_reinitialize_device(&request.service_request, password) {
@@ -364,8 +360,7 @@ pub(in crate::server) async fn response(
                     request.invoke_id,
                 );
                 let mut db = db.write().await;
-                let outcome = still_open()
-                    .and_then(|()| check_network_ports(state, &mut db))
+                let outcome = check_network_ports(state, &mut db)
                     .and_then(|()| invoke(handler, &context, &mut db))
                     .and_then(|()| activate_network_ports(state, &mut db));
                 // Taken under the guard, so a clone the handler kept adds
@@ -418,7 +413,6 @@ pub(in crate::server) async fn server_response<T: TransportPort + 'static>(
         &services.config.reinit_password,
         services.config.on_reinitialize.as_ref(),
         requester,
-        || Ok(()),
         |context, db| {
             if matches!(
                 context.state,

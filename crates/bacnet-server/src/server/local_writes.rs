@@ -737,8 +737,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         // Held: a caller dropped at an await below releases the stage at
         // once, from a task of its own, instead of leaving it to expire
         // (#2493).
-        let staged =
-            super::durable_writes::stage_held(self.db, Some(self.stage_releases), durable).await;
+        let staged = super::durable_writes::stage_held(self.db, self.stage_releases, durable).await;
         {
             // Owned, so the rest of the write can take it to a task of its
             // own with no wait between the commit and the hand-off (#1367).

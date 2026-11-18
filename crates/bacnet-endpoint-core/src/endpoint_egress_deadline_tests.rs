@@ -145,19 +145,21 @@ async fn network_number_egress_cancellation_retracts_queued_and_in_progress_comm
 }
 
 #[tokio::test]
-async fn owned_response_command_cancellation_is_independent_of_deadline() {
-    use bacnet_network::response_route::ResponseRoute;
+async fn owned_command_cancellation_is_independent_of_deadline() {
     let (_input, receiver) = mpsc::channel(4);
     let (sent, mut emissions) = mpsc::channel(4);
     let gate = Arc::new(Semaphore::new(0));
     let mut ingress = EndpointIngress::new(gate_transport(receiver, sent, gate.clone()), 1);
     let receivers = ingress.start().await.unwrap();
     let enqueue = |mac| {
-        receivers.egress.admit_response_apdu(
-            vec![0x60, 1, 9],
-            MacAddr::from_slice(&[mac]),
-            None,
-            ResponseRoute::unverified(),
+        receivers.egress.admit_owned_apdu(
+            vec![0x10, 8],
+            EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&[mac]),
+            },
+            false,
+            NetworkPriority::Normal,
+            Vec::new(),
         )
     };
     let first = enqueue(2).unwrap();

@@ -754,22 +754,21 @@ async fn stage_into(
     }
 }
 
-/// [`stage`] for a local write (an endpoint session's, #2468, or the
-/// server's `write_local`, #2493), whose caller may drop it at any await:
-/// what an object stages is held from that moment in a [`HeldStage`], which
-/// releases it even then. It runs on a Tokio runtime, as [`stage`] does, and
-/// the stage keeps that runtime's handle. A server passes its `releases`, so
-/// `stop()` waits for a release the stage hands to a task (#2495); an
-/// endpoint passes none.
+/// [`stage`] for the server's local write (`write_local`, #2493, and the
+/// Audit Log purge), whose caller may drop it at any await: what an object
+/// stages is held from that moment in a [`HeldStage`], which releases it
+/// even then. It runs on a Tokio runtime, as [`stage`] does, and the stage
+/// keeps that runtime's handle. The stage counts a release it hands to a
+/// task in `releases`, the server's, so `stop()` waits for it (#2495).
 pub(super) async fn stage_held(
     db: &Arc<RwLock<ObjectDatabase>>,
-    releases: Option<&Arc<StageReleases>>,
+    releases: &Arc<StageReleases>,
     targets: Vec<DurableTarget>,
 ) -> HeldStage {
     let mut held = HeldStage {
         db: Arc::downgrade(db),
         runtime: tokio::runtime::Handle::current(),
-        releases: releases.cloned(),
+        releases: Arc::clone(releases),
         staged: Vec::new(),
     };
     stage_into(db, &targets, &mut held.staged).await;
@@ -777,9 +776,7 @@ pub(super) async fn stage_held(
     // with no wait in between, so a test can tell when that write, and not
     // one of the server's own tasks, waits for it (#2504).
     #[cfg(test)]
-    if let Some(releases) = releases {
-        releases.note_stage_saved();
-    }
+    releases.note_stage_saved();
     held
 }
 
@@ -801,15 +798,14 @@ pub(super) async fn stage_held(
 /// borrows the server, which `stop()` holds exclusively, and fails before it
 /// stages once `stop()` has sealed the server; a run's write is a request
 /// task, joined before the wait.
-/// An endpoint has no pass that expires a forgotten stage, and its dispatch
-/// task waits for the next write that stages on the object; a server's pass
-/// takes about 10 s, during which storage leads what the object serves and a
-/// later write on it waits. So the stage must not wait out its lifetime.
+/// The server's pass that expires a forgotten stage takes about 10 s, during
+/// which storage leads what the object serves and a later write on it
+/// waits. So the stage must not wait out its lifetime.
 pub(super) struct HeldStage {
     db: std::sync::Weak<RwLock<ObjectDatabase>>,
     runtime: tokio::runtime::Handle,
-    /// The server's count of release tasks; `None` on an endpoint.
-    releases: Option<Arc<StageReleases>>,
+    /// The server's count of release tasks.
+    releases: Arc<StageReleases>,
     staged: Vec<(ObjectIdentifier, SaveWait)>,
 }
 
@@ -842,11 +838,11 @@ impl Drop for HeldStage {
         // spawned so `stop()` waits for it (#2495). A runtime that has shut
         // down drops the task, and with it its place in the count and a
         // stage nothing could still take.
-        let release = self.releases.as_ref().map(StageReleases::register);
+        let release = self.releases.register();
         self.runtime.spawn(async move {
             let mut guard = db.write().await;
             #[cfg(test)]
-            stage_releases::gate(release.as_ref()).await;
+            stage_releases::gate(&release).await;
             staged.release(&mut guard);
             // This order matters: the place in the count goes last. Dropped
             // while the guard is held, it could wake `stop()` on another

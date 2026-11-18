@@ -10,7 +10,7 @@ use bacnet_objects::property_metadata::{
 use bacnet_objects::traits::{AuditLog, Clocks, EnrollmentEval, Timed};
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{BACnetAuditLogQueryParameters, BACnetObjectSelector};
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{DeviceStatus, ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
 #[test]
@@ -28,17 +28,10 @@ fn typed_device_authority_is_forwarded_without_copying() {
     source_reporter::install(&mut object, &owner).unwrap();
     let mut forwarded = object.device_authority_internal().unwrap();
     assert_eq!(forwarded.object_identifier(), original);
-    forwarded
-        .write_property(
-            PropertyIdentifier::DESCRIPTION,
-            None,
-            PropertyValue::CharacterString("same authority".into()),
-            None,
-        )
-        .unwrap();
+    forwarded.set_system_status(DeviceStatus::BACKUP_IN_PROGRESS);
     assert_eq!(
-        read(object.as_ref(), PropertyIdentifier::DESCRIPTION),
-        PropertyValue::CharacterString("same authority".into())
+        read(object.as_ref(), PropertyIdentifier::SYSTEM_STATUS),
+        PropertyValue::Enumerated(DeviceStatus::BACKUP_IN_PROGRESS.to_raw())
     );
 }
 

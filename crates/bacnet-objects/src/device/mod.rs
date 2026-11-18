@@ -424,9 +424,7 @@ impl DeviceObject {
     /// it is saved before the write is answered, a write whose save fails
     /// is refused with DEVICE / OPERATIONAL_PROBLEM, and the saved one is
     /// served from the start and wins over
-    /// [`set_description`](Self::set_description). An endpoint session
-    /// waits for that save on its one dispatch task and handles nothing
-    /// else meanwhile, so its Device needs storage that returns promptly.
+    /// [`set_description`](Self::set_description).
     pub fn with_tags_persistence(
         config: DeviceConfig,
         persistence: Arc<dyn TagsPersistence>,
@@ -455,9 +453,9 @@ impl DeviceObject {
     }
 
     /// Provision independent optional Tags, Profile_Location and Profile_Name
-    /// rows before registration. Ordinary servers permit Tags writes; an endpoint
-    /// still applies its narrower Device write allowlist. The profile text is
-    /// network read-only. Invalid configuration leaves the old profile unchanged.
+    /// rows before registration. A server permits Tags writes as its mutation
+    /// policy allows. The profile text is network read-only. Invalid
+    /// configuration leaves the old profile unchanged.
     pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
         self.profile.provision(profile)
     }

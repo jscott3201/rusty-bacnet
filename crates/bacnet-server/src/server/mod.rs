@@ -477,8 +477,6 @@ mod clock;
 mod command_runs;
 mod reinitialize;
 mod time_sync_policy;
-#[doc(hidden)]
-pub use reinitialize::EndpointReinitializeAudit as __endpoint_ReinitializeAudit;
 pub use reinitialize::{ReinitializeContext, ReinitializeHandler};
 mod write_group;
 pub use clock::ClockConfig;
@@ -560,13 +558,9 @@ pub use notification_transactions::{
     NotificationReserveError as __endpoint_NotificationReserveError,
     NotificationTransactions as __endpoint_NotificationTransactions,
     NotificationWorkerResult as __endpoint_NotificationWorkerResult,
-    canonical_direct_peer as __endpoint_canonical_direct_peer,
-    canonical_routed_peer as __endpoint_canonical_routed_peer,
     run_notification_worker as __endpoint_run_notification_worker,
 };
 mod requests;
-#[doc(hidden)]
-pub use requests::endpoint_responder::EndpointResponder as __endpoint_EndpointResponder;
 #[cfg(feature = "sc-tls")]
 mod sc_builder;
 #[cfg(test)]

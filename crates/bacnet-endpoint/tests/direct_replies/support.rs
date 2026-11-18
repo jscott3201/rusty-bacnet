@@ -75,17 +75,14 @@ impl TestCa {
         .unwrap()
     }
 }
-type GateSlot = Arc<std::sync::Mutex<Option<Arc<tokio::sync::Semaphore>>>>;
 type Attributes = Arc<std::sync::Mutex<Vec<Vec<bacnet_transport::port::DataAttribute>>>>;
 
 /// A port with MAC `[0xaa; 6]` fed by `incoming`, whose every send (either
-/// kind) is decoded into `generic`, whose non-empty data attributes are
-/// kept in `attributes`, and which then waits for a permit when `gate` holds
-/// a semaphore.
+/// kind) is decoded into `generic` and whose non-empty data attributes are
+/// kept in `attributes`.
 fn queued_port(
     incoming: mpsc::Receiver<ReceivedNpdu>,
     generic: mpsc::UnboundedSender<Npdu>,
-    gate: GateSlot,
     attributes: Attributes,
 ) -> TestTransport {
     TestTransport::builder()
@@ -96,13 +93,7 @@ fn queued_port(
                 attributes.lock().unwrap().push(frame.attributes);
             }
             generic.send(decode_npdu(frame.npdu).unwrap()).unwrap();
-            let gate = gate.lock().unwrap().clone();
-            async move {
-                if let Some(gate) = gate {
-                    gate.acquire().await.unwrap().forget();
-                }
-                Ok(())
-            }
+            async { Ok(()) }
         })
         .build()
 }
@@ -111,7 +102,6 @@ pub struct Fixture {
     admitted: mpsc::Receiver<ReceivedNpdu>,
     pub incoming: mpsc::Sender<ReceivedNpdu>,
     pub generic: mpsc::UnboundedReceiver<Npdu>,
-    gate: GateSlot,
     /// The data attributes of every ordinary send that carried some.
     pub attributes: Attributes,
 }
@@ -130,7 +120,6 @@ impl Fixture {
         .unwrap();
         let (incoming, rx) = mpsc::channel(32);
         let (generic, observed) = mpsc::unbounded_channel();
-        let gate = GateSlot::default();
         let attributes = Attributes::default();
         (
             Self {
@@ -138,10 +127,9 @@ impl Fixture {
                 admitted,
                 incoming,
                 generic: observed,
-                gate: gate.clone(),
                 attributes: attributes.clone(),
             },
-            queued_port(rx, generic, gate, attributes),
+            queued_port(rx, generic, attributes),
         )
     }
     pub async fn peer(&self, tls: ScNodeTlsConfig, limits: Option<(u16, u16)>) -> Peer {
@@ -323,14 +311,4 @@ pub fn routed() -> Option<NpduAddress> {
         network: 123,
         mac_address: bacnet_types::MacAddr::from_slice(&[3, 4, 5, 6, 7, 8]),
     })
-}
-
-impl Fixture {
-    /// Make every later send of the port wait for a permit from the returned
-    /// semaphore.
-    pub fn hold_sends(&mut self) -> Arc<tokio::sync::Semaphore> {
-        let gate = Arc::new(tokio::sync::Semaphore::new(0));
-        *self.gate.lock().unwrap() = Some(gate.clone());
-        gate
-    }
 }

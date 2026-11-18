@@ -109,10 +109,7 @@ pub(super) struct ReadProfile<'a> {
     pub(super) execution: DeviceExecution,
     pub(super) registered_port: Option<ObjectIdentifier>,
     pub(super) work_limit: usize,
-    pub(super) identity: Option<&'a bacnet_objects::DeviceIdentity>,
-    /// An endpoint's COV reporting, which serves its Device's
-    /// Active_COV_Subscriptions when no server tables do (#2490).
-    pub(super) cov: Option<&'a dyn crate::endpoint_cov::EndpointCov>,
+    pub(super) identity: &'a bacnet_objects::DeviceIdentity,
 }
 
 /// ReadProperty under one database read guard, planned before any table is
@@ -121,7 +118,7 @@ pub(super) struct ReadProfile<'a> {
 /// as that request would be.
 pub(super) async fn read_property_response_observed(
     db: &RwLock<ObjectDatabase>,
-    tables: Option<LiveTables<'_>>,
+    tables: LiveTables<'_>,
     profile: ReadProfile<'_>,
     request: &ConfirmedRequestPdu,
     mut completed: impl FnMut(
@@ -137,8 +134,8 @@ pub(super) async fn read_property_response_observed(
         .map_err(Error::into_request_reject)
     {
         Ok(decoded) => {
-            let view =
-                DeviceReadContext::new(&db, profile.execution).with_identity(profile.identity);
+            let view = DeviceReadContext::new(&db, profile.execution)
+                .with_identity(Some(profile.identity));
             let scope = ReadScope {
                 work_limit: profile.work_limit,
                 registered_port: profile.registered_port,
@@ -154,15 +151,14 @@ pub(super) async fn read_property_response_observed(
                 decoded.property_array_index,
             ) {
                 Ok(plan) => {
-                    let live = match (tables, plan.live_lists(&db)) {
+                    let live = match plan.live_lists(&db) {
                         // Boxed: only a read of the Device's COV subscription
                         // list samples them, and the inline future would
                         // more than double every ReadProperty's (#1713).
-                        (Some(tables), Some(selection)) => {
+                        Some(selection) => {
                             Some(Box::pin(active_cov_snapshot(&db, tables, selection)).await)
                         }
-                        (None, Some(selection)) => profile.cov.map(|cov| cov.live(&db, selection)),
-                        _ => None,
+                        None => None,
                     };
                     let view = view.with_live(live.as_ref());
                     read::read_property_ack(
