@@ -54,6 +54,19 @@ pub struct AtomicCovCounters {
     /// subscriber. The value is not queued: the reference is evaluated again
     /// at its next fanout, and each report that leaves it out counts once.
     pub untimed_references_oversized: AtomicU64,
+    /// Times a reference entered the queue of those waiting for an invoke
+    /// ID (#2661): when its confirmed report found none free, unless it
+    /// waited already, and again each time a look at it was refused for
+    /// want of room. Not in [`CovCounters`] yet, so the server's API
+    /// doesn't report these three. `queued` is `delivered` plus `dropped`
+    /// plus those still waiting.
+    pub(crate) owed_id_revisits_queued: AtomicU64,
+    /// Of those, handed to the fanout once an ID came back.
+    pub(crate) owed_id_revisits_delivered: AtomicU64,
+    /// Of those, dropped while they waited: the subscription was
+    /// cancelled, expired, removed or replaced (a replacement reports for
+    /// itself).
+    pub(crate) owed_id_revisits_dropped: AtomicU64,
 }
 
 impl AtomicCovCounters {
@@ -133,13 +146,18 @@ pub enum InFlightAcquireError {
 #[derive(Debug, Default)]
 pub struct CovInFlightTracker {
     peer_in_flight: Mutex<HashMap<CovRecipient, usize>>,
+    /// Wakes, once a notification's peer slot and pool permit are both
+    /// back, what waits for one to end: references owed a look (#2661).
+    ended: tokio::sync::Notify,
 }
 
 /// RAII permit for an in-flight confirmed notification holding both a peer slot and a global permit.
 pub struct CovInFlightGuard {
     peer: CovRecipient,
     tracker: Arc<CovInFlightTracker>,
-    _global_permit: OwnedSemaphorePermit,
+    /// Given back first when the guard drops, so the wake that follows
+    /// finds the pool's permit returned too.
+    global_permit: Option<OwnedSemaphorePermit>,
 }
 
 impl std::fmt::Debug for CovInFlightGuard {
@@ -152,6 +170,7 @@ impl std::fmt::Debug for CovInFlightGuard {
 
 impl Drop for CovInFlightGuard {
     fn drop(&mut self) {
+        drop(self.global_permit.take());
         self.tracker.release(&self.peer);
     }
 }
@@ -177,8 +196,19 @@ impl CovInFlightTracker {
         Ok(CovInFlightGuard {
             peer,
             tracker: Arc::clone(self),
-            _global_permit: global_permit,
+            global_permit: Some(global_permit),
         })
+    }
+
+    /// Each peer's confirmed notifications in flight now.
+    pub(crate) fn in_flight(&self) -> HashMap<CovRecipient, usize> {
+        self.peer_in_flight.lock().unwrap().clone()
+    }
+
+    /// Completes once a confirmed notification in flight ends after this
+    /// is made, whether or not it was polled by then.
+    pub(crate) fn ended(&self) -> tokio::sync::futures::Notified<'_> {
+        self.ended.notified()
     }
 
     #[cfg(test)]
@@ -194,5 +224,7 @@ impl CovInFlightTracker {
                 guard.remove(peer);
             }
         }
+        drop(guard);
+        self.ended.notify_waiters();
     }
 }
