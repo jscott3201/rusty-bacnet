@@ -468,6 +468,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub fn group_source_request_drops(&self) -> u64 {
         self.group_source_request_drops.load(Ordering::Relaxed)
     }
+
+    /// Reject-Message-To-Network messages with reason 4 (message too long)
+    /// dropped since start because they could answer a frame of an earlier
+    /// request on the same router and network rather than the request
+    /// active there (#2651). A request the device answered after more than
+    /// one frame, a retry or segments, frees its path at once; for the
+    /// window it would have held the path before (the APDU timeout times the
+    /// attempts), a reason 4 fails a later request on that path only when
+    /// that request sent a frame at least as large as the answered one's
+    /// largest. A smaller request runs on to its own answer, retry or
+    /// timeout, and the reject is counted here.
+    pub fn too_long_reject_drops(&self) -> u64 {
+        self.routed_path_limits.dropped_rejects()
+    }
     /// Get the client's local MAC address.
     pub fn local_mac(&self) -> &[u8] {
         &self.local_mac

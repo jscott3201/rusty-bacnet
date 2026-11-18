@@ -92,7 +92,7 @@ pub(super) fn confirmed_request(
     request
 }
 
-async fn inject_apdu(
+pub(super) async fn inject_apdu(
     inbound: &mpsc::Sender<ReceivedNpdu>,
     immediate_source: &[u8],
     routed_source: Option<(u16, &[u8])>,
@@ -175,7 +175,7 @@ pub(super) async fn inject_reason_4(
     .await;
 }
 
-async fn inject_simple_ack(
+pub(super) async fn inject_simple_ack(
     inbound: &mpsc::Sender<ReceivedNpdu>,
     router: &[u8],
     dnet: u16,
@@ -194,7 +194,7 @@ async fn inject_simple_ack(
     .await;
 }
 
-async fn finish_segmented(
+pub(super) async fn finish_segmented(
     inbound: &mpsc::Sender<ReceivedNpdu>,
     outbound: &mut mpsc::UnboundedReceiver<SentFrame>,
     router: &[u8],
