@@ -50,7 +50,7 @@ async fn dropped_sender_impl(mode: MstpExecutionMode, frames: Frames) {
     // Client-only session has no server role: the lone reply sender is
     // released without bytes, yet the MAC still answers ReplyPostponed.
     let mut h = Harness::new(mode, SessionRole::ClientOnly, frames).await;
-    assert!(h.session.server().is_none());
+    assert!(h.session.responder().is_none());
     h.peer_deliver(&data_expecting(1, 44)).await;
     let postponed = h
         .wait_for("ReplyPostponed", |f| {
@@ -109,7 +109,7 @@ async fn mstp_dropped_sender_releases_extended_dedicated() {
 async fn token_during_work_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = Harness::new(mode, SessionRole::Both, frames).await;
     h.session
-        .server()
+        .responder()
         .expect("server role")
         .suspend_next_reply()
         .expect("arm suspension");

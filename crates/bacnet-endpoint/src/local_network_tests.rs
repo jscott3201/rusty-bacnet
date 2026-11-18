@@ -30,6 +30,8 @@ use tokio::time::{Duration, timeout};
 
 #[path = "local_network_answer_tests.rs"]
 mod answering;
+#[path = "local_network_server_tests.rs"]
+mod server;
 #[path = "local_network_source_tests.rs"]
 mod source;
 

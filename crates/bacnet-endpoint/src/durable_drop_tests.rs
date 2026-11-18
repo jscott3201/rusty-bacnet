@@ -22,6 +22,8 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::{Mutex as StdMutex, Weak};
 use std::thread::ThreadId;
 
+#[path = "durable_server_tests.rs"]
+mod durable_server;
 #[path = "durable_stop_tests.rs"]
 mod durable_stop;
 
@@ -278,7 +280,7 @@ async fn a_responder_let_go_of_last_drops_the_database_off_the_runtime() {
         let (class, dropped_on) = reporting_class(&storage);
         let mut endpoint = started_with(SessionRole::ServerOnly, class).await;
         let handle = if by_handle {
-            let handle = endpoint.session.cloned_server_handle().unwrap();
+            let handle = endpoint.session.cloned_responder_handle().unwrap();
             bounded(endpoint.session.stop()).await.unwrap();
             Some(handle)
         } else {

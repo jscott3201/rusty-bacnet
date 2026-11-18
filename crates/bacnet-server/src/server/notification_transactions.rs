@@ -117,7 +117,15 @@ impl Drop for AuditWorkerWake {
 struct NotificationCore {
     coordinator: Arc<OutboundTransactionCoordinator>,
     state: Mutex<NotificationState>,
+    /// How many invoke IDs these transactions may hold at once:
+    /// `usize::MAX` on a server's own link, [`SEAT_LEASES`] on a node's
+    /// seat (#2617).
+    lease_cap: usize,
 }
+
+#[path = "notification_lease_cap.rs"]
+mod lease_cap;
+pub(super) use lease_cap::SEAT_LEASES;
 
 pub(super) type NotificationReservation = (NotificationOperation, oneshot::Receiver<CovAckResult>);
 
@@ -189,6 +197,15 @@ impl NotificationTransactions {
 
     #[doc(hidden)]
     pub fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
+        Self::with_lease_cap(coordinator, usize::MAX)
+    }
+
+    /// [`Self::with_coordinator`], holding at most `lease_cap` invoke IDs
+    /// at once: [`SEAT_LEASES`] on a node's seat.
+    pub(super) fn with_lease_cap(
+        coordinator: Arc<OutboundTransactionCoordinator>,
+        lease_cap: usize,
+    ) -> Arc<Self> {
         Arc::new(Self {
             audit_batch: std::sync::OnceLock::new(),
             application_sealed: std::sync::atomic::AtomicBool::new(false),
@@ -199,6 +216,7 @@ impl NotificationTransactions {
                     closed: false,
                     pending: HashMap::new(),
                 }),
+                lease_cap,
             }),
             workers: Mutex::new(NotificationWorkers::default()),
             audit_permits: Arc::new(tokio::sync::Semaphore::new(64)),
@@ -549,6 +567,9 @@ impl NotificationCore {
         self: &Arc<Self>,
         metadata: LeaseMetadata,
     ) -> Result<NotificationReservation, NotificationReserveError> {
+        if self.lease_cap != usize::MAX {
+            return self.reserve_within_cap(metadata);
+        }
         let token = self
             .coordinator
             .reserve(metadata)
@@ -569,15 +590,7 @@ impl NotificationCore {
         }
         state.pending.insert(token, sender);
         drop(state);
-
-        Ok((
-            NotificationOperation {
-                transactions: Arc::clone(self),
-                token,
-                active: true,
-            },
-            receiver,
-        ))
+        Ok(self.reservation(token, receiver))
     }
 
     pub(super) fn admit_terminal(

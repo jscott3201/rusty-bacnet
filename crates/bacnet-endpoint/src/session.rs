@@ -121,19 +121,23 @@ enum Lifecycle {
 /// `role()` setter) and fixed for the session lifetime. Determines which
 /// role handles exist after [`start`](EndpointSession::start):
 ///
-/// - [`ClientOnly`](SessionRole::ClientOnly): `client()` is `Some`, `server()`
-///   is `None`. Inbound requests are counted (`no_server_role`) and their
-///   one-use reply sender released without sending.
-/// - [`ServerOnly`](SessionRole::ServerOnly): `server()` is `Some`,
-///   `client()` is `None`. Terminal responses with no consumer release their
-///   exact lease and count `no_client_role`.
-/// - [`Both`](SessionRole::Both): both handles are present above the one
+/// - [`ClientOnly`](SessionRole::ClientOnly): `client()` is `Some`, the
+///   server role's accessors are `None`. Inbound requests are counted
+///   (`no_server_role`) and their one-use reply sender released without
+///   sending.
+/// - [`ServerOnly`](SessionRole::ServerOnly): the server role is the narrow
+///   `responder()`, or the full `server()` that
+///   [`with_server`](EndpointSession::with_server) has the session build
+///   (#2617); `client()` is `None`. Terminal responses with no consumer
+///   release their exact lease and count `no_client_role`.
+/// - [`Both`](SessionRole::Both): both roles are present above the one
 ///   shared coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionRole {
     /// Client requester only.
     ClientOnly,
-    /// Server responder + notification pool only.
+    /// Server role only: the narrow responder and its notification pool,
+    /// or a full server ([`EndpointSession::with_server`]).
     ServerOnly,
     /// Both sibling roles above one ingress/coordinator.
     Both,
@@ -192,13 +196,13 @@ pub struct SessionConfig {
     pub queue_capacity: usize,
     /// The node's APDU timeout in milliseconds (default 6000): how long the
     /// client roles wait for an answer before they send a request again,
-    /// and, with a [`full_server`](EndpointSession::full_server), how long
+    /// and, with a full server ([`with_server`](EndpointSession::with_server)), how long
     /// its confirmed notifications wait, and the Device's APDU_Timeout
     /// (Clause 12.11.28).
     pub apdu_timeout_ms: u64,
     /// The node's APDU retries (default 3): how many times the client roles
-    /// send a request again, and, with a
-    /// [`full_server`](EndpointSession::full_server), its confirmed
+    /// send a request again, and, with a full server
+    /// ([`with_server`](EndpointSession::with_server)), its confirmed
     /// notifications, and the Device's Number_Of_APDU_Retries
     /// (Clause 12.11.29).
     pub apdu_retries: u8,
@@ -365,6 +369,14 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     notifications: Option<Arc<NotificationTransactions>>,
     client_handle: Option<ClientRoleHandle>,
     server_handle: Option<ServerRoleHandle>,
+    /// The full server's builder until start ([`Self::with_server`]), then
+    /// the server until stop (#2617), and the error its stop gave.
+    server_builder: Option<bacnet_server::server::ServerBuilder<T>>,
+    server: Option<bacnet_server::server::BACnetServer<T>>,
+    server_stop_error: Option<Error>,
+    /// Held while a start that built the server is unfinished: the server
+    /// takes no request until it goes, at the start's end or at stop.
+    server_gate: Option<oneshot::Sender<()>>,
     dispatch_task: Option<JoinHandle<SessionExit>>,
     network_number_task: Option<JoinHandle<()>>,
     cancel_tx: Option<oneshot::Sender<()>>,
@@ -475,6 +487,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             notifications: None,
             client_handle: None,
             server_handle: None,
+            server_builder: None,
+            server: None,
+            server_stop_error: None,
+            server_gate: None,
             dispatch_task: None,
             network_number_task: None,
             cancel_tx: None,
@@ -641,35 +657,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
-        let ingress = self
-            .ingress
-            .as_mut()
-            .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?;
-        let receivers = match ingress.start().await {
-            Ok(receivers) => receivers,
-            Err(error) => {
-                let _ = self.stop().await;
-                return Err(error);
-            }
-        };
-        if let Err(error) = self
-            .publish_registered_port(
-                (receivers.bip_port.clone(), receivers.bip6_port.clone()),
-                receivers.egress.local_network_number(),
-            )
-            .await
-        {
-            let _ = self.stop().await;
-            return Err(error);
-        }
-        let bip_local_address = receivers.bip_local_address;
-        if let Err(error) = self.start_roles(receivers, source_routes, device_target) {
+        if let Err(error) = self.start_link(device_target, source_routes).await {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;
             return Err(error);
         }
-        self.bip_local_address = bip_local_address;
         Ok(())
     }
 
@@ -681,6 +674,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`Error::Encoding`]. Takes
     /// `&mut self` so only the owner can stop; cloned role handles observe
     /// shutdown and fail closed.
+    ///
+    /// A full server the session built ([`with_server`](Self::with_server))
+    /// is stopped first: its work joins and its saves settle while the link
+    /// is still up, and its stop error, if any, is this call's.
     ///
     /// With an attached database, waits for its lock and for queued durable save
     /// attempts, including corrections for abandoned staged writes. A
@@ -707,6 +704,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if let Some(source) = &self.source_audit {
             source.close();
         }
+        self.stop_server().await;
         if let Some(requester) = &self.requester {
             requester.close();
         }
@@ -778,7 +776,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
         self.lifecycle
             .store(Lifecycle::Stopped as u8, Ordering::Release);
-        self.stop_exit.take().expect("joined dispatch")
+        let exit = self.stop_exit.take().expect("joined dispatch");
+        match self.server_stop_error.take() {
+            Some(error) if exit.is_ok() => Err(error),
+            _ => exit,
+        }
     }
 
     /// Borrows the client role (`None` when not composed).
@@ -789,14 +791,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.client_handle.as_ref()
     }
 
-    /// Borrows the server role (`None` when not composed).
-    ///
-    /// Returns `None` for [`ClientOnly`](SessionRole::ClientOnly) sessions,
-    /// and after [`stop`](Self::stop).
-    pub fn server(&self) -> Option<&ServerRoleHandle> {
-        self.server_handle.as_ref()
-    }
-
     /// Clones the client role handle with its session binding.
     ///
     /// The clone holds only a [`Weak`](std::sync::Weak) session token: it
@@ -804,15 +798,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Used to hand the client role to tasks that outlive the borrow.
     pub fn cloned_client_handle(&self) -> Option<ClientRoleHandle> {
         self.client_handle.clone()
-    }
-
-    /// Clones the server role handle with its session binding.
-    ///
-    /// Same [`Weak`](std::sync::Weak)-token semantics as
-    /// [`cloned_client_handle`](Self::cloned_client_handle); see
-    /// [`is_session_alive`](crate::roles::ServerRoleHandle::is_session_alive).
-    pub fn cloned_server_handle(&self) -> Option<ServerRoleHandle> {
-        self.server_handle.clone()
     }
 
     /// Samples policy-outcome ownership counters.
@@ -944,7 +929,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Transport-dependent: B/IP reaches the local subnet broadcast; SC
     /// relays via the hub as a broadcast NPDU. Fails when the session is not
     /// running, and with [`Error::InitiationDisabled`] while a
-    /// [`full_server`](Self::full_server) holds a DeviceCommunicationControl
+    /// full server ([`with_server`](Self::with_server)) holds a DeviceCommunicationControl
     /// DISABLE_INITIATION: this I-Am answers no Who-Is (Clause 16.1).
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
         let identity = self
@@ -1029,6 +1014,9 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         if let Some(task) = self.durable_settlement.take() {
             task.abort();
         }
+        // The server's own drop aborts its work and lets go of the node's
+        // DeviceCommunicationControl hold.
+        drop(self.server.take());
         self.cov.abort();
         // The session's own handle, kept through stop(), goes off the
         // runtime if it is the last (#1561). Every other endpoint holder

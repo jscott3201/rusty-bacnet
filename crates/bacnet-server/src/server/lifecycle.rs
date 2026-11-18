@@ -13,6 +13,8 @@ use super::heap_futures::boxed;
 use super::server_seat::{Apdus as _, Link, Own, Started};
 use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
 
+#[path = "start_settings.rs"]
+pub(super) mod settings;
 #[path = "start_outputs.rs"]
 mod start_outputs;
 pub(super) use period::{MonotonicClocks, event_enrollment_period};
@@ -56,27 +58,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         configured_device_bindings: Vec<DeviceBinding>,
     ) -> Result<Self, Error> {
         let transport = link.transport();
-        if let Some(profile) = &mut config.audit_reporters {
-            profile.canonicalize()?;
-        }
-        // Validate every configured route against the concrete transport before
-        // mutating the database or starting network work. No binding takes a
-        // group address (#1493).
         // Max_APDU_Length_Accepted is fixed here for the server's life; a
         // later fall in the transport's capacity leaves it as is, and each
         // reply is sized to its route instead (#2093).
         super::network_port::validate_apdu_capacity(&mut config, transport)?;
+        // Every setting, and every configured route against the concrete
+        // transport, before mutating the database or starting network work.
+        // No binding takes a group address (#1493). A node checks the same
+        // before its own link starts (#2617).
+        let settings::StartSettings {
+            device_bindings,
+            receive_timeout,
+            request_tasks,
+        } = settings::settle(&mut config, configured_device_bindings, |mac| {
+            transport.is_group_destination(mac)
+        })?;
         crate::local_device::validate_startup(&db, &config.device)?;
         crate::local_device::bind_database(&mut db, &config.device);
-        let is_group = |mac: &[u8]| transport.is_group_destination(mac);
-        let device_bindings =
-            DeviceBindingTable::from_configured(configured_device_bindings, is_group)?;
         let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, transport)?;
         super::audit_forwarder::initialize(&db, &config, &device_bindings, transport);
-        let receive_timeout = super::segmented_receive::validate_segment_timeout(&config)?;
         // Settled now: every owner from here on shares it (#1521).
         let config = Arc::new(config);
-        let request_tasks = super::request_tasks::RequestTasks::for_server(&config)?;
 
         if config.device.vendor_id() == 0 {
             warn!("vendor_id is 0 (ASHRAE reserved); set a valid vendor ID for production use");

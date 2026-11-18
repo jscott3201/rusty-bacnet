@@ -367,15 +367,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             };
         }
         let allowed = self.executed_services();
-        if self.identity.as_ref().is_some_and(|identity| {
-            !identity
-                .services()
-                .contains(&ServiceSupported::READ_PROPERTY)
-                || identity
+        // A full server serves its own services whatever the identity
+        // lists (#2617).
+        if self.server_builder.is_none()
+            && self.identity.as_ref().is_some_and(|identity| {
+                !identity
                     .services()
-                    .iter()
-                    .any(|service| !allowed.contains(service))
-        }) {
+                    .contains(&ServiceSupported::READ_PROPERTY)
+                    || identity
+                        .services()
+                        .iter()
+                        .any(|service| !allowed.contains(service))
+            })
+        {
             return Err(Error::Encoding(
                 "Endpoint identity services do not match the responder's services".into(),
             ));

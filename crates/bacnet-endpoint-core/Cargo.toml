@@ -27,7 +27,7 @@ tracing.workspace = true
 [dev-dependencies]
 bacnet-transport = { workspace = true, features = ["test-support"] }
 bytes = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 
 [lints]
 workspace = true

@@ -24,7 +24,10 @@ pub(super) struct AuditRoutes {
 }
 
 impl AuditRoutes {
-    fn capture<T: TransportPort>(bindings: &DeviceBindingTable, transport: &T) -> Self {
+    fn capture(
+        bindings: &DeviceBindingTable,
+        bip_broadcast: Option<std::net::SocketAddrV4>,
+    ) -> Self {
         Self {
             devices: bindings
                 .configured_resolutions()
@@ -33,7 +36,7 @@ impl AuditRoutes {
                 })
                 .filter(|(_, route)| next_hop(route).is_some())
                 .collect(),
-            bip_broadcast: transport.bip_broadcast_endpoint(),
+            bip_broadcast,
             ..Self::default()
         }
     }
@@ -44,8 +47,42 @@ impl AuditRoutes {
         bindings: &DeviceBindingTable,
         transport: &T,
     ) -> Result<Self, Error> {
+        let is_group = |mac: &[u8]| transport.is_group_destination(mac);
+        Self::prepare_for(
+            db,
+            config,
+            bindings,
+            transport.bip_broadcast_endpoint(),
+            &is_group,
+        )
+    }
+
+    /// [`Self::prepare`] from what a node knows of its link before it starts
+    /// (#2617): the B/IP broadcast endpoint and the link's own group check.
+    /// A provisioned Address recipient on this network that `is_group`
+    /// calls a group address is refused here, as the started link's rule
+    /// refuses it after start.
+    pub(super) fn prepare_for(
+        db: &mut ObjectDatabase,
+        config: &ServerConfig,
+        bindings: &DeviceBindingTable,
+        bip_broadcast: Option<std::net::SocketAddrV4>,
+        is_group: &dyn Fn(&[u8]) -> bool,
+    ) -> Result<Self, Error> {
         let routes = if config.audit_reporters.is_some() {
-            Self::capture(bindings, transport)
+            let mut routes = Self::capture(bindings, bip_broadcast);
+            let device = crate::local_device::initiating_device(&config.device);
+            let recipient = db
+                .get_mut(&device)
+                .and_then(|object| object.device_authority_internal())
+                .and_then(|authority| authority.provisioned_audit_recipient().cloned());
+            if let Some(BACnetRecipient::Address(address)) = recipient
+                && address.network_number == 0
+                && is_group(&address.mac_address)
+            {
+                routes.configured_groups.insert(address.mac_address);
+            }
+            routes
         } else {
             Self::default()
         };

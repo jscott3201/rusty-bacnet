@@ -284,7 +284,7 @@ async fn no_detached_role_outlives_session() {
 
     // Clone role Arcs out of the session (detached handles).
     let detached_client = session_a.cloned_client_handle().unwrap();
-    let detached_server = session_a.cloned_server_handle().unwrap();
+    let detached_server = session_a.cloned_responder_handle().unwrap();
     assert!(detached_server.is_session_alive());
 
     // Dropping the session ends role work: Weak upgrade fails, methods fail

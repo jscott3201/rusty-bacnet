@@ -86,7 +86,7 @@ async fn canceled_failed_start_retains_cleanup_until_stop_or_drop() {
             Lifecycle::Stopping as u8
         );
         assert!(!session.is_running());
-        assert!(session.client().is_none() && session.server().is_none());
+        assert!(session.client().is_none() && session.responder().is_none());
         assert_eq!(session.active_leases(), 0);
         assert_eq!(drops.load(Ordering::SeqCst), 0);
         assert!(session.start().await.is_err());

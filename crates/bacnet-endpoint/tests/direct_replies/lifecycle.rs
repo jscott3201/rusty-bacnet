@@ -104,7 +104,7 @@ async fn session_pending_response(stop: bool) {
     .unwrap()
     .with_database(database("owned"));
     session.start().await.unwrap();
-    let handle = session.cloned_server_handle().unwrap();
+    let handle = session.cloned_responder_handle().unwrap();
     let client = session.cloned_client_handle().unwrap();
     let request = tokio::spawn(async move {
         client
@@ -158,7 +158,7 @@ async fn canceling_live_responder_waiter_retracts_queued_reply_before_replacemen
     let mut session =
         EndpointSession::new(port, SessionRole::Both, SessionConfig::default()).unwrap();
     session.start().await.unwrap();
-    let handle = session.cloned_server_handle().unwrap();
+    let handle = session.cloned_responder_handle().unwrap();
     let client = session.cloned_client_handle().unwrap();
     let request = tokio::spawn(async move {
         client
