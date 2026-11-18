@@ -375,6 +375,43 @@ pub(super) async fn run<T: TransportPort + 'static>(
 mod tests {
     use super::*;
 
+    /// What the tool returns for `apdu` given on its own, but its octet
+    /// count: the tree, the summary and the one-line text.
+    fn returned(apdu: &[u8]) -> Value {
+        let npdu = [&[0x01, 0x00][..], apdu].concat();
+        let summary = summarize_npdu(&npdu);
+        let mut budget = MAX_FIELDS;
+        json!({
+            "tree": fields_json(&[decode_apdu_tree(apdu)], &mut budget, 256),
+            "summary": summary_json(&summary),
+            "text": one_line(Link::Apdu, &summary),
+        })
+    }
+
+    /// DeviceCommunicationControl and ReinitializeDevice requests whose
+    /// passwords differ only in their characters return the same JSON,
+    /// where an earlier field's length takes in the password's header or
+    /// the password claims too few octets (#2618).
+    #[test]
+    fn requests_differing_only_in_their_passwords_return_the_same() {
+        let pairs = [
+            ("00050114 091C05 707764", "00050114 091C05 717764"),
+            ("00050111 0C19012C00 657A71", "00050111 0C19012C00 616263"),
+            ("00050111 093C192C05 707764", "00050111 093C192C05 414243"),
+            ("00050111 0B19012C19 414243", "00050111 0B19012C19 585958"),
+            ("00050111 19002A00 416F", "00050111 19002A00 427A"),
+            ("00050111 19002A00 416577", "00050111 19002A00 587A78"),
+            (
+                "00050114 0900190070 613535776F7264",
+                "00050114 0900190070 62363678707265",
+            ),
+        ];
+        for (one, other) in pairs {
+            let (one, other) = (octets(one).unwrap(), octets(other).unwrap());
+            assert_eq!(returned(&one), returned(&other), "{one:02X?}");
+        }
+    }
+
     #[test]
     fn hex_is_read_with_separators_and_capped() {
         assert_eq!(octets("0x81 0a:00-04").unwrap(), [0x81, 0x0A, 0x00, 0x04]);

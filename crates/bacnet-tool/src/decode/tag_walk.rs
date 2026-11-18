@@ -76,6 +76,17 @@ impl<'a> Element<'a> {
         start..start + 2 * self.header + contents
     }
 
+    /// A primitive's contents, as offsets in the octets walked: after its
+    /// header.
+    pub(super) fn contents_range(&self) -> Range<usize> {
+        self.range.start + self.header..self.range.end
+    }
+
+    /// The length of its tag header, or of its opening tag.
+    pub(super) fn header(&self) -> usize {
+        self.header
+    }
+
     /// A primitive `item` that `reader` read from `base`.
     fn primitive(item: TagItem<'a>, base: usize) -> Self {
         Self {
@@ -134,8 +145,6 @@ pub(super) struct Stop {
     /// Where, in the octets walked: the tag at fault, or the opening tag
     /// left open.
     offset: usize,
-    /// The tag header there, when it parses.
-    tag: Option<Tag>,
     /// For contents past the end: how many octets they claim, and how many
     /// remain after the header.
     short: Option<(usize, usize)>,
@@ -155,15 +164,9 @@ impl Stop {
         Self {
             fault,
             offset,
-            tag: header.map(|(tag, _)| tag),
             short,
             end: data.len(),
         }
-    }
-
-    /// The tag header at the fault, when it parses.
-    pub(super) fn tag(&self) -> Option<Tag> {
-        self.tag
     }
 
     /// What stopped the walk. Contents past the end say how many octets

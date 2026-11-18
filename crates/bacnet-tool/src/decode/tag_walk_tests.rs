@@ -273,7 +273,7 @@ fn a_legacy_value_its_decoder_delimits_keeps_its_named_fields() {
     );
     assert_eq!(
         lines[4..],
-        ["    Tag walk stopped: malformed tag header: invalid extended tag number 255 @11..18"]
+        ["    Tag walk stopped: malformed tag header: invalid extended tag number 255 @11..17"]
     );
 
     let apdu = octets("00 05 01 0F 0C02400001 19 53 3E FEFF 0102 FFFF 3F 4908");

@@ -37,7 +37,7 @@ fn segmented_password_requests_hide_the_password() {
         "\
 reinitialize-device parameters @6..18
   [0] 00 (0) @6..8
-  Password: (hidden) @8..18"
+  Hidden: may hold a password @8..18"
     );
     // DeviceCommunicationControl, first segment.
     let dcc = format!("0E 05 01 00 04 11 0900 1900 2D08 {SECRET}");
@@ -47,7 +47,7 @@ reinitialize-device parameters @6..18
 device-communication-control parameters @6..20
   [0] 00 (0) @6..8
   [1] 00 (0) @8..10
-  Password: (hidden) @10..20"
+  Hidden: may hold a password @10..20"
     );
     // A later segment: its tag boundaries can't be trusted.
     let later = format!("0E 05 01 01 04 11 2D08 {SECRET}");
@@ -90,7 +90,10 @@ device-communication-control parameters @4..18
     let long = "00 5A71372D68756E746572322D5A71372D68756E746572322D";
     let text = snapshot(&octets(&format!("00 05 01 14 0900 1D19 {long}")));
     assert!(!text.contains("5A71372D"), "{text}");
-    assert!(text.contains("  Password: (hidden) @6..33"), "{text}");
+    assert!(
+        text.contains("  Hidden: may hold a password @6..33"),
+        "{text}"
+    );
     assert!(text.contains("reason hidden"), "{text}");
 }
 
@@ -104,13 +107,12 @@ fn everything_from_the_password_on_is_hidden() {
         "\
 device-communication-control parameters @4..14
   [1] 00 (0) @4..6
-  Password: (hidden) @6..9
-  Hidden: may hold a password @9..14
+  Hidden: may hold a password @6..14
   Not read as named fields: reason hidden (it may quote the password) @4..14"
     );
     let text = hidden("00 05 01 14 0900 1A0068 0B756E74");
     assert!(
-        text.contains("  Password: (hidden) @6..9\n  Hidden: may hold a password @9..13"),
+        text.contains("  Hidden: may hold a password @6..13"),
         "{text}"
     );
 }
@@ -132,18 +134,18 @@ fn only_expected_top_level_fields_stay() {
     );
 }
 
-/// A fault the walk stops at among the fields before the password keeps
-/// its text, which quotes only the octets at the fault; one at the
-/// password, or after hiding starts, is hidden with the rest.
+/// A fault the walk stops at where the layout expects a field or the
+/// password, its text and all, is hidden with what follows: the fields
+/// before it are all that shows.
 #[test]
-fn a_fault_before_the_password_shows_and_one_after_is_hidden() {
+fn a_fault_after_the_fields_before_the_password_is_hidden() {
     // A stray closing tag before the password tag.
     assert_eq!(
         hidden("00 05 01 11 1900 3F 2D08 0068756E7465"),
         "\
 device-communication-control parameters @4..15
   [1] 00 (0) @4..6
-  Tag walk stopped: closing tag [3] with no opening tag @6..15
+  Hidden: may hold a password @6..15
   Not read as named fields: reason hidden (it may quote the password) @4..15"
     );
     // The password claims 8 octets and 6 remain.
@@ -152,7 +154,7 @@ device-communication-control parameters @4..15
         "\
 device-communication-control parameters @4..14
   [1] 00 (0) @4..6
-  Password: (hidden) @6..14
+  Hidden: may hold a password @6..14
   Not read as named fields: reason hidden (it may quote the password) @4..14"
     );
     // The password inside a constructed [3] that is never closed.

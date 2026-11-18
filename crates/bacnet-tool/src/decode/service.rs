@@ -174,8 +174,14 @@ fn named(params: Params, doc: &Doc<'_>) -> Named {
         Ack(Confirmed::GET_EVENT_INFORMATION) => {
             event_information(doc, &GetEventInformationAck::decode(data)?)
         }
+        // Named only when the tags are the layout's, and decided with the
+        // password replaced by a valid one of its length.
         Request(Confirmed::DEVICE_COMMUNICATION_CONTROL) => {
-            let request = DeviceCommunicationControlRequest::decode(data)?;
+            if !password::DCC.whole(&doc.walk) {
+                return Err(Miss::Layout);
+            }
+            let masked = password::DCC.masked(data, &doc.walk);
+            let request = DeviceCommunicationControlRequest::decode(&masked)?;
             let items = doc.items()?;
             let mut fields = opt(doc, items, 0, |_| {
                 request
@@ -190,7 +196,11 @@ fn named(params: Params, doc: &Doc<'_>) -> Named {
             Ok(fields)
         }
         Request(Confirmed::REINITIALIZE_DEVICE) => {
-            let request = ReinitializeDeviceRequest::decode(data)?;
+            if !password::REINIT.whole(&doc.walk) {
+                return Err(Miss::Layout);
+            }
+            let masked = password::REINIT.masked(data, &doc.walk);
+            let request = ReinitializeDeviceRequest::decode(&masked)?;
             let items = doc.items()?;
             let mut fields = vec![doc.leaf(
                 need(items, 0)?,
@@ -289,6 +299,12 @@ impl<'a> Doc<'a> {
             && one.children.is_empty()
         {
             inner.clear();
+        }
+        // Where the walk stopped inside the value, its leaf ends where the
+        // decoder says the value's closing tag starts.
+        let closing = self.at + item.range.end - item.header();
+        if let Some(last) = inner.last_mut().filter(|_| item.is_stopped()) {
+            last.range.end = last.range.end.min(closing);
         }
         let mut field = Field::node(format!("Value: {text}"), self.abs(&item.range), inner);
         field.device_text = format
