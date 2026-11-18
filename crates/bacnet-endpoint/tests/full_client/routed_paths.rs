@@ -161,9 +161,10 @@ async fn a_seated_client_drops_a_reject_for_a_frame_below_the_floor() {
     let first = nth_request(&lab, 0, WAIT).await;
     reject(&lab);
     eventually(WAIT, "the reject counted", async || {
-        client.too_long_reject_drops() == 1
+        client.below_minimum_reject_drops() == 1
     })
     .await;
+    assert_eq!(client.too_long_reject_drops(), 0);
     assert!(!tiny.is_finished());
     ack(&lab, first);
     assert!(tiny.await.unwrap().unwrap().is_empty());

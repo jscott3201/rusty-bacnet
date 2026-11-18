@@ -9650,7 +9650,8 @@ State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a
 different DNET remain independent, and direct requests bypass this state. A
 matching Reject-Message-To-Network reason 4 completes only the active owner as
-`Error::RoutedPathTooLong { dnet }`. It records the largest forwarded NPDU that
+`Error::RoutedPathTooLong { dnet }` (for frames above 228 octets; see the
+228-octet floor rule below). It records the largest forwarded NPDU that
 request has sent as an exclusive upper bound: a reject may answer any of its
 frames, such as a full segment sent before a smaller final one (#2651).
 Learned negative evidence lasts for the client lifetime
@@ -9698,11 +9699,16 @@ the wrong request (#2651):
   6-1). A conforming router never refuses a frame that small as too long, so
   a reason 4 that lands on a request whose largest frame is that size or
   smaller is for other traffic to the network: it is dropped, counted in
-  `BACnetClient::too_long_reject_drops()`, and the request runs on to its own
-  answer, retry or timeout (#2665). A router that really limits a path below
-  228 octets is a router outside the standard: against it such requests end
-  by timeout, not as `RoutedPathTooLong`, until the limit is set with
-  `configure_routed_path_max_npdu`, which accepts any value, 228 or below.
+  `BACnetClient::below_minimum_reject_drops()` (apart from
+  `too_long_reject_drops()`, whose drops clear themselves), and the request
+  runs on to its own answer, retry or timeout (#2665). The first drop on a
+  path logs a warning. On a path with no configured limit every frame is 228
+  octets or fewer, so every reason 4 is dropped there. A router that really
+  limits a path below 228 octets is a router outside the standard: against it
+  the batch readers no longer get the fast too-long signal that makes them
+  split a request; they see timeouts, after the APDU timeout times the
+  attempts, until the limit is set with `configure_routed_path_max_npdu`,
+  which accepts any value, 228 or below.
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
 

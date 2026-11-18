@@ -113,8 +113,9 @@ pub fn rpm_failure(error: &Error) -> RpmFailure {
             RpmFailure::TooLarge
         }
         // The request itself was too long, for the link or for a router on
-        // the way (an older router, a small frame): one property at a time
-        // is shorter.
+        // the way (a router that refuses a frame above what its path carries;
+        // a frame of 228 octets or fewer never earns this, #2665): one
+        // property at a time is shorter.
         Error::SendTooLong { .. } | Error::RoutedPathTooLong { .. } => RpmFailure::TooLarge,
         _ => RpmFailure::Other,
     }

@@ -32,18 +32,18 @@ const DADR: [u8; 1] = [3];
 /// One APDU timeout at the default.
 const TIMEOUT: Duration = Duration::from_secs(6);
 /// The old hold at the defaults: the timeout times four attempts.
-const WINDOW: Duration = Duration::from_secs(24);
+pub(super) const WINDOW: Duration = Duration::from_secs(24);
 /// 300 octets of service data: a 304-octet APDU, a 315-octet forwarded NPDU
 /// (9 fixed octets of NPCI, a 1-octet DADR and a 1-octet SADR).
-const LARGE: usize = 300;
+pub(super) const LARGE: usize = 300;
 /// 220 octets of service data: a 235-octet forwarded NPDU, smaller than
 /// [`LARGE`] and just above the 228-octet floor a reason 4 can teach
 /// (#2665).
 const SMALL: usize = 220;
 
 /// One client and its routed path to [`DNET`] through [`ROUTER`].
-struct Path {
-    client: Arc<BACnetClient<TestTransport>>,
+pub(super) struct Path {
+    pub(super) client: Arc<BACnetClient<TestTransport>>,
     inbound: mpsc::Sender<ReceivedNpdu>,
     outbound: mpsc::UnboundedReceiver<SentFrame>,
 }
@@ -51,7 +51,7 @@ struct Path {
 impl Path {
     /// A client on `config` whose path carries `max_npdu`, or the
     /// conservative 228 octets with `None`.
-    async fn new(config: ClientConfig, max_npdu: Option<u16>) -> Self {
+    pub(super) async fn new(config: ClientConfig, max_npdu: Option<u16>) -> Self {
         let (transport, inbound, outbound) = harness(&[1], 1486);
         let client = Arc::new(BACnetClient::start(config, transport).await.unwrap());
         if let Some(max_npdu) = max_npdu {
@@ -67,7 +67,7 @@ impl Path {
         }
     }
 
-    fn request(&self, octets: usize, fill: u8) -> JoinHandle<Result<Bytes, Error>> {
+    pub(super) fn request(&self, octets: usize, fill: u8) -> JoinHandle<Result<Bytes, Error>> {
         routed_request(
             Arc::clone(&self.client),
             ROUTER.to_vec(),
@@ -79,7 +79,7 @@ impl Path {
 
     /// The next frame the client sends, within twice the window: on paused
     /// time a frame that never comes fails the test instead of hanging it.
-    async fn next_frame(&mut self) -> ConfirmedRequest {
+    pub(super) async fn next_frame(&mut self) -> ConfirmedRequest {
         let frame = timeout(2 * WINDOW, self.outbound.recv())
             .await
             .expect("no frame within twice the window")
@@ -87,17 +87,17 @@ impl Path {
         confirmed_request(frame, &ROUTER)
     }
 
-    async fn ack(&self, invoke_id: u8) {
+    pub(super) async fn ack(&self, invoke_id: u8) {
         inject_simple_ack(&self.inbound, &ROUTER, DNET, &DADR, invoke_id).await;
     }
 
-    async fn reject(&self) {
+    pub(super) async fn reject(&self) {
         inject_reason_4(&self.inbound, &ROUTER, DNET).await;
     }
 
     /// A request of `octets` the device answers on its retry, one timeout
     /// after its first frame. Returns its invoke ID.
-    async fn answered_on_retry(&mut self, octets: usize) -> u8 {
+    pub(super) async fn answered_on_retry(&mut self, octets: usize) -> u8 {
         let task = self.request(octets, 0x41);
         let first = self.next_frame().await;
         let sent = Instant::now();
@@ -112,7 +112,7 @@ impl Path {
     /// A request of `octets` sent now goes out after `wait`, in APDUs of at
     /// most `max_apdu` octets, and the device answers it, segment by segment
     /// when it is segmented. Returns its first frame.
-    async fn next_goes_out_after(
+    pub(super) async fn next_goes_out_after(
         &mut self,
         octets: usize,
         wait: Duration,
@@ -141,17 +141,32 @@ impl Path {
         frame
     }
 
-    async fn stop(self) {
+    /// The device answers a segmented request, segment by segment, from its
+    /// `first` frame.
+    pub(super) async fn finish_segmented(&mut self, first: ConfirmedRequest, max_apdu: u16) {
+        finish_segmented(
+            &self.inbound,
+            &mut self.outbound,
+            &ROUTER,
+            DNET,
+            &DADR,
+            first,
+            max_apdu,
+        )
+        .await;
+    }
+
+    pub(super) async fn stop(self) {
         let mut client = Arc::try_unwrap(self.client).ok().unwrap();
         client.stop().await.unwrap();
     }
 }
 
-fn too_long(result: Result<Bytes, Error>) -> bool {
+pub(super) fn too_long(result: Result<Bytes, Error>) -> bool {
     matches!(result, Err(Error::RoutedPathTooLong { dnet: DNET }))
 }
 
-fn timed_out(result: Result<Bytes, Error>) -> bool {
+pub(super) fn timed_out(result: Result<Bytes, Error>) -> bool {
     matches!(result, Err(Error::Remote(RemoteError::Abort { reason }))
         if reason == AbortReason::TSM_TIMEOUT)
 }
@@ -406,103 +421,6 @@ async fn a_reject_inside_a_segment_window_teaches_the_largest_frame() {
     // of 282. The final segment's 51 octets would have left 40.
     let first = path.next_goes_out_after(LARGE, WINDOW, 288).await;
     assert_eq!(6 + first.service_request.len(), 288);
-    path.stop().await;
-}
-
-/// The probe of #2665: one small frame, a reason 4 for other traffic to
-/// the network. The request is not ended by it, the drop is counted, the
-/// path learns nothing, and a later larger request goes out at once.
-/// Without the floor the path learned the 16-octet NPDU and every later
-/// request failed as too long.
-#[tokio::test(start_paused = true)]
-async fn a_reject_for_a_tiny_request_is_dropped_and_the_path_learns_nothing() {
-    let mut path = Path::new(ClientConfig::default(), None).await;
-    let task = path.request(1, 0x41);
-    let frame = path.next_frame().await;
-    assert_eq!(frame.service_request.len(), 1, "an NPDU of 16 octets");
-    path.reject().await;
-    sleep(Duration::from_millis(10)).await;
-    assert!(!task.is_finished(), "the reject ended the tiny request");
-    assert_eq!(path.client.too_long_reject_drops(), 1);
-    path.ack(frame.invoke_id).await;
-    assert!(task.await.unwrap().unwrap().is_empty());
-
-    path.next_goes_out_after(LARGE, Duration::ZERO, 217).await;
-    path.stop().await;
-}
-
-/// The floor's edge, on a wide path: a largest frame of 228 NPDU octets
-/// (213 of service data) drops the reject, and 229 takes it, learns, and
-/// leaves the path at the 228-octet floor.
-#[tokio::test(start_paused = true)]
-async fn the_floor_is_228_octets_and_a_reject_for_229_learns_it() {
-    let mut path = Path::new(ClientConfig::default(), Some(1497)).await;
-    let task = path.request(213, 0x41);
-    let frame = path.next_frame().await;
-    assert_eq!(frame.service_request.len(), 213);
-    path.reject().await;
-    sleep(Duration::from_millis(10)).await;
-    assert!(!task.is_finished(), "a reject ended a 228-octet frame");
-    assert_eq!(path.client.too_long_reject_drops(), 1);
-    path.ack(frame.invoke_id).await;
-    assert!(task.await.unwrap().unwrap().is_empty());
-
-    let task = path.request(214, 0x42);
-    path.next_frame().await;
-    path.reject().await;
-    assert!(too_long(task.await.unwrap()));
-    assert_eq!(path.client.too_long_reject_drops(), 1);
-
-    // The 229-octet NPDU bounds the path to 228: 217 APDU octets.
-    let first = path.next_goes_out_after(LARGE, Duration::ZERO, 217).await;
-    assert!(first.segmented);
-    path.stop().await;
-}
-
-/// A limit the user set is not held to the floor: a router that really
-/// carries less is configured, and requests are cut to it.
-#[tokio::test(start_paused = true)]
-async fn a_configured_limit_below_the_floor_is_honoured() {
-    let mut path = Path::new(ClientConfig::default(), Some(128)).await;
-    // 128 - 11 octets of NPCI: segments of 117 APDU octets, 111 of data.
-    let first = path.next_goes_out_after(LARGE, Duration::ZERO, 117).await;
-    assert!(first.segmented);
-    assert_eq!(first.service_request.len(), 111);
-    assert_eq!(path.client.too_long_reject_drops(), 0);
-    path.stop().await;
-}
-
-/// What a router that really limits below the floor looks like without
-/// the configured limit: its rejects are dropped, so the request ends by
-/// its own timeout, not as too long.
-#[tokio::test(start_paused = true)]
-async fn a_router_limiting_below_the_floor_shows_as_timeouts() {
-    let mut path = Path::new(ClientConfig::default(), None).await;
-    let task = path.request(LARGE, 0x41);
-    for _ in 0..4 {
-        path.next_frame().await;
-        path.reject().await;
-    }
-    assert!(timed_out(task.await.unwrap()));
-    assert_eq!(path.client.too_long_reject_drops(), 4);
-    path.stop().await;
-}
-
-/// A small request inside an answered request's window is below the floor
-/// and below the recorded size: one reject, dropped once and counted once.
-#[tokio::test(start_paused = true)]
-async fn a_small_request_in_the_answered_window_drops_a_reject_once() {
-    let mut path = Path::new(ClientConfig::default(), Some(1497)).await;
-    path.answered_on_retry(LARGE).await;
-    let task = path.request(1, 0x42);
-    let frame = path.next_frame().await;
-    path.reject().await;
-    sleep(Duration::from_millis(10)).await;
-    assert!(!task.is_finished());
-    assert_eq!(path.client.too_long_reject_drops(), 1);
-    path.ack(frame.invoke_id).await;
-    assert!(task.await.unwrap().unwrap().is_empty());
-    path.next_goes_out_after(LARGE, Duration::ZERO, 1476).await;
     path.stop().await;
 }
 
