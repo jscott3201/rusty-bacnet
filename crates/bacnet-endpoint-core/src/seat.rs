@@ -22,7 +22,8 @@
 //!   the endpoint's request queue), and a copy with no reply authority to
 //!   the client seat;
 //! - a Confirmed-Request goes to the server role. A ConfirmedCOVNotification
-//!   goes to the client seat instead, with its reply authority. A
+//!   or ConfirmedCOVNotificationMultiple goes to the client seat instead,
+//!   with its reply authority. A
 //!   ConfirmedEventNotification goes to the server role, and a copy with no
 //!   reply authority to the client seat. On an endpoint with no server role
 //!   every Confirmed-Request goes to the client seat;
@@ -121,7 +122,8 @@ pub const CLIENT_SEAT_CONTROL_QUEUE: usize = 64;
 #[non_exhaustive]
 pub struct SeatRoles {
     /// A server role answers for the device. The client then answers only
-    /// what is its own (a ConfirmedCOVNotification): it rejects no
+    /// what is its own (a confirmed COV notification, of either form): it
+    /// rejects no
     /// Confirmed-Request and acknowledges no ConfirmedEventNotification.
     pub server: bool,
 }

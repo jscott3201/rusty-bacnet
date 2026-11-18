@@ -409,7 +409,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             continue;
                         }
 
-                        let time_remaining = received.notification.time_remaining;
+                        let time_remaining = received.time_remaining();
                         let renew_after = options.renewal_delay(time_remaining);
                         publish_managed_cov_event(
                             &events_tx_for_task,
@@ -459,24 +459,29 @@ fn publish_managed_cov_event(
     let _ = events_tx.send(event);
 }
 
-/// True when `received` answers this subscription: it comes from `target`
-/// and names the subscription's process and object. A single-property
-/// subscription also needs its property among the reported values, so two
-/// subscriptions to one object under one process identifier don't move
-/// each other's renewals.
+/// True when `received` answers this subscription: a single-object
+/// notification (a managed subscription is a SubscribeCOV or a
+/// SubscribeCOVProperty one, never a SubscribeCOVPropertyMultiple one) that
+/// comes from `target` and names the subscription's process and object. A
+/// single-property subscription also needs its property among the reported
+/// values, so two subscriptions to one object under one process identifier
+/// don't move each other's renewals.
 fn matches_managed_cov_notification(
-    received: &ReceivedCOVNotification,
+    received: &COVEvent,
     target: &Station,
     local_network: Option<u16>,
     subscriber_process_identifier: u32,
     monitored_object_identifier: bacnet_types::primitives::ObjectIdentifier,
     property: Option<PropertyIdentifier>,
 ) -> bool {
-    received.notification.subscriber_process_identifier == subscriber_process_identifier
-        && received.notification.monitored_object_identifier == monitored_object_identifier
+    let Some(object) = received.object() else {
+        return false;
+    };
+    object.notification.subscriber_process_identifier == subscriber_process_identifier
+        && object.notification.monitored_object_identifier == monitored_object_identifier
         && target.is_source_of(received, local_network)
         && property.is_none_or(|property| {
-            received
+            object
                 .notification
                 .list_of_values
                 .iter()

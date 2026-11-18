@@ -130,22 +130,18 @@ impl Station {
     /// A station named on network 0 is on this link, so its notifications
     /// come with no source network too.
     ///
-    /// The managed COV helpers match notifications by this rule.
-    pub fn is_source_of(
-        &self,
-        received: &ReceivedCOVNotification,
-        local_network: Option<u16>,
-    ) -> bool {
+    /// Both kinds of notification are matched alike, by the source fields
+    /// they share. The managed COV helpers match notifications by this rule.
+    pub fn is_source_of(&self, received: &COVEvent, local_network: Option<u16>) -> bool {
+        let (source_network, source_address) =
+            (received.source_network(), received.source_address());
         let local_from = |mac: &MacAddr| {
-            received.source_network.is_none()
-                && received.source_address.is_none()
-                && received.source_mac == *mac
+            source_network.is_none() && source_address.is_none() && received.source_mac() == mac
         };
         match self {
             Self::Local { mac } => local_from(mac),
             Self::Remote { network, mac } | Self::Routed { network, mac, .. } => {
-                (received.source_network == Some(*network)
-                    && received.source_address.as_ref() == Some(mac))
+                (source_network == Some(*network) && source_address == Some(mac))
                     || ((*network == 0 || local_network == Some(*network)) && local_from(mac))
             }
         }

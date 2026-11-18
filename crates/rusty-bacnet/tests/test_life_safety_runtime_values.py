@@ -232,8 +232,8 @@ class LifeSafetyLiveServerTests(unittest.TestCase):
                     ],
                 )
 
-                # The client doesn't decode COV-multiple notifications, so the
-                # server's counters show the Tracking_Value reports.
+                # The Tracking_Value reports come as COV-multiple
+                # notifications (#2654), and the server's counters show them.
                 sent = (await server.cov_counters())["notifications_sent"]
                 await client.subscribe_cov_property_multiple(
                     address,
@@ -244,8 +244,25 @@ class LifeSafetyLiveServerTests(unittest.TestCase):
                     lifetime=60,
                 )
                 sent = await self._wait_for_sent(server, sent + 1)  # initial
+                initial = await asyncio.wait_for(
+                    notifications.get(), timeout=NOTIFICATION_TIMEOUT
+                )
+                self.assertEqual(
+                    (initial.kind, initial.subscriber_process_identifier),
+                    ("multiple", 1124),
+                )
                 await server.set_tracking_value_local(POINT, PRE_ALARM)
                 sent = await self._wait_for_sent(server, sent + 1)
+                changed = await asyncio.wait_for(
+                    notifications.get(), timeout=NOTIFICATION_TIMEOUT
+                )
+                self.assertEqual(changed.kind, "multiple")
+                [reported] = changed.objects
+                self.assertEqual(reported["monitored_object_identifier"], POINT)
+                self.assertIn(
+                    PRE_ALARM,
+                    [item["value"] for item in reported["values"] if item["property_id"] == TV],
+                )
                 # SubscribeCOV doesn't carry Tracking_Value: no ordinary report.
                 with self.assertRaises(asyncio.TimeoutError):
                     await asyncio.wait_for(notifications.get(), timeout=SILENCE_TIMEOUT)

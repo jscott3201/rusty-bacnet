@@ -184,8 +184,8 @@ class AveragingLiveServerTests(unittest.TestCase):
                 ErrorCode.OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
             )
 
-            # A property subscription is admitted. The client doesn't decode
-            # COV-multiple notifications, so the server's counters show them.
+            # A property subscription is admitted; the server's counters
+            # show its COV-multiple notifications.
             sent = (await server.cov_counters())["notifications_sent"]
             await client.subscribe_cov_property_multiple(
                 address,

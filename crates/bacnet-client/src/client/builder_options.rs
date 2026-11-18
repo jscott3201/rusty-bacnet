@@ -43,10 +43,11 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
         self
     }
 
-    /// Set the response policy for decoded ConfirmedCOVNotifications.
+    /// Set the response policy for decoded confirmed COV notifications,
+    /// ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple alike.
     pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&ReceivedCOVNotification) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.options = self
             .options
@@ -117,10 +118,11 @@ impl BipClientBuilder {
         self
     }
 
-    /// Set the response policy for decoded ConfirmedCOVNotifications.
+    /// Set the response policy for decoded confirmed COV notifications,
+    /// ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple alike.
     pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&ReceivedCOVNotification) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.options = self
             .options
@@ -205,10 +207,11 @@ impl Bip6ClientBuilder {
         self
     }
 
-    /// Set the response policy for decoded ConfirmedCOVNotifications.
+    /// Set the response policy for decoded confirmed COV notifications,
+    /// ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple alike.
     pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&ReceivedCOVNotification) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.options = self
             .options
@@ -261,10 +264,11 @@ impl ScClientBuilder {
         self
     }
 
-    /// Set the response policy for decoded ConfirmedCOVNotifications.
+    /// Set the response policy for decoded confirmed COV notifications,
+    /// ConfirmedCOVNotification and ConfirmedCOVNotificationMultiple alike.
     pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
     where
-        F: Fn(&ReceivedCOVNotification) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+        F: Fn(&COVEvent) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
     {
         self.options = self
             .options

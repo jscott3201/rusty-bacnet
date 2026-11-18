@@ -1,6 +1,11 @@
 //! The hub's one receiver of COV notifications: each goes to the entry
 //! whose subscriber process identifier it carries, if it comes from that
-//! entry's device and names its object (and property). The loop's arms
+//! entry's device and names its object (and property). The hub subscribes
+//! per object or property (SubscribeCOV, SubscribeCOVProperty), never with
+//! SubscribeCOVPropertyMultiple, so a COV-multiple notification answers none
+//! of its watches: it is left alone and counted
+//! ([`HubStats::cov_multiple_ignored`](super::hub::HubStats::cov_multiple_ignored)).
+//! The loop's arms
 //! never await: applying a notification takes two std mutexes in turn (the
 //! table's, released before the entry's), and a held-back signal is a
 //! deadline the loop sleeps toward. It also hands each device's scheduler
@@ -10,7 +15,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bacnet_client::client::{ReceivedCOVNotification, Station};
+use bacnet_client::client::{COVEvent, ReceivedCOVNotification, Station};
 use bacnet_types::constructed::BACnetPropertyValue;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
@@ -42,7 +47,7 @@ pub(super) struct Heard {
 /// channel.
 pub(super) async fn run(
     registry: Arc<Registry>,
-    mut notifications: broadcast::Receiver<ReceivedCOVNotification>,
+    mut notifications: broadcast::Receiver<COVEvent>,
     heard: Heard,
     mut stop: watch::Receiver<bool>,
 ) {
@@ -59,7 +64,10 @@ pub(super) async fn run(
             biased;
             _ = stop.wait_for(|stopped| *stopped) => break,
             received = notifications.recv() => match received {
-                Ok(received) => held.extend(registry.deliver(&received, own())),
+                Ok(event @ COVEvent::Object(_)) => held.extend(registry.deliver(&event, own())),
+                Ok(COVEvent::Multiple(_)) => {
+                    registry.cov_multiple_ignored.fetch_add(1, Ordering::Relaxed);
+                }
                 Err(RecvError::Lagged(missed)) => {
                     registry.lagged.fetch_add(missed, Ordering::Relaxed);
                 }
@@ -104,17 +112,20 @@ pub(super) async fn run(
     }
 }
 
-/// True when `received` is for `point`: from its device's address, by
-/// the client's rule ([`Station::is_source_of`]: its network and MAC, whatever
-/// router it came through, or its MAC alone once `own`, the client's
-/// network number, says the device is on this network), about its object,
-/// and for a property watch, carrying that property.
+/// True when `event` is for `point`: a single-object notification from its
+/// device's address, by the client's rule ([`Station::is_source_of`]: its
+/// network and MAC, whatever router it came through, or its MAC alone once
+/// `own`, the client's network number, says the device is on this network),
+/// about its object, and for a property watch, carrying that property.
 pub(super) fn belongs(
     point: &Point,
     target: Option<&Station>,
-    received: &ReceivedCOVNotification,
+    event: &COVEvent,
     own: Option<u16>,
 ) -> bool {
+    let Some(received) = event.object() else {
+        return false;
+    };
     let notification = &received.notification;
     if notification.monitored_object_identifier != point.object {
         return false;
@@ -127,7 +138,7 @@ pub(super) fn belongs(
     {
         return false;
     }
-    target.is_some_and(|target| target.is_source_of(received, own))
+    target.is_some_and(|target| target.is_source_of(event, own))
 }
 
 /// Whether `value` is one a point keeps: for an object watch, any value

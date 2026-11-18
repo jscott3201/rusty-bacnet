@@ -94,7 +94,7 @@ async fn a_confirmed_request_from_a_group_source_is_ignored_and_counted() {
         .await
         .expect("the peer's notification is delivered")
         .unwrap();
-    assert_eq!(delivered.notification.subscriber_process_identifier, 2);
+    assert_eq!(delivered.subscriber_process_identifier(), 2);
     let (to, npdu) = timeout(Duration::from_secs(2), sent.recv())
         .await
         .expect("the peer's notification is acknowledged")

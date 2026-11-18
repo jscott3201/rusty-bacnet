@@ -403,8 +403,7 @@ async fn a_frame_expecting_a_reply_is_answered_on_its_own_path_by_the_role_it_is
             .recv()
             .await
             .unwrap()
-            .notification
-            .subscriber_process_identifier,
+            .subscriber_process_identifier(),
         4
     );
     assert_eq!(to_other(&lab.node_sent), 0);

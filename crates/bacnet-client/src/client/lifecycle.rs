@@ -196,8 +196,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let device_table_dispatch = Arc::clone(&device_table);
         inbound.bind(&tsm, &device_table);
         let seat = inbound.seat();
-        let (cov_tx, _) =
-            broadcast::channel::<ReceivedCOVNotification>(options.cov_channel_capacity);
+        let (cov_tx, _) = broadcast::channel::<COVEvent>(options.cov_channel_capacity);
         let cov_tx_dispatch = cov_tx.clone();
         let (event_tx, _) =
             broadcast::channel::<ReceivedEventNotification>(options.event_channel_capacity);
@@ -352,8 +351,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 debug!("Ignoring a ConfirmedRequest from a group address");
                             }
                             // Beside a server role, which answers for the
-                            // device, only a ConfirmedCOVNotification is the
-                            // client's to answer (#2617).
+                            // device, only a confirmed COV notification, of
+                            // either form, is the client's to answer (#2617).
                             Ok(Apdu::ConfirmedRequest(request))
                                 if !inbound.answers_for_device()
                                     && !dispatch::seated_client_answers(&request) =>

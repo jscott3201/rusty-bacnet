@@ -401,51 +401,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await;
                     return;
                 }
-                if req.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION {
-                    match COVNotificationRequest::decode_detailed(&req.service_request) {
-                        Ok(notification) => {
-                            debug!(
-                                object = ?notification.monitored_object_identifier,
-                                "Received ConfirmedCOVNotification"
-                            );
-                            let received = ReceivedCOVNotification::new(
-                                notification,
-                                source_mac,
-                                source_network,
-                                COVNotificationDelivery::Confirmed,
-                            );
-                            let response = confirmed_cov_ack_policy(&received);
-                            let _ = cov_tx.send(received);
-                            Self::send_confirmed_cov_notification_response(
-                                network,
-                                source_mac,
-                                source_network,
-                                req.invoke_id,
-                                req.service_choice,
-                                response,
-                                reply,
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            let reject_reason = e.reject_reason();
-                            let e = e.into_error();
-                            warn_throttled!(
-                                decode_warning,
-                                error = %e,
-                                "Failed to decode ConfirmedCOVNotification"
-                            );
-                            Self::send_confirmed_request_reject(
-                                network,
-                                source_mac,
-                                source_network,
-                                reply,
-                                req.invoke_id,
-                                reject_reason,
-                            )
-                            .await;
-                        }
-                    }
+                if is_confirmed_cov_notification(req.service_choice) {
+                    Self::receive_confirmed_cov_notification(
+                        network,
+                        cov_tx,
+                        confirmed_cov_ack_policy,
+                        source_mac,
+                        source_network,
+                        reply,
+                        req,
+                        decode_warning,
+                    )
+                    .await;
                 } else if req.service_choice == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
                 {
                     Self::receive_confirmed_event_notification(
@@ -506,29 +473,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     }
                 } else if req.service_choice
                     == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION
+                    || req.service_choice
+                        == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE
                 {
-                    match COVNotificationRequest::decode(&req.service_request) {
-                        Ok(notification) => {
-                            debug!(
-                                object = ?notification.monitored_object_identifier,
-                                "Received UnconfirmedCOVNotification"
-                            );
-                            let received = ReceivedCOVNotification::new(
-                                notification,
-                                source_mac,
-                                source_network,
-                                COVNotificationDelivery::Unconfirmed,
-                            );
-                            let _ = cov_tx.send(received);
-                        }
-                        Err(e) => {
-                            warn_throttled!(
-                                decode_warning,
-                                error = %e,
-                                "Failed to decode UnconfirmedCOVNotification"
-                            );
-                        }
-                    }
+                    cov_notifications::receive_unconfirmed_cov_notification(
+                        cov_tx,
+                        source_mac,
+                        source_network,
+                        &req.service_request,
+                        req.service_choice,
+                        decode_warning,
+                    );
                 } else if req.service_choice
                     == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
                 {
@@ -696,11 +651,31 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 }
 
+/// Whether `service` is a confirmed COV notification, of one object or of
+/// several (Clauses 13.7 and 13.17).
+fn is_confirmed_cov_notification(service: ConfirmedServiceChoice) -> bool {
+    service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
+        || service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+}
+
+/// Whether a confirmed COV notification is the several-object form
+/// (Clause 13.17). Named here, with the other services the client receives.
+pub(super) fn is_confirmed_cov_multiple(service: ConfirmedServiceChoice) -> bool {
+    service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+}
+
+/// Whether an unconfirmed COV notification is the several-object form
+/// (Clause 13.18).
+pub(super) fn is_unconfirmed_cov_multiple(service: UnconfirmedServiceChoice) -> bool {
+    service == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE
+}
+
 /// Whether a seated client beside a server role answers `request` itself:
-/// only a ConfirmedCOVNotification, which is about its own subscription
-/// (#2617). Every other Confirmed-Request is the server role's.
+/// only a confirmed COV notification, of either form, which is about its own
+/// subscription (#2617, #2654). Every other Confirmed-Request is the server
+/// role's.
 pub(super) fn seated_client_answers(request: &ConfirmedRequestPdu) -> bool {
-    request.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
+    is_confirmed_cov_notification(request.service_choice)
 }
 
 /// A confirmed request that reached a seated client beside a server role and

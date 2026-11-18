@@ -321,6 +321,8 @@ async fn the_node_device_states_both_roles() {
     for service in [
         ServiceSupported::I_AM,
         ServiceSupported::CONFIRMED_COV_NOTIFICATION,
+        ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
         ServiceSupported::READ_PROPERTY_MULTIPLE,
     ] {
         assert!(lists(&data, service), "{service:?}");

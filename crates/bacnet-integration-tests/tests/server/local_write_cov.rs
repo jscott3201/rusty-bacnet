@@ -56,7 +56,9 @@ async fn local_write_fires_cov_notification() {
     let initial = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("timed out waiting for initial COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(initial.notification.monitored_object_identifier, ao_oid);
 
     // 2. Mutate PRESENT_VALUE through the LOCAL write path — the path that
@@ -76,7 +78,9 @@ async fn local_write_fires_cov_notification() {
     let received = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("timed out waiting for COV notification after local write")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.notification.monitored_object_identifier, ao_oid);
 
     // 3. Cancel the subscription; a further local write must NOT notify.

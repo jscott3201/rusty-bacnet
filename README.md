@@ -211,6 +211,8 @@ async def main():
             lifetime=60,
         )
         async for notification in notifications:
+            if notification.kind != "object":
+                continue  # a CovNotificationMultiple (a notification about several objects)
             for change in notification.values:
                 print(change["property_id"], change["value"].value)
             break
