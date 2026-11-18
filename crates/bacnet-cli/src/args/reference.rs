@@ -358,12 +358,28 @@ fn render_command(mut cli: Command) -> String {
     }
 
     writeln!(w, "## Global options\n").expect("write to a String");
+    let options = global_options(&cli);
+    // Clap takes only a global option on either side of the subcommand.
+    let before: Vec<String> = options
+        .iter()
+        .filter(|arg| !arg.is_global_set() && arg.get_id() != "help")
+        .filter_map(|arg| arg.get_long().map(|long| format!("`--{long}`")))
+        .collect();
+    let exceptions = match before.as_slice() {
+        [] => String::new(),
+        [one] => format!(", except {one}, which goes before it"),
+        [rest @ .., last] => format!(
+            ", except {} and {last}, which go before it",
+            rest.join(", ")
+        ),
+    };
     writeln!(
         w,
-        "These options go before or after the command. Each command also takes `-h` or `--help`.\n"
+        "These options go before or after the command{exceptions}. Each command also takes \
+         `-h` or `--help`.\n"
     )
     .expect("write to a String");
-    argument_list(w, "", &global_options(&cli));
+    argument_list(w, "", &options);
     writeln!(w).expect("write to a String");
 
     writeln!(w, "## Commands\n").expect("write to a String");

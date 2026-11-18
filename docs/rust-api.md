@@ -9623,7 +9623,35 @@ client
 
 // Restore the conservative unknown-path policy.
 client.clear_routed_path_limit(&router_mac, dnet).await?;
+
+// Each path with a configured or learned limit, or a below-minimum reject.
+for path in client.routed_path_limits() {
+    println!("{:?} network {}: {} octets ({})", path.router_mac, path.dnet,
+        path.max_npdu(), path.source().name());
+}
 ```
+
+`configure_routed_path_max_npdu` refuses, with `Error::Encoding`, a limit
+that can carry no request: one under the 50-octet minimum APDU plus the
+smallest NPCI a router adds to a request from this client (nine fixed octets,
+a one-octet DADR and the client's own MAC as SADR), so 66 on B/IP and 61 on
+MS/TP (#2667). Any larger value is taken, 228 or below included. A request to
+a station whose longer MAC leaves less than the minimum is still refused as
+`Error::RoutedPathTooLong` when it is made.
+
+`routed_path_limits()` lists every path holding more than the default, as
+`RoutedPathLimit` values ordered by router MAC and then network: the router
+MAC and DNET, `configured_max_npdu`, `learned_max_npdu` (one octet under the
+smallest frame a router refused as too long), and
+`below_minimum_reject_seen`, set when a reason 4 on that path was dropped
+below the 228-octet floor since its limit was last configured or cleared. A
+path held only by that mark is not kept when the table is full: it may be
+reclaimed for another path, and then is no longer listed.
+`max_npdu()` is the limit requests are sized to, and `source()` says where it
+comes from: `Learned` when the learned limit is below the configured one,
+`Configured` when one is set, otherwise `Default`. It reads the table once,
+sends nothing, and takes nothing from the request path. The two counters
+below are client-wide.
 
 Every MAC on a routed path holds to `bacnet_npdu::MAX_MAC_LEN` (18 octets), the
 longest address the NPDU codec carries and the network layer delivers (#1267).
@@ -9687,9 +9715,16 @@ matching Reject-Message-To-Network reason 4 completes only the active owner as
 request has sent as an exclusive upper bound: a reject may answer any of its
 frames, such as a full segment sent before a smaller final one (#2651).
 Learned negative evidence lasts for the client lifetime
-and has no widening TTL. Both configuration methods wait for an active owner;
-configuring replaces the prior value and deliberately resets learned evidence,
-while clearing removes configured and learned evidence. Active Clause 19.4
+and has no widening TTL. Both configuration methods wait for an active owner,
+and for a request queued on the path, which holds it while it waits out a
+hold; they don't wait out a hold themselves (#2667). A change made while the
+path is held after a request with no answer applies at once and leaves the
+hold in place, so the next request still waits it out, at the new limit; a
+reason 4 that lands in the hold finds no active request and is discarded, as
+any reject there is, so it can't move the new limit. Configuring replaces the
+prior value and deliberately resets learned evidence, while clearing removes
+configured and learned evidence; clearing a path the client holds nothing for
+reserves no entry, so it can't fail for capacity. Active Clause 19.4
 path probing and cache persistence across process restarts are not provided.
 
 The client retains at most 256 routed-path entries. At capacity it
@@ -9740,7 +9775,8 @@ the wrong request (#2651):
   the batch readers no longer get the fast too-long signal that makes them
   split a request; they see timeouts, after the APDU timeout times the
   attempts, until the limit is set with `configure_routed_path_max_npdu`,
-  which accepts any value, 228 or below.
+  which accepts any value from the bound above, 228 or below. The first drop
+  on each path also marks it in `routed_path_limits()`.
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
 

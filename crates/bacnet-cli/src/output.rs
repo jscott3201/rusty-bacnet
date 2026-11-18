@@ -265,6 +265,28 @@ pub fn print_waiting(secs: u64) {
     eprintln!("{}", format!("Waiting {secs}s for responses...").dimmed());
 }
 
+/// Log lines for a one-shot command at `-v`'s level (`warn` without it), on
+/// stderr in every link mode: stdout carries only the command's output, so a
+/// warning, an SC connection close or a lapsed registration can't corrupt a
+/// JSON result (#2667). Colour only when stderr is a terminal, as `bacnet
+/// mcp`'s.
+pub fn setup_tracing(verbosity: u8) {
+    use std::io::IsTerminal;
+    use tracing_subscriber::EnvFilter;
+    let filter = match verbosity {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(filter))
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
+        .init();
+}
+
 /// Print an error message to stderr.
 pub fn print_error(msg: &str) {
     eprintln!("{} {}", "ERROR:".red().bold(), msg.red());

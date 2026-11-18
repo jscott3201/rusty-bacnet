@@ -329,6 +329,7 @@ mod client_methods {
     mod object_device_alarm;
     mod priorities;
     mod read_write;
+    mod routed_paths;
     mod routing_table;
     mod sc_peer;
     mod vt_audit_time_directed;

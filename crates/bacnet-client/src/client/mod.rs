@@ -920,6 +920,7 @@ mod read_range;
 mod requests;
 mod response_admission;
 mod routed_path_limits;
+mod routed_path_listing;
 mod routing_table;
 mod seat;
 pub use seat::SeatedClientBuilder;
@@ -963,6 +964,7 @@ pub use event_notifications::{
 pub use i_have::{I_HAVE_CHANNEL_CAPACITY, MAX_I_HAVE_REPLIES, ReceivedIHave, collect_answers};
 pub use network_reports::{DiscoveredRouter, NETWORK_REPORT_CHANNEL_CAPACITY};
 pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
+pub use routed_path_listing::{RoutedPathLimit, RoutedPathLimitSource};
 pub use routing_table::{
     DEFAULT_ROUTING_TABLE_MAX_ENTRIES, RoutingTable, RoutingTableError, RoutingTableWait,
 };
@@ -1037,6 +1039,8 @@ mod routed_path_answered_tests;
 mod routed_path_floor_tests;
 #[cfg(test)]
 mod routed_path_limit_tests;
+#[cfg(test)]
+mod routed_path_listing_tests;
 #[cfg(test)]
 mod routed_reply_tests;
 #[cfg(all(test, feature = "sc-tls"))]

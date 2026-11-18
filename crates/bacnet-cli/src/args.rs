@@ -88,6 +88,21 @@ pub(crate) struct Cli {
     )]
     pub(crate) min_interval_ms: u64,
 
+    /// Size requests to NETWORK through the router at ROUTER (its address
+    /// on this network, as whois-router prints it) to at most MAX_NPDU
+    /// octets of NPDU, for this run. Repeat it for more paths. Without it a
+    /// path uses 228 octets, the least every router must carry; set it below
+    /// that for an older router that carries less, whose requests otherwise
+    /// time out, or above it for a wider path. Goes before the command.
+    // Not `global`: clap keeps a repeated global flag's values from one side
+    // of the subcommand only, so some would be lost without a word.
+    #[arg(
+        long,
+        value_name = "ROUTER/NETWORK=MAX_NPDU",
+        value_parser = crate::routed_paths::parse_limit_arg
+    )]
+    pub(crate) routed_path_limit: Vec<crate::routed_paths::LimitArg>,
+
     /// Run as a foreign device registered with this BBMD (IP, host name, or
     /// either with :port), so broadcasts such as discover reach its network.
     /// A host name is looked up at start: until it first resolves, again 30
@@ -810,6 +825,7 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
         ));
     }
     crate::mstp::check_matches(matches)?;
+    crate::routed_paths::check_matches(matches)?;
     if matches
         .get_one::<std::net::SocketAddrV4>("nat_global_address")
         .is_some()

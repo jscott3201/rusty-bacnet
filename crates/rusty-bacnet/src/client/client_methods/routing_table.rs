@@ -24,14 +24,14 @@ fn seconds(value: f64, name: &str) -> PyResult<std::time::Duration> {
 }
 
 /// The router as the caller wrote it, before the started client's link can
-/// read a string.
-enum RouterArg {
+/// read a string. The routed-path calls take it too (#2667).
+pub(super) enum RouterArg {
     Mac(Vec<u8>),
     Text(String),
 }
 
 impl RouterArg {
-    fn read(router: &Bound<'_, PyAny>) -> PyResult<Self> {
+    pub(super) fn read(router: &Bound<'_, PyAny>) -> PyResult<Self> {
         if let Ok(text) = router.cast::<PyString>() {
             return Ok(Self::Text(text.to_cow()?.into_owned()));
         }
@@ -46,17 +46,14 @@ impl RouterArg {
 
     /// The router's MAC on `client`'s link: bytes as given, or a string in
     /// the target grammar's address forms (a B/IPv6 socket address asks the
-    /// node its VMAC).
-    async fn on(self, client: &CoreClient) -> PyResult<Vec<u8>> {
+    /// node its VMAC). `refusal` is the ValueError's text for a string that
+    /// names a device or a routed station instead of an address.
+    pub(super) async fn on(self, client: &CoreClient, refusal: &str) -> PyResult<Vec<u8>> {
         match self {
             Self::Mac(mac) => Ok(mac),
-            Self::Text(text) => bacnet_ops::target::address_mac(
-                client.transport(),
-                &text,
-                "a routing-table query goes to a router's address",
-            )
-            .await
-            .map_err(|reason| PyValueError::new_err(crate::high_level::link_hint(reason))),
+            Self::Text(text) => bacnet_ops::target::address_mac(client.transport(), &text, refusal)
+                .await
+                .map_err(|reason| PyValueError::new_err(crate::high_level::link_hint(reason))),
         }
     }
 }
@@ -126,7 +123,9 @@ impl BACnetClient {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
-            let mac = router.on(&c).await?;
+            let mac = router
+                .on(&c, "a routing-table query goes to a router's address")
+                .await?;
             let table = c
                 .routing_table(&mac, bounds)
                 .await

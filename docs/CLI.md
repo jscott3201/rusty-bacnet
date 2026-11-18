@@ -52,6 +52,7 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `--share-port` | off | Share `--port` with other programs on this host that bind it the same way; BACnet/IP and BACnet/IPv6 only. See [Port sharing](#port-sharing) |
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
+| `--routed-path-limit <ROUTER/NETWORK=MAX_NPDU>` | | Size requests to `NETWORK` through the router at `ROUTER` to at most `MAX_NPDU` octets of NPDU for this run (without it, 228); repeat it for more paths, before the command. See [Routed path limits](#routed-path-limits) |
 | `--min-interval-ms <MS>` | `0` | Least time from the latest confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, at most 3600000, so paging or polling leaves a slow device room for others |
 | `--foreign-bbmd <ADDR>` | | Run as a foreign device registered with this BBMD (`ip`, `host`, or either with `:port`), so broadcasts reach its network. With `--ipv6`, an IPv6 address (`ip`, `[ip]` or `[ip]:port`) or a host name, and `--device-instance`. See [Foreign-device mode](#foreign-device-mode) |
 | `--ttl <N>` | `300` | Time-to-live in seconds of a foreign-device registration, for `--foreign-bbmd`, `register` and `discover --bbmd` |
@@ -87,7 +88,9 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `--no-tui` | | With no command, print the usage instead of opening the terminal UI; see [Plain `bacnet`](#plain-bacnet) |
 | `--yes` | | Confirm communication control and reinitialize without typing the target; needed when stdin is not a terminal |
 
-Output auto-detects: tables in TTY, JSON when piped.
+Output auto-detects: tables in TTY, JSON when piped. Log lines (warnings, and
+more with `-v`) go to stderr in every mode, so stdout carries only the
+command's output and a warning can't corrupt its JSON.
 
 **Device text:** strings a device supplies (values, object names, state
 texts, event messages) are cleaned in table and text output, as the terminal
@@ -167,6 +170,54 @@ calendar fields. Object creation/deletion and alarm acknowledgment require
 BVLC commands `bdt`, `fdt`, `register` and `unregister` address local B/IP peers
 and refuse routed targets. On BACnet/SC, device
 tables show a VMAC as hex octets (`02:00:00:00:00:01`), which every target argument takes back.
+
+<a id="routed-path-limits"></a>**Routed path limits.** The client sizes every
+request through a router to a limit for that path, the router and the
+destination network: 228 octets of NPDU, the least every router must carry
+(Table 6-1), unless set by hand or lowered by the router. A router that
+refuses a request as too long (reason 4, in its Reject-Message-To-Network)
+lowers its path's limit, except for a request of 228 octets or fewer, which no
+router that follows the standard refuses: the client doesn't believe such a
+reject, logs a warning, and the request runs on to its answer or its timeout
+(#2665). An older router that really carries less than 228 octets therefore
+shows as timeouts. Set its path's limit for the run with
+`--routed-path-limit ROUTER/NETWORK=MAX_NPDU`, before the command:
+
+```bash
+bacnet --routed-path-limit 192.168.1.20:47808/5=128 read 5:1234 ai:1 pv
+```
+
+`ROUTER` is the router's address on this network in any target form,
+`ip:port` or `ip` on B/IP, `mstp:N` on MS/TP, `bip6:0x...` or `[ipv6]:port` on
+B/IPv6, hex octets on BACnet/SC, as `whois-router` prints it; `NETWORK` is 1
+to 65534. Repeat the flag for more paths, each path once. A limit below 228 is
+taken; one that leaves no request the 50-octet minimum APDU after the routed
+header (under 66 on B/IP, 61 on MS/TP) is refused before the command sends
+anything, and so are a router named as a device or as a station behind a
+router (`1234`, `5:0x0a`) and one path named twice, however its router is
+written. A path's limit lasts for the run only. `tui`, `mcp`, plain `bacnet`,
+`capture`, `sc-check` and `mstp-ports` refuse the flag rather than ignore it.
+
+After the command, the CLI prints the client's routed paths to stderr when
+something happened that the command line didn't ask for: a path learned a
+limit from a router, or the client dropped a too-long reject. With `-v` it
+prints them whenever a path holds a limit. Stdout stays the command's own
+output. With table output it is a table, one row a path (the router in the
+link's own form, the network, the limit in force, where it comes from:
+`default`, `configured` or `learned`, the configured and learned limits, and
+whether a small request was refused there), and a line with the two counts of
+rejects the client did not believe. With JSON output it is one line:
+
+```json
+{"routed_paths":[{"router":"192.168.1.20:47808","network":5,"max_npdu":228,"source":"default","configured_max_npdu":null,"learned_max_npdu":null,"below_minimum_reject_seen":true}],"too_long_reject_drops":0,"below_minimum_reject_drops":4,"hint":"a router refused a request of 228 NPDU octets or fewer as too long, ..."}
+```
+
+`too_long_reject_drops` counts rejects that could answer a larger frame of an
+earlier request on the same path, and clears by itself;
+`below_minimum_reject_drops` counts rejects for a request of 228 octets or
+fewer. When the command timed out after such a reject, `hint` (a `Hint:` line
+in a table) names the flag to set for each path that drew one; otherwise it is
+`null`.
 
 **B/IPv6 targets are VMACs.** A B/IPv6 node is addressed by its 3-octet VMAC,
 not its IPv6 address (Clause U.1.3), and a device's VMAC is its device instance
@@ -2265,8 +2316,8 @@ router gives the registration, `--nat-global-address IP:PORT` lets the TUI's
 Network screen find our FDT entry there; it is a display hint only, and changes
 neither the registration nor anything else sent. While the transport manages the
 registration, `register` and `unregister` to that BBMD are refused; use
-another BBMD or a normal-mode CLI. With `--foreign-bbmd`, log lines go to
-stderr so they can't corrupt JSON output.
+another BBMD or a normal-mode CLI. Log lines go to stderr here as in every
+mode, so they can't corrupt JSON output.
 
 #### Multicast mode
 
@@ -2385,8 +2436,8 @@ formed throughout; an encrypted key (`ENCRYPTED PRIVATE KEY`, or OpenSSL's
 older `Proc-Type: 4,ENCRYPTED` form) and an OpenSSH key are named as such, and
 `bacnet sc-check` decodes the key by the same rule.
 Failures retain nonzero exit status and stderr diagnostics, not a successful JSON
-result. SC tracing (including connection-close warnings) also goes to stderr so
-it cannot corrupt JSON stdout. Before any DNS or TCP, the credential lint of
+result. SC tracing (including connection-close warnings) goes to stderr, as
+every mode's does, so it cannot corrupt JSON stdout. Before any DNS or TCP, the credential lint of
 [`bacnet sc-check`](sc-check.md#before-a-dial) refuses an expired or
 not-yet-valid operational certificate, an unreadable one, and a key that does
 not match it, with the reason on stderr; its warnings (expiry within 30 days, a

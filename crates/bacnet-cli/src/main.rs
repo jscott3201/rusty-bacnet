@@ -37,6 +37,7 @@ mod multicast;
 mod output;
 #[cfg(feature = "tui")]
 mod paths;
+mod routed_paths;
 mod sc_check;
 mod timestamp;
 mod transport;
@@ -49,26 +50,6 @@ use args::{Cli, Command};
 use bip_commands::execute_bip_command;
 use heap::boxed;
 use output::OutputFormat;
-
-fn setup_tracing(verbosity: u8, to_stderr: bool) {
-    use tracing_subscriber::EnvFilter;
-    let filter = match verbosity {
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
-        _ => "trace",
-    };
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(filter))
-        .with_target(false);
-    if to_stderr {
-        // SC close/handshake diagnostics, and a foreign device's refused or
-        // lapsed registration, must not corrupt a JSON result.
-        subscriber.with_writer(std::io::stderr).init();
-    } else {
-        subscriber.init();
-    }
-}
 
 fn resolve_format(cli: &Cli) -> OutputFormat {
     if cli.json {
@@ -464,7 +445,8 @@ async fn run<T: TransportPort + 'static>(
     cli: &Cli,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    boxed(|| execute_command(&client, cli, format)).await?;
+    let command = boxed(|| execute_command(&client, cli, format));
+    boxed(|| routed_paths::around(&client, cli, format, command)).await?;
     client.stop().await?;
     Ok(())
 }
@@ -636,27 +618,25 @@ fn parse_on_large_stack<T: Send + 'static>(parse: impl FnOnce() -> T + Send + 's
 
 /// Create `cli_main`'s future and move it to the heap. The full-size temporary
 /// that creating it takes is in this frame, which returns before polling
-/// starts.
+/// starts. The command line goes in boxed too, so the future holds a pointer
+/// to it, not its copies of the whole `Cli`.
 #[inline(never)]
 fn boxed_cli_main(cli: Cli) -> std::pin::Pin<Box<impl std::future::Future<Output = CliResult>>> {
-    Box::pin(cli_main(cli))
+    Box::pin(cli_main(Box::new(cli)))
 }
 
-async fn cli_main(cli: Cli) -> CliResult {
+async fn cli_main(cli: Box<Cli>) -> CliResult {
     if matches!(cli.command, Some(Command::Tui { .. })) {
         // The TUI sets up its own tracing: nothing may write to the terminal
         // while it is in raw mode. Boxed so its state stays out of this future
         // and its poll frame (see `heap`), as each session below is.
-        return boxed(|| run_tui(cli)).await;
+        return boxed(|| run_tui(*cli)).await;
     }
     if matches!(cli.command, Some(Command::Mcp { .. })) {
         // Stdout is the MCP stream: it sets up its own tracing, on stderr.
-        return boxed(|| run_mcp(cli)).await;
+        return boxed(|| run_mcp(*cli)).await;
     }
-    setup_tracing(
-        cli.verbose,
-        cli.sc || cli.foreign_bbmd.is_some() || cli.mstp.is_some(),
-    );
+    output::setup_tracing(cli.verbose);
     let format = resolve_format(&cli);
 
     // A one-shot binds --interface, or every interface without it.
@@ -753,9 +733,13 @@ async fn cli_main(cli: Cli) -> CliResult {
                 }
             }
         }
-        if !boxed(|| execute_bip_command(&client, cmd, cli.ttl, format)).await? {
-            boxed(|| execute_command(&client, &cli, format)).await?;
-        }
+        let command = boxed(|| async {
+            if !boxed(|| execute_bip_command(&client, cmd, cli.ttl, format)).await? {
+                boxed(|| execute_command(&client, &cli, format)).await?;
+            }
+            Ok(())
+        });
+        boxed(|| routed_paths::around(&client, &cli, format, command)).await?;
         client.stop().await?;
     }
 

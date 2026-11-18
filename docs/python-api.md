@@ -2659,6 +2659,63 @@ for router in await client.discover_routers():
         print(entry.network, entry.port_id)
 ```
 
+#### Routed path limits
+
+The client keeps a size limit, in NPDU octets, for each routed path: a router
+on the local link and a destination network (#2667). A path starts at 228
+octets, the least every router must carry (Table 6-1), and requests to
+stations on its network are sized to it, then segmented or refused as any
+request too large for its path is. A router's Reject-Message-To-Network with
+the "message too long" reason can lower it. The client does not believe such
+a reject for a request of 228 octets or fewer, so a router that
+really carries less (older or non-conforming equipment) shows as timeouts
+until its path's limit is set by hand:
+
+- `configure_routed_path_max_npdu(router, network, max_npdu)` sets the path's
+  limit, replacing any limit set or learned before. `router` is the router's
+  address on the local link, as `routing_table()` takes it: `bytes` such as a
+  `DiscoveredRouter`'s `mac`, or a string in the binding's address forms.
+  `network` is an `int` from 1 to 65534. A limit under 228 is taken; one that
+  could carry no request at all, under the 50-octet minimum APDU plus the
+  routed header (66 on B/IP, 61 on MS/TP), raises `ValueError`, as do a bad
+  router or network. An `int` outside 0 to 65535 raises `OverflowError`, and a
+  `bool` for `network` or `max_npdu` raises `TypeError`.
+- `clear_routed_path_limit(router, network)` puts the path back on 228,
+  dropping what was set or learned for it.
+- `routed_path_limits()` lists the paths that hold more than the default, as
+  frozen `RoutedPathLimit` objects by router and then network: `router`
+  (bytes), `network`, `max_npdu` (the limit in force), `source` (`"default"`,
+  `"configured"` or `"learned"`), `configured_max_npdu`, `learned_max_npdu`,
+  and `below_minimum_reject_seen`, set when a too-long reject for a request of
+  228 octets or fewer was dropped on that path since its limit was last set or
+  cleared. Its `repr` writes the router in the link's own form. A path held
+  only by that mark may be dropped when the client's table of 256 paths is
+  full.
+- `too_long_reject_drops()` and `below_minimum_reject_drops()` count, since
+  start and across every path, the too-long rejects the client dropped: the
+  first because they could answer a larger frame of an earlier request (these
+  clear by themselves), the second because the request sent nothing above 228
+  octets. A rise in the second, with timeouts to a network, is the sign of a
+  router that needs its path's limit set.
+
+None of the five sends anything through the path (a B/IPv6 router given as a
+socket address is first asked its VMAC), and each raises `RuntimeError`
+before the client starts and after `stop()`. The first two wait for a request
+active on the path, or one queued for it, but not out the hold a request with
+no answer leaves (the APDU timeout times the attempts): the change applies at
+once, and the next request still waits the hold out, sized to the new limit.
+They work on the client from `endpoint.client()` too.
+
+```python
+router = "192.168.1.20:47808"
+await client.configure_routed_path_max_npdu(router, 5, 128)
+for path in await client.routed_path_limits():
+    print(path)  # RoutedPathLimit(router='192.168.1.20:47808', network=5, max_npdu=128, source='configured')
+if await client.below_minimum_reject_drops():
+    print([p.network for p in await client.routed_path_limits() if p.below_minimum_reject_seen])
+await client.clear_routed_path_limit(router, 5)
+```
+
 #### `network_reports() -> Awaitable[NetworkReportIterator]`
 
 Follow the network reports the client receives from now on, as an async

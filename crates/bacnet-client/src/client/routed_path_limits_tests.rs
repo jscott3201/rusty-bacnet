@@ -86,7 +86,7 @@ async fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
     );
     limits.install_active(target, tsm_mac.clone(), 7, old.owner.clone(), 11, 0);
     assert!(limits.authorize_attempt(target, &tsm_mac, 7, &old.owner, 300));
-    let (claimed, _) = limits.claim_active(&router, 100, 1).unwrap();
+    let (claimed, _, _) = limits.claim_active(&router, 100, 1).unwrap();
 
     assert!(tsm.cancel_transaction_for_owner(&tsm_mac, 7, &old.owner));
     let replacement = tsm.register_transaction_with_progress(
@@ -138,8 +138,83 @@ async fn a_learned_limit_is_never_below_the_conservative_floor() {
         forwarded_npci_len: 11,
         ingress_floor: 0,
     };
-    limits.commit_learned_limit(active, 16);
+    let changed = limits.state().entries[&RoutedPathKey::new(&router, 100)].changed;
+    limits.commit_learned_limit(active, 16, changed);
     assert_eq!(lease.max_apdu(11), CONSERVATIVE_ROUTED_PATH_MAX_NPDU - 11);
+}
+
+/// Once a reason 4 is delivered, its request may drop its lease before the
+/// commit, and a change queued on the path may run in between; a clear may
+/// even leave the entry to be reclaimed for another path (#2667). The
+/// commit then learns nothing and does not panic: the change reset learned
+/// evidence, and the reject was for a frame sized before it.
+#[tokio::test]
+async fn a_commit_after_a_change_or_a_reclaim_learns_nothing() {
+    let limits = Arc::new(RoutedPathLimits::with_capacity(
+        1,
+        Duration::from_millis(10),
+    ));
+    let router = [2];
+    let key = RoutedPathKey::new(&router, 100);
+    let target = ConfirmedTarget::Routed {
+        router_mac: &router,
+        dest_network: 100,
+        dest_mac: &[3],
+    };
+    let tsm_mac = target.transaction_peer().tsm_mac;
+    let mut tsm = Tsm::new(TsmConfig::default());
+    let mut active = |invoke_id| ActiveRoutedSend {
+        path: key.clone(),
+        tsm_mac: tsm_mac.clone(),
+        invoke_id,
+        owner: tsm
+            .register_transaction_with_progress(
+                tsm_mac.clone(),
+                invoke_id,
+                ConfirmedServiceChoice::READ_PROPERTY,
+            )
+            .owner,
+        forwarded_npci_len: 11,
+        ingress_floor: 0,
+    };
+    let learned = |limits: &RoutedPathLimits| {
+        limits.state().entries.get(&key).and_then(|entry| {
+            entry
+                .learned
+                .as_ref()
+                .map(|learned| learned.exclusive_max_npdu)
+        })
+    };
+
+    let lease = limits.acquire(&router, 100).await.unwrap();
+    lease.configure(1497);
+    let changed = limits.state().entries[&key].changed;
+    drop(lease);
+    // Nothing changed since the claim: it learns.
+    limits.commit_learned_limit(active(1), 400, changed);
+    assert_eq!(learned(&limits), Some(400));
+
+    // A configure ran between the claim and the commit.
+    let changed = limits.state().entries[&key].changed;
+    limits
+        .acquire_for_change(&router, 100)
+        .await
+        .unwrap()
+        .configure(1497);
+    limits.commit_learned_limit(active(2), 300, changed);
+    assert_eq!(learned(&limits), None);
+
+    // A clear, and another path took the table's one entry.
+    let changed = limits.state().entries[&key].changed;
+    limits
+        .acquire_for_change(&router, 100)
+        .await
+        .unwrap()
+        .clear();
+    drop(limits.acquire(&[9], 7).await.unwrap());
+    assert!(!limits.state().entries.contains_key(&key));
+    limits.commit_learned_limit(active(3), 300, changed);
+    assert!(!limits.state().entries.contains_key(&key));
 }
 
 #[tokio::test]
