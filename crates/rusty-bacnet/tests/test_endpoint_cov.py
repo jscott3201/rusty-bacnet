@@ -1,12 +1,14 @@
-"""COV on the Python endpoints (#2490): the keyword-only ``cov`` turns on
-SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple, and
-``set_present_value_local`` and ``set_reliability_local`` are the
-application's changes their subscribers hear of.
+"""COV on the Python endpoints' full server (#2617): it answers SubscribeCOV,
+SubscribeCOVProperty and SubscribeCOVPropertyMultiple as a standalone server
+does, and the changes the application makes through
+``await endpoint.server()`` reach the subscribers, as a peer's writes do when
+the endpoint's ``mutation_policy`` lets them. The read-only server, the
+default, takes the subscriptions; ``mutation_policy="deny_all"`` denies them.
+``cov_policy`` is read as ``BACnetServer``'s is.
 
 A raw B/IP socket plays the subscriber and the tests assert what crosses the
 wire: the replies, the first notification of each subscription and the ones
-a local change sends, and, with COV off, the Reject every one of the three
-services got before. The BACnetClient's own ``subscribe_cov`` is checked
+a local change sends. The BACnetClient's own ``subscribe_cov`` is checked
 against the endpoint too.
 """
 import asyncio
@@ -22,8 +24,11 @@ from rusty_bacnet import (
 )
 
 AI1 = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+AV1 = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
 SUBSCRIBE_COV, SUBSCRIBE_COV_PROPERTY, SUBSCRIBE_COV_PROPERTY_MULTIPLE = 5, 28, 30
 UNCONFIRMED_COV_NOTIFICATION, UNCONFIRMED_COV_NOTIFICATION_MULTIPLE = 2, 11
+# SERVICES / SERVICE_REQUEST_DENIED, as an Error PDU carries them.
+DENIED = bytes.fromhex("91 05 91 1d")
 
 # Each service's parameters for AI-1's Present_Value, unconfirmed, for 60 s,
 # under subscriber process 1, 2 or 3 (the first octets after the header).
@@ -100,8 +105,8 @@ def notification(apdu):
 
 
 class EndpointCovWireTests(unittest.IsolatedAsyncioTestCase):
-    async def test_without_cov_the_three_services_are_refused_as_before(self):
-        owner = endpoint()
+    async def test_with_deny_all_the_three_services_are_denied(self):
+        owner = endpoint(mutation_policy="deny_all")
         subscriber = Subscriber()
         try:
             async with owner:
@@ -109,20 +114,22 @@ class EndpointCovWireTests(unittest.IsolatedAsyncioTestCase):
                 for invoke_id, (service, body) in enumerate(BODIES.items(), start=1):
                     with self.subTest(service=service):
                         await subscriber.send(to, invoke_id, service, body)
-                        # Reject, UNRECOGNIZED_SERVICE.
-                        self.assertEqual(await subscriber.apdu(), bytes([0x60, invoke_id, 9]))
+                        reply = await subscriber.apdu()
+                        # An Error PDU, SERVICES / SERVICE_REQUEST_DENIED.
+                        self.assertEqual(reply[:3], bytes([0x50, invoke_id, service]))
+                        self.assertIn(DENIED, reply)
                 await subscriber.quiet()
-                scope = (await owner.server()).service_scope()
-                self.assertEqual(scope["executes"], ["read_property"])
         finally:
             subscriber.close()
 
     async def test_each_subscription_hears_the_applications_changes(self):
-        owner = endpoint(cov={})
+        # The read-only default takes the subscriptions (#2617).
+        owner = endpoint()
         subscriber = Subscriber()
         try:
             async with owner:
                 to = await owner.local_address()
+                server = await owner.server()
                 for invoke_id, (service, body) in enumerate(BODIES.items(), start=1):
                     with self.subTest(service=service):
                         await subscriber.send(to, invoke_id, service, body)
@@ -134,8 +141,8 @@ class EndpointCovWireTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIn(real(10.0), first)
                 await subscriber.quiet()
 
-                await owner.set_present_value_local(AI1, PropertyValue.real(25.0))
-                heard = [await subscriber.apdu() for _ in BODIES]
+                await server.set_present_value_local(AI1, PropertyValue.real(25.0))
+                heard = [await subscriber.apdu(timeout=6.0) for _ in BODIES]
                 self.assertEqual(
                     sorted(notification(apdu) for apdu in heard),
                     [(UNCONFIRMED_COV_NOTIFICATION, 1), (UNCONFIRMED_COV_NOTIFICATION, 2),
@@ -146,20 +153,39 @@ class EndpointCovWireTests(unittest.IsolatedAsyncioTestCase):
 
                 # Status_Flags' FAULT follows a Reliability, and each
                 # subscription reports it.
-                await owner.set_reliability_local(AI1, Reliability.NO_SENSOR)
-                heard = [await subscriber.apdu() for _ in BODIES]
+                await server.set_reliability_local(AI1, Reliability.NO_SENSOR)
+                heard = [await subscriber.apdu(timeout=6.0) for _ in BODIES]
                 self.assertEqual(sorted(process for _, process in map(notification, heard)),
                                  [1, 2, 3])
                 await subscriber.quiet()
-                scope = (await owner.server()).service_scope()
-                self.assertEqual(scope["executes"], [
-                    "read_property", "subscribe_cov", "subscribe_cov_property",
-                    "subscribe_cov_property_multiple"])
         finally:
             subscriber.close()
 
-    async def test_a_timestamped_reference_is_refused_without_a_clock(self):
-        owner = endpoint(cov={})
+    async def test_the_cov_policy_caps_a_peers_subscriptions(self):
+        # The endpoint's cov_policy reaches its server: past the peer's
+        # quota of one, a subscription is refused for want of room.
+        owner = endpoint(cov_policy={"max_subscriptions_per_peer": 1})
+        subscriber = Subscriber()
+        try:
+            async with owner:
+                to = await owner.local_address()
+                await subscriber.send(to, 1, SUBSCRIBE_COV, BODIES[SUBSCRIBE_COV])
+                self.assertEqual(await subscriber.apdu(), bytes([0x20, 1, SUBSCRIBE_COV]))
+                await subscriber.apdu()  # its first notification
+                second = BODIES[SUBSCRIBE_COV].replace("09 01", "09 02", 1)
+                await subscriber.send(to, 2, SUBSCRIBE_COV, second)
+                # An Error PDU, RESOURCES (3) / NO_SPACE_TO_ADD_LIST_ELEMENT (19).
+                self.assertEqual(await subscriber.apdu(),
+                                 bytes.fromhex("50 02 05 91 03 91 13"))
+                counters = await (await owner.server()).cov_counters()
+                self.assertEqual(counters["subscriptions_rejected_quota"], 1)
+        finally:
+            subscriber.close()
+
+    async def test_a_timestamped_reference_is_taken_with_the_servers_clock(self):
+        # The narrow endpoint had no clock and refused it; the full server
+        # has one (#2617).
+        owner = endpoint()
         subscriber = Subscriber()
         try:
             async with owner:
@@ -167,18 +193,16 @@ class EndpointCovWireTests(unittest.IsolatedAsyncioTestCase):
                 timestamped = BODIES[SUBSCRIBE_COV_PROPERTY_MULTIPLE].replace(
                     "29 00 1f 4f", "29 01 1f 4f")
                 await subscriber.send(to, 1, SUBSCRIBE_COV_PROPERTY_MULTIPLE, timestamped)
-                reply = await subscriber.apdu()
-                self.assertEqual(reply[:3], bytes([0x50, 1, SUBSCRIBE_COV_PROPERTY_MULTIPLE]))
-                # SERVICES (5) / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (45).
-                self.assertIn(bytes.fromhex("91 05 91 2d"), reply)
-                await subscriber.quiet()
+                self.assertEqual(await subscriber.apdu(),
+                                 bytes([0x20, 1, SUBSCRIBE_COV_PROPERTY_MULTIPLE]))
         finally:
             subscriber.close()
 
     async def test_the_clients_subscribe_cov_hears_a_local_write(self):
-        owner = endpoint(cov={"policy": {"max_subscriptions_per_peer": 4}})
+        owner = endpoint(cov_policy={"max_subscriptions_per_peer": 4})
         async with owner:
             address = await owner.local_address()
+            server = await owner.server()
             async with BACnetClient(interface="127.0.0.1", port=0,
                                     broadcast_address="127.0.0.1",
                                     apdu_timeout_ms=2000) as client:
@@ -194,7 +218,7 @@ class EndpointCovWireTests(unittest.IsolatedAsyncioTestCase):
                     await client.subscribe_cov(address, 9, AI1, confirmed=False, lifetime=60)
                     for value in (10.0, 30.0):
                         if value != 10.0:
-                            await owner.set_present_value_local(AI1, PropertyValue.real(value))
+                            await server.set_present_value_local(AI1, PropertyValue.real(value))
                         received = await asyncio.wait_for(notifications.get(), 2)
                         self.assertEqual(received.subscriber_process_identifier, 9)
                         self.assertEqual(received.monitored_object_identifier, AI1)
@@ -207,84 +231,97 @@ class EndpointCovWireTests(unittest.IsolatedAsyncioTestCase):
                     with contextlib.suppress(asyncio.CancelledError):
                         await listener
 
+    async def test_a_peers_write_the_policy_allows_notifies_the_subscribers(self):
+        # Network writes notify too, as on a standalone server: the narrow
+        # endpoint took no write to an object (#2617).
+        owner = endpoint(mutation_policy="permissive")
+        owner.add_analog_value(1, "Setpoint")
+        async with owner:
+            address = await owner.local_address()
+            async with BACnetClient(interface="127.0.0.1", port=0,
+                                    broadcast_address="127.0.0.1",
+                                    apdu_timeout_ms=2000) as client:
+                notifications = asyncio.Queue()
+                iterator = await client.cov_notifications()
+
+                async def collect():
+                    async for received in iterator:
+                        notifications.put_nowait(received)
+
+                listener = asyncio.create_task(collect())
+                try:
+                    await client.subscribe_cov(address, 4, AV1, confirmed=False, lifetime=60)
+                    await asyncio.wait_for(notifications.get(), 2)
+                    await client.write_property(address, AV1, PropertyIdentifier.PRESENT_VALUE,
+                                                PropertyValue.real(21.5), priority=8)
+                    received = await asyncio.wait_for(notifications.get(), 2)
+                    self.assertIn(PropertyValue.real(21.5), [
+                        item["value"] for item in received.values
+                        if item["property_id"] == PropertyIdentifier.PRESENT_VALUE
+                    ])
+                finally:
+                    listener.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await listener
+
 
 class EndpointCovKeywordTests(unittest.TestCase):
-    def test_each_endpoint_takes_a_keyword_only_cov(self):
+    def test_each_endpoint_takes_a_keyword_only_cov_policy(self):
         for owner in (BipEndpoint, ScEndpoint, MstpEndpoint):
             with self.subTest(owner=owner.__name__):
-                parameter = inspect.signature(owner).parameters["cov"]
+                parameters = inspect.signature(owner).parameters
+                parameter = parameters["cov_policy"]
                 self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
                 self.assertIsNone(parameter.default)
+                self.assertNotIn("cov", parameters)
 
-    def test_the_bounds_themselves_are_taken(self):
-        widest = {"outbox_entries": 65_535, "outbox_octets": 16 * 1024 * 1024,
-                  "confirmed_timeout_ms": 3_600_000}
-        for owner in (lambda: endpoint(cov=widest),
-                      lambda: MstpEndpoint(2490, "/tmp/nonexistent", cov=widest)):
-            with self.subTest(owner=owner):
-                owner()
-
-    def test_mstp_and_sc_endpoints_take_cov_too(self):
-        cov = {"outbox_entries": 4, "confirmed_retries": 0}
-        MstpEndpoint(2490, "/tmp/nonexistent", cov=cov)
-        ScEndpoint(2490, "wss://localhost:1", bytes([2, 0, 0, 0, 0, 1]), "absent-ca.pem",
-                   "absent.pem", "absent.key", sc_device_uuid=bytes([0x11] * 16), cov=cov)
-
-    def test_invalid_cov_dicts_fail_at_construction(self):
-        for cov, error, message in [
-            ([("outbox_entries", 1)], TypeError, r"is not an instance of 'dict'"),
-            ({"outbox": 1}, TypeError, r"^cov got an unexpected key 'outbox'$"),
-            ({1: 1}, TypeError, r"^cov keys must be str$"),
-            ({"outbox_entries": "16"}, TypeError, r"^cov\['outbox_entries'\]: "),
-            ({"policy": [1]}, TypeError, r"^cov\['policy'\]: "),
-            ({"policy": {"max_subscriptions": 1}}, TypeError,
-             r"^cov\['policy'\] got an unexpected key 'max_subscriptions'$"),
-            ({"confirmed_retries": 256}, OverflowError, r"^cov\['confirmed_retries'\]: "),
-            ({"confirmed_timeout_ms": -1}, OverflowError, r"^cov\['confirmed_timeout_ms'\]: "),
-            ({"outbox_entries": 0}, ValueError, r"^cov\['outbox_entries'\] must be 1 to 65535$"),
-            ({"outbox_entries": 65_536}, ValueError,
-             r"^cov\['outbox_entries'\] must be 1 to 65535$"),
-            ({"outbox_entries": 2**40}, ValueError,
-             r"^cov\['outbox_entries'\] must be 1 to 65535$"),
-            ({"outbox_octets": 0}, ValueError,
-             r"^cov\['outbox_octets'\] must be 1 to 16777216$"),
-            ({"outbox_octets": 16 * 1024 * 1024 + 1}, ValueError,
-             r"^cov\['outbox_octets'\] must be 1 to 16777216$"),
-            ({"confirmed_timeout_ms": 0}, ValueError,
-             r"^cov\['confirmed_timeout_ms'\] must be 1 to 3600000$"),
-            ({"confirmed_timeout_ms": 3_600_001}, ValueError,
-             r"^cov\['confirmed_timeout_ms'\] must be 1 to 3600000$"),
-            ({"policy": {"max_subscriptions_global": 0}}, ValueError,
+    def test_invalid_cov_policies_fail_at_construction_as_on_the_server(self):
+        sc = (2490, "wss://localhost:1", bytes([2, 0, 0, 0, 0, 1]), "absent-ca.pem",
+              "absent.pem", "absent.key")
+        for policy, error, message in [
+            ([("max_subscriptions_global", 1)], TypeError, r"is not an instance of 'dict'"),
+            ({"max_subscriptions": 1}, TypeError,
+             r"^cov_policy got an unexpected key 'max_subscriptions'$"),
+            ({"max_subscriptions_global": 0}, ValueError,
              r"max_subscriptions_global must be positive$"),
         ]:
             for owner in (
-                lambda cov: endpoint(cov=cov),
-                lambda cov: MstpEndpoint(2490, "/tmp/nonexistent", cov=cov),
+                lambda policy: endpoint(cov_policy=policy),
+                lambda policy: MstpEndpoint(2490, "/tmp/nonexistent", cov_policy=policy),
+                lambda policy: ScEndpoint(*sc, sc_device_uuid=bytes([0x11] * 16),
+                                          cov_policy=policy),
             ):
-                with self.subTest(cov=cov, owner=owner):
+                with self.subTest(policy=policy, owner=owner):
                     with self.assertRaisesRegex(error, message):
-                        owner(cov)
+                        owner(policy)
 
 
 class EndpointLocalWriteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_local_changes_before_start_raise_runtime_error(self):
-        owner = endpoint(cov={})
+    async def test_the_server_is_there_only_while_the_endpoint_runs(self):
+        owner = endpoint()
         with self.assertRaisesRegex(RuntimeError, "endpoint not started"):
-            await owner.set_present_value_local(AI1, PropertyValue.real(1.0))
+            await owner.server()
+        async with owner:
+            server = await owner.server()
+            await server.set_present_value_local(AI1, PropertyValue.real(1.0))
+        with self.assertRaisesRegex(RuntimeError, "came from is closed"):
+            await server.set_reliability_local(AI1, Reliability.NO_SENSOR)
         with self.assertRaisesRegex(RuntimeError, "endpoint not started"):
-            await owner.set_reliability_local(AI1, Reliability.NO_SENSOR)
+            await owner.server()
 
     async def test_local_changes_are_refused_as_on_the_server(self):
         from rusty_bacnet import BacnetProtocolError, ErrorClass, ErrorCode
         owner = endpoint()
         async with owner:
+            server = await owner.server()
             missing = ObjectIdentifier(ObjectType.ANALOG_INPUT, 9)
             with self.assertRaises(BacnetProtocolError) as caught:
-                await owner.set_present_value_local(missing, PropertyValue.real(1.0))
+                await server.set_present_value_local(missing, PropertyValue.real(1.0))
             self.assertEqual((caught.exception.error_class, caught.exception.error_code),
                              (ErrorClass.OBJECT.to_raw(), ErrorCode.UNKNOWN_OBJECT.to_raw()))
-            # Without COV a change is still made: a client's read sees it.
-            await owner.set_present_value_local(AI1, PropertyValue.real(12.5))
+            # A local change is made under the read-only stance too: a
+            # client's read sees it.
+            await server.set_present_value_local(AI1, PropertyValue.real(12.5))
             async with BACnetClient(interface="127.0.0.1", port=0,
                                     broadcast_address="127.0.0.1",
                                     apdu_timeout_ms=2000) as client:

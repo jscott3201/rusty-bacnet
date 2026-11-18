@@ -40,6 +40,14 @@ no-progress resource limit aborts abandoned request transfers with OTHER.
 no object may have it, so it, or anything larger, raises ValueError at
 construction (#2171).
 
+`await endpoint.server()` returns this class too (#2617): the server
+the endpoint's session runs on the endpoint's one address, with its
+objects and the endpoint's server keywords. Its runtime calls work as
+here. Its `start()` and `stop()` raise RuntimeError, since the
+endpoint starts it and the endpoint's `close()` stops it, after which
+its calls raise RuntimeError too; so do its `add_*` and `configure_*`
+calls, since the endpoint configures it before its start.
+
 Usage:
 
 ```python
@@ -2173,7 +2181,8 @@ Start the server and begin accepting BACnet requests.
 An added object the database won't take raises ValueError: "duplicate
 object name: ..." for a name another object holds, or "object
 refused: ..." for any other reason, an instance of 4194303 among them
-(#2171).
+(#2171). An endpoint's server (`await endpoint.server()`) raises
+RuntimeError: it started with its endpoint.
 
 ### BACnetServer.stop
 
@@ -2181,7 +2190,9 @@ refused: ..." for any other reason, an instance of 4194303 among them
 def stop(self) -> Awaitable[None]
 ```
 
-Join admitted work and release the owned transport.
+Join admitted work and release the owned transport. An endpoint's
+server (`await endpoint.server()`) raises RuntimeError: the
+endpoint's `close()` stops it.
 
 Cancelling the returned Future retains shutdown ownership. Call stop()
 again to join it; a cleanup error also retains the owner for retry.
@@ -2618,7 +2629,9 @@ def report_device_reset_local(self) -> Awaitable[None]
 Record a reset the application makes for its own reasons: a
 DEVICE\_RESET Audit record from this device, with no invoke ID
 (#1564). A peer's accepted restart is recorded already. RuntimeError
-when the server is not running.
+when the server is not running. On an endpoint's server (#2617) the
+record goes through the endpoint's `source_audit_reporter`, as its
+peers' resets do, and nothing is recorded without one.
 
 ### BACnetServer.purge_audit_log
 

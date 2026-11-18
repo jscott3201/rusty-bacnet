@@ -17,9 +17,7 @@ use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::ReadAccessSpecification;
-use bacnet_types::enums::{
-    AuditLevel, EngineeringUnits, ErrorClass, ErrorCode, Segmentation, ServiceSupported,
-};
+use bacnet_types::enums::{AuditLevel, EngineeringUnits, ErrorClass, ErrorCode, Segmentation};
 use pyo3::exceptions::PyValueError;
 use pyo3::{PyErr, PyResult};
 
@@ -36,11 +34,13 @@ pub(crate) fn parse_ipv4(value: &str, field: &str) -> PyResult<Ipv4Addr> {
         .map_err(|e| PyValueError::new_err(format!("invalid {field}: {e}")))
 }
 
-/// Validate the server role's read work limit (#1250): the result rows one
-/// ReadProperty may expand, a Group's member rows included.
+/// Validate the server's read work limit (#1250): the result rows one
+/// ReadProperty or ReadPropertyMultiple may expand, a Group's member rows
+/// included, which the full server's ReadPropertyMultiple budget carries
+/// (#2617).
 ///
-/// Zero is a ValueError here, at construction, so the native
-/// `EndpointSession::new` refusal of a zero limit is never reached at start.
+/// Zero is a ValueError here, at construction, as the server's start would
+/// refuse a budget of none.
 pub(crate) fn parse_read_work_limit(read_work_limit: usize) -> PyResult<usize> {
     if read_work_limit == 0 {
         return Err(PyValueError::new_err(
@@ -80,18 +80,6 @@ pub(crate) fn parse_device_uuid(
     }
 }
 
-/// Map a services override to native bits (default: READ_PROPERTY only).
-///
-/// The endpoint responder executes ReadProperty (+Reject/Abort); advertising
-/// a wider profile without composing the full server breaks the I-Am vs
-/// behavior matrix (see `DeviceIdentity` docs).
-pub(crate) fn parse_services(services: Option<Vec<u8>>) -> Vec<ServiceSupported> {
-    match services {
-        None => vec![ServiceSupported::READ_PROPERTY],
-        Some(bits) => bits.into_iter().map(ServiceSupported::from_raw).collect(),
-    }
-}
-
 /// Map an optional segmentation override (default: NO_SEGMENTATION, the proven value).
 pub(crate) fn parse_segmentation(segmentation: Option<PySegmentation>) -> Segmentation {
     segmentation
@@ -102,14 +90,16 @@ pub(crate) fn parse_segmentation(segmentation: Option<PySegmentation>) -> Segmen
 /// Build the single validated DeviceIdentity (builder-time only).
 ///
 /// All Encoding failures (instance range, receive ceiling, duplicate ports) map
-/// to ValueError before any bind/dial. No post-start mutation exists.
+/// to ValueError before any bind/dial. No post-start mutation exists. The
+/// identity keeps its default service list: the full server lists the
+/// services it executes in the Device's Protocol_Services_Supported
+/// whatever the identity says (#2617).
 pub(crate) fn build_identity(
     device_instance: u32,
     device_name: &str,
     vendor_id: u16,
     max_apdu: u16,
     segmentation: Segmentation,
-    services: &[ServiceSupported],
     device_uuid: [u8; 16],
 ) -> PyResult<DeviceIdentity> {
     let identity = DeviceIdentity::new(device_instance, vendor_id)
@@ -118,7 +108,6 @@ pub(crate) fn build_identity(
         .with_max_apdu(max_apdu)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let identity = identity.with_segmentation(segmentation);
-    let identity = identity.with_services(services);
     let identity = identity.with_device_uuid(device_uuid);
     let identity = identity.with_name(device_name.to_string());
     Ok(identity)

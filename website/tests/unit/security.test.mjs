@@ -44,7 +44,7 @@ test('security page shows the exact release-pinned policy program and no dev sec
   assert.ok(body.includes(`https://docs.rs/bacnet-server/${release}/bacnet_server/policy/index.html`));
   assert.ok(body.includes(`https://docs.rs/bacnet-transport/${release}/bacnet_transport/port/struct.TransportProvenance.html`));
   // The certificate accessors and the DCC decision are documented in the page body.
-  for (const name of ['certificate()', 'subject_alt_names()', 'authorize_device_communication_control', 'sc_control_rate_limit', 'device_write_policy']) {
+  for (const name of ['certificate()', 'subject_alt_names()', 'authorize_device_communication_control', 'sc_control_rate_limit', 'server is read-only']) {
     assert.ok(body.includes(name), name);
   }
   // The manifest pins the site release, and the page says so.

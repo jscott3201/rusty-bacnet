@@ -45,7 +45,7 @@ GROUPS = {
     "router": ("Router", "Owned B/IP routing between numbered networks.",
                "BACnetRouter and its ports and routes, generated from the type stub."),
     "endpoints": ("Shared endpoints", "One transport that runs both the client and server roles.",
-                  "The B/IP, SC and MS/TP endpoints and their client and server roles, generated from the type stub."),
+                  "The B/IP, SC and MS/TP endpoints and what their status reports, generated from the type stub."),
     "types": ("Types and values", "Identifiers, property values, structured values and B/IP modes.",
               "Object identifiers, property values, structured values and B/IP modes, generated from the type stub."),
     "enums": ("Enumerations", "Named BACnet constants. Each also takes vendor or unknown values from their number.",
@@ -61,7 +61,7 @@ PRIMARY = {
     "client": ["BACnetClient"],
     "server": ["BACnetServer", "ScHub"],
     "router": ["BACnetRouter"],
-    "endpoints": ["BipEndpoint", "ScEndpoint", "MstpEndpoint", "EndpointServer"],
+    "endpoints": ["BipEndpoint", "ScEndpoint", "MstpEndpoint"],
 }
 
 # The stub's section comments, by the start of their text, and their groups.

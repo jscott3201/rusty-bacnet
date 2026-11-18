@@ -36,9 +36,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.set_load_control_shed_levels_local(&oid, shed_levels)
                 .await
                 .map_err(to_py_err)
@@ -64,9 +62,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.set_load_control_full_duty_baseline_local(&oid, kilowatts.map(|value| value as f32))
                 .await
                 .map_err(to_py_err)
@@ -92,9 +88,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.set_load_control_state_description_local(&oid, text)
                 .await
                 .map_err(to_py_err)

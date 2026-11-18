@@ -34,7 +34,10 @@ const POLICY: &str = "time_sync_policy";
 /// Neither the destructuring of the defaults nor the literal that rebuilds
 /// the policy uses `..`, so a field added to `TimeSyncPolicy` stops the
 /// bindings compiling until it is bound here.
-pub(super) fn time_sync_policy(dict: Option<&Bound<'_, PyDict>>) -> PyResult<TimeSyncPolicy> {
+///
+/// The endpoints read their `time_sync_policy` dict here too (#2617); their
+/// `None` is time synchronization off, not this default.
+pub(crate) fn time_sync_policy(dict: Option<&Bound<'_, PyDict>>) -> PyResult<TimeSyncPolicy> {
     let TimeSyncPolicy {
         mut enabled,
         mut source_restriction,

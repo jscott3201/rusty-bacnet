@@ -89,7 +89,7 @@ Python's `BACnetServer` takes:
 - `dcc_policy`, `dcc_password` and `dcc_source_restriction` for DeviceCommunicationControl, and `time_sync_policy` for clock changes.
 - `sc_control_rate_limit=(burst, per_second)` for the BACnet/SC control-message rate limit, which `BACnetClient` takes too.
 
-Python has no direct BACnet/SC listener, so a `MutationContext`'s principal and certificate accessors are always `None`. `ScCertificateMetadata.subject_alt_names` gives a certificate's DNS, URI, email and IP names as written. `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take `device_write_policy`, a callable that decides writes to the local Device under the same fail-closed rules.
+Python has no direct BACnet/SC listener, so a `MutationContext`'s principal and certificate accessors are always `None`. `ScCertificateMetadata.subject_alt_names` gives a certificate's DNS, URI, email and IP names as written. `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take `mutation_policy` too, with the same values and rules, for the full server each runs. Without one an endpoint's server is read-only: it denies every write, create and delete. Time synchronization stays off on an endpoint whatever its `mutation_policy`, unlike on `BACnetServer()`, until `time_sync_policy` turns it on.
 
 ## Record local access decisions
 

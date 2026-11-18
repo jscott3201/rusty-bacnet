@@ -21,7 +21,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// It is the server a transport of its own gives, with every service,
     /// policy and counter that one has, and `builder`'s settings as given:
     /// its policies (a builder with none lets any peer write, create and
-    /// delete, as a standalone server does), budgets, handlers, COV policy,
+    /// delete, as a standalone server does; one from [`read_only_server`]
+    /// lets none), budgets, handlers, COV policy,
     /// device bindings and clock zone. It answers every request the
     /// session's narrow server role would have, from the session's
     /// database, which the session hands it at start ([`with_database`](Self::with_database), or a
@@ -430,9 +431,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 }
 
-/// The full server a session builds without a builder of its own (#2617,
-/// for its later step): read-only. Peers read, discover and subscribe to
-/// COV; no peer writes, creates or deletes. Each covered mutation but the
+/// A read-only full server, for [`EndpointSession::with_server`] (#2617):
+/// the stance a node takes when no one has said who may write. The Python
+/// endpoints build their server from it unless given a `mutation_policy`,
+/// and a later step of #2617 has a session with no builder of its own
+/// build it. Peers read, discover and subscribe to COV; no peer writes,
+/// creates or deletes. Each covered mutation but the
 /// three COV subscriptions is denied (SERVICES / SERVICE_REQUEST_DENIED,
 /// skipped for an inbound WriteGroup), and time synchronization, local and
 /// UTC (Clauses 16.7 and 16.8), is ignored. Everything the server's other
@@ -445,8 +449,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 /// 16.5 and 16.6). With time synchronization off, Protocol_Services_Supported
 /// still lists TimeSynchronization and UTCTimeSynchronization, as it does
 /// for any server whose `TimeSyncPolicy` is disabled.
-#[allow(dead_code)]
-pub(crate) fn read_only_server<T: TransportPort + 'static>() -> ServerBuilder<T> {
+///
+/// It is an ordinary builder: set budgets, handlers, a COV policy and the
+/// rest on it as on any. A later `policy` call replaces the stance's
+/// policy, and a `time_sync_policy` call its time synchronization setting.
+pub fn read_only_server<T: TransportPort + 'static>() -> ServerBuilder<T> {
     BACnetServer::generic_builder()
         .policy(FnPolicy::new().inline().mutation(|context| {
             matches!(

@@ -24,12 +24,10 @@ impl BACnetServer {
         let invalid = |error: bacnet_types::error::Error| PyValueError::new_err(error.to_string());
         let zone =
             server::ClockConfig::new(utc_offset_minutes, daylight_savings).map_err(invalid)?;
-        let inner = Arc::clone(&self.inner);
+        let inner = self.inner.clone();
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.set_clock_zone(zone).await.map_err(invalid)
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))

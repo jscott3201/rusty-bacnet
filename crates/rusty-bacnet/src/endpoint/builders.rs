@@ -4,10 +4,9 @@
 //! `present_value_access`, `value_source_tracking` and the Audit policy on
 //! the Value objects, and the event algorithm parameter keywords (#2410).
 //! Each call builds its object once, so a bad keyword fails there, and
-//! keeps the parsed parameters for the rebuild at start.
-//! The same generated block carries `report_device_reset_local` (#1837) and
-//! the application's `set_present_value_local` and `set_reliability_local`
-//! (#2490).
+//! keeps the parsed parameters for the rebuild at start. The application's
+//! own changes to its objects, and its own resets' Audit records, go
+//! through `await endpoint.server()` (#2617).
 
 use pyo3::prelude::*;
 
@@ -248,96 +247,6 @@ macro_rules! endpoint_builders {
                 };
                 pending.build()?;
                 self.push_pending(pending)
-            }
-
-            /// Record a reset the application makes for its own reasons: a
-            /// DEVICE_RESET Audit record from this device, with no invoke ID,
-            /// through the session's source Reporter when it has one, as
-            /// `BACnetServer.report_device_reset_local` does (#1837). Each
-            /// endpoint selects one with `source_audit_reporter` (#2348,
-            /// #2357), and its level and operations filter the record;
-            /// without one this records nothing. A peer's accepted restart
-            /// is recorded already. RuntimeError when the endpoint is not
-            /// running.
-            fn report_device_reset_local<'py>(
-                &self,
-                py: Python<'py>,
-            ) -> PyResult<Bound<'py, PyAny>> {
-                let inner = self.lifecycle.session.clone();
-                let future = async move {
-                    let guard = inner.lock().await;
-                    let session = guard.as_ref().ok_or_else(|| {
-                        pyo3::exceptions::PyRuntimeError::new_err(
-                            "endpoint not started — use 'async with' or await start()",
-                        )
-                    })?;
-                    session
-                        .report_device_reset_local()
-                        .await
-                        .map_err(crate::errors::to_py_err)
-                };
-                crate::py_async::future_into_py(py, crate::unit_result(future))
-            }
-
-            /// Supply an object's Present_Value from the application, as
-            /// `BACnetServer.set_present_value_local` does, with the same
-            /// values taken and the same errors (#2490). With `cov`, the
-            /// object's COV subscribers hear of the change. RuntimeError
-            /// before start.
-            #[pyo3(signature = (object_id, value))]
-            fn set_present_value_local<'py>(
-                &self,
-                py: Python<'py>,
-                object_id: $crate::types::PyObjectIdentifier,
-                value: $crate::types::PyPropertyValue,
-            ) -> PyResult<Bound<'py, PyAny>> {
-                let inner = self.lifecycle.session.clone();
-                let oid = object_id.to_rust();
-                let value = value.inner;
-                let future = async move {
-                    let guard = inner.lock().await;
-                    let session = guard.as_ref().ok_or_else(|| {
-                        pyo3::exceptions::PyRuntimeError::new_err(
-                            "endpoint not started — use 'async with' or await start()",
-                        )
-                    })?;
-                    session
-                        .set_present_value_local(&oid, value)
-                        .await
-                        .map_err(crate::errors::to_py_err)
-                };
-                crate::py_async::future_into_py(py, crate::unit_result(future))
-            }
-
-            /// Set the Reliability the application works out for an
-            /// object, as `BACnetServer.set_reliability_local` does, with
-            /// the same objects and errors (#2490). Status_Flags' FAULT
-            /// follows it, and with `cov` the object's COV subscribers hear
-            /// of it. The endpoint runs no event pass, so Event_State stays
-            /// as it is. RuntimeError before start.
-            #[pyo3(signature = (object_id, reliability))]
-            fn set_reliability_local<'py>(
-                &self,
-                py: Python<'py>,
-                object_id: $crate::types::PyObjectIdentifier,
-                reliability: $crate::types::PyReliability,
-            ) -> PyResult<Bound<'py, PyAny>> {
-                let inner = self.lifecycle.session.clone();
-                let oid = object_id.to_rust();
-                let reliability = reliability.to_rust();
-                let future = async move {
-                    let guard = inner.lock().await;
-                    let session = guard.as_ref().ok_or_else(|| {
-                        pyo3::exceptions::PyRuntimeError::new_err(
-                            "endpoint not started — use 'async with' or await start()",
-                        )
-                    })?;
-                    session
-                        .set_reliability_local(&oid, reliability)
-                        .await
-                        .map_err(crate::errors::to_py_err)
-                };
-                crate::py_async::future_into_py(py, crate::unit_result(future))
             }
         }
     };
