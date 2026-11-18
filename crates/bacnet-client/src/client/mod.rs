@@ -940,6 +940,7 @@ mod transaction_cleanup;
 mod transaction_peer;
 mod transport_access;
 mod write_group;
+use requests::answered_by_peer;
 pub(crate) use routed_path_limits::check_routed_unicast;
 use routed_path_limits::{
     RoutedPathLease, RoutedPathLimits, forwarded_npci_len, routed_path_quarantine_horizon,
@@ -1030,6 +1031,8 @@ mod request_timer_tests;
 mod response_correlation_tests;
 #[cfg(test)]
 mod routed_max_apdu_tests;
+#[cfg(test)]
+mod routed_path_answered_tests;
 #[cfg(test)]
 mod routed_path_limit_tests;
 #[cfg(test)]

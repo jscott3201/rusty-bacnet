@@ -26,6 +26,8 @@ mod old_devices;
 mod reads;
 #[path = "full_client/roles.rs"]
 mod roles;
+#[path = "full_client/routed_paths.rs"]
+mod routed_paths;
 #[path = "full_client/stop_waits.rs"]
 mod stop_waits;
 

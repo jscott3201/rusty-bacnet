@@ -62,7 +62,9 @@ async fn routed_rows_subscribe_renew_and_cancel_through_the_router() {
 
     // Renewals fall due every 44 s, so the quit below lands on the third:
     // the cancels must wait for the renewals in flight rather than abort
-    // them, or the routed path's quarantine outlasts the cancel wait.
+    // them. A request cancelled after it went out holds its routed path for
+    // the APDU timeout times the attempts, longer than the cancel wait; one
+    // the device answered frees it at once (#2651).
     site.run_for(Duration::from_secs(130)).await;
     assert_eq!(active(&site), 2, "renewals kept both subscriptions");
     assert_eq!(
