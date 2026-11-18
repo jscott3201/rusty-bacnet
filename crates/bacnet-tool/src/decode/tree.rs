@@ -9,13 +9,12 @@
 //! AB.2 for BVLC-SC, Clause 6.2 for the NPCI and Clause 20.1 for the APDU
 //! headers. The common services' parameters are named field by field
 //! (`service`); any other's, and any a decoder refuses, are walked tag by
-//! tag (Clause 20.2).
+//! tag (Clause 20.2) with the shared tag reader (`tag_walk`), which marks
+//! where malformed tags stop it.
 
 use std::ops::Range;
 
 use bacnet_encoding::apdu::{Apdu, decode_apdu};
-use bacnet_encoding::primitives::decode_application_value;
-use bacnet_encoding::tags::{MAX_CONTEXT_NESTING_DEPTH, TagClass, decode_tag};
 use bacnet_npdu::{NetworkPriority, Npdu as NpduView};
 use bacnet_types::primitives::PropertyValue;
 use bytes::Bytes;
@@ -29,6 +28,9 @@ use bacnet_transport::sc_frame::ScFunction;
 
 #[path = "service.rs"]
 mod service;
+
+#[path = "tag_walk.rs"]
+mod tag_walk;
 
 use service::Params;
 
@@ -597,98 +599,6 @@ fn value_text(value: &PropertyValue) -> String {
         // TODO(#1888): the TUI's float cap applies here once it lands.
         value => bacnet_ops::format::format_property_value(value),
     }
-}
-
-/// The tagged values in `data[start..end]`, opening and closing tags as
-/// nodes. Stops at the first tag it can't read, with a leaf saying so.
-/// A closing tag with no opening one ends the walk early; the octets from
-/// it on are one leaf, so every octet still has a field.
-fn tags(data: &[u8], base: usize, start: usize, end: usize, depth: usize) -> Vec<Field> {
-    let mut fields = walk(data, base, start, end, depth).0;
-    let covered = fields
-        .last()
-        .map_or(start, |field| field.range.end.saturating_sub(base));
-    if covered < end {
-        fields.push(Field::leaf(
-            format!("Trailing octets: {}", end - covered),
-            base + covered..base + end,
-        ));
-    }
-    fields
-}
-
-/// [`tags`], and where the walk stopped: just past the closing tag that
-/// ended this level, or `end`. Every tag header's length comes from
-/// `decode_tag`, since tag numbers from 15 up take a second octet.
-fn walk(data: &[u8], base: usize, start: usize, end: usize, depth: usize) -> (Vec<Field>, usize) {
-    let mut fields = Vec::new();
-    let mut pos = start;
-    while pos < end {
-        let (tag, content) = match decode_tag(&data[..end], pos) {
-            Ok(read) if depth < MAX_CONTEXT_NESTING_DEPTH => read,
-            Ok(_) => {
-                fields.push(Field::leaf("Nested too deeply", base + pos..base + end));
-                return (fields, end);
-            }
-            Err(error) => {
-                fields.push(Field::leaf(
-                    format!("Malformed tag: {error}"),
-                    base + pos..base + end,
-                ));
-                return (fields, end);
-            }
-        };
-        if tag.is_closing {
-            return (fields, content);
-        }
-        if tag.is_opening {
-            let (inner, after) = walk(data, base, content, end, depth + 1);
-            fields.push(Field::node(
-                format!("[{}] opening", tag.number),
-                base + pos..base + after,
-                inner,
-            ));
-            pos = after;
-            continue;
-        }
-        // An application Boolean holds its value in the header and has no
-        // content octets; the value decoder knows where each one ends.
-        let decoded = (tag.class == TagClass::Application)
-            .then(|| decode_application_value(&data[..end], pos));
-        let after = match &decoded {
-            Some(Ok((_, after))) => *after,
-            _ => content.saturating_add(tag.length as usize),
-        }
-        .min(end)
-        .max(content);
-        let device_text = matches!(&decoded, Some(Ok((PropertyValue::CharacterString(_), _))));
-        let label = match decoded {
-            Some(Ok((value, _))) => format!(
-                "{}: {}",
-                APPLICATION_TAGS
-                    .get(usize::from(tag.number))
-                    .unwrap_or(&"Application"),
-                value_text(&value)
-            ),
-            Some(Err(error)) => format!("Application tag {}: {error}", tag.number),
-            None => {
-                let octets = &data[content..after];
-                let number = (octets.len() <= 4)
-                    .then(|| octets.iter().fold(0u32, |n, b| (n << 8) | u32::from(*b)));
-                match number {
-                    Some(n) if !octets.is_empty() => {
-                        format!("[{}] {} ({n})", tag.number, hex_upper(octets))
-                    }
-                    _ => format!("[{}] {}", tag.number, hex_upper(octets)),
-                }
-            }
-        };
-        let mut field = Field::leaf(label, base + pos..base + after);
-        field.device_text = device_text;
-        fields.push(field);
-        pos = after;
-    }
-    (fields, end)
 }
 
 #[cfg(test)]

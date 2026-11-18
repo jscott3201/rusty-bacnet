@@ -536,8 +536,8 @@ device-communication-control parameters @4..33
     );
 }
 
-/// A frame cut off mid-value falls back to the tag walk, says why, and
-/// still covers every octet.
+/// A frame cut off mid-value falls back to the tag walk, says why, marks
+/// where the walk stopped, and still covers every octet.
 #[test]
 fn a_damaged_frame_falls_back_to_the_tag_walk() {
     let mut frame = rp_ack(
@@ -555,7 +555,7 @@ read-property parameters @3..14
   [0] 00000001 (1) @3..8
   [1] 55 (85) @8..10
   [3] opening @10..14
-    Application tag 4: buffer too short: need 16 bytes, have 14 @11..14
+    Tag walk stopped: contents end at octet 16, past the end at 14 @11..14
   Not read as named fields: buffer too short: need 13 bytes, have 11 @3..14",
     );
 }

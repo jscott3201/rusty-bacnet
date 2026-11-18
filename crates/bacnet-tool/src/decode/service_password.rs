@@ -2,10 +2,10 @@
 //! ReinitializeDevice carry one, which the named fields show as hidden and
 //! the tag walk hides wherever it may sit.
 
-use bacnet_encoding::tags::{Tag, TagClass, decode_tag};
+use bacnet_encoding::tags::TagClass;
 use bacnet_types::enums::ConfirmedServiceChoice as Confirmed;
 
-use super::{Doc, Field, Params};
+use super::{Element, Field, Params};
 
 /// Where a password-bearing request keeps its password.
 #[derive(Debug, Clone, Copy)]
@@ -49,59 +49,43 @@ const MAYBE_PASSWORD: &str = "Hidden: may hold a password";
 /// the password tag, or the first field that isn't one of them, to the end
 /// every value at any depth is hidden: a password's length may claim too
 /// little and leave the rest of it to read as more tags.
-pub(super) fn hide_passwords(fields: &mut [Field], doc: &Doc<'_>, secret: Secret) {
+///
+/// `fields` are the walk's fields of `elements`, one each in order at
+/// every level. A level's fields may end with the leaf marking where the
+/// walk stopped, which has no element: it names the fault and quotes no
+/// octets, so it stays.
+pub(super) fn hide_passwords(fields: &mut [Field], elements: &[Element<'_>], secret: Secret) {
     let mut next = 0;
     let mut open = true;
-    for field in fields {
-        let header = header(field, doc);
+    for (field, element) in fields.iter_mut().zip(elements) {
+        let tag = element.item.tag;
+        let primitive = tag.class == TagClass::Context && !tag.is_opening && !tag.is_closing;
         if open
-            && let Some(header) = header
-            && header.class == TagClass::Context
-            && !header.is_opening
-            && !header.is_closing
+            && primitive
             && let Some(skipped) = secret.before[next..]
                 .iter()
-                .position(|&(number, most)| number == header.number && header.length <= most)
+                .position(|&(number, most)| number == tag.number && tag.length <= most)
         {
             next += skipped + 1;
             continue;
         }
         open = false;
-        let password = header.is_some_and(|header| {
-            header.class == TagClass::Context
-                && header.number == secret.tag
-                && !header.is_opening
-                && !header.is_closing
-        });
-        if password {
+        if primitive && tag.number == secret.tag {
             field.label = PASSWORD.into();
             field.device_text = false;
         } else {
-            hide(field, doc);
+            hide(field, element);
         }
     }
 }
 
-/// The tag header a field starts with, when it reads as one.
-fn header(field: &Field, doc: &Doc<'_>) -> Option<Tag> {
-    field
-        .range
-        .start
-        .checked_sub(doc.at)
-        .and_then(|at| decode_tag(doc.data, at).ok())
-        .map(|(header, _)| header)
-}
-
-/// Hide `field` and every part of it; the opening and closing tags of a
-/// constructed value keep their labels, which quote nothing.
-fn hide(field: &mut Field, doc: &Doc<'_>) {
-    if !field.children.is_empty() {
-        for child in &mut field.children {
-            hide(child, doc);
+/// Hide `field` and every part of it; a constructed value's node keeps
+/// its label, which quotes nothing, as does a fault's leaf.
+fn hide(field: &mut Field, element: &Element<'_>) {
+    if element.is_constructed() {
+        for (child, element) in field.children.iter_mut().zip(&element.children) {
+            hide(child, element);
         }
-        return;
-    }
-    if header(field, doc).is_some_and(|header| header.is_opening || header.is_closing) {
         return;
     }
     field.label = MAYBE_PASSWORD.into();

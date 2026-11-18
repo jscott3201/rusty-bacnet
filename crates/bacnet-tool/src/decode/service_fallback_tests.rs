@@ -134,12 +134,43 @@ fn only_expected_top_level_fields_stay() {
     );
 }
 
-/// A stray closing tag ends the walk early, and a PDU without parameters
-/// may carry octets after its header: either way every octet is covered.
+/// Where the walk stops in a password-bearing request, the octets from
+/// the fault on are one leaf that names the fault and quotes none of them,
+/// so it stays readable; whatever the walk read is hidden as before.
+#[test]
+fn a_fault_in_a_password_request_is_marked_and_quotes_nothing() {
+    // The password claims 8 octets and 6 remain.
+    assert_eq!(
+        hidden("00 05 01 11 1900 2D08 0068756E7465"),
+        "\
+device-communication-control parameters @4..14
+  [1] 00 (0) @4..6
+  Tag walk stopped: contents end at octet 16, past the end at 14 @6..14
+  Not read as named fields: buffer too short: need 12 bytes, have 10 @4..14"
+    );
+    // The password inside a constructed [3] that is never closed.
+    assert_eq!(
+        hidden(&format!("00 05 01 11 1900 3E 7508 {SECRET}")),
+        "\
+device-communication-control parameters @4..17
+  [1] 00 (0) @4..6
+  [3] opening @6..17
+    Hidden: may hold a password @7..17
+    Tag walk stopped: opening tag [3] is never closed @6..17
+  Not read as named fields: decoding error at offset 2: DCC: 11 trailing byte(s) @4..17"
+    );
+}
+
+/// A stray closing tag stops the walk with a leaf saying so, and a PDU
+/// without parameters may carry octets after its header: either way every
+/// octet is covered.
 #[test]
 fn octets_after_the_walk_stops_are_one_leaf() {
     let text = snapshot(&octets("10 03 0901 1C02000005 08 1F"));
-    assert!(text.contains("\n  Trailing octets: 1 @10..11\n"), "{text}");
+    assert!(
+        text.contains("\n  Tag walk stopped: closing tag [1] with no opening tag @10..11\n"),
+        "{text}"
+    );
     let reject = decode_apdu_tree(&octets("60 01 02 AABB"));
     let last = reject.children.last().unwrap();
     assert_eq!(
