@@ -2675,10 +2675,11 @@ until its path's limit is set by hand:
   limit, replacing any limit set or learned before. `router` is the router's
   address on the local link, as `routing_table()` takes it: `bytes` such as a
   `DiscoveredRouter`'s `mac`, or a string in the binding's address forms.
-  `network` is an `int` from 1 to 65534 (a `bool` raises `TypeError`). A
-  limit under 228 is taken; one that could carry no request at all, under the
-  50-octet minimum APDU plus the routed header (66 on B/IP, 61 on MS/TP),
-  raises `ValueError`, as do a bad router or network.
+  `network` is an `int` from 1 to 65534. A limit under 228 is taken; one that
+  could carry no request at all, under the 50-octet minimum APDU plus the
+  routed header (66 on B/IP, 61 on MS/TP), raises `ValueError`, as do a bad
+  router or network. An `int` outside 0 to 65535 raises `OverflowError`, and a
+  `bool` for `network` or `max_npdu` raises `TypeError`.
 - `clear_routed_path_limit(router, network)` puts the path back on 228,
   dropping what was set or learned for it.
 - `routed_path_limits()` lists the paths that hold more than the default, as
@@ -2687,7 +2688,9 @@ until its path's limit is set by hand:
   `"configured"` or `"learned"`), `configured_max_npdu`, `learned_max_npdu`,
   and `below_minimum_reject_seen`, set when a too-long reject for a request of
   228 octets or fewer was dropped on that path since its limit was last set or
-  cleared. Its `repr` writes the router in the link's own form.
+  cleared. Its `repr` writes the router in the link's own form. A path held
+  only by that mark may be dropped when the client's table of 256 paths is
+  full.
 - `too_long_reject_drops()` and `below_minimum_reject_drops()` count, since
   start and across every path, the too-long rejects the client dropped: the
   first because they could answer a larger frame of an earlier request (these
@@ -2695,9 +2698,13 @@ until its path's limit is set by hand:
   octets. A rise in the second, with timeouts to a network, is the sign of a
   router that needs its path's limit set.
 
-All five send nothing and raise `RuntimeError` before the client starts and
-after `stop()`; the first two wait for a request active on the path. They work on
-the client from `endpoint.client()` too.
+None of the five sends anything through the path (a B/IPv6 router given as a
+socket address is first asked its VMAC), and each raises `RuntimeError`
+before the client starts and after `stop()`. The first two wait for a request
+active on the path, or one queued for it, but not out the hold a request with
+no answer leaves (the APDU timeout times the attempts): the change applies at
+once, and the next request still waits the hold out, sized to the new limit.
+They work on the client from `endpoint.client()` too.
 
 ```python
 router = "192.168.1.20:47808"

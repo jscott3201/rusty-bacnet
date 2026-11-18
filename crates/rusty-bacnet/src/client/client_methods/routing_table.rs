@@ -46,17 +46,14 @@ impl RouterArg {
 
     /// The router's MAC on `client`'s link: bytes as given, or a string in
     /// the target grammar's address forms (a B/IPv6 socket address asks the
-    /// node its VMAC).
-    pub(super) async fn on(self, client: &CoreClient) -> PyResult<Vec<u8>> {
+    /// node its VMAC). `refusal` is the ValueError's text for a string that
+    /// names a device or a routed station instead of an address.
+    pub(super) async fn on(self, client: &CoreClient, refusal: &str) -> PyResult<Vec<u8>> {
         match self {
             Self::Mac(mac) => Ok(mac),
-            Self::Text(text) => bacnet_ops::target::address_mac(
-                client.transport(),
-                &text,
-                "a routing-table query goes to a router's address",
-            )
-            .await
-            .map_err(|reason| PyValueError::new_err(crate::high_level::link_hint(reason))),
+            Self::Text(text) => bacnet_ops::target::address_mac(client.transport(), &text, refusal)
+                .await
+                .map_err(|reason| PyValueError::new_err(crate::high_level::link_hint(reason))),
         }
     }
 }
@@ -126,7 +123,9 @@ impl BACnetClient {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
-            let mac = router.on(&c).await?;
+            let mac = router
+                .on(&c, "a routing-table query goes to a router's address")
+                .await?;
             let table = c
                 .routing_table(&mac, bounds)
                 .await

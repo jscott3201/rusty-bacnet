@@ -1172,7 +1172,7 @@ Properties:
 - `router: bytes`: The router's MAC on the local link, as `DiscoveredRouter.mac` gives it; the routed-path calls take it back.
 - `network: int`: The destination network.
 - `max_npdu: int`: The limit requests on the path are sized to, in NPDU octets: the configured limit (228 without one), lowered to the learned one.
-- `source: str`: Where `max_npdu` comes from: `"default"` (228 octets), `"configured"`, or `"learned"` from a router's too-long reject when that is lower than the configured limit.
+- `source: Literal["default", "configured", "learned"]`: Where `max_npdu` comes from: `"default"` (228 octets), `"configured"`, or `"learned"` from a router's too-long reject when that is lower than the configured limit.
 - `configured_max_npdu: Optional[int]`: The limit set with `configure_routed_path_max_npdu`, or None.
 - `learned_max_npdu: Optional[int]`: One octet under the smallest frame a router refused as too long on this path, or None; never below 228.
 - `below_minimum_reject_seen: bool`: Whether a too-long reject for a request of 228 NPDU octets or fewer was dropped on this path since its limit was last set or cleared: the sign of a router that carries less than every router must, whose requests end by timeout.

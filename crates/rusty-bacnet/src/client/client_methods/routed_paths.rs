@@ -17,13 +17,21 @@ use super::super::*;
 use super::routing_table::RouterArg;
 use crate::routed_paths::PyRoutedPathLimit;
 
-/// A path's network as the caller passed it: an `int`, and not a `bool`,
-/// as `RoutedTarget` takes it. The client checks the range.
-fn network_arg(network: &Bound<'_, PyAny>) -> PyResult<u16> {
-    if network.is_instance_of::<PyBool>() {
-        return Err(PyTypeError::new_err("network must be an int, not bool"));
+/// The ValueError for a router string that names a device or a routed
+/// station rather than the router's address on the local link.
+const NOT_A_ROUTER: &str = "a routed path names its router by its address on this client's \
+                            link, not a device instance or a station behind a router";
+
+/// An `int` argument as the caller passed it, and not a `bool`, as
+/// `RoutedTarget` takes its network: OverflowError outside 0 to 65535,
+/// TypeError for another type. The client checks the range.
+fn int_arg(value: &Bound<'_, PyAny>, name: &str) -> PyResult<u16> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{name} must be an int, not bool"
+        )));
     }
-    network.extract()
+    value.extract()
 }
 
 /// A refused argument (a router MAC of the wrong length, a network outside
@@ -46,25 +54,31 @@ impl BACnetClient {
     ///
     /// `router` is the router's address on the local link, as
     /// `routing_table` takes it: `bytes` such as a `DiscoveredRouter`'s
-    /// `mac`, or a string in the binding's address forms. `network` is 1 to
-    /// 65534. A limit under 228 octets is taken, for an older router that
-    /// carries less than the standard asks; one that could carry no request
-    /// at all (under 66 on B/IP, 61 on MS/TP) raises ValueError, as do a bad
-    /// router or network. The call waits for a request active on the path.
-    /// Sends nothing. Raises RuntimeError before start and after stop.
+    /// `mac`, or a string in the binding's address forms (a B/IPv6 socket
+    /// address is first asked its VMAC). `network` is 1 to 65534. A limit
+    /// under 228 octets is taken, for an older router that carries less than
+    /// the standard asks; one that could carry no request at all (under 66
+    /// on B/IP, 61 on MS/TP) raises ValueError, as do a bad router or
+    /// network; an `int` outside 0 to 65535 raises OverflowError, a `bool`
+    /// TypeError. The call waits for a request active on the path, or one
+    /// queued for it, but not out the hold a request with no answer leaves:
+    /// the change applies at once, and the next request still waits the hold
+    /// out. Nothing goes through the path. Raises RuntimeError before start
+    /// and after stop.
     fn configure_routed_path_max_npdu<'py>(
         &self,
         py: Python<'py>,
         router: Bound<'py, PyAny>,
         network: Bound<'py, PyAny>,
-        max_npdu: u16,
+        max_npdu: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let router = RouterArg::read(&router)?;
-        let network = network_arg(&network)?;
+        let network = int_arg(&network, "network")?;
+        let max_npdu = int_arg(&max_npdu, "max_npdu")?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let client = started(&inner).await?;
-            let mac = router.on(&client).await?;
+            let mac = router.on(&client, NOT_A_ROUTER).await?;
             client
                 .configure_routed_path_max_npdu(&mac, network, max_npdu)
                 .await
@@ -75,7 +89,7 @@ impl BACnetClient {
     /// Put the routed path through `router` to `network` back on the
     /// default, 228 octets, dropping the limit set or learned for it.
     /// Takes `router` and `network` as `configure_routed_path_max_npdu`
-    /// does, and waits the same way. Sends nothing.
+    /// does, and waits the same way. Nothing goes through the path.
     fn clear_routed_path_limit<'py>(
         &self,
         py: Python<'py>,
@@ -83,11 +97,11 @@ impl BACnetClient {
         network: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let router = RouterArg::read(&router)?;
-        let network = network_arg(&network)?;
+        let network = int_arg(&network, "network")?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let client = started(&inner).await?;
-            let mac = router.on(&client).await?;
+            let mac = router.on(&client, NOT_A_ROUTER).await?;
             client
                 .clear_routed_path_limit(&mac, network)
                 .await
@@ -98,8 +112,10 @@ impl BACnetClient {
     /// Every routed path that holds more than the default, as a list of
     /// `RoutedPathLimit`, by router and then network: a limit set by hand,
     /// one learned from a router's too-long reject, or a dropped
-    /// below-minimum reject (`below_minimum_reject_seen`). Sends nothing.
-    /// Raises RuntimeError before start and after stop.
+    /// below-minimum reject (`below_minimum_reject_seen`). A path held
+    /// only by that mark may be dropped when the client's table of 256
+    /// paths is full. Sends nothing. Raises RuntimeError before start and
+    /// after stop.
     fn routed_path_limits<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {

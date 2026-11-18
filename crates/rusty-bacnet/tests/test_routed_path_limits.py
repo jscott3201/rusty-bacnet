@@ -14,7 +14,7 @@ loop has no add_reader.
 import asyncio
 import copy
 import pickle
-import time
+import threading
 import unittest
 
 import rusty_bacnet as rb
@@ -151,15 +151,25 @@ class RoutedPathLimitWireTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_too_long_reject_for_a_small_request_is_counted_not_believed(self):
         # The router refuses a 20-octet read as too long, then the station
         # answers it anyway: the reject belongs to other traffic. The answer
-        # waits a moment, so the reject lands while the read is active.
+        # is held until the client has counted the reject, so it lands while
+        # the read is still active.
+        counted = threading.Event()
+
         def script(request):
             self.wire.send(too_long(NETWORK))
-            time.sleep(0.1)
+            counted.wait(5)
             return [answer(NETWORK, STATION, request)]
 
         self.wire.script = script
-        value = await asyncio.wait_for(
-            self.client.read_property(self.target, AI_1, P.PRESENT_VALUE), 5)
+        read = asyncio.ensure_future(
+            self.client.read_property(self.target, AI_1, P.PRESENT_VALUE))
+        try:
+            async with asyncio.timeout(5):
+                while await self.client.below_minimum_reject_drops() < 1:
+                    await asyncio.sleep(0.01)
+        finally:
+            counted.set()
+        value = await asyncio.wait_for(read, 5)
         self.assertEqual(value, rb.PropertyValue.unsigned(0))
         self.assertEqual(await self.client.below_minimum_reject_drops(), 1)
         self.assertEqual(await self.client.too_long_reject_drops(), 0)
@@ -231,7 +241,17 @@ class RoutedPathLimitWireTests(unittest.IsolatedAsyncioTestCase):
         for bad in (b"", bytes(19), "not an address", "5:1234"):
             with self.subTest(router=bad), self.assertRaises(ValueError):
                 await self.client.configure_routed_path_max_npdu(bad, NETWORK, 480)
-        for args in ((5, NETWORK, 480), (router, True, 480), (router, "5", 480)):
+        # A device or a routed station named as the router says so, in this
+        # call's own words.
+        for station in ("5:1234", "5:0x0a", "1234"):
+            with self.subTest(router=station):
+                with self.assertRaises(ValueError) as refused:
+                    await self.client.configure_routed_path_max_npdu(station, NETWORK, 480)
+                self.assertIn("a routed path names its router by its address",
+                              str(refused.exception))
+                self.assertNotIn("routing-table", str(refused.exception))
+        for args in ((5, NETWORK, 480), (router, True, 480), (router, "5", 480),
+                     (router, NETWORK, True), (router, NETWORK, 480.0)):
             with self.subTest(args=args), self.assertRaises(TypeError):
                 await self.client.configure_routed_path_max_npdu(*args)
         for args in ((router, -1, 480), (router, 65536, 480), (router, NETWORK, 65536)):

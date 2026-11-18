@@ -714,13 +714,19 @@ its path is.
 
 `router` is the router's address on the local link, as
 `routing_table` takes it: `bytes` such as a `DiscoveredRouter`'s
-`mac`, or a string in the binding's address forms. `network` is 1
-to 65534 (a `bool` raises TypeError). A limit under 228 is taken,
-for an older router that carries less than the standard asks; one
-that could carry no request at all (under 66 on B/IP, 61 on MS/TP)
-raises ValueError, as do a bad router or network. The call waits for
-a request active on the path. Sends nothing. RuntimeError before
-start and after stop.
+`mac`, or a string in the binding's address forms (a B/IPv6 socket
+address is first asked its VMAC). `network` is 1 to 65534. A limit
+under 228 is taken, for an older router that carries less than the
+standard asks; one that could carry no request at all (under 66 on
+B/IP, 61 on MS/TP) raises ValueError, as do a bad router or network.
+An `int` outside 0 to 65535 raises OverflowError, and a `bool`
+for `network` or `max_npdu` TypeError.
+
+The call waits for a request active on the path, or one queued for
+it, but not out the hold a request with no answer leaves (the APDU
+timeout times the attempts): the change applies at once, and the next
+request still waits the hold out, sized to the new limit. Nothing goes
+through the path. RuntimeError before start and after stop.
 
 ### BACnetClient.clear_routed_path_limit
 
@@ -731,8 +737,9 @@ def clear_routed_path_limit(self, router: str | bytes, network: int) -> Awaitabl
 Put the routed path through `router` to `network` back on the
 default, 228 octets, dropping the limit set or learned for it
 (#2667). Takes `router` and `network` as
-`configure_routed_path_max_npdu` does and waits the same way. Sends
-nothing. RuntimeError before start and after stop.
+`configure_routed_path_max_npdu` does and waits the same way.
+Nothing goes through the path. RuntimeError before start and after
+stop.
 
 ### BACnetClient.routed_path_limits
 
@@ -743,8 +750,9 @@ def routed_path_limits(self) -> Awaitable[list[RoutedPathLimit]]
 Every routed path that holds more than the default, by router and
 then network (#2667): a limit set by hand, one learned from a
 router's too-long reject, or a dropped below-minimum reject
-(`below_minimum_reject_seen`). Sends nothing. RuntimeError before
-start and after stop.
+(`below_minimum_reject_seen`). A path held only by that mark may be
+dropped when the client's table of 256 paths is full. Sends nothing.
+RuntimeError before start and after stop.
 
 ### BACnetClient.too_long_reject_drops
 
