@@ -100,7 +100,7 @@ fn services(context: &DeviceReadContext<'_>, db: &ObjectDatabase) -> PropertyVal
 fn context_and_ordinary_reads_do_not_sample_the_clock() {
     let clock = CountingClock::new(true);
     let db = database(Some(clock.clone()));
-    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
     assert_eq!(clock.reads(), 0, "construction does not need availability");
     let analog = AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     context
@@ -144,7 +144,7 @@ fn service_availability_is_lazy_and_cached_through_live_attachment() {
     for available in [false, true] {
         let clock = CountingClock::new(!available);
         let db = database(Some(clock.clone()));
-        let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+        let context = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
         clock.set(available);
         assert_clock_services(services(&context, &db), available);
         assert_eq!(clock.reads(), 1);
@@ -157,7 +157,7 @@ fn service_availability_is_lazy_and_cached_through_live_attachment() {
             1,
             "cache both availability and unavailability"
         );
-        let next = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+        let next = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
         assert_clock_services(services(&next, &db), !available);
         assert_eq!(
             clock.reads(),
@@ -171,7 +171,10 @@ fn service_availability_is_lazy_and_cached_through_live_attachment() {
 fn later_requests_observe_missing_and_rebound_readers() {
     let mut db = database(None);
     let read = |db: &ObjectDatabase| {
-        services(&DeviceReadContext::new(db, DeviceExecution::FullServer), db)
+        services(
+            &DeviceReadContext::new(db, DeviceExecution::FullServer { time_sync: true }),
+            db,
+        )
     };
     assert_clock_services(read(&db), false);
     let first = CountingClock::new(false);
@@ -195,7 +198,7 @@ fn rpm_repeated_service_rows_share_one_availability_sample() {
     for available in [false, true] {
         let clock = CountingClock::new(available);
         let db = database(Some(clock.clone()));
-        let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+        let context = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
         let request = ReadPropertyMultipleRequest {
             list_of_read_access_specs: vec![ReadAccessSpecification {
                 object_identifier: device(),
@@ -239,7 +242,7 @@ fn rpm_repeated_service_rows_share_one_availability_sample() {
 fn cached_service_availability_does_not_freeze_time_or_metadata() {
     let clock = CountingClock::new(true);
     let db = database(Some(clock.clone()));
-    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer { time_sync: true });
     assert_clock_services(services(&context, &db), true);
     let view = context.object(db.get(&device()).unwrap());
     assert_eq!(

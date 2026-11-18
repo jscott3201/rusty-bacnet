@@ -1,15 +1,18 @@
-//! A server whose time-synchronization policy is off does not list
-//! TimeSynchronization or UTCTimeSynchronization in the Device's
-//! Protocol_Services_Supported (#2617; Clause 12.11.14 names what the device
-//! executes, and Clauses 16.7 and 16.8 define the two services). The policy
-//! is fixed when the server starts, so a read has nothing to follow at run
-//! time. Reads are made on the wire, by ReadProperty and by
-//! ReadPropertyMultiple, over the shared test transport on paused time.
+//! A server whose time-synchronization policy is off, or accepts no source,
+//! does not list TimeSynchronization or UTCTimeSynchronization in the
+//! Device's Protocol_Services_Supported (#2617; Clause 12.11.14 names what
+//! the device executes, and Clauses 16.7 and 16.8 define the two services).
+//! The policy is fixed when the server starts, so a read has nothing to
+//! follow at run time. Reads are made on the wire, by ReadProperty, by
+//! ReadPropertyMultiple and by ReadRange of a Group, over the shared test
+//! transport on paused time.
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_objects::device_identity::build_database_with_extra;
+use bacnet_objects::group::GroupObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
+use bacnet_services::read_range::{ReadRangeAck, ReadRangeRequest};
 use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::bitstring::ServicesSupported;
@@ -33,16 +36,16 @@ fn off() -> TimeSyncPolicy {
     }
 }
 
-/// On, with every restriction the policy has: an allowlist that names
-/// nobody, a zero step cap, rates, coalescing and a one-entry source table.
-fn restricted() -> TimeSyncPolicy {
+/// On, with every restriction the policy has: an allowlist of `sources`, a
+/// zero step cap, rates, coalescing and a one-entry source table.
+fn restricted(sources: Vec<TimeSyncSource>) -> TimeSyncPolicy {
     let rate = TimeSyncRateLimit {
         max_per_second: 1.0,
         burst_capacity: 1,
     };
     TimeSyncPolicy {
         enabled: true,
-        source_restriction: Some(TimeSyncSourceRestriction::new(vec![]).unwrap()),
+        source_restriction: Some(TimeSyncSourceRestriction::new(sources).unwrap()),
         max_step: Some(Duration::ZERO),
         per_source_rate: Some(rate),
         global_rate: Some(rate),
@@ -58,11 +61,27 @@ struct Lab {
     sent: SendLog,
 }
 
+fn group() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::GROUP, 7).unwrap()
+}
+
+/// A server whose database holds Group 7, whose one member is the Device's
+/// Protocol_Services_Supported.
 async fn lab(policy: TimeSyncPolicy, clock: bool) -> Lab {
     let identity = bacnet_objects::DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
         .with_name("time-sync-services");
-    let db = build_database_with_extra(&identity, Vec::new()).unwrap();
+    let mut group = GroupObject::new(group().instance_number(), "GRP-7").unwrap();
+    group
+        .add_member(ReadAccessSpecification {
+            object_identifier: device(),
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED,
+                property_array_index: None,
+            }],
+        })
+        .unwrap();
+    let db = build_database_with_extra(&identity, vec![Box::new(group)]).unwrap();
     let config = ServerConfig {
         device: identity,
         time_sync_policy: policy,
@@ -160,6 +179,24 @@ fn octets(value: &[u8]) -> Vec<u8> {
     }
 }
 
+/// The Device's `property`, as ReadProperty serves it.
+async fn device_property(lab: &Lab, property: PropertyIdentifier) -> PropertyValue {
+    let mut body = BytesMut::new();
+    ReadPropertyRequest {
+        object_identifier: device(),
+        property_identifier: property,
+        property_array_index: None,
+    }
+    .encode(&mut body);
+    let service_ack = ack(lab, ConfirmedServiceChoice::READ_PROPERTY, &body).await;
+    let value = ReadPropertyACK::decode(&service_ack)
+        .unwrap()
+        .property_value;
+    bacnet_encoding::primitives::decode_application_value(&value, 0)
+        .unwrap()
+        .0
+}
+
 async fn by_read_property(lab: &Lab) -> Vec<u8> {
     let mut body = BytesMut::new();
     ReadPropertyRequest {
@@ -174,6 +211,31 @@ async fn by_read_property(lab: &Lab) -> Vec<u8> {
             .unwrap()
             .property_value,
     )
+}
+
+/// By ReadRange of the Group's Present_Value, whose one item is its member's
+/// row.
+async fn by_read_range(lab: &Lab) -> Vec<u8> {
+    let mut body = BytesMut::new();
+    ReadRangeRequest {
+        object_identifier: group(),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
+        range: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    let service_ack = ack(lab, ConfirmedServiceChoice::READ_RANGE, &body).await;
+    let items = ReadRangeAck::decode(&service_ack).unwrap().item_data;
+    let ack = ReadPropertyMultipleACK::decode(&items).unwrap();
+    let [result] = ack.list_of_read_access_results.as_slice() else {
+        panic!("one member: {ack:?}")
+    };
+    let [row] = result.list_of_results.as_slice() else {
+        panic!("one row: {result:?}")
+    };
+    assert_eq!(result.object_identifier, device());
+    octets(row.property_value.as_deref().unwrap())
 }
 
 /// By ReadPropertyMultiple, naming the property twice: both rows agree.
@@ -208,32 +270,64 @@ fn listed(data: &[u8]) -> BTreeSet<u8> {
         .collect()
 }
 
+/// One row of [`the_time_sync_bits_follow_the_policy_on_the_wire`]: the
+/// bits but the two time-synchronization ones, which are `expected`, after
+/// ReadProperty, ReadPropertyMultiple and a Group's ReadRange agree. With a
+/// clock the Device serves Local_Date and Local_Time whatever the policy.
+async fn row(name: &str, policy: TimeSyncPolicy, clock: bool, expected: bool) -> BTreeSet<u8> {
+    let lab = lab(policy, clock).await;
+    let mut read = listed(&by_read_property(&lab).await);
+    assert_eq!(
+        listed(&by_rpm(&lab).await),
+        read,
+        "{name}: ReadProperty and ReadPropertyMultiple agree"
+    );
+    assert_eq!(
+        listed(&by_read_range(&lab).await),
+        read,
+        "{name}: ReadProperty and a Group's ReadRange agree"
+    );
+    for service in [LOCAL, UTC] {
+        assert_eq!(read.remove(&service.to_raw()), expected, "{name}");
+    }
+    assert!(read.contains(&ServiceSupported::READ_PROPERTY.to_raw()));
+    if clock {
+        assert!(matches!(
+            device_property(&lab, PropertyIdentifier::LOCAL_DATE).await,
+            PropertyValue::Date(_)
+        ));
+        assert!(matches!(
+            device_property(&lab, PropertyIdentifier::LOCAL_TIME).await,
+            PropertyValue::Time(_)
+        ));
+    }
+    read
+}
+
 /// A clock with the default policy lists both services; a policy that is
 /// off lists neither, with every other bit as the default's; a server with
-/// no clock lists neither, as before (#834); an enabled policy with every
-/// restriction keeps both, since the device executes the service for the
-/// peers it accepts.
+/// no clock lists neither, as before (#834). An enabled policy with every
+/// restriction keeps both while its allowlist names a source, since the
+/// device executes the service for the peers it accepts, and lists neither
+/// when the allowlist names nobody, since it then executes it for no peer.
 #[tokio::test(start_paused = true)]
 async fn the_time_sync_bits_follow_the_policy_on_the_wire() {
     let mut others: Option<BTreeSet<u8>> = None;
+    let one = vec![TimeSyncSource::Direct(PEER.to_vec())];
     for (name, policy, clock, expected) in [
         ("default, clock", TimeSyncPolicy::default(), true, true),
         ("off, clock", off(), true, false),
         ("off, no clock", off(), false, false),
         ("default, no clock", TimeSyncPolicy::default(), false, false),
-        ("restricted, clock", restricted(), true, true),
+        ("allowlist of one, clock", restricted(one), true, true),
+        (
+            "allowlist of nobody, clock",
+            restricted(vec![]),
+            true,
+            false,
+        ),
     ] {
-        let lab = lab(policy, clock).await;
-        let mut read = listed(&by_read_property(&lab).await);
-        assert_eq!(
-            listed(&by_rpm(&lab).await),
-            read,
-            "{name}: ReadProperty and ReadPropertyMultiple agree"
-        );
-        for service in [LOCAL, UTC] {
-            assert_eq!(read.remove(&service.to_raw()), expected, "{name}");
-        }
-        assert!(read.contains(&ServiceSupported::READ_PROPERTY.to_raw()));
+        let read = Box::pin(row(name, policy, clock, expected)).await;
         assert_eq!(
             *others.get_or_insert_with(|| read.clone()),
             read,

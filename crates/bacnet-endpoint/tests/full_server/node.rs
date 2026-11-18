@@ -291,8 +291,52 @@ async fn node_device(lab: &Lab, property: PropertyIdentifier) -> PropertyValue {
         .0
 }
 
-/// The node's Device lists what both roles execute, and states the one
-/// timing both use, the session's.
+/// The node's Device's Protocol_Services_Supported as the other client
+/// reads it by ReadRange of a Group whose one member it is.
+async fn services_by_group_read_range(lab: &Lab) -> Vec<u8> {
+    use bacnet_objects::group::GroupObject;
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, NODE_DEVICE).unwrap();
+    let mut group = GroupObject::new(7, "GRP-7").unwrap();
+    group
+        .add_member(ReadAccessSpecification {
+            object_identifier: device,
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED,
+                property_array_index: None,
+            }],
+        })
+        .unwrap();
+    let added = lab.server().database().write().await.add(Box::new(group));
+    added.unwrap();
+    let ack = lab
+        .other
+        .read_range(
+            &Wire::mac(NODE),
+            ObjectIdentifier::new(ObjectType::GROUP, 7).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let rows = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack.item_data).unwrap();
+    let [result] = rows.list_of_read_access_results.as_slice() else {
+        panic!("{rows:?}")
+    };
+    assert_eq!(result.object_identifier, device);
+    let value = result.list_of_results[0].property_value.as_deref().unwrap();
+    match bacnet_encoding::primitives::decode_application_value(value, 0)
+        .unwrap()
+        .0
+    {
+        PropertyValue::BitString { data, .. } => data,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The node's Device lists what both roles execute, by ReadProperty and
+/// through a Group's ReadRange alike, and states the one timing both use,
+/// the session's.
 #[tokio::test(start_paused = true)]
 async fn the_node_device_states_both_roles() {
     let lab = dcc_lab(SessionConfig {
@@ -306,15 +350,19 @@ async fn the_node_device_states_both_roles() {
     else {
         panic!("services")
     };
+    let by_range = Box::pin(services_by_group_read_range(&lab)).await;
     for service in [
         ServiceSupported::I_AM,
+        ServiceSupported::I_HAVE,
         ServiceSupported::CONFIRMED_COV_NOTIFICATION,
         ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
         ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
         ServiceSupported::READ_PROPERTY_MULTIPLE,
     ] {
         assert!(lists(&data, service), "{service:?}");
+        assert!(lists(&by_range, service), "ReadRange: {service:?}");
     }
+    assert_eq!(by_range, data, "ReadRange and ReadProperty agree");
     assert_eq!(
         node_device(&lab, PropertyIdentifier::APDU_TIMEOUT).await,
         PropertyValue::Unsigned(2_500)

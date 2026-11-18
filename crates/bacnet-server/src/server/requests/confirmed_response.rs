@@ -77,8 +77,7 @@ pub(super) async fn read_property_multiple_observed(
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
         .map_err(|error| ReadFailure::Service(error.into_request_reject()))?;
     let budget = config.read_property_multiple_budget;
-    let view = DeviceReadContext::new(&db, execution)
-        .with_server(Some(&config.device), config.time_sync_policy.enabled);
+    let view = DeviceReadContext::new(&db, execution).with_identity(Some(&config.device));
     let scope = ReadScope {
         work_limit: budget.max_result_elements,
         registered_port: config.registered_network_port,
@@ -111,9 +110,6 @@ pub(super) struct ReadProfile<'a> {
     pub(super) registered_port: Option<ObjectIdentifier>,
     pub(super) work_limit: usize,
     pub(super) identity: Option<&'a bacnet_objects::DeviceIdentity>,
-    /// The server's time-synchronization policy is on (#2617); an endpoint's
-    /// responder lists neither service whatever this says.
-    pub(super) time_sync: bool,
     /// An endpoint's COV reporting, which serves its Device's
     /// Active_COV_Subscriptions when no server tables do (#2490).
     pub(super) cov: Option<&'a dyn crate::endpoint_cov::EndpointCov>,
@@ -141,8 +137,8 @@ pub(super) async fn read_property_response_observed(
         .map_err(Error::into_request_reject)
     {
         Ok(decoded) => {
-            let view = DeviceReadContext::new(&db, profile.execution)
-                .with_server(profile.identity, profile.time_sync);
+            let view =
+                DeviceReadContext::new(&db, profile.execution).with_identity(profile.identity);
             let scope = ReadScope {
                 work_limit: profile.work_limit,
                 registered_port: profile.registered_port,

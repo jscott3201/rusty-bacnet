@@ -11543,7 +11543,7 @@ The server automatically dispatches:
 **Unconfirmed:**
 - WhoIs / IAm
 - WhoHas / IHave
-- TimeSynchronization, UTCTimeSynchronization (opt-in source, step and rate limits, and an off switch that also drops both from Protocol_Services_Supported: [time synchronization policy](time-sync-policy.md))
+- TimeSynchronization, UTCTimeSynchronization (opt-in source, step and rate limits, and an off switch; a policy that is off or accepts no source also drops both from Protocol_Services_Supported: [time synchronization policy](time-sync-policy.md))
 - UnconfirmedTextMessage
 - UnconfirmedEventNotification (offered to the Notification Forwarder objects)
 - UnconfirmedAuditNotification (explicit sink and its own `ServerPolicy` approval, denied by default; no response or duplicate tracking)
@@ -13763,9 +13763,10 @@ session.stop().await?; // stops the server, then the link
 
   It also ignores time synchronization, local and UTC (Clauses 16.7 and
   16.8), and so its Device's Protocol_Services_Supported lists neither
-  service: a server whose `TimeSyncPolicy::enabled` is false lists neither,
-  endpoint-seated or standalone, and one whose policy is on lists both,
-  restricted or not (#2617). What the server's policy doesn't decide keeps the server's
+  service: a server whose `TimeSyncPolicy` is disabled, or enabled with a
+  `source_restriction` that names nobody, lists neither, endpoint-seated or
+  standalone, and one whose enabled policy accepts some source lists both,
+  whatever it limits (#2617). What the server's policy doesn't decide keeps the server's
   defaults, so any peer may still acknowledge an alarm (AcknowledgeAlarm,
   Clause 13.5), subscribe to COV, send event notifications, which
   Notification Forwarder objects pass on, announce itself with I-Am, and

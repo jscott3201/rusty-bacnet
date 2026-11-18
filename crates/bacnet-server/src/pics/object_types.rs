@@ -59,7 +59,7 @@ impl PicsGenerator<'_> {
                 .filter(|_| object_type == ObjectType::DEVICE)
                 .map(|execution| {
                     crate::device_view::DeviceReadContext::new(self.db, execution)
-                        .with_server(Some(&self.server_config.device), self.time_sync_on())
+                        .with_identity(Some(&self.server_config.device))
                 });
             let supported_properties =
                 Self::union_property_support(objects.iter().flat_map(|object| {

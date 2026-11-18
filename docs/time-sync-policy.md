@@ -9,10 +9,13 @@ the others, and of the DCC and mutation policies. The default policy applies
 every valid request, so a server that never configures one behaves as before.
 
 Both services are unconfirmed, so the policy changes no reply to them. It does
-change one property: with `enabled` false the Device's
-Protocol_Services_Supported lists neither service (Clause 12.11.14), on any
-server, including the read-only server an endpoint session builds by default;
-an enabled policy with limits keeps both listed, as does the default, and a
+change one property: the Device's Protocol_Services_Supported lists both
+services only while the server executes them for some peer (Clause 12.11.14).
+With `enabled` false, or with a `source_restriction` that names nobody, it
+lists neither, on any server, including the read-only server, which Python
+endpoints run by default: a peer cannot tell a request the server ignores from
+a service it lacks. An enabled policy that accepts some source keeps both
+listed whatever its step cap, rates or coalescing, as does the default, and a
 server with no Device clock lists neither whatever the policy. The policy is
 fixed when the server starts, so the list does not change while it runs. A
 refused request gets no response; it leaves the clock alone and does not reach
@@ -24,7 +27,7 @@ reason (`Ignoring time synchronization request`).
 | Rust field | Python key | Default | Effect |
 |---|---|---|---|
 | `enabled` | `enabled` | `true` | `false` refuses every request and drops both services from Protocol_Services_Supported |
-| `source_restriction` | `source_restriction` | `None` | Exact claimed sources that may set the clock; an empty list refuses all |
+| `source_restriction` | `source_restriction` | `None` | Exact claimed sources that may set the clock; an empty list refuses all and drops both services from Protocol_Services_Supported |
 | `max_step` | `max_step_ms` | `None` | Largest correction one request may make, forward or back |
 | `per_source_rate` | `per_source_rate` | `None` | Token bucket for each source |
 | `global_rate` | `global_rate` | `None` | One token bucket for all sources |

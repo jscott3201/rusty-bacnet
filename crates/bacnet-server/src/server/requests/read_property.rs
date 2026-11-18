@@ -113,7 +113,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     registered_port: config.registered_network_port,
                     work_limit: config.read_property_multiple_budget.max_result_elements,
                     identity: Some(&config.device),
-                    time_sync: config.time_sync_policy.enabled,
                     cov: None,
                 },
                 &admitted.req,
@@ -288,7 +287,7 @@ mod tests {
                 request,
                 ack,
                 config,
-                crate::device_view::DeviceExecution::FullServer,
+                crate::device_view::DeviceExecution::FullServer { time_sync: true },
                 |_, _, _, _, _| {},
             )
         }

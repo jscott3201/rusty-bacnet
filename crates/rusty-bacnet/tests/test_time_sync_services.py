@@ -1,10 +1,11 @@
 """The time-synchronization bits of the Device's Protocol_Services_Supported
 (#2617).
 
-A server whose time-synchronization policy is off lists neither
-TimeSynchronization nor UTCTimeSynchronization, and one whose policy is on
-lists both, restricted by source or not (Clause 12.11.14 names what the
-device executes; Clauses 16.7 and 16.8 define the services). A Python
+A server whose time-synchronization policy is off, or on with a source
+allowlist that names nobody, lists neither TimeSynchronization nor
+UTCTimeSynchronization, and one whose policy is on lists both, limited or
+not, while it accepts some source (Clause 12.11.14 names what the device
+executes; Clauses 16.7 and 16.8 define the services). A Python
 endpoint's policy is off unless it is given. The reads are raw
 ReadProperty and ReadPropertyMultiple exchanges over a B/IP socket, and the
 reply octets are compared. The policy is fixed when the server starts:
@@ -91,9 +92,12 @@ class TimeSyncServicesTests(unittest.IsolatedAsyncioTestCase):
             ("None", None, True),
             ("empty", {}, True),
             ("off", {"enabled": False}, False),
-            # On, with every sender refused or limited: the device executes
-            # the service for the peers it accepts.
-            ("allowlist of nobody", {"source_restriction": []}, True),
+            # On, but with every sender refused: the device executes the
+            # service for no peer.
+            ("allowlist of nobody", {"source_restriction": []}, False),
+            # On, with senders limited: the device executes the service for
+            # the peers it accepts.
+            ("allowlist of one", {"source_restriction": [(None, bytes(6))]}, True),
             ("restricted", {"max_step_ms": 0, "max_sources": 1,
                             "per_source_rate": (1.0, 1), "global_rate": (1.0, 1),
                             "coalesce_window_ms": 1000}, True),
@@ -113,7 +117,9 @@ class TimeSyncServicesTests(unittest.IsolatedAsyncioTestCase):
             ("off", {"time_sync_policy": {"enabled": False}}, False),
             ("empty", {"time_sync_policy": {}}, True),
             ("mutation policy, no time sync", {"mutation_policy": "permissive"}, False),
-            ("restricted", {"time_sync_policy": {"source_restriction": []}}, True),
+            ("allowlist of nobody", {"time_sync_policy": {"source_restriction": []}}, False),
+            ("allowlist of one",
+             {"time_sync_policy": {"source_restriction": [(None, bytes(6))]}}, True),
         ):
             with self.subTest(endpoint=name):
                 data = await self.endpoint_services(**keywords)

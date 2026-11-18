@@ -6560,10 +6560,11 @@ keys are the fields of the Rust `TimeSyncPolicy`, with `_ms` on the durations.
 A key left out keeps its default, and `None` or `{}` gives the default, which
 sets the clock from every valid request. The policy is copied at construction
 and applies to every later `start()`; nothing changes it while the server
-runs. With `enabled` false the Device's Protocol_Services_Supported lists
-neither TimeSynchronization nor UTCTimeSynchronization, since the server
-executes neither for any peer; an enabled policy that restricts sources, the
-step or the rate keeps both listed (#2617).
+runs. With `enabled` false, or a `source_restriction` of `[]`, the Device's
+Protocol_Services_Supported lists neither TimeSynchronization nor
+UTCTimeSynchronization, since the server executes neither for any peer; an
+enabled policy that accepts some source keeps both listed, whatever it limits
+(#2617).
 
 ```python
 server = BACnetServer(
@@ -6579,7 +6580,7 @@ server = BACnetServer(
 | Key | Default | Limits |
 |---|---|---|
 | `enabled` | `True` | `False` refuses every request and drops both services from Protocol_Services_Supported |
-| `source_restriction` | `None` | As `dcc_source_restriction`: `(None, mac)` for a direct source, `(network, address)` for a routed one; at most 256 entries of 1 to 18 octets, networks 1 to 65534. `[]` refuses every source |
+| `source_restriction` | `None` | As `dcc_source_restriction`: `(None, mac)` for a direct source, `(network, address)` for a routed one; at most 256 entries of 1 to 18 octets, networks 1 to 65534. `[]` refuses every source and drops both services from Protocol_Services_Supported |
 | `max_step_ms` | `None` | Largest correction, forward or back; 0 allows only an exact match |
 | `per_source_rate` | `None` | `(max_per_second, burst_capacity)`: rate positive and finite, burst positive |
 | `global_rate` | `None` | The same, for all sources together |
@@ -7386,8 +7387,9 @@ async with endpoint:
   a dict read as `BACnetServer`'s keyword of the same name reads it, so `{}`
   takes every valid request and the other keys restrict sources, the step
   and the rate. The Device's Protocol_Services_Supported lists both services
-  only when the policy is on, restricted or not: an endpoint without
-  `time_sync_policy` lists neither (#2617).
+  only when the policy is on and accepts some source: an endpoint without
+  `time_sync_policy`, or with a `source_restriction` of `[]`, lists neither
+  (#2617).
 - **The other server keywords.** `cov_policy` is read as `BACnetServer`'s;
   `on_reinitialize`, `after_reinitialize` and `reinit_password` are its
   keywords of the same names (see [ReinitializeDevice](#reinitializedevice));
