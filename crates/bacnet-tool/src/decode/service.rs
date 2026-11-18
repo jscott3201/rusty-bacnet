@@ -15,7 +15,8 @@
 //! service's decoder refuses, falls back to the tag walk's own fields, with
 //! a leaf saying why the decoder refused them; tags the walk can't frame
 //! fall back too, its fault marked where it stopped. A password is never
-//! shown, on either path.
+//! shown: the password-bearing requests' parameters don't fall back to the
+//! walk, but show as one hidden leaf (`password`).
 
 use std::ops::Range;
 
@@ -43,7 +44,7 @@ use bacnet_ops::format::alarms::{EventSummaryData, cell};
 use bacnet_ops::format::notification::EventValues;
 use bacnet_ops::format::{Floats, StateTexts, ValueFormat, format_property_value, timestamp_text};
 use bacnet_ops::label::{kebab, object_label};
-use password::{PASSWORD, REASON_HIDDEN, hide_passwords};
+use password::PASSWORD;
 
 /// Which parameters an APDU carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,8 +91,8 @@ pub(super) fn parameters(
 ) -> Vec<Field> {
     let data = &apdu[start..];
     let at = base + start;
-    let secret = params.and_then(Params::secret);
-    if secret.is_some() && segment.is_some_and(|sequence| sequence != 0) {
+    let secret = params.is_some_and(Params::carry_a_password);
+    if secret && segment.is_some_and(|sequence| sequence != 0) {
         return vec![Field::leaf(
             format!(
                 "Segment data: {} octets, hidden (may hold a password)",
@@ -116,23 +117,16 @@ pub(super) fn parameters(
         )),
         Some(Err(Miss::Unnamed)) | None => None,
     };
+    if secret {
+        return password::hidden(doc.whole(), refused.is_some());
+    }
     // The walk's own fields, value errors quoting offsets in the APDU.
     let mut fields = doc.walk.fields(Origin {
         frame: at,
         values: apdu,
         shift: start,
     });
-    if let Some(secret) = secret {
-        hide_passwords(&mut fields, &doc.walk, secret, doc.whole().end);
-    }
     if let Some(why) = refused {
-        // A decoder's reason can quote a password's octets: its character
-        // set, or how many of them decode.
-        let why = if secret.is_some() {
-            REASON_HIDDEN.into()
-        } else {
-            why
-        };
         fields.push(Field::leaf(
             format!("Not read as named fields: {why}"),
             doc.whole(),
@@ -174,14 +168,8 @@ fn named(params: Params, doc: &Doc<'_>) -> Named {
         Ack(Confirmed::GET_EVENT_INFORMATION) => {
             event_information(doc, &GetEventInformationAck::decode(data)?)
         }
-        // Named only when the tags are the layout's, and decided with the
-        // password replaced by a valid one of its length.
         Request(Confirmed::DEVICE_COMMUNICATION_CONTROL) => {
-            if !password::DCC.whole(&doc.walk) {
-                return Err(Miss::Layout);
-            }
-            let masked = password::DCC.masked(data, &doc.walk);
-            let request = DeviceCommunicationControlRequest::decode(&masked)?;
+            let request = DeviceCommunicationControlRequest::decode(data)?;
             let items = doc.items()?;
             let mut fields = opt(doc, items, 0, |_| {
                 request
@@ -196,11 +184,7 @@ fn named(params: Params, doc: &Doc<'_>) -> Named {
             Ok(fields)
         }
         Request(Confirmed::REINITIALIZE_DEVICE) => {
-            if !password::REINIT.whole(&doc.walk) {
-                return Err(Miss::Layout);
-            }
-            let masked = password::REINIT.masked(data, &doc.walk);
-            let request = ReinitializeDeviceRequest::decode(&masked)?;
+            let request = ReinitializeDeviceRequest::decode(data)?;
             let items = doc.items()?;
             let mut fields = vec![doc.leaf(
                 need(items, 0)?,

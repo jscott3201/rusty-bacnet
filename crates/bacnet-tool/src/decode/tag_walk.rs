@@ -76,12 +76,6 @@ impl<'a> Element<'a> {
         start..start + 2 * self.header + contents
     }
 
-    /// A primitive's contents, as offsets in the octets walked: after its
-    /// header.
-    pub(super) fn contents_range(&self) -> Range<usize> {
-        self.range.start + self.header..self.range.end
-    }
-
     /// The length of its tag header, or of its opening tag.
     pub(super) fn header(&self) -> usize {
         self.header

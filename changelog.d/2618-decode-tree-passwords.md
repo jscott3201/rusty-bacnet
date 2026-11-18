@@ -1,7 +1,8 @@
 ---
 section: Security
 ---
-- In a DeviceCommunicationControl or ReinitializeDevice request its decoder
-  refused, or its first segment, the frame decode tree (TUI capture, MCP
-  `bacnet_decode`) shows only the fields before the password that match the
-  layout; the rest, password and reason included, is hidden (#2618).
+- The frame decode tree (TUI capture, MCP `bacnet_decode`) shows all the
+  parameters of a DeviceCommunicationControl or ReinitializeDevice request
+  its decoder refuses, or of its first segment, as one hidden leaf with a
+  fixed reason: the password shows only in whether the decoder takes it
+  (#2618).

@@ -530,8 +530,7 @@ reinitialize-device parameters @4..20
         &frame,
         "
 device-communication-control parameters @4..33
-  [1] 00 (0) @4..6
-  Hidden: may hold a password @6..33
+  Hidden: may hold a password @4..33
   Not read as named fields: reason hidden (it may quote the password) @4..33",
     );
 }
