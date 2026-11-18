@@ -297,15 +297,19 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let future = async move {
-            let destination = match (broadcast, address) {
-                (Some(broadcast), _) => broadcast,
-                (None, Some(address)) => WriteGroupDestination::Device(
-                    bacnet_types::MacAddr::from_slice(&peers.parse(&address)?),
-                ),
+            match (broadcast, address) {
+                (Some(scope), _) => {
+                    let c = started(&inner).await?;
+                    c.write_group(scope, &req).await
+                }
+                (None, Some(address)) => {
+                    let mac = peers.parse(&address)?;
+                    let c = started(&inner).await?;
+                    c.write_group_directed(&mac, &req).await
+                }
                 (None, None) => unreachable!("no address means a broadcast"),
-            };
-            let c = started(&inner).await?;
-            c.write_group(&destination, &req).await.map_err(to_py_err)?;
+            }
+            .map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -344,14 +348,14 @@ impl ChannelValueArg {
 fn write_group_broadcast(
     has_address: bool,
     network: Option<u16>,
-) -> Result<Option<WriteGroupDestination>, &'static str> {
+) -> Result<Option<client::Broadcast>, &'static str> {
     match (has_address, network) {
         (true, Some(_)) => Err("give an address or a network, not both"),
         (true, None) => Ok(None),
-        (false, None) => Ok(Some(WriteGroupDestination::LocalBroadcast)),
+        (false, None) => Ok(Some(client::Broadcast::Local)),
         (false, Some(0)) => Err("network must be 1-65535"),
-        (false, Some(u16::MAX)) => Ok(Some(WriteGroupDestination::GlobalBroadcast)),
-        (false, Some(network)) => Ok(Some(WriteGroupDestination::RemoteBroadcast(network))),
+        (false, Some(u16::MAX)) => Ok(Some(client::Broadcast::Global)),
+        (false, Some(network)) => Ok(Some(client::Broadcast::Network(network))),
     }
 }
 
@@ -364,19 +368,16 @@ mod write_group_destination_tests {
     /// bacnet-client WriteGroup tests pin each destination's NPDU.
     #[test]
     fn write_group_address_and_network_pick_the_destination() {
-        use WriteGroupDestination::{GlobalBroadcast, LocalBroadcast, RemoteBroadcast};
+        use client::Broadcast::{Global, Local, Network};
         assert_eq!(write_group_broadcast(true, None), Ok(None));
-        assert_eq!(write_group_broadcast(false, None), Ok(Some(LocalBroadcast)));
+        assert_eq!(write_group_broadcast(false, None), Ok(Some(Local)));
         for network in [1, 5, 65534] {
             assert_eq!(
                 write_group_broadcast(false, Some(network)),
-                Ok(Some(RemoteBroadcast(network)))
+                Ok(Some(Network(network)))
             );
         }
-        assert_eq!(
-            write_group_broadcast(false, Some(65535)),
-            Ok(Some(GlobalBroadcast))
-        );
+        assert_eq!(write_group_broadcast(false, Some(65535)), Ok(Some(Global)));
         assert!(write_group_broadcast(false, Some(0)).is_err());
         assert!(write_group_broadcast(true, Some(5)).is_err());
     }

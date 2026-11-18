@@ -9691,8 +9691,9 @@ class BipEndpoint:
         ``audit_device_bindings`` (#2348): the Audit Reporter, added with
         ``add_audit_reporter``, through which the session reports the
         ReinitializeDevice resets, backups and restores it carries out,
-        ``report_device_reset_local()`` calls and the client role's reads,
-        each filtered by the Reporter's level and operations. It needs
+        ``report_device_reset_local()`` calls and the reads and writes of
+        its ``client()`` (#2617), each filtered by the Reporter's level and
+        operations. It needs
         ``device_write_policy`` and ``audit_recipient`` (the Device's Audit
         recipient); the bindings are ``(Device identifier, "ipv4:port")``
         routes to recipient Devices, or ``"network:0xMAC"`` for one behind a
@@ -9809,10 +9810,9 @@ class BipEndpoint:
         the client role alone; the endpoint's close stops it too, and calls
         in flight end as a stopping client's do. RuntimeError before start,
         after close, and while the last client is still stopping or its stop
-        failed (the error names the cause);
-        NotImplementedError on an endpoint built with
-        ``source_audit_reporter``, whose client arrives when source Audit
-        moves to the full client (#2617 step 3)."""
+        failed (the error names the cause). On an endpoint built with
+        ``source_audit_reporter``, the endpoint audits the client's reads
+        and writes (#2617)."""
         ...
 
     def server(self) -> Awaitable[EndpointServer]:
@@ -10049,10 +10049,9 @@ class ScEndpoint:
         the client role alone; the endpoint's close stops it too, and calls
         in flight end as a stopping client's do. RuntimeError before start,
         after close, and while the last client is still stopping or its stop
-        failed (the error names the cause);
-        NotImplementedError on an endpoint built with
-        ``source_audit_reporter``, whose client arrives when source Audit
-        moves to the full client (#2617 step 3).
+        failed (the error names the cause). On an endpoint built with
+        ``source_audit_reporter``, the endpoint audits the client's reads
+        and writes (#2617).
 
         It starts after the hub link is up, so its ``connection_events()``
         begins at that call, after the first ``connected``: read the link's
@@ -10278,10 +10277,9 @@ class MstpEndpoint:
         the client role alone; the endpoint's close stops it too, and calls
         in flight end as a stopping client's do. RuntimeError before start,
         after close, and while the last client is still stopping or its stop
-        failed (the error names the cause);
-        NotImplementedError on an endpoint built with
-        ``source_audit_reporter``, whose client arrives when source Audit
-        moves to the full client (#2617 step 3).
+        failed (the error names the cause). On an endpoint built with
+        ``source_audit_reporter``, the endpoint audits the client's reads
+        and writes (#2617).
 
         Its requests wait for this node's token, as the server role's
         answers do."""

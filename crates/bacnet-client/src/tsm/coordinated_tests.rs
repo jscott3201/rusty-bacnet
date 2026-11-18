@@ -533,6 +533,69 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
     }
 }
 
+/// Diverted registrations (#2617): the client's registration is refused
+/// as diverted, a diverted one goes through the coordinator and is
+/// answered as any other, the node's DeviceCommunicationControl refuses
+/// both while it restricts initiation and leaves the diversion when it
+/// lifts, and once the seat closes both are refused.
+#[test]
+fn diverted_registrations_take_the_coordinator_only_when_asked() {
+    let (mut tsm, coordinator) = coordinated_tsm();
+    let peer = CanonicalPeer::direct(&[7]);
+    let service = ConfirmedServiceChoice::READ_PROPERTY;
+    let plain = |tsm: &mut Tsm| {
+        tsm.register_coordinated_transaction_with_progress(
+            MacAddr::from_slice(&[7]),
+            CanonicalPeer::direct(&[7]),
+            service,
+            false,
+        )
+        .err()
+    };
+    tsm.divert_registrations();
+    assert_eq!(
+        plain(&mut tsm),
+        Some(CoordinatedRegistrationError::Diverted)
+    );
+    let (invoke_id, _registration) = tsm
+        .register_diverted(MacAddr::from_slice(&[7]), peer.clone(), service, false)
+        .unwrap();
+    assert_eq!(coordinator.active_count().unwrap(), 1);
+    assert_eq!(
+        tsm.coordinated_token(&[7], invoke_id).unwrap().invoke_id(),
+        invoke_id
+    );
+    // The diversion stays: the next plain registration is refused again.
+    assert_eq!(
+        plain(&mut tsm),
+        Some(CoordinatedRegistrationError::Diverted)
+    );
+    // DeviceCommunicationControl refuses both while it restricts, names
+    // itself, and leaves the diversion in place when it lifts.
+    tsm.restrict_initiation(true);
+    assert_eq!(
+        plain(&mut tsm),
+        Some(CoordinatedRegistrationError::InitiationRestricted)
+    );
+    assert_eq!(
+        tsm.register_diverted(MacAddr::from_slice(&[7]), peer.clone(), service, false)
+            .err(),
+        Some(CoordinatedRegistrationError::InitiationRestricted)
+    );
+    tsm.restrict_initiation(false);
+    assert_eq!(
+        plain(&mut tsm),
+        Some(CoordinatedRegistrationError::Diverted)
+    );
+    assert!(!tsm.initiation_restricted());
+    tsm.close_coordinated();
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+    assert!(matches!(
+        tsm.register_diverted(MacAddr::from_slice(&[7]), peer, service, false),
+        Err(CoordinatedRegistrationError::CoordinatorUnavailable)
+    ));
+}
+
 /// The node's DeviceCommunicationControl (#2617): while it restricts
 /// initiation no transaction is leased, with a refusal that names it; a
 /// retry falling due ends its transaction, freeing the invoke ID; and once

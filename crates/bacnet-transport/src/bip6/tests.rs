@@ -271,26 +271,47 @@ async fn bip6_start_stop() {
     );
 }
 
+/// Poll `future` once, in the test's own task.
+async fn poll_once<F: Future + Unpin>(future: &mut F) -> std::task::Poll<F::Output> {
+    std::future::poll_fn(|cx| std::task::Poll::Ready(std::pin::Pin::new(&mut *future).poll(cx)))
+        .await
+}
+
 /// A stop through a shared reference, with another holder alive (#2617):
-/// stops beside each other both return with the port free, and every
-/// later send fails with the stopped error.
+/// a second stop that comes while the first still waits for the tasks that
+/// hold the socket returns only once it is closed, and so its port free,
+/// and every later send fails with the stopped error.
 #[tokio::test]
 async fn bip6_stop_with_another_holder_alive_fails_later_sends_and_frees_the_port() {
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(1));
     let mut rx = transport.start().await.unwrap();
-    // A normal node binds the wildcard address at its port.
-    let bound = SocketAddrV6::new(
-        Ipv6Addr::UNSPECIFIED,
-        transport.local_address().unwrap().port(),
-        0,
-        0,
-    );
+    // Watched, not held. That the stop closed it is read from the
+    // transport's own references, not by binding its ephemeral port again,
+    // which another test process can be given in between (#2657).
+    let socket = std::sync::Arc::downgrade(&transport.socket.get().unwrap());
     let transport = std::sync::Arc::new(transport);
     let other = std::sync::Arc::clone(&transport);
-    let (first, second) = tokio::join!(transport.stop(), other.stop());
-    first.unwrap();
-    second.unwrap();
-    drop(std::net::UdpSocket::bind(bound).expect("the stop let go of the port"));
+    // The first stop aborts the tasks and waits for them, which nothing
+    // has run since; the second comes while they still hold the socket.
+    let mut first = Box::pin(async move { transport.stop().await });
+    assert!(poll_once(&mut first).await.is_pending());
+    let first = tokio::spawn(first);
+    let mut second = Box::pin(other.stop());
+    assert!(
+        poll_once(&mut second).await.is_pending(),
+        "the second stop waits for the first"
+    );
+    assert!(
+        socket.strong_count() > 0,
+        "it came while the socket was open"
+    );
+    second.await.unwrap();
+    assert_eq!(
+        socket.strong_count(),
+        0,
+        "the second stop returned with the socket closed"
+    );
+    first.await.unwrap().unwrap();
     for sent in [
         other.send_broadcast(&[0x01, 0x00]).await,
         other.send_unicast(&[0x01, 0x00], &[0x00, 0x00, 0x02]).await,

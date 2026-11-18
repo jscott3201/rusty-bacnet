@@ -2,44 +2,9 @@ use super::segmentation_context::{
     ConfirmedWait, InboundSegmentSource, ReassemblyAbortTarget, SegmentedRequestLimits,
 };
 use super::segmented_request::{OutgoingSegmentContext, OutgoingSegmentSend};
+use super::source_audit::Refused;
 use super::*;
 use crate::tsm::{CompletionOutcome, SegmentedAckArrival};
-use bacnet_encoding::apdu::advertised_max_segments;
-
-/// Size of the sequence-number space, and so the hard reassembly ceiling.
-///
-/// A local storage bound, not a protocol one. Clause 20.1.5.4 makes the
-/// sequence number modulo 256, so a longer response is entirely representable —
-/// this client simply keys its segment store by that `u8` and cannot tell
-/// segment 257 from segment 1. Clause 5.4.4.4 names this exact situation
-/// (`NewSegmentReceived_NoSpace`, a local inability to retain a segment)
-/// and prescribes the Abort below.
-///
-/// Exactly 256 segments reassemble correctly and must keep working; 257 is the
-/// first that would corrupt the payload.
-const SEQUENCE_NUMBER_SPACE: usize = 256;
-
-impl ResponseLimits {
-    /// The receive-side limits `config` puts on the wire.
-    pub(super) fn from_config(config: &ClientConfig) -> Self {
-        // Clause 20.1.2.4 uses max-segments-accepted to advertise receive
-        // capacity in segments. Clause 5.2.1.3 caps a transfer at the smaller
-        // of the sender's capacity and the receiver's advertised capacity.
-        // For a ComplexACK, the receiver's value comes from Max Segments
-        // Accepted in the corresponding BACnet-Confirmed-Request-PDU.
-        // Exceeding that limit is non-conformant, not merely unusual.
-        //
-        // Only the rungs B'001'..B'110' name a number; B'000' and B'111'
-        // promise nothing, and `advertised_max_segments` reports those as
-        // `None`.
-        let advertised =
-            advertised_max_segments(config.max_segments).map_or(usize::MAX, usize::from);
-        Self {
-            segmented_response_accepted: config.segmented_response_accepted,
-            max_reassembly_segments: advertised.min(SEQUENCE_NUMBER_SPACE),
-        }
-    }
-}
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Handle a segmented ComplexAck: accumulate segments, send SegmentAcks,
@@ -471,14 +436,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         target: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
-        limits: SegmentedRequestLimits<'_>,
+        limits: &mut SegmentedRequestLimits<'_>,
     ) -> Result<Bytes, Error> {
         let SegmentedRequestLimits {
             remote_max_apdu,
             remote_max_segments,
             routed_forwarded_npci_len,
             ..
-        } = limits;
+        } = *limits;
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
@@ -504,15 +469,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         );
 
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
-        let (invoke_id, registration) = {
-            let mut tsm = self.tsm.lock();
-            tsm.register_coordinated_transaction_with_progress(
-                tsm_mac.clone(),
-                transaction_peer.canonical,
-                service_choice,
-                true,
-            )
-            .map_err(Error::from)?
+        // A refusal is a closed seat, the node's DeviceCommunicationControl,
+        // or a request the node audits (#2617).
+        let (invoke_id, registration) = match self.register_transaction(
+            tsm_mac.clone(),
+            transaction_peer.canonical,
+            service_choice,
+            true,
+        ) {
+            Ok(registered) => registered,
+            Err(refused) => match self.on_refused(refused, target, service_choice, true)? {
+                Refused::Registered(registered) => registered,
+                Refused::Audited(auditor) => {
+                    return self
+                        .audited_segmented(auditor, service_choice, service_data, limits)
+                        .await;
+                }
+            },
         };
 
         let owner = registration.owner.clone();
@@ -812,7 +785,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         };
 
-        if let Some(lease) = limits.routed_path_lease {
+        if let Some(lease) = limits.routed_path_lease.as_ref() {
             lease.mark_terminal_observed();
         }
         guard.mark_completed();

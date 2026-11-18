@@ -267,8 +267,10 @@ impl<T: TransportPort + 'static> Inbound<T> for Seated<T> {
     }
 }
 
-fn seat_closed() -> Error {
-    Error::Encoding("the client's seat has closed: its node stopped".into())
+/// What a seated client's request or send fails with once its seat has
+/// closed, by its node's stop or the client's own.
+pub(super) fn seat_closed() -> Error {
+    Error::Encoding("the client's seat has closed: its node or the client stopped".into())
 }
 
 impl<T: TransportPort> BACnetClient<T> {

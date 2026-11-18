@@ -10,6 +10,10 @@
 //! before those services had typed calls.
 //! The eight of the `forms_without_*` tests were recorded the same way,
 //! through those raw sends, which are dev's, after the typed calls existed.
+//! The `wg/` pins were recorded from `write_group` to each
+//! `WriteGroupDestination` before WriteGroup took a `Broadcast` scope.
+//! `wg/routed` is newer, recorded from `write_group_directed`: no
+//! destination named a station behind a router.
 
 pub(super) const PINS: &[(&str, &str, &str)] = &[
     (
@@ -432,6 +436,36 @@ pub(super) const PINS: &[(&str, &str, &str)] = &[
         "vt-open/routed",
         "09 012400020105ff0204001591032105",
         r#"Ok(VTOpenAck { remote_vt_session_identifier: 29 })"#,
+    ),
+    (
+        "wg/device",
+        "02 0100100a091719082e090c4442860000090d190a002f3900",
+        r#"Ok(())"#,
+    ),
+    (
+        "wg/global",
+        " 0120ffff00ff100a091719082e090c4442860000090d190a002f3900",
+        r#"Ok(())"#,
+    ),
+    (
+        "wg/local",
+        " 0100100a091719082e090c4442860000090d190a002f3900",
+        r#"Ok(())"#,
+    ),
+    (
+        "wg/network",
+        " 0120000200ff100a091719082e090c4442860000090d190a002f3900",
+        r#"Ok(())"#,
+    ),
+    (
+        "wg/own",
+        " 0100100a091719082e090c4442860000090d190a002f3900",
+        r#"Ok(())"#,
+    ),
+    (
+        "wg/routed",
+        "09 012000020105ff100a091719082e090c4442860000090d190a002f3900",
+        r#"Ok(())"#,
     ),
     (
         "who-am-i-bcast/global",
