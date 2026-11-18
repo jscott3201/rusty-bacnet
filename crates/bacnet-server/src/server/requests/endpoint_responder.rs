@@ -391,6 +391,7 @@ impl EndpointResponder {
                 registered_port: self.registered_port.as_ref().map(|(oid, _)| *oid),
                 work_limit: self.read_work_limit,
                 identity: self.identity.as_ref(),
+                time_sync: false,
                 cov: self.cov.as_deref(),
             };
             confirmed_response::read_property_response_observed(

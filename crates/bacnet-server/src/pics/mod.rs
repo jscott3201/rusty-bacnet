@@ -343,6 +343,12 @@ impl<'a> PicsGenerator<'a> {
         }
     }
 
+    /// Whether the served Device's time-synchronization policy is on; a
+    /// standalone generator, which serves no Device, assumes it is (#2617).
+    fn time_sync_on(&self) -> bool {
+        self.served.is_none() || self.server_config.time_sync_policy.enabled
+    }
+
     pub(crate) fn for_server(mut self, execution: crate::device_view::DeviceExecution) -> Self {
         self.served = Some(execution);
         self
@@ -394,7 +400,10 @@ impl<'a> PicsGenerator<'a> {
             self.served
                 .unwrap_or(crate::device_view::DeviceExecution::FullServer),
         )
-        .with_identity(self.served.map(|_| &self.server_config.device));
+        .with_server(
+            self.served.map(|_| &self.server_config.device),
+            self.time_sync_on(),
+        );
         let read = |property| device.map(|d| view.object(d).read_property(property, None));
         let unsigned = |property, fallback| match read(property) {
             Some(Ok(PropertyValue::Unsigned(raw))) => u16::try_from(raw).unwrap_or(fallback),
@@ -506,7 +515,7 @@ impl<'a> PicsGenerator<'a> {
             })
             .flatten();
         let mut service_map: BTreeMap<&'static str, (bool, bool)> = BTreeMap::new();
-        let clock_available = self.db.clock_frame().is_some();
+        let clock_available = self.db.clock_frame().is_some() && self.time_sync_on();
         let executed: Box<dyn Iterator<Item = ServiceSupported> + '_> = match &effective_executed {
             Some(services) => Box::new(services.iter()),
             None => Box::new(

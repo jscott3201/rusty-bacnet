@@ -146,6 +146,9 @@ pub(crate) struct DeviceReadContext<'a> {
     execution: DeviceExecution,
     db: &'a ObjectDatabase,
     clock: OnceLock<bool>,
+    /// Whether the server's time-synchronization policy is on. It is fixed
+    /// when the server starts, so a read follows it with no lock (#2617).
+    time_sync: bool,
     live: Option<&'a LiveDeviceCov>,
     identity: Option<IdentityView>,
 }
@@ -158,6 +161,7 @@ impl<'a> DeviceReadContext<'a> {
             execution,
             db,
             clock: OnceLock::new(),
+            time_sync: true,
             live: None,
             identity: None,
         }
@@ -173,17 +177,36 @@ impl<'a> DeviceReadContext<'a> {
             execution: self.execution,
             db: self.db,
             clock: self.clock,
+            time_sync: self.time_sync,
             live,
             identity: self.identity,
         }
     }
-    /// Only full-server service bits depend on clock availability. Cache both
-    /// answers for this request; Device time values and metadata stay live.
+    /// The same context for a server with `identity`, as
+    /// [`with_identity`](Self::with_identity) takes it, and whose
+    /// time-synchronization policy is `time_sync` (on when true): with it off, the Device lists neither
+    /// TimeSynchronization nor UTCTimeSynchronization (Clause 12.11.14), since
+    /// the server executes neither for any peer (#2617). A policy that is on
+    /// but restricted by source keeps them listed.
+    pub(crate) fn with_server(
+        mut self,
+        identity: Option<&bacnet_objects::DeviceIdentity>,
+        time_sync: bool,
+    ) -> Self {
+        self.identity = identity.map(IdentityView::from);
+        self.time_sync = time_sync;
+        self
+    }
+    /// Only full-server service bits depend on clock availability and the
+    /// time-synchronization policy. Cache the clock answer for this request;
+    /// Device time values and metadata stay live.
     fn clock_available(&self) -> bool {
-        matches!(
-            self.execution,
-            DeviceExecution::FullServer | DeviceExecution::Node
-        ) && *self.clock.get_or_init(|| self.db.clock_frame().is_some())
+        self.time_sync
+            && matches!(
+                self.execution,
+                DeviceExecution::FullServer | DeviceExecution::Node
+            )
+            && *self.clock.get_or_init(|| self.db.clock_frame().is_some())
     }
     pub(crate) fn with_identity(
         mut self,
