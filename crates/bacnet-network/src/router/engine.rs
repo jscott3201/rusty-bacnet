@@ -244,11 +244,23 @@ totals!(
     }
 );
 
-/// Zeroed storage on the heap. Built here, outside any async function, so
+/// Empty storage, made when the program compiles (#2656). Built at run
+/// time, `Storage::new` put the storage's 150,024 bytes, and temporaries
+/// for its parts, on the stack of the task that started the router before
+/// the copy to the heap: about 216 KiB in a release build on macOS arm64
+/// and 331 KiB in a debug one. Copied from here, the start takes no stack
+/// for it in a release build and about 147 KiB in a debug one, for
+/// 150,024 bytes of read-only data, almost all of them zero. It is a
+/// `const` because the one use moves it into the box: a `static` can't be
+/// moved out of, and `boxed_storage` is the only copy the lint warns of.
+#[allow(clippy::large_const_arrays)]
+const EMPTY_STORAGE: HostedStorage = Storage::new();
+
+/// Empty storage on the heap. Built here, outside any async function, so
 /// the large table and scratch never sit in a future's state.
 #[inline(never)]
 fn boxed_storage() -> Box<HostedStorage> {
-    Box::new(Storage::new())
+    Box::new(EMPTY_STORAGE)
 }
 
 #[cfg(test)]
