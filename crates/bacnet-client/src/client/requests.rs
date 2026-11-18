@@ -31,6 +31,18 @@ impl core::fmt::Display for LengthBoundedBy {
     }
 }
 
+/// Whether `response` is the device's own answer to a confirmed request: an
+/// acknowledgment, or its Error, Reject or Abort. Any of them shows that the
+/// request reached the device (Clause 19.4). A router's refusal, a reason 4
+/// ending the request as [`TsmResponse::NetworkPathTooLong`], is no answer
+/// from the device.
+pub(super) fn answered_by_peer(response: &Result<TsmResponse, Error>) -> bool {
+    matches!(
+        response,
+        Ok(TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Remote { .. })
+    )
+}
+
 /// Reject a maximum transmittable length no conformant device could accept.
 ///
 /// Clause 5.2.1.2 derives this length as the smallest of the local capability,
@@ -399,32 +411,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if sized_by.is_some() {
             self.note_answer(sized_by, &response);
         }
-        if response.is_ok()
-            && let Some(lease) = path_lease.as_ref()
+        if let Some(lease) = path_lease.as_ref()
+            && answered_by_peer(&response)
         {
-            lease.mark_terminal_observed();
+            lease.mark_answered();
         }
         guard.mark_completed();
         response.and_then(Self::confirmed_response_result)
     }
 
-    /// An answer from the device, an acknowledgment or its Error, Reject or
-    /// Abort, starts the age of the discovery-table row that sized the
-    /// request, `sized_by`, again, so a device that keeps answering stays
-    /// in the table without repeating its I-Am (#2560). A router's refusal
-    /// is no answer from the device. With no such row the table isn't locked
-    /// again.
+    /// An answer from the device ([`answered_by_peer`]) starts the age of
+    /// the discovery-table row that sized the request, `sized_by`, again, so
+    /// a device that keeps answering stays in the table without repeating
+    /// its I-Am (#2560). With no such row the table isn't locked again.
     pub(super) fn note_answer(
         &self,
         sized_by: Option<(u16, &[u8])>,
         response: &Result<TsmResponse, Error>,
     ) {
         if let Some((network, mac)) = sized_by
-            && let Ok(
-                TsmResponse::SimpleAck
-                | TsmResponse::ComplexAck { .. }
-                | TsmResponse::Remote { .. },
-            ) = response
+            && answered_by_peer(response)
         {
             self.device_table.lock().answered(network, mac);
         }

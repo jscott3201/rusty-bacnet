@@ -9650,8 +9650,10 @@ State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a
 different DNET remain independent, and direct requests bypass this state. A
 matching Reject-Message-To-Network reason 4 completes only the active owner as
-`Error::RoutedPathTooLong { dnet }` and records the attempted NPDU length as an
-exclusive upper bound. Learned negative evidence lasts for the client lifetime
+`Error::RoutedPathTooLong { dnet }`. It records the largest forwarded NPDU that
+request has sent as an exclusive upper bound: a reject may answer any of its
+frames, such as a full segment sent before a smaller final one (#2651).
+Learned negative evidence lasts for the client lifetime
 and has no widening TTL. Both configuration methods wait for an active owner;
 configuring replaces the prior value and deliberately resets learned evidence,
 while clearing removes configured and learned evidence. Active Clause 19.4
@@ -9665,14 +9667,39 @@ is safely reclaimable, the operation returns
 `Error::RoutedPathCapacityExceeded { capacity: 256 }` before TSM registration
 or frame emission.
 
-An ambiguously terminated send (including cancellation, timeout, or send
-failure) quarantines its path for the configured APDU timeout multiplied by
-the configured attempt count. The same-path gate remains exclusive during
-that interval, and network controls already observed at ingress before the
-next generation activates are discarded using a monotonic ingress sequence.
-A source-correlated terminal response after one attempted frame can end the
-generation without quarantine; multi-frame or retried generations remain
-conservative.
+A reason 4 names only its reason and the network, not the request or the
+frame it refuses, so the client takes care that a late one is not pinned on
+the wrong request (#2651):
+
+- A request the device answered (an acknowledgment, or the device's own
+  Error, Reject or Abort) frees its path as soon as it completes, however
+  many frames it sent. A request answered after one frame leaves nothing
+  behind. One answered after several, a retry or segments, leaves its
+  largest frame on record for the APDU timeout times the attempt count.
+  An answer shows its frames crossed the path, so a reason 4 for one of
+  them means the path has shrunk since. Within that time a reason 4 fails a
+  later request on the path only if that request has sent a frame at least
+  as large: whichever frame the reject was for, that request's own cannot
+  pass. Clause 19.4 attributes a reason 4 on the same grounds, keeping
+  other traffic to the network no larger than the message it tests. A
+  smaller request keeps waiting for its own answer, retry or timeout, and
+  the reject is counted in `BACnetClient::too_long_reject_drops()`. After
+  the path shrinks, such a request that really is too long therefore ends
+  by its own timeout rather than as `RoutedPathTooLong`.
+- A request with no answer (a timeout, a send failure or the caller's
+  cancel) holds its path for the APDU timeout times the attempt count. So
+  does one a reason 4 ended after several frames: the router's refusal is
+  no answer, and another of its frames may draw one too. A reason 4 for a
+  request's only frame, on a path with no answered frames on record, frees
+  the path at once: among this client's confirmed requests on the path,
+  that frame is the only one it can be for.
+- Network controls observed at ingress before a request becomes active are
+  discarded using a monotonic ingress sequence.
+
+All of this covers the client's own confirmed requests on the path. Other
+traffic to the same network sits outside it, as before: the client's
+unconfirmed requests, the replies and notifications of a node's server
+role, and traffic through another router to that network.
 
 ### Property Access
 

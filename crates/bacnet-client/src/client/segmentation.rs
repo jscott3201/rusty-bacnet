@@ -751,6 +751,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
         .await;
         self.note_answer(limits.sized_by, &result);
+        if let Some(lease) = limits.routed_path_lease.as_ref()
+            && answered_by_peer(&result)
+        {
+            lease.mark_answered();
+        }
 
         #[cfg(test)]
         self.segmented_post_wait_cleanup.pause_if_enabled().await;
@@ -785,9 +790,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         };
 
-        if let Some(lease) = limits.routed_path_lease.as_ref() {
-            lease.mark_terminal_observed();
-        }
         guard.mark_completed();
         Self::confirmed_response_result(response)
     }

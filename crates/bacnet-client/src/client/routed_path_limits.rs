@@ -61,8 +61,36 @@ struct ActiveRoutedSend {
     invoke_id: u8,
     owner: TransactionOwner,
     forwarded_npci_len: u16,
-    outgoing_apdu_len: Option<u16>,
     ingress_floor: u64,
+}
+
+/// What ended the generation on a path, as far as its frames go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GenerationEnd {
+    /// Nothing has: a frame it sent may still draw a reason 4.
+    Open,
+    /// The device answered, with an acknowledgment or its Error, Reject or
+    /// Abort, so the size of each frame crossed the path (Clause 19.4).
+    Answered,
+    /// A reason 4 ended a one-frame generation while no earlier frame of
+    /// this client's confirmed requests on the path could still draw one,
+    /// so among those requests the reject was that frame's own. Other
+    /// traffic to the network sits outside the lease, as before: this
+    /// client's unconfirmed requests, a node's server replies and
+    /// notifications, and another router to the same network.
+    Refused,
+}
+
+/// The largest frame of the answered generations on a path whose frames
+/// may still draw a reason 4, and until when. Within that time a reason 4
+/// can belong to such a frame, so it fails a request only when that
+/// request's largest frame is no smaller: path limits fall with size, so
+/// whichever frame the reject was for, the request's own cannot pass.
+/// Clause 19.4 attributes a reason 4 the same way.
+#[derive(Clone, Copy)]
+struct AnsweredFrames {
+    largest_npdu: u16,
+    until: TokioInstant,
 }
 
 struct RoutedPathEntry {
@@ -72,8 +100,13 @@ struct RoutedPathEntry {
     active: Option<ActiveRoutedSend>,
     last_used: u64,
     quarantine_started: Option<TokioInstant>,
+    answered: Option<AnsweredFrames>,
     generation_attempts: u32,
-    generation_terminal_observed: bool,
+    /// The largest forwarded NPDU the generation has sent, 0 before its
+    /// first. A reason 4 may be for any of its frames, so a bound is learned
+    /// from this one, never from a smaller frame sent after it.
+    generation_largest_npdu: u16,
+    generation_end: GenerationEnd,
 }
 
 impl RoutedPathEntry {
@@ -85,9 +118,23 @@ impl RoutedPathEntry {
             active: None,
             last_used,
             quarantine_started: None,
+            answered: None,
             generation_attempts: 0,
-            generation_terminal_observed: false,
+            generation_largest_npdu: 0,
+            generation_end: GenerationEnd::Open,
         }
+    }
+
+    /// Start a new generation: nothing sent, nothing ended.
+    fn reset_generation(&mut self) {
+        self.generation_attempts = 0;
+        self.generation_largest_npdu = 0;
+        self.generation_end = GenerationEnd::Open;
+    }
+
+    /// [`Self::answered`] while it can still matter at `now`.
+    fn answered_at(&self, now: TokioInstant) -> Option<AnsweredFrames> {
+        self.answered.filter(|answered| answered.until > now)
     }
 }
 
@@ -95,6 +142,9 @@ struct RoutedPathState {
     entries: HashMap<RoutedPathKey, RoutedPathEntry>,
     next_use: u64,
     capacity: usize,
+    /// Reason-4 rejects dropped because they could belong to an earlier
+    /// answered generation's frame.
+    dropped_rejects: u64,
 }
 
 pub(super) struct RoutedPathLimits {
@@ -114,6 +164,7 @@ impl RoutedPathLimits {
                 entries: HashMap::new(),
                 next_use: 0,
                 capacity,
+                dropped_rejects: 0,
             }),
             quarantine_horizon,
         }
@@ -123,6 +174,11 @@ impl RoutedPathLimits {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// See [`BACnetClient::too_long_reject_drops`].
+    pub(super) fn dropped_rejects(&self) -> u64 {
+        self.state().dropped_rejects
     }
 
     /// How many path entries exist, in use or idle.
@@ -164,10 +220,11 @@ impl RoutedPathLimits {
         }
 
         if state.entries.len() >= state.capacity {
+            let now = TokioInstant::now();
             let reclaim = state
                 .entries
                 .iter()
-                .filter(|(_, entry)| self.is_safely_reclaimable(entry))
+                .filter(|(_, entry)| self.is_safely_reclaimable(entry, now))
                 .min_by(|(key_a, entry_a), (key_b, entry_b)| {
                     entry_a
                         .last_used
@@ -191,14 +248,17 @@ impl RoutedPathLimits {
         Ok(gate)
     }
 
-    fn is_safely_reclaimable(&self, entry: &RoutedPathEntry) -> bool {
+    /// Whether `entry` holds nothing a later request depends on at `now`,
+    /// read once for the whole scan of a full table.
+    fn is_safely_reclaimable(&self, entry: &RoutedPathEntry, now: TokioInstant) -> bool {
         entry.configured.is_none()
             && entry.learned.is_none()
             && entry.active.is_none()
             && Arc::strong_count(&entry.gate) == 1
-            && entry
-                .quarantine_started
-                .is_none_or(|started| started.elapsed() >= self.quarantine_horizon)
+            && entry.quarantine_started.is_none_or(|started| {
+                now.saturating_duration_since(started) >= self.quarantine_horizon
+            })
+            && entry.answered.is_none_or(|answered| answered.until <= now)
     }
 
     async fn wait_for_quarantine(&self, key: &RoutedPathKey) {
@@ -216,16 +276,14 @@ impl RoutedPathLimits {
                         let remaining = self.quarantine_horizon.saturating_sub(started.elapsed());
                         if remaining.is_zero() {
                             entry.quarantine_started = None;
-                            entry.generation_attempts = 0;
-                            entry.generation_terminal_observed = false;
+                            entry.reset_generation();
                             None
                         } else {
                             Some(remaining)
                         }
                     }
                     None => {
-                        entry.generation_attempts = 0;
-                        entry.generation_terminal_observed = false;
+                        entry.reset_generation();
                         None
                     }
                 }
@@ -270,7 +328,6 @@ impl RoutedPathLimits {
             invoke_id,
             owner,
             forwarded_npci_len,
-            outgoing_apdu_len: None,
             ingress_floor,
         });
     }
@@ -299,7 +356,7 @@ impl RoutedPathLimits {
         let Some(entry) = state.entries.get_mut(&key) else {
             return false;
         };
-        let Some(active) = entry.active.as_mut() else {
+        let Some(active) = entry.active.as_ref() else {
             return false;
         };
         if active.tsm_mac != *tsm_mac
@@ -308,7 +365,8 @@ impl RoutedPathLimits {
         {
             return false;
         }
-        active.outgoing_apdu_len = Some(outgoing_apdu_len);
+        let npdu = active.forwarded_npci_len.saturating_add(outgoing_apdu_len);
+        entry.generation_largest_npdu = entry.generation_largest_npdu.max(npdu);
         entry.generation_attempts = entry.generation_attempts.saturating_add(1);
         true
     }
@@ -328,7 +386,7 @@ impl RoutedPathLimits {
             return;
         }
 
-        let Some(active) = self.claim_active(
+        let Some((active, attempted_npdu)) = self.claim_active(
             &control.source_mac,
             reject.network,
             control.ingress_sequence,
@@ -342,36 +400,57 @@ impl RoutedPathLimits {
             reject.network,
         );
         if outcome == CompletionOutcome::Delivered {
-            self.commit_learned_limit(active);
+            self.commit_learned_limit(active, attempted_npdu);
         }
     }
 
+    /// Take the active request a reason 4 for `router_mac` and `dnet` ends,
+    /// with the largest forwarded NPDU it has sent. A reject that reached
+    /// ingress before the request was installed is not its own. One that
+    /// could be for an earlier answered generation's larger frame is
+    /// dropped and counted, and the request runs on to its own answer,
+    /// retry or timeout.
     fn claim_active(
         &self,
         router_mac: &[u8],
         dnet: u16,
         ingress_sequence: u64,
-    ) -> Option<ActiveRoutedSend> {
+    ) -> Option<(ActiveRoutedSend, u16)> {
         let key = RoutedPathKey::new(router_mac, dnet);
-        let mut state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         let entry = state.entries.get_mut(&key)?;
-        if entry.active.as_ref().is_none_or(|active| {
-            active.outgoing_apdu_len.is_none()
-                || active.path != key
-                || ingress_sequence <= active.ingress_floor
-        }) {
+        if entry.generation_attempts == 0
+            || entry
+                .active
+                .as_ref()
+                .is_none_or(|active| active.path != key || ingress_sequence <= active.ingress_floor)
+        {
             return None;
         }
-        entry.active.take()
+        let largest = entry.generation_largest_npdu;
+        // The clock is read only for a path with answered frames on record.
+        let answered = match entry.answered {
+            Some(_) => entry.answered_at(TokioInstant::now()),
+            None => None,
+        };
+        match answered {
+            Some(answered) if largest < answered.largest_npdu => {
+                state.dropped_rejects = state.dropped_rejects.saturating_add(1);
+                return None;
+            }
+            Some(_) => {}
+            None => {
+                entry.answered = None;
+                if entry.generation_attempts == 1 {
+                    entry.generation_end = GenerationEnd::Refused;
+                }
+            }
+        }
+        entry.active.take().map(|active| (active, largest))
     }
 
-    fn commit_learned_limit(&self, active: ActiveRoutedSend) {
-        let Some(attempted_npdu) = active
-            .outgoing_apdu_len
-            .and_then(|apdu| active.forwarded_npci_len.checked_add(apdu))
-        else {
-            return;
-        };
+    fn commit_learned_limit(&self, active: ActiveRoutedSend, attempted_npdu: u16) {
         let mut state = self.state();
         let entry = state
             .entries
@@ -429,17 +508,19 @@ impl RoutedPathLease {
         effective_npdu.saturating_sub(forwarded_npci_len)
     }
 
-    /// Mark a source-correlated terminal response for the current generation.
-    /// One attempted frame plus its terminal response proves there cannot be a
-    /// second reason-4 still in flight for that generation. Multi-frame or
-    /// retried generations remain ambiguous and are quarantined on drop.
-    pub(super) fn mark_terminal_observed(&self) {
+    /// Mark the current generation answered by the device: an
+    /// acknowledgment, or its Error, Reject or Abort, never a router's
+    /// refusal ([`answered_by_peer`]). The path is then free as soon as the
+    /// lease drops, however many frames the generation sent; the lease's
+    /// `Drop` implementation says what a generation with more than one
+    /// leaves behind.
+    pub(super) fn mark_answered(&self) {
         let mut state = self.limits.state();
         let entry = state
             .entries
             .get_mut(&self.key)
             .expect("path entry remains present while its gate is held");
-        entry.generation_terminal_observed = entry.generation_attempts == 1;
+        entry.generation_end = GenerationEnd::Answered;
     }
 
     fn configure(&self, max_npdu: u16) {
@@ -467,16 +548,43 @@ impl RoutedPathLease {
     }
 }
 
+/// Ending a generation frees its path at once unless a frame it sent may
+/// still draw a reason 4 that nothing could tell from the next request's:
+///
+/// - Answered by the device after one frame, or refused for its one frame:
+///   nothing of it is still in flight.
+/// - Answered after several frames (a retry, or segments): each frame's
+///   size crossed the path, so the path is free, and the largest frame is
+///   kept for the next window of the horizon. A reason 4 within it fails
+///   only a request at least that large ([`AnsweredFrames`]).
+/// - Anything else that sent a frame (no answer, a send failure, the
+///   caller's cancel, or a reason 4 after several frames, which is the
+///   router's refusal and not an answer) holds the path for the horizon.
 impl Drop for RoutedPathLease {
     fn drop(&mut self) {
+        let horizon = self.limits.quarantine_horizon;
         let mut state = self.limits.state();
         if let Some(entry) = state.entries.get_mut(&self.key) {
             entry.active = None;
-            if entry.generation_attempts > 0 && !entry.generation_terminal_observed {
-                entry.quarantine_started = Some(TokioInstant::now());
+            match (entry.generation_end, entry.generation_attempts) {
+                (_, 0) | (GenerationEnd::Answered, 1) | (GenerationEnd::Refused, _) => {}
+                (GenerationEnd::Answered, _) => {
+                    let now = TokioInstant::now();
+                    let largest_npdu = entry
+                        .answered_at(now)
+                        .map_or(entry.generation_largest_npdu, |answered| {
+                            answered.largest_npdu.max(entry.generation_largest_npdu)
+                        });
+                    entry.answered = Some(AnsweredFrames {
+                        largest_npdu,
+                        until: now + horizon,
+                    });
+                }
+                (GenerationEnd::Open, _) => {
+                    entry.quarantine_started = Some(TokioInstant::now());
+                }
             }
-            entry.generation_attempts = 0;
-            entry.generation_terminal_observed = false;
+            entry.reset_generation();
         }
     }
 }
@@ -488,9 +596,11 @@ fn bump_use(state: &mut RoutedPathState) -> u64 {
 
 pub(super) fn routed_path_quarantine_horizon(config: &ClientConfig) -> Duration {
     // Reuse the configured complete request/retry horizon instead of adding a
-    // separate arbitrary stale-control timer. A zero timeout still receives
-    // one millisecond, the existing configuration's millisecond granularity,
-    // so ambiguous generations never skip quarantine entirely.
+    // separate arbitrary stale-control timer: it is how long a path is held
+    // after a generation that may still draw a reason 4, and how long an
+    // answered generation's largest frame gates one. A zero timeout still
+    // receives one millisecond, the existing configuration's millisecond
+    // granularity, so neither is ever skipped entirely.
     let attempts = u64::from(config.apdu_retries).saturating_add(1);
     Duration::from_millis(config.apdu_timeout_ms.saturating_mul(attempts).max(1))
 }

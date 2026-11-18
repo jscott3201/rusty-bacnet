@@ -86,7 +86,7 @@ async fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
     );
     limits.install_active(target, tsm_mac.clone(), 7, old.owner.clone(), 11, 0);
     assert!(limits.authorize_attempt(target, &tsm_mac, 7, &old.owner, 100));
-    let claimed = limits.claim_active(&router, 100, 1).unwrap();
+    let (claimed, _) = limits.claim_active(&router, 100, 1).unwrap();
 
     assert!(tsm.cancel_transaction_for_owner(&tsm_mac, 7, &old.owner));
     let replacement = tsm.register_transaction_with_progress(
@@ -273,5 +273,5 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
         registration.response.await.unwrap(),
         TsmResponse::NetworkPathTooLong { dnet: 100 }
     ));
-    lease.mark_terminal_observed();
+    drop(lease);
 }

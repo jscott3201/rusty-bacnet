@@ -530,14 +530,13 @@ reinitialize-device parameters @4..20
         &frame,
         "
 device-communication-control parameters @4..33
-  [1] 00 (0) @4..6
-  Password: (hidden) @6..33
-  Not read as named fields: decoding error at offset 2: DCC password exceeds 20 characters @4..33",
+  Hidden: may hold a password @4..33
+  Not read as named fields: reason hidden (it may quote the password) @4..33",
     );
 }
 
-/// A frame cut off mid-value falls back to the tag walk, says why, and
-/// still covers every octet.
+/// A frame cut off mid-value falls back to the tag walk, says why, marks
+/// where the walk stopped, and still covers every octet.
 #[test]
 fn a_damaged_frame_falls_back_to_the_tag_walk() {
     let mut frame = rp_ack(
@@ -555,7 +554,7 @@ read-property parameters @3..14
   [0] 00000001 (1) @3..8
   [1] 55 (85) @8..10
   [3] opening @10..14
-    Application tag 4: buffer too short: need 16 bytes, have 14 @11..14
+    Tag walk stopped: contents claim 4 octets, 2 remain @11..14
   Not read as named fields: buffer too short: need 13 bytes, have 11 @3..14",
     );
 }
