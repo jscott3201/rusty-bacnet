@@ -1,7 +1,8 @@
 //! The node's DeviceCommunicationControl and the full client's source
-//! Audit (#2617). A session with a source Audit Reporter takes no full
-//! server today, so these hold the node's state through a server seat
-//! taken from the session's ingress, as a seated server does.
+//! Audit (#2617). These hold the node's state through a server seat taken
+//! from the session's ingress, as a seated server does, so each case sets
+//! it by hand; `source_server_tests.rs` drives it through the full server
+//! the session builds.
 use super::*;
 use bacnet_client::client::ClientOptions;
 use bacnet_endpoint_core::seat::ServerSeat;

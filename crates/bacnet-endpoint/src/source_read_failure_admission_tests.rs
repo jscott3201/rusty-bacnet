@@ -69,8 +69,10 @@ impl Fixture {
             .unwrap()
             .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
             .unwrap();
+        let db = Arc::new(RwLock::new(db));
         let (source, runtime) = SourceAudit::new(
-            Arc::new(RwLock::new(db)),
+            Arc::clone(&db),
+            &mut db.try_write().unwrap(),
             oid(ObjectType::AUDIT_REPORTER, 1),
             SourceRoutes::new(
                 &[(

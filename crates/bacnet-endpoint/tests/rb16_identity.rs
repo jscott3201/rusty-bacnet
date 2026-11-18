@@ -246,7 +246,7 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
     // Narrow admin borrow works while roles run; roles expose no lifecycle.
     assert_eq!(a.active_leases(), 0);
     let _ = a.policy_counters().await;
-    assert!(a.client().is_some() && a.server().is_some());
+    assert!(a.client().is_some() && a.responder().is_some());
 
     a.broadcast_i_am().await.unwrap();
     let got = tokio::time::timeout(WAIT, b_rx.recv())

@@ -152,7 +152,7 @@ async fn direct_prompt_does_not_consume_ordinary_suspension_or_echo_attributes()
     let mut session =
         EndpointSession::new(port, SessionRole::Both, SessionConfig::default()).unwrap();
     session.start().await.unwrap();
-    let handle = session.cloned_server_handle().unwrap();
+    let handle = session.cloned_responder_handle().unwrap();
     handle.suspend_next_reply().unwrap();
     let mut peer = f.peer(ca.tls("A"), None).await;
     let attributes = vec![DataAttribute {

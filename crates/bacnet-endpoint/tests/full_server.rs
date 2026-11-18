@@ -2,10 +2,11 @@
 //! session's link (#2617), on paused time over an in-memory link with
 //! broadcasts.
 //!
-//! The node under test is an endpoint session with both roles, whose full
-//! server serves its own database (AI-1 at 42.0) in place of the session's
-//! narrow server role (whose database has AI-1 at 20.0), beside a full
-//! client. Its peers are a `bacnet-server` device and a standalone client.
+//! The node under test is an endpoint session with both roles, which builds
+//! its full server at start ([`EndpointSession::with_server`]) on the
+//! session's database (AI-1 at 42.0), in place of its narrow server role,
+//! beside a full client. Its peers are a `bacnet-server` device and a
+//! standalone client.
 #![allow(dead_code)]
 
 #[path = "support/eventually.rs"]
@@ -70,7 +71,6 @@ struct Lab {
     session: EndpointSession<TestTransport>,
     node_sent: SendLog,
     node_link: TestTransportHandle,
-    server: BACnetServer<TestTransport>,
     client: BACnetClient<TestTransport>,
     /// A device the node's client reads, with AI-1 at 21.5.
     peer: BACnetServer<TestTransport>,
@@ -78,18 +78,27 @@ struct Lab {
     other: BACnetClient<TestTransport>,
 }
 
-/// A started session on node [`NODE`] with `role`, Device [`NODE_DEVICE`]
-/// and AI-1 at 20.0 in its own database.
+impl Lab {
+    /// The node's full server, which the session owns.
+    fn server(&self) -> &BACnetServer<TestTransport> {
+        self.session.server().expect("the node's full server")
+    }
+}
+
+/// A session on node [`NODE`] with `role`, Device [`NODE_DEVICE`], AI-1 at
+/// 42.0 in its database and a full server built from `builder`, started.
 async fn session(
     wire: &Wire,
     role: SessionRole,
+    builder: bacnet_server::server::ServerBuilder<TestTransport>,
 ) -> (EndpointSession<TestTransport>, SendLog, TestTransportHandle) {
     let port = wire.port(NODE);
     let (sent, link) = (port.sent(), port.handle());
     let mut session = EndpointSession::new(port.build(), role, SessionConfig::default())
         .unwrap()
         .device(DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
-        .with_database(database(NODE_DEVICE, 20.0));
+        .with_database(database(NODE_DEVICE, 42.0))
+        .with_server(builder);
     session.start().await.unwrap();
     (session, sent, link)
 }
@@ -110,41 +119,34 @@ async fn lab() -> Lab {
         .build()
         .await
         .unwrap();
-    let (session, node_sent, node_link) = session(&wire, SessionRole::Both).await;
-    let server = session
-        .full_server(BACnetServer::generic_builder().database(database(NODE_DEVICE, 42.0)))
-        .await
-        .unwrap();
+    let (session, node_sent, node_link) =
+        session(&wire, SessionRole::Both, BACnetServer::generic_builder()).await;
     let client = session.full_client().unwrap();
     Lab {
         wire,
         session,
         node_sent,
         node_link,
-        server,
         client,
         peer,
         other,
     }
 }
 
-/// The graceful order: the server, then the session, which stops the link
-/// once; the server's stop leaves it up.
+/// The session's stop stops its server, then the link, once.
 async fn stop(lab: Lab) {
     let Lab {
         mut session,
         node_link,
-        mut server,
         client,
         mut peer,
         mut other,
         ..
     } = lab;
-    server.stop().await.unwrap();
-    assert_eq!(node_link.stops(), 0, "the server stopped the node's link");
     drop(client);
     session.stop().await.unwrap();
     assert_eq!(node_link.stops(), 1);
+    assert!(session.server().is_none(), "gone with the stop");
     other.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
@@ -191,9 +193,8 @@ async fn the_full_server_answers_for_the_node_beside_its_full_client() {
         })
     })
     .await;
-    // It reads from its own database, not the session's, and it runs the
-    // services the session's narrow server role doesn't, ReadPropertyMultiple
-    // among them.
+    // It reads from the session's database, and it runs the services the
+    // session's narrow server role doesn't, ReadPropertyMultiple among them.
     let value = lab
         .other
         .read_property(&node, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
@@ -238,9 +239,12 @@ async fn the_full_server_answers_for_the_node_beside_its_full_client() {
         .unwrap();
     assert_eq!(peer_value.object_identifier, ai1());
 
-    // The session's narrow server role saw none of it.
+    // The session's narrow server role saw none of it, and no request
+    // found the node without a server.
+    assert!(lab.session.responder().is_none());
     let counters = lab.session.policy_counters().await;
     assert_eq!(counters.responder_declined, 0);
+    assert_eq!(counters.no_server_role, 0);
     assert_eq!(counters.confirmed_full_drops, 0);
     let seat = lab.session.server_seat_counters();
     assert!(seat.apdus >= 3, "{seat:?}");
@@ -383,7 +387,7 @@ async fn each_answer_goes_to_the_role_that_asked() {
         .unwrap();
     acknowledged(&mut from_peer, "from the peer").await;
     for round in 0..5u8 {
-        lab.server
+        lab.server()
             .set_present_value_local(&ai1(), PropertyValue::Real(50.0 + f32::from(round)))
             .await
             .unwrap();
@@ -423,70 +427,144 @@ async fn each_answer_goes_to_the_role_that_asked() {
     stop(lab).await;
 }
 
+/// A session that would build its server at start refuses, before its
+/// link starts, every setting it could not build one with, and starts once
+/// corrected: the refusal leaves it as it was.
 #[tokio::test(start_paused = true)]
-async fn a_full_server_is_refused_where_it_could_not_be_the_nodes_only_server() {
+async fn a_full_server_the_session_could_not_build_is_refused_before_the_link_starts() {
     let wire = Wire::new();
-    // No server role: a full client there answers every request itself.
-    let (mut alone, _, _) = session(&wire, SessionRole::ClientOnly).await;
-    let refused = alone.full_server(BACnetServer::generic_builder()).await;
-    assert!(
-        refused
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("no server role")
-    );
-    alone.stop().await.unwrap();
+    let identity = || DeviceIdentity::new(NODE_DEVICE, 42).unwrap();
+    // Refused at start: whose error says it, and whose link never started.
+    async fn refused(
+        session: &mut EndpointSession<TestTransport>,
+        link: &TestTransportHandle,
+        why: &str,
+    ) {
+        let error = session.start().await.expect_err("refused at start");
+        assert!(error.to_string().contains(why), "{why}: {error}");
+        assert!(!session.is_running());
+        assert_eq!(link.starts(), 0, "{why}: the link started");
+    }
+    let port = wire.port(NODE);
+    let link = port.handle();
+    let mut session = EndpointSession::new(
+        port.build(),
+        SessionRole::ClientOnly,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .device(identity())
+    .with_server(BACnetServer::generic_builder());
+    refused(&mut session, &link, "no server role").await;
 
-    // The session's own COV reporting.
     let port = wire.port(PEER);
-    let mut reporting =
+    let link = port.handle();
+    let mut session =
         EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
             .unwrap()
-            .device(DeviceIdentity::new(PEER_DEVICE, 42).unwrap())
-            .with_database(database(PEER_DEVICE, 1.0))
-            .with_cov(bacnet_device_core::report::ReportConfig::default());
-    reporting.start().await.unwrap();
-    let refused = reporting.full_server(BACnetServer::generic_builder()).await;
-    assert!(refused.err().unwrap().to_string().contains("COV"));
-    reporting.stop().await.unwrap();
+            .with_server(BACnetServer::generic_builder());
+    refused(&mut session, &link, "Device identity").await;
+    let mut session = session.device(identity());
+    // The builder's own database, link, port and identity.
+    let cases: [(bacnet_server::server::ServerBuilder<TestTransport>, &str); 4] = [
+        (
+            BACnetServer::generic_builder().database(database(NODE_DEVICE, 1.0)),
+            "give it to the session",
+        ),
+        (
+            BACnetServer::generic_builder().transport(Wire::new().port(9).build()),
+            "transport",
+        ),
+        (
+            BACnetServer::generic_builder().registered_network_port(
+                ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap(),
+            ),
+            "registered Network Port",
+        ),
+        (
+            BACnetServer::generic_builder()
+                .device(DeviceIdentity::new(NODE_DEVICE + 1, 42).unwrap()),
+            "Device identity",
+        ),
+    ];
+    for (builder, why) in cases {
+        session = session.with_server(builder);
+        refused(&mut session, &link, why).await;
+    }
+    // Beside the narrow role's opt-ins.
+    let mut session = session
+        .with_server(BACnetServer::generic_builder())
+        .with_cov(bacnet_device_core::report::ReportConfig::default());
+    refused(&mut session, &link, "with_cov").await;
 
-    // One at a time; a dropped server frees the seat at once.
-    let (mut session, _, link) = session(&Wire::new(), SessionRole::ServerOnly).await;
-    let first = session
-        .full_server(BACnetServer::generic_builder())
-        .await
-        .unwrap();
-    let second = session.full_server(BACnetServer::generic_builder()).await;
-    assert!(second.err().unwrap().to_string().contains("already has"));
-    drop(first);
-    let mut again = session
-        .full_server(BACnetServer::generic_builder())
-        .await
-        .expect("the dropped server's seat is free");
-    // The session's identity is the server's.
+    // Corrected, it starts and serves.
+    let port = wire.port(OTHER);
+    let link = port.handle();
+    let mut session = EndpointSession::new(
+        port.build(),
+        SessionRole::ServerOnly,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .with_server(BACnetServer::generic_builder());
+    refused(&mut session, &link, "Device identity").await;
+    let mut session = session.device(identity());
+    session.start().await.unwrap();
     let device = ObjectIdentifier::new(ObjectType::DEVICE, NODE_DEVICE).unwrap();
     assert!(
-        again
+        session
+            .server()
+            .unwrap()
             .read_local(&device, PropertyIdentifier::OBJECT_IDENTIFIER, None)
             .await
             .is_ok()
     );
-    again.stop().await.unwrap();
     session.stop().await.unwrap();
     assert_eq!(link.stops(), 1);
 }
 
-/// The session's server build can be spawned: its future is `Send` and
-/// borrows nothing of the session.
-fn the_full_server_build_is_send(
-    session: &EndpointSession<TestTransport>,
-) -> impl Send + 'static + use<> {
-    session.full_server(BACnetServer::generic_builder())
+/// `server()` is the session's while it runs: `None` before start, for a
+/// session without one and after stop.
+#[tokio::test(start_paused = true)]
+async fn the_server_is_borrowed_while_the_session_runs() {
+    let wire = Wire::new();
+    let port = wire.port(NODE);
+    let mut session =
+        EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
+            .unwrap()
+            .device(DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
+            .with_server(BACnetServer::generic_builder());
+    assert!(session.server().is_none(), "not before start");
+    session.start().await.unwrap();
+    assert!(session.server().is_some());
+    assert!(
+        session.responder().is_none(),
+        "the narrow role serves nothing"
+    );
+    session.stop().await.unwrap();
+    assert!(session.server().is_none(), "not after stop");
+
+    let (mut narrow, _, _) = narrow_session(&wire).await;
+    assert!(narrow.server().is_none());
+    assert!(narrow.responder().is_some());
+    narrow.stop().await.unwrap();
 }
 
-/// The node's AI-1 as `reader` reads it: 42.0 from the full server's
-/// database, 20.0 from the session's.
+/// A started narrow session on node [`PEER`], for comparison.
+async fn narrow_session(
+    wire: &Wire,
+) -> (EndpointSession<TestTransport>, SendLog, TestTransportHandle) {
+    let port = wire.port(PEER);
+    let (sent, link) = (port.sent(), port.handle());
+    let mut session =
+        EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
+            .unwrap()
+            .device(DeviceIdentity::new(PEER_DEVICE, 42).unwrap());
+    session.start().await.unwrap();
+    (session, sent, link)
+}
+
+/// The node's AI-1 as `reader` reads it.
 async fn read_node(reader: &BACnetClient<TestTransport>) -> f32 {
     let value = tokio::time::timeout(
         WAIT,
@@ -501,83 +579,4 @@ async fn read_node(reader: &BACnetClient<TestTransport>) -> f32 {
     .expect("an answer from the node")
     .unwrap();
     f32::from_be_bytes(value.property_value[1..5].try_into().unwrap())
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_stopped_full_server_hands_the_requests_back_to_the_narrow_role() {
-    let Lab {
-        mut session,
-        node_link,
-        mut server,
-        client,
-        mut peer,
-        mut other,
-        ..
-    } = lab().await;
-    assert_eq!(read_node(&other).await, 42.0);
-    server.stop().await.unwrap();
-    // The narrow server role answers again, from the session's database.
-    assert_eq!(read_node(&other).await, 20.0);
-    drop((server, client));
-    session.stop().await.unwrap();
-    assert_eq!(node_link.stops(), 1);
-    other.stop().await.unwrap();
-    peer.stop().await.unwrap();
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_dropped_full_server_hands_the_requests_back_to_the_narrow_role() {
-    let Lab {
-        mut session,
-        node_link,
-        server,
-        client,
-        mut peer,
-        mut other,
-        ..
-    } = lab().await;
-    assert_eq!(read_node(&other).await, 42.0);
-    // Dropped without a stop: its dispatch task is aborted, and its queue
-    // closes once the runtime has run that abort.
-    drop(server);
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(read_node(&other).await, 20.0);
-    drop(client);
-    session.stop().await.unwrap();
-    assert_eq!(node_link.stops(), 1);
-    other.stop().await.unwrap();
-    peer.stop().await.unwrap();
-}
-
-/// The refusals no running session is needed for: they come before the
-/// check that the session runs.
-#[tokio::test(start_paused = true)]
-async fn a_full_server_is_refused_beside_source_audit_or_a_registered_port() {
-    let wire = Wire::new();
-    let audited = EndpointSession::new(
-        wire.port(NODE).build(),
-        SessionRole::Both,
-        SessionConfig::default(),
-    )
-    .unwrap()
-    .with_source_audit_reporter(ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap());
-    let refused = audited.full_server(BACnetServer::generic_builder()).await;
-    let error = refused.err().expect("refused beside source Audit");
-    assert!(
-        error.to_string().contains("source Audit Reporter"),
-        "{error}"
-    );
-
-    let registered = EndpointSession::new(
-        wire.port(PEER).build(),
-        SessionRole::Both,
-        SessionConfig::default(),
-    )
-    .unwrap()
-    .with_registered_network_port(ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap());
-    let refused = registered
-        .full_server(BACnetServer::generic_builder())
-        .await;
-    let error = refused.err().expect("refused beside a registered port");
-    assert!(error.to_string().contains("Network Port"), "{error}");
 }

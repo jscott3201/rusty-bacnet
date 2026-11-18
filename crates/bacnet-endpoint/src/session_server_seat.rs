@@ -1,71 +1,31 @@
-//! A full `BACnetServer` on the session's link (#2617).
+//! The full `BACnetServer` the session builds on its own link (#2617).
 use super::*;
 use bacnet_endpoint_core::seat::{NodeDevice, ServerSeat, ServerSeatCounters};
+use bacnet_server::mutation::MutationTarget;
+use bacnet_server::policy::FnPolicy;
 use bacnet_server::server::{BACnetServer, ServerBuilder};
 
-impl<T: TransportPort + 'static> EndpointSession<T> {
-    /// A seat for a full server on this session's link: its network layer
-    /// and invoke-ID coordinator, shared, and a queue for what is the
-    /// server's to receive, as deep as the session's request queue
-    /// ([`SessionConfig::queue_capacity`]), whose place it takes. Refused
-    /// where the server could not be the session's only server role (see
-    /// [`Self::full_server`]); those refusals come before the check that the
-    /// session runs.
-    fn server_seat(&self) -> Result<ServerSeat<T>, Error> {
-        let refused = |why: &str| Err(Error::Encoding(format!("no full server here: {why}")));
-        if !matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
-            return refused(
-                "the session has no server role, so a full client on it would answer \
-                 requests too",
-            );
-        }
-        if self.source_audit_reporter.is_some() {
-            return refused("the session has a source Audit Reporter");
-        }
-        if self.cov.config.is_some() {
-            return refused(
-                "the session runs its own COV reporting; the full server brings its own",
-            );
-        }
-        if self.registered_network_port.is_some() {
-            return refused("the session's database holds its registered Network Port");
-        }
-        if self.identity.is_none() {
-            return refused(
-                "the session has no Device identity, which is the node's one set of device \
-                 settings: compose one with device()",
-            );
-        }
-        if !self.is_running() {
-            return Err(Error::Encoding("endpoint session is not running".into()));
-        }
-        let mut seat = self
-            .ingress
-            .as_ref()
-            .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?
-            .server_seat(Arc::clone(&self.coordinator))?;
-        seat.node = Some(NodeDevice {
-            client: matches!(self.role, SessionRole::Both),
-            client_max_apdu_length: self.client_config.max_apdu_length,
-            apdu_timeout_ms: self.config.apdu_timeout_ms,
-            apdu_retries: self.config.apdu_retries,
-        });
-        Ok(seat)
-    }
+/// Where the session's source Audit is, once it is: the seated server's
+/// observer of accepted ReinitializeDevice requests reads it.
+pub(super) type SourceSlot =
+    Arc<std::sync::OnceLock<std::sync::Weak<crate::source_audit::SourceAudit>>>;
 
-    /// A full [`BACnetServer`] on this session's link, built from `builder`:
-    /// one transport, one address, one pool of invoke IDs, beside the
-    /// session's client roles.
+impl<T: TransportPort + 'static> EndpointSession<T> {
+    /// Have [`start`](Self::start) build a full [`BACnetServer`] from
+    /// `builder` on this session's link (before start): one transport, one
+    /// address, one pool of invoke IDs, beside the session's client roles.
+    /// The session owns it; [`server`](Self::server) borrows it while the
+    /// session runs, and [`stop`](Self::stop) stops it first.
     ///
     /// It is the server a transport of its own gives, with every service,
-    /// policy and counter that one has. While it lives it takes every
-    /// request the session's own narrow server role would have taken, and
-    /// answers it from its own database: the session's database, its
-    /// Device writes, ReinitializeDevice handler and read limit no longer
-    /// answer anything. Once the server is stopped or dropped, the narrow
-    /// server role answers from the session's database again. See
-    /// [`SeatedServerBuilder::build`](bacnet_server::server::SeatedServerBuilder::build)
-    /// for what a seat changes, and the builder options it refuses.
+    /// policy and counter that one has, and `builder`'s settings as given:
+    /// its policies (a builder with none lets any peer write, create and
+    /// delete, as a standalone server does), budgets, handlers, COV policy,
+    /// device bindings and clock zone. It answers every request the
+    /// session's narrow server role would have, from the session's
+    /// database, which the session hands it at start ([`with_database`](Self::with_database), or a
+    /// stock one built from the identity). The narrow role then serves
+    /// nothing: [`responder`](Self::responder) is `None`.
     ///
     /// **One device.** The node has one set of device settings, the
     /// session's, and the server serves them as the node's Device:
@@ -76,44 +36,63 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///   resolved to the link. A builder identity that is not the default
     ///   is compared with it as the link serves both (after each is
     ///   resolved to the link) and leaving out the service list, which the
-    ///   full server builds itself: one that differs otherwise is refused.
-    ///   The database the builder holds must serve that Device, or be left
-    ///   out for a stock one;
+    ///   full server builds itself: one that differs otherwise is refused;
     /// - APDU_Timeout and Number_Of_APDU_Retries are
     ///   [`SessionConfig::apdu_timeout_ms`] and
     ///   [`SessionConfig::apdu_retries`] (default 6000 ms and 3), which the
     ///   client roles use and the server's confirmed notifications use too.
     ///   A builder that set other values, or a database whose Device
-    ///   declares others, is refused; a
-    ///   Device that declares the object model's defaults (6000 ms and 3, as
-    ///   one built from an identity does) is given the session's;
+    ///   declares others, is refused; a Device that declares the object
+    ///   model's defaults (6000 ms and 3, as one built from an identity
+    ///   does) is given the session's;
     /// - on a [`SessionRole::Both`] session, Protocol_Services_Supported
     ///   lists what the node's client executes (I-Am, I-Have, both COV
-    ///   notifications) beside the server's services (Clause 12.11.14). It
-    ///   follows the session's role, not whether a full client is attached
-    ///   at the moment: until one is, a ConfirmedCOVNotification the Device
-    ///   lists reaches the server, which rejects it, and a full client on a
-    ///   [`SessionRole::ServerOnly`] session executes services the Device
-    ///   doesn't list. Following the attached client would cost every
-    ///   ReadProperty a read of shared state;
+    ///   notifications) beside the server's services (Clause 12.11.14);
     /// - Segmentation_Supported, Max_Segments_Accepted and
     ///   APDU_Segment_Timeout are the identity's, which the server follows.
     ///   A [`full_client`](Self::full_client) keeps its own segmentation
-    ///   settings until the session builds its server itself (a later step
-    ///   of #2617): it accepts segmented answers even where the Device says
-    ///   it receives none, and, as before, it aborts a segmented
-    ///   ConfirmedCOVNotification, which it can't reassemble.
+    ///   settings for now (a later step of #2617): it accepts segmented
+    ///   answers even where the Device says it receives none, and it
+    ///   aborts a segmented ConfirmedCOVNotification, which it can't
+    ///   reassemble;
+    /// - a registered Network Port ([`with_registered_network_port`](Self::with_registered_network_port))
+    ///   is the session's to reserve and publish, and the server serves it
+    ///   for wildcard reads; written values take effect through the
+    ///   builder's ReinitializeDevice handler.
     ///
-    /// The session must be running, built with a server role
-    /// ([`SessionRole::ServerOnly`] or [`SessionRole::Both`]), so that a
-    /// [`full_client`](Self::full_client) leaves the server's requests to
-    /// it, and composed with a Device identity
-    /// ([`device`](Self::device)). One full server at a time. Refused, too, on a session with a
-    /// source Audit Reporter, with its own COV reporting
-    /// ([`with_cov`](Self::with_cov)), or with a registered Network Port:
-    /// those stay with the session's narrow server role for now. The session's
-    /// own COV reporting, local writes and persistence go with that role in
-    /// a later step of #2617, when the session builds its server itself.
+    /// **Refused at start**, before the link starts, leaving the session
+    /// ready to correct and start again: a session without a server role
+    /// ([`SessionRole::ClientOnly`]) or without a Device identity
+    /// ([`device`](Self::device)); a builder with a transport, a database
+    /// (give it to the session) or a registered Network Port (name it on
+    /// the session) of its own, or with device settings that contradict the
+    /// session's as above; beside the narrow server role's opt-ins
+    /// ([`with_cov`](Self::with_cov), [`with_device_writes`](Self::with_device_writes),
+    /// [`with_reinitialize`](Self::with_reinitialize), a non-default
+    /// [`SessionConfig::read_work_limit`]), whose places the builder's
+    /// settings take; and, beside a source Audit Reporter
+    /// ([`with_source_audit_reporter`](Self::with_source_audit_reporter)),
+    /// a builder with Audit Reporters of its own (the Device has one Audit
+    /// recipient) or one that decides no mutations: give it a policy whose
+    /// [`decides_mutations`](bacnet_server::ServerPolicy::decides_mutations)
+    /// is `true`, or [`MutationPolicy::DenyAll`](bacnet_server::mutation::MutationPolicy::DenyAll),
+    /// so that no peer rewrites the Device's Audit_Notification_Recipient
+    /// by default.
+    ///
+    /// **Source Audit beside the server.** The session's source Audit
+    /// sends its records through the server's pool of notifications, which
+    /// completes and joins them; the server reports each ReinitializeDevice
+    /// it accepts to the session's Reporter, which records it with its
+    /// requester. A peer's write of the Device's Audit_Notification_Recipient
+    /// that the policy allows is recorded with its requester as the source.
+    ///
+    /// **From the first request.** The session takes the server's seat as
+    /// soon as its link is up, and the server takes what waits there once
+    /// the session's start is done, so no request goes unanswered while
+    /// the server builds. A start that fails after the server is built
+    /// stops it; one cancelled there leaves it holding what waits,
+    /// unanswered, until [`stop`](Self::stop) or drop. A server build that
+    /// fails or is cancelled drops the database it was given.
     ///
     /// **Who answers what.** The server answers every confirmed request but
     /// a ConfirmedCOVNotification, which is a full client's; a
@@ -132,11 +111,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// ([`RequestAdmissionPolicy`](bacnet_server::server::RequestAdmissionPolicy))
     /// refuses work its handlers have no room for.
     ///
-    /// **One pool of invoke IDs.** The server and a full client lease from
-    /// the session's one pool of 256. When it runs out, the server's
-    /// confirmed notifications wait for an ID, while the client's requests
-    /// fail at once: a server with many confirmed COV notifications in
-    /// flight (up to 255) can leave the client's requests none.
+    /// **One pool of invoke IDs.** The server and the client roles lease
+    /// from the session's one pool of 256. The server holds at most 64 at
+    /// once: its confirmed notifications (COV, event and Audit, the source
+    /// Audit's records among them) and the reads its runs make. Past that,
+    /// each does what it does when the pool is empty: an event notification
+    /// waits for an ID, a COV notification is skipped with a warning (the
+    /// subscriber hears the next change; the session's own COV reporting,
+    /// [`with_cov`](Self::with_cov), queued it instead), an Audit record is
+    /// counted lost. The client's requests find the rest.
     ///
     /// **DeviceCommunicationControl binds the node.** The standard has it
     /// bind the whole device (Clause 16.1). While the server holds a
@@ -156,27 +139,38 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// A full client its operator started with
     /// [`ClientOptions::with_node_dcc_override`](bacnet_client::client::ClientOptions::with_node_dcc_override)
     /// keeps initiating; the session logs a warning then.
+    pub fn with_server(mut self, builder: ServerBuilder<T>) -> Self {
+        self.assert_configurable();
+        self.server_builder = Some(builder);
+        self
+    }
+
+    /// Borrows the full server [`with_server`](Self::with_server) had the
+    /// session build: `Some` while the session runs, `None` for a session
+    /// without one, before [`start`](Self::start) and after
+    /// [`stop`](Self::stop). For another task, clone what it needs from it
+    /// ([`database`](BACnetServer::database), an `Arc`).
+    pub fn server(&self) -> Option<&BACnetServer<T>> {
+        self.server.as_ref()
+    }
+
+    /// Borrows the narrow server role (`None` when not composed).
     ///
-    /// **Stopping.** Stop the server, then the session: the server's
-    /// [`stop`](BACnetServer::stop) joins its work and settles its saves,
-    /// and leaves the link up. A session stopped first stops the link all
-    /// the same; the server runs on for its own notifications, and what it
-    /// sends fails with the stopped transport's error.
+    /// Returns `None` for [`ClientOnly`](SessionRole::ClientOnly) sessions,
+    /// for a session given a full server ([`with_server`](Self::with_server),
+    /// which [`server`](Self::server) borrows), and after
+    /// [`stop`](Self::stop).
+    pub fn responder(&self) -> Option<&ServerRoleHandle> {
+        self.server_handle.as_ref()
+    }
+
+    /// Clones the narrow server role's handle with its session binding.
     ///
-    /// The seat is taken when this is called; the future that builds the
-    /// server borrows nothing of the session.
-    pub fn full_server(
-        &self,
-        builder: ServerBuilder<T>,
-    ) -> impl Future<Output = Result<BACnetServer<T>, Error>> + use<T> {
-        let seated = self.server_seat().map(|seat| {
-            let builder = builder.seat(seat);
-            match &self.identity {
-                Some(identity) => builder.node_identity(identity.clone()),
-                None => builder,
-            }
-        });
-        async move { seated?.build().await }
+    /// Same [`Weak`](std::sync::Weak)-token semantics as
+    /// [`cloned_client_handle`](Self::cloned_client_handle); see
+    /// [`is_session_alive`](crate::roles::ServerRoleHandle::is_session_alive).
+    pub fn cloned_responder_handle(&self) -> Option<ServerRoleHandle> {
+        self.server_handle.clone()
     }
 
     /// What ingress handed to the full server's seat, and what it dropped
@@ -187,4 +181,206 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .map(EndpointIngress::server_seat_counters)
             .unwrap_or_default()
     }
+
+    /// The node's device settings, which a seated server serves.
+    fn node_device(&self) -> NodeDevice {
+        NodeDevice {
+            client: matches!(self.role, SessionRole::Both),
+            client_max_apdu_length: self.client_config.max_apdu_length,
+            apdu_timeout_ms: self.config.apdu_timeout_ms,
+            apdu_retries: self.config.apdu_retries,
+        }
+    }
+
+    /// Refuse, before anything changes, a `with_server` the session could
+    /// not build (see [`with_server`](Self::with_server)), but for the
+    /// device settings, which [`check_server_device`](Self::check_server_device)
+    /// compares once the identity is resolved.
+    pub(super) fn check_server_builder(&self) -> Result<(), Error> {
+        let Some(builder) = &self.server_builder else {
+            return Ok(());
+        };
+        let refused = |why: &str| Err(Error::Encoding(format!("no full server here: {why}")));
+        if !matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
+            return refused("the session has no server role (ServerOnly or Both)");
+        }
+        if self.identity.is_none() {
+            return refused(
+                "the session has no Device identity, which is the node's one set of device \
+                 settings: compose one with device()",
+            );
+        }
+        let narrow = [
+            (
+                self.cov.config.is_some(),
+                "with_cov (the server reports COV itself)",
+            ),
+            (
+                self.device_write_authorizer.is_some(),
+                "with_device_writes (the builder's policy decides writes)",
+            ),
+            (
+                self.reinitialize.is_some() || self.reinit_password.is_some(),
+                "with_reinitialize (set on_reinitialize on the builder)",
+            ),
+            (
+                self.config.read_work_limit != SessionConfig::default().read_work_limit,
+                "a read_work_limit (set the builder's read_property_multiple_budget)",
+            ),
+        ];
+        if let Some((_, opt_in)) = narrow.iter().find(|(set, _)| *set) {
+            return refused(&format!(
+                "the narrow server role's {opt_in} goes with the full server's builder"
+            ));
+        }
+        let facts = builder.node_facts();
+        if facts.transport {
+            return refused("the builder has a transport: the server takes the session's link");
+        }
+        if facts.database {
+            return refused(
+                "the builder has a database: give it to the session (with_database), whose \
+                 database the server serves",
+            );
+        }
+        if facts.registered_network_port {
+            return refused(
+                "the builder names a registered Network Port: name it on the session \
+                 (with_registered_network_port), which reserves and publishes it",
+            );
+        }
+        if self.source_audit_reporter.is_some() && facts.audit_reporters {
+            return refused(
+                "the builder has Audit Reporters beside the session's source Audit Reporter: \
+                 the Device has one Audit recipient",
+            );
+        }
+        Ok(())
+    }
+
+    /// Refuse a `with_server` whose device settings contradict the
+    /// session's, once [`prepare_identity`](Self::prepare_identity) resolved
+    /// the identity and made the database.
+    pub(super) async fn check_server_device(&self) -> Result<(), Error> {
+        let (Some(builder), Some(identity)) = (&self.server_builder, &self.identity) else {
+            return Ok(());
+        };
+        let db = match &self.database {
+            Some(db) => Some(db.read().await),
+            None => None,
+        };
+        builder.check_node(
+            identity,
+            self.node_device(),
+            self.local_receive_capacity,
+            db.as_deref(),
+        )
+    }
+
+    /// Take the server's seat, as soon as the link is up, so what arrives
+    /// for the server waits for it in the seat's queue.
+    pub(super) fn take_server_seat(&self) -> Result<Option<ServerSeat<T>>, Error> {
+        if self.server_builder.is_none() {
+            return Ok(None);
+        }
+        let mut seat = self
+            .ingress
+            .as_ref()
+            .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?
+            .server_seat(Arc::clone(&self.coordinator))?;
+        seat.node = Some(self.node_device());
+        Ok(Some(seat))
+    }
+
+    /// Build the server on `seat` from the session's builder, handing it
+    /// the session's database, which the session then shares. The server
+    /// takes nothing from its seat while the session holds its gate
+    /// (`server_gate`), which the start lets go of once it is done, and a
+    /// stop otherwise. `source` is where its observer of accepted
+    /// ReinitializeDevice requests finds the session's source Audit.
+    pub(super) async fn build_server(
+        &mut self,
+        seat: ServerSeat<T>,
+        source: &SourceSlot,
+    ) -> Result<(), Error> {
+        let builder = self.server_builder.take().expect("checked server builder");
+        let identity = self.identity.clone().expect("checked identity");
+        let builder = match self.database.take() {
+            Some(db) => match Arc::try_unwrap(db) {
+                Ok(db) => builder.database(db.into_inner()),
+                Err(db) => {
+                    self.database = Some(db);
+                    return Err(Error::Encoding(
+                        "endpoint database is shared at start".into(),
+                    ));
+                }
+            },
+            None => builder,
+        };
+        let (gate, held) = oneshot::channel();
+        let mut seated = builder
+            .seat(seat)
+            .node_identity(identity)
+            .hold_requests_until(held);
+        if let Some(oid) = self.registered_network_port {
+            seated = seated.node_registered_port(oid);
+        }
+        if self.source_audit_reporter.is_some() {
+            // The session's Reporter records an accepted reset, backup or
+            // restore step with its requester (#1564). Weak, so the server
+            // never keeps the source alive.
+            let source = Arc::clone(source);
+            seated = seated.on_accepted_reinitialize(Arc::new(move |db, operation, requester| {
+                if let Some(source) = source.get().and_then(std::sync::Weak::upgrade) {
+                    source.device_operation(db, operation, Some(requester));
+                }
+            }));
+        }
+        let server = seated.build().await?;
+        self.database = Some(Arc::clone(server.database()));
+        self.server = Some(server);
+        self.server_gate = Some(gate);
+        Ok(())
+    }
+
+    /// Stop the full server, first: its work joins and its saves settle
+    /// while the link is still up. Kept through a cancelled stop, whose
+    /// next call stops it again; its error is the stop's. A server still
+    /// held by an unfinished start stops without taking what it holds.
+    pub(super) async fn stop_server(&mut self) {
+        if let Some(server) = self.server.as_mut() {
+            if let Err(error) = server.stop().await {
+                self.server_stop_error.get_or_insert(error);
+            }
+            self.server = None;
+        }
+        self.server_gate = None;
+    }
 }
+
+/// The full server a session builds without a builder of its own (#2617,
+/// for its later step): read-only. Peers read, discover and subscribe to
+/// COV; no peer writes, creates or deletes. Each covered mutation but the
+/// three COV subscriptions is denied (SERVICES / SERVICE_REQUEST_DENIED,
+/// skipped for an inbound WriteGroup); everything the server's other
+/// defaults deny (DeviceCommunicationControl, ReinitializeDevice without a
+/// handler, LifeSafetyOperation, Audit notifications) stays denied.
+/// Services the mutation policy doesn't decide keep the server's defaults:
+/// AcknowledgeAlarm (Clause 13.5), time synchronization under the default
+/// `TimeSyncPolicy` (Clause 16.7) and text messages (Clause 16.5) are
+/// executed for any peer.
+#[allow(dead_code)]
+pub(crate) fn read_only_server<T: TransportPort + 'static>() -> ServerBuilder<T> {
+    BACnetServer::generic_builder().policy(FnPolicy::new().inline().mutation(|context| {
+        matches!(
+            context.target,
+            MutationTarget::SubscribeCov(_)
+                | MutationTarget::SubscribeCovProperty(_)
+                | MutationTarget::SubscribeCovPropertyMultiple(_)
+        )
+    }))
+}
+
+#[cfg(test)]
+#[path = "session_server_tests.rs"]
+mod tests;

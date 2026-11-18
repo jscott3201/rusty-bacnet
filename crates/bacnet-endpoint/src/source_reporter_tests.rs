@@ -160,7 +160,7 @@ async fn success(role: SessionRole) {
     session.start().await.unwrap();
     assert!(session.is_running());
     assert!(session.client().is_some());
-    assert_eq!(session.server().is_some(), role == SessionRole::Both);
+    assert_eq!(session.responder().is_some(), role == SessionRole::Both);
     let db = session.database.as_ref().unwrap();
     let weak = Arc::downgrade(db);
     assert_eq!(

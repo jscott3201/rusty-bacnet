@@ -266,7 +266,7 @@ async fn deferred_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = Harness::new(mode, SessionRole::Both, frames).await;
     // Arm suspension: the next prompt-capable request answers token-owned.
     h.session
-        .server()
+        .responder()
         .expect("server role")
         .suspend_next_reply()
         .expect("arm suspension");

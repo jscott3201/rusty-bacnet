@@ -427,7 +427,11 @@ async fn a_frame_expecting_a_reply_is_answered_on_its_own_path_by_the_role_it_is
 
     // With the reply postponed the frame gets no reply, and the server
     // role's answer goes out as a frame of its own, client or no client.
-    lab.session.server().unwrap().suspend_next_reply().unwrap();
+    lab.session
+        .responder()
+        .unwrap()
+        .suspend_next_reply()
+        .unwrap();
     let (received, reply) = expecting_reply(&read);
     lab.wire.deliver(&node, received);
     assert!(reply.await.is_err(), "postponed: no reply on the frame");

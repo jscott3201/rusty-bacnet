@@ -84,8 +84,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             bound: false,
             committed: false,
         };
+        // A full server the session would build, refused before anything
+        // changes (#2617).
+        preparation.session.check_server_builder()?;
         preparation.session.validate_segmentation().await?;
         preparation.session.prepare_identity().await?;
+        preparation.session.check_server_device().await?;
         let device = preparation.session.validate_device_execution()?;
         let routes = preparation.session.prepare_source_audit_reporter()?;
         // Bind the database to the identity's Device from here on, as a

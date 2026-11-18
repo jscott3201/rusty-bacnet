@@ -11,10 +11,7 @@ use std::time::Duration;
 
 use super::super::eventually::eventually;
 
-#[allow(dead_code)]
-#[path = "../tests/support/wire.rs"]
-mod wire;
-use wire::Wire;
+use crate::session::wire::{self, Wire};
 
 const NODE: u8 = 1;
 const PEER: u8 = 2;

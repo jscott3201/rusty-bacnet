@@ -82,7 +82,7 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
 
     // Live clones prove binding while running.
     let live_client = a.cloned_client_handle().unwrap();
-    let live_server = a.cloned_server_handle().unwrap();
+    let live_server = a.cloned_responder_handle().unwrap();
     assert!(live_server.is_session_alive());
 
     // Owner shutdown with handles alive: stop joins, clones fail closed.
@@ -102,7 +102,7 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
     assert!(live_server.suspend_next_reply().is_err());
     // Session borrows are released at termination.
     assert!(a.client().is_none());
-    assert!(a.server().is_none());
+    assert!(a.responder().is_none());
 
     b.stop().await.unwrap();
 }
@@ -195,7 +195,7 @@ async fn detached_handles_survive_drop_as_fail_closed_values() {
     a.start().await.unwrap();
     b.start().await.unwrap();
     let detached_client = a.cloned_client_handle().unwrap();
-    let detached_server = a.cloned_server_handle().unwrap();
+    let detached_server = a.cloned_responder_handle().unwrap();
     // `Send + Sync` clones move across tasks while bound.
     let moved = tokio::spawn(async move { detached_server.is_session_alive() })
         .await
