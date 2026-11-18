@@ -1159,6 +1159,24 @@ Properties:
 - `acks: int`: How many acknowledgements carried the entries.
 - `truncated: bool`: Whether the call stopped at its `total` or `max_entries` bound, or lost acknowledgements, rather than after a quiet interval. It covers those cases only: a quiet end does not prove the table whole (on MS/TP, acknowledgements after the first wait for the router's token), so use a larger `quiet` on a slow trunk. A late acknowledgement of an earlier query to the same router can also be counted by the next one (nothing pairs answers with questions), so leave a gap between repeated queries; entries are reported as received, so a network number can appear twice.
 
+## RoutedPathLimit
+
+One routed path, a router on the local link and a destination
+network, with the size limit the client holds for it, as
+`BACnetClient.routed_path_limits()` lists it (#2667), frozen. Its
+`repr` writes the router in the link's own form. Refuses `copy` and
+`pickle`.
+
+Properties:
+
+- `router: bytes`: The router's MAC on the local link, as `DiscoveredRouter.mac` gives it; the routed-path calls take it back.
+- `network: int`: The destination network.
+- `max_npdu: int`: The limit requests on the path are sized to, in NPDU octets: the configured limit (228 without one), lowered to the learned one.
+- `source: str`: Where `max_npdu` comes from: `"default"` (228 octets), `"configured"`, or `"learned"` from a router's too-long reject when that is lower than the configured limit.
+- `configured_max_npdu: Optional[int]`: The limit set with `configure_routed_path_max_npdu`, or None.
+- `learned_max_npdu: Optional[int]`: One octet under the smallest frame a router refused as too long on this path, or None; never below 228.
+- `below_minimum_reject_seen: bool`: Whether a too-long reject for a request of 228 NPDU octets or fewer was dropped on this path since its limit was last set or cleared: the sign of a router that carries less than every router must, whose requests end by timeout.
+
 ## NetworkReport
 
 A network-layer report this client received (#1850), frozen. Fields

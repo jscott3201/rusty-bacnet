@@ -35,6 +35,7 @@ mod py_async;
 mod read_range;
 mod registration_dicts;
 mod reinitialize;
+mod routed_paths;
 mod router;
 mod sc_events;
 mod sc_identity;
@@ -88,6 +89,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     frame_decode::register(m)?;
     i_am_arrivals::register(m)?;
     discovery::register(m)?;
+    routed_paths::register(m)?;
     export_223::register(m)?;
     high_level::register(m)?;
     sc_inspection::register(m)?;
