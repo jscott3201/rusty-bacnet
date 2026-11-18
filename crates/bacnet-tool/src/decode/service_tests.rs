@@ -532,7 +532,7 @@ reinitialize-device parameters @4..20
 device-communication-control parameters @4..33
   [1] 00 (0) @4..6
   Password: (hidden) @6..33
-  Not read as named fields: decoding error at offset 2: DCC password exceeds 20 characters @4..33",
+  Not read as named fields: reason hidden (it may quote the password) @4..33",
     );
 }
 
@@ -555,7 +555,7 @@ read-property parameters @3..14
   [0] 00000001 (1) @3..8
   [1] 55 (85) @8..10
   [3] opening @10..14
-    Tag walk stopped: contents end at octet 16, past the end at 14 @11..14
+    Tag walk stopped: contents claim 4 octets, 2 remain @11..14
   Not read as named fields: buffer too short: need 13 bytes, have 11 @3..14",
     );
 }

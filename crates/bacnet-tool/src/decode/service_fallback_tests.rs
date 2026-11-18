@@ -59,30 +59,31 @@ device-communication-control parameters @6..16
     );
 }
 
-/// Parameters the decoder refuses hide a character string at any depth,
-/// application or context tagged, and ReinitializeDevice's tag 1.
+/// Parameters the decoder refuses: from where the password may sit, a
+/// constructed value of any tag holding a string, an application string,
+/// ReinitializeDevice's tag 1, the octets are one hidden leaf, and the
+/// decoder's reason is hidden too.
 #[test]
-fn refused_password_requests_hide_strings_at_any_depth() {
+fn refused_password_requests_hide_everything_from_the_password() {
     // DCC with the password inside a constructed [2].
     assert_eq!(
         hidden(&format!("00 05 01 11 1900 2E 7508 {SECRET} 2F")),
         "\
 device-communication-control parameters @4..18
   [1] 00 (0) @4..6
-  [2] opening @6..18
-    Hidden: may hold a password @7..17
-  Not read as named fields: decoding error at offset 2: DCC: 12 trailing byte(s) @4..18"
+  Hidden: may hold a password @6..18
+  Not read as named fields: reason hidden (it may quote the password) @4..18"
     );
     // ... and inside [3].
     let text = hidden(&format!("00 05 01 11 1900 3E 7508 {SECRET} 3F"));
     assert!(
-        text.contains("  [3] opening @6..18\n    Hidden: may hold a password @7..17"),
+        text.contains("\n  Hidden: may hold a password @6..18\n"),
         "{text}"
     );
     // An application character string at the top level.
     let text = hidden(&format!("00 05 01 11 1900 7508 {SECRET}"));
     assert!(
-        text.contains("  Hidden: may hold a password @6..16"),
+        text.contains("\n  Hidden: may hold a password @6..16\n"),
         "{text}"
     );
     // ReinitializeDevice with a password past 20 characters.
@@ -90,12 +91,12 @@ device-communication-control parameters @4..18
     let text = snapshot(&octets(&format!("00 05 01 14 0900 1D19 {long}")));
     assert!(!text.contains("5A71372D"), "{text}");
     assert!(text.contains("  Password: (hidden) @6..33"), "{text}");
-    assert!(text.contains("exceeds 20 characters"), "{text}");
+    assert!(text.contains("reason hidden"), "{text}");
 }
 
 /// A password whose length claims too little leaves the rest of it to read
-/// as more tags: everything from the password tag on is hidden, so the
-/// rest can't pass as a duration or a state.
+/// as more tags: everything after the password tag is one hidden leaf, so
+/// the rest can't pass as a duration or a state.
 #[test]
 fn everything_from_the_password_on_is_hidden() {
     assert_eq!(
@@ -105,7 +106,7 @@ device-communication-control parameters @4..14
   [1] 00 (0) @4..6
   Password: (hidden) @6..9
   Hidden: may hold a password @9..14
-  Not read as named fields: decoding error at offset 5: DCC: 5 trailing byte(s) @4..14"
+  Not read as named fields: reason hidden (it may quote the password) @4..14"
     );
     let text = hidden("00 05 01 14 0900 1A0068 0B756E74");
     assert!(
@@ -115,38 +116,44 @@ device-communication-control parameters @4..14
 }
 
 /// Only the fields before the password, at the top level and at their
-/// sizes, stay readable: a short [0] inside a constructed value, a time
-/// duration of five octets, and every field after it are hidden.
+/// sizes, stay readable: a constructed value, a time duration of five
+/// octets, and every field after either, are one hidden leaf.
 #[test]
 fn only_expected_top_level_fields_stay() {
     let text = hidden("00 05 01 11 1900 3E0907 3F");
-    assert!(text.contains("  [1] 00 (0) @4..6\n"), "{text}");
     assert!(
-        text.contains("  [3] opening @6..10\n    Hidden: may hold a password @7..9"),
+        text.contains("  [1] 00 (0) @4..6\n  Hidden: may hold a password @6..10\n"),
         "{text}"
     );
     let text = hidden("00 05 01 11 0D05 0102030405 1900");
     assert!(
-        text.contains(
-            "  Hidden: may hold a password @4..11\n  Hidden: may hold a password @11..13"
-        ),
+        text.contains("parameters @4..13\n  Hidden: may hold a password @4..13\n"),
         "{text}"
     );
 }
 
-/// Where the walk stops in a password-bearing request, the octets from
-/// the fault on are one leaf that names the fault and quotes none of them,
-/// so it stays readable; whatever the walk read is hidden as before.
+/// A fault the walk stops at among the fields before the password keeps
+/// its text, which quotes only the octets at the fault; one at the
+/// password, or after hiding starts, is hidden with the rest.
 #[test]
-fn a_fault_in_a_password_request_is_marked_and_quotes_nothing() {
+fn a_fault_before_the_password_shows_and_one_after_is_hidden() {
+    // A stray closing tag before the password tag.
+    assert_eq!(
+        hidden("00 05 01 11 1900 3F 2D08 0068756E7465"),
+        "\
+device-communication-control parameters @4..15
+  [1] 00 (0) @4..6
+  Tag walk stopped: closing tag [3] with no opening tag @6..15
+  Not read as named fields: reason hidden (it may quote the password) @4..15"
+    );
     // The password claims 8 octets and 6 remain.
     assert_eq!(
         hidden("00 05 01 11 1900 2D08 0068756E7465"),
         "\
 device-communication-control parameters @4..14
   [1] 00 (0) @4..6
-  Tag walk stopped: contents end at octet 16, past the end at 14 @6..14
-  Not read as named fields: buffer too short: need 12 bytes, have 10 @4..14"
+  Password: (hidden) @6..14
+  Not read as named fields: reason hidden (it may quote the password) @4..14"
     );
     // The password inside a constructed [3] that is never closed.
     assert_eq!(
@@ -154,10 +161,8 @@ device-communication-control parameters @4..14
         "\
 device-communication-control parameters @4..17
   [1] 00 (0) @4..6
-  [3] opening @6..17
-    Hidden: may hold a password @7..17
-    Tag walk stopped: opening tag [3] is never closed @6..17
-  Not read as named fields: decoding error at offset 2: DCC: 11 trailing byte(s) @4..17"
+  Hidden: may hold a password @6..17
+  Not read as named fields: reason hidden (it may quote the password) @4..17"
     );
 }
 

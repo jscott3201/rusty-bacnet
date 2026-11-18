@@ -34,7 +34,7 @@ use bacnet_types::enums::{
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::Field;
-use super::tag_walk::{Element, Origin, Walk, fields};
+use super::tag_walk::{Element, Origin, Walk, members_of};
 
 #[path = "service_password.rs"]
 mod password;
@@ -43,7 +43,7 @@ use bacnet_ops::format::alarms::{EventSummaryData, cell};
 use bacnet_ops::format::notification::EventValues;
 use bacnet_ops::format::{Floats, StateTexts, ValueFormat, format_property_value, timestamp_text};
 use bacnet_ops::label::{kebab, object_label};
-use password::{PASSWORD, hide_passwords};
+use password::{PASSWORD, REASON_HIDDEN, hide_passwords};
 
 /// Which parameters an APDU carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,9 +60,11 @@ pub(super) enum Params {
 enum Miss {
     /// The service has no named decode here.
     Unnamed,
-    /// Its decoder refused the parameters, or they aren't laid out as it
-    /// read them.
+    /// Its decoder refused the parameters.
     Refused(String),
+    /// They aren't laid out as its decoder read them: the tag walk stopped
+    /// where the decoder read on, or the tags don't fall as it read them.
+    Layout,
 }
 
 impl From<bacnet_types::error::Error> for Miss {
@@ -107,6 +109,11 @@ pub(super) fn parameters(
     let refused = match whole.map(|params| named(params, &doc)) {
         Some(Ok(fields)) => return fields,
         Some(Err(Miss::Refused(why))) => Some(why),
+        // Where the walk stopped says why, when it stopped.
+        Some(Err(Miss::Layout)) => Some(doc.walk.stop().map_or_else(
+            || "unexpected layout".to_string(),
+            |stop| format!("tag walk stopped: {}", stop.text()),
+        )),
         Some(Err(Miss::Unnamed)) | None => None,
     };
     // The walk's own fields, value errors quoting offsets in the APDU.
@@ -116,9 +123,16 @@ pub(super) fn parameters(
         shift: start,
     });
     if let Some(secret) = secret {
-        hide_passwords(&mut fields, &doc.walk.elements, secret);
+        hide_passwords(&mut fields, &doc.walk, secret, doc.whole().end);
     }
     if let Some(why) = refused {
+        // A decoder's reason can quote a password's octets: its character
+        // set, or how many of them decode.
+        let why = if secret.is_some() {
+            REASON_HIDDEN.into()
+        } else {
+            why
+        };
         fields.push(Field::leaf(
             format!("Not read as named fields: {why}"),
             doc.whole(),
@@ -215,40 +229,46 @@ impl<'a> Doc<'a> {
         Field::leaf(label, self.abs(&item.range))
     }
 
-    /// The top-level items, when the walk framed every tag: each a
-    /// primitive, or an opening tag through its closing tag with its
-    /// members, at offsets in [`Doc::data`]. The services' decoders frame
-    /// what they read as the walk does, so tags they accept and it doesn't
-    /// aren't laid out as they read them.
+    /// The top-level items: each a primitive, or an opening tag through its
+    /// closing tag with its members, at offsets in [`Doc::data`]. A fault
+    /// outside every item leaves them not laid out as the decoder read
+    /// them; one inside the last runs it to the end, which only a value can
+    /// take ([`Doc::value`]).
     fn items(&self) -> Result<&[Element<'a>], Miss> {
-        if self.walk.is_whole() {
-            Ok(&self.walk.elements)
-        } else {
-            Err(layout())
+        match self.walk.top_stop() {
+            Some(_) => Err(Miss::Layout),
+            None => Ok(&self.walk.elements),
         }
     }
 
-    /// The members of a constructed `item`.
+    /// The members of a constructed `item` the walk read whole.
     fn items_in<'d>(&self, item: &'d Element<'a>) -> Result<&'d [Element<'a>], Miss> {
-        if item.is_constructed() {
+        if item.is_constructed() && !item.is_stopped() {
             Ok(&item.children)
         } else {
-            Err(layout())
+            Err(Miss::Layout)
         }
     }
 
-    /// The tags inside `item`, as the tag walk shows them.
+    /// The tags inside `item`, as the tag walk shows them, with the leaf of
+    /// a fault the walk stopped at inside it.
     fn tags_of(&self, item: &Element<'_>) -> Vec<Field> {
         let origin = Origin {
             frame: self.at,
             values: self.data,
             shift: 0,
         };
-        fields(&item.children, origin)
+        members_of(item, origin)
     }
 
     /// A property value, written with its object type and property, its
     /// tags under it unless it is one primitive; and its text alone.
+    ///
+    /// Its decoder delimits its `octets`, and may take some the walk can't
+    /// frame, such as an EVENT_PARAMETERS value in its pre-framing form
+    /// from an older device (#2376). The walk then stopped inside the item
+    /// and ran it to the end, so it is the value's only when that is where
+    /// the value's tags end.
     fn value(
         &self,
         item: &Element<'_>,
@@ -256,12 +276,16 @@ impl<'a> Doc<'a> {
         property: PropertyIdentifier,
         index: Option<u32>,
         octets: &[u8],
-    ) -> (String, Field) {
+    ) -> Result<(String, Field), Miss> {
+        if item.is_stopped() && item.span_around(octets.len()) != item.range {
+            return Err(Miss::Layout);
+        }
         let texts = StateTexts::default();
         let format = ValueFormat::new(object_type, &texts, Floats::Display);
         let text = format.value_at(property, index, octets);
         let mut inner = self.tags_of(item);
-        if let [one] = inner.as_slice()
+        if !item.is_stopped()
+            && let [one] = inner.as_slice()
             && one.children.is_empty()
         {
             inner.clear();
@@ -270,13 +294,13 @@ impl<'a> Doc<'a> {
         field.device_text = format
             .data_at(property, index, octets)
             .may_hold_device_text();
-        (text, field)
+        Ok((text, field))
     }
 }
 
 /// The parameters aren't laid out as their decoder read them.
 fn layout() -> Miss {
-    Miss::Refused("unexpected layout".into())
+    Miss::Layout
 }
 
 /// The item tagged `number`.
@@ -383,7 +407,7 @@ fn read_property_ack(doc: &Doc<'_>, ack: ReadPropertyACK) -> Named {
             ack.property_identifier,
             ack.property_array_index,
             &ack.property_value,
-        )
+        )?
         .1,
     );
     Ok(fields)
@@ -405,7 +429,7 @@ fn write_property(doc: &Doc<'_>, request: WritePropertyRequest) -> Named {
             request.property_identifier,
             request.property_array_index,
             &request.property_value,
-        )
+        )?
         .1,
     );
     fields.extend(opt(doc, items, 4, |_| {
@@ -474,7 +498,7 @@ fn rpm_ack(doc: &Doc<'_>, ack: ReadPropertyMultipleACK) -> Named {
             let (label, device_text) = match (&element.property_value, element.error) {
                 (Some(value), _) => {
                     let (text, field) =
-                        doc.value(need(run, 4)?, object.object_type(), property, index, value);
+                        doc.value(need(run, 4)?, object.object_type(), property, index, value)?;
                     let label = format!("{name}: {text}");
                     let device_text = field.device_text;
                     kids.push(field);
@@ -521,7 +545,7 @@ fn property_values(
         kids.extend(opt(doc, run, 1, |_| {
             index.map(|index| format!("Array index: {index}"))
         }));
-        let (text, field) = doc.value(need(run, 2)?, object_type, property, index, &value.value);
+        let (text, field) = doc.value(need(run, 2)?, object_type, property, index, &value.value)?;
         let label = format!("{}: {text}", property_text(property, index));
         let device_text = field.device_text;
         kids.push(field);
@@ -714,3 +738,7 @@ mod tests;
 #[cfg(test)]
 #[path = "service_fallback_tests.rs"]
 mod fallback_tests;
+
+#[cfg(test)]
+#[path = "service_password_tests.rs"]
+mod password_tests;

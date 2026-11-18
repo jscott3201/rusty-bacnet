@@ -6,8 +6,8 @@ use bacnet_encoding::tags::tree::{MAX_TAG_TREE_DEPTH, MAX_TAG_TREE_NODES};
 
 use super::super::{Field, decode_apdu_tree};
 
-#[path = "tag_walk_oracle_tests.rs"]
-mod oracle;
+#[path = "tag_walk_property_tests.rs"]
+mod property;
 
 /// `text` as octets, spaces ignored.
 pub(super) fn octets(text: &str) -> Vec<u8> {
@@ -80,7 +80,8 @@ unconfirmed-private-transfer parameters @2..7
 }
 
 /// Octets that end inside a constructed element: what was read stays, and
-/// the leaf covers the opening tag the walk ended in, through the end.
+/// the leaf, which covers no octet, since the walk read them all, sits at
+/// the end of the element the walk ended in.
 #[test]
 fn an_unclosed_opening_tag_is_a_fault_after_its_members() {
     assert_walk(
@@ -92,13 +93,13 @@ unconfirmed-private-transfer parameters @2..11
     [2] opening @5..9
       Unsigned: 1 @6..8
     Unsigned: 2 @9..11
-    Tag walk stopped: opening tag [1] is never closed @4..11",
+    Tag walk stopped: opening tag [1] is never closed @11..11",
     );
 }
 
 /// A primitive whose length runs past the end, context or application
-/// tagged, stops the walk at its header; the fault's offsets count from
-/// the APDU, as the ranges do.
+/// tagged, stops the walk at its header, saying how many octets its
+/// contents claim and how many remain: numbers that hold in any frame.
 #[test]
 fn contents_past_the_end_are_a_fault_at_their_header() {
     assert_walk(
@@ -106,15 +107,55 @@ fn contents_past_the_end_are_a_fault_at_their_header() {
         "
 unconfirmed-private-transfer parameters @2..7
   [0] 01 (1) @2..4
-  Tag walk stopped: contents end at octet 9, past the end at 7 @4..7",
+  Tag walk stopped: contents claim 4 octets, 2 remain @4..7",
     );
     assert_walk(
         "3E 44 4291",
         "
 unconfirmed-private-transfer parameters @2..6
   [3] opening @2..6
-    Tag walk stopped: contents end at octet 8, past the end at 6 @3..6",
+    Tag walk stopped: contents claim 4 octets, 2 remain @3..6",
     );
+}
+
+/// The same NPDU, cut short inside a value, in a B/IP frame and in an
+/// extended MS/TP frame, whose COBS-encoded data puts the NPDU's octets
+/// nowhere in the frame: the fault reads the same in both.
+#[test]
+fn a_fault_reads_the_same_in_any_frame() {
+    use bacnet_ops::decode::frame::Framing;
+    use bacnet_ops::decode::testing::{bip, mstp};
+    use bacnet_transport::mstp::codec::FrameType;
+
+    // A ReadProperty-ACK whose REAL value lost two octets, after an octet
+    // string long enough to need an extended frame.
+    let mut npdu = octets("0100 3001 0C 0C00000001 19 55 3E 65FE 0200");
+    npdu.extend([0xAA; 512]);
+    npdu.extend_from_slice(&[0x44, 0x42, 0x91]);
+    let stop = |fields: &[Field]| {
+        let mut labels = Vec::new();
+        let mut stack: Vec<&Field> = fields.iter().collect();
+        while let Some(field) = stack.pop() {
+            if field.label.starts_with("Tag walk stopped") {
+                labels.push(field.label.clone());
+            }
+            stack.extend(&field.children);
+        }
+        labels
+    };
+    let on_bip = stop(&super::super::decode_tree(Framing::Bip, &bip(&npdu, false)));
+    let frame = mstp(
+        FrameType::BACNET_EXTENDED_DATA_NOT_EXPECTING_REPLY,
+        1,
+        2,
+        &npdu,
+    );
+    let on_mstp = stop(&super::super::decode_tree(Framing::Mstp, &frame));
+    assert_eq!(
+        on_bip,
+        ["Tag walk stopped: contents claim 4 octets, 2 remain"]
+    );
+    assert_eq!(on_mstp, on_bip);
 }
 
 /// A header that doesn't parse (here a length not in its shortest form)
@@ -149,19 +190,17 @@ fn innermost(field: &Field) -> (&Field, usize) {
     (field, depth)
 }
 
-/// Opening tags nest as deep as the reader's bound and no deeper: the one
-/// past it is a fault, inside the elements open there.
+/// Inside a parameter, opening tags nest as deep as the reader's bound and
+/// no deeper: the one past it is a fault, inside the elements open there.
 #[test]
-fn opening_tags_nest_to_the_readers_bound() {
-    let tree = decode_apdu_tree(&unnamed(&nested(MAX_TAG_TREE_DEPTH)));
+fn opening_tags_nest_to_the_readers_bound_inside_a_parameter() {
+    let deepest = MAX_TAG_TREE_DEPTH + 1;
+    let tree = decode_apdu_tree(&unnamed(&nested(deepest)));
     let params = tree.children.last().unwrap();
     let (leaf, depth) = innermost(params);
-    assert_eq!(
-        (leaf.label.as_str(), depth),
-        ("[0] 07 (7)", MAX_TAG_TREE_DEPTH + 1)
-    );
+    assert_eq!((leaf.label.as_str(), depth), ("[0] 07 (7)", deepest + 1));
 
-    let apdu = unnamed(&nested(MAX_TAG_TREE_DEPTH + 1));
+    let apdu = unnamed(&nested(deepest + 1));
     let tree = decode_apdu_tree(&apdu);
     let params = tree.children.last().unwrap();
     let (leaf, depth) = innermost(params);
@@ -169,10 +208,86 @@ fn opening_tags_nest_to_the_readers_bound() {
         leaf.label,
         format!("Tag walk stopped: opening tags nest deeper than {MAX_TAG_TREE_DEPTH}")
     );
-    assert_eq!(depth, MAX_TAG_TREE_DEPTH + 1);
+    assert_eq!(depth, deepest + 1);
     // From the opening tag past the bound to the end.
-    let at = 2 + MAX_TAG_TREE_DEPTH;
+    let at = 2 + deepest;
     assert_eq!(leaf.range, at..apdu.len());
+}
+
+/// A ReadPropertyMultiple-ACK whose value nests 31 deep inside its [4],
+/// as deep as its decoder takes a value: inside the result list [1], 33
+/// opening tags in all. Its fields are named, and the value's tags read
+/// to the innermost.
+#[test]
+fn a_value_as_deep_as_its_decoder_takes_keeps_its_named_fields() {
+    let mut apdu = octets("30 01 0E 0C00000001 1E 29 55 4E");
+    apdu.extend(std::iter::repeat_n(0x0E, 31));
+    apdu.extend_from_slice(&[0x21, 0x01]);
+    apdu.extend(std::iter::repeat_n(0x0F, 31));
+    apdu.extend_from_slice(&[0x4F, 0x1F]);
+    let text = walked(&apdu);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        &lines[..4],
+        [
+            "read-property-multiple parameters @3..78",
+            "  Results for analog-input 1 @3..78",
+            "    Object: analog-input 1 @3..8",
+            "    Properties @8..78",
+        ]
+    );
+    assert!(
+        lines[4].starts_with("      present-value: [0] ([0] ("),
+        "{text}"
+    );
+    assert!(lines[6].starts_with("        Value: [0] ([0] ("), "{text}");
+    assert_eq!(lines.last().unwrap().trim(), "Unsigned: 1 @43..45");
+    assert!(
+        !text.contains("stopped") && !text.contains("Not read"),
+        "{text}"
+    );
+}
+
+/// An EVENT_PARAMETERS value in its pre-framing form, which the stack
+/// takes from older devices (#2376), isn't tags: in a ReadProperty-ACK,
+/// whose decoder delimits it, the fields stay named, the value's tags
+/// stopping at its first octets. Where something follows the value (a
+/// WriteProperty's priority), the walk can't tell where the value ends, so
+/// the parameters are walked tag by tag, saying why.
+#[test]
+fn a_legacy_value_its_decoder_delimits_keeps_its_named_fields() {
+    let apdu = octets("30 01 0C 0C02400001 19 53 3E FEFF 0102 FFFF 3F");
+    let text = walked(&apdu);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        [lines[0], lines[1], lines[2]],
+        [
+            "read-property parameters @3..18",
+            "  Object: event-enrollment 1 @3..8",
+            "  Property: event-parameters @8..10",
+        ]
+    );
+    assert!(
+        lines[3].starts_with("  Value: ") && lines[3].ends_with(" @10..18"),
+        "{text}"
+    );
+    assert_eq!(
+        lines[4..],
+        ["    Tag walk stopped: malformed tag header: invalid extended tag number 255 @11..18"]
+    );
+
+    let apdu = octets("00 05 01 0F 0C02400001 19 53 3E FEFF 0102 FFFF 3F 4908");
+    assert_eq!(
+        walked(&apdu),
+        "
+write-property parameters @4..21
+  [0] 02400001 (37748737) @4..9
+  [1] 53 (83) @9..11
+  [3] opening @11..21
+    Tag walk stopped: malformed tag header: invalid extended tag number 255 @12..21
+  Not read as named fields: tag walk stopped: malformed tag header: invalid extended tag number 255 @4..21"
+            .trim()
+    );
 }
 
 /// The walk holds at most the tree's bound of elements: the one past it

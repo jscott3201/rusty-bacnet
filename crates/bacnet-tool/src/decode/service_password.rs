@@ -2,10 +2,10 @@
 //! ReinitializeDevice carry one, which the named fields show as hidden and
 //! the tag walk hides wherever it may sit.
 
-use bacnet_encoding::tags::TagClass;
+use bacnet_encoding::tags::{Tag, TagClass};
 use bacnet_types::enums::ConfirmedServiceChoice as Confirmed;
 
-use super::{Element, Field, Params};
+use super::{Field, Params, Walk};
 
 /// Where a password-bearing request keeps its password.
 #[derive(Debug, Clone, Copy)]
@@ -37,31 +37,48 @@ impl Params {
     }
 }
 
+impl Secret {
+    /// Whether `tag` is a context primitive, as every field before the
+    /// password and the password itself are.
+    fn primitive(tag: &Tag) -> bool {
+        tag.class == TagClass::Context && !tag.is_opening && !tag.is_closing
+    }
+
+    /// Whether `tag` is the password's.
+    fn is_password(self, tag: &Tag) -> bool {
+        Self::primitive(tag) && tag.number == self.tag
+    }
+}
+
 /// What the password field shows, on either path.
 pub(super) const PASSWORD: &str = "Password: (hidden)";
 
-/// What any other field that may hold a password shows on the tag walk.
+/// What the octets from where hiding starts show on the tag walk.
 const MAYBE_PASSWORD: &str = "Hidden: may hold a password";
+
+/// Why a password-bearing request's decoder refused it: hidden, since its
+/// reason can quote the password's octets (their character set, or how
+/// many of them decode).
+pub(super) const REASON_HIDDEN: &str = "reason hidden (it may quote the password)";
 
 /// On the tag walk of a password-bearing request, whose decoder refused
 /// it or saw only a segment: the fields before the password stay, each at
-/// most once, in order and at its expected size ([`Secret::before`]). From
-/// the password tag, or the first field that isn't one of them, to the end
-/// every value at any depth is hidden: a password's length may claim too
-/// little and leave the rest of it to read as more tags.
+/// most once, in order and at its expected size ([`Secret::before`]), and
+/// so does a fault the walk stopped at among them, whose text quotes only
+/// the octets at the fault. Hiding starts at the password, which shows as
+/// hidden, or at the first field that isn't one of them; from there to
+/// `end` the octets are one hidden leaf. A password's length may claim too
+/// little and leave the rest of it to read as more tags, whose numbers,
+/// nesting, faults and ranges would each quote its octets.
 ///
-/// `fields` are the walk's fields of `elements`, one each in order at
-/// every level. A level's fields may end with the leaf marking where the
-/// walk stopped, which has no element: it names the fault and quotes no
-/// octets, so it stays.
-pub(super) fn hide_passwords(fields: &mut [Field], elements: &[Element<'_>], secret: Secret) {
+/// `fields` are the walk's top-level fields, one for each of its elements
+/// in order, then the leaf of a fault outside them, if any.
+pub(super) fn hide_passwords(fields: &mut Vec<Field>, walk: &Walk<'_>, secret: Secret, end: usize) {
     let mut next = 0;
-    let mut open = true;
-    for (field, element) in fields.iter_mut().zip(elements) {
-        let tag = element.item.tag;
-        let primitive = tag.class == TagClass::Context && !tag.is_opening && !tag.is_closing;
-        if open
-            && primitive
+    let mut cut = None;
+    for (index, element) in walk.elements.iter().enumerate() {
+        let tag = element.tag;
+        if Secret::primitive(&tag)
             && let Some(skipped) = secret.before[next..]
                 .iter()
                 .position(|&(number, most)| number == tag.number && tag.length <= most)
@@ -69,25 +86,38 @@ pub(super) fn hide_passwords(fields: &mut [Field], elements: &[Element<'_>], sec
             next += skipped + 1;
             continue;
         }
-        open = false;
-        if primitive && tag.number == secret.tag {
+        cut = Some(if secret.is_password(&tag) {
+            index + 1
+        } else {
+            index
+        });
+        if let Some(field) = fields.get_mut(index).filter(|_| secret.is_password(&tag)) {
             field.label = PASSWORD.into();
             field.device_text = false;
-        } else {
-            hide(field, element);
         }
+        break;
     }
-}
-
-/// Hide `field` and every part of it; a constructed value's node keeps
-/// its label, which quotes nothing, as does a fault's leaf.
-fn hide(field: &mut Field, element: &Element<'_>) {
-    if element.is_constructed() {
-        for (child, element) in field.children.iter_mut().zip(&element.children) {
-            hide(child, element);
+    // Contents cut short at the password's own tag: the password.
+    let at_password = walk
+        .top_stop()
+        .and_then(|stop| stop.tag())
+        .is_some_and(|tag| secret.is_password(&tag));
+    if cut.is_none() && at_password {
+        let index = walk.elements.len();
+        if let Some(field) = fields.get_mut(index) {
+            field.label = PASSWORD.into();
+            field.device_text = false;
         }
+        cut = Some(index + 1);
+    }
+    let Some(cut) = cut else {
         return;
+    };
+    // The top-level fields tile the parameters, so hiding starts where
+    // the first field cut starts.
+    let start = fields.get(cut).map(|field| field.range.start);
+    fields.truncate(cut);
+    if let Some(start) = start.filter(|start| *start < end) {
+        fields.push(Field::leaf(MAYBE_PASSWORD, start..end));
     }
-    field.label = MAYBE_PASSWORD.into();
-    field.device_text = false;
 }
