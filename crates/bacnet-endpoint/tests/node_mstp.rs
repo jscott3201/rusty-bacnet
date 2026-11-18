@@ -224,7 +224,7 @@ async fn postponed_impl(mode: MstpExecutionMode, frames: Frames) {
         .await
         .expect("the client heard the notification")
         .unwrap();
-    assert_eq!(received.notification.subscriber_process_identifier, 4);
+    assert_eq!(received.subscriber_process_identifier(), 4);
 
     drop(held);
     let late = h

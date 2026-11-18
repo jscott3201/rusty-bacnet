@@ -322,7 +322,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         identity: &bacnet_objects::DeviceIdentity,
         node: NodeDevice,
         link: &NodeLink,
-        mut db: Option<&mut ObjectDatabase>,
+        db: Option<&mut ObjectDatabase>,
     ) -> Result<(), Error> {
         node_contradictions(&self.config, identity, node, link.capacity, db.as_deref())?;
         let mut config = self.config.clone();
@@ -335,7 +335,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         let settled = super::lifecycle::settings::settle(&mut config, bindings, |mac| {
             link.groups.contains(mac)
         })?;
-        if let Some(db) = db.as_deref_mut() {
+        if let Some(db) = db {
             crate::local_device::validate_startup(db, &config.device)?;
             AuditRoutes::prepare_for(db, &config, &settled.device_bindings, link.bip_broadcast)?;
         }

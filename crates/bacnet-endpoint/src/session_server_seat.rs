@@ -206,8 +206,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     /// Refuse, before anything changes, a `with_server` the session could
     /// not build (see [`with_server`](Self::with_server)), but for the
-    /// device settings, which [`check_server_device`](Self::check_server_device)
-    /// compares once the identity is resolved.
+    /// device and server settings, which
+    /// [`check_server_settings`](Self::check_server_settings) checks once
+    /// the identity is resolved.
     pub(super) fn check_server_builder(&self) -> Result<(), Error> {
         let Some(builder) = &self.server_builder else {
             return Ok(());

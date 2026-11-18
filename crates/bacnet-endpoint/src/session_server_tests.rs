@@ -198,6 +198,9 @@ async fn the_read_only_server_answers_reads_discovery_and_subscriptions_only() {
         .await
         .expect("a notification of the change")
         .unwrap();
+    let changed = changed
+        .into_object()
+        .expect("a COV notification of one object");
     assert_eq!(changed.notification.monitored_object_identifier, ai1());
 
     let mut peer = peer;
