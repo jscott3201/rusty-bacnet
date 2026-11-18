@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_session()?;
     endpoint.start().await?;
     assert!(endpoint.client().is_some());
-    assert!(endpoint.responder().is_none());
+    assert!(endpoint.server().is_none());
 
     // Controlled peer: real B/IP socket + network layer.
     let peer_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);

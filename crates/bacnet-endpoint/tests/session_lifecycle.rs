@@ -208,7 +208,7 @@ async fn shutdown_with_pending_segmented_response_cleans_up() {
 
 #[tokio::test(start_paused = true)]
 async fn reply_sender_is_single_consumer_one_use() {
-    // `ReceivedApdu::clone` drops reply authority; the responder takes it
+    // `ReceivedApdu::clone` drops reply authority; the server takes it
     // exactly once via `.take()`.
     let (reply_tx, reply_rx) = oneshot::channel();
     let received = ReceivedApdu {
@@ -275,22 +275,21 @@ async fn no_detached_role_outlives_session() {
     let (transport_a, transport_b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session_a = EndpointSession::new(transport_a, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(1, 42).unwrap())
         .with_database(database_with_analog(1, 1.0));
     let mut session_b = EndpointSession::new(transport_b, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(2, 42).unwrap())
         .with_database(database_with_analog(1, 2.0));
     session_a.start().await.unwrap();
     session_b.start().await.unwrap();
 
-    // Clone role Arcs out of the session (detached handles).
+    // Clone the client role out of the session (a detached handle).
     let detached_client = session_a.cloned_client_handle().unwrap();
-    let detached_server = session_a.cloned_responder_handle().unwrap();
-    assert!(detached_server.is_session_alive());
 
     // Dropping the session ends role work: Weak upgrade fails, methods fail
     // closed, no orphaned task keeps the lease pool alive.
     drop(session_a);
-    assert!(!detached_server.is_session_alive());
     assert!(
         detached_client
             .read_property(
@@ -308,16 +307,18 @@ async fn no_detached_role_outlives_session() {
 
 #[tokio::test(start_paused = true)]
 async fn context_preservation_does_not_change_group_decision() {
-    // Raw `link_layer_group` is preserved structurally but the responder scope
+    // Raw `link_layer_group` is preserved structurally but the server's
     // decision still uses effective `is_group` only (compat-mode: no new
     // decisions). A unicast NPDU carried over a group link (routed unicast
     // via broadcast DA, Clause 6.5.3) is still served.
     let (transport_a, transport_b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session_a = EndpointSession::new(transport_a, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(1, 42).unwrap())
         .with_database(database_with_analog(8, 8.0));
     let mut session_b = EndpointSession::new(transport_b, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(2, 42).unwrap())
         .with_database(database_with_analog(8, 9.0));
     session_a.start().await.unwrap();
     session_b.start().await.unwrap();

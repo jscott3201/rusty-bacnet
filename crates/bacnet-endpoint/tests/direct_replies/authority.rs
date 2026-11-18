@@ -144,54 +144,43 @@ async fn both_consumers_drop_group_direct_replies() {
     }
 }
 
+/// The session's server sends its direct answer with no data attributes, as
+/// the narrow responder did, and its ordinary answer with none either: the
+/// narrow responder copied the request's onto that one, the full server
+/// does not (#2617).
 #[tokio::test]
-async fn direct_prompt_does_not_consume_ordinary_suspension_or_echo_attributes() {
+async fn the_servers_answers_carry_no_data_attributes() {
     use bacnet_transport::port::DataAttribute;
     let ca = TestCa::new();
     let (mut f, port) = Fixture::new(&ca).await;
-    let mut session =
-        EndpointSession::new(port, SessionRole::Both, SessionConfig::default()).unwrap();
+    let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
+        .unwrap()
+        .device(node())
+        .with_database(database("attributes"));
     session.start().await.unwrap();
-    let handle = session.cloned_responder_handle().unwrap();
-    handle.suspend_next_reply().unwrap();
     let mut peer = f.peer(ca.tls("A"), None).await;
     let attributes = vec![DataAttribute {
         option_type: 3,
         must_understand: false,
         data: vec![4, 5],
     }];
-    let mut direct = f.capture(&mut peer, &unsupported(60), None).await;
+    let mut direct = f.capture(&mut peer, &read_name(60), None).await;
     direct.data_attributes = attributes.clone();
-    let (tx, rx) = oneshot::channel();
-    direct.reply_tx = Some(tx);
     f.feed(direct).await;
-    assert!(matches!(f.response(&peer).await.1, Apdu::Reject(r) if r.invoke_id == 60));
-    assert!(bounded(rx).await.is_err());
-    let mut ordinary = f.capture(&mut peer, &unsupported(61), routed()).await;
+    // `response` checks the frame's data options are empty.
+    assert!(matches!(f.response(&peer).await.1, Apdu::ComplexAck(a) if a.invoke_id == 60));
+    let mut ordinary = f.capture(&mut peer, &read_name(61), routed()).await;
     ordinary.provenance = TransportProvenance::unverified();
     ordinary.direct_response = None;
-    ordinary.data_attributes = attributes.clone();
-    let (tx, rx) = oneshot::channel();
-    ordinary.reply_tx = Some(tx);
+    ordinary.data_attributes = attributes;
     f.feed(ordinary).await;
-    assert!(
-        bounded(rx).await.is_err(),
-        "ordinary suspension must still be armed"
-    );
     let response = bounded(f.generic.recv()).await.unwrap();
     assert_eq!(response.destination, routed());
     assert!(
-        matches!(bacnet_encoding::apdu::decode_apdu(response.payload).unwrap(), Apdu::Reject(r) if r.invoke_id == 61)
+        matches!(bacnet_encoding::apdu::decode_apdu(response.payload).unwrap(), Apdu::ComplexAck(a) if a.invoke_id == 61)
     );
-    assert_eq!(*f.attributes.lock().unwrap(), [attributes]);
-    let mut ordinary = f.capture(&mut peer, &unsupported(62), None).await;
-    ordinary.provenance = TransportProvenance::unverified();
-    ordinary.direct_response = None;
-    let (tx, rx) = oneshot::channel();
-    ordinary.reply_tx = Some(tx);
-    f.feed(ordinary).await;
-    assert!(bounded(rx).await.is_ok(), "ordinary suspension is one-use");
-    f.barrier(&mut peer, 63).await;
+    assert!(f.attributes.lock().unwrap().is_empty());
+    f.barrier(&mut peer, 62).await;
     session.stop().await.unwrap();
     f.listener.stop().await;
 }

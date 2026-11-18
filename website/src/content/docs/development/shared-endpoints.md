@@ -17,7 +17,7 @@ Existing section links remain below so saved bookmarks can reach the right page.
 
 ## Check requester and responder scope separately
 
-[Continue: Check requester and responder scope separately](/rusty-bacnet/integrate/shared-endpoints/#check-requester-and-responder-scope-separately).
+[Continue: Check requester and server scope separately](/rusty-bacnet/integrate/shared-endpoints/#check-requester-and-server-scope-separately).
 
 ## Add source READ or WRITE Audit reporting deliberately
 

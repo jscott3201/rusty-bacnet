@@ -62,7 +62,6 @@ fn fixture() -> (
             notifications: Some(notifications),
             coordinator,
             shared,
-            source_routers: None,
             local_network: LocalNetworkNumber::default(),
             cov: None,
         },

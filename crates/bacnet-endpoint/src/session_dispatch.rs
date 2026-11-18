@@ -111,12 +111,7 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
         &apdu,
     );
     let admission = match outcome {
-        Ok(AdmissionOutcome::Admitted(admission)) => {
-            if let Some(routers) = &parts.source_routers {
-                routers.observe(&received);
-            }
-            admission
-        }
+        Ok(AdmissionOutcome::Admitted(admission)) => admission,
         Ok(_) => {
             let mut counters = parts.shared.counters.lock().await;
             counters.unclaimed_terminal += 1;

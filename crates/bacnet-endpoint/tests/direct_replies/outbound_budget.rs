@@ -103,6 +103,7 @@ async fn outbound_tls_endpoint_original_budget_uses_each_peer_limit_without_hub(
         let (port, mut local, hub) = start_port(&ca, uri).await;
         let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
             .unwrap()
+            .device(node())
             .with_database(database(&"long".repeat(30)));
         session.start().await.unwrap();
         bounded(async { tokio::select! {

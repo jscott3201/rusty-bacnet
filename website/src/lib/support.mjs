@@ -18,12 +18,6 @@ export function typeLabel(name) {
 
 const yesNo = value => value ? 'Yes' : 'No';
 
-function endpointCell(endpoint) {
-  if (endpoint === 'always') return 'Always';
-  if (endpoint) return { text: 'Opt-in: ', code: `${endpoint}()` };
-  return 'No';
-}
-
 function cliCell(builds, targets) {
   const built = targets.filter(target => builds[target]);
   if (built.length === targets.length) return 'Every release target';
@@ -36,13 +30,12 @@ function services(data, kind) {
   return {
     id: `services-${kind}`,
     caption: `${rows.length} ${kind} services, by surface`,
-    columns: ['Service', 'Full server executes', 'Full server initiates', 'Client sends', 'Endpoint responder executes', 'Python client sends'],
+    columns: ['Service', 'Full server executes', 'Full server initiates', 'Client sends', 'Python client sends'],
     rows: rows.map(service => [
       service.label,
       yesNo(service.serverExecutes),
       yesNo(service.serverInitiates),
       yesNo(service.clientSends),
-      endpointCell(service.endpoint),
       yesNo(service.pythonSends),
     ]),
   };

@@ -12,8 +12,8 @@ use super::*;
 /// How far apart the session sends requests to one station.
 const INTERVAL: Duration = Duration::from_secs(5);
 
-/// The site, its session pacing requests to one station `INTERVAL` apart
-/// and auditing writes.
+/// The site, its client-only session pacing requests to one station
+/// `INTERVAL` apart and auditing writes.
 async fn paced_site() -> Site {
     let config = SessionConfig {
         apdu_timeout_ms: 3_000,
@@ -21,7 +21,13 @@ async fn paced_site() -> Site {
         min_request_interval_ms: 5_000,
         ..SessionConfig::default()
     };
-    Site::start_with(false, &[AuditOperation::WRITE], config).await
+    Site::start_with(
+        SessionRole::ClientOnly,
+        false,
+        &[AuditOperation::WRITE],
+        config,
+    )
+    .await
 }
 
 type Client = Arc<bacnet_client::client::BACnetClient<LoopbackTransport>>;

@@ -208,7 +208,12 @@ async fn a_bip6_session_checks_its_own_vmac_once_started() {
 
 /// The source database with its Device's Audit recipient, Device 999.
 fn provisioned() -> ObjectDatabase {
-    let mut db = database(false);
+    provisioned_for(&crate::DeviceIdentity::new(123, 42).unwrap())
+}
+
+/// [`provisioned`] for Device `identity`.
+fn provisioned_for(identity: &crate::DeviceIdentity) -> ObjectDatabase {
+    let mut db = database_for(identity, false);
     db.set_clock_reader(None);
     db.get_mut(&oid(ObjectType::DEVICE, 123))
         .unwrap()
@@ -340,10 +345,7 @@ async fn records_resets<T: TransportPort + 'static, P: TransportPort + 'static>(
     };
     assert!(seen.is_empty(), "filtered resets built records: {seen:?}");
     assert_eq!(backup.operation, AuditOperation::DEVICE_BACKUP);
-    assert_eq!(
-        backup.target_timestamp,
-        Some(BACnetTimeStamp::SequenceNumber(0))
-    );
+    assert_stamp(&backup.target_timestamp, session.server().is_some(), 0);
     // Resets recorded: the peer's, then the local one.
     record_only(session, &[AuditOperation::DEVICE_RESET]).await;
     let mut seen = peer
@@ -374,15 +376,20 @@ async fn an_mstp_session_records_resets_through_its_reporter() {
         max_master: 3,
         ..MstpConfig::default()
     };
+    // The Device takes what a standard MS/TP frame carries.
+    let identity = crate::DeviceIdentity::new(123, 42)
+        .unwrap()
+        .with_max_apdu(480)
+        .unwrap();
     let mut session = crate::mstp::MstpEndpointBuilder::new(session_line, 1)
         .max_master(3)
-        .database(provisioned())
+        .database(provisioned_for(&identity))
         .source_audit_device_binding(oid(ObjectType::DEVICE, 999), 2)
         .build_session()
         .unwrap()
         .with_source_audit_reporter(selected())
-        .with_device_writes(Arc::new(|_| true))
-        .with_reinitialize(|_, _| Ok(()));
+        .device(identity)
+        .with_server(allowing().on_reinitialize(|_, _| Ok(())));
     session.start().await.unwrap();
     let mut network = NetworkLayer::new(MstpTransport::new(peer_line, config(2)));
     let rx = network.start().await.unwrap();
@@ -416,8 +423,8 @@ async fn an_sc_session_records_resets_through_its_reporter() {
         .build_hub_session(socket)
         .unwrap()
         .with_source_audit_reporter(selected())
-        .with_device_writes(Arc::new(|_| true))
-        .with_reinitialize(|_, _| Ok(()));
+        .device(crate::DeviceIdentity::new(123, 42).unwrap())
+        .with_server(allowing().on_reinitialize(|_, _| Ok(())));
     session.start().await.unwrap();
     let socket = TlsWebSocket::connect(&url, node_tls).await.unwrap();
     let mut network =

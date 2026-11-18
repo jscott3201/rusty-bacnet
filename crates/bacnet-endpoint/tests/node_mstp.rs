@@ -146,10 +146,6 @@ async fn prompt_impl(mode: MstpExecutionMode, frames: Frames) {
         .await;
     assert!(!postponed, "the prompt answer had a Reply Postponed first");
     expect_present_value(&reply, 9, 11.0);
-    assert!(
-        h.session.responder().is_none(),
-        "the narrow role serves nothing"
-    );
     assert_eq!(h.session.server_seat_counters().apdus, 1);
     assert_eq!(h.session.policy_counters().await.no_server_role, 0);
     h.shutdown().await;

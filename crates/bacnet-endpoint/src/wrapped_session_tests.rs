@@ -20,6 +20,7 @@ use crate::session::SessionRole;
 async fn a_wrapped_bip_session_keeps_its_link_calls_and_one_socket() {
     let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST)
         .role(SessionRole::Both)
+        .device(crate::DeviceIdentity::new(123, 42).unwrap())
         .build_session_wrapped(AnyTransport::from)
         .unwrap();
     assert!(session.bvlc_tables().is_some(), "taken before the wrap");

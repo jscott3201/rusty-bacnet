@@ -28,6 +28,7 @@ async fn shared_endpoint_replies_on_original_tls_socket() {
     let (mut f, port) = Fixture::new(&ca).await;
     let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
         .unwrap()
+        .device(node())
         .with_database(database("original"));
     session.start().await.unwrap();
     let mut peer = f.peer(ca.tls("A"), None).await;

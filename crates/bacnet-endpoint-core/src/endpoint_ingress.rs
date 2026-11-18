@@ -45,6 +45,10 @@ pub(crate) use routing::reserve;
 use routing::{ControlTee, IngressDrops, IngressQueues, next_apdu, route_received};
 pub use routing::{DROP_LOG_INTERVAL, IngressDropCounters};
 
+/// What [`EndpointIngress::observe_sources`] calls with each APDU from
+/// another network that it shows.
+pub type SourceObserver = Arc<dyn Fn(&ReceivedApdu) + Send + Sync>;
+
 /// Destination selected for one decoded APDU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngressRoute {
@@ -155,6 +159,8 @@ pub struct EndpointIngress<T: TransportPort> {
     drops: Arc<IngressDrops>,
     /// See [`Self::with_coordinator`].
     coordinator: Option<Arc<OutboundTransactionCoordinator>>,
+    /// See [`Self::observe_sources`].
+    source_observer: Option<SourceObserver>,
     queue_capacity: usize,
     lifecycle: Lifecycle,
     cancel_tx: Option<oneshot::Sender<()>>,
@@ -171,6 +177,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             seats: None,
             drops: Arc::default(),
             coordinator: None,
+            source_observer: None,
             queue_capacity,
             lifecycle: Lifecycle::Ready,
             cancel_tx: None,
@@ -187,6 +194,16 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     pub fn with_coordinator(mut self, coordinator: Arc<OutboundTransactionCoordinator>) -> Self {
         self.coordinator = Some(coordinator);
         self
+    }
+
+    /// Before start, have `observer` see what comes from another network
+    /// (an SNET in its NPDU) before any role takes it (#2617): every
+    /// request, and each answer that a lease of [`Self::with_coordinator`]'s
+    /// pool holds. A server's seat takes both, so the endpoint's own roles
+    /// would see neither. The look at the pool claims nothing.
+    #[doc(hidden)]
+    pub fn observe_sources(&mut self, observer: SourceObserver) {
+        self.source_observer = Some(observer);
     }
 
     /// Whether the link calls `mac` a group address, as its transport's own
@@ -329,6 +346,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             seats: Arc::clone(&seats),
             drops: Arc::clone(&self.drops),
             coordinator: self.coordinator.clone(),
+            observer: self.source_observer.clone(),
         };
         let controls_tee = ControlTee {
             layer: layer_controls,

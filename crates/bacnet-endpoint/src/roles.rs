@@ -593,6 +593,11 @@ impl bacnet_client::log_reader::LogRequester for Destined<'_> {
 
 /// Server role: narrow responder + shared notification pool.
 ///
+/// **Gone with the narrow server role (#2617).** No session hands one out:
+/// a session with a server role runs a full server, which
+/// [`EndpointSession::server`](crate::session::EndpointSession::server)
+/// borrows. A later step of #2617 removes this type.
+///
 /// Service scope stays narrow: `ReadProperty`, optionally authorized local
 /// Device.Description `WriteProperty`, optionally `ReinitializeDevice` through
 /// its handler, optionally `SubscribeCOV`, `SubscribeCOVProperty` and

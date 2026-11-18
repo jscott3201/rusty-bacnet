@@ -4,7 +4,7 @@
 //!
 //! The node under test is an endpoint session with both roles, which builds
 //! its full server at start ([`EndpointSession::with_server`]) on the
-//! session's database (AI-1 at 42.0), in place of its narrow server role,
+//! session's database (AI-1 at 42.0),
 //! beside a full client. Its peers are a `bacnet-server` device and a
 //! standalone client.
 #![allow(dead_code)]
@@ -199,7 +199,7 @@ async fn the_full_server_answers_for_the_node_beside_its_full_client() {
     })
     .await;
     // It reads from the session's database, and it runs the services the
-    // session's narrow server role doesn't, ReadPropertyMultiple among them.
+    // 0.15.0 endpoint's narrow server role didn't, ReadPropertyMultiple among them.
     let value = lab
         .other
         .read_property(&node, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
@@ -244,11 +244,8 @@ async fn the_full_server_answers_for_the_node_beside_its_full_client() {
         .unwrap();
     assert_eq!(peer_value.object_identifier, ai1());
 
-    // The session's narrow server role saw none of it, and no request
-    // found the node without a server.
-    assert!(lab.session.responder().is_none());
+    // No request found the node without a server.
     let counters = lab.session.policy_counters().await;
-    assert_eq!(counters.responder_declined, 0);
     assert_eq!(counters.no_server_role, 0);
     assert_eq!(counters.confirmed_full_drops, 0);
     let seat = lab.session.server_seat_counters();
@@ -433,7 +430,8 @@ async fn each_answer_goes_to_the_role_that_asked() {
 }
 
 /// `server()` is the session's while it runs: `None` before start, for a
-/// session without one and after stop.
+/// session without a server role and after stop. A session given no
+/// builder runs the read-only server.
 #[tokio::test(start_paused = true)]
 async fn the_server_is_borrowed_while_the_session_runs() {
     let wire = Wire::new();
@@ -446,31 +444,28 @@ async fn the_server_is_borrowed_while_the_session_runs() {
     assert!(session.server().is_none(), "not before start");
     session.start().await.unwrap();
     assert!(session.server().is_some());
-    assert!(
-        session.responder().is_none(),
-        "the narrow role serves nothing"
-    );
     session.stop().await.unwrap();
     assert!(session.server().is_none(), "not after stop");
 
-    let (mut narrow, _, _) = narrow_session(&wire).await;
-    assert!(narrow.server().is_none());
-    assert!(narrow.responder().is_some());
-    narrow.stop().await.unwrap();
-}
-
-/// A started narrow session on node [`PEER`], for comparison.
-async fn narrow_session(
-    wire: &Wire,
-) -> (EndpointSession<TestTransport>, SendLog, TestTransportHandle) {
     let port = wire.port(PEER);
-    let (sent, link) = (port.sent(), port.handle());
-    let mut session =
+    let mut default =
         EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
             .unwrap()
             .device(DeviceIdentity::new(PEER_DEVICE, 42).unwrap());
-    session.start().await.unwrap();
-    (session, sent, link)
+    default.start().await.unwrap();
+    assert!(default.server().is_some(), "the read-only server");
+    default.stop().await.unwrap();
+
+    let port = wire.port(OTHER);
+    let mut client = EndpointSession::new(
+        port.build(),
+        SessionRole::ClientOnly,
+        SessionConfig::default(),
+    )
+    .unwrap();
+    client.start().await.unwrap();
+    assert!(client.server().is_none(), "no server role");
+    client.stop().await.unwrap();
 }
 
 /// The node's AI-1 as `reader` reads it.

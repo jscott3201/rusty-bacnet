@@ -1,7 +1,8 @@
 ---
 section: Added
 ---
-- An application hosting its device on an endpoint makes its own changes with
-  `EndpointSession::write_local`, `set_present_value_local` and
-  `set_reliability_local`, saved and audited as the endpoint's network writes
-  are; no COV or event notification follows them (#2468).
+- A client-only endpoint session with a database for source Audit changes it
+  with `EndpointSession::write_local` (a stored property saved first, an
+  Audit recipient write audited), `set_present_value_local` and
+  `set_reliability_local`; a server-role session refuses them for
+  `server()`'s (#2468, #2617).

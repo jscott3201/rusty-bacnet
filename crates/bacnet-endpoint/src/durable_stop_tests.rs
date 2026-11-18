@@ -206,20 +206,12 @@ async fn retained_dispatch_and_ingress_errors_still_wait_for_settlement() {
         let go = stage_held_save(&db, &storage).await;
         let expected = served_snapshot(&db).await;
         let (progress, watchdog) = watchdog(go);
+        // The server's stop, first, settles the held save.
         assert!(
             timeout(Duration::from_millis(20), endpoint.session.stop())
                 .await
                 .is_err()
         );
-        let saved = endpoint
-            .session
-            .stop_exit
-            .as_ref()
-            .unwrap()
-            .as_ref()
-            .unwrap_err()
-            .to_string();
-        assert!(saved.contains(expected_error), "{saved}");
         assert_eq!(
             endpoint.session.lifecycle.load(Ordering::Acquire),
             Lifecycle::Stopping as u8
@@ -234,7 +226,7 @@ async fn retained_dispatch_and_ingress_errors_still_wait_for_settlement() {
             .unwrap();
         assert!(!stalled);
         let error = bounded(endpoint.session.stop()).await.unwrap_err();
-        assert_eq!(error.to_string(), saved);
+        assert!(error.to_string().contains(expected_error), "{error}");
         assert_eq!(*storage.saved.lock().unwrap(), Some(expected));
         assert_eq!(
             endpoint.session.lifecycle.load(Ordering::Acquire),

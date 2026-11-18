@@ -37,7 +37,7 @@
       {
         "heading": "Check requester and responder scope separately",
         "anchor": "check-requester-and-responder-scope-separately",
-        "target": "integrate/shared-endpoints/#check-requester-and-responder-scope-separately"
+        "target": "integrate/shared-endpoints/#check-requester-and-server-scope-separately"
       },
       {
         "heading": "Add source READ or WRITE Audit reporting deliberately",

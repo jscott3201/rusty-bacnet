@@ -2052,39 +2052,21 @@ Annex AB, external interoperability or certification claim follows.
 
 The selected original-socket response policy extends to standalone
 `BACnetClient` handling inbound confirmed COV/Event notifications and unsupported
-or segmented confirmed requests, and to `EndpointSession`'s existing narrow
-ReadProperty/authorized Device WriteProperty responder. This is new in
-0.12.0. It does not change outgoing client transactions, their retries or their
-terminal/segment-control admission. Ordinary direct routing now applies as
+or segmented confirmed requests. This is new in 0.12.0. It does not change
+outgoing client transactions, their retries or their terminal/segment-control
+admission. Ordinary direct routing now applies as
 described [above](#bidirectional-direct-traffic). BACnet permits response path switching; this is a
 local confinement policy for these incoming-request consumers, not a universal
-protocol correlation requirement.
+protocol correlation requirement. An endpoint session's server role is the
+full server (#2617), which answers as the
+[server response scope](#accepted-direct-server-responses) describes.
 
 Direct provenance **or any supplied direct capability** selects checked response
 issuance before `reply_tx`. Missing, mismatched, retired or sealed authority fails
 without a prompt-channel, address, replacement, Hub or new-dial fallback. Ordinary
 non-direct/no-capability ingress keeps existing MS/TP behavior: the standalone
-client falls back to ordinary routing after a failed prompt handoff, while the
-endpoint completes that prompt attempt even if its receiver closed. Endpoint
-reply suspension only consumes ordinary prompt work. Group requests and the
-client's COV `NoResponse` policy remain silent.
-
-The endpoint carries the saved `ResponseRoute` through its existing bounded
-egress queue (`SessionConfig.queue_capacity`). The hidden composition method
-`EndpointEgress::admit_response_apdu` returns caller-owned completion: dropping
-it retracts queued work. Stop/drop closes admission and cancels queued work;
-retained role handles cannot extend that lifetime. The direct socket still has
-the shared 64-item ordinary/reply writer queue and its existing bounded I/O. An already-started
-write cannot be recalled, and local completion does not prove peer receipt.
-
-After service execution, the endpoint caps a ComplexACK by the requester APDU
-limit and saved peer NPDU/BVLC limits using the actual local/routed NPDU header
-(Clause 5.2.1.2). It has no segmented response sender: an oversized ACK selects
-its existing `SEGMENTATION_NOT_SUPPORTED` Abort. If that Abort cannot fit, checked
-send fails without fallback. Retirement or invalid reply authority does not
-revoke the original authorization or roll back an admitted Device write.
-Direct responses use empty outgoing Data Options; ordinary endpoint egress keeps
-its existing data-attribute and destination behavior.
+client falls back to ordinary routing after a failed prompt handoff. Group
+requests and the client's COV `NoResponse` policy remain silent.
 
 Real-TLS and lifecycle tests use public client/session paths, held A envelopes
 and distinct-leaf B replacements, mixed prompt channels, exact response budgets
@@ -5298,12 +5280,7 @@ build refuses one with it as an unknown version:
 Once a clear leaves no Description saved, the next save writes the older
 version again.
 
-An endpoint session's own Device keeps a Description written through
-`with_device_writes` the same way, when it was built
-`with_tags_persistence`: the responder stages the save and awaits it with
-the database guard dropped before it answers. The session handles nothing
-else until the save returns (see [Authorized endpoint Device
-writes](#authorized-endpoint-device-writes)).
+An endpoint session's server, a full server (#2617), keeps it the same way.
 
 So every type with a store keeps a written Description, with one
 exception: the Audit Log. Its `AuditLogPersistence` keeps the records,
@@ -5837,8 +5814,8 @@ framing, through the shared `bacnet-encoding` codecs.
   `ReadPropertyMultipleBudget::max_result_elements` along with the request's
   own rows, so several Groups in one request share it; ReadProperty, ReadRange
   and `read_local` get the limit of a ReadPropertyMultiple naming only that
-  Present_Value. The shared endpoint's ReadProperty uses
-  `SessionConfig::read_work_limit` (default 256) instead. A request that would
+  Present_Value. An endpoint session's server, a full server (#2617), does
+  the same. A request that would
   pass the limit is aborted with OUT_OF_RESOURCES (`read_local` returns
   `Error::abort(AbortReason::OUT_OF_RESOURCES)`).
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
@@ -6228,8 +6205,8 @@ Reliability_Evaluation_Inhibit is TRUE; a value outside BACnetReliability is
 PROPERTY / VALUE_OUT_OF_RANGE, and an object that takes none OBJECT /
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. It is not audited, as the other
 `*_local` inputs aren't. The Python binding is
-`BACnetServer.set_reliability_local` (#2469), and an endpoint session has its
-own (see [Endpoint local writes](#endpoint-local-writes)).
+`BACnetServer.set_reliability_local` (#2469), and an endpoint session's
+server, a full server (#2617), has it too.
 
 #### Binary Input and Output Polarity
 
@@ -7280,9 +7257,7 @@ unfinished run as unsuccessful. `bacnet-device-core`'s `Responder::write`
 is synchronous and makes no writes for a Command, for a WriteProperty or a
 WritePropertyMultiple: the run a Present_Value write starts ends at once, with
 In_Process FALSE, All_Writes_Successful FALSE and every command's
-`write_successful` FALSE. The endpoint responder refuses a Command's
-Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
-than the Device's Description and Audit recipient.
+`write_successful` FALSE.
 
 Deleting a Command releases nothing (#2265): its writes are one-shot, and the
 values it made stay until another writer changes or relinquishes them. A run whose object is deleted stops: each local write checks the run's
@@ -8112,8 +8087,7 @@ naming the requester (its bound Device, when the audit profile knows one) and
 no invoke ID; a denied one makes none (#1318). A Channel's Present_Value is
 commandable (Clause 12.53.5), so its records, a WriteProperty's as well as a
 WriteGroup's, carry the priority, and Audit_Priority_Filter applies to them
-(Clause 19.6.3): one at a priority the filter disables is dropped. The
-endpoint responder ignores WriteGroup.
+(Clause 19.6.3): one at a priority the filter disables is dropped.
 
 Channel runs are owned as Command runs are (#1178). A `write_local` dropped
 after the Channel took its value leaves the distribution running, as it does
@@ -8121,8 +8095,7 @@ a Command's run (#1367). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
 returns, delays included, and ends it FAILED if its future is dropped first.
 `bacnet-device-core`'s `Responder::write` ends it at once as FAILED, without
-writing the members. The endpoint responder
-refuses a Channel's Present_Value write with WRITE_ACCESS_DENIED.
+writing the members.
 
 A run that one Command's or Channel's write starts in another carries the
 objects above it. If it would start an object already in that chain, as two
@@ -11366,10 +11339,10 @@ bytes, fingerprint or decoded inputs), and
 decision counters retain no per-source state. The policy runs after
 validation and before mutation; denials perform no database mutation, no
 COV/event fan-out, and no audit-log write (counters and bounded diagnostics
-only). This policy governs standalone-server mutations; direct handler calls
-and trusted local writes stay outside it. The shared endpoint's narrow
-[Device-write authorizer](#authorized-endpoint-device-writes) is configured
-separately. Python exposes the same native policy through
+only). This policy governs standalone-server mutations, and those of the
+full server an endpoint session with a server role runs (#2617); direct
+handler calls and trusted local writes stay outside it. Python exposes the
+same native policy through
 `BACnetServer(..., mutation_policy="permissive" | "deny_all" | callable)`, and
 the endpoints take the same keyword for the full server each runs, which is
 read-only without one (#2617). See
@@ -11771,8 +11744,8 @@ bit. A reset the application performs for its own reasons is reported with
 device with no invoke ID. Call it before restarting, and don't call it for a
 peer's accepted restart, which is recorded already.
 
-Endpoint sessions take the same handler; see
-[Endpoint ReinitializeDevice](#endpoint-reinitializedevice).
+An endpoint session's server takes the same handler, on the builder given
+to `with_server` (#2617).
 
 ### The DeviceCommunicationControl state
 
@@ -13282,13 +13255,13 @@ Out_Of_Service writes, object replacement/removal and adapters are refused befor
 effects. Protection lasts through admitted work and the final socket/cleanup
 owner, including cancellation and Drop; an idle exported role is not a lease.
 
-Full-server RP/RPM and bounded endpoint RP resolve Network-Port instance 4194303
-using this owner's selected identity, with concrete ACK object identifiers.
-Unregistered responders cannot inherit another owner's association from a shared
-database. Mixed RPM succeeds with inline UNKNOWN_OBJECT for an unavailable port
-when another property is accessible. Successful target Audit uses the same
-concrete object and preserves per-target records. Endpoint responder RPM remains
-unsupported. Same-device multiport/router generations, rebind, pending activation
+Full-server RP/RPM, an endpoint session's server's included (#2617), resolve
+Network-Port instance 4194303 using this owner's selected identity, with
+concrete ACK object identifiers. Unregistered owners cannot inherit another
+owner's association from a shared database. Mixed RPM succeeds with inline
+UNKNOWN_OBJECT for an unavailable port when another property is accessible.
+Successful target Audit uses the same concrete object and preserves
+per-target records. Same-device multiport/router generations, rebind, pending activation
 (and with it writes to the BBMD and foreign-device rows, the NAT rows
 included), B/IP
 multicast, DHCP and full Network Port conformance remain outside this profile.
@@ -13308,8 +13281,9 @@ reported by endpoint stop rather than discarded.
 one transport owner. One `EndpointSession` owns the transport, ingress, and
 shared outbound coordinator. Use its builders when both roles need that shared
 lifecycle. Standalone `BACnetClient` and `BACnetServer` remain public APIs with
-their own service and data-link capabilities; they are not deprecated. The
-endpoint responder's narrower service scope is described below.
+their own service and data-link capabilities; they are not deprecated. A
+session with a server role runs the full `BACnetServer`, read-only unless
+given a builder (see [Full server on an endpoint](#full-server-on-an-endpoint)).
 
 `EndpointSession`'s transport type defaults to `AnyTransport` (#2043), so
 `EndpointSession` alone names a session over any built-in transport. The
@@ -13368,18 +13342,12 @@ The port declares its own echo, as for a transport built by hand
 | `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `device` |
 | `generic_builder().transport(mstp)...` | `MstpEndpointBuilder::new(serial, station)...build_session()?` (one serial owner) |
 
-Notes: the endpoint server role defaults to `ReadProperty` (+ `Reject`/`Abort`
-+ segmentation-`Abort`). The explicit Device-write opt-in below adds one
-bounded WriteProperty path, and the ReinitializeDevice opt-in adds that
-service through an application handler; full `bacnet-server` parity is out of
-scope. The responder supplies exactly the service bits it executes (RP, plus
-WP and ReinitializeDevice when enabled) and exposes neither COV
-list property, even for a custom database Device. Server-role identity service
-lists must include RP and contain no unsupported bits; validation runs before
-ingress even when both opt-ins are off. With an opt-in, any declaration within
-the executed set is accepted, and that set is committed only after all
-validation succeeds. ClientOnly creates no
-responder and retains its services vector as a local declaration.
+Notes: a session with a server role (`ServerOnly`, `Both`) runs the full
+server, which needs the session's Device identity: without a server builder
+it is the read-only one (see [Full server on an endpoint](#full-server-on-an-endpoint)).
+The Device lists the services the node executes, whatever the identity's
+service list says. ClientOnly runs no server and retains its services vector
+as a local declaration.
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 registration) stay on `BipTransport` and on `BACnetClient` over B/IP (see
 [Transport access and BBMD helpers](#transport-access-and-bbmd-helpers)),
@@ -13467,7 +13435,8 @@ invoke IDs, and `bacnet_ops::Client::over` takes it as it is.
 ```rust
 use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
 
-let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
+let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?
+    .device(identity);
 session.start().await?;
 let client = session.full_client()?;
 client.who_is(Broadcast::Global, None).await?;
@@ -13479,15 +13448,15 @@ assert!(client.who_is(Broadcast::Global, None).await.is_err());
 - With a source Audit Reporter, the client's reads and writes are audited
   ([below](#source-audit-of-the-full-client)).
 - Beside a server role the client answers only the COV notifications of its
-  own subscriptions. The narrow server role answers a
-  ConfirmedEventNotification with a Reject (unrecognized service) while the
-  client still publishes it; a full server on the session
-  ([below](#full-server-on-an-endpoint)) acknowledges it. A session with no
-  server role leaves the client to answer as a standalone client does.
+  own subscriptions; the session's server
+  ([below](#full-server-on-an-endpoint)) acknowledges a
+  ConfirmedEventNotification, of which the client hears a copy. A session
+  with no server role leaves the client to answer as a standalone client
+  does.
 - The session has the one owner of the local network number: the client asks
   What-Is-Network-Number on first need and never answers one.
-- The node is one device: a DeviceCommunicationControl a full server on the
-  session accepts binds this client too, and a segmented answer no request
+- The node is one device: a DeviceCommunicationControl the session's server
+  accepts binds this client too, and a segmented answer no request
   of the node's holds comes to it ([below](#full-server-on-an-endpoint)).
 - Stopping: one `stop()` stops the session with the client still alive
   (#2617). It closes the session's roles, ends the client's tasks, fails its
@@ -13587,24 +13556,26 @@ in the caller's task.
   before the request registers, is refused there, unsent and unrecorded, and
   its sequence number is left unused. One already sent whose retry is
   withheld ends with `InitiationDisabled { sent: true }`. A client started
-  with `with_node_dcc_override` is audited as usual. A session with only the
-  narrow server role has no DeviceCommunicationControl to apply.
+  with `with_node_dcc_override` is audited as usual. A client-only session
+  has no server, so no DeviceCommunicationControl to apply.
 - None of this costs a standalone client anything: an audited client's
   requests leave the request path at the test registration already makes.
 
 ### Full server on an endpoint
 
-`EndpointSession::with_server(builder)`, before `start()`, has the session
-build a full `BACnetServer` from the builder on its one transport, beside its
-client roles (#2617). It is the server a transport of its own gives: every
-service, policy and counter, and the builder's settings as given (policies,
-budgets, handlers, COV policy, device bindings, clock zone). The session owns
-it: `server()` borrows it while the session runs, and is `None` before start,
-after stop and for a session without one. The session hands it its database
-(`with_database`, or a stock one built from the identity), and it answers
-every request the narrow server role would have, which then serves nothing
-(`responder()` is `None`). The session must have a `DeviceIdentity`: the node
-is one device on its address, with one set of device settings.
+A session with a server role (`ServerOnly`, `Both`) builds a full
+`BACnetServer` at start on its one transport, beside its client roles
+(#2617). `EndpointSession::with_server(builder)`, before `start()`, gives it
+the builder; without one it builds the read-only server of
+`bacnet_endpoint::session::read_only_server()` (below). It is the server a
+transport of its own gives: every service, policy and counter, and the
+builder's settings as given (policies, budgets, handlers, COV policy, device
+bindings, clock zone). The session owns it: `server()` borrows it while the
+session runs, and is `None` before start, after stop and for a session
+without a server role. The session hands it its database (`with_database`,
+or a stock one built from the identity). The session must have a
+`DeviceIdentity`: the node is one device on its address, with one set of
+device settings, and a server role without one is refused at start.
 
 ```rust
 use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
@@ -13623,15 +13594,27 @@ drop(client);
 session.stop().await?; // stops the server, then the link
 ```
 
-- `server()` asks about the full server only, and `responder()` about the
-  narrow server role. It is `Some` from the start that built the server
-  until a stop has stopped it; a cancelled start or stop leaves it `Some`.
-- The builder's policies apply as given. A builder with none lets any peer
+- `server()` is `Some` from the start that built the server until a stop
+  has stopped it; a cancelled start or stop leaves it `Some`.
+- The read-only default: without a builder the session runs
+  `read_only_server()`, so an endpoint nobody gave a policy is never writable
+  by a peer, and a 0.15.0 endpoint that upgrades doesn't become so. It
+  answers reads, discovery (Who-Is, Who-Has) and COV subscriptions, and
+  denies every write, create and delete with SERVICES /
+  SERVICE_REQUEST_DENIED (an inbound WriteGroup's Channel writes are skipped,
+  since nothing answers one). It ignores time synchronization, local and UTC
+  (Clauses 16.7 and 16.8), and so its Device's Protocol_Services_Supported
+  lists neither service (#2617). What its policy doesn't decide keeps the server's
+  defaults, so any peer may still acknowledge an alarm (AcknowledgeAlarm,
+  Clause 13.5), send event notifications, which Notification Forwarder
+  objects pass on, announce itself with I-Am, and send text messages;
+  DeviceCommunicationControl, ReinitializeDevice without a handler,
+  LifeSafetyOperation and Audit notifications stay denied. The Python
+  endpoints build their server from it unless given a `mutation_policy`.
+- A builder's policies apply as given. A builder with none lets any peer
   write, create and delete, as a standalone server does; give it a
   `ServerPolicy` or `MutationPolicy::DenyAll` to close it, or start from
-  `bacnet_endpoint::session::read_only_server()`, the read-only stance
-  described below, as an ordinary builder to set the rest on. The Python
-  endpoints build their server from it unless given a `mutation_policy`.
+  `read_only_server()` as an ordinary builder to set the rest on.
 - From the first request: the server's seat is attached as the link starts,
   before its first request is classified, and the server takes what waits
   there once the session's start is done, so nothing is dropped as finding no
@@ -13731,10 +13714,11 @@ session.stop().await?; // stops the server, then the link
   session, which counts them.
 - Refused at start, before the link starts, leaving the session ready to
   correct and start again: `with_server` on a session with no server role (a
-  full client there answers every request itself) or no Device identity;
-  beside the narrow server role's opt-ins (`with_cov`, `with_device_writes`,
-  `with_reinitialize`, a non-default `SessionConfig::read_work_limit`), whose
-  places the builder's settings take; a builder with a transport, a database
+  full client there answers every request itself); a server role without a
+  Device identity; a server role beside the gone narrow server role's
+  opt-ins (`with_cov`, `with_device_writes`, `with_reinitialize`, a
+  non-default `SessionConfig::read_work_limit`), whose places a builder's
+  settings take; a builder with a transport, a database
   (give it to the session) or a `registered_network_port` (name it on the
   session); a builder identity, `cov_retry_timeout_ms` or
   `notification_retries`, or a database Device's largest APDU or APDU timing,
@@ -13750,28 +13734,13 @@ session.stop().await?; // stops the server, then the link
   an Address naming this network by its number or a group address only the
   bound link reveals. That refusal ends the session and drops the database
   the server was given.
+- Routed source Audit bindings learn their networks' routers at the
+  session's ingress, from every request and every answer a lease of the
+  session's holds that comes from such a network, whichever role takes it.
 - Where this is going (maintainer decisions on #2617): the Python endpoints
-  already run this server, and `await endpoint.server()` returns it as a
-  `BACnetServer`. Next the narrow server role
-  goes, taking the session's own COV reporting, local writes, Device-write
-  authorizer, ReinitializeDevice opt-in and `read_work_limit` with it, and a
-  server-role session always builds a full server: without a builder, a
-  read-only one (`read_only_server()`) that answers reads, discovery and COV
-  subscriptions and refuses every write, create and delete (SERVICES /
-  SERVICE_REQUEST_DENIED), so a 0.15.0 endpoint that upgrades doesn't become
-  writable by any peer.
-
-  It also ignores time synchronization, local and UTC (Clauses 16.7 and
-  16.8), and so its Device's Protocol_Services_Supported lists neither
-  service: a server whose `TimeSyncPolicy` is disabled, or enabled with a
-  `source_restriction` that names nobody, lists neither, endpoint-seated or
-  standalone, and one whose enabled policy accepts some source lists both,
-  whatever it limits (#2617). What the server's policy doesn't decide keeps the server's
-  defaults, so any peer may still acknowledge an alarm (AcknowledgeAlarm,
-  Clause 13.5), subscribe to COV, send event notifications, which
-  Notification Forwarder objects pass on, announce itself with I-Am, and
-  send text messages; DeviceCommunicationControl, ReinitializeDevice without
-  a handler, LifeSafetyOperation and Audit notifications stay denied. Last,
+  run this server too, and `await endpoint.server()` returns it as a
+  `BACnetServer`. Next the narrow server role's leftover API goes (see
+  [The narrow server role is gone](#the-narrow-server-role-is-gone)), then
   the full client follows the node's segmentation.
 
 ### Endpoint shutdown and the object database
@@ -13792,326 +13761,35 @@ until settlement completes, then returns the saved outcome. It keeps its object
 database through `stop()` and lets go of it when it drops.
 
 Every endpoint holder of the database lets go through
-`bacnet_server::server::drop_database_off_runtime` (#1561): the session, the
-server role's responder (which a cloned `ServerRoleHandle` or the dispatch task
-may hold last), the source Audit runtime (which an audited request in flight
-may hold last), the session's Number task and its settlement task. So whichever goes last, in async
+`bacnet_server::server::drop_database_off_runtime` (#1561): the session, its
+server (whose aborted tasks may hold it last), the source Audit runtime (which
+an audited request in flight may hold last), the session's Number task and its
+settlement task. So whichever goes last, in async
 code a durable object's final saves run on Tokio's blocking pool, not on a
 runtime worker. Dropping a session aborts its settlement task without awaiting
 it; storage may still change after drop returns. Await `stop()` for the joined
 settlement boundary.
 
 
-### Authorized endpoint Device writes
+### The narrow server role is gone
 
-`EndpointSession::with_device_writes(authorizer)` or
-`BipEndpointBuilder::device_writes(authorizer)` enables WriteProperty for the
-one local Device's `Description` and, with a complete source profile,
-`Audit_Notification_Recipient`. Supply a mandatory Rust
-`bacnet_server::mutation::DeviceWriteAuthorizer`; its decoded context retains the
-immediate peer, claimed routed source, transport provenance and invoke ID, and
-its `principal()` names a verified direct SC peer (`None` on B/IP, for a routed
-request and for hub-relayed ingress). The callback must be fast, nonblocking and
-side-effect-free. Refusal or panic denies before mutation.
+Through 0.15.0 a session with a server role ran a narrow responder: it
+executed ReadProperty, and WriteProperty of the Device's Description and
+Audit recipient and ReinitializeDevice only when opted in; it ignored every
+unconfirmed request, Who-Is among them, and rejected every other service as
+unrecognized. A session with a server role now runs the full server instead
+(#2617), and the start refuses the narrow role's opt-ins. A later step of
+#2617 removes them:
 
-Startup requires a server role and a concrete built-in local Device in the
-attached database (the lowest when it holds several; see
-[Databases with several Devices](#databases-with-several-devices)). An optional
-`DeviceIdentity` must match that Device
-and contain only the service bits the responder executes. Configuration
-validation precedes transport startup and any profile/source-ownership changes.
-The enabled Device and identity advertise exactly RP+WP, plus ReinitializeDevice
-and SubscribeCOV when those are enabled too, including sessions without an
-identity. Default
-sessions keep their existing RP-only responder.
-Valid priorities 1–16 are ignored for noncommandable Description. Authorized
-NULL relinquishment succeeds without changing its value. Array indices,
-out-of-range priorities and other non-string values fail; numeric priority
-range errors use SERVICES/PARAMETER_OUT_OF_RANGE. Missing objects/properties
-return UNKNOWN_OBJECT/UNKNOWN_PROPERTY; known out-of-scope writes are denied.
-Typed Device authority is revalidated under the commit lock, including when
-the lower-level responder is used directly. Other targets, properties and
-WritePropertyMultiple remain excluded, including source Reporter configuration.
-
-The Description lives in memory unless the Device was built with
-`DeviceObject::with_tags_persistence`. Then the responder saves a written
-one before it answers, with the database guard dropped, and refuses the
-write with DEVICE / OPERATIONAL_PROBLEM when the save fails; the restarted
-endpoint serves it over `set_description` (#2364, see [Keeping a written
-Description](#keeping-a-written-description-2364)).
-
-The session waits for that save. Its one dispatch task handles a request
-to the end before it takes the next event, so while storage is saving a
-Description the session answers no other request, delivers no reply to its
-client role, and `stop()` waits too. The bundled server holds up only the
-request that wrote. Storage that never returns from a save therefore holds
-the whole endpoint, so give an endpoint's Device storage that answers
-quickly or fails.
-
-Deterministic request/reply tests cover authorization, framing, routing,
-reply channels, group silence, segmentation and shutdown; a B/IP loopback test
-covers an authorized write and service-profile readback. This is not general
-endpoint mutation parity or inbound replay suppression. The source recipient extension
-is described below and in the [Device recipient contract](device-audit-recipient.md).
-
-### Endpoint ReinitializeDevice
-
-`EndpointSession::with_reinitialize(handler)` or
-`BipEndpointBuilder::reinitialize(handler)` lets the endpoint execute
-ReinitializeDevice through the same `ReinitializeHandler` signature as the
-full server (see [The ReinitializeDevice handler](#the-reinitializedevice-handler)),
-with the request's `ReinitializeContext` built from the received source,
-routing and provenance. `with_reinit_password` / `reinit_password` sets the
-password a request must carry; startup refuses a password without a handler,
-and `build_transport` refuses either one. Startup requirements match the
-Device-write opt-in (a server role and a concrete built-in local Device), and
-the Device and identity then advertise ReinitializeDevice next to RP (and WP
-when writes are on).
-
-The handler rules are the server's, with one addition: the session answers
-inbound requests on a single dispatch task, so a slow or blocking handler, or
-after-reply hook, stalls every request behind it. The hooks registered with
-`ReinitializeContext::after_reply` run once the egress reports the reply sent,
-or the reply channel has taken it. With a source Audit Reporter configured,
-the session's Reporter records an accepted reset, backup or restore step as
-the server does (#1564), filtered by its Audit_Level and
-Auditable_Operations and sent to the Device's recipient. Clause 19.6.2 casts
-that Reporter as the source-side one; routing these target-side records
-through it, the session's only Reporter, is a local choice. A panic or a returned Reject is answered
-`SERVICES / OTHER` and the session keeps serving. A close that wins while the
-request waits for the database refuses it before the handler runs.
-
-`EndpointSession::report_device_reset_local()` is the session's counterpart of
-`BACnetServer::report_device_reset_local()` (#1837): it records a reset the
-application makes for its own reasons as a DEVICE_RESET from this device, with
-no invoke ID, through the source Reporter and its Audit_Level and
-Auditable_Operations filters. Without a source Reporter it records nothing.
-It fails when the session is not running, and returns once the record is
-admitted, so call it before restarting.
-
-### Endpoint local writes
-
-`EndpointSession::write_local`, `set_present_value_local` and
-`set_reliability_local` (#2468) are the session's counterparts of the
-`BACnetServer` calls of the same names: the application changes an object of
-its own database through bacnet-device-core's `write::local::apply`, under the
-database guard the responder reads under, so a request sees the object before
-the change or after it. Each is refused where the server's call is, with the
-same error. They work in any role while the session runs with a database;
-before `start()`, once `stop()` has begun (a cancelled `stop()` included) or
-without a database they fail with `Error::Encoding` and change nothing.
-
-```rust
-use bacnet_device_core::write::local::LocalCommandSource;
-
-session.set_present_value_local(&sensor, PropertyValue::Real(21.5)).await?;
-session.set_reliability_local(&sensor, Reliability::NO_SENSOR).await?;
-session
-    .write_local(&output, PropertyIdentifier::PRESENT_VALUE, None,
-        PropertyValue::Real(40.0), Some(8), LocalCommandSource::ServerDevice)
-    .await?;
-```
-
-A change that writes is reported to the session's COV subscribers when COV is
-enabled (see [Endpoint COV reporting](#endpoint-cov-reporting)), once a run it
-started has ended as below. What doesn't follow on an endpoint: it runs no
-event pass, so it sends no event notification after a local change, and
-Event_State stays as it is: a fault set here shows FAULT in Status_Flags
-without the IN_ALARM the server's event pass adds. No task makes the writes a
-change starts either. Each run ends at once, unmade,
-as bacnet-device-core's `Responder` ends one a client's write starts, so none
-leaves its object busy, but what it leaves differs by object:
-
-- A Command's Present_Value write that selects a list with actions ends it with
-  In_Process and All_Writes_Successful FALSE, and no action is written; one
-  that selects no list, or an empty one, starts no run.
-- A Channel's Present_Value write to a Channel with members ends its
-  distribution with Write_Status FAILED, Reliability PROCESS_ERROR and
-  Status_Flags FAULT, and no member is written; with no members it starts no
-  run and Write_Status stays IDLE.
-- A write that starts or moves a Timer gives it its new state, but the
-  State_Change_Values writes the transition owes aren't made (Reliability
-  PROCESS_ERROR, FAULT), and with no Timer task a running Timer never expires.
-- A Schedule's targets aren't written, nor a Staging object's.
-
-A client's next read sees the change.
-
-A call dropped before it commits has changed nothing the object serves. A save
-it had staged by then is let go of from a task of its own as soon as the guard
-is free, so storage comes back to what the object serves soon after and the
-next write to the object, a client's included, isn't held up behind it. Once
-the commit begins it runs to its end under the guard, with no await.
-
-Saving and auditing follow the endpoint's network writes, property by
-property:
-
-- A property its object saves first is staged and saved before the call
-  returns, with the guard dropped, as the endpoint saves a Description a client
-  writes to a Device built with `DeviceObject::with_tags_persistence`; a
-  failed save refuses the write with DEVICE / OPERATIONAL_PROBLEM. The table of
-  such properties is the server's own, so every property
-  `BACnetServer::write_local` saves first (a Notification Class's
-  Recipient_List, say) is saved first here too, never under the guard.
-- A write of the Device's Audit_Notification_Recipient takes the route an
-  authorized network write and `write_audit_recipient` take, through the source
-  Audit runtime: the old and the new recipient each get the record, which names
-  this Device with no invoke ID. Without a running source Reporter the Device
-  has no such property (PROPERTY / UNKNOWN_PROPERTY).
-- Nothing else is audited, as no other network write to the endpoint is. Here
-  the endpoint differs from the server, which audits a local write when target
-  Audit reporting is configured.
-
-The local-write cases the server and bacnet-device-core run side by side run on
-the endpoint too, compared by result and by the properties read back; the event
-pass and the Command, Channel and Timer runs are the differences pinned by
-tests.
-
-### Endpoint COV reporting
-
-`EndpointSession::with_cov(config)` (#2490), or `BipEndpointBuilder::cov(config)`
-on the B/IP builder, lets the endpoint execute SubscribeCOV,
-SubscribeCOVProperty and SubscribeCOVPropertyMultiple for the objects of its
-database and send the COV notifications their subscriptions call for. The session runs
-bacnet-device-core's `Reporter` (`bacnet_device_core::report`): the
-subscription table, change detection and confirmed delivery the core gives
-firmware. A subscription to an object or to one of its properties (with the
-request's own COV increment when it gives one), its renewal, its cancellation
-(one that matches nothing succeeds) and a lifetime that runs out on the
-session's clock behave as on `BACnetServer`, and the notifications carry the
-same octets. An object subscription and a property subscription from one
-subscriber, even under one process identifier, are two subscriptions, each
-reported, listed and cancelled on its own.
-
-A SubscribeCOVPropertyMultiple subscription is one context: the subscriber's
-process, its references (each a property with its own COV increment and
-Timestamped flag), a lifetime and a Max_Notification_Delay. Its reports are
-the COV-multiple notifications, split to fit the Max-APDU-Length-Accepted the
-request stated, and what a context could not send yet goes out by its
-Max_Notification_Delay at the latest. A refusal names the first reference it
-couldn't take, and the references before it stay subscribed, as on
-`BACnetServer`. A timestamped reference needs a Device clock: the session
-installs none, so give the database one before handing it over. Either lend
-it a `bacnet_device_core::clock::DeviceClock`, built over the host's
-monotonic timer (`DeviceClock::new(zone, now)`, with `now` a
-`bacnet_time::HostClock`'s reading, say), `set` from the host's real-time
-clock and bound with `DeviceClock::lend(&mut db)`; unset, it reads local
-midnight on 1990-01-01 and counts on from there, and a `set` after the
-lending reaches the database only when it is lent again. Or implement
-`bacnet_objects::clock::ClockReader` and pass it to
-`ObjectDatabase::set_clock_reader`; a frame counts only when it is a valid
-actual date and time. Without a clock a timestamped reference is refused
-with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and untimestamped ones
-are taken. With one, each change carries its time of change, and changes made
-while a confirmed report is out wait for its Ack and go together after it.
-
-```rust
-use bacnet_device_core::cov::CovPolicy;
-use bacnet_device_core::report::{OutboxLimits, ReportConfig};
-
-let policy = CovPolicy { max_subscriptions_global: 256, ..CovPolicy::default() };
-let config = ReportConfig::new(policy).with_outbox(OutboxLimits { entries: 64, octets: 16_384 });
-let mut session = BipEndpointBuilder::new(Ipv4Addr::UNSPECIFIED, 47808, Ipv4Addr::BROADCAST)
-    .role(SessionRole::ServerOnly)
-    .database(db)
-    .cov(config)
-    .build_session()?;
-session.start().await?;
-// AI-1's subscribers hear of this.
-session.set_present_value_local(&ai1, PropertyValue::Real(21.5)).await?;
-```
-
-What is reported: an accepted subscription's first notification, which follows
-the subscribe request's reply; then each change the application makes through
-`write_local`, `set_present_value_local` and `set_reliability_local`. A
-change made to the database any other way reports nothing. A client's write
-reaches only the Device's Description and Audit_Notification_Recipient
-([Authorized endpoint Device writes](#authorized-endpoint-device-writes)), and
-the Device takes no subscription of either kind, on the endpoint as on
-`BACnetServer`: it lends no COV reporting, so both services refuse it with
-OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and a client's write notifies
-nobody. The MS/TP and BACnet/SC builders take `cov(config)` too
-(`MstpEndpointBuilder::cov`, `ScEndpointBuilder::cov`), though not the other
-service opt-ins, and the B/IP and MS/TP builders' `build_transport` refuses
-it, as a bare transport can't keep it.
-
-Confirmed notifications lease their invoke IDs from the coordinator the
-client role draws from, so the two roles never hold one ID at once, and their
-answers come back through the session's one admission. They are sent again
-on `config.confirmed` (three seconds and three retries by default, apart from
-the client role's `SessionConfig` timer), and a subscriber that refuses one or
-never answers is held off for one retry cycle. A change made while a report is
-out waits for its answer. With every invoke ID leased, a confirmed report
-waits, and goes once it can take an ID that comes back. The client role isn't
-held back for it: its requests fail at once when no ID is free, so a client
-role that keeps every ID leased keeps the report waiting.
-
-At most `bacnet_endpoint::session::COV_CONFIRMED_IN_FLIGHT` (64) confirmed
-notifications are out at once, all subscribers together: a quarter of the 256
-invoke IDs. A subscriber that never answers holds an ID per notification until
-its retries run out, up to `CovPolicy::max_confirmed_in_flight_per_peer` of
-them (16 by default), so without the bound sixteen silent subscribers could
-lease every ID and leave the client role none for its own requests. With it,
-four silent subscribers fill the bound at the default limits. A confirmed
-report past it then waits, oldest owed first, until one of the notifications
-out ends: answered, or failed once its retries run out (12 s at the default
-timing). Nothing is dropped, and unconfirmed notifications don't count against
-the bound. When many confirmed
-subscribers are expected, lower `max_confirmed_in_flight_per_peer`, so that
-more silent subscribers are needed to fill the bound.
-
-`config` bounds the work:
-
-- `config.cov` (`CovPolicy`) caps the subscriptions: 1,024 in all, 64 per
-  subscriber, 16 indefinite and 16 confirmed notifications in flight per
-  subscriber by default, with 64 slots reserved for the peers it names. It
-  also bounds what one change sends: 64 notifications and 65,536 octets.
-  A subscription past a cap is refused with RESOURCES /
-  NO_SPACE_TO_ADD_LIST_ELEMENT. An invalid policy fails `start()` before the
-  transport starts.
-- `config.outbox` (`OutboxLimits`, 16 entries and 2,048 octets by default)
-  holds the notifications decided and not yet sent, allocated once at start.
-  A notification that finds no room isn't queued: its subscription is owed
-  one later notification with its current values, sent as room frees. An
-  outbox with no entry or no octet fails `start()`. A notification larger
-  than `octets` is never queued, so size it for the largest notification
-  the database's objects call for; the core gives no figure the endpoint
-  could check at start.
-
-Startup requires a server role and a concrete built-in local Device, as the
-Device-write opt-in does. The Device and identity then advertise the three
-services, and the Device lists Active_COV_Subscriptions (object and property
-subscriptions) and Active_COV_Multiple_Subscriptions (the contexts), read live
-from the table (Table 12-13). Without a composed
-identity, the Device object supplies what the notifications carry of it: its
-identifier, as the initiating device, and for a confirmed one its
-Max_APDU_Length_Accepted. On a session without the opt-in the three services
-are refused with UNRECOGNIZED_SERVICE and the Device has neither list. No
-event notification follows a change: the endpoint runs no event pass.
-
-A subscriber ends with the current value even when a change takes the object
-back to what it last heard before the last change's notification went
-(#2508): an unconfirmed notification still queued gives way to the newer one,
-where `BACnetServer`, which sends each at once, sends both, and a confirmed
-one's Ack brings a fresh look.
-
-`stop()` stops sending, drops what is still queued and gives back every
-invoke ID a notification holds.
-
-On paused time over an in-memory link, an endpoint and a `BACnetServer` with
-the same Device and object answer and notify with the same octets through a
-subscription, changes, a renewal, a cancellation and a lifetime running out,
-for an object subscription, a property subscription with its own
-increment and a COV-multiple context (timestamped and untimestamped
-references, two contexts to one object, a report split for a small
-subscriber), refuse the same subscriptions with the same replies, and list
-the same Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions; their
-confirmed notifications carry the same parameters. Both hosts, each with a
-subscriber of its own, also send at the same instants when a refused report's
-change goes out by the context's Max_Notification_Delay, and through the
-resends, hold-offs and held changes of a subscriber that never answers, over
-the whole lifetime. Only the backstop after a failed send is left to
-bacnet-server's parity tests (`device_core_parity_tests/cov/notify/multiple.rs`),
-since the endpoint's in-memory link can't fail one send.
+| The narrow role's | The full server's |
+|---|---|
+| `with_device_writes(authorizer)`, the builders' `device_writes` | a builder for `with_server` whose `ServerPolicy` decides mutations (`FnPolicy::new().mutation(..)`), which it asks about every covered mutation of every object |
+| `with_reinitialize(handler)`, `with_reinit_password(..)`, the builders' `reinitialize` and `reinit_password` | the builder's `on_reinitialize(handler)` and `reinit_password(..)` |
+| `with_cov(config)`, the builders' `cov` | nothing to turn on: the server answers subscriptions; the builder's `cov_policy` bounds them |
+| `SessionConfig::read_work_limit`, the builders' `read_work_limit` | the builder's `read_property_multiple_budget`, whose `max_result_elements` has the same default |
+| `write_local`, `set_present_value_local`, `set_reliability_local` on the session, now refused with a server role (a client-only session keeps them) | the same calls on `server()`, whose COV and event work follows them |
+| `responder()`, `cloned_responder_handle()`, `ServerRoleHandle` | `server()`, which borrows the server |
+| `PolicyCountersSnapshot::responder_declined` | the server's own counters |
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 
@@ -14464,12 +14142,9 @@ writes and internal application updates retain their existing ownership rules.
 Output profiles also remain independent of command priorities, Value_Source,
 command timestamps and feedback; attaching Tags storage does not persist commands.
 Device profiles preserve the clock, segmentation, identity, Audit recipient and
-executor-owned COV/service/binding views. Full servers accept Device Tags writes
-through the ordinary durable path. Endpoint responders retain their narrower
-Device write allowlist: even with Device writes enabled, Tags is refused before
-authorization or saving. Their default RP-only and optional RP/WP service sets
-stay unchanged; metadata describes the object's ordinary capability, not an
-expansion of endpoint admission. Existing standalone descriptor order is preserved.
+executor-owned COV/service/binding views. Full servers, an endpoint
+session's among them, accept Device Tags writes through the ordinary durable
+path. Existing standalone descriptor order is preserved.
 
 - `Tags` is a BACnetARRAY of `bacnet_types::constructed::BACnetNameValue`, a
   name with an optional primitive `PropertyValue`, whose codec

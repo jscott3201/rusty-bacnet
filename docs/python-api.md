@@ -8441,7 +8441,7 @@ segmented-request controls to the original socket. Unconfirmed Who-Is/Who-Has
 discovery replies retain ordinary routing. Python still exposes neither
 direct-listener setup nor this response capability. This adds no Python direct-connection entry point
 or Python direct-connection support. Native code also confines the standalone
-client's inbound confirmed replies and the shared endpoint's narrow responder;
+client's inbound confirmed replies and the shared endpoint's server role;
 that does not change outgoing client transaction/retry policy or expose a Python
 response capability. See the [server response scope](rust-api.md#accepted-direct-server-responses)
 and [native client/endpoint scope](rust-api.md#accepted-direct-client-and-endpoint-replies).

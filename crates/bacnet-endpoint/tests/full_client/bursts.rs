@@ -156,40 +156,36 @@ async fn no_burst_of_any_kind_or_size_ends_the_session() {
             assert!(lab.session.is_running(), "{what}");
             lab.session.broadcast_i_am().await.expect(&what);
             let counters = lab.session.policy_counters().await;
+            // Requests go to the server's seat, whose own queue counts what
+            // it drops; the session's queues keep the rest.
+            let server_drops = lab.session.server_seat_counters().full_drops;
+            let drops = full_drops(&counters) + server_drops;
+            // The server answers each read it takes, an Abort when its
+            // handlers have no room.
             let answered = apdus(&lab.node_sent)
                 .iter()
-                .filter(|(_, apdu)| matches!(apdu, Apdu::ComplexAck(_)))
+                .filter(|(_, apdu)| matches!(apdu, Apdu::ComplexAck(_) | Apdu::Abort(_)))
                 .count() as u64;
+            // Past its handlers' room and the Aborts it may send, the
+            // server drops a request and counts it.
+            let admission = lab.session.server().unwrap().request_admission_counters();
+            let unanswered = server_drops + admission.confirmed_fallback_dropped_total;
             match kind {
                 Kind::IAmFromMany | Kind::IAmFromOne => {
-                    assert_eq!(
-                        full_drops(&counters),
-                        counters.unconfirmed_full_drops,
-                        "{what}"
-                    );
+                    assert_eq!(full_drops(&counters), 0, "{what}");
                 }
                 // Each request is answered or counted, never both.
                 Kind::ReadFromMany => {
-                    assert_eq!(
-                        full_drops(&counters),
-                        counters.confirmed_full_drops,
-                        "{what}"
-                    );
-                    // Each request is answered, declined by the responder
-                    // (its answer found egress full) or dropped unanswered.
-                    assert_eq!(
-                        answered + counters.responder_declined + counters.confirmed_full_drops,
-                        size as u64,
-                        "{what}"
-                    );
+                    assert_eq!(full_drops(&counters), 0, "{what}");
+                    assert_eq!(answered + unanswered, size as u64, "{what}");
                     assert!(answered > 0, "{what}");
                 }
                 Kind::StrayAnswers => {
-                    assert_eq!(full_drops(&counters), counters.answer_full_drops, "{what}");
+                    assert_eq!(drops, counters.answer_full_drops, "{what}");
                 }
             }
             if capacity == SMALL && size >= 100 && !matches!(kind, Kind::IAmFromOne) {
-                assert!(full_drops(&counters) > 0, "{what}: the burst overflowed");
+                assert!(drops > 0, "{what}: the burst overflowed");
             }
 
             // The node still answers a peer, and its client still reads.
@@ -284,9 +280,11 @@ async fn reads_in_flight_complete_during_a_thousand_frame_i_am_burst() {
     assert_eq!(own.unwrap().object_identifier, ai1());
     assert_eq!(peers.unwrap().object_identifier, ai1());
 
+    // The server's seat dropped I-Ams; the session's own queues none.
     let counters = lab.session.policy_counters().await;
-    assert!(counters.unconfirmed_full_drops > 0, "{counters:?}");
-    assert_eq!(full_drops(&counters), counters.unconfirmed_full_drops);
+    let seat = lab.session.server_seat_counters();
+    assert!(seat.full_drops > 0, "{seat:?}");
+    assert_eq!(full_drops(&counters), 0, "{counters:?}");
     assert!(lab.session.is_running());
     other
         .read_property(&node, ai1(), PropertyIdentifier::OBJECT_NAME, None)
@@ -329,7 +327,8 @@ async fn an_mstp_request_expecting_a_reply_is_answered_in_the_middle_of_a_burst(
         panic!("a ComplexACK");
     };
     assert_eq!(ack.invoke_id, 7);
-    assert!(lab.session.policy_counters().await.unconfirmed_full_drops > 0);
+    let dropped = offered(&lab, 1_001).await;
+    assert!(dropped.0 > 0, "the server's seat dropped I-Ams");
 
     // With the queue held full of confirmed requests (the share kept for
     // them used up too), the next one's reply sender is released unanswered.
@@ -351,11 +350,27 @@ async fn an_mstp_request_expecting_a_reply_is_answered_in_the_middle_of_a_burst(
             Err(_) => postponed += 1,
         }
     }
-    let counters = lab.session.policy_counters().await;
     assert!(
         postponed > 0 && answered > 0,
         "{answered} answered, {postponed} postponed"
     );
-    assert_eq!(postponed, counters.confirmed_full_drops);
+    // Each one released unanswered was dropped by the server's seat, or by
+    // its admission past the Aborts it may send.
+    let now = offered(&lab, 1_201).await;
+    assert_eq!(postponed, (now.0 - dropped.0) + (now.1 - dropped.1));
     stop(lab).await;
+}
+
+/// Once `count` requests have reached the server's seat, taken or dropped:
+/// how many its seat dropped, and how many its admission dropped.
+async fn offered(lab: &Lab, count: u64) -> (u64, u64) {
+    eventually(WAIT, "every request offered to the seat", async || {
+        let seat = lab.session.server_seat_counters();
+        seat.apdus + seat.full_drops == count
+    })
+    .await;
+    let seat = lab.session.server_seat_counters();
+    let server = lab.session.server().unwrap();
+    let admission = server.request_admission_counters();
+    (seat.full_drops, admission.confirmed_fallback_dropped_total)
 }

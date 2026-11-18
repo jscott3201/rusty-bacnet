@@ -146,6 +146,12 @@ impl ScEndpointBuilder {
     /// one ReadProperty may expand, a Group's member rows included. See
     /// [`SessionConfig::read_work_limit`]; zero fails the
     /// session builds via [`EndpointSession::new`].
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder with a
+    /// `read_property_multiple_budget`. A later step of #2617
+    /// removes this call.
     pub fn read_work_limit(mut self, limit: usize) -> Self {
         self.session.read_work_limit = limit;
         self
@@ -216,6 +222,12 @@ impl ScEndpointBuilder {
     /// octets, and the confirmed timeout is 1 ms to
     /// [`COV_CONFIRMED_TIMEOUT_MAX_MS`](crate::session::COV_CONFIRMED_TIMEOUT_MAX_MS);
     /// past either, startup fails before the transport starts.
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder with a
+    /// `cov_policy`. A later step of #2617
+    /// removes this call.
     pub fn cov(mut self, config: ReportConfig) -> Self {
         self.cov = Some(config);
         self

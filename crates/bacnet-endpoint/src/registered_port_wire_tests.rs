@@ -156,12 +156,15 @@ impl Owner {
                 crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
                     .role(SessionRole::ServerOnly)
                     .device(identity)
-                    .database(db)
-                    .device_writes(Arc::new(|_| true));
+                    .database(db);
             if registered {
                 builder = builder.registered_network_port(port());
             }
-            let mut endpoint = builder.build_session().unwrap();
+            // A server that lets any peer write, as the standalone one does.
+            let mut endpoint = builder
+                .build_session()
+                .unwrap()
+                .with_server(bacnet_server::server::BACnetServer::generic_builder());
             endpoint.start().await.unwrap();
             Self::Endpoint(Box::new(endpoint))
         }

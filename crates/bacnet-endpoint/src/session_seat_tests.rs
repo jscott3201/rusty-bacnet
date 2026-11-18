@@ -31,8 +31,9 @@ async fn a_seat_nobody_reads_keeps_room_for_the_answer_to_its_clients_request() 
     let wire = Wire::new();
     let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
     let transport = wire.port_with_queue(NODE, 1_024).build();
-    let mut session =
-        EndpointSession::new(transport, SessionRole::Both, SessionConfig::default()).unwrap();
+    let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())
+        .unwrap()
+        .device(crate::DeviceIdentity::new(123, 42).unwrap());
     session.start().await.unwrap();
     let mut seat = session.client_seat().unwrap();
     let lease = seat

@@ -113,8 +113,9 @@ fn session(
         SessionConfig::default(),
     )
     .unwrap();
-    let session = if role == SessionRole::Both {
-        session.with_device_writes(Arc::new(|_| true))
+    // A server role runs the read-only full server on the node's identity.
+    let session = if role != SessionRole::ClientOnly {
+        session.device(crate::identity::DeviceIdentity::new(123, 42).unwrap())
     } else {
         session
     };
@@ -160,13 +161,12 @@ async fn success(role: SessionRole) {
     session.start().await.unwrap();
     assert!(session.is_running());
     assert!(session.client().is_some());
-    assert_eq!(session.responder().is_some(), role == SessionRole::Both);
+    assert_eq!(session.server().is_some(), role == SessionRole::Both);
     let db = session.database.as_ref().unwrap();
     let weak = Arc::downgrade(db);
-    assert_eq!(
-        Arc::strong_count(db),
-        if role == SessionRole::Both { 3 } else { 2 }
-    );
+    if role == SessionRole::ClientOnly {
+        assert_eq!(Arc::strong_count(db), 2);
+    }
     {
         let db = db.read().await;
         assert!(source(&db, selected()));
@@ -181,7 +181,7 @@ async fn success(role: SessionRole) {
     assert!(session.start().await.is_err());
     assert_eq!(observed.starts.load(Ordering::SeqCst), 1);
     if role == SessionRole::Both {
-        // The responder sees the same promoted object, not a second database.
+        // The server sees the same promoted object, not a second database.
         let mut peer =
             EndpointSession::new(peer, SessionRole::ClientOnly, SessionConfig::default()).unwrap();
         peer.start().await.unwrap();
@@ -216,7 +216,7 @@ async fn client_only_retains_source_database_and_startup_is_silent() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn both_shares_source_database_with_responder_and_startup_is_silent() {
+async fn both_shares_source_database_with_its_server_and_startup_is_silent() {
     success(SessionRole::Both).await;
 }
 
@@ -601,16 +601,20 @@ async fn selected_source_requires_typed_recipient_before_start() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn source_both_requires_explicit_authorizer_before_owner_installation() {
-    let (mut session, _peer, observed) = session(SessionRole::Both);
-    session.device_write_authorizer = None;
+async fn source_both_needs_a_server_that_decides_mutations() {
+    // The read-only server a session runs by default decides every
+    // mutation, so source Audit starts beside it (#2617); a builder whose
+    // policy decides none is refused, before anything changes.
+    let (session, _peer, observed) = session(SessionRole::Both);
     let mut session = session
         .with_database(database())
-        .with_source_audit_reporter(selected());
-    rejected(&mut session, &observed, "explicit Device write authorizer").await;
-    session = session.with_device_writes(Arc::new(|_| false));
+        .with_source_audit_reporter(selected())
+        .with_server(bacnet_server::server::BACnetServer::generic_builder());
+    rejected(&mut session, &observed, "decides mutations").await;
+    session = session.with_server(super::read_only_server());
     session.start().await.unwrap();
     session.stop().await.unwrap();
+    assert_eq!(observed.starts.load(Ordering::SeqCst), 1);
 }
 
 #[path = "source_start_cleanup_tests.rs"]

@@ -7,9 +7,10 @@
 //!   in a database and read back through the PICS generator, which says
 //!   whether CreateObject and DeleteObject reach the type;
 //! - services: the full server's `EXECUTED_SERVICES` and the PICS initiator
-//!   list, the client's `SENT_SERVICES`, the shared endpoint's responder lists,
-//!   and the Python client's methods in the type stub, matched to services by
-//!   name, with every other method on an explicit list ([`python_services`]);
+//!   list (an endpoint session with a server role runs that server), the
+//!   client's `SENT_SERVICES`, and the Python client's methods in the type
+//!   stub, matched to services by name, with every other method on an
+//!   explicit list ([`python_services`]);
 //! - data links: the Cargo features of `bacnet-transport`, resolved through the
 //!   manifests for the Python wheel (`rusty-bacnet`) and for each release
 //!   target of the CLI (`TARGETS` in `scripts/release/third_party_notices.py`,
@@ -240,17 +241,11 @@ fn services(python: &BTreeSet<u8>) -> Result<Vec<Value>> {
     let executed = bits(bacnet_objects::device::EXECUTED_SERVICES);
     let initiated = bits(PicsGenerator::INITIATED_SERVICES);
     let sent = bits(bacnet_client::client::SENT_SERVICES);
-    let responder = bits(bacnet_endpoint::RESPONDER_SERVICES);
-    let opt_in: BTreeMap<u8, &str> = bacnet_endpoint::RESPONDER_OPT_IN_SERVICES
-        .iter()
-        .map(|opt_in| (opt_in.service.to_raw(), opt_in.method))
-        .collect();
     let mut rows = Vec::new();
     for raw in 0..=u8::MAX {
-        let used = [&executed, &initiated, &sent, &responder, python]
+        let used = [&executed, &initiated, &sent, python]
             .iter()
-            .any(|set| set.contains(&raw))
-            || opt_in.contains_key(&raw);
+            .any(|set| set.contains(&raw));
         if !used {
             continue;
         }
@@ -259,11 +254,6 @@ fn services(python: &BTreeSet<u8>) -> Result<Vec<Value>> {
             .ok_or_else(|| format!("service bit {raw} has no PICS name"))?;
         let kind =
             kind(service).ok_or_else(|| format!("{label}: neither confirmed nor unconfirmed"))?;
-        let endpoint = if responder.contains(&raw) {
-            json!("always")
-        } else {
-            opt_in.get(&raw).map_or(Value::Null, |method| json!(method))
-        };
         rows.push((
             (kind != "confirmed", label),
             object([
@@ -274,7 +264,6 @@ fn services(python: &BTreeSet<u8>) -> Result<Vec<Value>> {
                 ("serverExecutes", json!(executed.contains(&raw))),
                 ("serverInitiates", json!(initiated.contains(&raw))),
                 ("clientSends", json!(sent.contains(&raw))),
-                ("endpoint", endpoint),
                 ("pythonSends", json!(python.contains(&raw))),
             ]),
         ));
