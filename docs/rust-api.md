@@ -13758,7 +13758,7 @@ unrecognized. A session with a server role now runs the full server instead
 | `with_reinitialize(handler)`, `with_reinit_password(..)`, the builders' `reinitialize` and `reinit_password` | the builder's `on_reinitialize(handler)` and `reinit_password(..)` |
 | `with_cov(config)`, the builders' `cov` | nothing to turn on: the server answers subscriptions; the builder's `cov_policy` bounds them |
 | `SessionConfig::read_work_limit`, the builders' `read_work_limit` | the builder's `read_property_multiple_budget`, whose `max_result_elements` has the same default |
-| `write_local`, `set_present_value_local`, `set_reliability_local` on the session | the same calls on `server()`, whose COV and event work follows them |
+| `write_local`, `set_present_value_local`, `set_reliability_local` on the session, now refused with a server role (a client-only session keeps them) | the same calls on `server()`, whose COV and event work follows them |
 | `responder()`, `cloned_responder_handle()`, `ServerRoleHandle` | `server()`, which borrows the server |
 | `PolicyCountersSnapshot::responder_declined` | the server's own counters |
 

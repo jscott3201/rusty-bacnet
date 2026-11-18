@@ -292,9 +292,23 @@ async fn outbound_endpoint_refusal_after_replacement(refusal: Refusal, same_leaf
     );
     assert_ne!(identity_a.incarnation(), identity_b.incarnation());
 
-    // The old response finds its route retired: it fails, and goes
-    // neither through the Hub nor by the ordinary path.
+    // The old response is attempted on its retired route and fails before
+    // B's request is let in: the server's handler for A ends (its request
+    // admitted, none active), and its answer went neither through the Hub
+    // nor by the ordinary path.
+    let server = session.server().unwrap();
+    let admitted = server.request_admission_counters().confirmed_admitted_total;
     release_a.send(()).unwrap();
+    bounded(async {
+        loop {
+            let counters = server.request_admission_counters();
+            if counters.confirmed_admitted_total > admitted && counters.confirmed_active == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     assert_eq!(ordinary_sends.len(), ordinary_before);
     assert!(futures_util::poll!(Box::pin(peer.hub.recv()).as_mut()).is_pending());
 

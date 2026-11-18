@@ -76,19 +76,25 @@ impl TestCa {
     }
 }
 type GateSlot = Arc<std::sync::Mutex<Option<Arc<tokio::sync::Semaphore>>>>;
+type Attributes = Arc<std::sync::Mutex<Vec<Vec<bacnet_transport::port::DataAttribute>>>>;
 
 /// A port with MAC `[0xaa; 6]` fed by `incoming`, whose every send (either
-/// kind) is decoded into `generic`, and which then waits for a permit when
-/// `gate` holds a semaphore.
+/// kind) is decoded into `generic`, whose non-empty data attributes are
+/// kept in `attributes`, and which then waits for a permit when `gate` holds
+/// a semaphore.
 fn queued_port(
     incoming: mpsc::Receiver<ReceivedNpdu>,
     generic: mpsc::UnboundedSender<Npdu>,
     gate: GateSlot,
+    attributes: Attributes,
 ) -> TestTransport {
     TestTransport::builder()
         .local_mac(&[0xaa; 6])
         .inbound(incoming)
         .on_send(move |frame| {
+            if !frame.attributes.is_empty() {
+                attributes.lock().unwrap().push(frame.attributes);
+            }
             generic.send(decode_npdu(frame.npdu).unwrap()).unwrap();
             let gate = gate.lock().unwrap().clone();
             async move {
@@ -106,6 +112,8 @@ pub struct Fixture {
     pub incoming: mpsc::Sender<ReceivedNpdu>,
     pub generic: mpsc::UnboundedReceiver<Npdu>,
     gate: GateSlot,
+    /// The data attributes of every ordinary send that carried some.
+    pub attributes: Attributes,
 }
 impl Fixture {
     pub async fn new(ca: &TestCa) -> (Self, TestTransport) {
@@ -123,6 +131,7 @@ impl Fixture {
         let (incoming, rx) = mpsc::channel(32);
         let (generic, observed) = mpsc::unbounded_channel();
         let gate = GateSlot::default();
+        let attributes = Attributes::default();
         (
             Self {
                 listener,
@@ -130,8 +139,9 @@ impl Fixture {
                 incoming,
                 generic: observed,
                 gate: gate.clone(),
+                attributes: attributes.clone(),
             },
-            queued_port(rx, generic, gate),
+            queued_port(rx, generic, gate, attributes),
         )
     }
     pub async fn peer(&self, tls: ScNodeTlsConfig, limits: Option<(u16, u16)>) -> Peer {

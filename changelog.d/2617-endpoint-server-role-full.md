@@ -2,6 +2,6 @@
 section: Changed
 ---
 - **Breaking (wire):** An endpoint session with a server role always runs the
-  full server, read-only unless `with_server` gives it a builder: it answers
-  Who-Is, Who-Has, every read and COV subscriptions, denies writes, creates
-  and deletes, and ignores time synchronization (#2617).
+  full server: it answers Who-Is, Who-Has and every read service, where it
+  rejected all but ReadProperty, and its Device lists the server's services,
+  those the read-only server denies included (#2617).

@@ -143,3 +143,44 @@ async fn both_consumers_drop_group_direct_replies() {
         f.listener.stop().await;
     }
 }
+
+/// The session's server sends its direct answer with no data attributes, as
+/// the narrow responder did, and its ordinary answer with none either: the
+/// narrow responder copied the request's onto that one, the full server
+/// does not (#2617).
+#[tokio::test]
+async fn the_servers_answers_carry_no_data_attributes() {
+    use bacnet_transport::port::DataAttribute;
+    let ca = TestCa::new();
+    let (mut f, port) = Fixture::new(&ca).await;
+    let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
+        .unwrap()
+        .device(node())
+        .with_database(database("attributes"));
+    session.start().await.unwrap();
+    let mut peer = f.peer(ca.tls("A"), None).await;
+    let attributes = vec![DataAttribute {
+        option_type: 3,
+        must_understand: false,
+        data: vec![4, 5],
+    }];
+    let mut direct = f.capture(&mut peer, &read_name(60), None).await;
+    direct.data_attributes = attributes.clone();
+    f.feed(direct).await;
+    // `response` checks the frame's data options are empty.
+    assert!(matches!(f.response(&peer).await.1, Apdu::ComplexAck(a) if a.invoke_id == 60));
+    let mut ordinary = f.capture(&mut peer, &read_name(61), routed()).await;
+    ordinary.provenance = TransportProvenance::unverified();
+    ordinary.direct_response = None;
+    ordinary.data_attributes = attributes;
+    f.feed(ordinary).await;
+    let response = bounded(f.generic.recv()).await.unwrap();
+    assert_eq!(response.destination, routed());
+    assert!(
+        matches!(bacnet_encoding::apdu::decode_apdu(response.payload).unwrap(), Apdu::ComplexAck(a) if a.invoke_id == 61)
+    );
+    assert!(f.attributes.lock().unwrap().is_empty());
+    f.barrier(&mut peer, 62).await;
+    session.stop().await.unwrap();
+    f.listener.stop().await;
+}

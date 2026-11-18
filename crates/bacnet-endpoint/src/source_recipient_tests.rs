@@ -50,6 +50,30 @@ async fn current(session: &EndpointSession<TestTransport>) -> PropertyValue {
         .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
         .unwrap()
 }
+/// The application's own write of the recipient: through the session's
+/// server when it has one, which the session refuses its own call for
+/// (#2617), and through the session otherwise.
+async fn write_recipient_locally(
+    session: &EndpointSession<TestTransport>,
+    value: PropertyValue,
+    priority: Option<u8>,
+) -> Result<(), Error> {
+    let oid = oid(ObjectType::DEVICE, 123);
+    let property = PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT;
+    let source = bacnet_device_core::write::local::LocalCommandSource::ServerDevice;
+    match session.server() {
+        Some(server) => {
+            server
+                .write_local(&oid, property, None, value, priority, source)
+                .await
+        }
+        None => {
+            session
+                .write_local(&oid, property, None, value, priority, source)
+                .await
+        }
+    }
+}
 async fn wire(
     session: &EndpointSession<TestTransport>,
     peer: &NetworkLayer<TestTransport>,
@@ -424,6 +448,53 @@ async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
     peer.stop().await.unwrap();
 }
 
+/// A session of both roles given no server builder runs the read-only
+/// server, beside which source Audit starts (#2617): a peer's write of the
+/// audited Device's Audit_Notification_Recipient is denied, the recipient
+/// stays, and nothing is recorded.
+#[tokio::test(start_paused = true)]
+async fn the_default_server_denies_a_peers_write_of_the_recipient() {
+    let (sink, mut records) = network().await;
+    let (peer, mut replies) = network().await;
+    let mut db = database(false);
+    db.set_clock_reader(None);
+    db.get_mut(&oid(ObjectType::DEVICE, 123))
+        .unwrap()
+        .device_authority_internal()
+        .unwrap()
+        .provision_audit_recipient(device(999))
+        .unwrap();
+    let config = SessionConfig {
+        apdu_timeout_ms: 100,
+        apdu_retries: 0,
+        ..SessionConfig::default()
+    };
+    let mut session = bare_session(SessionRole::Both, config)
+        .device(crate::DeviceIdentity::new(123, 42).unwrap())
+        .with_database(db)
+        .with_source_audit_reporter(selected());
+    session
+        .source_audit_bindings
+        .push((oid(ObjectType::DEVICE, 999), address(&sink)));
+    session.start().await.unwrap();
+    let reply = wire(&session, &peer, &mut replies, value(&direct(&sink)), 75).await;
+    assert!(
+        matches!(&reply, Apdu::Error(error) if error.invoke_id == 75
+            && error.error_class == ErrorClass::SERVICES
+            && error.error_code == ErrorCode::SERVICE_REQUEST_DENIED),
+        "{reply:?}"
+    );
+    assert_eq!(
+        current(&session).await,
+        PropertyValue::ApplicationData(value(&device(999)))
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(records.try_recv().is_err(), "a record of a denied write");
+    session.stop().await.unwrap();
+    sink.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn source_recipient_unresolved_device_preserves_read_and_rejects_live_change() {
     let (sink, mut records) = network().await;
@@ -480,15 +551,7 @@ async fn a_local_write_of_the_recipient_tells_the_old_and_the_new_one() {
         let mut session = session(db, role, &old);
         session.start().await.unwrap();
         let next = direct(&new);
-        session
-            .write_local(
-                &oid(ObjectType::DEVICE, 123),
-                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-                None,
-                PropertyValue::ApplicationData(value(&next)),
-                None,
-                bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
-            )
+        write_recipient_locally(&session, PropertyValue::ApplicationData(value(&next)), None)
             .await
             .unwrap();
         let (first, _) = notification(&receive(&mut old_records).await, false);
@@ -543,15 +606,7 @@ async fn a_refused_local_write_of_the_recipient_sends_nothing() {
             (ErrorClass::SERVICES, ErrorCode::PARAMETER_OUT_OF_RANGE),
         ),
     ] {
-        let refused = session
-            .write_local(
-                &oid(ObjectType::DEVICE, 123),
-                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-                None,
-                value,
-                priority,
-                bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
-            )
+        let refused = write_recipient_locally(&session, value, priority)
             .await
             .unwrap_err();
         assert!(

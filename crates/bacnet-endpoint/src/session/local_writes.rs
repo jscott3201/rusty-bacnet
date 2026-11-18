@@ -21,10 +21,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// application: a network-equivalent write made as `source`, the
     /// counterpart of `BACnetServer::write_local` (#2468).
     ///
-    /// **Superseded (#2617).** With a server role the session's full server
-    /// hosts the database, and this call bypasses its COV, event and Audit
-    /// work: use the server's call of the same name
-    /// ([`server`](Self::server)). A later step of #2617 removes this call.
+    /// **Refused with a server role (#2617).** A session with a server role
+    /// runs a full server, which hosts the database: this call refuses there,
+    /// with [`Error::Encoding`], and the server's call of the same name
+    /// ([`server`](Self::server)) makes the change, with its COV and event
+    /// work. A later step of #2617 removes this call.
     ///
     /// bacnet-device-core's local write checks and commits it under the
     /// session's database guard, so it is refused where the server's is:
@@ -114,10 +115,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Supply an object's logical Present_Value from the application, the
     /// counterpart of `BACnetServer::set_present_value_local` (#2468).
     ///
-    /// **Superseded (#2617).** With a server role the session's full server
-    /// hosts the database, and this call bypasses its COV, event and Audit
-    /// work: use the server's call of the same name
-    /// ([`server`](Self::server)). A later step of #2617 removes this call.
+    /// **Refused with a server role (#2617).** A session with a server role
+    /// runs a full server, which hosts the database: this call refuses there,
+    /// with [`Error::Encoding`], and the server's call of the same name
+    /// ([`server`](Self::server)) makes the change, with its COV and event
+    /// work. A later step of #2617 removes this call.
     ///
     /// The object's own local input takes it: the Analog, Binary and
     /// Multi-state Inputs, noncommandable Values, the Integer Value, Loop
@@ -154,10 +156,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// as NO_SENSOR when its hardware reports a missing sensor, the
     /// counterpart of `BACnetServer::set_reliability_local` (#2468).
     ///
-    /// **Superseded (#2617).** With a server role the session's full server
-    /// hosts the database, and this call bypasses its COV, event and Audit
-    /// work: use the server's call of the same name
-    /// ([`server`](Self::server)). A later step of #2617 removes this call.
+    /// **Refused with a server role (#2617).** A session with a server role
+    /// runs a full server, which hosts the database: this call refuses there,
+    /// with [`Error::Encoding`], and the server's call of the same name
+    /// ([`server`](Self::server)) makes the change, with its COV and event
+    /// work. A later step of #2617 removes this call.
     ///
     /// The built-in Inputs, Outputs and Values, the Integer Value, Loop,
     /// Schedule, Life Safety Point and Zone, Access Zone, Credential Data
@@ -196,6 +199,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let not_running = || Error::Encoding("endpoint session is not running".into());
         if !self.is_running() {
             return Err(not_running());
+        }
+        if self.server.is_some() {
+            return Err(Error::Encoding(
+                "a session with a server role makes its local changes through its server: \
+                 call server()'s write_local, set_present_value_local or \
+                 set_reliability_local, whose COV and event work follow them"
+                    .into(),
+            ));
         }
         let database = self
             .database

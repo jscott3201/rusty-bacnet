@@ -196,24 +196,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             ));
         }
         // No peer may rewrite the audited Device's recipient by default: the
-        // narrow role writes the Device only through an authorizer, and a
-        // full server needs a policy that decides mutations (#2617).
-        match &self.server_builder {
-            None if self.role == SessionRole::Both && self.device_write_authorizer.is_none() => {
-                return Err(Error::Encoding(
-                    "source Audit with Both roles requires an explicit Device write authorizer"
-                        .into(),
-                ));
-            }
-            Some(builder) if !builder.node_facts().decides_mutations => {
-                return Err(Error::Encoding(
-                    "source Audit beside a full server requires a server policy that decides \
-                     mutations (a ServerPolicy whose decides_mutations is true, or \
-                     MutationPolicy::DenyAll)"
-                        .into(),
-                ));
-            }
-            _ => {}
+        // session's server, the read-only one or a builder's, needs a policy
+        // that decides mutations (#2617). A client-only session has none.
+        if let Some(builder) = &self.server_builder
+            && !builder.node_facts().decides_mutations
+        {
+            return Err(Error::Encoding(
+                "source Audit beside a full server requires a server policy that decides \
+                 mutations (a ServerPolicy whose decides_mutations is true, or \
+                 MutationPolicy::DenyAll)"
+                    .into(),
+            ));
         }
         let routes = self.prepare_source_routes()?;
         let db = self.database.as_mut().ok_or_else(|| {

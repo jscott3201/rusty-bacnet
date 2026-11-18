@@ -287,7 +287,10 @@ pub(super) struct IngressQueues {
 }
 
 /// Show `observer` what came from another network: every request, and an
-/// answer one of `coordinator`'s leases holds, whichever role takes it.
+/// answer one of `coordinator`'s leases holds, whichever role takes it. An
+/// answer that names a service must name the lease's, as admission
+/// requires; one that names none (a Reject, an Abort, a Segment-ACK, a
+/// segment) is held by its peer and invoke ID alone, as admission holds it.
 fn observe_source(
     observer: &SourceObserver,
     coordinator: Option<&OutboundTransactionCoordinator>,
@@ -299,10 +302,30 @@ fn observe_source(
         return;
     }
     let held = || {
-        coordinator.is_some_and(|pool| lease_holder(pool, route, received, local_network).is_some())
+        let apdu = &received.apdu;
+        if route != IngressRoute::TerminalOrSegment || from_requester(apdu) {
+            return false;
+        }
+        let (Some(pool), Some(invoke_id)) = (coordinator, apdu.get(1)) else {
+            return false;
+        };
+        let source = received.source_network.as_ref();
+        pool.lease_of_source(&received.source_mac, source, local_network, *invoke_id)
+            .is_some_and(|(_, service)| answer_service(apdu).is_none_or(|s| s == service.to_raw()))
     };
     if route == IngressRoute::InboundRequest || held() {
         observer(received);
+    }
+}
+
+/// The service an answer's octets name, where admission checks it: a
+/// Simple-ACK's, an Error's, an unsegmented Complex-ACK's.
+fn answer_service(apdu: &[u8]) -> Option<u8> {
+    let first = *apdu.first()?;
+    match first >> 4 {
+        2 | 5 => apdu.get(2).copied(),
+        3 if first & 0x08 == 0 => apdu.get(2).copied(),
+        _ => None,
     }
 }
 

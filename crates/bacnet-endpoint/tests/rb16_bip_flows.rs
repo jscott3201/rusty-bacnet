@@ -10,8 +10,11 @@
 //! - `LoopbackTransport` appears only in `rb16_bip_proof.rs` (bind-count
 //!   double) and `rb16_identity.rs` (determinism), never INSTEAD of these
 //!   real-UDP flows.
-//! - Endpoint server reality is unsegmented ReadProperty-only; COV/event
-//!   confirmed draws `Reject UNRECOGNIZED_SERVICE` (correct vs services).
+//! - The endpoint's server role is the full server, read-only unless given
+//!   a policy (#2617). A confirmed COV notification draws
+//!   `Reject UNRECOGNIZED_SERVICE`, since only a full client on the session
+//!   takes one; a malformed confirmed event notification draws
+//!   `Reject INVALID_TAG`, since the server executes those.
 
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -301,8 +304,8 @@ async fn bip_same_id_opposite_directions_routed_and_wrong_peer() {
 
 #[tokio::test]
 async fn bip_routed_and_confirmed_cov_event_flows() {
-    // Routed destination on wire + routed reply; confirmed COV/event draw
-    // Reject (narrow reality, == services). Raw UDP peer for full NPDU control.
+    // Routed destination on wire + routed reply; malformed confirmed COV and
+    // event notifications draw Rejects. Raw UDP peer for full NPDU control.
     let id = identity();
     let db = db_with_analog(&id, 1, 3.0);
     let mut endpoint = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)

@@ -85,7 +85,7 @@ async fn a_full_server_the_session_could_not_build_is_refused_before_the_link_st
             .with_server(BACnetServer::generic_builder());
         (session, link)
     };
-    let opt_ins: [(EndpointSession<TestTransport>, TestTransportHandle, &str); 4] = [
+    let opt_ins: [(EndpointSession<TestTransport>, TestTransportHandle, &str); 5] = [
         {
             let (session, link) = narrow(10, SessionConfig::default());
             let cov = bacnet_device_core::report::ReportConfig::default();
@@ -105,6 +105,15 @@ async fn a_full_server_the_session_could_not_build_is_refused_before_the_link_st
                 session.with_reinitialize(|_, _| Ok(())),
                 link,
                 "with_reinitialize",
+            )
+        },
+        {
+            // A password alone names its own option, not the handler's.
+            let (session, link) = narrow(14, SessionConfig::default());
+            (
+                session.with_reinit_password("pw"),
+                link,
+                "with_reinit_password",
             )
         },
         {

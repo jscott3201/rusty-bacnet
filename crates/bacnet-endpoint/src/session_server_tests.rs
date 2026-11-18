@@ -75,9 +75,14 @@ fn session(
 
 /// [`session`] given no builder: it runs the read-only server.
 fn default_session(wire: &Wire) -> (EndpointSession<TestTransport>, SendLog) {
+    default_session_as(wire, SessionRole::Both)
+}
+
+/// [`default_session`] with `role`.
+fn default_session_as(wire: &Wire, role: SessionRole) -> (EndpointSession<TestTransport>, SendLog) {
     let port = wire.port(NODE);
     let sent = port.sent();
-    let session = EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
+    let session = EndpointSession::new(port.build(), role, SessionConfig::default())
         .unwrap()
         .device(crate::DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
         .with_database(database());
@@ -263,6 +268,69 @@ fn answers(sent: &SendLog) -> Vec<Apdu> {
         .collect()
 }
 
+/// A server-only session given no builder runs the read-only server too:
+/// a peer reads and discovers the node, and its write is denied with
+/// nothing changed.
+#[tokio::test(start_paused = true)]
+async fn a_server_only_session_runs_the_read_only_server() {
+    let wire = Wire::new();
+    let (mut session, _) = default_session_as(&wire, SessionRole::ServerOnly);
+    session.start().await.unwrap();
+    let peer = peer(&wire).await;
+    let node = Wire::mac(NODE);
+    let before = present_value(&peer).await;
+    let pv = PropertyIdentifier::PRESENT_VALUE;
+    let written = peer.write_property(&node, av7(), pv, None, real(5.0), Some(8));
+    assert!(denied(written.await));
+    assert_eq!(present_value(&peer).await, before, "nothing changed");
+    peer.who_is(Broadcast::Global, None).await.unwrap();
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, NODE_DEVICE).unwrap();
+    eventually(WAIT, "the node's I-Am", async || {
+        peer.discovered_devices()
+            .await
+            .iter()
+            .any(|found| found.object_identifier == device)
+    })
+    .await;
+    let mut peer = peer;
+    peer.stop().await.unwrap();
+    session.stop().await.unwrap();
+}
+
+/// A session with a server role refuses its own local writes, which would
+/// skip its server's COV and event work; the server's calls of the same
+/// names make the change.
+#[tokio::test(start_paused = true)]
+async fn the_sessions_local_writes_are_refused_beside_its_server() {
+    use bacnet_device_core::write::local::LocalCommandSource;
+    use bacnet_types::enums::Reliability;
+    let wire = Wire::new();
+    let (mut session, _) = default_session(&wire);
+    session.start().await.unwrap();
+    let refused = |result: Result<(), Error>| match result {
+        Err(Error::Encoding(message)) => message.contains("server()'s write_local"),
+        _ => false,
+    };
+    let (av7, ai1) = (av7(), ai1());
+    let pv = PropertyIdentifier::PRESENT_VALUE;
+    let source = LocalCommandSource::ServerDevice;
+    let value = PropertyValue::Real(5.0);
+    let write = session.write_local(&av7, pv, None, value, Some(8), source);
+    assert!(refused(write.await), "write_local");
+    let input = session.set_present_value_local(&ai1, PropertyValue::Real(9.0));
+    assert!(refused(input.await), "set_present_value_local");
+    let reliability = session.set_reliability_local(&ai1, Reliability::NO_SENSOR);
+    assert!(refused(reliability.await), "set_reliability_local");
+    let server = session.server().unwrap();
+    assert_eq!(served(server, ai1, pv).await, PropertyValue::Real(0.0));
+    server
+        .set_present_value_local(&ai1, PropertyValue::Real(9.0))
+        .await
+        .unwrap();
+    assert_eq!(served(server, ai1, pv).await, PropertyValue::Real(9.0));
+    session.stop().await.unwrap();
+}
+
 /// A request already on the link when the session starts reaches the
 /// server: the session takes the server's seat as soon as its link is up,
 /// before it builds the server, so the request waits in the seat's queue
@@ -372,11 +440,7 @@ async fn the_read_only_server_refuses_the_other_mutations_and_time_sync() {
     assert!(denied(Box::pin(reset).await));
     let control =
         peer.device_communication_control(&node, EnableDisable::DISABLE_INITIATION, Some(5), None);
-    let refused = Box::pin(control).await;
-    assert!(
-        matches!(refused, Err(Error::Remote(RemoteError::Error { .. }))),
-        "{refused:?}"
-    );
+    assert!(denied(Box::pin(control).await));
     let new_year = Date {
         year: 101,
         month: 1,

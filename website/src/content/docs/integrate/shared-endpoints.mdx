@@ -74,7 +74,7 @@ B/IPv6 has no endpoint builder, as it has no server builder. In Rust, compose an
 | Default server | Read-only: reads, Who-Is, Who-Has and COV subscriptions answered; writes, creates and deletes denied; ReinitializeDevice and DeviceCommunicationControl refused; time synchronization ignored |
 | Server with a policy | Rust `with_server(builder)` or Python `mutation_policy`: that policy, as on a standalone server |
 
-The Device lists the services the node executes: the full server's, and on a session of both roles the client's COV notification, I-Am and I-Have services beside them. Through 0.15.0 the Rust session ran a narrow responder instead, which answered ReadProperty alone unless opted in.
+The Device lists the services the node executes: the full server's, and on a session of both roles the client's COV notification, I-Am and I-Have services beside them. Earlier releases ran a narrow responder in the Rust session instead, which answered ReadProperty alone unless opted in.
 
 A requester write's commandability is a declaration about the remote property, not permission to write it. Rust requires `Commandability::{Commandable, Noncommandable}`; Python requires `commandability="commandable"` or `"noncommandable"`. For a first integration, exercise reads before enabling mutations. Consult <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission limits</a> for the shared budgets.
 

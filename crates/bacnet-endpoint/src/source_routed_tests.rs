@@ -640,6 +640,52 @@ async fn only_a_request_or_a_held_answer_teaches_the_router() {
     site.stop().await;
 }
 
+/// A client-only session, whose own dispatch takes the answers to its
+/// requests, learns the router from such an answer at its ingress too
+/// (#2617): the answer to its read of the station there teaches it, and one
+/// with the read's invoke ID but another service, which admission refuses
+/// too, doesn't.
+#[tokio::test(start_paused = true)]
+async fn a_client_only_session_learns_the_router_from_an_answer() {
+    let config = SessionConfig {
+        apdu_timeout_ms: 1_000,
+        apdu_retries: 0,
+        ..SessionConfig::default()
+    };
+    let operations = [AuditOperation::READ];
+    let mut site = Site::start_with(SessionRole::ClientOnly, false, &operations, config).await;
+    assert_eq!(site.learned(), None);
+    let client = site.session.cloned_client_handle().unwrap();
+    let read = tokio::spawn(async move {
+        client
+            .read_property_with_destination(
+                EndpointApduDestination::Routed {
+                    destination_network: REMOTE,
+                    destination_mac: MacAddr::from_slice(&STATION),
+                    router_mac: MacAddr::from_slice(&ROUTER_NEAR),
+                },
+                Vec::new(),
+                target(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .await
+    });
+    let request = site.receive().await;
+    let (invoke, rp) = read_request(&request);
+    let other_service = Apdu::SimpleAck(SimpleAck {
+        invoke_id: invoke,
+        service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+    });
+    site.send(other_service, false).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(site.learned(), None, "another service's answer taught it");
+    site.send(ack(invoke, &rp), false).await;
+    assert!(read.await.unwrap().is_ok());
+    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    site.stop().await;
+}
+
 #[path = "source_routed_change_tests.rs"]
 mod change;
 

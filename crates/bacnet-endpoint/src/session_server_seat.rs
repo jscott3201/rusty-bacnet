@@ -234,7 +234,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if self.identity.is_none() {
             return refused(
                 "a session with a server role runs a full server, which needs the node's \
-                 Device identity, its one set of device settings: compose one with device()",
+                 Device identity, its one set of device settings: compose one with device(), \
+                 or use role(SessionRole::ClientOnly) for a node that only asks",
             );
         }
         let narrow = [
@@ -247,8 +248,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "with_device_writes (give with_server a builder whose policy decides writes)",
             ),
             (
-                self.reinitialize.is_some() || self.reinit_password.is_some(),
+                self.reinitialize.is_some(),
                 "with_reinitialize (give with_server a builder with on_reinitialize)",
+            ),
+            (
+                self.reinit_password.is_some(),
+                "with_reinit_password (give with_server a builder with reinit_password)",
             ),
             (
                 self.config.read_work_limit != SessionConfig::default().read_work_limit,
