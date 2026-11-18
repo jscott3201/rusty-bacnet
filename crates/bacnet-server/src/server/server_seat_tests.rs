@@ -220,6 +220,155 @@ async fn a_seat_refuses_what_only_a_link_of_its_own_can_take() {
     assert_eq!(unused_link.starts(), 0);
 }
 
+/// What the node's ingress hands a server held by
+/// [`SeatedServerBuilder::hold_requests_until`] waits in the seat's queue,
+/// unanswered, until the node lets go: then it is answered, once.
+#[tokio::test(start_paused = true)]
+async fn a_held_server_takes_nothing_until_the_node_lets_go() {
+    for send in [true, false] {
+        let (mut node, seat) = node().await;
+        let (gate, held) = oneshot::channel();
+        let mut server = BACnetServer::generic_builder()
+            .seat(seat)
+            .hold_requests_until(held)
+            .build()
+            .await
+            .unwrap();
+        node.inbound.send(read_device_name(7)).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert!(answers(&node.sent).is_empty(), "answered while held");
+        assert_eq!(
+            node.ingress.server_seat_counters().apdus,
+            1,
+            "the request waits in the seat's queue"
+        );
+        // Sent, or dropped with a start that went no further.
+        if send {
+            gate.send(()).unwrap();
+        } else {
+            drop(gate);
+        }
+        let replies = answered(&node.sent, 1).await;
+        assert!(
+            matches!(&replies[..], [Apdu::ComplexAck(ack)] if ack.invoke_id == 7),
+            "{replies:?}"
+        );
+        server.stop().await.unwrap();
+        node.ingress.stop().await.unwrap();
+    }
+}
+
+/// A server stopped while still held stops: its stop doesn't wait for the
+/// node to let go, and it answers nothing it was holding.
+#[tokio::test(start_paused = true)]
+async fn a_held_server_stops_without_the_node_letting_go() {
+    let (mut node, seat) = node().await;
+    let (gate, held) = oneshot::channel::<()>();
+    let mut server = BACnetServer::generic_builder()
+        .seat(seat)
+        .hold_requests_until(held)
+        .build()
+        .await
+        .unwrap();
+    node.inbound.send(read_device_name(9)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), server.stop())
+        .await
+        .expect("the held server's stop returned")
+        .unwrap();
+    drop(gate);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(answers(&node.sent).is_empty(), "{:?}", answers(&node.sent));
+    node.ingress.stop().await.unwrap();
+}
+
+/// A seated server holds at most [`SEAT_LEASES`] of the node's invoke IDs
+/// at once, whatever it sends: past them it is refused as when the pool is
+/// out of IDs, while the node's client still finds the rest, and a waiter
+/// takes the first that one of the server's own leases frees. A server on
+/// its own link has no such cap.
+///
+/// [`SEAT_LEASES`]: super::super::notification_transactions::SEAT_LEASES
+#[tokio::test(start_paused = true)]
+async fn a_seated_server_holds_at_most_a_quarter_of_the_nodes_invoke_ids() {
+    use super::super::notification_transactions::{NotificationReserveError, SEAT_LEASES};
+    use bacnet_endpoint_core::coordinator::{LeaseMetadata, ReserveError, TerminalPolicy};
+    let peer = || canonical_direct_peer(&PEER);
+    let cov = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
+    let (mut node, seat) = node().await;
+    let mut server = BACnetServer::generic_builder()
+        .seat(seat)
+        .build()
+        .await
+        .unwrap();
+    let pool = Arc::clone(&server.notification_transactions);
+    let mut held: Vec<_> = (0..SEAT_LEASES)
+        .map(|_| pool.reserve(peer(), cov).expect("an ID within the cap"))
+        .collect();
+    // A read the server sends shares the cap.
+    assert!(matches!(
+        pool.reserve_read(peer(), ConfirmedServiceChoice::READ_PROPERTY),
+        Err(NotificationReserveError::Coordinator(
+            ReserveError::Exhausted
+        ))
+    ));
+    assert!(matches!(
+        pool.reserve(peer(), cov),
+        Err(NotificationReserveError::Coordinator(
+            ReserveError::Exhausted
+        ))
+    ));
+    assert_eq!(node.coordinator.active_count().unwrap(), SEAT_LEASES);
+    let client = node
+        .coordinator
+        .reserve(LeaseMetadata::requester(
+            peer(),
+            ConfirmedServiceChoice::READ_PROPERTY,
+            TerminalPolicy::ComplexAck,
+        ))
+        .expect("the client finds an ID");
+    // A confirmed event notification waits for one, and takes the first a
+    // lease of the server's frees.
+    let waiter = Arc::clone(&pool);
+    let waiting = tokio::spawn(async move {
+        waiter
+            .reserve_waiting(
+                peer(),
+                ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+                || {},
+            )
+            .await
+            .map(|(operation, _)| operation.invoke_id())
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(!waiting.is_finished(), "past the cap it waits");
+    drop(held.pop());
+    let invoke = tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("woken by the freed lease")
+        .unwrap()
+        .expect("an ID within the cap");
+    assert_ne!(invoke, client.invoke_id());
+    let _ = node.coordinator.cancel(client);
+    drop(held);
+    server.stop().await.unwrap();
+    node.ingress.stop().await.unwrap();
+
+    let mut own = BACnetServer::generic_builder()
+        .transport(TestTransport::new())
+        .build()
+        .await
+        .unwrap();
+    let past: Vec<_> = (0..=SEAT_LEASES)
+        .map(|_| {
+            own.notification_transactions
+                .reserve(peer(), cov)
+                .expect("no cap on its own link")
+        })
+        .collect();
+    drop(past);
+    own.stop().await.unwrap();
+}
+
 /// The seated build can be spawned: its future is `Send`, as the
 /// standalone build's is.
 #[allow(dead_code)]

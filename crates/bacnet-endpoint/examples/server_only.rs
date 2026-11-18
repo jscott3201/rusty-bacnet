@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .device(identity.clone())
         .build_session()?;
     endpoint.start().await?;
-    assert!(endpoint.server().is_some());
+    assert!(endpoint.responder().is_some());
     assert!(endpoint.client().is_none());
     assert!(endpoint.is_running());
 

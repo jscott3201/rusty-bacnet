@@ -35,6 +35,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         &self.db
     }
 
+    /// The pool the server's confirmed notifications take their invoke IDs
+    /// and workers from: on a node's seat, the node's source Audit sends
+    /// through it too, so the server completes and joins those records
+    /// (#2617).
+    #[doc(hidden)]
+    pub fn notification_pool(&self) -> &Arc<NotificationTransactions> {
+        &self.notification_transactions
+    }
+
     /// Read one local property through the server's ReadProperty evaluator.
     ///
     /// Device wildcard reads target the configured identity; removal returns

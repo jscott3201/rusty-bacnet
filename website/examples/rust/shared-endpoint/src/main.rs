@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             io::stdout(),
             "Roles: requester={} responder={}",
             session.client().is_some(),
-            session.server().is_some()
+            session.responder().is_some()
         )?;
         writeln!(io::stdout(), "Press Enter to stop (or send EOF).")?;
         io::stdout().flush()?;
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Stopped: address={:?} requester={} responder={}",
         session.bip_local_address(),
         session.client().is_some(),
-        session.server().is_some()
+        session.responder().is_some()
     )?;
     if let Some(address) = address {
         let rebound = UdpSocket::bind(address)?;

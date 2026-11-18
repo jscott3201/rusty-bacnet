@@ -297,7 +297,7 @@ async fn endpoint_device_write_actual_ingress_rejects_source_reporter_and_stops(
             .unwrap(),
         PropertyValue::CharacterString(String::new())
     );
-    let server = session.server().unwrap().clone();
+    let server = session.responder().unwrap().clone();
     session.stop().await.unwrap();
     assert!(!server.is_session_alive());
     peer.stop().await.unwrap();

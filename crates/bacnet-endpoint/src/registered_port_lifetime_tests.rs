@@ -282,7 +282,7 @@ async fn registered_port_admitted_read_survives_independent_ingress_end() {
                 .device(id)
                 .with_registered_network_port(port());
         session.start().await.unwrap();
-        let idle_handle = session.cloned_server_handle().unwrap();
+        let idle_handle = session.cloned_responder_handle().unwrap();
         let db = session.database.as_ref().unwrap().clone();
         let mut locked = db.write().await;
         let baseline = control.lease.lock().unwrap().strong_count();
@@ -433,7 +433,7 @@ async fn registered_port_active_endpoint_cancelled_stop_retains_and_then_release
     .with_registered_network_port(port());
     session.start().await.unwrap();
     let db = session.database.as_ref().unwrap().clone();
-    let idle = session.cloned_server_handle().unwrap();
+    let idle = session.cloned_responder_handle().unwrap();
     {
         let stop = session.stop();
         tokio::pin!(stop);

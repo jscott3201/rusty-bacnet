@@ -160,8 +160,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             }
             (None, None) => return Err(invalid("registered B/IP mode changed during bind")),
         };
-        // Written values activate only through a ReinitializeDevice handler.
-        db.set_network_port_activation_internal(oid, self.reinitialize.is_some())?;
+        // Written values activate only through a ReinitializeDevice handler:
+        // the narrow role's, or a full server's, which its build sets.
+        if self.server_builder.is_none() {
+            db.set_network_port_activation_internal(oid, self.reinitialize.is_some())?;
+        }
         // The port's configured number is the local network number from the
         // start (#1403); the Number owner copies every later change from the
         // port, as the full server's does.

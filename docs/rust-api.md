@@ -13506,48 +13506,69 @@ in the caller's task.
   either, since nothing reached the target and Clause 19.6.1 warns against
   needless notification load; one already sent whose retry the control
   withholds is recorded as failed, with SERVICES, COMMUNICATION_DISABLED.
-- DeviceCommunicationControl does not reach an audited session yet: a
-  session with a source Audit Reporter refuses a full server, and only a
-  full server on the session sets the node's state. Once the server seat
-  takes source Audit (a later step of #2617), DISABLE_INITIATION will
-  refuse an audited request as every request is, with
-  `InitiationDisabled { sent: false }`: before it takes a slot, and, when
-  it was waiting for a slot or for the database, before it takes a
-  sequence number. One the control catches after that, before the request
-  registers, is refused there, unsent and unrecorded, and its sequence
-  number is left unused. One already sent whose retry is withheld ends with
-  `InitiationDisabled { sent: true }`. A client started with
-  `with_node_dcc_override` is audited as usual.
+- DeviceCommunicationControl reaches an audited session through the full
+  server it builds (`with_server`, see below), which sets the node's state.
+  A DISABLE_INITIATION the server accepts refuses an audited request as it
+  refuses every request, with `InitiationDisabled { sent: false }`: before
+  it takes a slot, and, when it was waiting for a slot or for the database,
+  before it takes a sequence number. One the control catches after that,
+  before the request registers, is refused there, unsent and unrecorded, and
+  its sequence number is left unused. One already sent whose retry is
+  withheld ends with `InitiationDisabled { sent: true }`. A client started
+  with `with_node_dcc_override` is audited as usual. A session with only the
+  narrow server role has no DeviceCommunicationControl to apply.
 - None of this costs a standalone client anything: an audited client's
   requests leave the request path at the test registration already makes.
 
 ### Full server on an endpoint
 
-`EndpointSession::full_server(builder)` builds a full `BACnetServer` from a
-`BACnetServer::generic_builder()` on the session's one transport, beside its
+`EndpointSession::with_server(builder)`, before `start()`, has the session
+build a full `BACnetServer` from the builder on its one transport, beside its
 client roles (#2617). It is the server a transport of its own gives: every
-service, policy and counter. While it lives it takes every request the
-session's narrow server role would have taken and answers from its own
-database; the narrow role gets requests again once the server is stopped or
-dropped. The session must have a `DeviceIdentity`: the node is one device on
-its address, with one set of device settings.
+service, policy and counter, and the builder's settings as given (policies,
+budgets, handlers, COV policy, device bindings, clock zone). The session owns
+it: `server()` borrows it while the session runs, and is `None` before start,
+after stop and for a session without one. The session hands it its database
+(`with_database`, or a stock one built from the identity), and it answers
+every request the narrow server role would have, which then serves nothing
+(`responder()` is `None`). The session must have a `DeviceIdentity`: the node
+is one device on its address, with one set of device settings.
 
 ```rust
 use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
 use bacnet_server::server::BACnetServer;
 
 let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?
-    .device(identity);
+    .device(identity)
+    .with_database(db)
+    .with_server(BACnetServer::generic_builder().mutation_policy(policy));
 session.start().await?;
-let mut server = session
-    .full_server(BACnetServer::generic_builder().database(db))
-    .await?;
+let server = session.server().expect("built at start");
+server.set_present_value_local(&point, value).await?;
 let client = session.full_client()?;
 // ... the node answers Who-Is, reads, COV and the rest, and asks others ...
-server.stop().await?; // joins the server's work; the link stays up
-session.stop().await?; // stops the link
+drop(client);
+session.stop().await?; // stops the server, then the link
 ```
 
+- `server()` asks about the full server only, and `responder()` about the
+  narrow server role. It is `Some` from the start that built the server
+  until a stop has stopped it; a cancelled start or stop leaves it `Some`.
+- The builder's policies apply as given. A builder with none lets any peer
+  write, create and delete, as a standalone server does; give it a
+  `ServerPolicy` or `MutationPolicy::DenyAll` to close it.
+- From the first request: the server's seat is attached as the link starts,
+  before its first request is classified, and the server takes what waits
+  there once the session's start is done, so nothing is dropped as finding no
+  server while the server builds.
+  A start that fails after the server is built stops it; one cancelled there
+  leaves it holding its requests unanswered until `stop()` or drop. A server
+  build that fails or is cancelled drops the database it was given.
+- Stopping: `stop()` stops the server first, which joins its work and settles
+  its saves while the link is still up, then the session's other roles and
+  the link. A cancelled stop keeps the server, and the next call stops it
+  again; the server's stop error is the stop's. Dropping the session drops
+  the server, which aborts its work and lets the database go off the runtime.
 - Who answers what: the server answers every request but a
   ConfirmedCOVNotification or ConfirmedCOVNotificationMultiple, which is the
   full client's. It acknowledges a
@@ -13566,13 +13587,36 @@ session.stop().await?; // stops the link
   handlers have no room for, as it does standalone. What the server finds
   still queued when it stops is dropped unanswered and counted only as
   handed over (`apdus`).
-- One pool of invoke IDs: the server and the full client share the session's
-  256. When it runs out the server's confirmed notifications wait for an ID
-  while the client's requests fail at once, so a server with many confirmed
-  COV notifications in flight can leave the client none.
+- One pool of invoke IDs: the server and the client roles share the session's
+  256, and the server holds at most 64 at once: its confirmed COV, event and
+  Audit notifications (the session's source Audit records among them) and the
+  reads its runs make. Past that each does what it does when the pool is
+  empty: a confirmed event notification waits for an ID, an Audit record is
+  counted lost, and a confirmed COV notification is skipped with a warning;
+  the subscriber hears the next change. The endpoint's own COV reporting
+  (`with_cov`) queued its notifications past its 64 instead. The client's
+  requests find the rest of the pool.
 - The session keeps the one owner of the local network number; the server
   runs none and takes the number it publishes. Target Audit routes its
   recipient by that number, so a seated server takes `audit_reporters`.
+- A registered Network Port (`with_registered_network_port`) is the
+  session's: it reserves the port before the link starts and publishes it
+  after, its Number owner writes the number it learns into the server's
+  database, and the server serves the port for wildcard reads. Written
+  values take effect through the builder's ReinitializeDevice handler.
+- Source Audit beside the server: a session with a source Audit Reporter
+  needs a builder whose policy decides mutations (a `ServerPolicy` whose
+  `decides_mutations()` is `true`, or `MutationPolicy::DenyAll`), so no peer
+  rewrites the audited Device's Audit_Notification_Recipient by default, and
+  no `audit_reporters` of its own, since the Device has one Audit recipient.
+  Both `decides_mutations()` and `authorize_mutation()` default to `true`: a
+  `ServerPolicy` of your own that overrides neither passes this check and
+  lets any peer rewrite the recipient, so decide that write in
+  `authorize_mutation()`.
+  The session's records go through the server's pool of notifications, which
+  completes their acknowledgments; the server reports each ReinitializeDevice
+  it accepts, which is recorded with its requester; and a peer's write of the
+  recipient that the policy allows is recorded with the peer as the source.
 - One device, one set of settings: the server serves the node's Device. Its
   identity is the session's, with Max_APDU_Length_Accepted the smaller of
   the identity's and the client's `max_apdu_length` (Clause 12.11.18).
@@ -13582,14 +13626,14 @@ session.stop().await?; // stops the link
   `notification_retries`). On a `Both` session Protocol_Services_Supported
   lists what the client executes (I-Am, I-Have, and the COV notifications
   of one object and of several, both forms of each) beside the server's
-  services. That follows the session's role, not the
-  client attached at the moment: until one is, the server rejects a
-  ConfirmedCOVNotification the Device lists, and a full client on a
-  `ServerOnly` session executes services the Device doesn't list. Following
-  the attached client would cost every ReadProperty a read of shared state.
-  Segmentation_Supported is the identity's and the server follows it; the
-  full client keeps its own segmentation settings until the session builds
-  its server itself, and it can't reassemble a segmented
+  services, whatever the identity's service list says. That follows the
+  session's role, not the client attached at the moment: until one is, the
+  server rejects a ConfirmedCOVNotification the Device lists, and a full
+  client on a `ServerOnly` session executes services the Device doesn't
+  list. Following the attached client would cost every ReadProperty a read
+  of shared state. Segmentation_Supported is the identity's and the server
+  follows it; the full client keeps its own segmentation settings for now
+  (a later step of #2617), and it can't reassemble a segmented
   ConfirmedCOVNotification, which it aborts.
 - DeviceCommunicationControl binds the whole node (Clause 16.1). While the
   server holds a DISABLE_INITIATION it accepted, nothing on the node
@@ -13610,27 +13654,43 @@ session.stop().await?; // stops the link
   as an idle client does (Clause 5.4.4.1); it takes at most half of the
   client's queue. Other answers to nothing the node asked stay with the
   session, which counts them.
-- Refused: a session with no server role (a full client there answers every
-  request itself), with no Device identity, with a source Audit Reporter,
-  with its own COV reporting (`with_cov`), or with a registered Network
-  Port; a builder with a transport of its own or `registered_network_port`;
-  and a builder identity, `cov_retry_timeout_ms` or `notification_retries`,
-  or a database Device's largest APDU or APDU timing, that differs from the
-  node's (a Device that declares the object model's default timing is given
-  the node's). One full server at a time.
-- Stopping: stop the server, then the session. The server's `stop()` joins
-  its work and settles its saves but leaves the link to the session. A
-  session stopped first stops the link all the same; the server's later
-  sends fail with the stopped transport's error, and its own `stop()` still
-  completes.
-- `full_server` is the way to put a server on a node today. Its builder
-  hook, `ServerBuilder::seat`, takes a `bacnet_endpoint_core::seat::ServerSeat`,
-  which only an endpoint session makes for now.
-- Where this is going (maintainer decisions on #2617): the session builds its
-  full server itself and the narrow server role goes, taking the session's
-  own COV reporting, local writes and persistence with it; the full client
-  then follows the node's segmentation; and in Python `await
-  endpoint.server()` returns a `BACnetServer`.
+- Refused at start, before the link starts, leaving the session ready to
+  correct and start again: `with_server` on a session with no server role (a
+  full client there answers every request itself) or no Device identity;
+  beside the narrow server role's opt-ins (`with_cov`, `with_device_writes`,
+  `with_reinitialize`, a non-default `SessionConfig::read_work_limit`), whose
+  places the builder's settings take; a builder with a transport, a database
+  (give it to the session) or a `registered_network_port` (name it on the
+  session); a builder identity, `cov_retry_timeout_ms` or
+  `notification_retries`, or a database Device's largest APDU or APDU timing,
+  that differs from the node's (a Device that declares the object model's
+  default timing is given the node's); a builder setting a server's start
+  would refuse, checked on the settings the seat gives the server by the
+  same step every start runs (policies and budgets, device bindings against
+  the link's group rule, Audit Reporters and their routes, the Device's
+  segment timeout); and beside a source Audit Reporter, a builder as above
+  that decides no mutations or has Audit Reporters. The session keeps its
+  database through each of these refusals. One check needs the started link
+  and comes after it: target Audit's recipient as the started link sees it,
+  an Address naming this network by its number or a group address only the
+  bound link reveals. That refusal ends the session and drops the database
+  the server was given.
+- Where this is going (maintainer decisions on #2617): in Python, `await
+  endpoint.server()` returns this `BACnetServer`. Then the narrow server role
+  goes, taking the session's own COV reporting, local writes, Device-write
+  authorizer, ReinitializeDevice opt-in and `read_work_limit` with it, and a
+  server-role session always builds a full server: without a builder, a
+  read-only one that answers reads, discovery and COV subscriptions and
+  refuses every write, create and delete (SERVICES / SERVICE_REQUEST_DENIED),
+  so a 0.15.0 endpoint that upgrades doesn't become writable by any peer.
+  It also ignores time synchronization, local and UTC (Clauses 16.7 and
+  16.8). What the server's policy doesn't decide keeps the server's
+  defaults, so any peer may still acknowledge an alarm (AcknowledgeAlarm,
+  Clause 13.5), subscribe to COV, send event notifications, which
+  Notification Forwarder objects pass on, announce itself with I-Am, and
+  send text messages; DeviceCommunicationControl, ReinitializeDevice without
+  a handler, LifeSafetyOperation and Audit notifications stay denied. Last,
+  the full client follows the node's segmentation.
 
 ### Endpoint shutdown and the object database
 

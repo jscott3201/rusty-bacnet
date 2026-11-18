@@ -53,7 +53,7 @@ async fn source_recipient_canceled_stop_keeps_sealed_membership_until_retry_barr
     session.start().await.unwrap();
     let db = session.database.as_ref().unwrap().clone();
     let client = session.cloned_client_handle().unwrap();
-    let server = session.cloned_server_handle().unwrap();
+    let server = session.cloned_responder_handle().unwrap();
     let token = session.shared.token.clone();
     let mut guard = db.write().await;
     protected(&mut guard);
