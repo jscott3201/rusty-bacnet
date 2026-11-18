@@ -325,13 +325,13 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                 .build_session()
                 .unwrap();
             if role == SessionRole::Both {
-                session = session.with_device_writes(Arc::new(|_| true));
+                session = session.device(crate::identity::DeviceIdentity::new(123, 42).unwrap());
             }
             session = session.with_source_audit_reporter(selected());
             let bindings = session.source_audit_bindings.clone();
             session.start().await.unwrap();
             assert!(session.client().is_some());
-            assert_eq!(session.responder().is_some(), role == SessionRole::Both);
+            assert_eq!(session.server().is_some(), role == SessionRole::Both);
             assert_eq!(session.source_audit_bindings, bindings);
             {
                 let db = session.database.as_ref().unwrap().read().await;
@@ -471,7 +471,7 @@ async fn source_post_start_address_rejection_joins_ingress_and_is_terminal() {
         session.lifecycle.load(Ordering::Acquire),
         Lifecycle::Stopped as u8
     );
-    assert!(session.client().is_none() && session.responder().is_none());
+    assert!(session.client().is_none() && session.server().is_none());
     assert_eq!(session.active_leases(), 0);
     assert!(!source(
         &*session.database.as_ref().unwrap().read().await,

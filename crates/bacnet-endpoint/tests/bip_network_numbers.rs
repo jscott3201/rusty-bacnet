@@ -28,7 +28,7 @@ async fn foreign() -> (Endpoint, SocketAddrV4, UdpSocket) {
     .await
     .unwrap(); // port 0: nothing to lose
     assert!(endpoint.client().is_some());
-    assert!(endpoint.responder().is_none());
+    assert!(endpoint.server().is_none());
     let (registration, source) = receive(&bbmd).await;
     assert_eq!(source, local);
     assert_eq!(registration, frame(5, &60u16.to_be_bytes()));
@@ -187,7 +187,7 @@ async fn endpoint_number_bbmd_server_wire_admission() {
                 ..BbmdOptions::default()
             }));
         let (server, local) = start(configured).await?;
-        assert!(server.responder().is_some());
+        assert!(server.server().is_some());
         assert!(server.client().is_none());
         let group = SocketAddrV4::new(BROADCAST, local.port());
         // Before relying on shared capture, prove the real production wildcard

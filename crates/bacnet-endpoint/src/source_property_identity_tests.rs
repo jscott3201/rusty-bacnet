@@ -91,9 +91,10 @@ async fn source_read_alias_success_records_peer_concrete_object_both_roles_modes
                 }
                 assert_eq!(record.result, None);
                 assert_eq!(record.invoke_id, Some(invoke));
-                assert_eq!(
-                    record.source_timestamp,
-                    Some(BACnetTimeStamp::SequenceNumber(sequence as u16))
+                assert_stamp(
+                    &record.source_timestamp,
+                    role == SessionRole::Both,
+                    sequence as u16,
                 );
                 if let Some(invoke_id) = delivery {
                     send(

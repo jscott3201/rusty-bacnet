@@ -282,6 +282,28 @@ pub(super) struct IngressQueues {
     /// The endpoint's invoke-ID pool, whose leases' answers come before
     /// answers no lease holds.
     pub(super) coordinator: Option<Arc<OutboundTransactionCoordinator>>,
+    /// See [`EndpointIngress::observe_sources`].
+    pub(super) observer: Option<SourceObserver>,
+}
+
+/// Show `observer` what came from another network: every request, and an
+/// answer one of `coordinator`'s leases holds, whichever role takes it.
+fn observe_source(
+    observer: &SourceObserver,
+    coordinator: Option<&OutboundTransactionCoordinator>,
+    route: IngressRoute,
+    received: &ReceivedApdu,
+    local_network: Option<u16>,
+) {
+    if received.source_network.is_none() {
+        return;
+    }
+    let held = || {
+        coordinator.is_some_and(|pool| lease_holder(pool, route, received, local_network).is_some())
+    };
+    if route == IngressRoute::InboundRequest || held() {
+        observer(received);
+    }
 }
 
 /// What a seat takes of one APDU.
@@ -468,11 +490,16 @@ pub(super) fn route_received(
         seats,
         drops,
         coordinator,
+        observer,
     } = queues;
     let route = match classify(&received, transport) {
         Ok(route) => route,
         Err(reason) => return send_policy(policy_tx, drops, PolicyOutcome { reason, received }),
     };
+    if let Some(observer) = observer {
+        let pool = coordinator.as_deref();
+        observe_source(observer, pool, route, &received, local_network);
+    }
 
     let received = share_out(seats, route, received, local_network)?;
 

@@ -164,8 +164,13 @@ impl Endpoint {
             apdu_timeout_ms: 5_000,
             ..SessionConfig::default()
         };
+        let mut session = EndpointSession::new(transport, role, config).unwrap();
+        // A server role runs a full server on the node's identity.
+        if role != SessionRole::ClientOnly {
+            session = session.device(crate::DeviceIdentity::new(123, 42).unwrap());
+        }
         Self {
-            session: EndpointSession::new(transport, role, config).unwrap(),
+            session,
             inbound,
             sent,
         }

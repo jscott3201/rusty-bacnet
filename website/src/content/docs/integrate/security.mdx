@@ -38,7 +38,7 @@ Some decisions are settings rather than policy methods:
 - ReinitializeDevice runs only when you install an `on_reinitialize` handler, optionally behind a password. The policy doesn't cover it; the handler's `ReinitializeContext` has the same `principal()` for its own checks.
 - TimeSynchronization is limited by `TimeSyncPolicy`.
 - Routing control belongs to the router's `ControlAuthorizer`, not to the server.
-- A [shared endpoint](/rusty-bacnet/integrate/shared-endpoints/)'s responder has its own mandatory Device-write authorizer.
+- A [shared endpoint](/rusty-bacnet/integrate/shared-endpoints/) runs the full server, read-only unless its server builder (Rust `with_server`) or `mutation_policy` (Python) says who may write.
 
 ### Compose decisions with FnPolicy
 

@@ -35,7 +35,9 @@ fn migrate_bip_client(
 }
 
 /// Old: `BACnetServer::bip_builder().database(db)...build().await`
-/// New: server-only endpoint session with the identity-built database.
+/// New: server-only endpoint session with the identity-built database. It
+/// runs the read-only server; give `with_server` a builder for another
+/// policy.
 fn migrate_bip_server(
     interface: Ipv4Addr,
     port: u16,
@@ -59,7 +61,7 @@ fn migrate_sc_loopback(
     ws: LoopbackWebSocket,
 ) -> Result<EndpointSession<ScTransport<LoopbackWebSocket>>, bacnet_types::error::Error> {
     ScEndpointBuilder::new(vmac, uuid)
-        .role(SessionRole::Both)
+        .role(SessionRole::ClientOnly)
         .build_loopback_session(ws)
 }
 
@@ -70,7 +72,7 @@ fn migrate_mstp<S: bacnet_transport::mstp::SerialPort>(
     station: u8,
 ) -> Result<EndpointSession<MstpTransport<S>>, bacnet_types::error::Error> {
     MstpEndpointBuilder::new(serial, station)
-        .role(SessionRole::Both)
+        .role(SessionRole::ClientOnly)
         .build_session()
 }
 

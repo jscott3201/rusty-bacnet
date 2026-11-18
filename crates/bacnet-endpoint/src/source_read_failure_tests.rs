@@ -74,7 +74,7 @@ async fn source_failure_permit_losses_wire_shape_reverse_completion_and_sequence
         for _ in 0..u16::MAX {
             db.next_event_sequence_number();
         }
-        let mut session = session(db, SessionRole::Both, &sink);
+        let mut session = session(db, SessionRole::ClientOnly, &sink);
         session.start().await.unwrap();
         let owner = session.notifications.as_ref().unwrap();
         let permits: Vec<_> = (0..64).map(|_| owner.try_admit_audit().unwrap()).collect();

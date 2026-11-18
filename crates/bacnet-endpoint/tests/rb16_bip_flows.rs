@@ -488,12 +488,21 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
         oid(ObjectType::ANALOG_INPUT, 1)
     );
 
-    // Confirmed COV + event draw Reject (services reality: only READ_PROPERTY
-    // executed). Raw sends Confirmed COV Notification; endpoint must Reject
-    // on the wire (flow completes, no hang), proving the matrix.
-    for (choice, iid) in [
-        (ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION, 61u8),
-        (ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION, 62u8),
+    // Confirmed COV + event notifications with a malformed body draw a
+    // Reject on the wire (flow completes, no hang). The server executes no
+    // COV notification, which only a full client on the session takes, and
+    // executes the event notification, whose parameters it can't decode.
+    for (choice, iid, expected) in [
+        (
+            ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+            61u8,
+            RejectReason::UNRECOGNIZED_SERVICE,
+        ),
+        (
+            ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+            62u8,
+            RejectReason::INVALID_TAG,
+        ),
     ] {
         let cov = Apdu::ConfirmedRequest(ConfirmedPdu {
             segmented: false,
@@ -537,7 +546,7 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
                 reject_reason,
             }) => {
                 assert_eq!(invoke_id, iid);
-                assert_eq!(reject_reason, RejectReason::UNRECOGNIZED_SERVICE);
+                assert_eq!(reject_reason, expected);
             }
             other => panic!("COV/event must Reject, got {other:?}"),
         }

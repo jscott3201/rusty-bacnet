@@ -4,8 +4,8 @@ use bacnet_endpoint_core::endpoint_ingress::{
 };
 use bacnet_network::response_route::ResponseRoute;
 use bacnet_npdu::NetworkPriority;
-use bacnet_transport::{port::DirectResponseScope, sc::WebSocketPort};
-use bacnet_types::{MacAddr, enums::PropertyIdentifier};
+use bacnet_transport::port::DirectResponseScope;
+use bacnet_types::MacAddr;
 
 #[tokio::test]
 async fn checked_response_queue_is_bounded_caller_owned_and_does_not_retarget() {
@@ -87,99 +87,4 @@ async fn checked_response_queue_is_bounded_caller_owned_and_does_not_retarget() 
             .await
             .is_err()
     );
-}
-
-async fn session_pending_response(stop: bool) {
-    let ca = TestCa::new();
-    let (mut f, port) = Fixture::new(&ca).await;
-    let _gate = f.hold_sends();
-    let mut session = EndpointSession::new(
-        port,
-        SessionRole::Both,
-        SessionConfig {
-            queue_capacity: 1,
-            ..Default::default()
-        },
-    )
-    .unwrap()
-    .with_database(database("owned"));
-    session.start().await.unwrap();
-    let handle = session.cloned_responder_handle().unwrap();
-    let client = session.cloned_client_handle().unwrap();
-    let request = tokio::spawn(async move {
-        client
-            .read_property(&[1], csv_oid(), PropertyIdentifier::OBJECT_NAME, None)
-            .await
-    });
-    bounded(f.generic.recv()).await.unwrap();
-    let mut a = f.peer(ca.tls("A"), None).await;
-    let admitted = f.capture(&mut a, &unsupported(10), None).await;
-    let saved = admitted.direct_response.clone().unwrap();
-    let response = handle.handle_inbound(received_apdu(admitted));
-    tokio::pin!(response);
-    // Unsupported request has no async service work. This first poll synchronously
-    // admits its response behind the held network operation, then waits completion.
-    assert!(futures_util::poll!(&mut response).is_pending());
-    if stop {
-        bounded(session.stop()).await.unwrap();
-    } else {
-        drop(session);
-    }
-    assert!(bounded(response).await.is_err());
-    assert!(bounded(request).await.unwrap().is_err());
-    assert!(!handle.is_session_alive());
-    let read = a.ws.recv();
-    tokio::pin!(read);
-    assert!(futures_util::poll!(&mut read).is_pending());
-    assert!(f.generic.try_recv().is_err());
-    f.listener.stop().await;
-    assert_eq!(f.listener.active_connections(), 0);
-    assert!(
-        saved
-            .send(&[1, 0, 0x60, 10, 9], &DirectResponseScope::default())
-            .await
-            .is_err()
-    );
-}
-#[tokio::test]
-async fn live_session_stop_cancels_queued_original_response_and_retained_handle() {
-    session_pending_response(true).await;
-}
-#[tokio::test]
-async fn live_session_drop_cancels_queued_original_response_and_retained_handle() {
-    session_pending_response(false).await;
-}
-
-#[tokio::test]
-async fn canceling_live_responder_waiter_retracts_queued_reply_before_replacement() {
-    let ca = TestCa::new();
-    let (mut f, port) = Fixture::new(&ca).await;
-    let gate = f.hold_sends();
-    let mut session =
-        EndpointSession::new(port, SessionRole::Both, SessionConfig::default()).unwrap();
-    session.start().await.unwrap();
-    let handle = session.cloned_responder_handle().unwrap();
-    let client = session.cloned_client_handle().unwrap();
-    let request = tokio::spawn(async move {
-        client
-            .read_property(&[1], csv_oid(), PropertyIdentifier::OBJECT_NAME, None)
-            .await
-    });
-    bounded(f.generic.recv()).await.unwrap();
-    let mut a = f.peer(ca.tls("A"), None).await;
-    let admitted = f.capture(&mut a, &unsupported(20), None).await;
-    {
-        let response = handle.handle_inbound(received_apdu(admitted));
-        tokio::pin!(response);
-        assert!(futures_util::poll!(&mut response).is_pending());
-    }
-    gate.add_permits(1);
-    request.abort();
-    assert!(bounded(request).await.unwrap_err().is_cancelled());
-    // Keep A current until the barrier: retirement must not mask failed cancellation.
-    f.barrier(&mut a, 21).await;
-    let mut b = f.peer(ca.tls("B"), None).await;
-    f.barrier(&mut b, 22).await;
-    session.stop().await.unwrap();
-    f.listener.stop().await;
 }

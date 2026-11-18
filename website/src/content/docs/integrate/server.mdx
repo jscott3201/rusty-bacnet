@@ -13,7 +13,7 @@ import serverPython from '../../../../examples/python/server_device.py?raw';
 
 A `BACnetServer` makes your application a BACnet device: it holds a Device object and the objects you add, and answers reads, writes, subscriptions and discovery for them. Your application supplies the values the server can't know, such as a measured temperature, and acts on the commands peers write. This page builds one on BACnet/IP in Rust and in Python and describes **v{release}**.
 
-The server has the full service set. If one device must also send requests through the same socket, use a [shared endpoint](/rusty-bacnet/integrate/shared-endpoints/) instead, whose responder is narrower.
+The server has the full service set. If one device must also send requests through the same socket, use a [shared endpoint](/rusty-bacnet/integrate/shared-endpoints/) instead, which runs this server beside a client, read-only unless given a policy.
 
 ## Build a server
 

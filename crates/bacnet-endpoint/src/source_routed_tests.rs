@@ -168,11 +168,14 @@ impl Site {
             apdu_retries: 0,
             ..SessionConfig::default()
         };
-        Self::start_with(confirmed, operations, config).await
+        Self::start_with(SessionRole::Both, confirmed, operations, config).await
     }
 
-    /// [`Site::start`], with the session's `config`.
+    /// [`Site::start`], with a session of `role` and the session's
+    /// `config`. A server role runs a full server that lets any peer write
+    /// and carries out ReinitializeDevice.
     async fn start_with(
+        role: SessionRole,
         confirmed: bool,
         operations: &[AuditOperation],
         config: SessionConfig,
@@ -212,7 +215,7 @@ impl Site {
                 None,
             )
             .unwrap();
-        let mut session = EndpointSession::new(near, SessionRole::Both, config)
+        let mut session = EndpointSession::new(near, role, config)
             .unwrap()
             .with_database(db)
             .with_source_audit_routed_device_binding(
@@ -220,9 +223,12 @@ impl Site {
                 REMOTE,
                 MacAddr::from_slice(&STATION),
             )
-            .with_source_audit_reporter(selected())
-            .with_device_writes(Arc::new(|_| true))
-            .with_reinitialize(|_, _| Ok(()));
+            .with_source_audit_reporter(selected());
+        if role != SessionRole::ClientOnly {
+            session = session
+                .device(crate::DeviceIdentity::new(123, 42).unwrap())
+                .with_server(allowing().on_reinitialize(|_, _| Ok(())));
+        }
         session.start().await.unwrap();
         let mut peer = NetworkLayer::new(station);
         let rx = peer.start().await.unwrap();
@@ -412,7 +418,7 @@ async fn lost_routed_records_are_counted_and_summarized_there() {
         AuditOperation::AUDITING_FAILURE,
     ];
     let mut site = Site::start(false, &operations).await;
-    let owner = Arc::clone(site.session.notifications.as_ref().unwrap());
+    let owner = Arc::clone(site.session.server().unwrap().notification_pool());
     let permits: Vec<_> = (0..64).map(|_| owner.try_admit_audit().unwrap()).collect();
     for _ in 0..2 {
         site.session.report_device_reset_local().await.unwrap();
@@ -590,6 +596,47 @@ async fn a_refused_record_keeps_its_router() {
             "{refusal}"
         );
     }
+    site.stop().await;
+}
+
+/// The session learns a network's router at its ingress, whichever role
+/// takes the traffic (#2617): an answer from there that no lease of the
+/// session's holds, which any station may send, teaches nothing; a request
+/// from there, which the server takes, does.
+#[tokio::test(start_paused = true)]
+async fn only_a_request_or_a_held_answer_teaches_the_router() {
+    let mut site = Site::start(false, &[AuditOperation::READ]).await;
+    let stray = Apdu::SimpleAck(SimpleAck {
+        invoke_id: 99,
+        service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+    });
+    site.send(stray, false).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(site.learned(), None, "a stray answer taught a router");
+
+    let mut service = BytesMut::new();
+    bacnet_services::read_property::ReadPropertyRequest {
+        object_identifier: oid(ObjectType::DEVICE, 123),
+        property_identifier: PropertyIdentifier::OBJECT_NAME,
+        property_array_index: None,
+    }
+    .encode(&mut service);
+    let request = Apdu::ConfirmedRequest(ConfirmedRequest {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: false,
+        max_segments: None,
+        max_apdu_length: 480,
+        invoke_id: 4,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_request: service.freeze(),
+    });
+    site.send(request, true).await;
+    let answer = decode_apdu(site.receive().await.apdu).unwrap();
+    assert!(matches!(answer, Apdu::ComplexAck(ack) if ack.invoke_id == 4));
+    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
     site.stop().await;
 }
 

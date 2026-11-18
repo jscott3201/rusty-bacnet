@@ -1,6 +1,6 @@
 ---
 title: "Compose a shared endpoint"
-description: "Run requester and bounded responder roles through one B/IP, SC or MS/TP transport owner."
+description: "Run requester and server roles through one B/IP, SC or MS/TP transport owner."
 ---
 
 import { Code } from '@astrojs/starlight/components';
@@ -10,7 +10,7 @@ import endpointManifest from '../../../../examples/rust/shared-endpoint/Cargo.to
 
 [Build and integrate](/rusty-bacnet/integrate/overview/) / Shared endpoints
 
-Use an endpoint when one local device needs to initiate requests and serve a bounded request set through the same transport. Keep standalone `BACnetClient` for a requester or `BACnetServer` for the full server service set; both remain public APIs.
+Use an endpoint when one local device needs to initiate requests and serve them through the same transport. Its server role is the full server, read-only unless you say who may write. Standalone `BACnetClient` and `BACnetServer` remain public APIs.
 
 ## One session owns the connection
 
@@ -47,34 +47,34 @@ The first line contains the actual nonzero port assigned by the OS. Press Enter 
 
 ```text
 Started endpoint: 127.0.0.1:<assigned-port>
-Roles: requester=true responder=true
+Roles: requester=true server=true
 Press Enter to stop (or send EOF).
-Stopped: address=None requester=false responder=false
+Stopped: address=None requester=false server=false
 Rebound endpoint: 127.0.0.1:<assigned-port>; owner running=false
 ```
 
-The role and address observations come from the session APIs. After awaited stop, the program checks the released port by binding a temporary UDP socket and observes the still-live owner again. It then drops that temporary socket. Printing a start address alone does not establish stop or role availability, and role availability does not establish requester/responder traffic. A failure exits unsuccessfully; reporting and stdin errors after startup pass through the awaited-stop path.
+The role and address observations come from the session APIs. After awaited stop, the program checks the released port by binding a temporary UDP socket and observes the still-live owner again. It then drops that temporary socket. Printing a start address alone does not establish stop or role availability, and role availability does not establish requester/server traffic. A failure exits unsuccessfully; reporting and stdin errors after startup pass through the awaited-stop path.
 
 The exact source and manifest displayed here are checked with the development integration harness. They are also independently compiled against the published direct dependency and run through the same lifecycle checks. That evidence uses Rust 1.99.0 and a development test harness; it does not establish the release's minimum compiler, hardware behavior or protocol-service interoperability.
 
 The declared Network Port in the program is not automatically registered. Explicit registration is a separate [receiving-port contract](/rusty-bacnet/integrate/network-ports/). A successful start exposes the actual B/IP address, including the ephemeral port; after stop it is unavailable.
 
-For SC, `ScEndpointBuilder` composes a caller-dialed `TlsWebSocket` with `build_hub_session` under the `sc-tls` feature. For MS/TP, `MstpEndpointBuilder` owns one serial link. Python exposes `BipEndpoint`, `ScEndpoint` and `MstpEndpoint`, with `async with endpoint`, `await endpoint.client()`, a `BACnetClient` on the endpoint's one address with every call the standalone client has, and `await endpoint.server()`, the `BACnetServer` the endpoint's session runs there. Unlike the Rust session's default responder, a Python endpoint always runs that full server: it answers discovery and every service a standalone server executes, and lists them in its Device. Without a `mutation_policy` it is read-only, denying every write, create and delete, so an endpoint nobody gave a policy is never writable by a peer; given one (`"permissive"`, `"deny_all"` or a callable), it is the server `BACnetServer(mutation_policy=...)` is, but for time synchronization, which an endpoint ignores until `time_sync_policy` turns it on. The application changes its objects through that server, whose COV and event notifications follow as on a standalone one. Its builders cover Analog and Binary Inputs and Values, Groups and Audit Reporters; other object types need a standalone `BACnetServer` for now.
+For SC, `ScEndpointBuilder` composes a caller-dialed `TlsWebSocket` with `build_hub_session` under the `sc-tls` feature. For MS/TP, `MstpEndpointBuilder` owns one serial link. Python exposes `BipEndpoint`, `ScEndpoint` and `MstpEndpoint`, with `async with endpoint`, `await endpoint.client()`, a `BACnetClient` on the endpoint's one address with every call the standalone client has, and `await endpoint.server()`, the `BACnetServer` the endpoint's session runs there. As a Rust session with a server role does, a Python endpoint runs that full server: it answers discovery and every service a standalone server executes, and lists them in its Device. Without a `mutation_policy` it is read-only, denying every write, create and delete, so an endpoint nobody gave a policy is never writable by a peer; given one (`"permissive"`, `"deny_all"` or a callable), it is the server `BACnetServer(mutation_policy=...)` is, but for time synchronization, which an endpoint ignores until `time_sync_policy` turns it on. The application changes its objects through that server, whose COV and event notifications follow as on a standalone one. Its builders cover Analog and Binary Inputs and Values, Groups and Audit Reporters; other object types need a standalone `BACnetServer` for now.
 
 B/IPv6 has no endpoint builder, as it has no server builder. In Rust, compose an `EndpointSession` over a `Bip6Transport` (the `bacnet-transport/ipv6` feature) and declare its Network Port with `DeviceIdentity::with_bip6_port`. Build the transport with `Some(instance)` of the Device the session serves: that instance is the port's VMAC, and a registered B/IPv6 port refuses to start with another instance or a random VMAC. Python has no B/IPv6 endpoint, and Ethernet has none in either language; use their standalone owners.
 
-## Check requester and responder scope separately
+## Check requester and server scope separately
 
-| Role | Bounded contract |
+| Role | Contract |
 |---|---|
 | Requester reads | ReadProperty, ReadRange and ReadPropertyMultiple; unsegmented requests/responses |
 | Requester RPM | 1–64 explicit property occurrences; concrete objects; no ALL, REQUIRED, OPTIONAL or wildcard object selectors |
 | Requester writes | Direct IPv4 B/IP WriteProperty only; required commandability declaration; no routed WP or WPM in this profile |
-| Default responder | ReadProperty, with Reject/Abort handling; no responder RPM or full-server parity |
-| Opt-in responder writes | One built-in local Device's Description and, with a complete source profile, Audit_Notification_Recipient; mandatory mutation authorizer |
-| Opt-in COV | SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple for the hosted objects, notified after the application's local changes; Rust `with_cov` or each builder's `cov` |
+| Server role | The full server's service set, on the session's Device identity, which a Rust session with a server role must have |
+| Default server | Read-only: reads, Who-Is, Who-Has and COV subscriptions answered; writes, creates and deletes denied; ReinitializeDevice and DeviceCommunicationControl refused; time synchronization ignored |
+| Server with a policy | Rust `with_server(builder)` or Python `mutation_policy`: that policy, as on a standalone server |
 
-The Device's advertised services must match the responder. Server-role declarations include RP and cannot add unsupported services; explicit write opt-in advertises RP+WP only after validation. The COV opt-in advertises the three subscribe services and lists Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions; without it they stay refused and the Device exposes neither list. A client's write reaches only the Device, which takes no subscription, so it notifies nobody. These rows are the Rust default responder's; a session given a full server with `with_server`, as every Python endpoint is, has the full server's.
+The Device lists the services the node executes: the full server's, and on a session of both roles the client's COV notification, I-Am and I-Have services beside them. Through 0.15.0 the Rust session ran a narrow responder instead, which answered ReadProperty alone unless opted in.
 
 A requester write's commandability is a declaration about the remote property, not permission to write it. Rust requires `Commandability::{Commandable, Noncommandable}`; Python requires `commandability="commandable"` or `"noncommandable"`. For a first integration, exercise reads before enabling mutations. Consult <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission limits</a> for the shared budgets.
 
@@ -85,7 +85,7 @@ The optional Rust source Reporter profile belongs to this session and currently 
 1. Put a concrete built-in Device and the selected Audit Reporter in the database. If it holds several Devices, the lowest instance is the local one (<a href={`${repository}/blob/v${release}/docs/rust-api.md#databases-with-several-devices`}>details</a>).
 2. Provision the Device's typed Audit recipient. A Device recipient needs an immutable `source_audit_device_binding`; a direct Address recipient needs none.
 3. Set the Reporter's audit level and READ/WRITE operation policy. `Monitored_Objects` must be absent, including no empty or NULL-only list.
-4. Select `with_source_audit_reporter`. A `Both` session also requires an explicit Device write authorizer.
+4. Select `with_source_audit_reporter`. A `Both` session needs a server whose policy decides mutations, so that no peer rewrites the recipient unasked: the read-only default does.
 
 The <a href={`${repository}/blob/v${release}/docs/rust-api.md#bounded-endpoint-source-read-reporting`}>canonical source Reporter example</a> supplies the exact setup. Python endpoints select one with `source_audit_reporter`, beside a server whose `mutation_policy` decides writes: the read-only default, `"deny_all"` or a callable.
 

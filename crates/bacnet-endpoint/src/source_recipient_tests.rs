@@ -109,16 +109,13 @@ fn assert_record(
     new: &BACnetRecipient,
     source: BACnetRecipient,
     invoke: Option<u8>,
-    sequence: u16,
+    clocked: bool,
 ) {
     assert_eq!(record.operation, AuditOperation::WRITE);
     assert_eq!(record.source_device, source);
     assert_eq!(record.invoke_id, invoke);
     assert_eq!(record.source_timestamp, None);
-    assert_eq!(
-        record.target_timestamp,
-        Some(BACnetTimeStamp::SequenceNumber(sequence))
-    );
+    assert_stamp(&record.target_timestamp, clocked, 0);
     assert_eq!(record.target_device, device(123));
     assert_eq!(record.target_object, Some(oid(ObjectType::DEVICE, 123)));
     assert_eq!(
@@ -191,7 +188,7 @@ async fn source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters
                     device(123)
                 },
                 (role == SessionRole::Both).then_some(71),
-                0,
+                role == SessionRole::Both,
             );
             assert_eq!(
                 current(&session).await,
@@ -281,7 +278,7 @@ async fn source_recipient_null_equal_invalid_and_second_permit_preserve_commit_s
     let (a, _) = notification(&receive(&mut records).await, false);
     let (b, _) = notification(&receive(&mut records).await, false);
     assert_eq!(a, b);
-    assert_record(&a, &device(999), &next, device(123), None, 0);
+    assert_record(&a, &device(999), &next, device(123), None, false);
     assert_eq!(
         session
             .database
@@ -362,15 +359,18 @@ async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
     let c = calls.clone();
     let mut db = database(false);
     db.set_clock_reader(None);
-    let mut session =
-        session(db, SessionRole::Both, &sink).with_device_writes(Arc::new(move |_| {
+    let policy = bacnet_server::policy::FnPolicy::new()
+        .inline()
+        .mutation(move |_| {
             c.fetch_add(1, Ordering::SeqCst);
             match d.load(Ordering::SeqCst) {
                 0 => false,
                 1 => panic!("controlled authorizer panic"),
                 _ => true,
             }
-        }));
+        });
+    let mut session = session(db, SessionRole::Both, &sink)
+        .with_server(bacnet_server::server::BACnetServer::generic_builder().policy(policy));
     session.start().await.unwrap();
     let next = direct(&sink);
     for mode in [0, 1] {
@@ -391,17 +391,15 @@ async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
             Apdu::Error(_)
         ));
     }
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "malformed values never reach policy"
-    );
+    // The server asks its policy before it decodes the value, as for any
+    // write; a malformed one is refused all the same.
+    let asked = calls.load(Ordering::SeqCst);
     assert!(
         matches!(wire(&session,&peer,&mut replies,vec![0],74).await,Apdu::SimpleAck(a) if a.invoke_id==74)
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        3,
+        asked + 1,
         "NULL still requires policy"
     );
     assert_eq!(
@@ -496,7 +494,14 @@ async fn a_local_write_of_the_recipient_tells_the_old_and_the_new_one() {
         let (first, _) = notification(&receive(&mut old_records).await, false);
         let (second, _) = notification(&receive(&mut new_records).await, false);
         assert_eq!(first, second);
-        assert_record(&first, &device(999), &next, device(123), None, 0);
+        assert_record(
+            &first,
+            &device(999),
+            &next,
+            device(123),
+            None,
+            role == SessionRole::Both,
+        );
         assert_eq!(
             current(&session).await,
             PropertyValue::ApplicationData(value(&next))

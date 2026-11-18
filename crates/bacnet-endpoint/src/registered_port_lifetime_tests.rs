@@ -2,7 +2,6 @@
 use super::*;
 use bacnet_transport::{
     bip::BipTransport,
-    port::ReceivedNpdu,
     test_transport::{SendMode, TestTransport, TestTransportBuilder},
 };
 use std::{
@@ -50,17 +49,6 @@ impl Control {
 /// publication must use the local 1476.
 fn controlled(control: Arc<Control>) -> TestTransport {
     controlled_builder(control).build()
-}
-
-/// [`controlled`], with `receiver` as its received frames in place of the
-/// real link's.
-fn controlled_with_input(
-    control: Arc<Control>,
-    receiver: mpsc::Receiver<ReceivedNpdu>,
-) -> TestTransport {
-    controlled_builder(control)
-        .replace_inbound(receiver)
-        .build()
 }
 
 fn controlled_builder(control: Arc<Control>) -> TestTransportBuilder {
@@ -269,94 +257,6 @@ async fn registered_port_endpoint_cancelled_start_and_stop_join_same_cleanup() {
 }
 
 #[tokio::test]
-async fn registered_port_admitted_read_survives_independent_ingress_end() {
-    for direct in [false, true] {
-        let control = Control::new();
-        let (incoming, receiver) = mpsc::channel(1);
-        let transport = controlled_with_input(control.clone(), receiver);
-        let id = identity();
-        let mut session =
-            EndpointSession::new(transport, SessionRole::ServerOnly, SessionConfig::default())
-                .unwrap()
-                .with_database(id.build_database().unwrap())
-                .device(id)
-                .with_registered_network_port(port());
-        session.start().await.unwrap();
-        let idle_handle = session.cloned_responder_handle().unwrap();
-        let db = session.database.as_ref().unwrap().clone();
-        let mut locked = db.write().await;
-        let baseline = control.lease.lock().unwrap().strong_count();
-        // Real encoded RP for NETWORK_PORT:4194303 Object_Identifier; block its DB read.
-        let npdu =
-            bytes::Bytes::from_static(&[1, 4, 0, 5, 1, 12, 12, 0x0e, 0x3f, 0xff, 0xff, 25, 75]);
-        let mac = bacnet_types::MacAddr::from_slice(&[127, 0, 0, 1, 0xba, 0xc0]);
-        let direct_call = if direct {
-            let handle = idle_handle.clone();
-            Some(tokio::spawn(async move {
-                handle
-                    .handle_inbound(ReceivedApdu {
-                        router_response: None,
-                        direct_response: None,
-                        apdu: npdu.slice(2..),
-                        source_mac: mac,
-                        ingress_network: None,
-                        source_network: None,
-                        link_layer_group: false,
-                        is_group: false,
-                        global_broadcast: false,
-                        data_attributes: vec![],
-                        provenance: bacnet_transport::port::TransportProvenance::unverified(),
-                        reply_tx: None,
-                    })
-                    .await
-            }))
-        } else {
-            incoming
-                .send(ReceivedNpdu::unverified(npdu, mac, false, vec![], None))
-                .await
-                .unwrap();
-            None
-        };
-        tokio::time::timeout(Duration::from_secs(3), async {
-            // Per-call strong acquisition is an exact admission observation, not a delay.
-            while control.lease.lock().unwrap().strong_count() <= baseline {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        drop(incoming);
-        wait(&control.stop_entered).await;
-        control.release.add_permits(1);
-        wait(&control.stop_finished).await;
-        assert!(session.bip_local_address().is_none());
-        // UDP is stopped; the already-admitted reader still protects object identity.
-        assert!(locked.remove(&port()).is_err());
-        assert!(
-            locked
-                .get_mut(&port())
-                .unwrap()
-                .write_property(
-                    PropertyIdentifier::OUT_OF_SERVICE,
-                    None,
-                    PropertyValue::Boolean(true),
-                    None
-                )
-                .is_err()
-        );
-        drop(locked);
-        if let Some(call) = direct_call {
-            assert!(call.await.unwrap().is_err());
-        }
-        session.stop().await.unwrap();
-        assert!(!control.alive());
-        assert!(db.write().await.remove(&port()).unwrap().is_some());
-        // Retaining an inactive public role does not reserve the object indefinitely.
-        assert!(!idle_handle.is_session_alive());
-    }
-}
-
-#[tokio::test]
 async fn registered_port_endpoint_cleanup_error_is_reported() {
     let control = Control::new();
     let id = identity();
@@ -433,7 +333,6 @@ async fn registered_port_active_endpoint_cancelled_stop_retains_and_then_release
     .with_registered_network_port(port());
     session.start().await.unwrap();
     let db = session.database.as_ref().unwrap().clone();
-    let idle = session.cloned_responder_handle().unwrap();
     {
         let stop = session.stop();
         tokio::pin!(stop);
@@ -443,7 +342,6 @@ async fn registered_port_active_endpoint_cancelled_stop_retains_and_then_release
     assert_protected(&db).await;
     control.release.add_permits(1);
     session.stop().await.unwrap();
-    assert!(!idle.is_session_alive());
     assert!(!control.alive());
     assert!(db.write().await.remove(&port()).unwrap().is_some());
 }

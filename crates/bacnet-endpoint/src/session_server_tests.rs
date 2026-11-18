@@ -1,8 +1,8 @@
-//! The full server a session builds (#2617, part 3a), over an in-memory
-//! link with broadcasts on paused time: the read-only server a session
-//! will build when it is given no builder of its own, requests that are on
-//! the link before the session starts, and a session dropped with its
-//! server where no runtime runs.
+//! The full server a session builds (#2617), over an in-memory link with
+//! broadcasts on paused time: the read-only server a session builds when it
+//! is given no builder of its own, requests that are on the link before the
+//! session starts, and a session dropped with its server where no runtime
+//! runs.
 use super::*;
 use crate::session::eventually::eventually;
 use bacnet_client::client::{BACnetClient, Broadcast};
@@ -69,13 +69,18 @@ fn session(
     wire: &Wire,
     builder: ServerBuilder<TestTransport>,
 ) -> (EndpointSession<TestTransport>, SendLog) {
+    let (session, sent) = default_session(wire);
+    (session.with_server(builder), sent)
+}
+
+/// [`session`] given no builder: it runs the read-only server.
+fn default_session(wire: &Wire) -> (EndpointSession<TestTransport>, SendLog) {
     let port = wire.port(NODE);
     let sent = port.sent();
     let session = EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
         .unwrap()
         .device(crate::DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
-        .with_database(database())
-        .with_server(builder);
+        .with_database(database());
     (session, sent)
 }
 
@@ -118,14 +123,14 @@ async fn present_value(peer: &BACnetClient<TestTransport>) -> f32 {
     f32::from_be_bytes(ack.property_value[1..5].try_into().unwrap())
 }
 
-/// The read-only server: a peer reads, discovers the node and its objects
-/// and subscribes to COV, which the server reports; no peer writes,
-/// creates or deletes, each refused SERVICES / SERVICE_REQUEST_DENIED with
-/// nothing changed.
+/// The read-only server a session given no builder runs: a peer reads,
+/// discovers the node and its objects and subscribes to COV, which the
+/// server reports; no peer writes, creates or deletes, each refused
+/// SERVICES / SERVICE_REQUEST_DENIED with nothing changed.
 #[tokio::test(start_paused = true)]
 async fn the_read_only_server_answers_reads_discovery_and_subscriptions_only() {
     let wire = Wire::new();
-    let (mut session, _) = session(&wire, read_only_server());
+    let (mut session, _) = default_session(&wire);
     session.start().await.unwrap();
     let peer = peer(&wire).await;
     let node = Wire::mac(NODE);
@@ -296,21 +301,24 @@ async fn served(
     server.read_local(&object, property, None).await.unwrap()
 }
 
-/// The rest of the covered mutations the read-only server refuses:
-/// WritePropertyMultiple, AddListElement, RemoveListElement and
-/// AtomicWriteFile are answered SERVICES / SERVICE_REQUEST_DENIED, and an
-/// inbound WriteGroup, which has no answer, changes nothing. A
-/// TimeSynchronization or UTCTimeSynchronization, unconfirmed too, leaves
-/// the Device's clock alone.
+/// The rest of what the read-only server a session given no builder runs
+/// refuses: WritePropertyMultiple, AddListElement, RemoveListElement,
+/// AtomicWriteFile and ReinitializeDevice are answered SERVICES /
+/// SERVICE_REQUEST_DENIED, and DeviceCommunicationControl with an Error
+/// too, the node initiating as before; an inbound WriteGroup, which has no
+/// answer, changes nothing. A TimeSynchronization or
+/// UTCTimeSynchronization, unconfirmed too, leaves the Device's clock
+/// alone.
 #[tokio::test(start_paused = true)]
 async fn the_read_only_server_refuses_the_other_mutations_and_time_sync() {
     use bacnet_services::common::BACnetPropertyValue;
     use bacnet_services::file::FileWriteAccessMethod;
     use bacnet_services::wpm::WriteAccessSpecification;
     use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
+    use bacnet_types::enums::{EnableDisable, ReinitializedState};
     use bacnet_types::primitives::{Date, Time};
     let wire = Wire::new();
-    let (mut session, _) = session(&wire, read_only_server());
+    let (mut session, _) = default_session(&wire);
     Box::pin(session.start()).await.unwrap();
     let peer = Box::pin(peer(&wire)).await;
     let node = Wire::mac(NODE);
@@ -360,6 +368,15 @@ async fn the_read_only_server_refuses_the_other_mutations_and_time_sync() {
         inhibit_delay: None,
     };
     peer.write_group_directed(&node, &group).await.unwrap();
+    let reset = peer.reinitialize_device(&node, ReinitializedState::WARMSTART, None);
+    assert!(denied(Box::pin(reset).await));
+    let control =
+        peer.device_communication_control(&node, EnableDisable::DISABLE_INITIATION, Some(5), None);
+    let refused = Box::pin(control).await;
+    assert!(
+        matches!(refused, Err(Error::Remote(RemoteError::Error { .. }))),
+        "{refused:?}"
+    );
     let new_year = Date {
         year: 101,
         month: 1,
@@ -386,6 +403,8 @@ async fn the_read_only_server_refuses_the_other_mutations_and_time_sync() {
     assert_eq!(after, before, "nothing changed");
     let local = PropertyIdentifier::LOCAL_DATE;
     assert_eq!(served(server, device, local).await, date, "the clock moved");
+    // The node still initiates: no DeviceCommunicationControl took hold.
+    session.broadcast_i_am().await.unwrap();
 
     let mut peer = peer;
     peer.stop().await.unwrap();

@@ -143,15 +143,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             (None, None, None)
         };
 
-        // Routed source Audit bindings' routers, which traffic and router
-        // announcements teach (#2371).
-        let source_routers = source_recipient
+        // Routed source Audit bindings' routers, which router announcements
+        // teach here, and traffic at ingress (#2371).
+        let routers = source_recipient
             .as_ref()
             .map(|runtime| Arc::clone(runtime.routes.routers()))
             .filter(|routers| !routers.is_empty());
         self.network_number_task = receivers.network_controls.map(|mut controls| {
             let egress = egress.clone();
-            let routers = source_routers.clone();
             let registration_lease = self.registered_port_lease.upgrade();
             // The owner copies its state into the layer's number slot after
             // each control, where the requester and source routes read it
@@ -236,7 +235,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             coordinator: Arc::clone(&self.coordinator),
             shared: Arc::clone(&self.shared),
             local_network: egress.local_network_number().clone(),
-            source_routers,
             cov,
         };
         let audit_lease = source_recipient

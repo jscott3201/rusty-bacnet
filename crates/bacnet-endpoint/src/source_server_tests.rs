@@ -9,18 +9,12 @@ use super::*;
 use bacnet_client::client::ClientOptions;
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_server::mutation::MutationPolicy;
-use bacnet_server::policy::FnPolicy;
 use bacnet_server::server::{AuditReportersConfig, BACnetServer, DccPolicy, ServerBuilder};
 use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{EnableDisable, ReinitializedState};
 use std::sync::atomic::{AtomicBool, Ordering};
-
-/// A server whose policy lets any peer write: it decides mutations.
-fn allowing() -> ServerBuilder<TestTransport> {
-    BACnetServer::generic_builder().policy(FnPolicy::new().inline().mutation(|_| true))
-}
 
 fn config() -> SessionConfig {
     SessionConfig {

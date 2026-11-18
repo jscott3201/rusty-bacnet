@@ -5,11 +5,13 @@ use bacnet_server::mutation::DeviceWriteAuthorizer;
 use bacnet_server::server::ReinitializeContext;
 use bacnet_types::enums::{AuditOperation, ServiceSupported};
 
-/// The services the session's server role, its bounded Device responder,
-/// executes on every session, as `BACnetServicesSupported` bits (Clause 21).
+/// The services the gone narrow server role, its bounded Device responder,
+/// executed, as `BACnetServicesSupported` bits (Clause 21).
 ///
-/// The responder is not the full `bacnet-server` service set: everything not
-/// here or in [`RESPONDER_OPT_IN_SERVICES`] is refused.
+/// A session with a server role now runs a full server, which executes
+/// `bacnet_objects::device::EXECUTED_SERVICES` (#2617). A later step of
+/// #2617 removes this list, [`RESPONDER_OPT_IN_SERVICES`] and
+/// [`ResponderOptIn`].
 pub const RESPONDER_SERVICES: &[ServiceSupported] = &[ServiceSupported::READ_PROPERTY];
 
 /// A service the session's server role executes only once an
@@ -51,6 +53,12 @@ pub const RESPONDER_OPT_IN_SERVICES: &[ResponderOptIn] = &[
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Enables authorized writes to the local Device's `Description` and installed Audit recipient.
     ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// `with_server` a builder whose policy decides
+    /// mutations. A later step of #2617
+    /// removes this call.
+    ///
     /// The callback is mandatory and receives the existing redacted mutation
     /// context. A refusal or panic denies the request before mutation. It must
     /// be fast, nonblocking and side-effect-free; see [`DeviceWriteAuthorizer`].
@@ -87,6 +95,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     /// Enables ReinitializeDevice, carried out by `handler` with the
     /// requester's [`ReinitializeContext`] and the database write-locked.
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// `with_server` a builder with
+    /// `on_reinitialize`. A later step of #2617
+    /// removes this call.
     ///
     /// Startup requirements and the advertised services are those of
     /// [`with_device_writes`](Self::with_device_writes). The handler follows
@@ -126,6 +140,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov),
     /// [`MstpEndpointBuilder::cov`](crate::mstp::MstpEndpointBuilder::cov)
     /// and [`ScEndpointBuilder::cov`](crate::sc::ScEndpointBuilder::cov).
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// `with_server` a builder with a `cov_policy`;
+    /// the server answers subscriptions itself. A later step of #2617
+    /// removes this call.
     ///
     /// The session runs bacnet-device-core's
     /// [`Reporter`](bacnet_device_core::report::Reporter) over its database:
@@ -222,6 +242,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Sets the password a ReinitializeDevice request must carry.
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// `with_server` a builder with
+    /// `reinit_password`. A later step of #2617
+    /// removes this call.
     ///
     /// It takes effect only with [`with_reinitialize`](Self::with_reinitialize):
     /// startup refuses a password without a handler.

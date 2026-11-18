@@ -46,7 +46,7 @@ async fn read_and_record(
 async fn disable_initiation_refuses_an_audited_request_before_admission() {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
-    let mut session = session(database(false), SessionRole::Both, &sink);
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
     let client = full_client(&session);
@@ -110,7 +110,7 @@ async fn disable_initiation_refuses_an_audited_request_before_admission() {
 async fn a_request_waiting_for_the_database_takes_no_sequence_number() {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
-    let mut session = session(database(false), SessionRole::Both, &sink);
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
     let client = full_client(&session);
@@ -160,7 +160,7 @@ async fn a_request_waiting_for_the_database_takes_no_sequence_number() {
 async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
-    let mut session = session(database(false), SessionRole::Both, &sink);
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
     let client = full_client(&session);
@@ -246,7 +246,7 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
 async fn an_audited_request_whose_retry_is_withheld_is_recorded_as_failed() {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
-    let mut session = session(database(false), SessionRole::Both, &sink);
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 1_000;
     session.client_config.apdu_retries = 2;
     session.start().await.unwrap();

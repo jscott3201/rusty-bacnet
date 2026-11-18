@@ -50,7 +50,7 @@ async fn dropped_sender_impl(mode: MstpExecutionMode, frames: Frames) {
     // Client-only session has no server role: the lone reply sender is
     // released without bytes, yet the MAC still answers ReplyPostponed.
     let mut h = Harness::new(mode, SessionRole::ClientOnly, frames).await;
-    assert!(h.session.responder().is_none());
+    assert!(h.session.server().is_none());
     h.peer_deliver(&data_expecting(1, 44)).await;
     let postponed = h
         .wait_for("ReplyPostponed", |f| {
@@ -108,11 +108,10 @@ async fn mstp_dropped_sender_releases_extended_dedicated() {
 
 async fn token_during_work_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = Harness::new(mode, SessionRole::Both, frames).await;
-    h.session
-        .responder()
-        .expect("server role")
-        .suspend_next_reply()
-        .expect("arm suspension");
+    // The server's read waits for the database the test holds: the
+    // application at work.
+    let database = std::sync::Arc::clone(h.session.server().expect("server role").database());
+    let held = database.write().await;
     h.peer_deliver(&data_expecting(1, 55)).await;
     // Token + PFM arrive while the application works (order vs dispatch is
     // deliberately uncontrolled). Neither may break the pending reply
@@ -141,6 +140,7 @@ async fn token_during_work_impl(mode: MstpExecutionMode, frames: Frames) {
         "MAC must release ReplyPostponed during application work; {}",
         h.link_report()
     );
+    drop(held);
     // Ownership preserved: the token opportunity delivers the postponed
     // response to the original requester (possibly already observed above).
     match early_data {

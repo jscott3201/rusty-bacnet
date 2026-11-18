@@ -26,9 +26,8 @@
 //! call reports shutdown.
 //!
 //! The session keeps its object database through `stop()` and lets go of it
-//! when it drops. Every endpoint holder of the database (the session, the
-//! server role's responder, a cloned server role handle, the source Audit
-//! runtime and the session's tasks) lets go through
+//! when it drops. Every holder of the database (the session, its server,
+//! the source Audit runtime and the session's tasks) lets go through
 //! [`drop_database_off_runtime`], so whichever goes last, in async code the
 //! objects and any durable saves they wait for drop on Tokio's blocking pool,
 //! not on a runtime worker (#1561).
@@ -126,26 +125,30 @@ enum Lifecycle {
 ///   server role's accessors are `None`. Inbound requests are counted
 ///   (`no_server_role`) and their one-use reply sender released without
 ///   sending.
-/// - [`ServerOnly`](SessionRole::ServerOnly): the server role is the narrow
-///   `responder()`, or the full `server()` that
-///   [`with_server`](EndpointSession::with_server) has the session build
+/// - [`ServerOnly`](SessionRole::ServerOnly): the server role is the full
+///   `server()` the session builds at start, the read-only one
+///   ([`read_only_server`]) unless
+///   [`with_server`](EndpointSession::with_server) gave it a builder
 ///   (#2617); `client()` is `None`. Terminal responses with no consumer
 ///   release their exact lease and count `no_client_role`.
 /// - [`Both`](SessionRole::Both): both roles are present above the one
 ///   shared coordinator.
+///
+/// A session with a server role needs a Device identity
+/// ([`device`](EndpointSession::device)): its start refuses one without,
+/// before the link starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionRole {
     /// Client requester only.
     ClientOnly,
-    /// Server role only: the narrow responder and its notification pool,
-    /// or a full server ([`EndpointSession::with_server`]).
+    /// Server role only: a full server ([`EndpointSession::with_server`],
+    /// or [`read_only_server`] without one).
     ServerOnly,
     /// Both sibling roles above one ingress/coordinator.
     Both,
 }
 
-/// Session tuning (bounded queues, client timers, the responder's read work
-/// limit).
+/// Session tuning (bounded queues, client timers).
 ///
 /// Typed at the public boundary: every field is validated where it matters
 /// (`queue_capacity == 0`, `read_work_limit == 0` or a
@@ -215,10 +218,14 @@ pub struct SessionConfig {
     /// identity's ceiling resolved against the transport's stable local
     /// receive capacity (480 for standard MS/TP, 1476 for extended MS/TP).
     pub max_apdu_length: u16,
-    /// Result rows one ReadProperty served by the server role may expand
-    /// (default 256).
+    /// Result rows one ReadProperty served by the narrow server role may
+    /// expand (default 256). That role is gone (#2617): a session with a
+    /// server role refuses at start a value other than the default, and its
+    /// server's own budget,
+    /// [`ServerBuilder::read_property_multiple_budget`](bacnet_server::server::ServerBuilder::read_property_multiple_budget),
+    /// carries the limit. A later step of #2617 removes the field.
     ///
-    /// The endpoint's counterpart of the server's
+    /// It was the endpoint's counterpart of the server's
     /// [`ReadPropertyMultipleBudget::max_result_elements`](bacnet_device_core::read::ReadPropertyMultipleBudget::max_result_elements),
     /// with the same default. A read counts its own row, and a Group's
     /// Present_Value adds one row per member property after ALL, REQUIRED
@@ -336,20 +343,23 @@ struct SessionShared {
 /// role registration, policy-outcome ownership, timers, egress and
 /// termination. Start-once/stop-once; `Drop` aborts without orphaning.
 ///
-/// An optional [`DeviceIdentity`](crate::identity::DeviceIdentity) is the
-/// single source for I-Am + Device readback + role limits when composed via
-/// [`device`](Self::device). Standalone sessions without an
-/// identity keep the `SessionConfig` 480 default untouched.
+/// A [`DeviceIdentity`](crate::identity::DeviceIdentity) is the single
+/// source for I-Am + Device readback + role limits when composed via
+/// [`device`](Self::device); a session with a server role needs one. A
+/// client-only session without an identity keeps the `SessionConfig` 480
+/// default untouched.
 ///
 /// ```no_run
 /// use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
+/// use bacnet_endpoint::DeviceIdentity;
 /// use bacnet_transport::loopback::LoopbackTransport;
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), bacnet_types::error::Error> {
 /// let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
 /// let mut session =
-///     EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
+///     EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?
+///         .device(DeviceIdentity::new(1001, 42)?);
 /// session.start().await?;
 /// assert!(session.is_running());
 /// session.stop().await?;
@@ -528,15 +538,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     /// Attaches the local object database (before start).
     ///
-    /// Must be called before [`start`](Self::start); when the server role is
-    /// composed without an identity or database, an empty one is used. With a
+    /// Must be called before [`start`](Self::start). With a
     /// [`DeviceIdentity`](crate::identity::DeviceIdentity), omitting the database
     /// requests stock generation after receive-capacity resolution. Explicitly
     /// supplied databases, including empty ones, are preserved. Their selected
-    /// Device must match the resolved identity and declare
-    /// segmentation NO_SEGMENTATION, matching the narrow endpoint roles.
-    /// The session retains ownership even in `ClientOnly` mode and shares this
-    /// same database with the responder in `Both` mode.
+    /// Device must match the resolved identity and declare segmentation
+    /// NO_SEGMENTATION, as the session's identity must for now. The session
+    /// retains ownership even in `ClientOnly` mode; with a server role it
+    /// hands the database to its server at start, and shares it from then
+    /// on.
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.
@@ -551,9 +561,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Activates bounded source READ reporting on direct IPv4 B/IP. The built-in
     /// Device must have a typed Audit recipient provision, even at Audit_Level
     /// NONE. Device choices use immutable builder route bindings; direct Address
-    /// choices need no binding. Monitored_Objects must be absent. `Both` requires
-    /// an explicit [`with_device_writes`](Self::with_device_writes) authorizer;
-    /// `ClientOnly` permits trusted local changes and `ServerOnly` is rejected.
+    /// choices need no binding. Monitored_Objects must be absent. `Both`
+    /// requires a server whose policy decides mutations, so that no peer
+    /// rewrites the audited Device's recipient unasked: the read-only server
+    /// a session runs without a builder does; see
+    /// [`with_server`](Self::with_server). `ClientOnly` permits trusted local
+    /// changes and `ServerOnly` is rejected.
     /// Standalone BACnetClient source reporting remains unsupported.
     ///
     /// [`start`](Self::start) requires a concrete built-in local Device
@@ -676,9 +689,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// `&mut self` so only the owner can stop; cloned role handles observe
     /// shutdown and fail closed.
     ///
-    /// A full server the session built ([`with_server`](Self::with_server))
-    /// is stopped first: its work joins and its saves settle while the link
-    /// is still up, and its stop error, if any, is this call's.
+    /// The session's server ([`with_server`](Self::with_server)) is
+    /// stopped first: its work joins and its saves settle while the link is
+    /// still up, and its stop error, if any, is this call's.
     ///
     /// With an attached database, waits for its lock and for queued durable save
     /// attempts, including corrections for abandoned staged writes. A
@@ -929,8 +942,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// from [`server_config`](crate::identity::server_config).
     /// Transport-dependent: B/IP reaches the local subnet broadcast; SC
     /// relays via the hub as a broadcast NPDU. Fails when the session is not
-    /// running, and with [`Error::InitiationDisabled`] while a
-    /// full server ([`with_server`](Self::with_server)) holds a DeviceCommunicationControl
+    /// running, and with [`Error::InitiationDisabled`] while the session's
+    /// server ([`with_server`](Self::with_server)) holds a DeviceCommunicationControl
     /// DISABLE_INITIATION: this I-Am answers no Who-Is (Clause 16.1).
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
         let identity = self
@@ -981,10 +994,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 #[cfg(test)]
 #[path = "source_reporter_tests.rs"]
 mod source_reporter_tests;
-
-#[cfg(test)]
-#[path = "device_write_tests.rs"]
-mod device_write_tests;
 
 impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
     fn drop(&mut self) {
@@ -1041,8 +1050,6 @@ struct DispatchParts {
     /// The layer's network number, which the session's Number owner
     /// publishes; answers relayed with it as SNET match like direct ones.
     local_network: LocalNetworkNumber,
-    /// Routed source Audit bindings' routers, learned from traffic (#2371).
-    source_routers: Option<Arc<crate::source_audit::routers::SourceRouters>>,
     /// COV reporting, which the answers to its notifications go to (#2490).
     cov: Option<Arc<cov::CovHost>>,
 }
@@ -1080,9 +1087,6 @@ async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
     let _attributes = received.data_attributes.clone();
     let _provenance = &received.provenance;
     let _ingress = received.ingress_network;
-    if let Some(routers) = &parts.source_routers {
-        routers.observe(&received);
-    }
     let Some(responder) = parts.responder.as_ref() else {
         let mut counters = parts.shared.counters.lock().await;
         counters.no_server_role += 1;
@@ -1158,10 +1162,6 @@ mod port_retry;
 #[cfg(test)]
 #[path = "local_network_tests.rs"]
 mod local_network_tests;
-
-#[cfg(test)]
-#[path = "read_work_limit_tests.rs"]
-mod read_work_limit_tests;
 
 #[cfg(test)]
 #[path = "client_pacing_tests.rs"]

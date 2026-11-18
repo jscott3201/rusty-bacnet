@@ -12,6 +12,7 @@ async fn small_link(
     let (mut f, port) = Fixture::new(&ca).await;
     let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
         .unwrap()
+        .device(node())
         .with_database(database(&"x".repeat(name_len)));
     session.start().await.unwrap();
     let mut peer = f.peer(ca.tls("small"), Some((npdu, bvlc))).await;
@@ -57,13 +58,14 @@ async fn endpoint_too_small_for_abort_fails_without_fallback_and_dispatch_contin
     let (mut f, port) = Fixture::new(&ca).await;
     let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
         .unwrap()
+        .device(node())
         .with_database(database("x"));
     session.start().await.unwrap();
     let mut a = f.peer(ca.tls("tiny"), Some((4, 8))).await;
     let admitted = f.capture(&mut a, &read_name(90), None).await;
     f.feed(admitted).await;
     bounded(async {
-        while session.policy_counters().await.responder_declined != 1 {
+        while session.server_seat_counters().apdus != 1 {
             tokio::task::yield_now().await;
         }
     })

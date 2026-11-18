@@ -290,7 +290,9 @@ async fn a_full_client_needs_a_running_session() {
     let wire = Wire::new();
     let config = SessionConfig::default();
     let mut session =
-        EndpointSession::new(wire.port(NODE).build(), SessionRole::Both, config.clone()).unwrap();
+        EndpointSession::new(wire.port(NODE).build(), SessionRole::Both, config.clone())
+            .unwrap()
+            .device(bacnet_endpoint::DeviceIdentity::new(901, 42).unwrap());
     assert!(session.full_client().is_err(), "before start");
     session.start().await.unwrap();
     let client = session.full_client().unwrap();
@@ -423,23 +425,6 @@ async fn a_frame_expecting_a_reply_is_answered_on_its_own_path_by_the_role_it_is
         Apdu::ComplexAck(ack) if ack.invoke_id == 12
     ));
     assert_eq!(to_other(&lab.node_sent), 0);
-
-    // With the reply postponed the frame gets no reply, and the server
-    // role's answer goes out as a frame of its own, client or no client.
-    lab.session
-        .responder()
-        .unwrap()
-        .suspend_next_reply()
-        .unwrap();
-    let (received, reply) = expecting_reply(&read);
-    lab.wire.deliver(&node, received);
-    assert!(reply.await.is_err(), "postponed: no reply on the frame");
-    eventually(WAIT, "the deferred answer", async || {
-        to_other(&lab.node_sent) == 1
-    })
-    .await;
-    let (_, deferred) = apdus(&lab.node_sent).pop().unwrap();
-    assert!(matches!(deferred, Apdu::ComplexAck(ack) if ack.invoke_id == 12));
 
     drop(client);
     stop(lab).await;

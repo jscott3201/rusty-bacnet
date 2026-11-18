@@ -1,7 +1,7 @@
 //! Whichever endpoint holder lets go of the object database last drops it
 //! off the async runtime (#1561): the session as it drops, stopped or not;
-//! the server role's responder, held by a cloned role handle or by the
-//! aborted dispatch task; the source Audit runtime, held by an audited read
+//! the full server of its server role, whose aborted tasks let go last; the
+//! source Audit runtime, held by an audited read
 //! in flight; the Number task's handle, upgraded across its lock wait; and a
 //! registered Number owner. A durable class whose save storage still holds
 //! no longer parks the runtime's thread while it drops.
@@ -273,38 +273,27 @@ async fn a_session_dropped_last_lets_its_database_go_off_the_runtime() {
     }
 }
 
+/// A session whose server role holds the database last, dropped unstopped,
+/// lets it go off the runtime: the full server's tasks, aborted by the
+/// drop, let go of it only once the runtime cancels them, after the
+/// session's own handle has gone.
 #[tokio::test]
-async fn a_responder_let_go_of_last_drops_the_database_off_the_runtime() {
-    for by_handle in [true, false] {
-        let storage = Storage::holding();
-        let (class, dropped_on) = reporting_class(&storage);
-        let mut endpoint = started_with(SessionRole::ServerOnly, class).await;
-        let handle = if by_handle {
-            let handle = endpoint.session.cloned_responder_handle().unwrap();
-            bounded(endpoint.session.stop()).await.unwrap();
-            Some(handle)
-        } else {
-            None
-        };
-        let db = database(&endpoint);
-        // Keep an unfinished save for the final holder's Drop, including
-        // when the retained role outlives an already stopped session.
-        let go = stage_held_save(&db, &storage).await;
-        let weak = Arc::downgrade(&db);
-        drop(db);
-        // A cloned server role handle keeps the responder past a stopped
-        // session's drop. Without stop(), the drop aborts the dispatch task,
-        // which lets its responder go only once the runtime cancels it,
-        // after the session's own handle has gone.
-        let (progress, watchdog) = watchdog(go);
-        drop(endpoint);
-        drop(handle);
-        assert!(
-            thread_was_free(weak, progress, watchdog).await,
-            "the responder held the runtime's thread (by handle: {by_handle})"
-        );
-        dropped_off_the_runtime(dropped_on, &storage).await;
-    }
+async fn a_server_role_let_go_of_last_drops_the_database_off_the_runtime() {
+    let storage = Storage::holding();
+    let (class, dropped_on) = reporting_class(&storage);
+    let endpoint = started_with(SessionRole::ServerOnly, class).await;
+    let db = database(&endpoint);
+    // Keep an unfinished save for the final holder's Drop.
+    let go = stage_held_save(&db, &storage).await;
+    let weak = Arc::downgrade(&db);
+    drop(db);
+    let (progress, watchdog) = watchdog(go);
+    drop(endpoint);
+    assert!(
+        thread_was_free(weak, progress, watchdog).await,
+        "the server role held the runtime's thread"
+    );
+    dropped_off_the_runtime(dropped_on, &storage).await;
 }
 
 #[tokio::test]

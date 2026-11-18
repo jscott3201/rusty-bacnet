@@ -140,8 +140,8 @@ async fn endpoint_records_accepted_reinitialize_requests_only() {
         .unwrap();
     let mode = Arc::new(AtomicU8::new(ACCEPT));
     let answer = Arc::clone(&mode);
-    let mut session = session(db, SessionRole::Both, &sink)
-        .with_reinitialize(move |_, _| match answer.load(Ordering::SeqCst) {
+    let server = allowing()
+        .on_reinitialize(move |_, _| match answer.load(Ordering::SeqCst) {
             ACCEPT => Ok(()),
             REFUSE => Err(Error::protocol(
                 ErrorClass::DEVICE,
@@ -150,7 +150,8 @@ async fn endpoint_records_accepted_reinitialize_requests_only() {
             PANIC => panic!("reinitialize handler panic"),
             _ => Err(Error::Encoding("disk full".into())),
         })
-        .with_reinit_password("pw");
+        .reinit_password("pw");
+    let mut session = session(db, SessionRole::Both, &sink).with_server(server);
     session.start().await.unwrap();
     let mac = session_mac(&session, &peer, &mut replies).await;
     let requester = BACnetRecipient::Address(BACnetAddress {
@@ -186,11 +187,8 @@ async fn endpoint_records_accepted_reinitialize_requests_only() {
             record.target_device,
             BACnetRecipient::Device(oid(ObjectType::DEVICE, 123))
         );
-        assert_eq!(
-            record.target_timestamp,
-            Some(BACnetTimeStamp::SequenceNumber(sequence)),
-            "{state:?}: no record before this one since the last"
-        );
+        // A refusal's record would arrive first, with another invoke ID.
+        assert_stamp(&record.target_timestamp, true, sequence);
         assert_eq!(record.source_timestamp, None);
         assert_eq!(record.target_object, None);
         assert_eq!(record.target_property, None);
@@ -269,11 +267,7 @@ async fn endpoint_records_a_local_reset_through_the_reporters_filters() {
     assert_eq!(record.source_device, device);
     assert_eq!(record.target_device, device);
     assert_eq!(record.invoke_id, None);
-    assert_eq!(
-        record.target_timestamp,
-        Some(BACnetTimeStamp::SequenceNumber(0)),
-        "the filtered reports built no record"
-    );
+    assert_stamp(&record.target_timestamp, true, 0);
     assert_eq!(record.target_object, None);
     assert_eq!(record.result, None);
     tokio::time::sleep(WAIT).await;

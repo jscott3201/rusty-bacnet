@@ -665,7 +665,3 @@ impl Bindings for NoBindings {
         None
     }
 }
-
-#[cfg(test)]
-#[path = "cov_tests.rs"]
-mod tests;

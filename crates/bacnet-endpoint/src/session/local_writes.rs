@@ -21,6 +21,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// application: a network-equivalent write made as `source`, the
     /// counterpart of `BACnetServer::write_local` (#2468).
     ///
+    /// **Superseded (#2617).** With a server role the session's full server
+    /// hosts the database, and this call bypasses its COV, event and Audit
+    /// work: use the server's call of the same name
+    /// ([`server`](Self::server)). A later step of #2617 removes this call.
+    ///
     /// bacnet-device-core's local write checks and commits it under the
     /// session's database guard, so it is refused where the server's is:
     /// an unknown object with OBJECT / UNKNOWN_OBJECT, an array index as
@@ -109,6 +114,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Supply an object's logical Present_Value from the application, the
     /// counterpart of `BACnetServer::set_present_value_local` (#2468).
     ///
+    /// **Superseded (#2617).** With a server role the session's full server
+    /// hosts the database, and this call bypasses its COV, event and Audit
+    /// work: use the server's call of the same name
+    /// ([`server`](Self::server)). A later step of #2617 removes this call.
+    ///
     /// The object's own local input takes it: the Analog, Binary and
     /// Multi-state Inputs, noncommandable Values, the Integer Value, Loop
     /// and Life Safety Point and Zone among the built-in objects. They
@@ -143,6 +153,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Set the Reliability the application works out for an object, such
     /// as NO_SENSOR when its hardware reports a missing sensor, the
     /// counterpart of `BACnetServer::set_reliability_local` (#2468).
+    ///
+    /// **Superseded (#2617).** With a server role the session's full server
+    /// hosts the database, and this call bypasses its COV, event and Audit
+    /// work: use the server's call of the same name
+    /// ([`server`](Self::server)). A later step of #2617 removes this call.
     ///
     /// The built-in Inputs, Outputs and Values, the Integer Value, Loop,
     /// Schedule, Life Safety Point and Zone, Access Zone, Credential Data
@@ -211,11 +226,3 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         .await
     }
 }
-
-#[cfg(test)]
-#[path = "local_write_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "local_staged_release_tests.rs"]
-mod staged_release_tests;

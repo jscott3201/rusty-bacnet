@@ -76,25 +76,19 @@ impl TestCa {
     }
 }
 type GateSlot = Arc<std::sync::Mutex<Option<Arc<tokio::sync::Semaphore>>>>;
-type Attributes = Arc<std::sync::Mutex<Vec<Vec<bacnet_transport::port::DataAttribute>>>>;
 
 /// A port with MAC `[0xaa; 6]` fed by `incoming`, whose every send (either
-/// kind) is decoded into `generic`, whose non-empty data attributes are
-/// kept in `attributes`, and which then waits for a permit when `gate` holds
-/// a semaphore.
+/// kind) is decoded into `generic`, and which then waits for a permit when
+/// `gate` holds a semaphore.
 fn queued_port(
     incoming: mpsc::Receiver<ReceivedNpdu>,
     generic: mpsc::UnboundedSender<Npdu>,
     gate: GateSlot,
-    attributes: Attributes,
 ) -> TestTransport {
     TestTransport::builder()
         .local_mac(&[0xaa; 6])
         .inbound(incoming)
         .on_send(move |frame| {
-            if !frame.attributes.is_empty() {
-                attributes.lock().unwrap().push(frame.attributes);
-            }
             generic.send(decode_npdu(frame.npdu).unwrap()).unwrap();
             let gate = gate.lock().unwrap().clone();
             async move {
@@ -111,7 +105,6 @@ pub struct Fixture {
     admitted: mpsc::Receiver<ReceivedNpdu>,
     pub incoming: mpsc::Sender<ReceivedNpdu>,
     pub generic: mpsc::UnboundedReceiver<Npdu>,
-    pub attributes: Attributes,
     gate: GateSlot,
 }
 impl Fixture {
@@ -129,7 +122,6 @@ impl Fixture {
         .unwrap();
         let (incoming, rx) = mpsc::channel(32);
         let (generic, observed) = mpsc::unbounded_channel();
-        let attributes = Attributes::default();
         let gate = GateSlot::default();
         (
             Self {
@@ -137,10 +129,9 @@ impl Fixture {
                 admitted,
                 incoming,
                 generic: observed,
-                attributes: attributes.clone(),
                 gate: gate.clone(),
             },
-            queued_port(rx, generic, gate, attributes),
+            queued_port(rx, generic, gate),
         )
     }
     pub async fn peer(&self, tls: ScNodeTlsConfig, limits: Option<(u16, u16)>) -> Peer {
@@ -240,6 +231,11 @@ pub fn confirmed(service: ConfirmedServiceChoice, invoke_id: u8, data: Bytes) ->
 pub fn unsupported(invoke: u8) -> Apdu {
     confirmed(ConfirmedServiceChoice::from_raw(254), invoke, Bytes::new())
 }
+/// The endpoint's Device: a session with a server role runs a full server,
+/// which serves the node's identity (#2617).
+pub fn node() -> bacnet_endpoint::DeviceIdentity {
+    bacnet_endpoint::DeviceIdentity::new(1001, 42).unwrap()
+}
 pub fn csv_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap()
 }
@@ -297,6 +293,7 @@ impl Consumer {
                 Default::default(),
             )
             .unwrap()
+            .device(node())
             .with_database(database("original"));
             session.start().await.unwrap();
             Self::Endpoint(Box::new(session))
@@ -325,22 +322,5 @@ impl Fixture {
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         *self.gate.lock().unwrap() = Some(gate.clone());
         gate
-    }
-}
-pub fn received_apdu(envelope: ReceivedNpdu) -> bacnet_network::layer::ReceivedApdu {
-    let npdu = decode_npdu(envelope.npdu).unwrap();
-    bacnet_network::layer::ReceivedApdu {
-        apdu: npdu.payload,
-        source_mac: envelope.source_mac,
-        source_network: npdu.source,
-        ingress_network: None,
-        link_layer_group: envelope.link_layer_group,
-        is_group: envelope.link_layer_group,
-        global_broadcast: false,
-        data_attributes: envelope.data_attributes,
-        provenance: envelope.provenance,
-        router_response: None,
-        direct_response: envelope.direct_response,
-        reply_tx: envelope.reply_tx,
     }
 }
