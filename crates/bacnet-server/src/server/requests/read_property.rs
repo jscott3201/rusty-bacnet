@@ -260,11 +260,20 @@ mod tests {
     /// left all three unchanged (600, 1,280 and 4,976 bytes). The RPM probe
     /// passes a closure that captures nothing, where the general handler's
     /// captures its audit state, so it measures the read's own state.
+    ///
+    /// The general handler's ceiling is its size at #2661 on the B/IP
+    /// transport, 5,256 bytes, plus the slack; other transports' differ (the
+    /// BACnet/SC one is 5,928). It is the boxed future of each confirmed
+    /// request the handler serves, and a rare path awaited inline grows it
+    /// unnoticed (a refused COV report's wait added 872 bytes before it was
+    /// boxed). A toolchain bump that trips it means measuring again; any
+    /// other change, boxing what grew.
     #[test]
     fn rpm_and_wpm_futures_stay_within_their_ceilings() {
         const SLACK: usize = 64;
         const RPM_CEILING: usize = 600 + SLACK;
         const WPM_CEILING: usize = 1280 + SLACK;
+        const HANDLER_CEILING: usize = 5256 + SLACK;
         fn rpm<'a>(
             db: &'a RwLock<ObjectDatabase>,
             tables: super::super::confirmed_response::LiveTables<'a>,
@@ -301,7 +310,14 @@ mod tests {
             shrink the future (box a rare path), don't raise the ceiling";
         eprintln!(
             "RPM read future: {rpm} bytes, ceiling {RPM_CEILING}; WPM mutation future: \
-             {wpm} bytes, ceiling {WPM_CEILING}; general handler: {handler} bytes"
+             {wpm} bytes, ceiling {WPM_CEILING}; general handler: {handler} bytes, ceiling \
+             {HANDLER_CEILING}"
+        );
+        assert!(
+            handler <= HANDLER_CEILING,
+            "the general handler future is {handler} bytes, over {HANDLER_CEILING}: the size at \
+             #2661 plus 64 bytes; box the rare path that grew it, or measure again after a \
+             toolchain bump"
         );
         assert!(
             rpm <= RPM_CEILING,

@@ -81,12 +81,16 @@ impl CovSubscriptionTable {
 
     /// Create a new COV subscription table with a custom policy and counters.
     pub fn with_policy(policy: CovPolicy, counters: Arc<AtomicCovCounters>) -> Self {
-        let timed =
-            timed_store::HistoryStore::new(DEFAULT_TIMED_APDU_LENGTH, Arc::clone(&counters));
+        let revisits = Arc::new(CovRevisits::new(Arc::clone(&counters)));
+        let timed = timed_store::HistoryStore::new(
+            DEFAULT_TIMED_APDU_LENGTH,
+            Arc::clone(&counters),
+            Arc::clone(&revisits),
+        );
         Self {
             core: CovTable::new(policy),
             wakes: BTreeMap::new(),
-            revisits: Arc::default(),
+            revisits,
             counters,
             in_flight: Arc::new(CovInFlightTracker::default()),
             dispatch_turn: 0,
@@ -99,7 +103,11 @@ impl CovSubscriptionTable {
     /// Bound each Multiple context's pending timestamped changes by what one
     /// notification of this maximum APDU length can carry.
     pub fn with_max_apdu_length(mut self, max_apdu_length: usize) -> Self {
-        self.timed = timed_store::HistoryStore::new(max_apdu_length, Arc::clone(&self.counters));
+        self.timed = timed_store::HistoryStore::new(
+            max_apdu_length,
+            Arc::clone(&self.counters),
+            Arc::clone(&self.revisits),
+        );
         self
     }
 
@@ -185,6 +193,14 @@ impl CovSubscriptionTable {
         context: &'a MultipleContextKey,
     ) -> impl Iterator<Item = &'a CovSubscriptionSnapshot> + 'a {
         self.core.multiple_context_references(context)
+    }
+
+    /// The keys of every accepted reference of one Multiple context.
+    pub(crate) fn context_keys(&self, context: &MultipleContextKey) -> Vec<CovSubscriptionKey> {
+        self.core
+            .multiple_context_references(context)
+            .map(|sub| sub.key().clone())
+            .collect()
     }
 
     /// Whether an exact subscription identity is present.
@@ -354,6 +370,12 @@ impl CovSubscriptionTable {
             runtime_clock::core_now(),
         );
         self.settle();
+        // A listed reference replaces its old self, which waits no more for
+        // an invoke ID: the context's initial report covers it (#2661).
+        if let Ok(accepted) = &accepted {
+            self.revisits
+                .forget_owed(accepted.iter().map(CovSubscriptionSnapshot::key));
+        }
         accepted
     }
 
@@ -591,7 +613,8 @@ impl CovSubscriptionTable {
             .context_idle(context, snapshots, runtime_clock::core_now())
     }
 
-    /// References owed a fresh evaluation after an acknowledgment.
+    /// References owed a fresh evaluation: after an acknowledgment or a
+    /// fence, or once an invoke ID comes back (#2661).
     pub(crate) fn revisits(&self) -> &Arc<CovRevisits> {
         &self.revisits
     }
@@ -608,6 +631,12 @@ impl CovSubscriptionTable {
         // Nothing changed: no counter, history or wake-up to touch.
         if published.is_empty() && fenced.is_empty() && !counted(&counts) {
             return;
+        }
+        // A replacement reports for itself: its old self waits no more for
+        // an invoke ID (#2661).
+        if !published.is_empty() {
+            self.revisits
+                .forget_owed(published.iter().map(CovSubscriptionSnapshot::key));
         }
         self.counters.add(&counts);
         bacnet_device_core::cov::timed::follow_table(
