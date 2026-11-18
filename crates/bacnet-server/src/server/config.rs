@@ -113,6 +113,12 @@ pub struct ServerConfig {
     /// with [`Error::protocol`]: a panic or an [`Error::reject`] is answered
     /// SERVICES / OTHER.
     pub on_reinitialize: Option<ReinitializeHandler>,
+    /// Told of each ReinitializeDevice the server accepts, after its own
+    /// Audit record, under the same database guard: a node's source Audit
+    /// on its seat records it too (#2617). Set by the node, not by an
+    /// application.
+    #[doc(hidden)]
+    pub accepted_reinitialize_audit: Option<super::reinitialize::EndpointReinitializeAudit>,
     /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
     /// authentication is not service authorization. See [`MutationPolicy`].
     /// `DenyAll` denies every covered mutation without asking
@@ -322,6 +328,7 @@ impl Default for ServerConfig {
             time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
             on_reinitialize: None,
+            accepted_reinitialize_audit: None,
             mutation_policy: MutationPolicy::default(),
             policy: None,
             audit_notification_sink: None,

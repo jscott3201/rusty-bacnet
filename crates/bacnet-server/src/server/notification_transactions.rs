@@ -117,7 +117,21 @@ impl Drop for AuditWorkerWake {
 struct NotificationCore {
     coordinator: Arc<OutboundTransactionCoordinator>,
     state: Mutex<NotificationState>,
+    /// How many invoke IDs these transactions may hold at once:
+    /// `usize::MAX` on a server's own link, [`SEAT_LEASES`] on a node's
+    /// seat (#2617).
+    lease_cap: usize,
 }
+
+/// The invoke IDs a server on a node's seat may hold at once (#2617): its
+/// confirmed notifications (COV, event and Audit together, the node's
+/// source Audit records among them) and the reads its runs make. A
+/// quarter of the node's 256, so its client keeps the rest, as the
+/// endpoint's own COV reporting did. Past it each waits or gives up as it
+/// does when the node has no ID free: an event notification waits for
+/// one, a COV notification is skipped with a warning, an Audit record is
+/// counted lost.
+pub(super) const SEAT_LEASES: usize = 64;
 
 pub(super) type NotificationReservation = (NotificationOperation, oneshot::Receiver<CovAckResult>);
 
@@ -189,6 +203,15 @@ impl NotificationTransactions {
 
     #[doc(hidden)]
     pub fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
+        Self::with_lease_cap(coordinator, usize::MAX)
+    }
+
+    /// [`Self::with_coordinator`], holding at most `lease_cap` invoke IDs
+    /// at once: [`SEAT_LEASES`] on a node's seat.
+    pub(super) fn with_lease_cap(
+        coordinator: Arc<OutboundTransactionCoordinator>,
+        lease_cap: usize,
+    ) -> Arc<Self> {
         Arc::new(Self {
             audit_batch: std::sync::OnceLock::new(),
             application_sealed: std::sync::atomic::AtomicBool::new(false),
@@ -199,6 +222,7 @@ impl NotificationTransactions {
                     closed: false,
                     pending: HashMap::new(),
                 }),
+                lease_cap,
             }),
             workers: Mutex::new(NotificationWorkers::default()),
             audit_permits: Arc::new(tokio::sync::Semaphore::new(64)),
@@ -549,6 +573,9 @@ impl NotificationCore {
         self: &Arc<Self>,
         metadata: LeaseMetadata,
     ) -> Result<NotificationReservation, NotificationReserveError> {
+        if self.lease_cap != usize::MAX {
+            return self.reserve_within_cap(metadata);
+        }
         let token = self
             .coordinator
             .reserve(metadata)
@@ -570,6 +597,43 @@ impl NotificationCore {
         state.pending.insert(token, sender);
         drop(state);
 
+        Ok((
+            NotificationOperation {
+                transactions: Arc::clone(self),
+                token,
+                active: true,
+            },
+            receiver,
+        ))
+    }
+
+    /// [`Self::reserve`] on a seat: the count and the lease are taken under
+    /// one guard, so racing reservations never pass the cap. Refused as
+    /// the node's pool refuses when it is out of IDs, and with nothing
+    /// leased, so a waiter's wake comes only from a lease that ends.
+    fn reserve_within_cap(
+        self: &Arc<Self>,
+        metadata: LeaseMetadata,
+    ) -> Result<NotificationReservation, NotificationReserveError> {
+        let (sender, receiver) = oneshot::channel();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| NotificationReserveError::StatePoisoned)?;
+        if state.closed {
+            return Err(NotificationReserveError::Closed);
+        }
+        if state.pending.len() >= self.lease_cap {
+            return Err(NotificationReserveError::Coordinator(
+                ReserveError::Exhausted,
+            ));
+        }
+        let token = self
+            .coordinator
+            .reserve(metadata)
+            .map_err(NotificationReserveError::Coordinator)?;
+        state.pending.insert(token, sender);
+        drop(state);
         Ok((
             NotificationOperation {
                 transactions: Arc::clone(self),
