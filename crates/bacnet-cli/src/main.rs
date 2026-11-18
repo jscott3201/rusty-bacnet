@@ -33,6 +33,7 @@ mod multicast;
 mod output;
 #[cfg(feature = "tui")]
 mod paths;
+mod routed_paths;
 mod sc_check;
 mod timestamp;
 mod transport;
@@ -43,26 +44,6 @@ use crate::core::guard;
 use crate::core::range::parse_discover_range;
 use args::{Cli, Command};
 use output::OutputFormat;
-
-fn setup_tracing(verbosity: u8, to_stderr: bool) {
-    use tracing_subscriber::EnvFilter;
-    let filter = match verbosity {
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
-        _ => "trace",
-    };
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(filter))
-        .with_target(false);
-    if to_stderr {
-        // SC close/handshake diagnostics, and a foreign device's refused or
-        // lapsed registration, must not corrupt a JSON result.
-        subscriber.with_writer(std::io::stderr).init();
-    } else {
-        subscriber.init();
-    }
-}
 
 fn resolve_format(cli: &Cli) -> OutputFormat {
     if cli.json {
@@ -477,7 +458,8 @@ async fn run<T: TransportPort + 'static>(
     cli: &Cli,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    execute_command(&client, cli, format).await?;
+    let command = Box::pin(execute_command(&client, cli, format));
+    routed_paths::around(&client, cli, format, command).await?;
     client.stop().await?;
     Ok(())
 }
@@ -665,10 +647,7 @@ async fn cli_main(cli: Cli) -> CliResult {
         // Stdout is the MCP stream: it sets up its own tracing, on stderr.
         return Box::pin(run_mcp(cli)).await;
     }
-    setup_tracing(
-        cli.verbose,
-        cli.sc || cli.foreign_bbmd.is_some() || cli.mstp.is_some(),
-    );
+    output::setup_tracing(cli.verbose);
     let format = resolve_format(&cli);
 
     // A one-shot binds --interface, or every interface without it.
@@ -765,9 +744,13 @@ async fn cli_main(cli: Cli) -> CliResult {
                 }
             }
         }
-        if !execute_bip_command(&client, cmd, cli.ttl, format).await? {
-            execute_command(&client, &cli, format).await?;
-        }
+        let command = Box::pin(async {
+            if !execute_bip_command(&client, cmd, cli.ttl, format).await? {
+                execute_command(&client, &cli, format).await?;
+            }
+            Ok(())
+        });
+        routed_paths::around(&client, &cli, format, command).await?;
         client.stop().await?;
     }
 
