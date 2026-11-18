@@ -383,3 +383,54 @@ fn a_reference_reads_the_device_lists_from_the_database() {
         PropertyValue::CharacterString("AI-1".into())
     );
 }
+
+/// While the local Device is in a backup or a restore, a File added,
+/// renamed or removed leaves the revision alone: the procedures' own
+/// configuration Files (Clauses 12.11.35, 19.1). Any other object still
+/// moves it, and once the Device is IDLE again so does a File.
+#[test]
+fn configuration_files_in_a_backup_or_restore_leave_the_revision() {
+    use bacnet_types::enums::BackupAndRestoreState as State;
+    let mut db = ObjectDatabase::new();
+    let device = DeviceObject::new(DeviceConfig {
+        identity: DeviceIdentity::new(1, 0).unwrap(),
+        backup_and_restore: true,
+        ..DeviceConfig::default()
+    })
+    .unwrap();
+    let device_oid = device.object_identifier();
+    db.add(Box::new(device)).unwrap();
+    let set_state = |db: &mut ObjectDatabase, state| {
+        db.get_mut(&device_oid)
+            .and_then(|device| device.device_authority_internal())
+            .unwrap()
+            .set_backup_and_restore_state(state);
+    };
+    let file = |instance| {
+        Box::new(
+            crate::file::FileObject::new(instance, format!("cfg-{instance}"), "config").unwrap(),
+        )
+    };
+    let file1 = oid(ObjectType::FILE, 1);
+    for state in [State::PERFORMING_A_BACKUP, State::PREPARING_FOR_RESTORE] {
+        set_state(&mut db, state);
+        let before = db.database_revision();
+        db.add(file(1)).unwrap();
+        // Replaced under another name: a rename.
+        db.add(Box::new(
+            crate::file::FileObject::new(1, "renamed", "config").unwrap(),
+        ))
+        .unwrap();
+        drop(db.remove(&file1).unwrap());
+        assert_eq!(db.database_revision(), before, "{state:?}");
+        // Anything but a File still counts.
+        db.add(ai(7)).unwrap();
+        assert_eq!(db.database_revision(), before.wrapping_add(1), "{state:?}");
+        drop(db.remove(&oid(ObjectType::ANALOG_INPUT, 7)).unwrap());
+    }
+    set_state(&mut db, State::IDLE);
+    let before = db.database_revision();
+    db.add(file(1)).unwrap();
+    drop(db.remove(&file1).unwrap());
+    assert_eq!(db.database_revision(), before.wrapping_add(2));
+}

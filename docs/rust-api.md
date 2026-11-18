@@ -6110,9 +6110,22 @@ peer's CreateObject or DeleteObject did it or the application did through
   an initial value names the object. A refused write, a refused add and a
   CreateObject refused after its object was added leave it alone; a
   WritePropertyMultiple keeps a rename it made before a later write failed.
-  An application that keeps the revision across restarts sets the saved
-  value with `ObjectDatabase::set_database_revision` once the database is
-  built. A restore doesn't move it yet.
+- **Backup and restore.** While the local Device's Backup_And_Restore_State
+  isn't IDLE, adding, removing or renaming a File leaves the revision alone,
+  whoever does it: a peer's CreateObject or DeleteObject, or the
+  application's own `add` and `remove`. Those are the configuration Files
+  the procedures create and delete, which the standard keeps out of the
+  revision (Clauses 12.11.35 and 19.1). So an application carrying out a
+  backup or restore sets the Device's state first, as the procedures need
+  anyway, and the database does the rest. Ending a successful restore
+  doesn't yet set the revision from its value before the restore
+  (Clause 19.1.3.4); that is a follow-up.
+- **Across restarts.** The revision isn't saved: after a restart it starts
+  again from the built database's count, so it can repeat a value a client
+  cached before the restart. An application that keeps it reads
+  `ObjectDatabase::database_revision` after the operations that can move it
+  (there is no change notification), saves it, and sets it back with
+  `ObjectDatabase::set_database_revision` once the database is built.
 - **References.** What follows a reference to a local property reads
   through `ObjectDatabase::read_object_property`, so it sees what a peer
   reads: the Trend Log poller, the Averaging sampler, a Pulse Converter's
@@ -6122,8 +6135,8 @@ peer's CreateObject or DeleteObject did it or the application did through
   built-in Device reports no COV, so a COV subscription to it is refused as
   before.
 - **On its own.** A `DeviceObject` read directly, outside the database,
-  lists only itself and reads Database_Revision 0. The database's own
-  answer is `ObjectDatabase::read_device_property`.
+  lists only itself and reads Database_Revision 0. Read either through the
+  database with `ObjectDatabase::read_object_property`, as a peer would.
 
 #### Databases with several Devices
 

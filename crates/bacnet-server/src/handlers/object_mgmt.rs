@@ -100,8 +100,12 @@ pub(crate) fn handle_create_object_observed(
     }
 
     // One creation moves Database_Revision once, even when an initial value
-    // named the new object (a rename, which moves it too).
-    db.set_database_revision(revision.wrapping_add(1));
+    // named the new object (a rename, which moves it too). A configuration
+    // File created during a backup or a restore moved it not at all, and
+    // leaves it so (`ObjectDatabase::database_revision`).
+    if db.database_revision() != revision {
+        db.set_database_revision(revision.wrapping_add(1));
+    }
     bacnet_services::object_mgmt::CreateObjectAck {
         object_identifier: created_oid,
     }

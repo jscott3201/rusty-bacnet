@@ -16,7 +16,9 @@
 //! itself: its Object_List names just the Device, and its
 //! Database_Revision stays 0.
 
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    BackupAndRestoreState, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -54,7 +56,10 @@ impl ObjectDatabase {
     /// or [`add`](Self::add) replacing it under another name), from 0 for a
     /// new database, so a database built with three objects starts at 3. It
     /// wraps past `u32::MAX`. Replacing an object under its identifier and
-    /// name doesn't move it.
+    /// name doesn't move it, and neither does adding, removing or renaming a
+    /// File while the local Device is in a backup or a restore: its
+    /// Backup_And_Restore_State isn't IDLE (Clause 12.11.35, the
+    /// configuration Files of Clauses 19.1.2.2, 19.1.2.5 and 19.1.3.2).
     pub fn database_revision(&self) -> u32 {
         self.revision
     }
@@ -71,7 +76,10 @@ impl ObjectDatabase {
     /// database rather than the object: Object_List and Database_Revision
     /// of the [local Device](Self::local_device). Read the value with
     /// [`read_device_property`](Self::read_device_property). Any other
-    /// property is answered without asking `object` anything.
+    /// property is answered without asking `object` anything. For the read
+    /// plan; an application reads with
+    /// [`read_object_property`](Self::read_object_property).
+    #[doc(hidden)]
     pub fn keeps_device_property(
         &self,
         object: &dyn BACnetObject,
@@ -121,6 +129,7 @@ impl ObjectDatabase {
     // Out of line and cold: the read services call it only for the two
     // properties, and keeping it out of their per-row code keeps a row that
     // reads anything else as cheap as before (#2669).
+    #[doc(hidden)]
     #[cold]
     #[inline(never)]
     pub fn read_device_property(
@@ -150,7 +159,7 @@ impl ObjectDatabase {
                         Some(rest) => self.order.get(rest),
                     })
                     .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .ok_or(property_error(ErrorCode::INVALID_ARRAY_INDEX))
+                    .ok_or_else(|| property_error(ErrorCode::INVALID_ARRAY_INDEX))
             }
             (PropertyIdentifier::DATABASE_REVISION, None) => {
                 Ok(PropertyValue::Unsigned(u64::from(self.revision)))
@@ -168,12 +177,12 @@ impl ObjectDatabase {
         if oid.object_type() != ObjectType::DEVICE {
             self.order.push(oid);
         }
-        self.revision = self.revision.wrapping_add(1);
+        self.revision_moved(&oid);
     }
 
-    /// An object took a new name: Clause 12.11.35 counts a rename too.
-    pub(super) fn list_renamed(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
+    /// `oid` took a new name: Clause 12.11.35 counts a rename too.
+    pub(super) fn list_renamed(&mut self, oid: &ObjectIdentifier) {
+        self.revision_moved(oid);
     }
 
     /// Take `oid`, just removed, off the list. `retain`, as the type index
@@ -182,7 +191,33 @@ impl ObjectDatabase {
         if oid.object_type() != ObjectType::DEVICE {
             self.order.retain(|listed| listed != oid);
         }
+        self.revision_moved(oid);
+    }
+
+    /// Move Database_Revision for a change to `oid`, unless `oid` is a File
+    /// and the local Device is in a backup or a restore: the configuration
+    /// Files those procedures create and delete leave it alone (Clauses
+    /// 12.11.35, 19.1.2.2, 19.1.2.5, 19.1.3.2).
+    fn revision_moved(&mut self, oid: &ObjectIdentifier) {
+        if oid.object_type() == ObjectType::FILE && self.backup_or_restore() {
+            return;
+        }
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Whether the local Device's Backup_And_Restore_State is anything but
+    /// IDLE. A Device that serves none is never in either procedure.
+    fn backup_or_restore(&self) -> bool {
+        let idle = BackupAndRestoreState::IDLE.to_raw();
+        self.local_device()
+            .identifier()
+            .and_then(|device| self.get(&device))
+            .and_then(|device| {
+                device
+                    .read_property(PropertyIdentifier::BACKUP_AND_RESTORE_STATE, None)
+                    .ok()
+            })
+            .is_some_and(|state| !matches!(state, PropertyValue::Enumerated(raw) if raw == idle))
     }
 }
 

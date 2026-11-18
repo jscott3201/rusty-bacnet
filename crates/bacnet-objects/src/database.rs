@@ -189,7 +189,7 @@ impl ObjectDatabase {
                 .push(oid);
             self.list_added(oid);
         } else if renamed {
-            self.list_renamed();
+            self.list_renamed(&oid);
         }
         self.membership_changed(oid, true);
         Ok(())
@@ -246,7 +246,7 @@ impl ObjectDatabase {
             // Insert the current name
             self.name_index.insert(name.to_string(), *oid);
             if renamed {
-                self.list_renamed();
+                self.list_renamed(oid);
             }
         }
     }

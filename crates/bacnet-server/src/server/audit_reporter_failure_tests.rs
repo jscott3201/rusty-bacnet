@@ -542,3 +542,41 @@ async fn audit_reporter_execution_error_mapping_matches_response_but_unknown_out
         fixture.server.stop().await.unwrap();
     }
 }
+
+/// A refused write of the audited Device's Database_Revision records the
+/// revision a peer reads, the database's (#2669): five objects added, so
+/// 5, not the 0 the Device object holds on its own.
+#[tokio::test]
+async fn a_refused_revision_write_records_the_databases_revision() {
+    let mut fixture = server(reporter()).await;
+    let device = oid(ObjectType::DEVICE, 10);
+    let response = dispatch(
+        &fixture.server,
+        ConfirmedServiceChoice::WRITE_PROPERTY,
+        wp(
+            device,
+            PropertyIdentifier::DATABASE_REVISION,
+            vec![0x21, 9],
+            None,
+        ),
+    )
+    .await;
+    assert_wp_error(
+        response,
+        ErrorClass::PROPERTY,
+        ErrorCode::WRITE_ACCESS_DENIED,
+    );
+    settle().await;
+    let records = notifications(&fixture.transport.sent);
+    assert_eq!(records.len(), 1);
+    let [record] = &records[0].notifications[..] else {
+        panic!("one record: {records:?}");
+    };
+    assert_eq!(record.target_object, Some(device));
+    assert_eq!(record.current_value, Some(vec![0x21, 5]));
+    assert_eq!(
+        record.result,
+        Some((ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED))
+    );
+    fixture.server.stop().await.unwrap();
+}
