@@ -287,7 +287,7 @@ mod tests {
                 request,
                 ack,
                 config,
-                crate::device_view::DeviceExecution::FullServer,
+                crate::device_view::DeviceExecution::FullServer { time_sync: true },
                 |_, _, _, _, _| {},
             )
         }

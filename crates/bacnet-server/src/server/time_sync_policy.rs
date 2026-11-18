@@ -229,6 +229,22 @@ impl TimeSyncPolicy {
         }
         Ok(())
     }
+
+    /// Whether a server with this policy executes TimeSynchronization and
+    /// UTCTimeSynchronization for some peer: it is enabled, and its source
+    /// allowlist, when it has one, names at least one source. The Device's
+    /// Protocol_Services_Supported lists both services only then, and only
+    /// with a Device clock (#2617): a peer cannot tell a request the server
+    /// ignores from a service it lacks. A step cap, a rate limit or
+    /// coalescing still lets some request through, so each keeps both
+    /// listed. The server reads this once, when it starts.
+    pub(crate) fn executes(&self) -> bool {
+        self.enabled
+            && self
+                .source_restriction
+                .as_ref()
+                .is_none_or(|sources| !sources.0.is_empty())
+    }
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {

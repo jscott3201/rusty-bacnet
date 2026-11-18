@@ -217,7 +217,7 @@ fn the_server_pics_follows_the_identity_device() {
     };
     let pics_config = PicsConfig::default();
     let server = PicsGenerator::new(&db, &config, &pics_config)
-        .for_server(crate::device_view::DeviceExecution::FullServer);
+        .for_server(crate::device_view::DeviceExecution::FullServer { time_sync: true });
     assert_eq!(strings(&server.generate()), ["Served", "S", "1", "1"]);
     let raw = generate_pics(&db, &config, &pics_config);
     assert_eq!(strings(&raw), ["Lower", "L", "2", "2"]);
@@ -226,7 +226,7 @@ fn the_server_pics_follows_the_identity_device() {
         ..ServerConfig::default()
     };
     let server = PicsGenerator::new(&db, &elsewhere, &pics_config)
-        .for_server(crate::device_view::DeviceExecution::FullServer);
+        .for_server(crate::device_view::DeviceExecution::FullServer { time_sync: true });
     assert_eq!(strings(&server.generate()), ["Lower", "L", "2", "2"]);
 }
 
@@ -368,7 +368,7 @@ fn the_server_vendor_id_follows_the_described_device() {
     let pics_config = PicsConfig::default();
     let vendor_block = |config: &ServerConfig| {
         let pics = PicsGenerator::new(&db, config, &pics_config)
-            .for_server(crate::device_view::DeviceExecution::FullServer)
+            .for_server(crate::device_view::DeviceExecution::FullServer { time_sync: true })
             .generate();
         (pics.vendor_info.vendor_id, pics.vendor_info.vendor_name)
     };

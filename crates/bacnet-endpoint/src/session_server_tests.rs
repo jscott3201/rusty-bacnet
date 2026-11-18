@@ -540,6 +540,68 @@ async fn requests_classified_as_the_link_starts_are_the_servers() {
     session.stop().await.unwrap();
 }
 
+/// The Device's Protocol_Services_Supported as `peer` reads it from the node,
+/// with the two time-synchronization bits (Clauses 16.7 and 16.8) apart from
+/// the rest.
+async fn services_by_peer(peer: &BACnetClient<TestTransport>) -> ([bool; 2], Vec<u8>) {
+    use bacnet_types::enums::ServiceSupported;
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, NODE_DEVICE).unwrap();
+    let ack = peer
+        .read_property(
+            &Wire::mac(NODE),
+            device,
+            PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED,
+            None,
+        )
+        .await
+        .unwrap();
+    let (value, _) =
+        bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
+    let bacnet_types::primitives::PropertyValue::BitString { mut data, .. } = value else {
+        panic!("{value:?}")
+    };
+    let bits = [
+        ServiceSupported::TIME_SYNCHRONIZATION,
+        ServiceSupported::UTC_TIME_SYNCHRONIZATION,
+    ]
+    .map(|service| {
+        let bit = usize::from(service.to_raw());
+        let listed = data[bit / 8] & (0x80 >> (bit % 8)) != 0;
+        data[bit / 8] &= !(0x80 >> (bit % 8));
+        listed
+    });
+    (bits, data)
+}
+
+/// The read-only server's time synchronization is off, so its Device lists
+/// neither time-synchronization service, and nothing else differs from a
+/// server with the default policy, which lists both. A read-only server
+/// given a policy that is on lists both again (#2617).
+#[tokio::test(start_paused = true)]
+async fn the_read_only_server_lists_no_time_synchronization() {
+    let mut others = Vec::new();
+    for (name, builder, expected) in [
+        ("read-only", read_only_server(), [false; 2]),
+        (
+            "read-only, policy on",
+            read_only_server().time_sync_policy(Default::default()),
+            [true; 2],
+        ),
+        ("default", BACnetServer::generic_builder(), [true; 2]),
+    ] {
+        let wire = Wire::new();
+        let (mut session, _) = session(&wire, builder);
+        session.start().await.unwrap();
+        let peer = peer(&wire).await;
+        let (bits, rest) = services_by_peer(&peer).await;
+        assert_eq!(bits, expected, "{name}");
+        others.push(rest);
+        session.stop().await.unwrap();
+    }
+    assert_eq!(others[0], others[2], "no other bit moves");
+    assert_eq!(others[1], others[2]);
+}
+
 /// A session dropped with its server, unstopped, on a thread with no
 /// runtime, whether the runtime that ran it is still there or gone, drops
 /// cleanly: nothing in the drop needs a runtime.

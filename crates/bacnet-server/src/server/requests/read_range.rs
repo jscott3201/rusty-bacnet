@@ -11,13 +11,17 @@ use bacnet_services::read_range::ReadRangeRequest;
 /// flag and count of the page comes from one instant. The page follows
 /// the configured ReadRange budget, and a Group's Present_Value counts
 /// against the ReadPropertyMultiple work limit as in ReadProperty (#1172).
+/// A Device read among those members, its Protocol_Services_Supported
+/// included, goes through the server's `execution`, as other reads do
+/// (#2617). `unsegmented_max_apdu`, when the reply must fit one APDU, is
+/// that APDU's largest size.
 pub(super) async fn response(
     db: &RwLock<ObjectDatabase>,
     tables: confirmed_response::LiveTables<'_>,
     request: &ConfirmedRequestPdu,
     config: &ServerConfig,
-    effective_max_apdu: u16,
-    segmented_response_available: bool,
+    execution: DeviceExecution,
+    unsegmented_max_apdu: Option<u16>,
     completed: impl FnOnce(
         &ObjectDatabase,
         ObjectIdentifier,
@@ -27,12 +31,12 @@ pub(super) async fn response(
     ),
 ) -> Apdu {
     let mut budget = config.read_range_budget;
-    if !segmented_response_available {
+    if let Some(max_apdu) = unsegmented_max_apdu {
         budget.max_service_ack_bytes = budget.max_service_ack_bytes.min(
             event_information::unsegmented_complex_ack_service_budget(
                 request.invoke_id,
                 request.service_choice,
-                effective_max_apdu,
+                max_apdu,
             ),
         );
     }
@@ -42,10 +46,7 @@ pub(super) async fn response(
         .map_err(Error::into_request_reject)
     {
         Ok(decoded) => {
-            // A node's profile differs from the server's only in the
-            // services it lists, which no ReadRange reads (#2617).
-            let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
-                .with_identity(Some(&config.device));
+            let view = DeviceReadContext::new(&db, execution).with_identity(Some(&config.device));
             let scope = bacnet_device_core::read::ReadScope {
                 work_limit: config.read_property_multiple_budget.max_result_elements,
                 registered_port: None,
