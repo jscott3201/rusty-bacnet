@@ -13670,7 +13670,11 @@ session.stop().await?; // stops the server, then the link
   the link's group rule, Audit Reporters and their routes, the Device's
   segment timeout); and beside a source Audit Reporter, a builder as above
   that decides no mutations or has Audit Reporters. The session keeps its
-  database through each refusal.
+  database through each of these refusals. One check needs the started link
+  and comes after it: target Audit's recipient as the started link sees it,
+  an Address naming this network by its number or a group address only the
+  bound link reveals. That refusal ends the session and drops the database
+  the server was given.
 - Where this is going (maintainer decisions on #2617): in Python, `await
   endpoint.server()` returns this `BACnetServer`. Then the narrow server role
   goes, taking the session's own COV reporting, local writes, Device-write

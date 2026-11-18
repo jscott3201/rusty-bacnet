@@ -345,3 +345,40 @@ async fn the_server_seat_takes_the_request_queues_depth_and_tiers() {
         assert_eq!(counters.full_drops, 2 * capacity as u64 + 3);
     }
 }
+
+/// A server's seat asked for at start is attached before the classifier
+/// takes its first APDU (#2617). Requests already on the link, which the
+/// classifier takes at once on another worker while the start is held
+/// just after the classifier spawns, all reach the server's seat and none
+/// the endpoint's own request queue. Real time on a multi-thread runtime,
+/// where the classifier runs beside the start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn requests_on_the_link_at_start_are_the_seated_servers() {
+    let (transport, link) = test_transport();
+    for _ in 0..6 {
+        inject(&link, READ_PROPERTY).await;
+    }
+    let mut endpoint = EndpointIngress::new(transport, 16);
+    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+    let started = crate::endpoint_ingress::AFTER_CLASSIFIER_SPAWN.scope(
+        Duration::from_millis(50),
+        endpoint.start_with_server_seat(coordinator),
+    );
+    let (mut ingress, mut server) = timeout(Duration::from_secs(5), started)
+        .await
+        .expect("the start returned")
+        .unwrap();
+    for _ in 0..6 {
+        receive(&mut server.apdus).await;
+    }
+    assert!(
+        ingress.inbound_requests.try_recv().is_err(),
+        "a request reached the endpoint's own queue"
+    );
+    assert_eq!(endpoint.server_seat_counters().apdus, 6);
+    drop(server);
+    timeout(Duration::from_secs(5), endpoint.stop())
+        .await
+        .expect("the stop returned")
+        .unwrap();
+}

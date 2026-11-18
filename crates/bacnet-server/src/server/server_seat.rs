@@ -321,7 +321,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         &self,
         identity: &bacnet_objects::DeviceIdentity,
         node: NodeDevice,
-        link: &NodeLink,
+        link: &NodeLink<'_>,
         db: Option<&mut ObjectDatabase>,
     ) -> Result<(), Error> {
         node_contradictions(&self.config, identity, node, link.capacity, db.as_deref())?;
@@ -332,12 +332,11 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         config.cov_retry_timeout_ms = node.apdu_timeout_ms;
         config.notification_retries = node.apdu_retries;
         let bindings = self.configured_device_bindings.clone();
-        let settled = super::lifecycle::settings::settle(&mut config, bindings, |mac| {
-            link.groups.contains(mac)
-        })?;
+        let settled = super::lifecycle::settings::settle(&mut config, bindings, link.is_group)?;
         if let Some(db) = db {
             crate::local_device::validate_startup(db, &config.device)?;
-            AuditRoutes::prepare_for(db, &config, &settled.device_bindings, link.bip_broadcast)?;
+            let bindings = &settled.device_bindings;
+            AuditRoutes::prepare_for(db, &config, bindings, link.bip_broadcast, link.is_group)?;
         }
         Ok(())
     }
@@ -346,11 +345,12 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 /// What a node's link says of itself before it starts (#2617), for
 /// [`ServerBuilder::check_node`].
 #[doc(hidden)]
-pub struct NodeLink {
+pub struct NodeLink<'a> {
     /// The largest APDU the link will accept.
     pub capacity: u16,
-    /// The link's group rule.
-    pub groups: bacnet_transport::port::GroupDestinations,
+    /// The link's own group check, its transport's
+    /// [`TransportPort::is_group_destination`], which a server's start asks.
+    pub is_group: &'a dyn Fn(&[u8]) -> bool,
     /// The link's B/IP broadcast endpoint, on B/IP.
     pub bip_broadcast: Option<std::net::SocketAddrV4>,
 }

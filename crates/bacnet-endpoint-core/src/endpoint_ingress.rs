@@ -35,6 +35,12 @@ use egress::{NetworkServiceCommand, NetworkServicePayload, send_network_service_
 #[path = "endpoint_routing.rs"]
 mod routing;
 use crate::coordinator::OutboundTransactionCoordinator;
+
+#[cfg(test)]
+tokio::task_local! {
+    /// How long a test holds the start just after the classifier spawns.
+    pub(crate) static AFTER_CLASSIFIER_SPAWN: std::time::Duration;
+}
 pub(crate) use routing::reserve;
 use routing::{ControlTee, IngressDrops, IngressQueues, next_apdu, route_received};
 pub use routing::{DROP_LOG_INTERVAL, IngressDropCounters};
@@ -181,6 +187,18 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     pub fn with_coordinator(mut self, coordinator: Arc<OutboundTransactionCoordinator>) -> Self {
         self.coordinator = Some(coordinator);
         self
+    }
+
+    /// Whether the link calls `mac` a group address, as its transport's own
+    /// [`TransportPort::is_group_destination`] says, before start as after
+    /// (#2617): what a server's start checks its bindings against.
+    #[doc(hidden)]
+    pub fn is_group_destination(&self, mac: &[u8]) -> bool {
+        match (&self.network, self.started.upgrade()) {
+            (Some(network), _) => network.transport().is_group_destination(mac),
+            (None, Some(network)) => network.transport().is_group_destination(mac),
+            (None, None) => false,
+        }
     }
 
     /// Pre-start link capability; never retains or exposes a transport reference.
@@ -347,6 +365,12 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             cancel_rx,
             (Arc::clone(&egress_open), seat_holds),
         )));
+        // A test may hold the start here, the classifier already running,
+        // to show that the server's seat was attached before it (#2617).
+        #[cfg(test)]
+        if let Ok(pause) = AFTER_CLASSIFIER_SPAWN.try_with(|pause| *pause) {
+            tokio::time::sleep(pause).await;
+        }
         self.cancel_tx = Some(cancel_tx);
         self.egress_open = Some(egress_open);
         self.lifecycle = Lifecycle::Running;

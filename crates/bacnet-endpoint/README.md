@@ -167,7 +167,8 @@ server's seat is attached as the link starts, before its first request is
 classified, so a request that arrives while the server builds waits for it;
 its queue is as deep as the session's request queue. A builder setting a
 server's start would refuse is refused before the link starts, leaving the
-session ready to retry with its database. It shares the session's invoke-ID pool, holding at
+session ready to retry with its database; only target Audit's recipient as
+the started link sees it is checked after. It shares the session's invoke-ID pool, holding at
 most 64 of the 256 at once so the client keeps the rest, and the session's
 network-number owner, which target Audit follows. The session's registered
 Network Port and source Audit Reporter work beside it. The builder's policies

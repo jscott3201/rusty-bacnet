@@ -87,6 +87,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// overrides neither passes this check and lets any peer rewrite the
     /// recipient. Decide the recipient write in `authorize_mutation`.
     ///
+    /// One check needs the started link, and comes after it: target Audit's
+    /// recipient as the started link sees it, an Address that names this
+    /// network by its number or a group address only the bound link
+    /// reveals. Its refusal ends the session and drops the database the
+    /// server was given.
+    ///
     /// **Source Audit beside the server.** The session's source Audit
     /// sends its records through the server's pool of notifications, which
     /// completes and joins them; the server reports each ReinitializeDevice
@@ -281,16 +287,18 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let (Some(builder), Some(identity)) = (&self.server_builder, &self.identity) else {
             return Ok(());
         };
-        let ingress = self.ingress.as_ref().ok_or_else(missing_ingress)?;
-        let (_, groups) = ingress.link_unicast_facts().ok_or_else(missing_ingress)?;
-        let link = NodeLink {
-            capacity: self.local_receive_capacity,
-            groups,
-            bip_broadcast: ingress.bip_broadcast_endpoint(),
-        };
+        // The guard first: nothing borrowed from the link is held across a
+        // wait, so the start stays `Send`.
         let mut db = match &self.database {
             Some(db) => Some(db.write().await),
             None => None,
+        };
+        let ingress = self.ingress.as_ref().ok_or_else(missing_ingress)?;
+        let is_group = |mac: &[u8]| ingress.is_group_destination(mac);
+        let link = NodeLink {
+            capacity: self.local_receive_capacity,
+            is_group: &is_group,
+            bip_broadcast: ingress.bip_broadcast_endpoint(),
         };
         builder.check_node(identity, self.node_device(), &link, db.as_deref_mut())
     }
@@ -428,12 +436,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 /// skipped for an inbound WriteGroup), and time synchronization, local and
 /// UTC (Clauses 16.7 and 16.8), is ignored. Everything the server's other
 /// defaults deny (DeviceCommunicationControl, ReinitializeDevice without a
-/// handler, LifeSafetyOperation, Audit notifications) stays denied. What
-/// the mutation policy doesn't decide keeps the server's defaults and is
-/// executed for any peer: AcknowledgeAlarm (Clause 13.5), the SubscribeCOV
-/// family, received event notifications, which Notification Forwarder
-/// objects pass on, a received I-Am, and text messages (Clauses 16.5 and
-/// 16.6).
+/// handler, LifeSafetyOperation, Audit notifications) stays denied. The
+/// policy allows the SubscribeCOV family. What it doesn't decide keeps
+/// the server's defaults and is executed for any peer: AcknowledgeAlarm
+/// (Clause 13.5), received event notifications, which Notification
+/// Forwarder objects pass on, a received I-Am, and text messages (Clauses
+/// 16.5 and 16.6). With time synchronization off, Protocol_Services_Supported
+/// still lists TimeSynchronization and UTCTimeSynchronization, as it does
+/// for any server whose `TimeSyncPolicy` is disabled.
 #[allow(dead_code)]
 pub(crate) fn read_only_server<T: TransportPort + 'static>() -> ServerBuilder<T> {
     BACnetServer::generic_builder()
