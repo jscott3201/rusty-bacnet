@@ -241,9 +241,38 @@ impl RoutedPathLimits {
         self.state().entries.len()
     }
 
-    /// Reserve and lock the path through `router_mac` to `dnet`. A router MAC
-    /// outside [`routed_mac_fits`] is refused before any entry is reserved.
+    /// Reserve and lock the path through `router_mac` to `dnet`, and wait
+    /// out any hold an earlier request left on it. A router MAC outside
+    /// [`routed_mac_fits`] is refused before any entry is reserved.
     pub(super) async fn acquire(
+        self: &Arc<Self>,
+        router_mac: &[u8],
+        dnet: u16,
+    ) -> Result<RoutedPathLease, Error> {
+        let lease = self.lock_path(router_mac, dnet).await?;
+        self.wait_for_quarantine(&lease.key).await;
+        Ok(lease)
+    }
+
+    /// [`acquire`](Self::acquire) for a change of the path's limit
+    /// (`configure_routed_path_max_npdu`, `clear_routed_path_limit`): it
+    /// waits for the gate, so for a request on the path, but not out a hold
+    /// a request left behind it. The change sends nothing, and it leaves the
+    /// hold in place, so the next request still waits it out. A reason 4
+    /// that lands in the hold finds no request active on the path and is
+    /// discarded ([`Self::claim_active`]), as it is without the change: it
+    /// can't touch the new limit. The change resets learned evidence anyway.
+    pub(super) async fn acquire_for_change(
+        self: &Arc<Self>,
+        router_mac: &[u8],
+        dnet: u16,
+    ) -> Result<RoutedPathLease, Error> {
+        self.lock_path(router_mac, dnet).await
+    }
+
+    /// Reserve the path's entry and take its gate. A router MAC outside
+    /// [`routed_mac_fits`] is refused before any entry is reserved.
+    async fn lock_path(
         self: &Arc<Self>,
         router_mac: &[u8],
         dnet: u16,
@@ -257,7 +286,6 @@ impl RoutedPathLimits {
         let key = RoutedPathKey::new(router_mac, dnet);
         let gate = self.reserve_gate(&key)?;
         let gate = gate.lock_owned().await;
-        self.wait_for_quarantine(&key).await;
         Ok(RoutedPathLease {
             limits: Arc::clone(self),
             key,
@@ -712,7 +740,12 @@ pub(super) fn forwarded_npci_len(
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Configure the maximum NPDU for one immediate-router/DNET path.
     ///
-    /// The update waits for any request already active on the same path. It
+    /// The update waits for a request on the same path: the one active
+    /// there, or one queued for it, which holds the path from when it starts
+    /// waiting out a hold until it ends. It doesn't wait out a hold itself:
+    /// after a request with no answer the path is held for the APDU timeout
+    /// times the attempts (#2651), and the update applies at once; the next
+    /// request still waits the hold out, sized to the new limit. It
     /// replaces the previous configured value and deliberately clears learned
     /// reason-4 evidence for that path. A router MAC outside 1 to
     /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets or a DNET outside 1..=65534 is
@@ -741,21 +774,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE,
             )));
         }
-        let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
+        let lease = self
+            .routed_path_limits
+            .acquire_for_change(router_mac, dnet)
+            .await?;
         lease.configure(max_npdu);
         Ok(())
     }
 
     /// Restore one immediate-router/DNET path to the conservative default.
     ///
-    /// The update waits for an active request and clears both configured and
-    /// learned reason-4 evidence. Later requests therefore use the 228-octet
+    /// The update waits as a configure does, not out a hold, and clears both
+    /// configured and learned reason-4 evidence. Later requests therefore use the 228-octet
     /// conservative routed NPDU envelope until new evidence is supplied. The
     /// router MAC and DNET are checked as in
     /// [`configure_routed_path_max_npdu`](Self::configure_routed_path_max_npdu).
     pub async fn clear_routed_path_limit(&self, router_mac: &[u8], dnet: u16) -> Result<(), Error> {
         check_remote_dnet(dnet)?;
-        let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
+        let lease = self
+            .routed_path_limits
+            .acquire_for_change(router_mac, dnet)
+            .await?;
         lease.clear();
         Ok(())
     }

@@ -87,7 +87,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// configured limit, a learned one, or a below-minimum reject seen
     /// ([`RoutedPathLimit::below_minimum_reject_seen`]), ordered by router
     /// MAC and then network. A path with none of these uses the default 228
-    /// octets and is not listed. Sends nothing, and leaves every request
+    /// octets and is not listed. A path held only by the below-minimum
+    /// mark may be reclaimed for another path when the table is full (256
+    /// paths), and is then no longer listed: the mark is a hint, and the
+    /// table does not grow for it. Sends nothing, and leaves every request
     /// alone: it reads the table once and copies what it lists.
     pub fn routed_path_limits(&self) -> Vec<RoutedPathLimit> {
         self.routed_path_limits.listing()

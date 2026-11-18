@@ -8,9 +8,9 @@ use std::sync::Arc;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, Instant, sleep};
 
-use super::routed_path_answered_tests::{LARGE, Path, too_long};
+use super::routed_path_answered_tests::{LARGE, Path, WINDOW, timed_out, too_long};
 use super::routed_path_limit_tests::{DNET, confirmed_request, harness};
 use super::{BACnetClient, ClientConfig, RoutedPathLimit, RoutedPathLimitSource, Station};
 
@@ -186,4 +186,78 @@ async fn the_listing_is_ordered_by_router_then_network() {
     assert_eq!(order, [(vec![2], 3), (vec![2], 7), (vec![9], 2)]);
     let mut client = Arc::try_unwrap(client).ok().unwrap();
     client.stop().await.unwrap();
+}
+
+/// A request with no answer leaves its path held for the window (the APDU
+/// timeout times the attempts): returns the client when it has ended.
+async fn timed_out_path() -> Path {
+    let mut path = Path::new(ClientConfig::default(), None).await;
+    let task = path.request(1, 0x41);
+    for _ in 0..4 {
+        path.next_frame().await;
+    }
+    assert!(timed_out(task.await.unwrap()));
+    path
+}
+
+/// A change of the limit after a timeout applies at once instead of waiting
+/// out the hold, and leaves the hold in place: the next request still waits
+/// it out, sized to the new limit (480 octets: 469 of APDU, so 304 go out
+/// whole, where the default would segment them).
+#[tokio::test(start_paused = true)]
+async fn a_change_after_a_timeout_applies_at_once_and_the_hold_stays() {
+    let mut path = timed_out_path().await;
+    let from = Instant::now();
+    path.client
+        .configure_routed_path_max_npdu(&ROUTER, DNET, 300)
+        .await
+        .unwrap();
+    path.client
+        .clear_routed_path_limit(&ROUTER, DNET)
+        .await
+        .unwrap();
+    path.client
+        .configure_routed_path_max_npdu(&ROUTER, DNET, 480)
+        .await
+        .unwrap();
+    assert_eq!(
+        from.elapsed(),
+        Duration::ZERO,
+        "a change waited out the hold"
+    );
+    let first = path.next_goes_out_after(LARGE, WINDOW, 469).await;
+    assert!(!first.segmented);
+    path.stop().await;
+}
+
+/// A reason 4 that lands in the hold after a change finds no request
+/// active on the path: it is discarded, uncounted, and neither the new
+/// limit nor a learned one moves, as #2651's hold has it for any reject
+/// there. The next request goes out after the rest of the hold at the new
+/// limit.
+#[tokio::test(start_paused = true)]
+async fn a_reject_in_the_hold_after_a_change_is_discarded() {
+    let mut path = timed_out_path().await;
+    path.client
+        .configure_routed_path_max_npdu(&ROUTER, DNET, 480)
+        .await
+        .unwrap();
+    path.reject().await;
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(
+        (
+            path.client.below_minimum_reject_drops(),
+            path.client.too_long_reject_drops()
+        ),
+        (0, 0)
+    );
+    assert_eq!(
+        path.client.routed_path_limits(),
+        [listed(Some(480), None, false)]
+    );
+    let first = path
+        .next_goes_out_after(LARGE, WINDOW - Duration::from_millis(10), 469)
+        .await;
+    assert!(!first.segmented);
+    path.stop().await;
 }

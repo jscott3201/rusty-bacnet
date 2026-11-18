@@ -9644,7 +9644,9 @@ a station whose longer MAC leaves less than the minimum is still refused as
 MAC and DNET, `configured_max_npdu`, `learned_max_npdu` (one octet under the
 smallest frame a router refused as too long), and
 `below_minimum_reject_seen`, set when a reason 4 on that path was dropped
-below the 228-octet floor since its limit was last configured or cleared.
+below the 228-octet floor since its limit was last configured or cleared. A
+path held only by that mark is not kept when the table is full: it may be
+reclaimed for another path, and then is no longer listed.
 `max_npdu()` is the limit requests are sized to, and `source()` says where it
 comes from: `Learned` when the learned limit is below the configured one,
 `Configured` when one is set, otherwise `Default`. It reads the table once,
@@ -9713,9 +9715,15 @@ matching Reject-Message-To-Network reason 4 completes only the active owner as
 request has sent as an exclusive upper bound: a reject may answer any of its
 frames, such as a full segment sent before a smaller final one (#2651).
 Learned negative evidence lasts for the client lifetime
-and has no widening TTL. Both configuration methods wait for an active owner;
-configuring replaces the prior value and deliberately resets learned evidence,
-while clearing removes configured and learned evidence. Active Clause 19.4
+and has no widening TTL. Both configuration methods wait for an active owner,
+and for a request queued on the path, which holds it while it waits out a
+hold; they don't wait out a hold themselves (#2667). A change made while the
+path is held after a request with no answer applies at once and leaves the
+hold in place, so the next request still waits it out, at the new limit; a
+reason 4 that lands in the hold finds no active request and is discarded, as
+any reject there is, so it can't move the new limit. Configuring replaces the
+prior value and deliberately resets learned evidence, while clearing removes
+configured and learned evidence. Active Clause 19.4
 path probing and cache persistence across process restarts are not provided.
 
 The client retains at most 256 routed-path entries. At capacity it
