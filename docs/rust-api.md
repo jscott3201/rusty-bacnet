@@ -6101,18 +6101,29 @@ peer's CreateObject or DeleteObject did it or the application did through
   list without building it; only a whole read walks it, once. Past the end
   is PROPERTY / INVALID_ARRAY_INDEX.
 - **Database_Revision** (Clause 12.11.35) moves by one with each add of a new
-  identifier and each removal, from 0 for a new database, so a database built
-  with three objects starts at 3. A replaced object, a refused add and a
-  CreateObject refused after its object was added (an initial value it
-  couldn't take) leave it alone. An application that keeps the revision
-  across restarts sets the saved value with
-  `ObjectDatabase::set_database_revision` once the database is built. A
-  rename and a restore don't move it yet.
-- **On its own.** A `DeviceObject` read directly, outside the read services,
-  lists only itself and reads Database_Revision 0, as do the local
-  references that read it straight from the object (a Trend Log, an Event
-  Enrollment or a COV subscription naming the Device's Object_List). The
-  database's own answer is `ObjectDatabase::read_device_property`.
+  identifier, each removal and each rename, from 0 for a new database, so a
+  database built with three objects starts at 3. A rename is an Object_Name
+  written by WriteProperty, WritePropertyMultiple or a local write
+  (`ObjectDatabase::update_name_index` after the application's own write),
+  or `add` replacing an object under another name; writing the name an
+  object already has doesn't count. A CreateObject moves it once, even when
+  an initial value names the object. A refused write, a refused add and a
+  CreateObject refused after its object was added leave it alone; a
+  WritePropertyMultiple keeps a rename it made before a later write failed.
+  An application that keeps the revision across restarts sets the saved
+  value with `ObjectDatabase::set_database_revision` once the database is
+  built. A restore doesn't move it yet.
+- **References.** What follows a reference to a local property reads
+  through `ObjectDatabase::read_object_property`, so it sees what a peer
+  reads: the Trend Log poller, the Averaging sampler, a Pulse Converter's
+  Input_Reference, Event_Algorithm_Inhibit_Ref, an Event Enrollment's
+  monitored and setpoint values and its notification's referenced value, a
+  Channel member's datatype and an audit record's current value. The
+  built-in Device reports no COV, so a COV subscription to it is refused as
+  before.
+- **On its own.** A `DeviceObject` read directly, outside the database,
+  lists only itself and reads Database_Revision 0. The database's own
+  answer is `ObjectDatabase::read_device_property`.
 
 #### Databases with several Devices
 

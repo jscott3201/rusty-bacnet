@@ -91,3 +91,41 @@ fn an_index_that_is_not_unsigned_leaves_the_log_unpolled() {
     assert_eq!(count(&db, oid), 0);
     assert!(!db.trend_poll.0.contains_key(&oid));
 }
+
+/// A log of the local Device's Database_Revision logs the database's
+/// revision (#2669), which moves as objects come and go; the Device object
+/// on its own would read 0 every time.
+#[test]
+fn a_log_of_the_device_revision_follows_the_database() {
+    use crate::binary::BinaryValueObject;
+    use crate::device::{DeviceConfig, DeviceObject};
+    let (mut db, oid, time, _) = fixture(50);
+    let device = DeviceObject::new(DeviceConfig {
+        identity: crate::DeviceIdentity::new(9, 0).unwrap(),
+        ..DeviceConfig::default()
+    })
+    .unwrap();
+    let device_oid = device.object_identifier();
+    db.add(Box::new(device)).unwrap();
+    let mut log = trend(50, 16);
+    log.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+        object_identifier: device_oid,
+        property_identifier: P::DATABASE_REVISION.to_raw(),
+        property_array_index: None,
+        device_identifier: None,
+    }))
+    .unwrap();
+    // Replaced under its identifier and name: the revision stays at 3.
+    db.add(Box::new(log)).unwrap();
+    db.poll_trend_logs();
+    assert_eq!(last_datum(&db, oid), LogDatum::UnsignedValue(3));
+    db.add(Box::new(BinaryValueObject::new(1, "BV-1").unwrap()))
+        .unwrap();
+    *time.lock().unwrap() = Duration::from_millis(500);
+    db.poll_trend_logs();
+    assert_eq!(last_datum(&db, oid), LogDatum::UnsignedValue(4));
+    drop(db.remove(&target()).unwrap());
+    *time.lock().unwrap() = Duration::from_millis(1000);
+    db.poll_trend_logs();
+    assert_eq!(last_datum(&db, oid), LogDatum::UnsignedValue(5));
+}

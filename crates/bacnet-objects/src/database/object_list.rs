@@ -49,10 +49,12 @@ impl ObjectDatabase {
     }
 
     /// Database_Revision (Clause 12.11.35): it moves by one each time an
-    /// object is added under a new identifier or removed, from 0 for a new
-    /// database, so a database built with three objects starts at 3. It
-    /// wraps past `u32::MAX`. Replacing an object under its identifier
-    /// doesn't move it.
+    /// object is added under a new identifier or removed, and each time an
+    /// object takes a new name ([`update_name_index`](Self::update_name_index),
+    /// or [`add`](Self::add) replacing it under another name), from 0 for a
+    /// new database, so a database built with three objects starts at 3. It
+    /// wraps past `u32::MAX`. Replacing an object under its identifier and
+    /// name doesn't move it.
     pub fn database_revision(&self) -> u32 {
         self.revision
     }
@@ -83,6 +85,31 @@ impl ObjectDatabase {
         }
         let oid = object.object_identifier();
         oid.object_type() == ObjectType::DEVICE && self.local_device().identifier() == Some(oid)
+    }
+
+    /// Read `property` (at `array_index`) of `object`, an object this
+    /// database holds, as a peer reads it: from the database for a property
+    /// it keeps ([`keeps_device_property`](Self::keeps_device_property)),
+    /// from the object for any other. Whatever follows a reference to a
+    /// local property reads through this: the Trend Log poller, the
+    /// Averaging sampler, a Pulse Converter's Input_Reference, an
+    /// Event_Algorithm_Inhibit_Ref, an Event Enrollment's monitored and
+    /// setpoint values, and the server's Channel members and audit records
+    /// (#2669).
+    // Out of line: one copy for its many callers keeps firmware images
+    // smaller.
+    #[inline(never)]
+    pub fn read_object_property(
+        &self,
+        object: &dyn BACnetObject,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        if self.keeps_device_property(object, property) {
+            self.read_device_property(property, array_index)
+        } else {
+            object.read_property(property, array_index)
+        }
     }
 
     /// The local Device's Object_List or Database_Revision as a read of it
@@ -141,6 +168,11 @@ impl ObjectDatabase {
         if oid.object_type() != ObjectType::DEVICE {
             self.order.push(oid);
         }
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// An object took a new name: Clause 12.11.35 counts a rename too.
+    pub(super) fn list_renamed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
     }
 

@@ -158,11 +158,13 @@ impl ObjectDatabase {
 
         // If replacing an existing object, remove its old name from the index
         // and invalidate state owned by enrollments that monitor it.
+        let mut renamed = false;
         if let Some(old) = self.objects.get(&oid) {
             if let Some(reporter) = old.audit_reporter() {
                 reporter.status_internal().configuration_changed();
             }
             let old_name = old.object_name().to_string();
+            renamed = old_name != name;
             self.name_index.remove(&old_name);
             self.invalidate_enrollments_monitoring(&oid);
         }
@@ -186,6 +188,8 @@ impl ObjectDatabase {
                 .or_default()
                 .push(oid);
             self.list_added(oid);
+        } else if renamed {
+            self.list_renamed();
         }
         self.membership_changed(oid, true);
         Ok(())
@@ -223,13 +227,27 @@ impl ObjectDatabase {
 
     /// Update the name index after a successful Object_Name write.
     ///
-    /// Call this after `write_property(OBJECT_NAME, …)` succeeds.
+    /// Call this after `write_property(OBJECT_NAME, …)` succeeds. A name
+    /// that changed moves Database_Revision (#2669); writing the name the
+    /// object already had doesn't.
     pub fn update_name_index(&mut self, oid: &ObjectIdentifier) {
         if let Some(obj) = self.objects.get(oid) {
-            // Remove any old name mapping for this OID
-            self.name_index.retain(|_, v| v != oid);
+            let name = obj.object_name();
+            // Remove any old name mapping for this OID, noting whether it
+            // was the name the object has now.
+            let mut renamed = true;
+            self.name_index.retain(|old, v| {
+                if v != oid {
+                    return true;
+                }
+                renamed &= old != name;
+                false
+            });
             // Insert the current name
-            self.name_index.insert(obj.object_name().to_string(), *oid);
+            self.name_index.insert(name.to_string(), *oid);
+            if renamed {
+                self.list_renamed();
+            }
         }
     }
 

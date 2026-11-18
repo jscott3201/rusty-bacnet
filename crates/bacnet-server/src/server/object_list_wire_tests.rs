@@ -380,3 +380,153 @@ async fn refused_creates_and_deletes_move_nothing() {
     wire.expect(&[device, ai1(), bv(1)], 3).await;
     wire.server.stop().await.unwrap();
 }
+
+fn name_octets(name: &str) -> Vec<u8> {
+    let mut octets = BytesMut::new();
+    encode_property_value(&mut octets, &PropertyValue::CharacterString(name.into())).unwrap();
+    octets.to_vec()
+}
+
+/// One write: the object, the property and its encoded value.
+type Write = (ObjectIdentifier, PropertyIdentifier, Vec<u8>);
+
+fn named(object: ObjectIdentifier, name: &str) -> Write {
+    (object, PropertyIdentifier::OBJECT_NAME, name_octets(name))
+}
+
+impl Wire {
+    async fn revision(&mut self) -> u64 {
+        match self.read(REVISION, None).await.as_deref() {
+            Ok([PropertyValue::Unsigned(revision)]) => *revision,
+            other => panic!("Database_Revision read {other:?}"),
+        }
+    }
+
+    async fn write(&mut self, (object, property, value): Write) -> Apdu {
+        let mut body = BytesMut::new();
+        bacnet_services::write_property::WritePropertyRequest {
+            object_identifier: object,
+            property_identifier: property,
+            property_array_index: None,
+            property_value: value,
+            priority: None,
+        }
+        .encode(&mut body)
+        .unwrap();
+        self.request(ConfirmedServiceChoice::WRITE_PROPERTY, body.freeze())
+            .await
+    }
+
+    async fn write_many(&mut self, writes: Vec<Write>) -> Apdu {
+        use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+        let mut body = BytesMut::new();
+        WritePropertyMultipleRequest {
+            list_of_write_access_specs: writes
+                .into_iter()
+                .map(
+                    |(object_identifier, property_identifier, value)| WriteAccessSpecification {
+                        object_identifier,
+                        list_of_properties: vec![BACnetPropertyValue {
+                            property_identifier,
+                            property_array_index: None,
+                            value,
+                            priority: None,
+                        }],
+                    },
+                )
+                .collect(),
+        }
+        .encode(&mut body)
+        .unwrap();
+        self.request(
+            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+            body.freeze(),
+        )
+        .await
+    }
+}
+
+/// A rename moves Database_Revision once (Clause 12.11.35), by
+/// WriteProperty or WritePropertyMultiple; writing the same name, or a
+/// name another object holds, doesn't. A WritePropertyMultiple keeps the
+/// rename it made before a later write failed, and its move with it. A
+/// CreateObject that names its object moves it once, as any create does.
+#[tokio::test]
+async fn a_rename_moves_the_revision_and_the_same_name_does_not() {
+    let mut wire = Wire::start().await;
+    assert_eq!(wire.revision().await, 3);
+    let renamed = wire.write(named(ai1(), "Zone temperature")).await;
+    assert!(matches!(renamed, Apdu::SimpleAck(_)), "{renamed:?}");
+    assert_eq!(wire.revision().await, 4);
+    let same = wire.write(named(ai1(), "Zone temperature")).await;
+    assert!(matches!(same, Apdu::SimpleAck(_)), "{same:?}");
+    assert_eq!(wire.revision().await, 4);
+    let taken = wire.write(named(ai1(), "BV-1")).await;
+    assert!(
+        matches!(&taken, Apdu::Error(error) if error.error_code == ErrorCode::DUPLICATE_NAME),
+        "{taken:?}"
+    );
+    assert_eq!(wire.revision().await, 4);
+
+    let active = (bv(1), PropertyIdentifier::PRESENT_VALUE, vec![0x91, 0x01]);
+    let both = wire.write_many(vec![named(ai1(), "Supply"), active]).await;
+    assert!(matches!(both, Apdu::SimpleAck(_)), "{both:?}");
+    assert_eq!(wire.revision().await, 5);
+    let partly = wire
+        .write_many(vec![named(ai1(), "Return"), named(av1(), "missing")])
+        .await;
+    assert!(matches!(partly, Apdu::Error(_)), "{partly:?}");
+    assert_eq!(wire.revision().await, 6);
+
+    let created = wire
+        .create(CreateObjectRequest {
+            object_specifier: ObjectSpecifier::Type(ObjectType::ANALOG_VALUE),
+            list_of_initial_values: vec![BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::OBJECT_NAME,
+                property_array_index: None,
+                value: name_octets("Mixed air"),
+                priority: None,
+            }],
+        })
+        .await;
+    assert!(matches!(created, Apdu::ComplexAck(_)), "{created:?}");
+    assert_eq!(wire.revision().await, 7);
+    wire.server.stop().await.unwrap();
+}
+
+/// The Device takes no COV subscription to its Object_List or its
+/// Database_Revision, as before #2669: the built-in Device reports no COV
+/// at all, so SubscribeCOVProperty is OBJECT /
+/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and no subscriber is owed a
+/// notification when the database changes.
+#[tokio::test]
+async fn the_device_lists_take_no_cov_subscription() {
+    let mut wire = Wire::start().await;
+    for property in [LIST, REVISION] {
+        let mut body = BytesMut::new();
+        bacnet_services::cov::SubscribeCOVPropertyRequest {
+            subscriber_process_identifier: 1,
+            monitored_object_identifier: wire.device,
+            issue_confirmed_notifications: Some(false),
+            lifetime: Some(60),
+            monitored_property_identifier: property,
+            monitored_property_array_index: None,
+            cov_increment: None,
+        }
+        .encode(&mut body)
+        .unwrap();
+        let refused = wire
+            .request(
+                ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY,
+                body.freeze(),
+            )
+            .await;
+        assert!(
+            matches!(&refused, Apdu::Error(error)
+                if (error.error_class, error.error_code)
+                    == (ErrorClass::OBJECT, ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED)),
+            "{property:?}: {refused:?}"
+        );
+    }
+    wire.server.stop().await.unwrap();
+}

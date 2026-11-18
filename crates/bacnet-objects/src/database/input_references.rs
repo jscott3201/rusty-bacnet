@@ -159,7 +159,7 @@ impl ObjectDatabase {
         {
             return InputSource::Unusable;
         }
-        let value = target.read_property(property, index);
+        let value = self.read_object_property(target, property, index);
         if slot && matches!(value, Ok(PropertyValue::Null)) {
             return InputSource::Idle;
         }

@@ -315,3 +315,71 @@ fn only_the_local_devices_two_properties_are_kept() {
     assert!(keeps(&db, high, PropertyIdentifier::OBJECT_LIST));
     assert!(!keeps(&db, low, PropertyIdentifier::OBJECT_LIST));
 }
+
+/// A rename moves the revision: an Object_Name written and indexed, or an
+/// object replaced under another name. Writing the name it already has, or
+/// replacing it under the same name, doesn't.
+#[test]
+fn a_rename_moves_the_revision_and_the_same_name_does_not() {
+    let mut db = ObjectDatabase::new();
+    db.add(device(1)).unwrap();
+    db.add(ai(1)).unwrap();
+    let ai1 = oid(ObjectType::ANALOG_INPUT, 1);
+    let name = |db: &mut ObjectDatabase, name: &str| {
+        db.get_mut(&ai1)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::OBJECT_NAME,
+                None,
+                PropertyValue::CharacterString(name.into()),
+                None,
+            )
+            .unwrap();
+        db.update_name_index(&ai1);
+        db.database_revision()
+    };
+    assert_eq!(name(&mut db, "AI-1"), 2);
+    assert_eq!(name(&mut db, "Zone temperature"), 3);
+    assert_eq!(name(&mut db, "Zone temperature"), 3);
+    assert!(db.find_by_name("Zone temperature").is_some());
+    // Replaced under its identifier: another name moves it, the same not.
+    db.add(ai(1)).unwrap();
+    assert_eq!(db.database_revision(), 4);
+    db.add(ai(1)).unwrap();
+    assert_eq!(db.database_revision(), 4);
+}
+
+/// What follows a reference to a local property reads the local Device's
+/// two properties from the database, and anything else from the object.
+#[test]
+fn a_reference_reads_the_device_lists_from_the_database() {
+    let mut db = ObjectDatabase::new();
+    db.add(device(1)).unwrap();
+    db.add(ai(1)).unwrap();
+    let read = |db: &ObjectDatabase, object, property, index| {
+        db.read_object_property(db.get(&object).unwrap(), property, index)
+            .unwrap()
+    };
+    let device = oid(ObjectType::DEVICE, 1);
+    assert_eq!(
+        read(&db, device, PropertyIdentifier::DATABASE_REVISION, None),
+        PropertyValue::Unsigned(2)
+    );
+    assert_eq!(
+        read(&db, device, PropertyIdentifier::OBJECT_LIST, Some(0)),
+        PropertyValue::Unsigned(2)
+    );
+    assert_eq!(
+        read(&db, device, PropertyIdentifier::OBJECT_NAME, None),
+        PropertyValue::CharacterString("device-1".into())
+    );
+    assert_eq!(
+        read(
+            &db,
+            oid(ObjectType::ANALOG_INPUT, 1),
+            PropertyIdentifier::OBJECT_NAME,
+            None
+        ),
+        PropertyValue::CharacterString("AI-1".into())
+    );
+}

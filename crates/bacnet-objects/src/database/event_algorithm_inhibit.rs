@@ -64,7 +64,7 @@ impl ObjectDatabase {
         let value = self.get(&target).and_then(|object| {
             let index =
                 index.filter(|_| crate::property_metadata::is_array_property(object, property));
-            object.read_property(property, index).ok()
+            self.read_object_property(object, property, index).ok()
         });
         match value {
             Some(PropertyValue::Boolean(inhibit)) => inhibit,

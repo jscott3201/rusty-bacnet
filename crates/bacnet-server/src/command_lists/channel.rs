@@ -319,8 +319,7 @@ async fn write_member<H: RunHost>(
             Some((device, datatype)) => (Some(device), datatype),
             None => {
                 let value = db.get(&reference.object_identifier).and_then(|object| {
-                    object
-                        .read_property(property, reference.property_array_index)
+                    db.read_object_property(object, property, reference.property_array_index)
                         .ok()
                 });
                 let object_type = reference.object_identifier.object_type();
