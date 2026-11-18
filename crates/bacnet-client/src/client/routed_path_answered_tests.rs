@@ -205,6 +205,35 @@ async fn a_request_with_no_answer_holds_its_path_for_the_full_window() {
     path.stop().await;
 }
 
+/// A request its caller cancels once its first frame is on the wire has no
+/// answer: the path is held for the whole window, the request waiting
+/// behind it goes out when the window ends, and the cancelled transaction
+/// leaves no invoke ID leased.
+#[tokio::test(start_paused = true)]
+async fn a_request_cancelled_after_its_first_frame_holds_the_path_for_the_full_window() {
+    let mut path = Path::new(ClientConfig::default(), None).await;
+    let cancelled = path.request(1, 0x41);
+    path.next_frame().await;
+    let waiter = path.request(1, 0x42);
+    sleep(Duration::from_millis(1)).await;
+    cancelled.abort();
+    assert!(cancelled.await.unwrap_err().is_cancelled());
+
+    let from = Instant::now();
+    let frame = path.next_frame().await;
+    assert_eq!(from.elapsed(), WINDOW, "when the waiter went out");
+    assert_eq!(frame.service_request.as_ref(), [0x42]);
+    assert_eq!(
+        path.client.tsm.lock().coordinated_active_count(),
+        1,
+        "only the waiter's invoke ID is leased"
+    );
+    path.ack(frame.invoke_id).await;
+    assert!(waiter.await.unwrap().unwrap().is_empty());
+    assert_eq!(path.client.tsm.lock().coordinated_active_count(), 0);
+    path.stop().await;
+}
+
 /// A reason 4 that ends a request after its retry is the router's refusal,
 /// not an answer, and either frame may draw another: the path is held for
 /// the whole window, as before.
@@ -221,7 +250,8 @@ async fn a_reason_4_after_a_retry_holds_the_path_for_the_full_window() {
 }
 
 /// A reason 4 for a request's only frame, on a path with no answered
-/// frames on record, can only be that frame's: the path is free at once.
+/// frames on record, is that frame's among the client's confirmed requests
+/// on the path: the path is free at once.
 #[tokio::test(start_paused = true)]
 async fn a_reason_4_for_the_only_frame_frees_the_path_at_once() {
     let mut path = Path::new(ClientConfig::default(), Some(1497)).await;
@@ -272,6 +302,29 @@ async fn inside_the_window_a_smaller_request_drops_the_reject_and_completes() {
 
     let next = path.next_goes_out_after(LARGE, Duration::ZERO, 1476).await;
     assert!(!next.segmented, "a dropped reject taught a bound");
+    path.stop().await;
+}
+
+/// The record keeps the largest frame of every answered request in its
+/// window: a smaller request answered on its retry after a larger one does
+/// not shrink it, so a reject that may be the larger frame's still cannot
+/// fail a request of the smaller size.
+#[tokio::test(start_paused = true)]
+async fn a_smaller_answered_request_does_not_shrink_the_record() {
+    let mut path = Path::new(ClientConfig::default(), Some(1497)).await;
+    path.answered_on_retry(LARGE).await;
+    path.answered_on_retry(SMALL).await;
+    let task = path.request(SMALL, 0x42);
+    let frame = path.next_frame().await;
+    path.reject().await;
+    sleep(Duration::from_millis(10)).await;
+    assert!(
+        !task.is_finished(),
+        "a reject that may be the larger frame's failed the smaller request"
+    );
+    assert_eq!(path.client.too_long_reject_drops(), 1);
+    path.ack(frame.invoke_id).await;
+    assert!(task.await.unwrap().unwrap().is_empty());
     path.stop().await;
 }
 

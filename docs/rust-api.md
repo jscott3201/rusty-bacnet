@@ -9691,9 +9691,15 @@ the wrong request (#2651):
   does one a reason 4 ended after several frames: the router's refusal is
   no answer, and another of its frames may draw one too. A reason 4 for a
   request's only frame, on a path with no answered frames on record, frees
-  the path at once.
+  the path at once: among this client's confirmed requests on the path,
+  that frame is the only one it can be for.
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
+
+All of this covers the client's own confirmed requests on the path. Other
+traffic to the same network sits outside it, as before: the client's
+unconfirmed requests, the replies and notifications of a node's server
+role, and traffic through another router to that network.
 
 ### Property Access
 

@@ -72,8 +72,12 @@ enum GenerationEnd {
     /// The device answered, with an acknowledgment or its Error, Reject or
     /// Abort, so the size of each frame crossed the path (Clause 19.4).
     Answered,
-    /// A reason 4 ended a one-frame generation while no earlier frame on
-    /// the path could still draw one, so the reject was that frame's own.
+    /// A reason 4 ended a one-frame generation while no earlier frame of
+    /// this client's confirmed requests on the path could still draw one,
+    /// so among those requests the reject was that frame's own. Other
+    /// traffic to the network sits outside the lease, as before: this
+    /// client's unconfirmed requests, a node's server replies and
+    /// notifications, and another router to the same network.
     Refused,
 }
 
@@ -216,10 +220,11 @@ impl RoutedPathLimits {
         }
 
         if state.entries.len() >= state.capacity {
+            let now = TokioInstant::now();
             let reclaim = state
                 .entries
                 .iter()
-                .filter(|(_, entry)| self.is_safely_reclaimable(entry))
+                .filter(|(_, entry)| self.is_safely_reclaimable(entry, now))
                 .min_by(|(key_a, entry_a), (key_b, entry_b)| {
                     entry_a
                         .last_used
@@ -243,15 +248,17 @@ impl RoutedPathLimits {
         Ok(gate)
     }
 
-    fn is_safely_reclaimable(&self, entry: &RoutedPathEntry) -> bool {
+    /// Whether `entry` holds nothing a later request depends on at `now`,
+    /// read once for the whole scan of a full table.
+    fn is_safely_reclaimable(&self, entry: &RoutedPathEntry, now: TokioInstant) -> bool {
         entry.configured.is_none()
             && entry.learned.is_none()
             && entry.active.is_none()
             && Arc::strong_count(&entry.gate) == 1
-            && entry
-                .quarantine_started
-                .is_none_or(|started| started.elapsed() >= self.quarantine_horizon)
-            && entry.answered_at(TokioInstant::now()).is_none()
+            && entry.quarantine_started.is_none_or(|started| {
+                now.saturating_duration_since(started) >= self.quarantine_horizon
+            })
+            && entry.answered.is_none_or(|answered| answered.until <= now)
     }
 
     async fn wait_for_quarantine(&self, key: &RoutedPathKey) {
