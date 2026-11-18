@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -19,6 +20,15 @@ pub async fn bounded<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(10), future)
         .await
         .expect("loopback test exceeded deadline")
+}
+
+/// Create the future `make` returns, in a frame of its own, and move it to
+/// the heap, as the CLI's own `heap::boxed` does (#2656). A debug build
+/// keeps a copy of each future a test awaits in the test's poll frame, and
+/// a fixture's router or server start runs under all of them.
+#[inline(never)]
+pub fn boxed<F: Future>(make: impl FnOnce() -> F) -> Pin<Box<F>> {
+    Box::pin(make())
 }
 
 pub struct Files(pub PathBuf);

@@ -45,19 +45,22 @@ async fn observed_site(
     let (mut outgoing, station) = LoopbackTransport::pair(vec![1], vec![5]);
     let mut to_station = incoming.start().await.unwrap();
     let mut to_router = outgoing.start().await.unwrap();
-    let StartedRouter { router, .. } = BACnetRouter::start(
-        vec![
-            RouterPort {
-                transport: AnyTransport::Bip(Box::new(bip)),
-                network_number: 1,
-            },
-            RouterPort {
-                transport: AnyTransport::Loopback(router_end),
-                network_number: DNET,
-            },
-        ],
-        RouterOptions::new(),
-    )
+    // Boxed, as `site_with_config`'s starts are (#2656).
+    let StartedRouter { router, .. } = boxed(|| {
+        BACnetRouter::start(
+            vec![
+                RouterPort {
+                    transport: AnyTransport::Bip(Box::new(bip)),
+                    network_number: 1,
+                },
+                RouterPort {
+                    transport: AnyTransport::Loopback(router_end),
+                    network_number: DNET,
+                },
+            ],
+            RouterOptions::new(),
+        )
+    })
     .await
     .expect("the router binds its ports");
     let (_, port) = decode_bip_mac(router.ports()[0].local_mac()).unwrap();
@@ -85,7 +88,7 @@ async fn observed_site(
             }
         }
     })));
-    let server = BACnetServer::start(config, database, station)
+    let server = boxed(|| BACnetServer::start(config, database, station))
         .await
         .unwrap();
     (router, server, port, sources, tap, relay)

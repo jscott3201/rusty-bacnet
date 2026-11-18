@@ -30,6 +30,12 @@ const FAILOVER_VMAC: [u8; 6] = [0x20; 6];
 /// A passing run takes a few seconds.
 const WAIT: Duration = Duration::from_secs(30);
 
+/// The connect limit of the tests that watch a dial stall. The same limit
+/// covers their real dials of a live hub (TCP, TLS and the WebSocket
+/// upgrade), so it leaves room for a loaded CI host: at 300 ms a Windows
+/// runner once timed out in the upgrade of the first, real connection.
+const CONNECT_LIMIT_MS: u64 = 1_500;
+
 type Session = EndpointSession<ScTransport<TlsWebSocket>>;
 type Link = (ScConnectionState, Option<ScActiveHub>, Option<[u8; 6]>);
 
@@ -321,13 +327,13 @@ async fn sc_a_stalled_primary_times_out_and_starts_on_the_failover_hub() {
     let mut failover = pki.hub(1, "127.0.0.1:0", FAILOVER_VMAC).await.unwrap();
     let hubs = ScHubDialer::new(&format!("wss://localhost:{stalled_port}"), pki.node.clone())
         .failover_url(&url(&failover))
-        .connect_timeout_ms(300);
+        .connect_timeout_ms(CONNECT_LIMIT_MS);
     let started = Instant::now();
     let vmac = [0x02, 0, 0, 0, 0, 0x34];
     let mut session = tokio::time::timeout(WAIT, endpoint(hubs, vmac, Some(reconnect(1))))
         .await
         .expect("connect_hub_session must not hang on a stalled primary");
-    // Well under the OS connect timeout; the bound is the 300 ms limit plus load.
+    // Well under the OS connect timeout; the bound is the connect limit plus load.
     assert!(started.elapsed() < Duration::from_secs(20));
     let monitor = session.sc_link().unwrap();
     let mut events = monitor.connection_events();
@@ -357,7 +363,7 @@ async fn sc_a_dropped_hub_is_redialled_within_the_connect_timeout() {
     let pki = Pki::new();
     let mut hub = pki.hub(0, "127.0.0.1:0", PRIMARY_VMAC).await.unwrap();
     let addr = hub.local_addr().unwrap();
-    let hubs = ScHubDialer::new(&url(&hub), pki.node.clone()).connect_timeout_ms(300);
+    let hubs = ScHubDialer::new(&url(&hub), pki.node.clone()).connect_timeout_ms(CONNECT_LIMIT_MS);
     let mut session = endpoint(hubs, [0x02, 0, 0, 0, 0, 0x33], Some(reconnect(50))).await;
     let monitor = session.sc_link().unwrap();
     let mut events = monitor.connection_events();
@@ -404,9 +410,10 @@ async fn sc_a_dropped_hub_is_redialled_within_the_connect_timeout() {
     })
     .await
     .unwrap_or_else(|_| panic!("no dial timeout in time; saw {seen:?}"));
-    // The 300 ms limit, not the 10 s default.
+    // The configured limit, not the 10 s default.
     assert!(
-        (Duration::from_millis(250)..Duration::from_secs(5)).contains(&stalled_for),
+        (Duration::from_millis(CONNECT_LIMIT_MS - 50)..Duration::from_secs(6))
+            .contains(&stalled_for),
         "{stalled_for:?}"
     );
 
@@ -621,7 +628,7 @@ async fn sc_stop_on_the_failover_hub_ends_the_primary_probes() {
         pki.node.clone(),
     )
     .failover_url(&url(&failover))
-    .connect_timeout_ms(300);
+    .connect_timeout_ms(CONNECT_LIMIT_MS);
     let mut session = endpoint(hubs, [0x02, 0, 0, 0, 0, 0x38], Some(reconnect(1))).await;
     let monitor = session.sc_link().unwrap();
     let mut events = monitor.connection_events();
@@ -652,7 +659,7 @@ async fn sc_stop_while_both_hubs_are_lost_ends_the_redials() {
     let failover_addr = failover.local_addr().unwrap().to_string();
     let hubs = ScHubDialer::new(&url(&primary), pki.node.clone())
         .failover_url(&url(&failover))
-        .connect_timeout_ms(300);
+        .connect_timeout_ms(CONNECT_LIMIT_MS);
     let retries = ScReconnectConfig {
         initial_delay_ms: 50,
         max_delay_ms: 50,

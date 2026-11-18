@@ -9,7 +9,9 @@
 #[allow(dead_code)]
 mod support;
 
+use std::future::Future;
 use std::net::Ipv4Addr;
+use std::pin::Pin;
 
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_server::server::BACnetServer;
@@ -20,7 +22,7 @@ use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::loopback::LoopbackTransport;
 use serde_json::{Value, json};
 use support::lab::{lab_database, lab_identity};
-use support::{Process, command, failure, run};
+use support::{Process, boxed, command, failure, run};
 
 /// The lab device's network and instance.
 const DNET: u16 = 2;
@@ -45,7 +47,16 @@ async fn site_with_database(
     .await
 }
 
-async fn site_with_config(
+/// Boxed, as the starts in it are: every test awaits it in its own poll
+/// frame, and the router's start runs under it (#2656).
+fn site_with_config(
+    database: bacnet_objects::database::ObjectDatabase,
+    config: bacnet_server::server::ServerConfig,
+) -> Pin<Box<impl Future<Output = (BACnetRouter, BACnetServer<LoopbackTransport>, u16)>>> {
+    boxed(move || start_site(database, config))
+}
+
+async fn start_site(
     database: bacnet_objects::database::ObjectDatabase,
     config: bacnet_server::server::ServerConfig,
 ) -> (BACnetRouter, BACnetServer<LoopbackTransport>, u16) {
@@ -66,11 +77,11 @@ async fn site_with_config(
             network_number: DNET,
         },
     ];
-    let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
+    let StartedRouter { router, .. } = boxed(|| BACnetRouter::start(ports, RouterOptions::new()))
         .await
         .expect("the router binds its ports");
     let (_, port) = decode_bip_mac(router.ports()[0].local_mac()).unwrap();
-    let server = BACnetServer::start(config, database, station)
+    let server = boxed(|| BACnetServer::start(config, database, station))
         .await
         .unwrap();
     (router, server, port)
