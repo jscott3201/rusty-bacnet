@@ -33,6 +33,17 @@ fn config() -> SessionConfig {
 /// An audited session with both roles and a full server from `builder`,
 /// on Device 123, whose Reporter records to Device 999 at `sink`.
 fn server_session(
+    db: ObjectDatabase,
+    sink: &NetworkLayer<TestTransport>,
+    builder: ServerBuilder<TestTransport>,
+    config: SessionConfig,
+) -> EndpointSession<TestTransport> {
+    server_session_on(bus_port(), db, sink, builder, config)
+}
+
+/// [`server_session`] on `port`.
+fn server_session_on(
+    port: TestTransport,
     mut db: ObjectDatabase,
     sink: &NetworkLayer<TestTransport>,
     builder: ServerBuilder<TestTransport>,
@@ -45,7 +56,8 @@ fn server_session(
         .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
         .unwrap();
     db.set_clock_reader(None);
-    let mut session = bare_session(SessionRole::Both, config)
+    let mut session = EndpointSession::new(port, SessionRole::Both, config)
+        .unwrap()
         .device(crate::DeviceIdentity::new(123, 42).unwrap())
         .with_database(db)
         .with_source_audit_reporter(selected())
@@ -101,6 +113,22 @@ async fn session_mac(
     receive(replies).await.source_mac
 }
 
+/// `service` with `data` under `invoke_id`.
+fn confirmed(service: ConfirmedServiceChoice, data: BytesMut, invoke_id: u8) -> Apdu {
+    Apdu::ConfirmedRequest(ConfirmedRequest {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: false,
+        max_segments: None,
+        max_apdu_length: 1476,
+        invoke_id,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: service,
+        service_request: data.freeze(),
+    })
+}
+
 /// `service` with `data` from `peer` to `session`, and its answer.
 async fn ask(
     peer: &NetworkLayer<TestTransport>,
@@ -110,24 +138,20 @@ async fn ask(
     data: BytesMut,
     invoke_id: u8,
 ) -> Apdu {
-    send(
-        peer,
-        session,
-        Apdu::ConfirmedRequest(ConfirmedRequest {
-            segmented: false,
-            more_follows: false,
-            segmented_response_accepted: false,
-            max_segments: None,
-            max_apdu_length: 1476,
-            invoke_id,
-            sequence_number: None,
-            proposed_window_size: None,
-            service_choice: service,
-            service_request: data.freeze(),
-        }),
-    )
-    .await;
+    send(peer, session, confirmed(service, data, invoke_id)).await;
     decode_apdu(receive(replies).await.apdu).unwrap()
+}
+
+/// A WARMSTART ReinitializeDevice's parameters.
+fn warmstart() -> BytesMut {
+    let mut data = BytesMut::new();
+    ReinitializeDeviceRequest {
+        reinitialized_state: ReinitializedState::WARMSTART,
+        password: None,
+    }
+    .encode(&mut data)
+    .unwrap();
+    data
 }
 
 fn requester(peer: &NetworkLayer<TestTransport>) -> BACnetRecipient {
@@ -161,21 +185,11 @@ async fn a_reset_the_server_accepts_is_recorded_with_its_requester() {
     let mut session = server_session(db, &sink, builder, config());
     session.start().await.unwrap();
     let mac = session_mac(&session, &peer, &mut replies).await;
-    let reset = || {
-        let mut data = BytesMut::new();
-        ReinitializeDeviceRequest {
-            reinitialized_state: ReinitializedState::WARMSTART,
-            password: None,
-        }
-        .encode(&mut data)
-        .unwrap();
-        data
-    };
     let service = ConfirmedServiceChoice::REINITIALIZE_DEVICE;
-    let reply = ask(&peer, &mac, &mut replies, service, reset(), 1).await;
+    let reply = ask(&peer, &mac, &mut replies, service, warmstart(), 1).await;
     assert!(matches!(reply, Apdu::Error(_)), "{reply:?}");
     refuse.store(false, Ordering::SeqCst);
-    let reply = ask(&peer, &mac, &mut replies, service, reset(), 2).await;
+    let reply = ask(&peer, &mac, &mut replies, service, warmstart(), 2).await;
     assert!(matches!(reply, Apdu::SimpleAck(_)), "{reply:?}");
     let (record, _) = notification(&receive(&mut records).await, false);
     assert_eq!(record.operation, AuditOperation::DEVICE_RESET);
@@ -187,6 +201,44 @@ async fn a_reset_the_server_accepts_is_recorded_with_its_requester() {
     );
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(records.try_recv().is_err());
+    session.stop().await.unwrap();
+    sink.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
+/// A ReinitializeDevice already on the link when the session starts is
+/// recorded, with its requester: the server takes nothing from its seat
+/// until the session's source Audit is in place, however long the start
+/// takes after the server is built. A pause there gives the server's
+/// dispatch its turn; without the hold it would accept the reset before
+/// the source Audit could record it.
+#[tokio::test(start_paused = true)]
+async fn a_reset_waiting_as_the_session_starts_is_recorded() {
+    let (sink, mut records) = network().await;
+    let (peer, mut replies) = network().await;
+    let mut db = database(false);
+    reporting(&mut db, &[AuditOperation::DEVICE_RESET], false);
+    let port = bus_port();
+    let mac = port.local_mac().to_vec();
+    let builder = allowing().on_reinitialize(|_, _| Ok(()));
+    let mut session = server_session_on(port, db, &sink, builder, config());
+    let service = ConfirmedServiceChoice::REINITIALIZE_DEVICE;
+    send(&peer, &mac, confirmed(service, warmstart(), 3)).await;
+    let pauses = crate::session::server_seat::StartPauses {
+        after_build: Duration::from_millis(20),
+        ..Default::default()
+    };
+    let start = crate::session::server_seat::START_PAUSES.scope(pauses, session.start());
+    Box::pin(start).await.unwrap();
+    let reply = decode_apdu(receive(&mut replies).await.apdu).unwrap();
+    assert!(
+        matches!(&reply, Apdu::SimpleAck(ack) if ack.invoke_id == 3),
+        "{reply:?}"
+    );
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.operation, AuditOperation::DEVICE_RESET);
+    assert_eq!(record.source_device, requester(&peer));
+    assert_eq!(record.invoke_id, Some(3));
     session.stop().await.unwrap();
     sink.stop().await.unwrap();
     peer.stop().await.unwrap();

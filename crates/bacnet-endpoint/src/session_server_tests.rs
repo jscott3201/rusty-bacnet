@@ -1,7 +1,8 @@
 //! The full server a session builds (#2617, part 3a), over an in-memory
 //! link with broadcasts on paused time: the read-only server a session
-//! will build when it is given no builder of its own, and a request that
-//! is on the link before the session starts.
+//! will build when it is given no builder of its own, requests that are on
+//! the link before the session starts, and a session dropped with its
+//! server where no runtime runs.
 use super::*;
 use crate::session::eventually::eventually;
 use bacnet_client::client::{BACnetClient, Broadcast};
@@ -18,7 +19,12 @@ use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 use std::time::Duration;
 
-use crate::session::wire::{self, Wire};
+/// The in-memory link with broadcasts, for tests of several nodes (#2617);
+/// the client seat's tests take it from here too.
+#[allow(dead_code)]
+#[path = "../tests/support/wire.rs"]
+pub(in crate::session) mod wire;
+use wire::Wire;
 
 const NODE: u8 = 1;
 const PEER: u8 = 2;
@@ -33,13 +39,27 @@ fn ai1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
 }
 
-/// The node's database: its Device, AV-7 and AI-1.
+fn ch5() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::CHANNEL, 5).unwrap()
+}
+
+/// The node's database: its Device, AV-7, AI-1, File-3 and Channel-5
+/// (number 11, in control group 27).
 fn database() -> ObjectDatabase {
     let identity = crate::DeviceIdentity::new(NODE_DEVICE, 42).unwrap();
     let units = EngineeringUnits::DEGREES_CELSIUS;
     let value = AnalogValueObject::new(7, "AV-7", units).unwrap();
     let input = AnalogInputObject::new(1, "AI-1", units).unwrap();
-    crate::build_database_with_extra(&identity, vec![Box::new(value), Box::new(input)]).unwrap()
+    let file = bacnet_objects::file::FileObject::new(3, "File-3", "text/plain").unwrap();
+    let mut channel = bacnet_objects::channel::ChannelObject::new(5, "CH-5", 11).unwrap();
+    channel.set_control_groups(vec![27]).unwrap();
+    let extra: Vec<Box<dyn BACnetObject>> = vec![
+        Box::new(value),
+        Box::new(input),
+        Box::new(file),
+        Box::new(channel),
+    ];
+    crate::build_database_with_extra(&identity, extra).unwrap()
 }
 
 /// A session of both roles on node [`NODE`] of `wire`, with Device
@@ -255,4 +275,175 @@ async fn a_request_on_the_link_before_start_is_the_servers() {
     assert_eq!(session.policy_counters().await.no_server_role, 0);
     assert_eq!(session.server_seat_counters().apdus, 1);
     session.stop().await.unwrap();
+}
+
+/// An application-tagged REAL.
+fn real(value: f32) -> Vec<u8> {
+    let mut bytes = vec![0x44];
+    bytes.extend_from_slice(&value.to_be_bytes());
+    bytes
+}
+
+/// What `server` serves for `object`'s `property`.
+async fn served(
+    server: &BACnetServer<TestTransport>,
+    object: ObjectIdentifier,
+    property: PropertyIdentifier,
+) -> PropertyValue {
+    server.read_local(&object, property, None).await.unwrap()
+}
+
+/// The rest of the covered mutations the read-only server refuses:
+/// WritePropertyMultiple, AddListElement, RemoveListElement and
+/// AtomicWriteFile are answered SERVICES / SERVICE_REQUEST_DENIED, and an
+/// inbound WriteGroup, which has no answer, changes nothing. A
+/// TimeSynchronization or UTCTimeSynchronization, unconfirmed too, leaves
+/// the Device's clock alone.
+#[tokio::test(start_paused = true)]
+async fn the_read_only_server_refuses_the_other_mutations_and_time_sync() {
+    use bacnet_services::common::BACnetPropertyValue;
+    use bacnet_services::file::FileWriteAccessMethod;
+    use bacnet_services::wpm::WriteAccessSpecification;
+    use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
+    use bacnet_types::primitives::{Date, Time};
+    let wire = Wire::new();
+    let (mut session, _) = session(&wire, read_only_server());
+    Box::pin(session.start()).await.unwrap();
+    let peer = Box::pin(peer(&wire)).await;
+    let node = Wire::mac(NODE);
+    let server = session.server().unwrap();
+    let pv = PropertyIdentifier::PRESENT_VALUE;
+    let before = (
+        served(server, av7(), pv).await,
+        served(server, ch5(), pv).await,
+    );
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, NODE_DEVICE).unwrap();
+    let date = served(server, device, PropertyIdentifier::LOCAL_DATE).await;
+
+    let specs = vec![WriteAccessSpecification {
+        object_identifier: av7(),
+        list_of_properties: vec![BACnetPropertyValue {
+            property_identifier: pv,
+            property_array_index: None,
+            value: real(5.0),
+            priority: Some(8),
+        }],
+    }];
+    assert!(denied(
+        Box::pin(peer.write_property_multiple(&node, specs)).await
+    ));
+    // An application-tagged Unsigned, 1: what the list holds doesn't matter.
+    let list = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
+    let added = peer.add_list_element(&node, ch5(), list, None, vec![0x21, 1]);
+    assert!(denied(Box::pin(added).await));
+    let removed = peer.remove_list_element(&node, ch5(), list, None, vec![0x21, 1]);
+    assert!(denied(Box::pin(removed).await));
+    let access = FileWriteAccessMethod::Stream {
+        file_start_position: 0,
+        file_data: b"written".to_vec(),
+    };
+    let file = ObjectIdentifier::new(ObjectType::FILE, 3).unwrap();
+    assert!(denied(
+        Box::pin(peer.atomic_write_file(&node, file, access)).await
+    ));
+    let group = WriteGroupRequest {
+        group_number: std::num::NonZeroU32::new(27).unwrap(),
+        write_priority: 8,
+        change_list: vec![GroupChannelValue {
+            channel: 11,
+            override_priority: None,
+            value: real(5.0),
+        }],
+        inhibit_delay: None,
+    };
+    peer.write_group_directed(&node, &group).await.unwrap();
+    let new_year = Date {
+        year: 101,
+        month: 1,
+        day: 1,
+        day_of_week: 1,
+    };
+    let noon = Time {
+        hour: 12,
+        minute: 0,
+        second: 0,
+        hundredths: 0,
+    };
+    peer.time_synchronization(&node, new_year, noon)
+        .await
+        .unwrap();
+    peer.utc_time_synchronization(&node, new_year, noon)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let after = (
+        served(server, av7(), pv).await,
+        served(server, ch5(), pv).await,
+    );
+    assert_eq!(after, before, "nothing changed");
+    let local = PropertyIdentifier::LOCAL_DATE;
+    assert_eq!(served(server, device, local).await, date, "the clock moved");
+
+    let mut peer = peer;
+    peer.stop().await.unwrap();
+    session.stop().await.unwrap();
+}
+
+/// Requests a peer sent before the session started are the server's
+/// however late the session gets to them: the seat is attached inside the
+/// link's start, before its first request is classified. A pause right
+/// after the link starts gives the classifier its turn first; with the
+/// seat taken after that, they would reach the session's own queue and
+/// find no server.
+#[tokio::test(start_paused = true)]
+async fn requests_classified_as_the_link_starts_are_the_servers() {
+    let wire = Wire::new();
+    let (mut session, sent) = session(&wire, BACnetServer::generic_builder());
+    for invoke_id in 1..=8 {
+        wire.deliver(&Wire::mac(NODE), read_request(invoke_id));
+    }
+    let pauses = super::StartPauses {
+        after_link: Duration::from_millis(20),
+        ..Default::default()
+    };
+    Box::pin(super::START_PAUSES.scope(pauses, session.start()))
+        .await
+        .unwrap();
+    eventually(WAIT, "eight answers", async || answers(&sent).len() == 8).await;
+    assert!(
+        answers(&sent)
+            .iter()
+            .all(|answer| matches!(answer, Apdu::ComplexAck(_))),
+        "{:?}",
+        answers(&sent)
+    );
+    assert_eq!(session.policy_counters().await.no_server_role, 0);
+    assert_eq!(session.server_seat_counters().apdus, 8);
+    session.stop().await.unwrap();
+}
+
+/// A session dropped with its server, unstopped, on a thread with no
+/// runtime, whether the runtime that ran it is still there or gone, drops
+/// cleanly: nothing in the drop needs a runtime.
+#[test]
+fn a_session_with_its_server_drops_where_no_runtime_runs() {
+    for runtime_gone in [false, true] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let session = runtime.block_on(async {
+            let wire = Wire::new();
+            let (mut session, _) = session(&wire, BACnetServer::generic_builder());
+            session.start().await.unwrap();
+            session
+        });
+        if runtime_gone {
+            drop(runtime);
+            std::thread::spawn(move || drop(session)).join().unwrap();
+        } else {
+            std::thread::spawn(move || drop(session)).join().unwrap();
+            drop(runtime);
+        }
+    }
 }

@@ -123,15 +123,9 @@ struct NotificationCore {
     lease_cap: usize,
 }
 
-/// The invoke IDs a server on a node's seat may hold at once (#2617): its
-/// confirmed notifications (COV, event and Audit together, the node's
-/// source Audit records among them) and the reads its runs make. A
-/// quarter of the node's 256, so its client keeps the rest, as the
-/// endpoint's own COV reporting did. Past it each waits or gives up as it
-/// does when the node has no ID free: an event notification waits for
-/// one, a COV notification is skipped with a warning, an Audit record is
-/// counted lost.
-pub(super) const SEAT_LEASES: usize = 64;
+#[path = "notification_lease_cap.rs"]
+mod lease_cap;
+pub(super) use lease_cap::SEAT_LEASES;
 
 pub(super) type NotificationReservation = (NotificationOperation, oneshot::Receiver<CovAckResult>);
 
@@ -596,52 +590,7 @@ impl NotificationCore {
         }
         state.pending.insert(token, sender);
         drop(state);
-
-        Ok((
-            NotificationOperation {
-                transactions: Arc::clone(self),
-                token,
-                active: true,
-            },
-            receiver,
-        ))
-    }
-
-    /// [`Self::reserve`] on a seat: the count and the lease are taken under
-    /// one guard, so racing reservations never pass the cap. Refused as
-    /// the node's pool refuses when it is out of IDs, and with nothing
-    /// leased, so a waiter's wake comes only from a lease that ends.
-    fn reserve_within_cap(
-        self: &Arc<Self>,
-        metadata: LeaseMetadata,
-    ) -> Result<NotificationReservation, NotificationReserveError> {
-        let (sender, receiver) = oneshot::channel();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| NotificationReserveError::StatePoisoned)?;
-        if state.closed {
-            return Err(NotificationReserveError::Closed);
-        }
-        if state.pending.len() >= self.lease_cap {
-            return Err(NotificationReserveError::Coordinator(
-                ReserveError::Exhausted,
-            ));
-        }
-        let token = self
-            .coordinator
-            .reserve(metadata)
-            .map_err(NotificationReserveError::Coordinator)?;
-        state.pending.insert(token, sender);
-        drop(state);
-        Ok((
-            NotificationOperation {
-                transactions: Arc::clone(self),
-                token,
-                active: true,
-            },
-            receiver,
-        ))
+        Ok(self.reservation(token, receiver))
     }
 
     pub(super) fn admit_terminal(

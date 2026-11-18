@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::super::eventually::eventually;
 
-use crate::session::wire::{self, Wire};
+use crate::session::server_seat::tests::wire::{self, Wire};
 
 const NODE: u8 = 1;
 const PEER: u8 = 2;

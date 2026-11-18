@@ -1,9 +1,10 @@
 ---
 section: Migration notes
 ---
-- **Endpoint server role (Rust API, #2617):** where you used the narrow server
-  role's handle, call `responder()` for `server()` and
-  `cloned_responder_handle()` for `cloned_server_handle()`. `server()` now
-  returns `Option<&BACnetServer<T>>`: `Some` while a session given
-  `with_server(builder)` before `start()` runs. Give that session its
-  database and Device identity, not the builder.
+- **Endpoint server role (Rust API, #2617):** replace `server()` with
+  `responder()` and `cloned_server_handle()` with `cloned_responder_handle()`
+  where you meant the narrow server role. Check every `server().is_some()` or
+  `is_none()`: it still compiles but now asks about a full server
+  `with_server` built, so a role check like the shared-endpoint guide's
+  printed `false`. Give such a session its database and Device identity,
+  not the builder.

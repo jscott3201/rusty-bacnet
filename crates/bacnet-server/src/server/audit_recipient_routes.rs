@@ -24,7 +24,10 @@ pub(super) struct AuditRoutes {
 }
 
 impl AuditRoutes {
-    fn capture<T: TransportPort>(bindings: &DeviceBindingTable, transport: &T) -> Self {
+    fn capture(
+        bindings: &DeviceBindingTable,
+        bip_broadcast: Option<std::net::SocketAddrV4>,
+    ) -> Self {
         Self {
             devices: bindings
                 .configured_resolutions()
@@ -33,7 +36,7 @@ impl AuditRoutes {
                 })
                 .filter(|(_, route)| next_hop(route).is_some())
                 .collect(),
-            bip_broadcast: transport.bip_broadcast_endpoint(),
+            bip_broadcast,
             ..Self::default()
         }
     }
@@ -44,8 +47,19 @@ impl AuditRoutes {
         bindings: &DeviceBindingTable,
         transport: &T,
     ) -> Result<Self, Error> {
+        Self::prepare_for(db, config, bindings, transport.bip_broadcast_endpoint())
+    }
+
+    /// [`Self::prepare`] from the link's B/IP broadcast endpoint alone, which
+    /// a node knows before its link starts (#2617).
+    pub(super) fn prepare_for(
+        db: &mut ObjectDatabase,
+        config: &ServerConfig,
+        bindings: &DeviceBindingTable,
+        bip_broadcast: Option<std::net::SocketAddrV4>,
+    ) -> Result<Self, Error> {
         let routes = if config.audit_reporters.is_some() {
-            Self::capture(bindings, transport)
+            Self::capture(bindings, bip_broadcast)
         } else {
             Self::default()
         };

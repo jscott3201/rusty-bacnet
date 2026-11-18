@@ -13522,12 +13522,16 @@ drop(client);
 session.stop().await?; // stops the server, then the link
 ```
 
+- `server()` asks about the full server only, and `responder()` about the
+  narrow server role. It is `Some` from the start that built the server
+  until a stop has stopped it; a cancelled start or stop leaves it `Some`.
 - The builder's policies apply as given. A builder with none lets any peer
   write, create and delete, as a standalone server does; give it a
   `ServerPolicy` or `MutationPolicy::DenyAll` to close it.
-- From the first request: the session takes the server's seat as soon as its
-  link is up, and the server takes what waits there once the session's start
-  is done, so nothing is dropped as finding no server while the server builds.
+- From the first request: the server's seat is attached as the link starts,
+  before its first request is classified, and the server takes what waits
+  there once the session's start is done, so nothing is dropped as finding no
+  server while the server builds.
   A start that fails after the server is built stops it; one cancelled there
   leaves it holding its requests unanswered until `stop()` or drop. A server
   build that fails or is cancelled drops the database it was given.
@@ -13575,6 +13579,10 @@ session.stop().await?; // stops the server, then the link
   `decides_mutations()` is `true`, or `MutationPolicy::DenyAll`), so no peer
   rewrites the audited Device's Audit_Notification_Recipient by default, and
   no `audit_reporters` of its own, since the Device has one Audit recipient.
+  Both `decides_mutations()` and `authorize_mutation()` default to `true`: a
+  `ServerPolicy` of your own that overrides neither passes this check and
+  lets any peer rewrite the recipient, so decide that write in
+  `authorize_mutation()`.
   The session's records go through the server's pool of notifications, which
   completes their acknowledgments; the server reports each ReinitializeDevice
   it accepts, which is recorded with its requester; and a peer's write of the
@@ -13625,8 +13633,13 @@ session.stop().await?; // stops the server, then the link
   session); a builder identity, `cov_retry_timeout_ms` or
   `notification_retries`, or a database Device's largest APDU or APDU timing,
   that differs from the node's (a Device that declares the object model's
-  default timing is given the node's); and beside a source Audit Reporter, a
-  builder as above that decides no mutations or has Audit Reporters.
+  default timing is given the node's); a builder setting a server's start
+  would refuse, checked on the settings the seat gives the server by the
+  same step every start runs (policies and budgets, device bindings against
+  the link's group rule, Audit Reporters and their routes, the Device's
+  segment timeout); and beside a source Audit Reporter, a builder as above
+  that decides no mutations or has Audit Reporters. The session keeps its
+  database through each refusal.
 - Where this is going (maintainer decisions on #2617): in Python, `await
   endpoint.server()` returns this `BACnetServer`. Then the narrow server role
   goes, taking the session's own COV reporting, local writes, Device-write
@@ -13635,13 +13648,14 @@ session.stop().await?; // stops the server, then the link
   read-only one that answers reads, discovery and COV subscriptions and
   refuses every write, create and delete (SERVICES / SERVICE_REQUEST_DENIED),
   so a 0.15.0 endpoint that upgrades doesn't become writable by any peer.
-  That stance covers the mutations the server's policy decides: services
-  outside it keep the server's defaults, so any peer may still acknowledge an
-  alarm (AcknowledgeAlarm, Clause 13.5), synchronize the clock under the
-  default `TimeSyncPolicy`, and send text messages; DeviceCommunicationControl,
-  ReinitializeDevice without a handler, LifeSafetyOperation and Audit
-  notifications stay denied. Last, the full client follows the node's
-  segmentation.
+  It also ignores time synchronization, local and UTC (Clauses 16.7 and
+  16.8). What the server's policy doesn't decide keeps the server's
+  defaults, so any peer may still acknowledge an alarm (AcknowledgeAlarm,
+  Clause 13.5), subscribe to COV, send event notifications, which
+  Notification Forwarder objects pass on, announce itself with I-Am, and
+  send text messages; DeviceCommunicationControl, ReinitializeDevice without
+  a handler, LifeSafetyOperation and Audit notifications stay denied. Last,
+  the full client follows the node's segmentation.
 
 ### Endpoint shutdown and the object database
 

@@ -657,73 +657,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
-        let ingress = self
-            .ingress
-            .as_mut()
-            .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?;
-        let receivers = match ingress.start().await {
-            Ok(receivers) => receivers,
-            Err(error) => {
-                let _ = self.stop().await;
-                return Err(error);
-            }
-        };
-        // A full server's seat at once, before any await, so what arrives
-        // for it waits in the seat's queue while it builds (#2617).
-        let seat = match self.take_server_seat() {
-            Ok(seat) => seat,
-            Err(error) => {
-                let _ = self.stop().await;
-                return Err(error);
-            }
-        };
-        if let Err(error) = self
-            .publish_registered_port(
-                (receivers.bip_port.clone(), receivers.bip6_port.clone()),
-                receivers.egress.local_network_number(),
-            )
-            .await
-        {
-            let _ = self.stop().await;
-            return Err(error);
-        }
-        let source = server_seat::SourceSlot::default();
-        if let Some(seat) = seat
-            && let Err(error) = self.build_server(seat, &source).await
-        {
-            let _ = self.stop().await;
-            return Err(error);
-        }
-        let bip_local_address = receivers.bip_local_address;
-        // Source Audit installs itself under the database's guard, which a
-        // started server may be holding a moment.
-        let database = self
-            .source_audit_reporter
-            .and(self.database.as_ref().map(Arc::clone));
-        let mut guard = match &database {
-            Some(database) => Some(database.write().await),
-            None => None,
-        };
-        let started = self.start_roles(
-            receivers,
-            source_routes,
-            device_target,
-            guard.as_deref_mut(),
-        );
-        drop(guard);
-        if let Err(error) = started {
+        if let Err(error) = self.start_link(device_target, source_routes).await {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;
             return Err(error);
         }
-        if let Some(audit) = &self.source_audit {
-            let _ = source.set(Arc::downgrade(audit));
-        }
-        // The server takes its requests from here on. A start that failed
-        // or was cancelled before this leaves them held until stop.
-        self.server_gate = None;
-        self.bip_local_address = bip_local_address;
         Ok(())
     }
 
@@ -1203,12 +1142,6 @@ mod network_number_tests;
 #[cfg(test)]
 #[path = "../tests/support/bus_port.rs"]
 mod bus_port;
-
-/// The in-memory link with broadcasts, for tests of several nodes (#2617).
-#[cfg(test)]
-#[allow(dead_code)]
-#[path = "../tests/support/wire.rs"]
-mod wire;
 
 /// Waits on paused time that fail at their limit instead of hanging (#2293).
 #[cfg(test)]

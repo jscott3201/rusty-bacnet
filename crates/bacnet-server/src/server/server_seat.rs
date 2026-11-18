@@ -306,21 +306,53 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         }
     }
 
-    /// Refuse, before a node's link starts, the device settings a seated
-    /// build would refuse (#2617): an identity, `cov_retry_timeout_ms` or
-    /// `notification_retries` that contradicts the node's, or a database
-    /// Device, the node's own `db`, that declares other APDU timing.
-    /// `capacity` is what the node's link will accept.
+    /// Refuse, before a node's link starts, what a seated build of this
+    /// builder would refuse without the started link (#2617), so the node
+    /// stays as it was: an identity, `cov_retry_timeout_ms` or
+    /// `notification_retries` that contradicts the node's, a database
+    /// Device, the node's own `db`, that declares other APDU timing, and
+    /// whatever every start checks of its settings (its policies and
+    /// budgets, the Device's segment timeout, the device bindings against
+    /// the link's group rule, the Audit Reporters and their routes), on the
+    /// settings the seat gives the server. Checking the Audit routes marks
+    /// each Reporter's route as a start does, which the start marks again.
     #[doc(hidden)]
     pub fn check_node(
         &self,
         identity: &bacnet_objects::DeviceIdentity,
         node: NodeDevice,
-        capacity: u16,
-        db: Option<&ObjectDatabase>,
+        link: &NodeLink,
+        mut db: Option<&mut ObjectDatabase>,
     ) -> Result<(), Error> {
-        node_contradictions(&self.config, identity, node, capacity, db).map(|_| ())
+        node_contradictions(&self.config, identity, node, link.capacity, db.as_deref())?;
+        let mut config = self.config.clone();
+        config.device = identity
+            .resolve(node.client_max_apdu_length)?
+            .resolve(link.capacity)?;
+        config.cov_retry_timeout_ms = node.apdu_timeout_ms;
+        config.notification_retries = node.apdu_retries;
+        let bindings = self.configured_device_bindings.clone();
+        let settled = super::lifecycle::settings::settle(&mut config, bindings, |mac| {
+            link.groups.contains(mac)
+        })?;
+        if let Some(db) = db.as_deref_mut() {
+            crate::local_device::validate_startup(db, &config.device)?;
+            AuditRoutes::prepare_for(db, &config, &settled.device_bindings, link.bip_broadcast)?;
+        }
+        Ok(())
     }
+}
+
+/// What a node's link says of itself before it starts (#2617), for
+/// [`ServerBuilder::check_node`].
+#[doc(hidden)]
+pub struct NodeLink {
+    /// The largest APDU the link will accept.
+    pub capacity: u16,
+    /// The link's group rule.
+    pub groups: bacnet_transport::port::GroupDestinations,
+    /// The link's B/IP broadcast endpoint, on B/IP.
+    pub bip_broadcast: Option<std::net::SocketAddrV4>,
 }
 
 /// What a node checks of a [`ServerBuilder`] before it builds the server on

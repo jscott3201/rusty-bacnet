@@ -232,6 +232,33 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
 
     /// Starts the transport, network layer, and classifier task once.
     pub async fn start(&mut self) -> Result<IngressReceivers, Error> {
+        Ok(self.start_seated(None).await?.0)
+    }
+
+    /// [`Self::start`] with a seat for a full server attached before the
+    /// classifier takes its first APDU (#2617), so no request reaches the
+    /// endpoint's own queue first; `coordinator` as for
+    /// [`Self::server_seat`]. Should the seat be refused, the endpoint is
+    /// still running when this fails: stop it.
+    #[doc(hidden)]
+    pub async fn start_with_server_seat(
+        &mut self,
+        coordinator: Arc<crate::coordinator::OutboundTransactionCoordinator>,
+    ) -> Result<(IngressReceivers, crate::seat::ServerSeat<T>), Error> {
+        let (receivers, seat) = self.start_seated(Some(coordinator)).await?;
+        Ok((receivers, seat.expect("a seat was asked for")?))
+    }
+
+    async fn start_seated(
+        &mut self,
+        server: Option<Arc<crate::coordinator::OutboundTransactionCoordinator>>,
+    ) -> Result<
+        (
+            IngressReceivers,
+            Option<Result<crate::seat::ServerSeat<T>, Error>>,
+        ),
+        Error,
+    > {
         if self.lifecycle != Lifecycle::Ready {
             return Err(Error::Encoding(
                 "endpoint ingress cannot be started more than once".into(),
@@ -307,6 +334,9 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             })?);
         self.started = Arc::downgrade(&network);
         let seat_number = seats.number().clone();
+        let server_seat = server.map(|coordinator| {
+            seats.attach_server(Arc::clone(&network), coordinator, self.queue_capacity)
+        });
         self.seats = Some(seats);
 
         self.session_task = Some(tokio::spawn(session_task(
@@ -321,7 +351,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.egress_open = Some(egress_open);
         self.lifecycle = Lifecycle::Running;
 
-        Ok(IngressReceivers {
+        let receivers = IngressReceivers {
             network_controls: controls,
             bip_port,
             bip6_port,
@@ -333,7 +363,8 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             policy_outcomes,
             egress,
             seat_number,
-        })
+        };
+        Ok((receivers, server_seat))
     }
 
     /// A seat for a full client on the started link (#2617): the layer and

@@ -430,21 +430,24 @@ async fn each_answer_goes_to_the_role_that_asked() {
 /// A session that would build its server at start refuses, before its
 /// link starts, every setting it could not build one with, and starts once
 /// corrected: the refusal leaves it as it was.
+/// Refused at start: whose error says it, and whose link never started.
+async fn refused(
+    session: &mut EndpointSession<TestTransport>,
+    link: &TestTransportHandle,
+    why: &str,
+) {
+    let error = Box::pin(session.start())
+        .await
+        .expect_err("refused at start");
+    assert!(error.to_string().contains(why), "{why}: {error}");
+    assert!(!session.is_running());
+    assert_eq!(link.starts(), 0, "{why}: the link started");
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_full_server_the_session_could_not_build_is_refused_before_the_link_starts() {
     let wire = Wire::new();
     let identity = || DeviceIdentity::new(NODE_DEVICE, 42).unwrap();
-    // Refused at start: whose error says it, and whose link never started.
-    async fn refused(
-        session: &mut EndpointSession<TestTransport>,
-        link: &TestTransportHandle,
-        why: &str,
-    ) {
-        let error = session.start().await.expect_err("refused at start");
-        assert!(error.to_string().contains(why), "{why}: {error}");
-        assert!(!session.is_running());
-        assert_eq!(link.starts(), 0, "{why}: the link started");
-    }
     let port = wire.port(NODE);
     let link = port.handle();
     let mut session = EndpointSession::new(
@@ -491,11 +494,50 @@ async fn a_full_server_the_session_could_not_build_is_refused_before_the_link_st
         session = session.with_server(builder);
         refused(&mut session, &link, why).await;
     }
-    // Beside the narrow role's opt-ins.
-    let mut session = session
-        .with_server(BACnetServer::generic_builder())
-        .with_cov(bacnet_device_core::report::ReportConfig::default());
-    refused(&mut session, &link, "with_cov").await;
+    // Beside each of the narrow role's opt-ins.
+    let narrow = |n: u8, config: SessionConfig| {
+        let port = wire.port(n);
+        let link = port.handle();
+        let session = EndpointSession::new(port.build(), SessionRole::Both, config)
+            .unwrap()
+            .device(identity())
+            .with_server(BACnetServer::generic_builder());
+        (session, link)
+    };
+    let opt_ins: [(EndpointSession<TestTransport>, TestTransportHandle, &str); 4] = [
+        {
+            let (session, link) = narrow(10, SessionConfig::default());
+            let cov = bacnet_device_core::report::ReportConfig::default();
+            (session.with_cov(cov), link, "with_cov")
+        },
+        {
+            let (session, link) = narrow(11, SessionConfig::default());
+            (
+                session.with_device_writes(std::sync::Arc::new(|_| true)),
+                link,
+                "with_device_writes",
+            )
+        },
+        {
+            let (session, link) = narrow(12, SessionConfig::default());
+            (
+                session.with_reinitialize(|_, _| Ok(())),
+                link,
+                "with_reinitialize",
+            )
+        },
+        {
+            let config = SessionConfig {
+                read_work_limit: 7,
+                ..SessionConfig::default()
+            };
+            let (session, link) = narrow(13, config);
+            (session, link, "read_work_limit")
+        },
+    ];
+    for (mut session, link, why) in opt_ins {
+        refused(&mut session, &link, why).await;
+    }
 
     // Corrected, it starts and serves.
     let port = wire.port(OTHER);
@@ -521,6 +563,89 @@ async fn a_full_server_the_session_could_not_build_is_refused_before_the_link_st
     );
     session.stop().await.unwrap();
     assert_eq!(link.stops(), 1);
+}
+
+/// What every server start checks of its settings, on the settings the
+/// seat gives the server, is checked before the session's link starts too:
+/// the policies and budgets the server's requests are held to, the device
+/// bindings against the link's group rule, the Audit Reporters and their
+/// routes, and the Device's segment timeout. Each refusal leaves the
+/// session ready, with its database: corrected, it starts and serves it.
+#[tokio::test(start_paused = true)]
+async fn a_server_setting_its_start_would_refuse_is_refused_before_the_link_starts() {
+    use bacnet_server::server::{AuditReportersConfig, DeviceBinding, TimeSyncPolicy};
+    let wire = Wire::new();
+    let identity = || DeviceIdentity::new(NODE_DEVICE, 42).unwrap();
+    // A MAC the link calls a group address.
+    let group = Wire::mac(77);
+    let port = wire.port(PEER).group_mac(&group);
+    let link = port.handle();
+    let mut session =
+        EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
+            .unwrap()
+            .device(identity())
+            .with_database(database(NODE_DEVICE, 7.0));
+    let device = |instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
+    let reporter = ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap();
+    let time_sync = TimeSyncPolicy {
+        max_sources: 0,
+        ..TimeSyncPolicy::default()
+    };
+    let cases: [(bacnet_server::server::ServerBuilder<TestTransport>, &str); 4] = [
+        (
+            BACnetServer::generic_builder().time_sync_policy(time_sync),
+            "max_sources",
+        ),
+        (
+            BACnetServer::generic_builder()
+                .device_binding(DeviceBinding::local(device(9), &group).unwrap())
+                .unwrap(),
+            "group address",
+        ),
+        (
+            BACnetServer::generic_builder().audit_reporters(AuditReportersConfig {
+                reporters: Vec::new(),
+            }),
+            "1..=64",
+        ),
+        // A Reporter the database lacks, on a Device with no Audit
+        // recipient: refused as the database's.
+        (
+            BACnetServer::generic_builder().audit_reporters(AuditReportersConfig {
+                reporters: vec![reporter],
+            }),
+            "write-access-denied",
+        ),
+    ];
+    for (builder, why) in cases {
+        session = session.with_server(builder);
+        refused(&mut session, &link, why).await;
+    }
+    // Corrected, it starts and serves the database it was given.
+    session = session.with_server(BACnetServer::generic_builder());
+    Box::pin(session.start()).await.unwrap();
+    assert_eq!(link.starts(), 1);
+    let value = session
+        .server()
+        .unwrap()
+        .read_local(&ai1(), PropertyIdentifier::PRESENT_VALUE, None)
+        .await
+        .unwrap();
+    assert_eq!(value, PropertyValue::Real(7.0));
+    session.stop().await.unwrap();
+
+    // The Device's segment timeout, which the server's start checks.
+    let port = wire.port(OTHER);
+    let link = port.handle();
+    let long = identity().with_apdu_segment_timeout_ms(u64::MAX / 2);
+    let db = build_database_with_extra(&long, Vec::new()).unwrap();
+    let mut session =
+        EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
+            .unwrap()
+            .device(long)
+            .with_database(db)
+            .with_server(BACnetServer::generic_builder());
+    refused(&mut session, &link, "segment timeout").await;
 }
 
 /// `server()` is the session's while it runs: `None` before start, for a

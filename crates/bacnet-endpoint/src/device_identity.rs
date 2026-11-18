@@ -89,7 +89,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         preparation.session.check_server_builder()?;
         preparation.session.validate_segmentation().await?;
         preparation.session.prepare_identity().await?;
-        preparation.session.check_server_device().await?;
+        preparation.session.check_server_settings().await?;
         let device = preparation.session.validate_device_execution()?;
         let routes = preparation.session.prepare_source_audit_reporter()?;
         // Bind the database to the identity's Device from here on, as a

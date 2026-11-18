@@ -3,6 +3,7 @@ use super::*;
 use bacnet_endpoint_core::seat::{NodeDevice, ServerSeat, ServerSeatCounters};
 use bacnet_server::mutation::MutationTarget;
 use bacnet_server::policy::FnPolicy;
+use bacnet_server::server::NodeLink;
 use bacnet_server::server::{BACnetServer, ServerBuilder};
 
 /// Where the session's source Audit is, once it is: the seated server's
@@ -61,12 +62,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///   builder's ReinitializeDevice handler.
     ///
     /// **Refused at start**, before the link starts, leaving the session
-    /// ready to correct and start again: a session without a server role
-    /// ([`SessionRole::ClientOnly`]) or without a Device identity
-    /// ([`device`](Self::device)); a builder with a transport, a database
-    /// (give it to the session) or a registered Network Port (name it on
-    /// the session) of its own, or with device settings that contradict the
-    /// session's as above; beside the narrow server role's opt-ins
+    /// ready to correct and start again with its database: a session
+    /// without a server role ([`SessionRole::ClientOnly`]) or without a
+    /// Device identity ([`device`](Self::device)); a builder with a
+    /// transport, a database (give it to the session) or a registered
+    /// Network Port (name it on the session) of its own, or with device
+    /// settings that contradict the session's as above; a builder whose
+    /// settings a server's start would refuse, which the session checks as
+    /// the server will get them (policies and budgets, device bindings,
+    /// Audit Reporters and their routes, the Device's segment timeout);
+    /// beside the narrow server role's opt-ins
     /// ([`with_cov`](Self::with_cov), [`with_device_writes`](Self::with_device_writes),
     /// [`with_reinitialize`](Self::with_reinitialize), a non-default
     /// [`SessionConfig::read_work_limit`]), whose places the builder's
@@ -77,7 +82,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`decides_mutations`](bacnet_server::ServerPolicy::decides_mutations)
     /// is `true`, or [`MutationPolicy::DenyAll`](bacnet_server::mutation::MutationPolicy::DenyAll),
     /// so that no peer rewrites the Device's Audit_Notification_Recipient
-    /// by default.
+    /// by default. `decides_mutations` is `true` unless a policy says
+    /// otherwise, and so is `authorize_mutation`: a policy of your own that
+    /// overrides neither passes this check and lets any peer rewrite the
+    /// recipient. Decide the recipient write in `authorize_mutation`.
     ///
     /// **Source Audit beside the server.** The session's source Audit
     /// sends its records through the server's pool of notifications, which
@@ -86,10 +94,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// requester. A peer's write of the Device's Audit_Notification_Recipient
     /// that the policy allows is recorded with its requester as the source.
     ///
-    /// **From the first request.** The session takes the server's seat as
-    /// soon as its link is up, and the server takes what waits there once
-    /// the session's start is done, so no request goes unanswered while
-    /// the server builds. A start that fails after the server is built
+    /// **From the first request.** The server's seat is attached as the
+    /// link starts, before its first request is classified, and the server
+    /// takes what waits there once the session's start is done, so no
+    /// request goes unanswered while the server builds. A start that fails after the server is built
     /// stops it; one cancelled there leaves it holding what waits,
     /// unanswered, until [`stop`](Self::stop) or drop. A server build that
     /// fails or is cancelled drops the database it was given.
@@ -146,10 +154,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Borrows the full server [`with_server`](Self::with_server) had the
-    /// session build: `Some` while the session runs, `None` for a session
-    /// without one, before [`start`](Self::start) and after
-    /// [`stop`](Self::stop). For another task, clone what it needs from it
-    /// ([`database`](BACnetServer::database), an `Arc`).
+    /// session build. `Some` from the start that built it until a
+    /// [`stop`](Self::stop) has stopped it: a start that failed after
+    /// building it, or a stop, has stopped it too, while a cancelled start
+    /// or stop leaves it `Some` until the next stop. `None` before start and
+    /// for a session without one. It asks about the full server only: the
+    /// narrow server role is [`responder`](Self::responder). For another
+    /// task, clone what it needs from it ([`database`](BACnetServer::database),
+    /// an `Arc`).
     pub fn server(&self) -> Option<&BACnetServer<T>> {
         self.server.as_ref()
     }
@@ -258,38 +270,88 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         Ok(())
     }
 
-    /// Refuse a `with_server` whose device settings contradict the
-    /// session's, once [`prepare_identity`](Self::prepare_identity) resolved
-    /// the identity and made the database.
-    pub(super) async fn check_server_device(&self) -> Result<(), Error> {
+    /// Refuse, once [`prepare_identity`](Self::prepare_identity) resolved
+    /// the identity and made the database, a `with_server` the server's
+    /// build would refuse without the started link: device settings that
+    /// contradict the session's, and whatever every server start checks of
+    /// its settings, as the seat will give them. The link is still
+    /// unstarted, so the session stays ready to retry with its database.
+    pub(super) async fn check_server_settings(&self) -> Result<(), Error> {
         let (Some(builder), Some(identity)) = (&self.server_builder, &self.identity) else {
             return Ok(());
         };
-        let db = match &self.database {
-            Some(db) => Some(db.read().await),
+        let ingress = self.ingress.as_ref().ok_or_else(missing_ingress)?;
+        let (_, groups) = ingress.link_unicast_facts().ok_or_else(missing_ingress)?;
+        let link = NodeLink {
+            capacity: self.local_receive_capacity,
+            groups,
+            bip_broadcast: ingress.bip_broadcast_endpoint(),
+        };
+        let mut db = match &self.database {
+            Some(db) => Some(db.write().await),
             None => None,
         };
-        builder.check_node(
-            identity,
-            self.node_device(),
-            self.local_receive_capacity,
-            db.as_deref(),
-        )
+        builder.check_node(identity, self.node_device(), &link, db.as_deref_mut())
     }
 
-    /// Take the server's seat, as soon as the link is up, so what arrives
-    /// for the server waits for it in the seat's queue.
-    pub(super) fn take_server_seat(&self) -> Result<Option<ServerSeat<T>>, Error> {
-        if self.server_builder.is_none() {
-            return Ok(None);
+    /// The start after its preflight ([`start`](Self::start)): the link,
+    /// with the full server's seat attached before its first request is
+    /// classified, the registered port, the server, then the roles. The
+    /// server takes its requests once all of it is done (#2617).
+    pub(super) async fn start_link(
+        &mut self,
+        device_target: Option<ObjectIdentifier>,
+        source_routes: Option<crate::source_audit::recipient::SourceRoutes>,
+    ) -> Result<(), Error> {
+        let ingress = self.ingress.as_mut().ok_or_else(missing_ingress)?;
+        let (receivers, seat) = match self.server_builder {
+            Some(_) => {
+                let coordinator = Arc::clone(&self.coordinator);
+                let (receivers, seat) = ingress.start_with_server_seat(coordinator).await?;
+                (receivers, Some(seat))
+            }
+            None => (ingress.start().await?, None),
+        };
+        #[cfg(test)]
+        start_pause(|pauses| pauses.after_link).await;
+        self.publish_registered_port(
+            (receivers.bip_port.clone(), receivers.bip6_port.clone()),
+            receivers.egress.local_network_number(),
+        )
+        .await?;
+        let source = SourceSlot::default();
+        if let Some(mut seat) = seat {
+            seat.node = Some(self.node_device());
+            self.build_server(seat, &source).await?;
         }
-        let mut seat = self
-            .ingress
-            .as_ref()
-            .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?
-            .server_seat(Arc::clone(&self.coordinator))?;
-        seat.node = Some(self.node_device());
-        Ok(Some(seat))
+        #[cfg(test)]
+        start_pause(|pauses| pauses.after_build).await;
+        let bip_local_address = receivers.bip_local_address;
+        // Source Audit installs itself under the database's guard, which a
+        // started server may be holding a moment.
+        let database = self
+            .source_audit_reporter
+            .and(self.database.as_ref().map(Arc::clone));
+        let mut guard = match &database {
+            Some(database) => Some(database.write().await),
+            None => None,
+        };
+        let started = self.start_roles(
+            receivers,
+            source_routes,
+            device_target,
+            guard.as_deref_mut(),
+        );
+        drop(guard);
+        started?;
+        if let Some(audit) = &self.source_audit {
+            let _ = source.set(Arc::downgrade(audit));
+        }
+        // The server takes its requests from here on. A start that failed
+        // or was cancelled before this leaves them held until stop.
+        self.server_gate = None;
+        self.bip_local_address = bip_local_address;
+        Ok(())
     }
 
     /// Build the server on `seat` from the session's builder, handing it
@@ -362,25 +424,60 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 /// for its later step): read-only. Peers read, discover and subscribe to
 /// COV; no peer writes, creates or deletes. Each covered mutation but the
 /// three COV subscriptions is denied (SERVICES / SERVICE_REQUEST_DENIED,
-/// skipped for an inbound WriteGroup); everything the server's other
+/// skipped for an inbound WriteGroup), and time synchronization, local and
+/// UTC (Clauses 16.7 and 16.8), is ignored. Everything the server's other
 /// defaults deny (DeviceCommunicationControl, ReinitializeDevice without a
-/// handler, LifeSafetyOperation, Audit notifications) stays denied.
-/// Services the mutation policy doesn't decide keep the server's defaults:
-/// AcknowledgeAlarm (Clause 13.5), time synchronization under the default
-/// `TimeSyncPolicy` (Clause 16.7) and text messages (Clause 16.5) are
-/// executed for any peer.
+/// handler, LifeSafetyOperation, Audit notifications) stays denied. What
+/// the mutation policy doesn't decide keeps the server's defaults and is
+/// executed for any peer: AcknowledgeAlarm (Clause 13.5), the SubscribeCOV
+/// family, received event notifications, which Notification Forwarder
+/// objects pass on, a received I-Am, and text messages (Clauses 16.5 and
+/// 16.6).
 #[allow(dead_code)]
 pub(crate) fn read_only_server<T: TransportPort + 'static>() -> ServerBuilder<T> {
-    BACnetServer::generic_builder().policy(FnPolicy::new().inline().mutation(|context| {
-        matches!(
-            context.target,
-            MutationTarget::SubscribeCov(_)
-                | MutationTarget::SubscribeCovProperty(_)
-                | MutationTarget::SubscribeCovPropertyMultiple(_)
-        )
-    }))
+    BACnetServer::generic_builder()
+        .policy(FnPolicy::new().inline().mutation(|context| {
+            matches!(
+                context.target,
+                MutationTarget::SubscribeCov(_)
+                    | MutationTarget::SubscribeCovProperty(_)
+                    | MutationTarget::SubscribeCovPropertyMultiple(_)
+            )
+        }))
+        .time_sync_policy(bacnet_server::server::TimeSyncPolicy {
+            enabled: false,
+            ..Default::default()
+        })
+}
+
+fn missing_ingress() -> Error {
+    Error::Encoding("endpoint session ingress owner is missing".into())
+}
+
+/// Pauses a test puts into a start (#2617), to widen the windows the start
+/// must keep closed: right after the link starts, and right after the
+/// server is built.
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct StartPauses {
+    pub(crate) after_link: std::time::Duration,
+    pub(crate) after_build: std::time::Duration,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// The pauses of the start this task runs, when a test sets them.
+    pub(crate) static START_PAUSES: StartPauses;
+}
+
+#[cfg(test)]
+async fn start_pause(which: fn(&StartPauses) -> std::time::Duration) {
+    let pause = START_PAUSES.try_with(which).unwrap_or_default();
+    if !pause.is_zero() {
+        tokio::time::sleep(pause).await;
+    }
 }
 
 #[cfg(test)]
 #[path = "session_server_tests.rs"]
-mod tests;
+pub(super) mod tests;
