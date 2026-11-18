@@ -6,16 +6,19 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a command-line tool prints its results
 #![forbid(unsafe_code)]
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 use std::{io::IsTerminal, net::Ipv4Addr};
 
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::{parse, target};
-use bacnet_transport::{bip::BipTransport, port::TransportPort};
+use bacnet_ops::parse;
+use bacnet_transport::port::TransportPort;
 use clap::{CommandFactory, FromArgMatches};
 
 mod args;
+mod bip_commands;
 mod commands;
 mod core;
 // The one-shot capture (`pcap`) and the TUI's Capture screen each use a
@@ -25,6 +28,7 @@ mod decode;
 mod destination;
 mod entry;
 mod foreign;
+mod heap;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod mstp;
@@ -43,6 +47,8 @@ mod tui;
 use crate::core::guard;
 use crate::core::range::parse_discover_range;
 use args::{Cli, Command};
+use bip_commands::execute_bip_command;
+use heap::boxed;
 use output::OutputFormat;
 
 fn resolve_format(cli: &Cli) -> OutputFormat {
@@ -62,13 +68,18 @@ fn resolve_format(cli: &Cli) -> OutputFormat {
     }
 }
 
+/// A boxed future, as the one-shot dispatch's helpers return them (see
+/// [`heap`]).
+type Boxed<'a, T> = Pin<Box<dyn Future<Output = Result<T, Box<dyn std::error::Error>>> + 'a>>;
+
 /// Resolve a target string to a MAC on this network, for commands without a
-/// routed client call (see [`destination::resolve_mac`]).
-async fn resolve_target_mac<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    target_str: &str,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    Ok(destination::resolve_mac(client, target_str).await?)
+/// routed client call (see [`destination::resolve_mac`]). Boxed, as each
+/// command is (see [`heap`]).
+fn resolve_target_mac<'a, T: TransportPort + 'static>(
+    client: &'a BACnetClient<T>,
+    target_str: &'a str,
+) -> Boxed<'a, Vec<u8>> {
+    boxed(move || async move { Ok(destination::resolve_mac(client, target_str).await?) })
 }
 
 /// How long a routed target waits for its device to answer a Who-Is sent
@@ -90,12 +101,12 @@ fn routed_wait() -> Duration {
 
 /// Resolve a device command's target string: besides an address or a
 /// discovered instance, it takes `dnet:instance` and `dnet:0xMAC` for a
-/// device behind a router.
-async fn resolve_destination<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    target_str: &str,
-) -> Result<Destination, Box<dyn std::error::Error>> {
-    Ok(destination::resolve(client, target_str, routed_wait()).await?)
+/// device behind a router. Boxed, as each command is (see [`heap`]).
+fn resolve_destination<'a, T: TransportPort + 'static>(
+    client: &'a BACnetClient<T>,
+    target_str: &'a str,
+) -> Boxed<'a, Destination> {
+    boxed(move || async move { Ok(destination::resolve(client, target_str, routed_wait()).await?) })
 }
 
 /// Execute a one-shot CLI command.
@@ -131,8 +142,9 @@ async fn execute_command<T: TransportPort + 'static>(
             }
             let range = parse_discover_range(range.as_deref())?;
             let scope =
-                commands::discover::scope(client, target.as_deref(), *dnet, *global).await?;
-            commands::discover::discover(client, &scope, range, *wait, format).await?;
+                boxed(|| commands::discover::scope(client, target.as_deref(), *dnet, *global))
+                    .await?;
+            boxed(|| commands::discover::discover(client, &scope, range, *wait, format)).await?;
         }
         Command::Find {
             name,
@@ -148,8 +160,9 @@ async fn execute_command<T: TransportPort + 'static>(
                 .or(name_flag.as_ref())
                 .ok_or("find needs a NAME")?;
             let scope =
-                commands::discover::scope(client, target.as_deref(), *dnet, *global).await?;
-            commands::discover::find_by_name(client, name, &scope, *wait, format).await?;
+                boxed(|| commands::discover::scope(client, target.as_deref(), *dnet, *global))
+                    .await?;
+            boxed(|| commands::discover::find_by_name(client, name, &scope, *wait, format)).await?;
         }
         Command::Read {
             target,
@@ -159,18 +172,22 @@ async fn execute_command<T: TransportPort + 'static>(
             let to = resolve_destination(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
             let (prop, index) = parse::parse_property(property)?;
-            commands::read::read_property_cmd(
-                client,
-                &to,
-                object_type,
-                instance,
-                prop,
-                index,
-                format,
-            )
+            boxed(|| {
+                commands::read::read_property_cmd(
+                    client,
+                    &to,
+                    object_type,
+                    instance,
+                    prop,
+                    index,
+                    format,
+                )
+            })
             .await?;
         }
-        Command::Export { format } => commands::export::export_cmd(client, format).await?,
+        Command::Export { format } => {
+            boxed(|| commands::export::export_cmd(client, format)).await?
+        }
         Command::Inventory {
             target,
             types,
@@ -186,11 +203,11 @@ async fn execute_command<T: TransportPort + 'static>(
                 csv_exact: *csv_exact,
                 layout: commands::inventory::Layout::of(csv, format),
             };
-            commands::inventory::inventory_cmd(client, args).await?;
+            boxed(|| commands::inventory::inventory_cmd(client, args)).await?;
         }
         Command::Readm { target, specs } => {
             let to = resolve_destination(client, target).await?;
-            commands::read::read_multiple_cmd(client, &to, specs, format).await?;
+            boxed(|| commands::read::read_multiple_cmd(client, &to, specs, format)).await?;
         }
         Command::Write {
             target,
@@ -206,25 +223,28 @@ async fn execute_command<T: TransportPort + 'static>(
             // `72.5@8 --priority 10` names two: refused, never one picked.
             let pri = bacnet_ops::write::one_priority(inline_priority, *priority)?;
             let to = resolve_destination(client, target).await?;
-            commands::write::write_property_cmd(
-                client,
-                &to,
-                commands::write::WritePropertyArgs {
-                    object_type,
-                    instance,
-                    property: prop,
-                    index,
-                    value: val,
-                    priority: pri.map(bacnet_ops::Priority::get),
-                },
-                format,
-            )
+            boxed(|| {
+                commands::write::write_property_cmd(
+                    client,
+                    &to,
+                    commands::write::WritePropertyArgs {
+                        object_type,
+                        instance,
+                        property: prop,
+                        index,
+                        value: val,
+                        priority: pri.map(bacnet_ops::Priority::get),
+                    },
+                    format,
+                )
+            })
             .await?;
         }
         Command::Writem { target, specs } => {
             let to = resolve_destination(client, target).await?;
             let specs = commands::write::parse_write_multiple(specs)?;
-            commands::write::write_property_multiple_cmd(client, &to, specs, format).await?;
+            boxed(|| commands::write::write_property_multiple_cmd(client, &to, specs, format))
+                .await?;
         }
         Command::Subscribe {
             target,
@@ -240,13 +260,15 @@ async fn execute_command<T: TransportPort + 'static>(
                 lifetime: *lifetime,
                 confirmed: *confirmed,
             };
-            commands::subscribe::subscribe_cmd(
-                client,
-                &to,
-                subscription,
-                format,
-                commands::subscribe::stop_signal(),
-            )
+            boxed(|| {
+                commands::subscribe::subscribe_cmd(
+                    client,
+                    &to,
+                    subscription,
+                    format,
+                    commands::subscribe::stop_signal(),
+                )
+            })
             .await?;
         }
         Command::Control {
@@ -256,14 +278,16 @@ async fn execute_command<T: TransportPort + 'static>(
             password,
         } => {
             let to = resolve_destination(client, target).await?;
-            commands::device::control_cmd(
-                client,
-                &to,
-                action,
-                *duration,
-                password.as_deref(),
-                format,
-            )
+            boxed(|| {
+                commands::device::control_cmd(
+                    client,
+                    &to,
+                    action,
+                    *duration,
+                    password.as_deref(),
+                    format,
+                )
+            })
             .await?;
         }
         Command::Reinit {
@@ -272,19 +296,21 @@ async fn execute_command<T: TransportPort + 'static>(
             password,
         } => {
             let to = resolve_destination(client, target).await?;
-            commands::device::reinit_cmd(client, &to, state, password.as_deref(), format).await?;
+            boxed(|| commands::device::reinit_cmd(client, &to, state, password.as_deref(), format))
+                .await?;
         }
         Command::Alarms { target, max } => {
             let to = resolve_destination(client, target).await?;
-            commands::alarms::alarms_cmd(client, &to, *max, format).await?;
+            boxed(|| commands::alarms::alarms_cmd(client, &to, *max, format)).await?;
         }
         Command::AlarmSummary { target } => {
             let to = resolve_destination(client, target).await?;
-            commands::alarms::alarm_summary_cmd(client, &to, format).await?;
+            boxed(|| commands::alarms::alarm_summary_cmd(client, &to, format)).await?;
         }
         Command::EnrollmentSummary { target, filters } => {
             let to = resolve_destination(client, target).await?;
-            commands::alarms::enrollment_summary_cmd(client, &to, filters, format).await?;
+            boxed(|| commands::alarms::enrollment_summary_cmd(client, &to, filters, format))
+                .await?;
         }
         Command::FileRead {
             target,
@@ -295,18 +321,20 @@ async fn execute_command<T: TransportPort + 'static>(
             output,
         } => {
             let to = resolve_destination(client, target).await?;
-            commands::file::file_read_cmd(
-                client,
-                &to,
-                *file_instance,
-                commands::file::FileReadOptions {
-                    access: *access,
-                    start_position: *start,
-                    count: *count,
-                    output_path: output.as_deref(),
-                },
-                format,
-            )
+            boxed(|| {
+                commands::file::file_read_cmd(
+                    client,
+                    &to,
+                    *file_instance,
+                    commands::file::FileReadOptions {
+                        access: *access,
+                        start_position: *start,
+                        count: *count,
+                        output_path: output.as_deref(),
+                    },
+                    format,
+                )
+            })
             .await?;
         }
         Command::FileWrite {
@@ -316,8 +344,10 @@ async fn execute_command<T: TransportPort + 'static>(
             input,
         } => {
             let to = resolve_destination(client, target).await?;
-            commands::file::file_write_cmd(client, &to, *file_instance, *start, input, format)
-                .await?;
+            boxed(|| {
+                commands::file::file_write_cmd(client, &to, *file_instance, *start, input, format)
+            })
+            .await?;
         }
         Command::Bdt { .. }
         | Command::Fdt { .. }
@@ -326,11 +356,11 @@ async fn execute_command<T: TransportPort + 'static>(
             return Err("BBMD management commands (bdt, fdt, register, unregister) are only supported on BACnet/IP transport".into());
         }
         Command::WhoisRouter { dnet, wait } => {
-            commands::router::whois_router_cmd(client, *dnet, *wait, format).await?;
+            boxed(|| commands::router::whois_router_cmd(client, *dnet, *wait, format)).await?;
         }
         Command::RoutingTable { target, wait } => {
             let mac = resolve_target_mac(client, target).await?;
-            commands::router::routing_table_cmd(client, &mac, *wait, format).await?;
+            boxed(|| commands::router::routing_table_cmd(client, &mac, *wait, format)).await?;
         }
         Command::AckAlarm {
             target,
@@ -342,19 +372,21 @@ async fn execute_command<T: TransportPort + 'static>(
         } => {
             let (object_type, instance) = parse::parse_object_specifier(object)?;
             let to = resolve_destination(client, target).await?;
-            commands::device::acknowledge_alarm_cmd(
-                client,
-                &to,
-                commands::device::AcknowledgeAlarmArgs {
-                    object_type,
-                    instance,
-                    event_state: bacnet_types::enums::EventState::from_raw(*state),
-                    source,
-                    timestamp: timestamp.clone(),
-                    time_of_acknowledgment: ack_time.clone(),
-                },
-                format,
-            )
+            boxed(|| {
+                commands::device::acknowledge_alarm_cmd(
+                    client,
+                    &to,
+                    commands::device::AcknowledgeAlarmArgs {
+                        object_type,
+                        instance,
+                        event_state: bacnet_types::enums::EventState::from_raw(*state),
+                        source,
+                        timestamp: timestamp.clone(),
+                        time_of_acknowledgment: ack_time.clone(),
+                    },
+                    format,
+                )
+            })
             .await?;
         }
         Command::ReadRange {
@@ -366,90 +398,45 @@ async fn execute_command<T: TransportPort + 'static>(
             let to = resolve_destination(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
             let (prop, index) = parse::parse_property(property)?;
-            commands::read_range::read_range_cmd(
-                client,
-                &to,
-                object_type,
-                instance,
-                prop,
-                index,
-                range,
-                format,
-            )
+            boxed(|| {
+                commands::read_range::read_range_cmd(
+                    client,
+                    &to,
+                    object_type,
+                    instance,
+                    prop,
+                    index,
+                    range,
+                    format,
+                )
+            })
             .await?;
         }
         Command::CreateObject { target, object } => {
             let to = resolve_destination(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
-            commands::device::create_object_cmd(client, &to, object_type, instance, format).await?;
+            boxed(|| {
+                commands::device::create_object_cmd(client, &to, object_type, instance, format)
+            })
+            .await?;
         }
         Command::DeleteObject { target, object } => {
             let to = resolve_destination(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
-            commands::device::delete_object_cmd(client, &to, object_type, instance, format).await?;
+            boxed(|| {
+                commands::device::delete_object_cmd(client, &to, object_type, instance, format)
+            })
+            .await?;
         }
         Command::Capture { .. } => {
             return Err("capture command should be handled before client setup".into());
         }
         Command::TimeSync { target, utc } => {
             let to = resolve_destination(client, target).await?;
-            commands::device::time_sync_cmd(client, &to, *utc, format).await?;
+            boxed(|| commands::device::time_sync_cmd(client, &to, *utc, format)).await?;
         }
     }
     Ok(())
-}
-
-/// Try to execute a BIP-specific BBMD management command.
-/// Returns `Ok(true)` if handled, `Ok(false)` if not a BIP-specific command.
-async fn execute_bip_command(
-    client: &BACnetClient<BipTransport>,
-    cmd: &Command,
-    ttl: u16,
-    format: OutputFormat,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    match cmd {
-        Command::Discover {
-            range,
-            wait,
-            target,
-            bbmd: Some(bbmd_addr),
-            dnet,
-            global,
-        } => {
-            let bbmd_mac = target::address_mac(
-                client.transport(),
-                bbmd_addr,
-                "--bbmd requires an IP address, not a device instance",
-            )
-            .await?;
-            client.register_foreign_device_bvlc(&bbmd_mac, ttl).await?;
-            eprintln!("Registered as foreign device with BBMD {bbmd_addr}");
-            // Brief pause to allow registration to propagate.
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let range = parse_discover_range(range.as_deref())?;
-            let scope =
-                commands::discover::scope(client, target.as_deref(), *dnet, *global).await?;
-            commands::discover::discover(client, &scope, range, *wait, format).await?;
-        }
-        Command::Bdt { target } => {
-            let mac = resolve_target_mac(client, target).await?;
-            commands::router::bdt_cmd(client, &mac, format).await?;
-        }
-        Command::Fdt { target } => {
-            let mac = resolve_target_mac(client, target).await?;
-            commands::router::fdt_cmd(client, &mac, format).await?;
-        }
-        Command::Register { target } => {
-            let mac = resolve_target_mac(client, target).await?;
-            commands::router::register_cmd(client, &mac, ttl, format).await?;
-        }
-        Command::Unregister { target } => {
-            let mac = resolve_target_mac(client, target).await?;
-            commands::router::unregister_cmd(client, &mac, format).await?;
-        }
-        _ => return Ok(false),
-    }
-    Ok(true)
 }
 
 /// Run the one-shot command and stop the client.
@@ -458,8 +445,8 @@ async fn run<T: TransportPort + 'static>(
     cli: &Cli,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let command = Box::pin(execute_command(&client, cli, format));
-    routed_paths::around(&client, cli, format, command).await?;
+    let command = boxed(|| execute_command(&client, cli, format));
+    boxed(|| routed_paths::around(&client, cli, format, command)).await?;
     client.stop().await?;
     Ok(())
 }
@@ -631,21 +618,23 @@ fn parse_on_large_stack<T: Send + 'static>(parse: impl FnOnce() -> T + Send + 's
 
 /// Create `cli_main`'s future and move it to the heap. The full-size temporary
 /// that creating it takes is in this frame, which returns before polling
-/// starts.
+/// starts. The command line goes in boxed too, so the future holds a pointer
+/// to it, not its copies of the whole `Cli`.
 #[inline(never)]
 fn boxed_cli_main(cli: Cli) -> std::pin::Pin<Box<impl std::future::Future<Output = CliResult>>> {
-    Box::pin(cli_main(cli))
+    Box::pin(cli_main(Box::new(cli)))
 }
 
-async fn cli_main(cli: Cli) -> CliResult {
+async fn cli_main(cli: Box<Cli>) -> CliResult {
     if matches!(cli.command, Some(Command::Tui { .. })) {
         // The TUI sets up its own tracing: nothing may write to the terminal
-        // while it is in raw mode. Boxed so its state stays out of this future.
-        return Box::pin(run_tui(cli)).await;
+        // while it is in raw mode. Boxed so its state stays out of this future
+        // and its poll frame (see `heap`), as each session below is.
+        return boxed(|| run_tui(*cli)).await;
     }
     if matches!(cli.command, Some(Command::Mcp { .. })) {
         // Stdout is the MCP stream: it sets up its own tracing, on stderr.
-        return Box::pin(run_mcp(cli)).await;
+        return boxed(|| run_mcp(*cli)).await;
     }
     output::setup_tracing(cli.verbose);
     let format = resolve_format(&cli);
@@ -694,13 +683,13 @@ async fn cli_main(cli: Cli) -> CliResult {
     }
 
     if args.mstp.is_some() {
-        return mstp::run(&cli, &args, format).await;
+        return boxed(|| mstp::run(&cli, &args, format)).await;
     }
     if args.sc {
         #[cfg(feature = "sc-tls")]
         {
             let client = transport::build_sc_client(&args).await?;
-            run(client, &cli, format).await?;
+            boxed(|| run(client, &cli, format)).await?;
         }
         #[cfg(not(feature = "sc-tls"))]
         {
@@ -725,7 +714,7 @@ async fn cli_main(cli: Cli) -> CliResult {
                 }
             }
         }
-        run(client, &cli, format).await?;
+        boxed(|| run(client, &cli, format)).await?;
     } else {
         let mut client = transport::build_bip_client(&args).await?;
         let cmd = cli.command.as_ref().expect("a command after parsing");
@@ -744,13 +733,13 @@ async fn cli_main(cli: Cli) -> CliResult {
                 }
             }
         }
-        let command = Box::pin(async {
-            if !execute_bip_command(&client, cmd, cli.ttl, format).await? {
-                execute_command(&client, &cli, format).await?;
+        let command = boxed(|| async {
+            if !boxed(|| execute_bip_command(&client, cmd, cli.ttl, format)).await? {
+                boxed(|| execute_command(&client, &cli, format)).await?;
             }
             Ok(())
         });
-        routed_paths::around(&client, &cli, format, command).await?;
+        boxed(|| routed_paths::around(&client, &cli, format, command)).await?;
         client.stop().await?;
     }
 
@@ -792,3 +781,6 @@ async fn run_mcp(cli: Cli) -> CliResult {
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod future_size_tests;
