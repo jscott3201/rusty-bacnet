@@ -25,7 +25,7 @@ use rmcp::model::{
     ReadResourceResponse, ServerCapabilities, ServerConfig, SubscribeRequestParams,
     SubscriptionFilter, UnsubscribeRequestParams,
 };
-use rmcp::service::{RequestContext, SubscriptionContext};
+use rmcp::service::{MaybeSendFuture, RequestContext, SubscriptionContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::sync::CancellationToken;
@@ -33,6 +33,7 @@ use tokio_util::sync::CancellationToken;
 use crate::contain::{contained, contained_sync};
 use crate::context::{Ctx, Gates};
 use crate::cursor::Cursors;
+use crate::heap::boxed;
 use crate::listen::{self, Subs};
 use crate::policy::Policy;
 use crate::{legacy, prompts, resources, tools};
@@ -566,6 +567,57 @@ fn peer(context: &RequestContext<RoleServer>) -> tools::write::Peer {
     }
 }
 
+/// The work of the handlers that reach the network, each run behind the
+/// box its [`ServerHandler`] method hands the SDK.
+impl<T: TransportPort + 'static> McpServer<T> {
+    async fn serve_call(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let args = request.arguments.unwrap_or_default();
+        let writing = tools::writes(&request.name);
+        // Built once: a write needs it, and an attached session's agent
+        // pane names the client (#2185).
+        let peer = (writing || self.ctx.pane.is_some()).then(|| peer(&context));
+        let noted = self.ctx.pane.as_ref().map(|pane| {
+            let started = tokio::time::Instant::now();
+            let client = peer.as_ref().and_then(|p| p.name.clone());
+            (pane, started, (crate::board::target(&args), client))
+        });
+        let call = async {
+            if let Some(peer) = peer.as_ref().filter(|_| writing) {
+                let retry = tools::write::Retry {
+                    state: request.request_state,
+                    responses: request.input_responses,
+                    server: false,
+                };
+                return tools::call_write(&self.ctx, &request.name, args, retry, peer, context.ct)
+                    .await;
+            }
+            tools::call(&self.ctx, &request.name, args, context.ct)
+                .await
+                .map(Into::into)
+        };
+        let response = contained(&self.ctx.panics, call).await;
+        if let Some((pane, started, (target, client))) = noted {
+            let what = (request.name.as_ref(), target, client);
+            pane.record(what, &response, started.elapsed());
+        }
+        response
+    }
+
+    async fn serve_read(
+        &self,
+        request: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        // The read on the heap too: this future only owns the request.
+        let read = boxed(|| resources::read(&self.ctx, &request.uri, context.ct));
+        contained(&self.ctx.panics, read).await.map(Into::into)
+    }
+}
+
 impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
     fn get_info(&self) -> ServerConfig {
         let capabilities = ServerCapabilities::builder()
@@ -608,41 +660,15 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         contained(&self.ctx.panics, list).await
     }
 
-    async fn call_tool(
+    // The three handlers that reach the network hand the SDK a boxed
+    // future (`heap`, #2656): its task, task-locals and dispatch over every
+    // kind of request then hold a pointer, not a copy of each.
+    fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResponse, ErrorData> {
-        let args = request.arguments.unwrap_or_default();
-        let writing = tools::writes(&request.name);
-        // Built once: a write needs it, and an attached session's agent
-        // pane names the client (#2185).
-        let peer = (writing || self.ctx.pane.is_some()).then(|| peer(&context));
-        let noted = self.ctx.pane.as_ref().map(|pane| {
-            let started = tokio::time::Instant::now();
-            let client = peer.as_ref().and_then(|p| p.name.clone());
-            (pane, started, (crate::board::target(&args), client))
-        });
-        let call = async {
-            if let Some(peer) = peer.as_ref().filter(|_| writing) {
-                let retry = tools::write::Retry {
-                    state: request.request_state,
-                    responses: request.input_responses,
-                    server: false,
-                };
-                return tools::call_write(&self.ctx, &request.name, args, retry, peer, context.ct)
-                    .await;
-            }
-            tools::call(&self.ctx, &request.name, args, context.ct)
-                .await
-                .map(Into::into)
-        };
-        let response = contained(&self.ctx.panics, call).await;
-        if let Some((pane, started, (target, client))) = noted {
-            let what = (request.name.as_ref(), target, client);
-            pane.record(what, &response, started.elapsed());
-        }
-        response
+    ) -> impl Future<Output = Result<CallToolResponse, ErrorData>> + MaybeSendFuture + '_ {
+        boxed(|| self.serve_call(request, context))
     }
 
     async fn list_resources(
@@ -671,13 +697,12 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         contained(&self.ctx.panics, list).await
     }
 
-    async fn read_resource(
+    fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResponse, ErrorData> {
-        let read = resources::read(&self.ctx, &request.uri, context.ct);
-        contained(&self.ctx.panics, read).await.map(Into::into)
+    ) -> impl Future<Output = Result<ReadResourceResponse, ErrorData>> + MaybeSendFuture + '_ {
+        boxed(|| self.serve_read(request, context))
     }
 
     fn accepted_subscription_filter(
@@ -697,8 +722,11 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         })
     }
 
-    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
-        contained(&self.ctx.panics, listen::run(&self.ctx, context)).await
+    fn listen(
+        &self,
+        context: SubscriptionContext,
+    ) -> impl Future<Output = Result<(), ErrorData>> + MaybeSendFuture + '_ {
+        boxed(|| contained(&self.ctx.panics, listen::run(&self.ctx, context)))
     }
 
     // The SDK routes these to sessions on revisions before 2026-07-28 only

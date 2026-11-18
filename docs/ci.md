@@ -1242,8 +1242,8 @@ which the Tests job's build can't reuse, so they run in the shorter job.
 PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's.
 Within a job every step runs even when an earlier one failed, so one run
 reports each failure. `STACK_GUARD_TESTS` (in the workflow's `env`)
-selects every server, client, endpoint, integration and CLI test, the
-benchmark SC mTLS tests and bacnet-transport's BACnet/SC tests; the guard step
+selects every server, client, endpoint, integration, CLI and MCP server
+test, the benchmark SC mTLS tests and bacnet-transport's BACnet/SC tests; the guard step
 runs `--no-run` first because rustc reads `RUST_MIN_STACK` too, and adds about
 two minutes to each Tests job. The per-crate default-feature checks
 (`scripts/ci/check-default-features.sh`) aren't here: `ci.yml`'s Clippy job
