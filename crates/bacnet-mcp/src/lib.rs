@@ -41,6 +41,7 @@ mod errors;
 #[cfg(test)]
 mod fence_tests;
 mod follow;
+mod heap;
 mod legacy;
 mod listen;
 pub mod policy;
