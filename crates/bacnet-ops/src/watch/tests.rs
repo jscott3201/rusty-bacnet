@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bacnet_client::client::{ReceivedCOVNotification, Station};
+use bacnet_client::client::{COVEvent, ReceivedCOVNotification, Station};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -282,6 +282,11 @@ async fn joining_as_the_last_leaves_keeps_one_live_subscription() {
     lab.stop().await;
 }
 
+/// `received` as the client's stream carries it.
+pub(super) fn event(received: &ReceivedCOVNotification) -> COVEvent {
+    COVEvent::Object(received.clone())
+}
+
 /// A notification for `point`'s object, from the lab device's MAC,
 /// carrying `values` (property, index).
 fn notification(
@@ -356,12 +361,22 @@ fn notifications_cannot_grow_the_rows() {
         element.object,
         &[(PropertyIdentifier::PRIORITY_ARRAY, Some(9))],
     );
-    assert!(!dispatch::belongs(&element, Some(&target), &other, None));
+    assert!(!dispatch::belongs(
+        &element,
+        Some(&target),
+        &event(&other),
+        None
+    ));
     let mine = notification(
         element.object,
         &[(PropertyIdentifier::PRIORITY_ARRAY, Some(8))],
     );
-    assert!(dispatch::belongs(&element, Some(&target), &mine, None));
+    assert!(dispatch::belongs(
+        &element,
+        Some(&target),
+        &event(&mine),
+        None
+    ));
     let mut rows = Vec::new();
     dispatch::merge(&mut rows, &element, &[], false, &other);
     assert!(rows.is_empty());
@@ -374,7 +389,12 @@ fn notifications_cannot_grow_the_rows() {
         &[(PropertyIdentifier::PRIORITY_ARRAY, None)],
     );
     array.notification.list_of_values[0].value = [0x00; 16].to_vec();
-    assert!(!dispatch::belongs(&element, Some(&target), &array, None));
+    assert!(!dispatch::belongs(
+        &element,
+        Some(&target),
+        &event(&array),
+        None
+    ));
     let mut kept = rows.clone();
     dispatch::merge(&mut kept, &element, &[], false, &array);
     assert_eq!(kept, rows, "the previous value stays");
@@ -382,7 +402,12 @@ fn notifications_cannot_grow_the_rows() {
         element.object,
         &[(PropertyIdentifier::PRIORITY_ARRAY, None)],
     );
-    assert!(dispatch::belongs(&element, Some(&target), &single, None));
+    assert!(dispatch::belongs(
+        &element,
+        Some(&target),
+        &event(&single),
+        None
+    ));
     let whole = Point {
         watched: Watched::Property {
             property: PropertyIdentifier::PRIORITY_ARRAY,
@@ -390,7 +415,12 @@ fn notifications_cannot_grow_the_rows() {
         },
         ..element.clone()
     };
-    assert!(!dispatch::belongs(&whole, Some(&target), &mine, None));
+    assert!(!dispatch::belongs(
+        &whole,
+        Some(&target),
+        &event(&mine),
+        None
+    ));
 }
 
 /// A property watch that keeps Status_Flags takes in its property
@@ -429,7 +459,7 @@ async fn lagged_notifications_are_counted() {
     ));
     let (sender, receiver) = tokio::sync::broadcast::channel(1);
     for _ in 0..4 {
-        sender.send(notification(ai(1), &[])).unwrap();
+        sender.send(event(&notification(ai(1), &[]))).unwrap();
     }
     let (stop, stopped) = watch::channel(false);
     let (_events, events) = tokio::sync::broadcast::channel(1);
@@ -447,6 +477,77 @@ async fn lagged_notifications_are_counted() {
     ));
     settle().await;
     assert_eq!(registry.lagged.load(Ordering::Relaxed), 3);
+    stop.send_replace(true);
+    task.await.unwrap();
+}
+
+/// The hub subscribes per object or property, so a COV-multiple
+/// notification answers none of its watches, even one carrying a watch's
+/// process identifier from its device: the receiver counts it and leaves the
+/// entry alone (#2654).
+#[tokio::test(start_paused = true)]
+async fn cov_multiple_notifications_are_counted_and_left_alone() {
+    use bacnet_client::client::{COVNotificationDelivery, ReceivedCOVNotificationMultiple};
+    use bacnet_services::cov_multiple::{
+        COVNotificationItem, COVNotificationMultipleRequest, COVNotificationValue,
+    };
+    let registry = Arc::new(Registry::new(
+        PROCESS_BASE,
+        Duration::ZERO,
+        POINT_PROPERTIES.to_vec(),
+        false,
+    ));
+    let shared = Arc::new(super::shared::Shared::new(object(ai(1)), PROCESS_BASE, 4));
+    registry
+        .table()
+        .by_process
+        .insert(PROCESS_BASE, Arc::clone(&shared));
+    shared.lock().target = Some(Station::local(&[2]));
+    let multiple = COVEvent::Multiple(ReceivedCOVNotificationMultiple {
+        notification: COVNotificationMultipleRequest {
+            subscriber_process_identifier: PROCESS_BASE,
+            initiating_device_identifier: oid(ObjectType::DEVICE, LAB),
+            time_remaining: 100,
+            timestamp: None,
+            list_of_cov_notifications: vec![COVNotificationItem {
+                monitored_object_identifier: ai(1),
+                list_of_values: vec![COVNotificationValue {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    value: vec![0x44, 0x42, 0x28, 0, 0],
+                    time_of_change: None,
+                }],
+            }],
+        },
+        source_mac: bacnet_types::MacAddr::from_slice(&[2]),
+        source_network: None,
+        source_address: None,
+        delivery: COVNotificationDelivery::Unconfirmed,
+    });
+    let (sender, receiver) = tokio::sync::broadcast::channel(4);
+    sender.send(multiple.clone()).unwrap();
+    let single = notification(ai(1), &[(PropertyIdentifier::PRESENT_VALUE, None)]);
+    sender.send(event(&single)).unwrap();
+    sender.send(multiple).unwrap();
+    let (stop, stopped) = watch::channel(false);
+    let (_events, events) = tokio::sync::broadcast::channel(1);
+    let (_devices, devices) = tokio::sync::broadcast::channel(1);
+    let heard = dispatch::Heard {
+        events,
+        devices,
+        own: Box::new(|| None),
+    };
+    let task = tokio::spawn(dispatch::run(
+        Arc::clone(&registry),
+        receiver,
+        heard,
+        stopped,
+    ));
+    settle().await;
+    assert_eq!(registry.cov_multiple_ignored.load(Ordering::Relaxed), 2);
+    assert_eq!(registry.lagged.load(Ordering::Relaxed), 0);
+    // Only the single-object notification reached the entry.
+    assert_eq!(shared.lock().snapshot.notifications, 1);
     stop.send_replace(true);
     task.await.unwrap();
 }
@@ -500,10 +601,10 @@ async fn a_notified_value_clears_the_whole_objects_error() {
         entry.failure = Some(crate::format::PropertyError::NoValue);
     }
     let flags = notification(ai(1), &[(PropertyIdentifier::STATUS_FLAGS, None)]);
-    registry.deliver(&flags, None);
+    registry.deliver(&event(&flags), None);
     assert!(shared.lock().failure.is_some(), "not the watched property");
     let value = notification(ai(1), &[(PropertyIdentifier::PRESENT_VALUE, None)]);
-    registry.deliver(&value, None);
+    registry.deliver(&event(&value), None);
     assert!(shared.lock().failure.is_none(), "a value of the property");
 }
 

@@ -28,14 +28,16 @@ use std::sync::OnceLock;
 
 /// What a full client executes beside a full server on one node (#2617):
 /// I-Am and I-Have, which its discovery takes in, and the COV
-/// notifications of its subscriptions, which it acknowledges. The server
-/// already lists both event notifications, whose confirmed form it
-/// acknowledges; the client takes neither COV-notification-multiple form.
+/// notifications of its subscriptions, of one object or of several
+/// (#2654), whose confirmed forms it acknowledges. The server already lists
+/// both event notifications, whose confirmed form it acknowledges.
 pub(crate) const NODE_CLIENT_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::I_AM,
     ServiceSupported::I_HAVE,
     ServiceSupported::CONFIRMED_COV_NOTIFICATION,
     ServiceSupported::UNCONFIRMED_COV_NOTIFICATION,
+    ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+    ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -21,6 +21,8 @@ An initial property read establishes a baseline and gives useful context when no
 
 The Python client exposes `subscribe_cov`, `unsubscribe_cov`, and `cov_notifications()`. An application needs to coordinate subscribing, consuming notifications, renewing finite subscriptions where appropriate, and unsubscribing during orderly shutdown.
 
+`cov_notifications()` yields both kinds of notification in the order they arrive: a `CovNotification` about one object, from `subscribe_cov` or `subscribe_cov_property`, and a `CovNotificationMultiple` about several, from `subscribe_cov_property_multiple`. Each has a `kind` field, `"object"` or `"multiple"`, so one loop can tell them apart. The Rust client's stream does the same with `COVEvent`.
+
 Use an explicit subscriber process identifier and keep the client alive while consuming events. Avoid copying a permanent subscription into a short-lived experiment. The API distinguishes confirmed and unconfirmed delivery; neither replaces application-level freshness checks or historian requirements.
 
 ## A working read is not a working notification path

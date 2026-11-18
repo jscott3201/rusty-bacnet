@@ -45,20 +45,26 @@ impl Panics {
 
 /// Run a request's handler, catching a panic: recorded in `panics`, which
 /// ends the session, and answered with an internal error.
-pub(crate) async fn contained<R>(
+///
+/// A combinator rather than an async fn, which would hold `handler` twice
+/// in its future, as an async fn holds its arguments, and once more in its
+/// poll frame (#2656).
+pub(crate) fn contained<R>(
     panics: &Panics,
     handler: impl Future<Output = Result<R, ErrorData>>,
-) -> Result<R, ErrorData> {
-    match AssertUnwindSafe(handler).catch_unwind().await {
-        Ok(result) => result,
-        Err(payload) => {
-            panics.caught(payload.as_ref());
-            Err(ErrorData::internal_error(
-                "the server failed serving this request, and this session ends",
-                None,
-            ))
-        }
-    }
+) -> impl Future<Output = Result<R, ErrorData>> {
+    AssertUnwindSafe(handler)
+        .catch_unwind()
+        .map(move |caught| match caught {
+            Ok(result) => result,
+            Err(payload) => {
+                panics.caught(payload.as_ref());
+                Err(ErrorData::internal_error(
+                    "the server failed serving this request, and this session ends",
+                    None,
+                ))
+            }
+        })
 }
 
 /// [`contained`] for a synchronous handler: `None` when it panicked.

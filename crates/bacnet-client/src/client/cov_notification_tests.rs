@@ -8,7 +8,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier, RejectReason};
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast::error::RecvError;
 
-fn cov_notification(process_id: u32) -> COVNotificationRequest {
+pub(super) fn cov_notification(process_id: u32) -> COVNotificationRequest {
     COVNotificationRequest {
         subscriber_process_identifier: process_id,
         initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 100).unwrap(),
@@ -23,16 +23,16 @@ fn cov_notification(process_id: u32) -> COVNotificationRequest {
     }
 }
 
-fn received_cov_notification(process_id: u32) -> ReceivedCOVNotification {
-    ReceivedCOVNotification::new(
+fn received_cov_notification(process_id: u32) -> COVEvent {
+    COVEvent::Object(ReceivedCOVNotification::new(
         cov_notification(process_id),
         &[],
         &None,
         COVNotificationDelivery::Unconfirmed,
-    )
+    ))
 }
 
-async fn send_cov_notification<T: TransportPort>(
+pub(super) async fn send_cov_notification<T: TransportPort>(
     transport: &T,
     client_mac: &[u8],
     apdu: Apdu,
@@ -60,7 +60,7 @@ async fn receive_peer_apdu(
     receive_peer_npdu_apdu(peer_rx).await.1
 }
 
-async fn receive_peer_npdu_apdu(
+pub(super) async fn receive_peer_npdu_apdu(
     peer_rx: &mut tokio::sync::mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>,
 ) -> (Npdu, Apdu) {
     let received = timeout(Duration::from_secs(2), peer_rx.recv())
@@ -99,14 +99,7 @@ async fn cov_notification_channel_uses_configured_capacity() {
     client.cov_tx.send(received_cov_notification(1)).unwrap();
     client.cov_tx.send(received_cov_notification(2)).unwrap();
     assert!(matches!(rx.recv().await, Err(RecvError::Lagged(1))));
-    assert_eq!(
-        rx.recv()
-            .await
-            .unwrap()
-            .notification
-            .subscriber_process_identifier,
-        2
-    );
+    assert_eq!(rx.recv().await.unwrap().subscriber_process_identifier(), 2);
     client.stop().await.unwrap();
 }
 
@@ -142,7 +135,9 @@ async fn unconfirmed_cov_notification_includes_source_and_delivery() {
     let received = timeout(Duration::from_secs(2), rx.recv())
         .await
         .expect("timed out waiting for COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.delivery, COVNotificationDelivery::Unconfirmed);
     assert_eq!(&received.source_mac[..], &peer_mac);
     assert_eq!(received.source_network, Some(200));
@@ -198,7 +193,9 @@ async fn confirmed_cov_notification_enqueues_and_sends_simple_ack() {
     let received = timeout(Duration::from_secs(2), rx.recv())
         .await
         .expect("timed out waiting for COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.delivery, COVNotificationDelivery::Confirmed);
     assert_eq!(&received.source_mac[..], &peer_mac);
     assert_eq!(received.source_network, None);
@@ -257,7 +254,9 @@ async fn confirmed_cov_notification_routes_ack_to_npdu_source() {
     let received = timeout(Duration::from_secs(2), rx.recv())
         .await
         .expect("timed out waiting for COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.delivery, COVNotificationDelivery::Confirmed);
     assert_eq!(&received.source_mac[..], &router_mac);
     assert_eq!(received.source_network, Some(300));
@@ -297,7 +296,7 @@ async fn confirmed_cov_notification_ack_policy_can_reject() {
     let mut client = BACnetClient::generic_builder()
         .transport(client_transport)
         .confirmed_cov_notification_ack_policy(|received| {
-            assert_eq!(received.delivery, COVNotificationDelivery::Confirmed);
+            assert_eq!(received.delivery(), COVNotificationDelivery::Confirmed);
             ConfirmedCOVNotificationResponse::Reject(RejectReason::OTHER)
         })
         .build()
@@ -330,7 +329,9 @@ async fn confirmed_cov_notification_ack_policy_can_reject() {
     let received = timeout(Duration::from_secs(2), rx.recv())
         .await
         .expect("timed out waiting for COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.notification.subscriber_process_identifier, 12);
 
     let Apdu::Reject(reject) = receive_peer_apdu(&mut peer_rx).await else {
@@ -383,7 +384,9 @@ async fn confirmed_cov_notification_ack_policy_can_suppress_response() {
     let received = timeout(Duration::from_secs(2), rx.recv())
         .await
         .expect("timed out waiting for COV notification")
-        .expect("COV channel closed");
+        .expect("COV channel closed")
+        .into_object()
+        .expect("a single-object notification");
     assert_eq!(received.notification.subscriber_process_identifier, 13);
     assert!(
         timeout(Duration::from_millis(100), peer_rx.recv())

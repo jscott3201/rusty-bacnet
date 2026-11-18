@@ -43,12 +43,12 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   # The tests the stack guard step reruns with smaller stacks (#953): every
-  # server, client, endpoint, integration and CLI test, the benchmark SC mTLS
-  # tests, and bacnet-transport's BACnet/SC tests (node, TLS dial, direct
-  # connection and hub, unit and integration).
+  # server, client, endpoint, integration, CLI and MCP server (#2656) test,
+  # the benchmark SC mTLS tests, and bacnet-transport's BACnet/SC tests
+  # (node, TLS dial, direct connection and hub, unit and integration).
   STACK_GUARD_TESTS: >-
     package(bacnet-server) | package(bacnet-client) | package(bacnet-endpoint)
-    | package(bacnet-integration-tests) | package(bacnet-cli)
+    | package(bacnet-integration-tests) | package(bacnet-cli) | package(bacnet-mcp)
     | binary_id(bacnet-benchmarks::sc_mtls)
     | (package(bacnet-transport) & (test(/^(sc_hub|sc_tls|sc)::/) | binary_id(/^bacnet-transport::sc_hub/)))
 

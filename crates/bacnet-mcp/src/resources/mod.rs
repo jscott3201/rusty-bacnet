@@ -31,6 +31,7 @@ pub(crate) use self::content::{Cache, point_body, refresh_alarms};
 use self::uri::{ALARMS, DEVICES, LEDGER, SESSION, Uri};
 use crate::context::{Call, Ctx};
 use crate::errors::ToolError;
+use crate::heap::boxed;
 
 const JSON: &str = "application/json";
 
@@ -140,14 +141,22 @@ pub(crate) async fn read<T: TransportPort + 'static>(
     let account = ctx.account();
     let budget = ctx.policy.caps.budget;
     let call = Call::new(budget, Arc::clone(&account));
+    // The content's future goes on the heap, as a tool's does in
+    // `tools::call` (`heap`, #2656): one box a read.
     let work = async {
+        let call = &call;
         match parsed {
-            Uri::Point(point) => content::point(ctx, &call, point).await,
-            Uri::Devices => content::devices(ctx, None).await,
-            Uri::DevicesAfter(after) => content::devices(ctx, Some(&after)).await,
-            Uri::Device(device) => content::device(ctx, &call, device).await,
-            Uri::Alarms => content::alarms(ctx, &call).await,
-            Uri::DeviceAlarms(device) => content::device_alarms(ctx, &call, device).await,
+            Uri::Point(point) => boxed(move || content::point(ctx, call, point)).await,
+            Uri::Devices => boxed(move || content::devices(ctx, None)).await,
+            Uri::DevicesAfter(after) => {
+                let after = &after;
+                boxed(move || content::devices(ctx, Some(after))).await
+            }
+            Uri::Device(device) => boxed(move || content::device(ctx, call, device)).await,
+            Uri::Alarms => boxed(move || content::alarms(ctx, call)).await,
+            Uri::DeviceAlarms(device) => {
+                boxed(move || content::device_alarms(ctx, call, device)).await
+            }
             Uri::Session => Ok(content::session(ctx)),
             Uri::Ledger => Ok(content::ledger(ctx)),
         }

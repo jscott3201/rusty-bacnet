@@ -119,15 +119,13 @@ async fn the_node_device_states_what_the_whole_node_does() {
         ServiceSupported::I_HAVE,
         ServiceSupported::CONFIRMED_COV_NOTIFICATION,
         ServiceSupported::UNCONFIRMED_COV_NOTIFICATION,
+        ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
         ServiceSupported::READ_PROPERTY,
         ServiceSupported::CONFIRMED_EVENT_NOTIFICATION,
     ] {
         assert!(lists(&data, service), "{service:?}");
     }
-    assert!(!lists(
-        &data,
-        ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE
-    ));
     assert_eq!(
         unsigned(&server, PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED).await,
         480
@@ -185,8 +183,14 @@ async fn a_server_only_node_lists_the_servers_services() {
     let server = builder.build().await.unwrap();
     let data = services(&server).await;
     assert!(lists(&data, ServiceSupported::READ_PROPERTY));
-    assert!(!lists(&data, ServiceSupported::I_AM));
-    assert!(!lists(&data, ServiceSupported::CONFIRMED_COV_NOTIFICATION));
+    for service in [
+        ServiceSupported::I_AM,
+        ServiceSupported::CONFIRMED_COV_NOTIFICATION,
+        ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+    ] {
+        assert!(!lists(&data, service), "{service:?}");
+    }
     assert_eq!(
         unsigned(&server, PropertyIdentifier::APDU_TIMEOUT).await,
         2_000

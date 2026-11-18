@@ -516,8 +516,9 @@ fn notification_rejects_legacy_timestamp_and_time_shapes() {
     assert_eq!(output.as_ref(), b"prefix");
 }
 
-#[test]
-fn notification_decoder_rejects_timestamp_presence_mismatch_and_accepts_proprietary_id() {
+/// A notification carrying both the top-level timestamp and one value's time
+/// of change, the encoding of it, and the two times.
+fn timestamped_encoding() -> (BytesMut, bacnet_types::primitives::Time) {
     let date = bacnet_types::primitives::Date {
         year: 126,
         month: 8,
@@ -535,20 +536,51 @@ fn notification_decoder_rejects_timestamp_presence_mismatch_and_accepts_propriet
     request.list_of_cov_notifications[0].list_of_values[0].time_of_change = Some(time);
     let mut encoded = BytesMut::new();
     request.encode(&mut encoded).unwrap();
+    (encoded, time)
+}
+
+#[test]
+fn the_decoder_accepts_a_timestamp_without_a_time_of_change() {
+    let (encoded, time) = timestamped_encoding();
     let time_of_change = encoded
         .windows(5)
         .rposition(|window| window == [0x3c, 12, 34, 56, 78])
         .unwrap();
     let mut mismatched = encoded.to_vec();
     mismatched.drain(time_of_change..time_of_change + 5);
-    assert!(matches!(
-        COVNotificationMultipleRequest::decode(&mismatched),
-        Err(Error::Remote(RemoteError::Reject { reason })) if reason == RejectReason::PARAMETER_OUT_OF_RANGE
-    ));
+    let decoded = COVNotificationMultipleRequest::decode(&mismatched).unwrap();
+    assert_eq!(decoded.timestamp.map(|(_, t)| t), Some(time));
+    assert_eq!(
+        decoded.list_of_cov_notifications[0].list_of_values[0].time_of_change,
+        None
+    );
+    // The encoder still refuses to write the mismatch it reads.
+    assert!(decoded.encode(&mut BytesMut::new()).is_err());
+}
 
+#[test]
+fn the_decoder_accepts_a_time_of_change_without_a_timestamp() {
+    let (encoded, time) = timestamped_encoding();
+    // The timestamp is an opening tag, an application date and time, and a
+    // closing tag: 1 + 5 + 5 + 1 octets.
+    let start = encoded.iter().position(|&octet| octet == 0x3e).unwrap();
+    assert_eq!(encoded[start + 11], 0x3f);
+    let mut mismatched = encoded.to_vec();
+    mismatched.drain(start..start + 12);
+    let decoded = COVNotificationMultipleRequest::decode(&mismatched).unwrap();
+    assert_eq!(decoded.timestamp, None);
+    assert_eq!(
+        decoded.list_of_cov_notifications[0].list_of_values[0].time_of_change,
+        Some(time)
+    );
+    assert!(decoded.encode(&mut BytesMut::new()).is_err());
+}
+
+#[test]
+fn notification_decoder_accepts_proprietary_id() {
+    let mut encoded = BytesMut::new();
     let proprietary = PropertyIdentifier::from_raw(512);
     let request = notification_with(proprietary);
-    encoded.clear();
     request.encode(&mut encoded).unwrap();
     assert_eq!(
         COVNotificationMultipleRequest::decode(&encoded)

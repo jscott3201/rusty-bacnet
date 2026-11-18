@@ -11,7 +11,7 @@ pub(super) struct DispatchContext<'a, T: TransportPort + 'static> {
     /// Network layer used to send replies.
     pub(super) network: &'a Arc<NetworkLayer<T>>,
     /// Broadcast channel for COV notifications.
-    pub(super) cov_tx: &'a broadcast::Sender<ReceivedCOVNotification>,
+    pub(super) cov_tx: &'a broadcast::Sender<COVEvent>,
     /// Broadcast channel for event notifications.
     pub(super) event_tx: &'a broadcast::Sender<ReceivedEventNotification>,
     /// How confirmed COV notifications are acknowledged.

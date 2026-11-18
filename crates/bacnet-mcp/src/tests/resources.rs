@@ -139,6 +139,7 @@ async fn device_session_and_ledger_resources() {
     assert_eq!(session["level"], json!("read-only"));
     assert_eq!(session["cov"]["max"], json!(256));
     assert_eq!(session["cov"]["lifetime_s"], json!(300));
+    assert_eq!(session["cov"]["cov_multiple_ignored"], json!(0));
     let ledger = lab.agent.read("bacnet://ledger").await.unwrap();
     assert_eq!(ledger["entries"], json!([]));
     assert_eq!(lab.sends().len(), before);
