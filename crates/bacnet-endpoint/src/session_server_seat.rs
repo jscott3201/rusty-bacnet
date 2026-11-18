@@ -12,9 +12,13 @@ pub(super) type SourceSlot =
     Arc<std::sync::OnceLock<std::sync::Weak<crate::source_audit::SourceAudit>>>;
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
-    /// Have [`start`](Self::start) build a full [`BACnetServer`] from
-    /// `builder` on this session's link (before start): one transport, one
-    /// address, one pool of invoke IDs, beside the session's client roles.
+    /// Have [`start`](Self::start) build the session's server from
+    /// `builder` (before start). A session with a server role always runs a
+    /// full [`BACnetServer`] on its link: one transport, one address, one
+    /// pool of invoke IDs, beside the session's client roles. Without this
+    /// call it is the read-only one, [`read_only_server`]: peers read,
+    /// discover and subscribe to COV, and no peer writes, creates, deletes,
+    /// reinitializes, controls communication or sets the clock (#2617).
     /// The session owns it; [`server`](Self::server) borrows it while the
     /// session runs, and [`stop`](Self::stop) stops it first.
     ///
@@ -22,12 +26,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// policy and counter that one has, and `builder`'s settings as given:
     /// its policies (a builder with none lets any peer write, create and
     /// delete, as a standalone server does; one from [`read_only_server`]
-    /// lets none), budgets, handlers, COV policy,
-    /// device bindings and clock zone. It answers every request the
-    /// session's narrow server role would have, from the session's
-    /// database, which the session hands it at start ([`with_database`](Self::with_database), or a
-    /// stock one built from the identity). The narrow role then serves
-    /// nothing: [`responder`](Self::responder) is `None`.
+    /// lets none), budgets, handlers, COV policy, device bindings and clock
+    /// zone. It serves the session's database, which the session hands it
+    /// at start ([`with_database`](Self::with_database), or a stock one
+    /// built from the identity).
     ///
     /// **One device.** The node has one set of device settings, the
     /// session's, and the server serves them as the node's Device:
@@ -63,16 +65,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///   builder's ReinitializeDevice handler.
     ///
     /// **Refused at start**, before the link starts, leaving the session
-    /// ready to correct and start again with its database: a session
-    /// without a server role ([`SessionRole::ClientOnly`]) or without a
-    /// Device identity ([`device`](Self::device)); a builder with a
+    /// ready to correct and start again with its database: a builder on a
+    /// session without a server role ([`SessionRole::ClientOnly`]); a
+    /// server role, with this builder or the default, without a Device
+    /// identity ([`device`](Self::device)); a builder with a
     /// transport, a database (give it to the session) or a registered
     /// Network Port (name it on the session) of its own, or with device
     /// settings that contradict the session's as above; a builder whose
     /// settings a server's start would refuse, which the session checks as
     /// the server will get them (policies and budgets, device bindings,
-    /// Audit Reporters and their routes, the Device's segment timeout);
-    /// beside the narrow server role's opt-ins
+    /// Audit Reporters and their routes, the Device's segment timeout); a
+    /// server role beside the gone narrow server role's opt-ins
     /// ([`with_cov`](Self::with_cov), [`with_device_writes`](Self::with_device_writes),
     /// [`with_reinitialize`](Self::with_reinitialize), a non-default
     /// [`SessionConfig::read_work_limit`]), whose places the builder's
@@ -132,10 +135,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Audit's records among them) and the reads its runs make. Past that,
     /// each does what it does when the pool is empty: an event notification
     /// waits for an ID, a COV notification's subscription waits for one of
-    /// the server's IDs to come back and is then looked at again (as the
-    /// session's own COV reporting, [`with_cov`](Self::with_cov), queued
-    /// it), an Audit record is counted lost. The client's requests find the
-    /// rest.
+    /// the server's IDs to come back and is then looked at again, an Audit
+    /// record is counted lost. The client's requests find the rest.
     ///
     /// **DeviceCommunicationControl binds the node.** The standard has it
     /// bind the whole device (Clause 16.1). While the server holds a
@@ -161,34 +162,28 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self
     }
 
-    /// Borrows the full server [`with_server`](Self::with_server) had the
-    /// session build. `Some` from the start that built it until a
-    /// [`stop`](Self::stop) has stopped it: a start that failed after
-    /// building it, or a stop, has stopped it too, while a cancelled start
-    /// or stop leaves it `Some` until the next stop. `None` before start and
-    /// for a session without one. It asks about the full server only: the
-    /// narrow server role is [`responder`](Self::responder). For another
-    /// task, clone what it needs from it ([`database`](BACnetServer::database),
+    /// Borrows the session's server: the one [`with_server`](Self::with_server)
+    /// had it build, or the read-only one. `Some` from the start that built
+    /// it until a [`stop`](Self::stop) has stopped it: a start that failed
+    /// after building it, or a stop, has stopped it too, while a cancelled
+    /// start or stop leaves it `Some` until the next stop. `None` before
+    /// start and for a session without a server role. For another task,
+    /// clone what it needs from it ([`database`](BACnetServer::database),
     /// an `Arc`).
     pub fn server(&self) -> Option<&BACnetServer<T>> {
         self.server.as_ref()
     }
 
-    /// Borrows the narrow server role (`None` when not composed).
-    ///
-    /// Returns `None` for [`ClientOnly`](SessionRole::ClientOnly) sessions,
-    /// for a session given a full server ([`with_server`](Self::with_server),
-    /// which [`server`](Self::server) borrows), and after
-    /// [`stop`](Self::stop).
+    /// The gone narrow server role's handle: always `None`, since a session
+    /// with a server role runs a full server, which [`server`](Self::server)
+    /// borrows (#2617). A later step of #2617 removes this call.
     pub fn responder(&self) -> Option<&ServerRoleHandle> {
         self.server_handle.as_ref()
     }
 
-    /// Clones the narrow server role's handle with its session binding.
-    ///
-    /// Same [`Weak`](std::sync::Weak)-token semantics as
-    /// [`cloned_client_handle`](Self::cloned_client_handle); see
-    /// [`is_session_alive`](crate::roles::ServerRoleHandle::is_session_alive).
+    /// The gone narrow server role's handle, cloned: always `None`, as
+    /// [`responder`](Self::responder) is. A later step of #2617 removes
+    /// this call.
     pub fn cloned_responder_handle(&self) -> Option<ServerRoleHandle> {
         self.server_handle.clone()
     }
@@ -212,7 +207,18 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
     }
 
-    /// Refuse, before anything changes, a `with_server` the session could
+    /// A session with a server role runs a full server: the read-only one
+    /// ([`read_only_server`]) unless [`with_server`](Self::with_server)
+    /// gave it a builder (#2617).
+    pub(super) fn default_server(&mut self) {
+        if self.server_builder.is_none()
+            && matches!(self.role, SessionRole::ServerOnly | SessionRole::Both)
+        {
+            self.server_builder = Some(read_only_server());
+        }
+    }
+
+    /// Refuse, before anything changes, a full server the session could
     /// not build (see [`with_server`](Self::with_server)), but for the
     /// device and server settings, which
     /// [`check_server_settings`](Self::check_server_settings) checks once
@@ -227,8 +233,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
         if self.identity.is_none() {
             return refused(
-                "the session has no Device identity, which is the node's one set of device \
-                 settings: compose one with device()",
+                "a session with a server role runs a full server, which needs the node's \
+                 Device identity, its one set of device settings: compose one with device(), \
+                 or make a node that only asks a SessionRole::ClientOnly session (a link \
+                 builder's role(), or the role EndpointSession::new takes)",
             );
         }
         let narrow = [
@@ -238,20 +246,25 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             ),
             (
                 self.device_write_authorizer.is_some(),
-                "with_device_writes (the builder's policy decides writes)",
+                "with_device_writes (give with_server a builder whose policy decides writes)",
             ),
             (
-                self.reinitialize.is_some() || self.reinit_password.is_some(),
-                "with_reinitialize (set on_reinitialize on the builder)",
+                self.reinitialize.is_some(),
+                "with_reinitialize (give with_server a builder with on_reinitialize)",
+            ),
+            (
+                self.reinit_password.is_some(),
+                "with_reinit_password (give with_server a builder with reinit_password)",
             ),
             (
                 self.config.read_work_limit != SessionConfig::default().read_work_limit,
-                "a read_work_limit (set the builder's read_property_multiple_budget)",
+                "a read_work_limit (give with_server a builder with a \
+                 read_property_multiple_budget)",
             ),
         ];
         if let Some((_, opt_in)) = narrow.iter().find(|(set, _)| *set) {
             return refused(&format!(
-                "the narrow server role's {opt_in} goes with the full server's builder"
+                "the narrow server role is gone, and with it {opt_in}"
             ));
         }
         let facts = builder.node_facts();
@@ -315,6 +328,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         source_routes: Option<crate::source_audit::recipient::SourceRoutes>,
     ) -> Result<(), Error> {
         let ingress = self.ingress.as_mut().ok_or_else(missing_ingress)?;
+        // Routed source Audit bindings' routers learn from what comes from
+        // their networks, whichever role takes it (#2371).
+        if let Some(routers) = source_routes
+            .as_ref()
+            .map(|routes| Arc::clone(routes.routers()))
+            .filter(|routers| !routers.is_empty())
+        {
+            ingress.observe_sources(Arc::new(move |received| routers.observe(received)));
+        }
         let (receivers, seat) = match self.server_builder {
             Some(_) => {
                 let coordinator = Arc::clone(&self.coordinator);
@@ -431,12 +453,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 }
 
-/// A read-only full server, for [`EndpointSession::with_server`] (#2617):
-/// the stance a node takes when no one has said who may write. The Python
-/// endpoints build their server from it unless given a `mutation_policy`,
-/// and a later step of #2617 has a session with no builder of its own
-/// build it. Peers read, discover and subscribe to COV; no peer writes,
-/// creates or deletes. Each covered mutation but the
+/// The read-only full server (#2617): the stance a node takes when no one
+/// has said who may write. A session with a server role and no builder of
+/// its own ([`EndpointSession::with_server`]) runs it, and the Python
+/// endpoints build their server from it unless given a `mutation_policy`.
+/// Peers read, discover and subscribe to COV; no peer writes, creates or
+/// deletes. Each covered mutation but the
 /// three COV subscriptions is denied (SERVICES / SERVICE_REQUEST_DENIED,
 /// skipped for an inbound WriteGroup), and time synchronization, local and
 /// UTC (Clauses 16.7 and 16.8), is ignored. Everything the server's other

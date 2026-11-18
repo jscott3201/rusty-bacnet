@@ -5,7 +5,8 @@ use bacnet_endpoint_core::endpoint_ingress::{
 use bacnet_network::response_route::ResponseRoute;
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::{port::DirectResponseScope, sc::WebSocketPort};
-use bacnet_types::{MacAddr, enums::PropertyIdentifier};
+use bacnet_types::MacAddr;
+use std::time::Duration;
 
 #[tokio::test]
 async fn checked_response_queue_is_bounded_caller_owned_and_does_not_retarget() {
@@ -89,48 +90,50 @@ async fn checked_response_queue_is_bounded_caller_owned_and_does_not_retarget() 
     );
 }
 
+/// The session's server answers a peer's request on its direct connection.
+/// That answer can't pass ordinary sends held behind the client's (it goes
+/// by its saved route), so here it waits on the database the test holds. A
+/// stop or a drop of the session cancels it (#2617): the server's request
+/// work ends with it, the peer never gets the answer, and the saved route
+/// dies with the listener.
 async fn session_pending_response(stop: bool) {
     let ca = TestCa::new();
     let (mut f, port) = Fixture::new(&ca).await;
-    let _gate = f.hold_sends();
-    let mut session = EndpointSession::new(
-        port,
-        SessionRole::Both,
-        SessionConfig {
-            queue_capacity: 1,
-            ..Default::default()
-        },
-    )
-    .unwrap()
-    .with_database(database("owned"));
+    let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
+        .unwrap()
+        .device(node())
+        .with_database(database("owned"));
     session.start().await.unwrap();
-    let handle = session.cloned_responder_handle().unwrap();
-    let client = session.cloned_client_handle().unwrap();
-    let request = tokio::spawn(async move {
-        client
-            .read_property(&[1], csv_oid(), PropertyIdentifier::OBJECT_NAME, None)
-            .await
-    });
-    bounded(f.generic.recv()).await.unwrap();
     let mut a = f.peer(ca.tls("A"), None).await;
-    let admitted = f.capture(&mut a, &unsupported(10), None).await;
+    let admitted = f.capture(&mut a, &read_name(10), None).await;
     let saved = admitted.direct_response.clone().unwrap();
-    let response = handle.handle_inbound(received_apdu(admitted));
-    tokio::pin!(response);
-    // Unsupported request has no async service work. This first poll synchronously
-    // admits its response behind the held network operation, then waits completion.
-    assert!(futures_util::poll!(&mut response).is_pending());
-    if stop {
-        bounded(session.stop()).await.unwrap();
-    } else {
-        drop(session);
-    }
-    assert!(bounded(response).await.is_err());
-    assert!(bounded(request).await.unwrap().is_err());
-    assert!(!handle.is_session_alive());
+    let database = std::sync::Arc::clone(session.server().unwrap().database());
+    let guard = database.write().await;
+    f.feed(admitted).await;
+    let server = session.server().unwrap();
+    bounded(async {
+        while server.request_admission_counters().confirmed_active == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     let read = a.ws.recv();
     tokio::pin!(read);
-    assert!(futures_util::poll!(&mut read).is_pending());
+    if stop {
+        let stopping = session.stop();
+        tokio::pin!(stopping);
+        let _ = futures_util::poll!(&mut stopping);
+        drop(guard);
+        bounded(stopping).await.unwrap();
+    } else {
+        drop(session);
+        drop(guard);
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        futures_util::poll!(&mut read).is_pending(),
+        "a cancelled answer reached the peer"
+    );
     assert!(f.generic.try_recv().is_err());
     f.listener.stop().await;
     assert_eq!(f.listener.active_connections(), 0);
@@ -142,44 +145,10 @@ async fn session_pending_response(stop: bool) {
     );
 }
 #[tokio::test]
-async fn live_session_stop_cancels_queued_original_response_and_retained_handle() {
+async fn live_session_stop_cancels_the_servers_queued_direct_answer() {
     session_pending_response(true).await;
 }
 #[tokio::test]
-async fn live_session_drop_cancels_queued_original_response_and_retained_handle() {
+async fn live_session_drop_cancels_the_servers_queued_direct_answer() {
     session_pending_response(false).await;
-}
-
-#[tokio::test]
-async fn canceling_live_responder_waiter_retracts_queued_reply_before_replacement() {
-    let ca = TestCa::new();
-    let (mut f, port) = Fixture::new(&ca).await;
-    let gate = f.hold_sends();
-    let mut session =
-        EndpointSession::new(port, SessionRole::Both, SessionConfig::default()).unwrap();
-    session.start().await.unwrap();
-    let handle = session.cloned_responder_handle().unwrap();
-    let client = session.cloned_client_handle().unwrap();
-    let request = tokio::spawn(async move {
-        client
-            .read_property(&[1], csv_oid(), PropertyIdentifier::OBJECT_NAME, None)
-            .await
-    });
-    bounded(f.generic.recv()).await.unwrap();
-    let mut a = f.peer(ca.tls("A"), None).await;
-    let admitted = f.capture(&mut a, &unsupported(20), None).await;
-    {
-        let response = handle.handle_inbound(received_apdu(admitted));
-        tokio::pin!(response);
-        assert!(futures_util::poll!(&mut response).is_pending());
-    }
-    gate.add_permits(1);
-    request.abort();
-    assert!(bounded(request).await.unwrap_err().is_cancelled());
-    // Keep A current until the barrier: retirement must not mask failed cancellation.
-    f.barrier(&mut a, 21).await;
-    let mut b = f.peer(ca.tls("B"), None).await;
-    f.barrier(&mut b, 22).await;
-    session.stop().await.unwrap();
-    f.listener.stop().await;
 }

@@ -21,7 +21,7 @@ test('the capability tables render a row per generated entry and export as Markd
     await expect(region).toHaveAttribute('tabindex', '0');
     await expect(region).toHaveAttribute('aria-label', (await main.locator(`#table-${id} caption`).textContent()) ?? '');
   }
-  await expect(rows('services-confirmed').filter({ hasText: 'ReadProperty' }).first().locator('td').nth(3)).toHaveText('Always');
+  await expect(rows('services-confirmed').filter({ hasText: 'ReadProperty' }).first().locator('td').nth(0)).toHaveText('Yes');
   await main.getByRole('link', { name: 'what a result proves', exact: true }).click();
   await expect(page).toHaveURL(base + 'project/support/#understand-what-a-result-proves');
 

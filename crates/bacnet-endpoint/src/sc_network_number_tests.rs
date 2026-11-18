@@ -88,16 +88,21 @@ async fn start() -> (
     )
     .unwrap()
     .with_database(database())
-    .with_device_writes(Arc::new(|_| true));
+    .device(
+        crate::DeviceIdentity::new(7, 0)
+            .unwrap()
+            .with_name("progress"),
+    )
+    .with_server(bacnet_server::server::BACnetServer::generic_builder());
     let (result, ()) = bounded(async { tokio::join!(session.start(), peer.accept()) }).await;
     result.unwrap();
     (session, peer, observed)
 }
 async fn ack(session: &EndpointSession<ScTransport<GateSocket>>, peer: &Peer) {
     let (operation, acknowledged) = session
-        .notifications
-        .as_ref()
+        .server()
         .unwrap()
+        .notification_pool()
         .reserve(
             CanonicalPeer::direct(&PEER),
             S::CONFIRMED_AUDIT_NOTIFICATION,

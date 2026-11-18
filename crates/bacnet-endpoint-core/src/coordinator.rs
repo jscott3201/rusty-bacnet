@@ -598,19 +598,30 @@ impl OutboundTransactionCoordinator {
     /// changed: the role [`admits`](Self::admit) the answer itself. A
     /// poisoned coordinator reads as no holder.
     pub fn holder_of(&self, peer: &CanonicalPeer, invoke_id: u8) -> Option<LeaseHolder> {
+        self.lease_of(peer, invoke_id).map(|(holder, _)| holder)
+    }
+
+    /// The holder of the active lease of `invoke_id` for `peer`, and the
+    /// service it asked for. Claims nothing.
+    fn lease_of(
+        &self,
+        peer: &CanonicalPeer,
+        invoke_id: u8,
+    ) -> Option<(LeaseHolder, ConfirmedServiceChoice)> {
         let state = self.state.lock().ok()?;
         let index = usize::from(invoke_id);
         let active = state.slots[index].as_ref()?;
         if active.metadata.peer != *peer {
             return None;
         }
-        Some(match active.metadata.owner {
+        let holder = match active.metadata.owner {
             LeaseOwner::Notification => LeaseHolder::Server,
             LeaseOwner::Requester if state.endpoint_requester[index] == active.generation => {
                 LeaseHolder::EndpointRequester
             }
             LeaseOwner::Requester => LeaseHolder::Client,
-        })
+        };
+        Some((holder, active.metadata.service_choice))
     }
 
     /// [`Self::holder_of`] for an answer, by its envelope, matched as
@@ -624,13 +635,28 @@ impl OutboundTransactionCoordinator {
         local_network: Option<u16>,
         invoke_id: u8,
     ) -> Option<LeaseHolder> {
+        self.lease_of_source(immediate_mac, routed_source, local_network, invoke_id)
+            .map(|(holder, _)| holder)
+    }
+
+    /// [`Self::holder_of_source`], with the service the lease asked for, so
+    /// a caller can match an answer's service choice as
+    /// [`Self::admit_from_source`] does (#2617). Claims nothing.
+    #[doc(hidden)]
+    pub fn lease_of_source(
+        &self,
+        immediate_mac: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+        invoke_id: u8,
+    ) -> Option<(LeaseHolder, ConfirmedServiceChoice)> {
         let peer = CanonicalPeer::from_source(immediate_mac, routed_source, local_network);
-        self.holder_of(&peer, invoke_id).or_else(|| {
+        self.lease_of(&peer, invoke_id).or_else(|| {
             let alias =
                 CanonicalPeer::routed_alias(routed_source, local_network).or_else(|| {
                     CanonicalPeer::direct_alias(immediate_mac, routed_source, local_network)
                 })?;
-            self.holder_of(&alias, invoke_id)
+            self.lease_of(&alias, invoke_id)
         })
     }
 

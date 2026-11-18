@@ -50,6 +50,30 @@ async fn current(session: &EndpointSession<TestTransport>) -> PropertyValue {
         .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
         .unwrap()
 }
+/// The application's own write of the recipient: through the session's
+/// server when it has one, which the session refuses its own call for
+/// (#2617), and through the session otherwise.
+async fn write_recipient_locally(
+    session: &EndpointSession<TestTransport>,
+    value: PropertyValue,
+    priority: Option<u8>,
+) -> Result<(), Error> {
+    let oid = oid(ObjectType::DEVICE, 123);
+    let property = PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT;
+    let source = bacnet_device_core::write::local::LocalCommandSource::ServerDevice;
+    match session.server() {
+        Some(server) => {
+            server
+                .write_local(&oid, property, None, value, priority, source)
+                .await
+        }
+        None => {
+            session
+                .write_local(&oid, property, None, value, priority, source)
+                .await
+        }
+    }
+}
 async fn wire(
     session: &EndpointSession<TestTransport>,
     peer: &NetworkLayer<TestTransport>,
@@ -109,16 +133,13 @@ fn assert_record(
     new: &BACnetRecipient,
     source: BACnetRecipient,
     invoke: Option<u8>,
-    sequence: u16,
+    clocked: bool,
 ) {
     assert_eq!(record.operation, AuditOperation::WRITE);
     assert_eq!(record.source_device, source);
     assert_eq!(record.invoke_id, invoke);
     assert_eq!(record.source_timestamp, None);
-    assert_eq!(
-        record.target_timestamp,
-        Some(BACnetTimeStamp::SequenceNumber(sequence))
-    );
+    assert_stamp(&record.target_timestamp, clocked, 0);
     assert_eq!(record.target_device, device(123));
     assert_eq!(record.target_object, Some(oid(ObjectType::DEVICE, 123)));
     assert_eq!(
@@ -191,7 +212,7 @@ async fn source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters
                     device(123)
                 },
                 (role == SessionRole::Both).then_some(71),
-                0,
+                role == SessionRole::Both,
             );
             assert_eq!(
                 current(&session).await,
@@ -281,7 +302,7 @@ async fn source_recipient_null_equal_invalid_and_second_permit_preserve_commit_s
     let (a, _) = notification(&receive(&mut records).await, false);
     let (b, _) = notification(&receive(&mut records).await, false);
     assert_eq!(a, b);
-    assert_record(&a, &device(999), &next, device(123), None, 0);
+    assert_record(&a, &device(999), &next, device(123), None, false);
     assert_eq!(
         session
             .database
@@ -362,15 +383,18 @@ async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
     let c = calls.clone();
     let mut db = database(false);
     db.set_clock_reader(None);
-    let mut session =
-        session(db, SessionRole::Both, &sink).with_device_writes(Arc::new(move |_| {
+    let policy = bacnet_server::policy::FnPolicy::new()
+        .inline()
+        .mutation(move |_| {
             c.fetch_add(1, Ordering::SeqCst);
             match d.load(Ordering::SeqCst) {
                 0 => false,
                 1 => panic!("controlled authorizer panic"),
                 _ => true,
             }
-        }));
+        });
+    let mut session = session(db, SessionRole::Both, &sink)
+        .with_server(bacnet_server::server::BACnetServer::generic_builder().policy(policy));
     session.start().await.unwrap();
     let next = direct(&sink);
     for mode in [0, 1] {
@@ -391,17 +415,15 @@ async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
             Apdu::Error(_)
         ));
     }
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "malformed values never reach policy"
-    );
+    // The server asks its policy before it decodes the value, as for any
+    // write; a malformed one is refused all the same.
+    let asked = calls.load(Ordering::SeqCst);
     assert!(
         matches!(wire(&session,&peer,&mut replies,vec![0],74).await,Apdu::SimpleAck(a) if a.invoke_id==74)
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        3,
+        asked + 1,
         "NULL still requires policy"
     );
     assert_eq!(
@@ -421,6 +443,53 @@ async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
     );
     assert!(records.try_recv().is_err());
     assert_eq!(session.active_leases(), 0);
+    session.stop().await.unwrap();
+    sink.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
+/// A session of both roles given no server builder runs the read-only
+/// server, beside which source Audit starts (#2617): a peer's write of the
+/// audited Device's Audit_Notification_Recipient is denied, the recipient
+/// stays, and nothing is recorded.
+#[tokio::test(start_paused = true)]
+async fn the_default_server_denies_a_peers_write_of_the_recipient() {
+    let (sink, mut records) = network().await;
+    let (peer, mut replies) = network().await;
+    let mut db = database(false);
+    db.set_clock_reader(None);
+    db.get_mut(&oid(ObjectType::DEVICE, 123))
+        .unwrap()
+        .device_authority_internal()
+        .unwrap()
+        .provision_audit_recipient(device(999))
+        .unwrap();
+    let config = SessionConfig {
+        apdu_timeout_ms: 100,
+        apdu_retries: 0,
+        ..SessionConfig::default()
+    };
+    let mut session = bare_session(SessionRole::Both, config)
+        .device(crate::DeviceIdentity::new(123, 42).unwrap())
+        .with_database(db)
+        .with_source_audit_reporter(selected());
+    session
+        .source_audit_bindings
+        .push((oid(ObjectType::DEVICE, 999), address(&sink)));
+    session.start().await.unwrap();
+    let reply = wire(&session, &peer, &mut replies, value(&direct(&sink)), 75).await;
+    assert!(
+        matches!(&reply, Apdu::Error(error) if error.invoke_id == 75
+            && error.error_class == ErrorClass::SERVICES
+            && error.error_code == ErrorCode::SERVICE_REQUEST_DENIED),
+        "{reply:?}"
+    );
+    assert_eq!(
+        current(&session).await,
+        PropertyValue::ApplicationData(value(&device(999)))
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(records.try_recv().is_err(), "a record of a denied write");
     session.stop().await.unwrap();
     sink.stop().await.unwrap();
     peer.stop().await.unwrap();
@@ -482,21 +551,20 @@ async fn a_local_write_of_the_recipient_tells_the_old_and_the_new_one() {
         let mut session = session(db, role, &old);
         session.start().await.unwrap();
         let next = direct(&new);
-        session
-            .write_local(
-                &oid(ObjectType::DEVICE, 123),
-                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-                None,
-                PropertyValue::ApplicationData(value(&next)),
-                None,
-                bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
-            )
+        write_recipient_locally(&session, PropertyValue::ApplicationData(value(&next)), None)
             .await
             .unwrap();
         let (first, _) = notification(&receive(&mut old_records).await, false);
         let (second, _) = notification(&receive(&mut new_records).await, false);
         assert_eq!(first, second);
-        assert_record(&first, &device(999), &next, device(123), None, 0);
+        assert_record(
+            &first,
+            &device(999),
+            &next,
+            device(123),
+            None,
+            role == SessionRole::Both,
+        );
         assert_eq!(
             current(&session).await,
             PropertyValue::ApplicationData(value(&next))
@@ -538,15 +606,7 @@ async fn a_refused_local_write_of_the_recipient_sends_nothing() {
             (ErrorClass::SERVICES, ErrorCode::PARAMETER_OUT_OF_RANGE),
         ),
     ] {
-        let refused = session
-            .write_local(
-                &oid(ObjectType::DEVICE, 123),
-                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-                None,
-                value,
-                priority,
-                bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
-            )
+        let refused = write_recipient_locally(&session, value, priority)
             .await
             .unwrap_err();
         assert!(

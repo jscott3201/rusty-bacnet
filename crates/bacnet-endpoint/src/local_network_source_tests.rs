@@ -87,9 +87,6 @@ fn unstarted_source(
         .session
         .with_database(db)
         .with_source_audit_reporter(oid(ObjectType::AUDIT_REPORTER, 1));
-    if role == SessionRole::Both {
-        session = session.with_device_writes(Arc::new(|_| true));
-    }
     if port_number.is_some() {
         session = session
             .device(identity)

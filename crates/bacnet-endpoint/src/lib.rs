@@ -10,7 +10,10 @@ pub mod roles;
 pub mod sc;
 pub mod session;
 mod source_audit;
+// The server's rows for test objects. The session's tests state no value
+// types, so `typed` goes unused here.
 #[cfg(test)]
+#[allow(dead_code)]
 #[path = "../../bacnet-server/src/test_rows.rs"]
 mod test_rows;
 #[cfg(test)]

@@ -78,14 +78,18 @@ async fn retired_and_missing_reply_authority_do_not_revoke_admitted_device_execu
     let observed = Arc::new(Mutex::new(Vec::new()));
     let auth_allowed = allowed.clone();
     let auth_observed = observed.clone();
-    let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
-        .unwrap()
-        .with_database(db)
-        .with_device_writes(Arc::new(move |context| {
+    let policy = bacnet_server::policy::FnPolicy::new()
+        .inline()
+        .mutation(move |context| {
             let identity = context.provenance.direct_sc_identity().unwrap();
             auth_observed.lock().unwrap().push(identity);
             *auth_allowed.lock().unwrap() == Some(identity)
-        }));
+        });
+    let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(123, 0).unwrap())
+        .with_database(db)
+        .with_server(bacnet_server::server::BACnetServer::generic_builder().policy(policy));
     session.start().await.unwrap();
     let mut a = f.peer(ca.tls("A"), None).await;
     let held = f
@@ -127,7 +131,6 @@ async fn retired_and_missing_reply_authority_do_not_revoke_admitted_device_execu
     f.feed(read).await;
     assert_description(&mut f, &b, "current B committed", 37).await;
     f.barrier(&mut b, 38).await;
-    assert_eq!(session.policy_counters().await.responder_declined, 2);
     session.stop().await.unwrap();
     f.listener.stop().await;
 }
@@ -135,8 +138,9 @@ async fn retired_and_missing_reply_authority_do_not_revoke_admitted_device_execu
 async fn endpoint_segmented_request_abort_and_read_error_use_original_socket() {
     let ca = TestCa::new();
     let (mut f, port) = Fixture::new(&ca).await;
-    let mut session =
-        EndpointSession::new(port, SessionRole::Both, SessionConfig::default()).unwrap();
+    let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
+        .unwrap()
+        .device(node());
     session.start().await.unwrap();
     let mut peer = f.peer(ca.tls("A"), None).await;
     let admitted = f.capture(&mut peer, &read_name(40), None).await;

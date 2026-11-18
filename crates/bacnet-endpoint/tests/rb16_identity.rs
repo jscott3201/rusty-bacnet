@@ -248,7 +248,7 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
     // Narrow admin borrow works while roles run; roles expose no lifecycle.
     assert_eq!(a.active_leases(), 0);
     let _ = a.policy_counters().await;
-    assert!(a.client().is_some() && a.responder().is_some());
+    assert!(a.client().is_some() && a.server().is_some());
 
     a.broadcast_i_am().await.unwrap();
     let got = tokio::time::timeout(WAIT, b_rx.recv())
@@ -267,9 +267,10 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
         other => panic!("expected I-Am, got {other:?}"),
     }
 
-    // Missing identity errors without sending (no invented device).
+    // Missing identity errors without sending (no invented device). A
+    // session with a server role needs one, so this one is a client.
     let (t_c, _t_d) = LoopbackTransport::pair(vec![0x03], vec![0x04]);
-    let mut c = EndpointSession::new(t_c, SessionRole::Both, session_config()).unwrap();
+    let mut c = EndpointSession::new(t_c, SessionRole::ClientOnly, session_config()).unwrap();
     c.start().await.unwrap();
     assert!(c.broadcast_i_am().await.is_err());
     c.stop().await.unwrap();
@@ -280,24 +281,20 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
 
 #[tokio::test(start_paused = true)]
 async fn capability_matrix_services_and_segmentation_refuse() {
-    // Services == reality: ReadProperty succeeds; WriteProperty (unexecuted)
-    // draws Reject UNRECOGNIZED_SERVICE from the narrow responder.
+    // ReadProperty succeeds; WriteProperty draws the read-only server's
+    // Error SERVICES / SERVICE_REQUEST_DENIED.
     // Segmentation NO_SEGMENTATION: segmented request draws server Abort; segmented
     // ComplexAck draws client Abort (both directions refuse, Loopback here;
     // real-loopback proofs assert the same aborts on wire).
-    use bacnet_encoding::apdu::{
-        AbortPdu, ConfirmedRequest as ConfirmedPdu, RejectPdu, encode_apdu,
-    };
+    use bacnet_encoding::apdu::{AbortPdu, ConfirmedRequest as ConfirmedPdu, encode_apdu};
     use bacnet_services::read_property::ReadPropertyRequest;
-    use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice, RejectReason};
+    use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
     use bytes::BytesMut;
 
     let id = DeviceIdentity::new(55, 5).unwrap();
     let db_a = build_database_with_extra(&id, vec![analog(9, 3.25)]).unwrap();
-    let db_b = {
-        let id_b = DeviceIdentity::new(56, 5).unwrap();
-        build_database_with_extra(&id_b, vec![analog(9, 9.5)]).unwrap()
-    };
+    let id_b = DeviceIdentity::new(56, 5).unwrap();
+    let db_b = build_database_with_extra(&id_b, vec![analog(9, 9.5)]).unwrap();
     // Pair for baseline: two full sessions so ReadProperty has a responder.
     let (t_a, t_b) = LoopbackTransport::pair(vec![0xA1], vec![0xB2]);
     let mut a = EndpointSession::new(t_a, SessionRole::Both, session_config())
@@ -306,7 +303,8 @@ async fn capability_matrix_services_and_segmentation_refuse() {
         .device(id);
     let mut b = EndpointSession::new(t_b, SessionRole::Both, session_config())
         .unwrap()
-        .with_database(db_b);
+        .with_database(db_b)
+        .device(id_b);
     a.start().await.unwrap();
     b.start().await.unwrap();
 
@@ -340,16 +338,17 @@ async fn capability_matrix_services_and_segmentation_refuse() {
     let mut peer_rx = peer.start().await.unwrap();
     c.start().await.unwrap();
 
-    // Unexecuted service (WriteProperty) draws Reject on the wire.
+    // A WriteProperty draws the read-only server's denial on the wire.
     let mut svc = BytesMut::new();
-    // Minimal WriteProperty body: object id + property id + value (the
-    // responder rejects before parsing detail, so exact body is inert).
-    ReadPropertyRequest {
+    bacnet_services::write_property::WritePropertyRequest {
         object_identifier: object_id(ObjectType::ANALOG_INPUT, 9),
-        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_identifier: PropertyIdentifier::OUT_OF_SERVICE,
         property_array_index: None,
+        property_value: vec![0x11],
+        priority: None,
     }
-    .encode(&mut svc);
+    .encode(&mut svc)
+    .unwrap();
     let write_req = Apdu::ConfirmedRequest(ConfirmedPdu {
         segmented: false,
         more_follows: false,
@@ -369,17 +368,20 @@ async fn capability_matrix_services_and_segmentation_refuse() {
         .unwrap();
     let reply = tokio::time::timeout(WAIT, peer_rx.recv())
         .await
-        .expect("reject must arrive")
+        .expect("the denial must arrive")
         .expect("peer closed");
     match decode_apdu(reply.apdu).unwrap() {
-        Apdu::Reject(RejectPdu {
-            invoke_id,
-            reject_reason,
-        }) => {
-            assert_eq!(invoke_id, 21);
-            assert_eq!(reject_reason, RejectReason::UNRECOGNIZED_SERVICE);
+        Apdu::Error(error) => {
+            assert_eq!(error.invoke_id, 21);
+            assert_eq!(
+                (error.error_class, error.error_code),
+                (
+                    bacnet_types::enums::ErrorClass::SERVICES,
+                    bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED
+                )
+            );
         }
-        other => panic!("expected Reject, got {other:?}"),
+        other => panic!("expected Error, got {other:?}"),
     }
 
     // Segmented request draws server Abort SEGMENTATION_NOT_SUPPORTED.
@@ -704,7 +706,7 @@ async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn endpoint_roles_reject_segmented_database_without_identity_and_allow_correction() {
+async fn endpoint_roles_reject_a_segmented_database_and_allow_correction() {
     for role in [
         SessionRole::ClientOnly,
         SessionRole::ServerOnly,
@@ -712,15 +714,19 @@ async fn endpoint_roles_reject_segmented_database_without_identity_and_allow_cor
     ] {
         let identity = DeviceIdentity::new(42, 7).unwrap();
         let (transport, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
-        let mut endpoint = EndpointSession::new(transport, role, session_config())
-            .unwrap()
-            .with_database(
-                identity
-                    .clone()
-                    .with_segmentation(Segmentation::SEGMENTED_BOTH)
-                    .build_database()
-                    .unwrap(),
-            );
+        let mut endpoint = EndpointSession::new(transport, role, session_config()).unwrap();
+        // A server role needs the node's identity; a client role may go
+        // without one.
+        if role != SessionRole::ClientOnly {
+            endpoint = endpoint.device(identity.clone());
+        }
+        let mut endpoint = endpoint.with_database(
+            identity
+                .clone()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH)
+                .build_database()
+                .unwrap(),
+        );
         let error = endpoint
             .start()
             .await

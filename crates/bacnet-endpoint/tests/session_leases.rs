@@ -225,6 +225,7 @@ async fn malformed_apdu_is_policy_owned() {
     let (client_transport, peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut client = EndpointSession::new(client_transport, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(901, 42).unwrap())
         .with_database(database_with_analog(5, 5.0));
     client.start().await.unwrap();
     let mut peer = NetworkLayer::new(peer_transport);

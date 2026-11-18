@@ -184,7 +184,9 @@ async fn bip_bind_count_is_one_per_start() {
 
     let (inner, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let (transport, starts) = counting(inner);
-    let mut s = EndpointSession::new(transport, SessionRole::Both, session_config()).unwrap();
+    let mut s = EndpointSession::new(transport, SessionRole::Both, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(901, 42).unwrap());
     s.start().await.unwrap();
     assert_eq!(starts.starts(), 1, "one bind per start, no hidden socket");
     assert!(s.start().await.is_err());
@@ -193,7 +195,9 @@ async fn bip_bind_count_is_one_per_start() {
 
     let (inner2, _peer2) = LoopbackTransport::pair(vec![0x03], vec![0x04]);
     let (transport2, starts2) = counting(inner2);
-    let mut s2 = EndpointSession::new(transport2, SessionRole::Both, session_config()).unwrap();
+    let mut s2 = EndpointSession::new(transport2, SessionRole::Both, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(902, 42).unwrap());
     s2.start().await.unwrap();
     assert_eq!(starts2.starts(), 1, "rebind after stop binds once");
     s2.stop().await.unwrap();

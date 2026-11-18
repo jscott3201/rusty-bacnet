@@ -84,8 +84,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             bound: false,
             committed: false,
         };
-        // A full server the session would build, refused before anything
+        // The full server the session will build, refused before anything
         // changes (#2617).
+        preparation.session.default_server();
         preparation.session.check_server_builder()?;
         preparation.session.validate_segmentation().await?;
         preparation.session.prepare_identity().await?;

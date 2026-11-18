@@ -257,6 +257,12 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// one ReadProperty may expand, a Group's member rows included. See
     /// [`SessionConfig::read_work_limit`]; zero fails
     /// [`build_session`](Self::build_session) via [`EndpointSession::new`].
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder with a
+    /// `read_property_multiple_budget`. A later step of #2617
+    /// removes this call.
     pub fn read_work_limit(mut self, limit: usize) -> Self {
         self.session.read_work_limit = limit;
         self
@@ -317,6 +323,12 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// past either, startup fails before the transport starts.
     /// [`build_transport`](Self::build_transport) refuses it, since a bare
     /// transport can't keep it.
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder with a
+    /// `cov_policy`. A later step of #2617
+    /// removes this call.
     pub fn cov(mut self, config: ReportConfig) -> Self {
         self.cov = Some(config);
         self

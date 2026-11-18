@@ -552,9 +552,9 @@ async fn network_number_endpoint_held_learning_preserves_audit_ack_progress() {
     let mac =
         bacnet_transport::bvll::encode_bip_mac([127, 0, 0, 1], f.peer.local_addr().unwrap().port());
     let (operation, acknowledged) = endpoint
-        .notifications
-        .as_ref()
+        .server()
         .unwrap()
+        .notification_pool()
         .reserve(CanonicalPeer::direct(&mac), S::CONFIRMED_AUDIT_NOTIFICATION)
         .unwrap();
     f.announce(19, 1).await;

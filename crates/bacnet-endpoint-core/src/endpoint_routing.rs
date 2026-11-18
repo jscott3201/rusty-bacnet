@@ -282,6 +282,53 @@ pub(super) struct IngressQueues {
     /// The endpoint's invoke-ID pool, whose leases' answers come before
     /// answers no lease holds.
     pub(super) coordinator: Option<Arc<OutboundTransactionCoordinator>>,
+    /// See [`EndpointIngress::observe_sources`].
+    pub(super) observer: Option<SourceObserver>,
+}
+
+/// Show `observer` what came from another network: every request, and an
+/// answer one of `coordinator`'s leases holds, whichever role takes it. The
+/// lease must match the answer's peer and invoke ID and, where the PDU
+/// carries a service (a Simple-ACK, an Error, an unsegmented Complex-ACK),
+/// its service; a Reject, an Abort, a Segment-ACK or a segment is matched
+/// by its peer and invoke ID alone. Admission's other checks, the lease's
+/// owner and the answers it takes, are not made here.
+fn observe_source(
+    observer: &SourceObserver,
+    coordinator: Option<&OutboundTransactionCoordinator>,
+    route: IngressRoute,
+    received: &ReceivedApdu,
+    local_network: Option<u16>,
+) {
+    if received.source_network.is_none() {
+        return;
+    }
+    let held = || {
+        let apdu = &received.apdu;
+        if route != IngressRoute::TerminalOrSegment || from_requester(apdu) {
+            return false;
+        }
+        let (Some(pool), Some(invoke_id)) = (coordinator, apdu.get(1)) else {
+            return false;
+        };
+        let source = received.source_network.as_ref();
+        pool.lease_of_source(&received.source_mac, source, local_network, *invoke_id)
+            .is_some_and(|(_, service)| answer_service(apdu).is_none_or(|s| s == service.to_raw()))
+    };
+    if route == IngressRoute::InboundRequest || held() {
+        observer(received);
+    }
+}
+
+/// The service an answer's octets name, where admission checks it: a
+/// Simple-ACK's, an Error's, an unsegmented Complex-ACK's.
+fn answer_service(apdu: &[u8]) -> Option<u8> {
+    let first = *apdu.first()?;
+    match first >> 4 {
+        2 | 5 => apdu.get(2).copied(),
+        3 if first & 0x08 == 0 => apdu.get(2).copied(),
+        _ => None,
+    }
 }
 
 /// What a seat takes of one APDU.
@@ -468,11 +515,16 @@ pub(super) fn route_received(
         seats,
         drops,
         coordinator,
+        observer,
     } = queues;
     let route = match classify(&received, transport) {
         Ok(route) => route,
         Err(reason) => return send_policy(policy_tx, drops, PolicyOutcome { reason, received }),
     };
+    if let Some(observer) = observer {
+        let pool = coordinator.as_deref();
+        observe_source(observer, pool, route, &received, local_network);
+    }
 
     let received = share_out(seats, route, received, local_network)?;
 

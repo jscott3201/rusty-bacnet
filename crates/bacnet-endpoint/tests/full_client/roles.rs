@@ -76,6 +76,8 @@ async fn a_client_request_and_a_server_notification_share_one_invoke_id_pool() {
                 .await
         });
         lab.session
+            .server()
+            .unwrap()
             .set_present_value_local(&ai1(), PropertyValue::Real(30.0 + f32::from(round)))
             .await
             .unwrap();
@@ -378,27 +380,19 @@ async fn beside_a_server_role_the_node_answers_as_it_does_with_no_full_client() 
     // What the node sends with no full client.
     let alone = lab(SessionRole::Both).await;
     let expected = ask_the_node(&alone).await;
-    // The narrow server role rejects the file read and the event
-    // notification as services it doesn't know, and reads its Device. The
-    // Reject of the event notification is today's behaviour, pinned here:
-    // step 4 of #2617 puts the full server on a seat, which acknowledges
-    // it, and this expectation changes then.
+    // The full server rejects the file read, whose parameters are missing,
+    // acknowledges the event notification and reads its Device.
     let [
         Apdu::Reject(file),
-        Apdu::Reject(event),
+        Apdu::SimpleAck(event),
         Apdu::ComplexAck(read),
     ] = &expected[..]
     else {
-        panic!("the narrow server role's answers: {expected:?}");
+        panic!("the server's answers: {expected:?}");
     };
-    assert_eq!(
-        (file.invoke_id, file.reject_reason),
-        (1, RejectReason::UNRECOGNIZED_SERVICE)
-    );
-    assert_eq!(
-        (event.invoke_id, event.reject_reason),
-        (2, RejectReason::UNRECOGNIZED_SERVICE)
-    );
+    assert_eq!(file.invoke_id, 1);
+    assert_ne!(file.reject_reason, RejectReason::UNRECOGNIZED_SERVICE);
+    assert_eq!(event.invoke_id, 2);
     assert_eq!(read.invoke_id, 3);
     stop(alone).await;
 
@@ -447,8 +441,8 @@ async fn with_no_server_role_the_full_client_answers_as_a_standalone_client_does
     assert!(events.try_recv().is_ok());
 
     // An Unconfirmed-Request still goes to the session itself, with a copy
-    // for the client. Today's narrow server role answers no Who-Is with an
-    // I-Am, so the session's own count of requests that found no server
+    // for the client. A client-only session has no server to answer a
+    // Who-Is, so the session's own count of requests that found no server
     // role is what shows it was handed one.
     let before = (
         lab.session.policy_counters().await.no_server_role,

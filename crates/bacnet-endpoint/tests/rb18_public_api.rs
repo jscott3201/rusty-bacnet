@@ -75,19 +75,19 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
     db.add(Box::new(ai)).unwrap();
     let mut a = EndpointSession::new(ta, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(901, 42).unwrap())
         .with_database(db);
-    let mut b = EndpointSession::new(tb, SessionRole::Both, session_config()).unwrap();
+    let mut b = EndpointSession::new(tb, SessionRole::Both, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(902, 42).unwrap());
     a.start().await.unwrap();
     b.start().await.unwrap();
 
-    // Live clones prove binding while running.
+    // A live clone proves binding while running.
     let live_client = a.cloned_client_handle().unwrap();
-    let live_server = a.cloned_responder_handle().unwrap();
-    assert!(live_server.is_session_alive());
 
-    // Owner shutdown with handles alive: stop joins, clones fail closed.
+    // Owner shutdown with a handle alive: stop joins, the clone fails closed.
     a.stop().await.unwrap();
-    assert!(!live_server.is_session_alive());
     assert!(
         live_client
             .read_property(
@@ -99,10 +99,9 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
             .await
             .is_err()
     );
-    assert!(live_server.suspend_next_reply().is_err());
     // Session borrows are released at termination.
     assert!(a.client().is_none());
-    assert!(a.responder().is_none());
+    assert!(a.server().is_none());
 
     b.stop().await.unwrap();
 }
@@ -110,7 +109,9 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
 #[tokio::test(start_paused = true)]
 async fn use_after_stop_fails_closed() {
     let (t, _p) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let mut s = EndpointSession::new(t, SessionRole::Both, session_config()).unwrap();
+    let mut s = EndpointSession::new(t, SessionRole::Both, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(903, 42).unwrap());
     s.start().await.unwrap();
     let client = s.cloned_client_handle().unwrap();
     s.stop().await.unwrap();
@@ -149,6 +150,7 @@ async fn role_teardown_while_other_session_remains() {
     let mut client = EndpointSession::new(tc, SessionRole::ClientOnly, session_config()).unwrap();
     let mut server = EndpointSession::new(ts, SessionRole::ServerOnly, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(904, 42).unwrap())
         .with_database(db);
     client.start().await.unwrap();
     server.start().await.unwrap();
@@ -190,17 +192,18 @@ async fn role_teardown_while_other_session_remains() {
 #[tokio::test(start_paused = true)]
 async fn detached_handles_survive_drop_as_fail_closed_values() {
     let (ta, tb) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let mut a = EndpointSession::new(ta, SessionRole::Both, session_config()).unwrap();
-    let mut b = EndpointSession::new(tb, SessionRole::Both, session_config()).unwrap();
+    let mut a = EndpointSession::new(ta, SessionRole::Both, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(905, 42).unwrap());
+    let mut b = EndpointSession::new(tb, SessionRole::Both, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(906, 42).unwrap());
     a.start().await.unwrap();
     b.start().await.unwrap();
     let detached_client = a.cloned_client_handle().unwrap();
-    let detached_server = a.cloned_responder_handle().unwrap();
-    // `Send + Sync` clones move across tasks while bound.
-    let moved = tokio::spawn(async move { detached_server.is_session_alive() })
-        .await
-        .unwrap();
-    assert!(moved);
+    // A `Send + Sync` clone moves across tasks while bound.
+    let moved = detached_client.clone();
+    tokio::spawn(async move { drop(moved) }).await.unwrap();
     drop(a);
     assert!(
         !detached_client
@@ -256,7 +259,10 @@ async fn mstp_session_exposes_its_transport_counters() {
     use bacnet_transport::mstp::codec::{Frame, FrameType};
 
     let (serial, peer) = LoopbackSerial::pair();
-    let mut session = MstpEndpointBuilder::new(serial, 5).build_session().unwrap();
+    let mut session = MstpEndpointBuilder::new(serial, 5)
+        .device(DeviceIdentity::new(1005, 42).unwrap())
+        .build_session()
+        .unwrap();
     let diagnostics = session
         .mstp_diagnostics()
         .expect("the MS/TP builder keeps the counters");

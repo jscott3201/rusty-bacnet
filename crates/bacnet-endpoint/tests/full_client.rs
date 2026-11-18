@@ -89,8 +89,8 @@ struct Lab {
 }
 
 /// A started session on node [`NODE`], with device [`NODE_DEVICE`] and
-/// AI-1 at 20.0, COV reporting on when it has a server role, and the peer
-/// server.
+/// AI-1 at 20.0, its read-only server when it has a server role, and the
+/// peer server.
 async fn lab(role: SessionRole) -> Lab {
     lab_with(role, false).await
 }
@@ -115,9 +115,6 @@ async fn lab_with(role: SessionRole, numbers: bool) -> Lab {
         .unwrap()
         .device(identity)
         .with_database(database);
-    if role != SessionRole::ClientOnly {
-        session = session.with_cov(bacnet_device_core::report::ReportConfig::default());
-    }
     session.start().await.unwrap();
     Lab {
         wire,
