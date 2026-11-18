@@ -287,10 +287,12 @@ pub(super) struct IngressQueues {
 }
 
 /// Show `observer` what came from another network: every request, and an
-/// answer one of `coordinator`'s leases holds, whichever role takes it. An
-/// answer that names a service must name the lease's, as admission
-/// requires; one that names none (a Reject, an Abort, a Segment-ACK, a
-/// segment) is held by its peer and invoke ID alone, as admission holds it.
+/// answer one of `coordinator`'s leases holds, whichever role takes it. The
+/// lease must match the answer's peer and invoke ID and, where the PDU
+/// carries a service (a Simple-ACK, an Error, an unsegmented Complex-ACK),
+/// its service; a Reject, an Abort, a Segment-ACK or a segment is matched
+/// by its peer and invoke ID alone. Admission's other checks, the lease's
+/// owner and the answers it takes, are not made here.
 fn observe_source(
     observer: &SourceObserver,
     coordinator: Option<&OutboundTransactionCoordinator>,

@@ -640,13 +640,14 @@ async fn only_a_request_or_a_held_answer_teaches_the_router() {
     site.stop().await;
 }
 
-/// A client-only session, whose own dispatch takes the answers to its
-/// requests, learns the router from such an answer at its ingress too
-/// (#2617): the answer to its read of the station there teaches it, and one
-/// with the read's invoke ID but another service, which admission refuses
-/// too, doesn't.
-#[tokio::test(start_paused = true)]
-async fn a_client_only_session_learns_the_router_from_an_answer() {
+/// A client-only site whose session reads the station behind the router:
+/// the site, the read, its invoke ID and its request.
+async fn client_only_read() -> (
+    Site,
+    tokio::task::JoinHandle<Result<(), Error>>,
+    u8,
+    ReadPropertyRequest,
+) {
     let config = SessionConfig {
         apdu_timeout_ms: 1_000,
         apdu_retries: 0,
@@ -670,9 +671,21 @@ async fn a_client_only_session_learns_the_router_from_an_answer() {
                 None,
             )
             .await
+            .map(|_| ())
     });
     let request = site.receive().await;
     let (invoke, rp) = read_request(&request);
+    (site, read, invoke, rp)
+}
+
+/// A client-only session, whose own dispatch takes the answers to its
+/// requests, learns the router from such an answer at its ingress too
+/// (#2617): the answer to its read of the station there teaches it, and one
+/// with the read's invoke ID but another service, which admission refuses
+/// too, doesn't.
+#[tokio::test(start_paused = true)]
+async fn a_client_only_session_learns_the_router_from_an_answer() {
+    let (site, read, invoke, rp) = Box::pin(client_only_read()).await;
     let other_service = Apdu::SimpleAck(SimpleAck {
         invoke_id: invoke,
         service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
@@ -683,6 +696,59 @@ async fn a_client_only_session_learns_the_router_from_an_answer() {
     site.send(ack(invoke, &rp), false).await;
     assert!(read.await.unwrap().is_ok());
     assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    site.stop().await;
+}
+
+/// An Error is matched by its service too: one naming another service
+/// teaches no router, one naming the read's does.
+#[tokio::test(start_paused = true)]
+async fn an_error_teaches_the_router_only_for_the_leases_service() {
+    let (site, read, invoke, _) = Box::pin(client_only_read()).await;
+    let error = |service| {
+        Apdu::Error(ErrorPdu {
+            invoke_id: invoke,
+            service_choice: service,
+            error_class: ErrorClass::PROPERTY,
+            error_code: ErrorCode::UNKNOWN_PROPERTY,
+            error_data: Bytes::new(),
+        })
+    };
+    site.send(error(ConfirmedServiceChoice::WRITE_PROPERTY), false)
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(site.learned(), None, "another service's Error taught it");
+    site.send(error(ConfirmedServiceChoice::READ_PROPERTY), false)
+        .await;
+    assert!(read.await.unwrap().is_err());
+    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    site.stop().await;
+}
+
+/// A segmented Complex-ACK's first segment carries its service after the
+/// sequence number and window: it is matched by its peer and invoke ID, as
+/// admission matches it, and teaches the router.
+#[tokio::test(start_paused = true)]
+async fn a_held_segment_teaches_the_router() {
+    let (site, read, invoke, _) = Box::pin(client_only_read()).await;
+    let segment = Apdu::ComplexAck(ComplexAck {
+        segmented: true,
+        more_follows: true,
+        invoke_id: invoke,
+        sequence_number: Some(0),
+        proposed_window_size: Some(1),
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_ack: Bytes::from_static(&[0x0c, 0, 0, 0, 1]),
+    });
+    site.send(segment, false).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let learned = site.learned();
+    assert_eq!(
+        learned.as_deref(),
+        Some(&ROUTER_NEAR[..]),
+        "a held segment didn't teach"
+    );
+    read.abort();
+    let _ = read.await;
     site.stop().await;
 }
 

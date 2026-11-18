@@ -331,6 +331,38 @@ async fn the_sessions_local_writes_are_refused_beside_its_server() {
     session.stop().await.unwrap();
 }
 
+/// A start cancelled after the session runs but before it builds its server
+/// leaves a running session with no server: its local writes are refused by
+/// its role all the same, and nothing changes.
+#[tokio::test(start_paused = true)]
+async fn a_server_role_refuses_local_writes_with_no_server_built() {
+    let wire = Wire::new();
+    let (mut session, _) = default_session(&wire);
+    let pauses = super::StartPauses {
+        after_link: Duration::from_secs(5),
+        ..Default::default()
+    };
+    let start = Box::pin(super::START_PAUSES.scope(pauses, session.start()));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), start)
+            .await
+            .is_err()
+    );
+    assert!(session.is_running(), "the cancelled start left it running");
+    assert!(session.server().is_none(), "no server was built");
+    let ai1 = ai1();
+    let input = session.set_present_value_local(&ai1, PropertyValue::Real(9.0));
+    assert!(
+        matches!(input.await, Err(Error::Encoding(message)) if message.contains("server()'s write_local"))
+    );
+    let pv = PropertyIdentifier::PRESENT_VALUE;
+    let database = session.database.as_ref().unwrap().read().await;
+    let value = database.get(&ai1).unwrap().read_property(pv, None).unwrap();
+    assert_eq!(value, PropertyValue::Real(0.0), "nothing changed");
+    drop(database);
+    let _ = session.stop().await;
+}
+
 /// A request already on the link when the session starts reaches the
 /// server: the session takes the server's seat as soon as its link is up,
 /// before it builds the server, so the request waits in the seat's queue

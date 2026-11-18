@@ -135,10 +135,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Audit's records among them) and the reads its runs make. Past that,
     /// each does what it does when the pool is empty: an event notification
     /// waits for an ID, a COV notification's subscription waits for one of
-    /// the server's IDs to come back and is then looked at again (as the
-    /// session's own COV reporting, [`with_cov`](Self::with_cov), queued
-    /// it), an Audit record is counted lost. The client's requests find the
-    /// rest.
+    /// the server's IDs to come back and is then looked at again, an Audit
+    /// record is counted lost. The client's requests find the rest.
     ///
     /// **DeviceCommunicationControl binds the node.** The standard has it
     /// bind the whole device (Clause 16.1). While the server holds a
@@ -237,7 +235,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             return refused(
                 "a session with a server role runs a full server, which needs the node's \
                  Device identity, its one set of device settings: compose one with device(), \
-                 or use role(SessionRole::ClientOnly) for a node that only asks",
+                 or make a node that only asks a SessionRole::ClientOnly session (a link \
+                 builder's role(), or the role EndpointSession::new takes)",
             );
         }
         let narrow = [

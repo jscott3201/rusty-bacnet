@@ -35,7 +35,6 @@ use bacnet_device_core::cov::{Delivery, SubscriberEndpoint, Token};
 use bacnet_device_core::read::LiveLists;
 use bacnet_device_core::report::{Bindings, Destination, InvokeIds, ReportConfig, Reporter};
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
-use bacnet_device_core::write::Applied;
 use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_endpoint_core::coordinator::{
     Admission, CanonicalPeer, LeaseMetadata, LeaseToken, OutboundTransactionCoordinator,
@@ -199,11 +198,6 @@ impl CovRole {
         Some(host)
     }
 
-    /// The running host, for the application's own changes.
-    pub(super) fn host(&self) -> Option<&Arc<CovHost>> {
-        self.host.as_ref()
-    }
-
     /// Stop sending and give back every invoke ID a notification holds.
     /// What is still queued is dropped.
     pub(super) async fn stop(&mut self) {
@@ -289,31 +283,6 @@ impl CovHost {
     /// `Reporter` sees time move forward only.
     fn now(&self) -> bacnet_time::Instant {
         self.clock.now()
-    }
-
-    /// Make the application's change to `oid` with `apply` and queue what
-    /// it reports: a Life Safety object's values are captured first, so its
-    /// notification carries exactly what changed. A change that wrote
-    /// nothing reports nothing.
-    pub(crate) fn local(
-        &self,
-        db: &mut ObjectDatabase,
-        oid: ObjectIdentifier,
-        apply: impl FnOnce(&mut ObjectDatabase) -> Result<Applied, Error>,
-    ) -> Result<Applied, Error> {
-        let mut state = self.lock();
-        state.reporter.capture(db, &[oid]);
-        let applied = apply(db);
-        let written: &[ObjectIdentifier] = match applied {
-            Ok(Applied::Written) => &[oid],
-            // Reporting no object drops the capture.
-            _ => &[],
-        };
-        let now = self.now();
-        state.reporter.changed(db, written, now);
-        drop(state);
-        self.wake.notify_one();
-        applied
     }
 
     /// The answer `apdu` the dispatch task admitted: true when it answers a

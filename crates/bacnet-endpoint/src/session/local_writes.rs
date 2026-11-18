@@ -3,12 +3,13 @@
 //! ([`apply`](bacnet_device_core::write::local::apply)) under the session's
 //! database guard, staged as `bacnet-server` stages its own.
 //!
-//! A change that writes is reported to the session's COV subscribers when
-//! COV is enabled ([`EndpointSession::with_cov`], #2490). What else follows
-//! a change on the server, its event pass and the Command, Channel, Timer,
-//! Schedule and Staging work, has nothing to run on here: the endpoint runs
-//! no event pass, and no task makes a run's writes or times a Timer. A
-//! change is seen by the next read.
+//! Only a client-only session takes these calls (#2617): one with a server
+//! role refuses them, and its server's calls of the same names make the
+//! change. What follows a change on the server, its COV and event
+//! notifications, its event pass and the Command, Channel, Timer, Schedule
+//! and Staging work, has nothing to run on here: the session reports no COV
+//! and runs no event pass, and no task makes a run's writes or times a
+//! Timer. A change is seen by the next read.
 
 use super::*;
 use bacnet_device_core::write::local::{self, LocalChange, LocalCommandSource};
@@ -37,12 +38,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// succeeds and changes nothing (#1396). `source` names the local
     /// Device or an object of it as the command's initiator.
     ///
-    /// **COV.** With [`with_cov`](Self::with_cov), a change that writes is
-    /// reported to the subscribers of `oid` once its run, if any, has
-    /// ended as below.
-    ///
-    /// **What doesn't follow on an endpoint.** The endpoint sends no event
-    /// notification after a local change and runs no event pass, so
+    /// **What doesn't follow on an endpoint.** The endpoint sends no COV or
+    /// event notification after a local change and runs no event pass, so
     /// Event_State stays as it is. No task
     /// makes the writes a change starts either; each run ends at once,
     /// unmade, as bacnet-device-core's `Responder` ends one a client's write
@@ -83,8 +80,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// # Errors
     /// [`Error::Encoding`] when the session is not running (before
     /// [`start`](Self::start), or once [`stop`](Self::stop) has begun, a
-    /// cancelled stop included) or has no database; nothing changes then. Otherwise the refusal above, with
-    /// nothing changed.
+    /// cancelled stop included), has a server role (`ServerOnly` or `Both`,
+    /// whether or not its server was built), or has no database; nothing
+    /// changes then. Otherwise the refusal above, with nothing changed.
     ///
     /// # Cancellation
     /// Dropped before it commits, the call has changed nothing the object
@@ -132,10 +130,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// included. A Value that tracks
     /// its source then names this session's Device as Value_Source.
     ///
-    /// **What follows on an endpoint:** a COV notification with
-    /// [`with_cov`](Self::with_cov), but no event notification and no event
-    /// pass, as for [`write_local`](Self::write_local). An input is not
-    /// audited and saves nothing first.
+    /// **What follows on an endpoint:** no COV or event notification and no
+    /// event pass, as for [`write_local`](Self::write_local). An input is
+    /// not audited and saves nothing first.
     ///
     /// # Errors
     /// As [`write_local`](Self::write_local).
@@ -171,11 +168,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// an object that takes none refuses it with OBJECT /
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Status_Flags' FAULT follows it.
     ///
-    /// **What follows on an endpoint:** a COV notification with
-    /// [`with_cov`](Self::with_cov), but no event notification and no event
-    /// pass, as for [`write_local`](Self::write_local), so an object that reports faults
-    /// keeps its Event_State and its Status_Flags show FAULT without
-    /// IN_ALARM, where the server's event pass would add it. Not audited.
+    /// **What follows on an endpoint:** no COV or event notification and no
+    /// event pass, as for [`write_local`](Self::write_local), so an object
+    /// that reports faults keeps its Event_State and its Status_Flags show
+    /// FAULT without IN_ALARM, where the server's event pass would add it.
+    /// Not audited.
     ///
     /// # Errors
     /// As [`write_local`](Self::write_local).
@@ -193,14 +190,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Make `change` to `oid` under the database guard, staged as the
-    /// server stages its local writes, while the session runs, and report
-    /// it to COV subscribers.
+    /// server stages its local writes, while a client-only session runs.
     async fn apply_local(&self, oid: ObjectIdentifier, change: LocalChange) -> Result<(), Error> {
         let not_running = || Error::Encoding("endpoint session is not running".into());
         if !self.is_running() {
             return Err(not_running());
         }
-        if self.server.is_some() {
+        // By role, not by a built server: a start cancelled before it builds
+        // the server leaves a running session with none (#2617).
+        if self.role != SessionRole::ClientOnly {
             return Err(Error::Encoding(
                 "a session with a server role makes its local changes through its server: \
                  call server()'s write_local, set_present_value_local or \
@@ -228,11 +226,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 }
                 Ok(applied)
             };
-            match self.cov.host() {
-                Some(cov) => cov.local(db, oid, apply),
-                None => apply(db),
-            }
-            .map(|_| ())
+            apply(db).map(|_| ())
         })
         .await
     }
