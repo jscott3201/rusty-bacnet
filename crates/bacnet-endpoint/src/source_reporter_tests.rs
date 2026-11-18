@@ -207,7 +207,13 @@ async fn success(role: SessionRole) {
         selected()
     ));
     drop(session);
-    assert!(weak.upgrade().is_none());
+    // The server's drop hands its handle to a task, which lets go of it on
+    // the runtime's next turn, as a standalone server's drop does (#2617).
+    let wait = Duration::from_secs(1);
+    crate::session::eventually::eventually(wait, "the database let go", async || {
+        weak.upgrade().is_none()
+    })
+    .await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -256,7 +262,7 @@ async fn rejected(
             Lifecycle::Ready as u8
         );
         assert!(!session.is_running());
-        assert!(session.requester.is_none() && session.responder.is_none());
+        assert!(session.requester.is_none() && session.server.is_none());
         assert!(session.dispatch_task.is_none() && session.egress.is_none());
         assert_eq!(observed.starts.load(Ordering::SeqCst), 0);
         assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
@@ -494,7 +500,8 @@ async fn source_database_is_released_on_drop_without_stop() {
         session.start().await.unwrap();
         let weak = Arc::downgrade(session.database.as_ref().unwrap());
         drop(session);
-        // Dispatch owns a responder clone until its abort is observed.
+        // The session's aborted tasks, and on Both its server's, let go of
+        // their handles once the runtime drops them.
         crate::session::eventually::eventually(
             Duration::from_secs(2),
             "the dropped session lets go of the database",

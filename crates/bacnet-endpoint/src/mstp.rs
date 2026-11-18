@@ -9,16 +9,15 @@
 //!
 //! # Reply-path ownership (RB-17)
 //!
-//! Prompt replies route through the existing responder `reply_tx` path
-//! (MAC `AnswerDataRequest` window, no token needed). Token-owned
-//! initiations (client requests, broadcasts) plus deferred-after-postponed
-//! responses go through the single [`EndpointEgress`](bacnet_endpoint_core::endpoint_ingress::EndpointEgress)
-//! → `queue_npdu` path and transmit as `DataNotExpectingReply` at the next
-//! token opportunity. The two stay distinct by construction: the responder
-//! observes `reply_tx` present (prompt) or absent (token-owned), never both
-//! for one request. Deferred correlation is session-side (one-shot
-//! suspension on the session token, resolved via egress); the MAC keeps no
-//! extra state and no second serial owner exists.
+//! The server role's prompt answer to a DataExpectingReply frame's request
+//! goes through the request's one-use `reply_tx` (the MAC's `AnswerDataRequest`
+//! window, no token needed). Token-owned initiations (client requests,
+//! broadcasts, the server's notifications) and an answer that comes after
+//! the MAC has sent Reply Postponed go through the transport's `queue_npdu`
+//! path and transmit as `DataNotExpectingReply` at the next token
+//! opportunity. A request carries `reply_tx` (prompt) or not (token-owned),
+//! never both; the MAC keeps no extra state and no second serial owner
+//! exists.
 //!
 //! # Bounds and evidence level
 //!
@@ -39,7 +38,6 @@
 
 use std::time::Duration;
 
-use bacnet_device_core::report::ReportConfig;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::mstp::{MstpConfig, MstpExecutionMode, MstpTransport, SerialPort};
 use bacnet_types::MacAddr;
@@ -100,7 +98,6 @@ pub struct MstpEndpointBuilder<S: SerialPort> {
     session: SessionConfig,
     database: Option<ObjectDatabase>,
     identity: Option<crate::identity::DeviceIdentity>,
-    cov: Option<ReportConfig>,
     source_audit_bindings: Vec<(ObjectIdentifier, MacAddr)>,
     source_audit_routed: crate::session::RoutedBindings,
 }
@@ -130,7 +127,6 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
             session: SessionConfig::default(),
             database: None,
             identity: None,
-            cov: None,
             source_audit_bindings: Vec::new(),
             source_audit_routed: Vec::new(),
         }
@@ -253,21 +249,6 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         self
     }
 
-    /// Sets the server role's read work limit (default 256): the result rows
-    /// one ReadProperty may expand, a Group's member rows included. See
-    /// [`SessionConfig::read_work_limit`]; zero fails
-    /// [`build_session`](Self::build_session) via [`EndpointSession::new`].
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder with a
-    /// `read_property_multiple_budget`. A later step of #2617
-    /// removes this call.
-    pub fn read_work_limit(mut self, limit: usize) -> Self {
-        self.session.read_work_limit = limit;
-        self
-    }
-
     /// Sets the node's APDU timeout and retries (default 6000 ms and 3; see
     /// [`SessionConfig::apdu_timeout_ms`]): the client roles' request
     /// timing, and a full server's confirmed notifications and its Device's
@@ -287,7 +268,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         self
     }
 
-    /// Attaches the object database for the server responder.
+    /// Attaches the object database, which a server role's server serves.
     ///
     /// Build it from the same identity passed to
     /// [`device`](Self::device) so Device readback agrees with I-Am.
@@ -305,32 +286,6 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// and its selected Device must match the resolved identity.
     pub fn device(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         self.identity = Some(identity);
-        self
-    }
-
-    /// Enables SubscribeCOV, SubscribeCOVProperty and
-    /// SubscribeCOVPropertyMultiple for the objects of the database, with
-    /// the COV notifications they call for, under `config`, as
-    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov)
-    /// does. Its bounds, startup requirements and refusals are those of
-    /// [`EndpointSession::with_cov`].
-    /// The outbox holds at most
-    /// [`COV_OUTBOX_MAX_ENTRIES`](crate::session::COV_OUTBOX_MAX_ENTRIES)
-    /// entries and
-    /// [`COV_OUTBOX_MAX_OCTETS`](crate::session::COV_OUTBOX_MAX_OCTETS)
-    /// octets, and the confirmed timeout is 1 ms to
-    /// [`COV_CONFIRMED_TIMEOUT_MAX_MS`](crate::session::COV_CONFIRMED_TIMEOUT_MAX_MS);
-    /// past either, startup fails before the transport starts.
-    /// [`build_transport`](Self::build_transport) refuses it, since a bare
-    /// transport can't keep it.
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder with a
-    /// `cov_policy`. A later step of #2617
-    /// removes this call.
-    pub fn cov(mut self, config: ReportConfig) -> Self {
-        self.cov = Some(config);
         self
     }
 
@@ -377,9 +332,6 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
                 "source Audit route data requires build_session()".into(),
             ));
         }
-        if self.cov.is_some() {
-            return Err(Error::Encoding("COV requires build_session()".into()));
-        }
         let config = self.config();
         let serial = self
             .serial
@@ -422,7 +374,6 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         let session = self.session.clone();
         let database = self.database.take();
         let identity = self.identity.take();
-        let cov = self.cov.take();
         let transport = self.build_transport()?;
         let diagnostics = transport.diagnostics();
         let mut endpoint = EndpointSession::new(wrap(transport), role, session)?;
@@ -432,9 +383,6 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         }
         if let Some(id) = identity {
             endpoint = endpoint.device(id);
-        }
-        if let Some(config) = cov {
-            endpoint = endpoint.with_cov(config);
         }
         Ok(endpoint.with_source_audit_device_bindings(bindings, routed))
     }

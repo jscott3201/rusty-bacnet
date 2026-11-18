@@ -1,7 +1,7 @@
 //! A session's full server (#2617) and its objects' saves: the session's
 //! stop stops the server first, whose own stop waits for the saves while
 //! the link is still up, and a session dropped with its server, stopped or
-//! not, lets the database go off the runtime as the narrow session does.
+//! not, lets the database go off the runtime as a client-only one does.
 use super::*;
 use bacnet_server::server::BACnetServer;
 

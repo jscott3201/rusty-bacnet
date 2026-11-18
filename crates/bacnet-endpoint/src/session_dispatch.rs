@@ -149,16 +149,6 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
             .complete_pre_admitted(admission, apdu, received)
             .await;
     } else {
-        // An answer to one of the COV reporting's confirmed notifications
-        // ends it there (#2490).
-        if let Some(cov) = &parts.cov
-            && cov.answer(&admission, &received.apdu)
-        {
-            if let Some(reply_tx) = received.reply_tx {
-                drop(reply_tx);
-            }
-            return;
-        }
         let Some(notifications) = parts.notifications.as_ref() else {
             let _ = parts.coordinator.release(admission.token());
             let mut counters = parts.shared.counters.lock().await;

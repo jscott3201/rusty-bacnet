@@ -19,7 +19,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// snapshot, and a B/IPv6 transport built with the served Device's
     /// instance (the identity's, else the database's Device), which is its
     /// VMAC (#2057). It publishes the actual address, UDP port and MAC (a
-    /// B/IPv6 link's VMAC) before exposing responder roles.
+    /// B/IPv6 link's VMAC) before the server takes requests.
     ///
     /// There is no B/IPv6 endpoint builder, as there is no B/IPv6 server
     /// builder: compose the session over a `Bip6Transport` (the
@@ -160,11 +160,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             }
             (None, None) => return Err(invalid("registered B/IP mode changed during bind")),
         };
-        // Written values activate only through a ReinitializeDevice handler:
-        // the narrow role's, or a full server's, which its build sets.
-        if self.server_builder.is_none() {
-            db.set_network_port_activation_internal(oid, self.reinitialize.is_some())?;
-        }
+        // Written values activate only through a server's ReinitializeDevice
+        // handler, which the server's build sets; the reservation left the
+        // port not activating, as a session with no server keeps it.
+
         // The port's configured number is the local network number from the
         // start (#1403); the Number owner copies every later change from the
         // port, as the full server's does.
