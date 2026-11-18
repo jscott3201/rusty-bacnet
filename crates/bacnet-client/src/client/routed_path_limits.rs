@@ -10,7 +10,12 @@ use tokio::time::Instant as TokioInstant;
 use super::*;
 use crate::tsm::CompletionOutcome;
 
-/// Smallest routed NPDU envelope required across the standard data links.
+/// The smallest NPDU a router must be able to forward between any two data
+/// links, the lowest of the per-link figures in Table 6-1 (Clause 6.6). It is
+/// the default path limit, and also the floor of what a path can learn: a
+/// conforming router never refuses a frame this small as too long, so a
+/// reason 4 claimed by a request whose largest frame is no larger is not
+/// about that frame ([`RoutedPathLimits::claim_active`]).
 const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
 /// Hard bound covering gates, configured evidence, and learned evidence.
 pub(super) const MAX_ROUTED_PATH_ENTRIES: usize = 256;
@@ -107,6 +112,9 @@ struct RoutedPathEntry {
     /// from this one, never from a smaller frame sent after it.
     generation_largest_npdu: u16,
     generation_end: GenerationEnd,
+    /// Whether a below-minimum drop on this path has been logged since its
+    /// limit was last configured or cleared.
+    below_minimum_warned: bool,
 }
 
 impl RoutedPathEntry {
@@ -122,6 +130,7 @@ impl RoutedPathEntry {
             generation_attempts: 0,
             generation_largest_npdu: 0,
             generation_end: GenerationEnd::Open,
+            below_minimum_warned: false,
         }
     }
 
@@ -145,6 +154,9 @@ struct RoutedPathState {
     /// Reason-4 rejects dropped because they could belong to an earlier
     /// answered generation's frame.
     dropped_rejects: u64,
+    /// Reason-4 rejects dropped because the active request's largest frame
+    /// is within the conservative limit.
+    below_minimum_drops: u64,
 }
 
 pub(super) struct RoutedPathLimits {
@@ -165,6 +177,7 @@ impl RoutedPathLimits {
                 next_use: 0,
                 capacity,
                 dropped_rejects: 0,
+                below_minimum_drops: 0,
             }),
             quarantine_horizon,
         }
@@ -179,6 +192,20 @@ impl RoutedPathLimits {
     /// See [`BACnetClient::too_long_reject_drops`].
     pub(super) fn dropped_rejects(&self) -> u64 {
         self.state().dropped_rejects
+    }
+
+    /// See [`BACnetClient::below_minimum_reject_drops`].
+    pub(super) fn below_minimum_drops(&self) -> u64 {
+        self.state().below_minimum_drops
+    }
+
+    /// Whether the path's below-minimum warning has fired and not been reset.
+    #[cfg(test)]
+    pub(super) fn below_minimum_warned(&self, router_mac: &[u8], dnet: u16) -> bool {
+        self.state()
+            .entries
+            .get(&RoutedPathKey::new(router_mac, dnet))
+            .is_some_and(|entry| entry.below_minimum_warned)
     }
 
     /// How many path entries exist, in use or idle.
@@ -409,7 +436,11 @@ impl RoutedPathLimits {
     /// ingress before the request was installed is not its own. One that
     /// could be for an earlier answered generation's larger frame is
     /// dropped and counted, and the request runs on to its own answer,
-    /// retry or timeout.
+    /// retry or timeout. So is one claimed by a request whose largest frame is
+    /// within [`CONSERVATIVE_ROUTED_PATH_MAX_NPDU`] (counted apart): no
+    /// conforming router refuses such a frame, so the reject was for other
+    /// traffic, and believing it would pin the path below any link's minimum.
+    /// The first such drop on a path logs a warning.
     fn claim_active(
         &self,
         router_mac: &[u8],
@@ -429,6 +460,27 @@ impl RoutedPathLimits {
             return None;
         }
         let largest = entry.generation_largest_npdu;
+        // This check stays before the arms below: they clear the answered
+        // record and mark a one-frame generation refused, which a dropped
+        // reject must not do.
+        if largest <= CONSERVATIVE_ROUTED_PATH_MAX_NPDU {
+            state.below_minimum_drops = state.below_minimum_drops.saturating_add(1);
+            let first = !std::mem::replace(&mut entry.below_minimum_warned, true);
+            drop(guard);
+            if first {
+                tracing::warn!(
+                    router_mac = ?router_mac,
+                    dnet,
+                    npdu_octets = largest,
+                    minimum_npdu_octets = CONSERVATIVE_ROUTED_PATH_MAX_NPDU,
+                    "Ignored a reason-4 (too long) network reject for a frame within \
+                     the 228-octet routed minimum of Table 6-1; a router refusing a frame that \
+                     small is outside the standard. If this router really limits the path \
+                     below that, set the limit by hand with configure_routed_path_max_npdu"
+                );
+            }
+            return None;
+        }
         // The clock is read only for a path with answered frames on record.
         let answered = match entry.answered {
             Some(_) => entry.answered_at(TokioInstant::now()),
@@ -456,6 +508,9 @@ impl RoutedPathLimits {
             .entries
             .get_mut(&active.path)
             .expect("the reason-4 claimant still holds its routed path gate");
+        // A learned limit stays at the conservative one or above, whatever
+        // the caller passes (`claim_active` already drops smaller frames).
+        let attempted_npdu = attempted_npdu.max(CONSERVATIVE_ROUTED_PATH_MAX_NPDU + 1);
         let exclusive_max_npdu = entry.learned.as_ref().map_or(attempted_npdu, |learned| {
             learned.exclusive_max_npdu.min(attempted_npdu)
         });
@@ -535,6 +590,7 @@ impl RoutedPathLease {
             observed_at: StdInstant::now(),
         });
         entry.learned = None;
+        entry.below_minimum_warned = false;
     }
 
     fn clear(&self) {
@@ -545,6 +601,7 @@ impl RoutedPathLease {
             .expect("path entry remains present while its gate is held");
         entry.configured = None;
         entry.learned = None;
+        entry.below_minimum_warned = false;
     }
 }
 

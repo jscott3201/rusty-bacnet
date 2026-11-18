@@ -32,16 +32,18 @@ const DADR: [u8; 1] = [3];
 /// One APDU timeout at the default.
 const TIMEOUT: Duration = Duration::from_secs(6);
 /// The old hold at the defaults: the timeout times four attempts.
-const WINDOW: Duration = Duration::from_secs(24);
+pub(super) const WINDOW: Duration = Duration::from_secs(24);
 /// 300 octets of service data: a 304-octet APDU, a 315-octet forwarded NPDU
 /// (9 fixed octets of NPCI, a 1-octet DADR and a 1-octet SADR).
-const LARGE: usize = 300;
-/// 100 octets of service data: a 115-octet forwarded NPDU.
-const SMALL: usize = 100;
+pub(super) const LARGE: usize = 300;
+/// 220 octets of service data: a 235-octet forwarded NPDU, smaller than
+/// [`LARGE`] and just above the 228-octet floor a reason 4 can teach
+/// (#2665).
+const SMALL: usize = 220;
 
 /// One client and its routed path to [`DNET`] through [`ROUTER`].
-struct Path {
-    client: Arc<BACnetClient<TestTransport>>,
+pub(super) struct Path {
+    pub(super) client: Arc<BACnetClient<TestTransport>>,
     inbound: mpsc::Sender<ReceivedNpdu>,
     outbound: mpsc::UnboundedReceiver<SentFrame>,
 }
@@ -49,7 +51,7 @@ struct Path {
 impl Path {
     /// A client on `config` whose path carries `max_npdu`, or the
     /// conservative 228 octets with `None`.
-    async fn new(config: ClientConfig, max_npdu: Option<u16>) -> Self {
+    pub(super) async fn new(config: ClientConfig, max_npdu: Option<u16>) -> Self {
         let (transport, inbound, outbound) = harness(&[1], 1486);
         let client = Arc::new(BACnetClient::start(config, transport).await.unwrap());
         if let Some(max_npdu) = max_npdu {
@@ -65,7 +67,7 @@ impl Path {
         }
     }
 
-    fn request(&self, octets: usize, fill: u8) -> JoinHandle<Result<Bytes, Error>> {
+    pub(super) fn request(&self, octets: usize, fill: u8) -> JoinHandle<Result<Bytes, Error>> {
         routed_request(
             Arc::clone(&self.client),
             ROUTER.to_vec(),
@@ -77,7 +79,7 @@ impl Path {
 
     /// The next frame the client sends, within twice the window: on paused
     /// time a frame that never comes fails the test instead of hanging it.
-    async fn next_frame(&mut self) -> ConfirmedRequest {
+    pub(super) async fn next_frame(&mut self) -> ConfirmedRequest {
         let frame = timeout(2 * WINDOW, self.outbound.recv())
             .await
             .expect("no frame within twice the window")
@@ -85,17 +87,17 @@ impl Path {
         confirmed_request(frame, &ROUTER)
     }
 
-    async fn ack(&self, invoke_id: u8) {
+    pub(super) async fn ack(&self, invoke_id: u8) {
         inject_simple_ack(&self.inbound, &ROUTER, DNET, &DADR, invoke_id).await;
     }
 
-    async fn reject(&self) {
+    pub(super) async fn reject(&self) {
         inject_reason_4(&self.inbound, &ROUTER, DNET).await;
     }
 
     /// A request of `octets` the device answers on its retry, one timeout
     /// after its first frame. Returns its invoke ID.
-    async fn answered_on_retry(&mut self, octets: usize) -> u8 {
+    pub(super) async fn answered_on_retry(&mut self, octets: usize) -> u8 {
         let task = self.request(octets, 0x41);
         let first = self.next_frame().await;
         let sent = Instant::now();
@@ -110,7 +112,7 @@ impl Path {
     /// A request of `octets` sent now goes out after `wait`, in APDUs of at
     /// most `max_apdu` octets, and the device answers it, segment by segment
     /// when it is segmented. Returns its first frame.
-    async fn next_goes_out_after(
+    pub(super) async fn next_goes_out_after(
         &mut self,
         octets: usize,
         wait: Duration,
@@ -139,17 +141,32 @@ impl Path {
         frame
     }
 
-    async fn stop(self) {
+    /// The device answers a segmented request, segment by segment, from its
+    /// `first` frame.
+    pub(super) async fn finish_segmented(&mut self, first: ConfirmedRequest, max_apdu: u16) {
+        finish_segmented(
+            &self.inbound,
+            &mut self.outbound,
+            &ROUTER,
+            DNET,
+            &DADR,
+            first,
+            max_apdu,
+        )
+        .await;
+    }
+
+    pub(super) async fn stop(self) {
         let mut client = Arc::try_unwrap(self.client).ok().unwrap();
         client.stop().await.unwrap();
     }
 }
 
-fn too_long(result: Result<Bytes, Error>) -> bool {
+pub(super) fn too_long(result: Result<Bytes, Error>) -> bool {
     matches!(result, Err(Error::RoutedPathTooLong { dnet: DNET }))
 }
 
-fn timed_out(result: Result<Bytes, Error>) -> bool {
+pub(super) fn timed_out(result: Result<Bytes, Error>) -> bool {
     matches!(result, Err(Error::Remote(RemoteError::Abort { reason }))
         if reason == AbortReason::TSM_TIMEOUT)
 }
@@ -341,8 +358,8 @@ async fn after_the_window_a_smaller_request_takes_the_reject() {
     assert!(too_long(task.await.unwrap()));
     assert_eq!(path.client.too_long_reject_drops(), 0);
 
-    // The 115-octet NPDU bounds the next request to 103 APDU octets.
-    let first = path.next_goes_out_after(LARGE, Duration::ZERO, 103).await;
+    // The 235-octet NPDU bounds the next request to 223 APDU octets.
+    let first = path.next_goes_out_after(LARGE, Duration::ZERO, 223).await;
     assert!(first.segmented);
     path.stop().await;
 }
@@ -375,11 +392,11 @@ async fn a_reject_inside_a_segment_window_teaches_the_largest_frame() {
         proposed_window_size: 4,
         ..ClientConfig::default()
     };
-    let mut path = Path::new(config, None).await;
-    // Segments of 211, 211 and 78 octets: forwarded NPDUs of 228, 228, 95.
-    let task = path.request(500, 0x41);
+    let mut path = Path::new(config, Some(300)).await;
+    // Segments of 283, 283 and 34 octets: forwarded NPDUs of 300, 300, 51.
+    let task = path.request(600, 0x41);
     let first = path.next_frame().await;
-    assert_eq!(first.service_request.len(), 211);
+    assert_eq!(first.service_request.len(), 283);
     inject_apdu(
         &path.inbound,
         &ROUTER,
@@ -393,17 +410,17 @@ async fn a_reject_inside_a_segment_window_teaches_the_largest_frame() {
         }),
     )
     .await;
-    assert_eq!(path.next_frame().await.service_request.len(), 211);
+    assert_eq!(path.next_frame().await.service_request.len(), 283);
     let last = path.next_frame().await;
     assert!(!last.more_follows);
-    assert_eq!(last.service_request.len(), 78);
+    assert_eq!(last.service_request.len(), 34);
     path.reject().await;
     assert!(too_long(task.await.unwrap()));
 
-    // Bound by the 228-octet NPDU: 227, so 216 APDU octets, and a segment
-    // of 210. The final segment's 95 octets would have left 83.
-    let first = path.next_goes_out_after(LARGE, WINDOW, 216).await;
-    assert_eq!(6 + first.service_request.len(), 216);
+    // Bound by the 300-octet NPDU: 299, so 288 APDU octets, and a segment
+    // of 282. The final segment's 51 octets would have left 40.
+    let first = path.next_goes_out_after(LARGE, WINDOW, 288).await;
+    assert_eq!(6 + first.service_request.len(), 288);
     path.stop().await;
 }
 

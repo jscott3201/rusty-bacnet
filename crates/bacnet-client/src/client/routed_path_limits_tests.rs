@@ -85,7 +85,7 @@ async fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
         ConfirmedServiceChoice::READ_PROPERTY,
     );
     limits.install_active(target, tsm_mac.clone(), 7, old.owner.clone(), 11, 0);
-    assert!(limits.authorize_attempt(target, &tsm_mac, 7, &old.owner, 100));
+    assert!(limits.authorize_attempt(target, &tsm_mac, 7, &old.owner, 300));
     let (claimed, _) = limits.claim_active(&router, 100, 1).unwrap();
 
     assert!(tsm.cancel_transaction_for_owner(&tsm_mac, 7, &old.owner));
@@ -105,6 +105,41 @@ async fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
     );
     assert!(tsm.owner_is_current(&tsm_mac, 7, &replacement.owner));
     assert_eq!(tsm.pending_count(), 1);
+}
+
+/// A learned limit is never below the conservative one, whatever size is
+/// committed (#2665): the claim path drops such rejects, and the commit
+/// holds the floor on its own.
+#[tokio::test]
+async fn a_learned_limit_is_never_below_the_conservative_floor() {
+    let limits = Arc::new(RoutedPathLimits::with_capacity(
+        2,
+        Duration::from_millis(10),
+    ));
+    let router = [2];
+    let target = ConfirmedTarget::Routed {
+        router_mac: &router,
+        dest_network: 100,
+        dest_mac: &[3],
+    };
+    let lease = limits.acquire(&router, 100).await.unwrap();
+    let tsm_mac = target.transaction_peer().tsm_mac;
+    let mut tsm = Tsm::new(TsmConfig::default());
+    let registration = tsm.register_transaction_with_progress(
+        tsm_mac.clone(),
+        9,
+        ConfirmedServiceChoice::READ_PROPERTY,
+    );
+    let active = ActiveRoutedSend {
+        path: RoutedPathKey::new(&router, 100),
+        tsm_mac,
+        invoke_id: 9,
+        owner: registration.owner,
+        forwarded_npci_len: 11,
+        ingress_floor: 0,
+    };
+    limits.commit_learned_limit(active, 16);
+    assert_eq!(lease.max_apdu(11), CONSERVATIVE_ROUTED_PATH_MAX_NPDU - 11);
 }
 
 #[tokio::test]
@@ -255,7 +290,7 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
         11,
         5,
     );
-    assert!(limits.authorize_attempt(target, &tsm_mac, 9, &registration.owner, 100));
+    assert!(limits.authorize_attempt(target, &tsm_mac, 9, &registration.owner, 300));
 
     limits
         .handle_network_control(&tsm, reason_4_control(&router, 100, 5))
