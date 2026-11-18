@@ -29,11 +29,6 @@ bacnet-client.workspace = true
 # The source Reporter hands both capability features' accessors on to the
 # object it wraps (#2215); `std` implies them.
 bacnet-objects = { workspace = true, features = ["std", "event-reporting", "durable-writes"] }
-# `std` implies `cov-multiple`, named here because the endpoint routes
-# SubscribeCOVPropertyMultiple to the core's `Reporter` (#2490).
-bacnet-device-core = { workspace = true, features = ["std", "cov-multiple"] }
-# The COV Reporter's timeline is Tokio's clock (#2490).
-bacnet-time = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
@@ -52,6 +47,9 @@ sc-tls = [
 # The control-writer count, to tell a control's queued write from the
 # server's own tasks' (#2507).
 bacnet-server = { workspace = true, features = ["test-support"] }
+# The local-write sources the tests hand the server, and the I-Am a Device
+# builds (#2617).
+bacnet-device-core = { workspace = true, features = ["std"] }
 # The B/IPv6 Network Port tests run on a real Bip6Transport (#1940); the
 # dedicated-thread MS/TP tests run their node on the test's paused time
 # (`test-support`, #2284).

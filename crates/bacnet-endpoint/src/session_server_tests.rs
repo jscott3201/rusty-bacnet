@@ -297,45 +297,11 @@ async fn a_server_only_session_runs_the_read_only_server() {
     session.stop().await.unwrap();
 }
 
-/// A session with a server role refuses its own local writes, which would
-/// skip its server's COV and event work; the server's calls of the same
-/// names make the change.
-#[tokio::test(start_paused = true)]
-async fn the_sessions_local_writes_are_refused_beside_its_server() {
-    use bacnet_device_core::write::local::LocalCommandSource;
-    use bacnet_types::enums::Reliability;
-    let wire = Wire::new();
-    let (mut session, _) = default_session(&wire);
-    session.start().await.unwrap();
-    let refused = |result: Result<(), Error>| match result {
-        Err(Error::Encoding(message)) => message.contains("server()'s write_local"),
-        _ => false,
-    };
-    let (av7, ai1) = (av7(), ai1());
-    let pv = PropertyIdentifier::PRESENT_VALUE;
-    let source = LocalCommandSource::ServerDevice;
-    let value = PropertyValue::Real(5.0);
-    let write = session.write_local(&av7, pv, None, value, Some(8), source);
-    assert!(refused(write.await), "write_local");
-    let input = session.set_present_value_local(&ai1, PropertyValue::Real(9.0));
-    assert!(refused(input.await), "set_present_value_local");
-    let reliability = session.set_reliability_local(&ai1, Reliability::NO_SENSOR);
-    assert!(refused(reliability.await), "set_reliability_local");
-    let server = session.server().unwrap();
-    assert_eq!(served(server, ai1, pv).await, PropertyValue::Real(0.0));
-    server
-        .set_present_value_local(&ai1, PropertyValue::Real(9.0))
-        .await
-        .unwrap();
-    assert_eq!(served(server, ai1, pv).await, PropertyValue::Real(9.0));
-    session.stop().await.unwrap();
-}
-
 /// A start cancelled after the session runs but before it builds its server
-/// leaves a running session with no server: its local writes are refused by
-/// its role all the same, and nothing changes.
+/// leaves a running session with no server and its database as it was,
+/// and a stop then completes.
 #[tokio::test(start_paused = true)]
-async fn a_server_role_refuses_local_writes_with_no_server_built() {
+async fn a_start_cancelled_before_its_server_is_built_leaves_none() {
     let wire = Wire::new();
     let (mut session, _) = default_session(&wire);
     let pauses = super::StartPauses {
@@ -350,17 +316,18 @@ async fn a_server_role_refuses_local_writes_with_no_server_built() {
     );
     assert!(session.is_running(), "the cancelled start left it running");
     assert!(session.server().is_none(), "no server was built");
-    let ai1 = ai1();
-    let input = session.set_present_value_local(&ai1, PropertyValue::Real(9.0));
-    assert!(
-        matches!(input.await, Err(Error::Encoding(message)) if message.contains("server()'s write_local"))
-    );
     let pv = PropertyIdentifier::PRESENT_VALUE;
     let database = session.database.as_ref().unwrap().read().await;
-    let value = database.get(&ai1).unwrap().read_property(pv, None).unwrap();
+    let value = database
+        .get(&ai1())
+        .unwrap()
+        .read_property(pv, None)
+        .unwrap();
     assert_eq!(value, PropertyValue::Real(0.0), "nothing changed");
     drop(database);
-    let _ = session.stop().await;
+    let stopped = tokio::time::timeout(WAIT, session.stop()).await;
+    assert!(stopped.is_ok(), "the stop completes");
+    assert!(!session.is_running());
 }
 
 /// A request already on the link when the session starts reaches the

@@ -42,9 +42,9 @@ Group's Present_Value: ReadProperty, ReadRange and `read_local` count the read's
 own row plus one row per member property and abort with OUT_OF_RESOURCES past
 it. A shared endpoint (`bacnet-endpoint`) session with a server role runs a
 full server, which takes the budget of the builder given to `with_server`, or
-the default without one (#2617); `SessionConfig::read_work_limit` and the
-endpoint builders' `read_work_limit(...)`, the narrow server role's limit, are
-refused at start unless left at the default. The Python `BipEndpoint`,
+the default without one (#2617); the narrow server role's own limit,
+`SessionConfig::read_work_limit` and the endpoint builders'
+`read_work_limit(...)`, is gone. The Python `BipEndpoint`,
 `ScEndpoint` and `MstpEndpoint` run that full server, and their keyword-only
 `read_work_limit=256` is its `max_result_elements` (#2617), refusing zero with
 `ValueError`.

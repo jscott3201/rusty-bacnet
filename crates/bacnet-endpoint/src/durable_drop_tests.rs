@@ -256,8 +256,8 @@ async fn a_session_dropped_last_lets_its_database_go_off_the_runtime() {
             bounded(endpoint.session.stop()).await.unwrap();
         }
         let db = database(&endpoint);
-        // For the stopped case, stage only after graceful settlement so this
-        // fixture still makes Drop encounter an unfinished save.
+        // For the stopped case, stage after the stop, so this fixture still
+        // makes Drop encounter an unfinished save.
         let go = stage_held_save(&db, &storage).await;
         let weak = Arc::downgrade(&db);
         drop(db);

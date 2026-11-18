@@ -52,7 +52,7 @@ async def main() -> None:
             first_client = await first.client()
             second_client = await second.client()
             first_server = await first.server()
-            print(f"first server alive: {first_server.is_session_alive()}")
+            print(f"first server: {type(first_server).__name__}")
 
             oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
 

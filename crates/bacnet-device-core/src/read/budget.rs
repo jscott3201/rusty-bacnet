@@ -49,9 +49,9 @@ pub struct ReadPropertyMultipleBudget {
     /// Maximum aggregate expanded result occurrences (default 256).
     ///
     /// ReadProperty, ReadRange and `read_local` charge a Group's Present_Value
-    /// to this limit as well. The shared endpoint (`bacnet-endpoint`) has no
-    /// `ServerConfig`: its ReadProperty uses the session's `read_work_limit`,
-    /// which has the same default and the same abort.
+    /// to this limit as well. A shared endpoint (`bacnet-endpoint`) session
+    /// with a server role runs a full server, which takes this budget from
+    /// the server builder it is given.
     pub max_result_elements: usize,
     /// Maximum encoded service parameters, excluding APDU/NPDU (default 16384).
     pub max_service_ack_bytes: usize,
