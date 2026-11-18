@@ -85,9 +85,9 @@ impl DeviceIdentity {
 
     /// Overrides segmentation support for a matching full server.
     ///
-    /// Narrow EndpointSession roles require NONE and reject any other identity
-    /// before ingress starts. A full server uses this declaration with the
-    /// segment timeout supplied by this identity.
+    /// An EndpointSession still requires NO_SEGMENTATION and refuses any
+    /// other identity before its link starts. A full server uses this
+    /// declaration with the segment timeout supplied by this identity.
     pub fn with_segmentation(mut self, segmentation: Segmentation) -> Self {
         self.segmentation_supported = segmentation;
         self

@@ -31,16 +31,7 @@ fn request() -> ConfirmedRequestPdu {
 async fn answer(handler: &ReinitializeHandler) -> (Apdu, AfterReply) {
     let db = RwLock::new(ObjectDatabase::new());
     let requester = Requester::new(&[1], None, TransportProvenance::unverified());
-    response(
-        &db,
-        &request(),
-        &None,
-        Some(handler),
-        requester,
-        || Ok(()),
-        |_, _| {},
-    )
-    .await
+    response(&db, &request(), &None, Some(handler), requester, |_, _| {}).await
 }
 
 #[tokio::test]

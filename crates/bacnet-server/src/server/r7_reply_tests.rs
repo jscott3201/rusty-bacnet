@@ -306,7 +306,33 @@ async fn r7_lso_replay_keeps_apdu_only_and_uses_current_der_or_router_context() 
     routed.router.stop().await.unwrap();
 }
 
-#[path = "r7_endpoint_tests.rs"]
-mod endpoint;
+#[tokio::test]
+async fn r7_server_scope_retirement_and_cancel_release_pending_der_owner_without_reply() {
+    for cancel in [false, true] {
+        let mut routed = Routed::new().await;
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(
+            AnalogInputObject::new(7, "input", EngineeringUnits::SQUARE_METERS).unwrap(),
+        ))
+        .unwrap();
+        let context = context(db, ServerConfig::default());
+        let held = context.services.db.write().await;
+        let (tx, rx) = oneshot::channel();
+        let received = routed.receive(2000, &read(12), Some(tx)).await;
+        dispatch(&context, received).await;
+        if cancel {
+            context.request_tasks.close();
+        } else {
+            context.services.network.seal_responses();
+        }
+        drop(held);
+        settled(&context).await;
+        assert!(rx.await.is_err());
+        assert!(routed.wire.try_recv().is_err());
+        assert_eq!(context.request_tasks.counters().confirmed_active, 0);
+        routed.router.stop().await.unwrap();
+    }
+}
+
 #[path = "r7_segment_tests.rs"]
 mod segments;

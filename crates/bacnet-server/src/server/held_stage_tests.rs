@@ -1,6 +1,6 @@
-//! An endpoint local write's [`HeldStage`] (#2468) dropped on a thread with
-//! no runtime while a database guard is held still lets go of the stage:
-//! the release goes to the runtime it staged on and waits for the guard.
+//! A local write's [`HeldStage`] (#2493) dropped on a thread with no
+//! runtime while a database guard is held still lets go of the stage: the
+//! release goes to the runtime it staged on and waits for the guard.
 
 use super::*;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -42,7 +42,8 @@ async fn a_held_stage_dropped_off_the_runtime_under_a_guard_still_releases() {
     let db = Arc::new(RwLock::new(db));
     let value = PropertyValue::CharacterString("lobby".into());
     let targets = DurableTarget::local(device(), PropertyIdentifier::DESCRIPTION, None, &value);
-    let held = stage_held(&db, None, targets).await;
+    let releases = Arc::new(StageReleases::default());
+    let held = stage_held(&db, &releases, targets).await;
     assert!(staged(&db).await, "the Description is staged");
 
     // Dropped on a plain thread while a reader holds the guard.
@@ -71,7 +72,8 @@ async fn a_held_stage_dropped_with_the_guard_free_has_released_when_the_drop_ret
     let db = Arc::new(RwLock::new(db));
     let value = PropertyValue::CharacterString("lobby".into());
     let targets = DurableTarget::local(device(), PropertyIdentifier::DESCRIPTION, None, &value);
-    let held = stage_held(&db, None, targets).await;
+    let releases = Arc::new(StageReleases::default());
+    let held = stage_held(&db, &releases, targets).await;
     assert!(staged(&db).await, "the Description is staged");
 
     // No task runs between the drop and the check on this current-thread

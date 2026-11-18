@@ -53,7 +53,7 @@ fn stage(
 ) -> super::super::HeldStage {
     let value = PropertyValue::CharacterString("lobby".into());
     let targets = DurableTarget::local(device(), PropertyIdentifier::DESCRIPTION, None, &value);
-    on.block_on(stage_held(db, Some(releases), targets))
+    on.block_on(stage_held(db, releases, targets))
 }
 
 /// Whether a stop-time wait finds nothing outstanding without any time

@@ -361,8 +361,6 @@ async fn registered_port_capacity_1476_valid_wp_and_rp_through_both_owners() {
             .await
             .get_mut(&device())
             .unwrap()
-            .device_authority_internal()
-            .unwrap()
             .write_property(
                 P::DESCRIPTION,
                 None,

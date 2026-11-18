@@ -19,10 +19,6 @@ pub(super) use audit_notification::ask_policy;
 mod confirmed;
 pub(super) mod confirmed_response;
 mod dcc;
-#[doc(hidden)]
-pub mod endpoint_responder;
-#[cfg(test)]
-mod endpoint_shared_runtime_tests;
 mod enrollment_summary;
 mod event_information;
 mod issue;

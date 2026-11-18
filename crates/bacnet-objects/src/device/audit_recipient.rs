@@ -74,15 +74,6 @@ impl DeviceAuthority<'_> {
             PropertyValue::Unsigned(u64::from(apdu_retries)),
         );
     }
-    pub fn write_property(
-        &mut self,
-        property: PropertyIdentifier,
-        index: Option<u32>,
-        value: PropertyValue,
-        priority: Option<u8>,
-    ) -> Result<(), Error> {
-        self.0.write_property(property, index, value, priority)
-    }
     pub fn provision_audit_recipient(&mut self, recipient: BACnetRecipient) -> Result<(), Error> {
         self.0.provision_audit_recipient(recipient)
     }

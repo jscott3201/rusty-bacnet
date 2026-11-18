@@ -107,13 +107,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let config = &admitted.services.config;
             let response = confirmed_response::read_property_response_observed(
                 &admitted.services.db,
-                Some(admitted.services.live_tables()),
+                admitted.services.live_tables(),
                 confirmed_response::ReadProfile {
                     execution: admitted.services.execution,
                     registered_port: config.registered_network_port,
                     work_limit: config.read_property_multiple_budget.max_result_elements,
-                    identity: Some(&config.device),
-                    cov: None,
+                    identity: &config.device,
                 },
                 &admitted.req,
                 |db, oid, req, result| {

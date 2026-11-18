@@ -186,11 +186,14 @@ async fn direct_egress_preserves_npdu_flags_priority_and_destination() {
     let egress = ingress.egress.clone();
 
     egress
-        .send_direct(
+        .send_apdu(
             vec![0x20, 0x2a, 0x0c],
-            MacAddr::from_slice(&[0x44, 0x55]),
+            EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&[0x44, 0x55]),
+            },
             true,
             NetworkPriority::Urgent,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -205,11 +208,14 @@ async fn direct_egress_preserves_npdu_flags_priority_and_destination() {
     endpoint.stop().await.unwrap();
     assert!(matches!(
         egress
-            .send_direct(
+            .send_apdu(
                 vec![0x20, 0x2b, 0x0c],
-                MacAddr::from_slice(&[0x44]),
+                EndpointApduDestination::Direct {
+                    destination_mac: MacAddr::from_slice(&[0x44]),
+                },
                 false,
                 NetworkPriority::Normal,
+                Vec::new(),
             )
             .await,
         Err(Error::Encoding(message)) if message == "endpoint shutdown"
@@ -226,11 +232,14 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
     let first_egress = egress.clone();
     let first = tokio::spawn(async move {
         first_egress
-            .send_direct(
+            .send_apdu(
                 vec![0x20, 0x01, 0x0c],
-                MacAddr::from_slice(&[0x01]),
+                EndpointApduDestination::Direct {
+                    destination_mac: MacAddr::from_slice(&[0x01]),
+                },
                 false,
                 NetworkPriority::Normal,
+                Vec::new(),
             )
             .await
     });
@@ -239,11 +248,14 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
     let second_egress = egress.clone();
     let second = tokio::spawn(async move {
         second_egress
-            .send_direct(
+            .send_apdu(
                 vec![0x20, 0x02, 0x0c],
-                MacAddr::from_slice(&[0x01]),
+                EndpointApduDestination::Direct {
+                    destination_mac: MacAddr::from_slice(&[0x01]),
+                },
                 false,
                 NetworkPriority::Normal,
+                Vec::new(),
             )
             .await
     });
@@ -251,11 +263,14 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
 
     assert!(matches!(
         egress
-            .send_direct(
+            .send_apdu(
                 vec![0x20, 0x03, 0x0c],
-                MacAddr::from_slice(&[0x01]),
+                EndpointApduDestination::Direct {
+                    destination_mac: MacAddr::from_slice(&[0x01]),
+                },
                 false,
                 NetworkPriority::Normal,
+                Vec::new(),
             )
             .await,
         Err(Error::Encoding(message)) if message == "endpoint egress queue is full"

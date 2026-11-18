@@ -249,13 +249,6 @@ impl std::fmt::Debug for MutationAuthorizationContext {
     }
 }
 
-/// The shared endpoint's gate for writes to its local Device, given the same
-/// redacted context [`ServerPolicy::authorize_mutation`](crate::ServerPolicy::authorize_mutation)
-/// sees, under the same calling rules. A full server uses its
-/// [`ServerPolicy`](crate::ServerPolicy) instead.
-pub type DeviceWriteAuthorizer =
-    std::sync::Arc<dyn Fn(&MutationAuthorizationContext) -> bool + Send + Sync>;
-
 /// Saturating lifetime decision totals for one covered service.
 /// These count authorization decisions, not successful mutations or response delivery.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

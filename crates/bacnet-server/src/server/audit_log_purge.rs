@@ -47,7 +47,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.active_network()?;
         let staged = durable_writes::stage_held(
             &self.db,
-            Some(self.request_tasks.stage_releases()),
+            self.request_tasks.stage_releases(),
             durable_writes::DurableTarget::purge(*oid),
         )
         .await;

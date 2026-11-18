@@ -1,8 +1,6 @@
 //! Bounded endpoint send admission and explicit completion ownership.
 use super::*;
-use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::network_number::LocalNetworkNumber;
-use bacnet_network::response_route::ResponseRoute;
 use bacnet_transport::port::GroupDestinations;
 
 pub(super) enum NetworkServicePayload {
@@ -12,7 +10,6 @@ pub(super) enum NetworkServicePayload {
 
 pub(super) struct NetworkServiceCommand {
     pub(super) payload: NetworkServicePayload,
-    pub(super) response_route: Option<ResponseRoute>,
     pub(super) destination: EndpointApduDestination,
     pub(super) expecting_reply: bool,
     pub(super) priority: NetworkPriority,
@@ -33,8 +30,6 @@ struct ApduAdmission {
     deadline: Option<tokio::time::Instant>,
     /// Whether dropping the completion retracts the send.
     cancel_on_drop: bool,
-    /// Immutable ingress authority a reply must follow, for response sends.
-    response_route: Option<ResponseRoute>,
 }
 
 /// Completion of an admitted endpoint send, without claiming remote receipt.
@@ -198,7 +193,6 @@ impl EndpointEgress {
             data_attributes,
             deadline,
             cancel_on_drop: deadline.is_some(),
-            response_route: None,
         })
     }
 
@@ -222,40 +216,6 @@ impl EndpointEgress {
             data_attributes,
             deadline: None,
             cancel_on_drop: true,
-            response_route: None,
-        })
-    }
-
-    /// Queue a caller-owned reply under its immutable ingress authority.
-    /// Dropping completion retracts queued work; a started socket write may
-    /// already have reached the peer. Invalid/stale direct routes never fall back.
-    #[doc(hidden)]
-    pub fn admit_response_apdu(
-        &self,
-        apdu: Vec<u8>,
-        next_hop: MacAddr,
-        destination: Option<NpduAddress>,
-        route: ResponseRoute,
-    ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
-        let destination = match destination {
-            Some(address) => EndpointApduDestination::Routed {
-                destination_network: address.network,
-                destination_mac: address.mac_address,
-                router_mac: next_hop,
-            },
-            None => EndpointApduDestination::Direct {
-                destination_mac: next_hop,
-            },
-        };
-        self.admit(ApduAdmission {
-            apdu,
-            destination,
-            expecting_reply: false,
-            priority: NetworkPriority::Normal,
-            data_attributes: Vec::new(),
-            deadline: None,
-            cancel_on_drop: true,
-            response_route: Some(route),
         })
     }
 
@@ -268,7 +228,6 @@ impl EndpointEgress {
             data_attributes,
             deadline,
             cancel_on_drop,
-            response_route,
         } = send;
         if !self.open.load(Ordering::Acquire) {
             return Err(EndpointEgressAdmissionError::Closed);
@@ -276,7 +235,6 @@ impl EndpointEgress {
         let (completion, result) = oneshot::channel();
         let command = NetworkServiceCommand {
             payload: NetworkServicePayload::Apdu(apdu),
-            response_route,
             destination,
             expecting_reply,
             priority,
@@ -312,7 +270,6 @@ impl EndpointEgress {
         self.commands
             .try_send(NetworkServiceCommand {
                 payload: NetworkServicePayload::LocalControl(npdu),
-                response_route: None,
                 destination: EndpointApduDestination::LocalBroadcast,
                 expecting_reply: false,
                 priority: NetworkPriority::Normal,
@@ -350,25 +307,6 @@ impl EndpointEgress {
         } else {
             Err(EndpointEgressAdmissionError::Closed)
         }
-    }
-
-    /// Sends one direct unicast APDU without granting network lifecycle access.
-    #[doc(hidden)]
-    pub async fn send_direct(
-        &self,
-        apdu: Vec<u8>,
-        destination_mac: MacAddr,
-        expecting_reply: bool,
-        priority: NetworkPriority,
-    ) -> Result<(), Error> {
-        self.send_apdu(
-            apdu,
-            EndpointApduDestination::Direct { destination_mac },
-            expecting_reply,
-            priority,
-            Vec::new(),
-        )
-        .await
     }
 }
 

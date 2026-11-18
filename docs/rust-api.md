@@ -13888,7 +13888,7 @@ and the narrow role's settings and handle are removed (#2617):
 
 | Removed (0.15.0) | Use instead |
 |---|---|
-| `EndpointSession::with_device_writes(authorizer)`, `BipEndpointBuilder::device_writes` | a builder for `with_server` whose `ServerPolicy` decides mutations (`FnPolicy::new().mutation(..)`), which it asks about every covered mutation of every object |
+| `EndpointSession::with_device_writes(authorizer)`, `BipEndpointBuilder::device_writes`, `bacnet_server::mutation::DeviceWriteAuthorizer` | a builder for `with_server` whose `ServerPolicy` decides mutations (`FnPolicy::new().mutation(..)`), which it asks about every covered mutation of every object |
 | `with_reinitialize(handler)`, `with_reinit_password(..)`, `BipEndpointBuilder::reinitialize` and `reinit_password` | the builder's `on_reinitialize(handler)` and `reinit_password(..)` |
 | `SessionConfig::read_work_limit`, the three builders' `read_work_limit` | the builder's `read_property_multiple_budget`, whose `max_result_elements` has the same default (256) and the same Abort |
 | `RESPONDER_SERVICES`, `RESPONDER_OPT_IN_SERVICES`, `ResponderOptIn` | the Device's Protocol_Services_Supported (`server().read_local(..)`), or `bacnet_objects::device::EXECUTED_SERVICES` for what the server's dispatch executes |
