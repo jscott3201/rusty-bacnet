@@ -205,8 +205,8 @@ impl ScEndpointBuilder {
         if let Some(config) = &self.reconnect {
             config.validate()?;
         }
-        // The session's own checks, so a bad queue capacity, read work
-        // limit or pacing interval fails before connect_hub_session dials.
+        // The session's own checks, so a bad queue capacity or pacing
+        // interval fails before connect_hub_session dials.
         self.session.validate()?;
         crate::session::check_link_bindings(
             &self.source_audit_bindings,
@@ -236,7 +236,7 @@ impl ScEndpointBuilder {
     ///
     /// Checks VMAC reservation, UUID presence, heartbeat range, reconnect
     /// config, source Audit bindings and the session settings (queue
-    /// capacity, read work limit, pacing interval). Returns a typed
+    /// capacity, pacing interval). Returns a typed
     /// [`Error::Encoding`] on the first
     /// violation, before any dial.
     pub fn validate_only(&self) -> Result<(), Error> {

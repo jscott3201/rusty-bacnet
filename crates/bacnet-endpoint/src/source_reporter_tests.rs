@@ -500,7 +500,8 @@ async fn source_database_is_released_on_drop_without_stop() {
         session.start().await.unwrap();
         let weak = Arc::downgrade(session.database.as_ref().unwrap());
         drop(session);
-        // Dispatch owns a responder clone until its abort is observed.
+        // The session's aborted tasks, and on Both its server's, let go of
+        // their handles once the runtime drops them.
         crate::session::eventually::eventually(
             Duration::from_secs(2),
             "the dropped session lets go of the database",

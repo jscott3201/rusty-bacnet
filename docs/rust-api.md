@@ -13800,19 +13800,29 @@ session.stop().await?; // stops the server, then the link
 
 ### Endpoint shutdown and the object database
 
-`EndpointSession::stop()` stops the session's server first. The server's own
-stop joins its requests, settles forgotten staged writes and waits for the
-saves its objects have queued, including any correction that restores the
-state an object serves (#1581), as `BACnetServer::stop` describes: storage
-that stalls keeps shutdown pending, with periodic warnings, while a database
-guard the application holds does not (the objects settle from a task once it
-is let go). Only the server stages saves on the session's database, so a
-client-only session has none to settle (#2617). Completion means those save
-attempts finished, not that the backend succeeded or the data survived power
-loss. With a source Audit Reporter the stop then waits for the database's
-lock to take the Reporter's recipient owner out, so release application-held
-guards there. Application work that continues independently of the session
-is not joined.
+`EndpointSession::stop()` stops the session's server first, as
+`BACnetServer::stop` describes. The server's own stop joins its requests,
+waits up to 5 s for local writes dropped with their stage still held to let
+go of it, then settles forgotten staged writes and waits for the saves its
+objects have queued, including any correction that restores the state an
+object serves (#1581): storage that stalls keeps shutdown pending, with
+periodic warnings. Only the server stages saves on the session's database,
+so a client-only session has none to settle (#2617). Completion means those
+save attempts finished, not that the backend succeeded or the data survived
+power loss. Application work that continues independently of the session is
+not joined.
+
+Settling needs the database's guard. If any guard is held at that moment,
+the application's or even a background reader's brief one, the server hands
+the settling to a task that runs once the guard is free, and nothing waits
+for that task's saves, so `stop()` can return before storage holds what the
+objects serve. The stop still waits for the guard where an Audit Reporter is
+taken out under it, the session's source Reporter or the server's own Audit
+Reporters, but the settling has been handed off by then, so it can return
+unsettled there too. A runtime that shuts down before the task runs drops
+it, and storage is then put back only as the objects are dropped: a process
+that exits without running destructors can lose it. Let go of every guard
+before `stop()` where storage must be settled when it returns.
 
 Canceling `stop()` retains its original dispatch or ingress outcome and the
 server it has not finished stopping. Call it again to finish. The session
@@ -13824,10 +13834,12 @@ Every endpoint holder of the database lets go through
 server (whose aborted tasks may hold it last), the source Audit runtime (which
 an audited request in flight may hold last) and the session's Number task. So
 whichever goes last, in async code a durable object's final saves run on
-Tokio's blocking pool, not on a runtime worker. A dropped server hands its
-handle to a task that lets go of it on the runtime's next turn, after a
-graceful stop too, as a standalone server does; storage may still change after
-a drop returns. Await `stop()` for the joined save boundary.
+Tokio's blocking pool, not on a runtime worker. The server `stop()` stops
+hands its handle to a task that lets go of it on the runtime's next turn, as
+a standalone server's drop does: code that takes the database back once the
+session is gone (`Arc::try_unwrap` of a clone it kept) lets that turn pass
+first. Storage may still change after a drop returns. Await `stop()`, with
+no guard held, for the joined save boundary.
 
 ### The narrow server role is gone
 

@@ -136,3 +136,42 @@ async fn retained_dispatch_and_ingress_errors_still_wait_for_settlement() {
         assert!(endpoint.session.stop_exit.is_none());
     }
 }
+
+/// A server-role session with no Audit Reporter whose database the
+/// application holds at stop: its server hands the settling to a task, so
+/// the stop returns with the guard still held and the save storage holds
+/// unfinished, and once the guard goes, storage comes back to the state the
+/// class serves (#2617).
+#[tokio::test(flavor = "current_thread")]
+async fn a_guard_held_across_stop_defers_the_settling_without_holding_the_stop() {
+    let storage = Storage::holding();
+    let (class, _dropped_on) = reporting_class(&storage);
+    let mut endpoint = started_with(SessionRole::Both, class).await;
+    let db = database(&endpoint);
+    let go = stage_held_save(&db, &storage).await;
+    let expected = served_snapshot(&db).await;
+    let guard = Arc::clone(&db).read_owned().await;
+    bounded(endpoint.session.stop()).await.unwrap();
+    assert_eq!(
+        endpoint.session.lifecycle.load(Ordering::Acquire),
+        Lifecycle::Stopped as u8
+    );
+    drop(guard);
+    let (progress, watchdog) = watchdog(go);
+    tokio::spawn(async move {
+        let _ = progress.send(());
+    })
+    .await
+    .unwrap();
+    let stalled = tokio::task::spawn_blocking(move || watchdog.join().unwrap())
+        .await
+        .unwrap();
+    assert!(!stalled, "the deferred settling blocked the runtime");
+    // The held save lands the staged list, then the correction the
+    // deferred settling queued puts back the one the class serves.
+    crate::session::eventually::eventually(WAIT, "storage holds the served list", async || {
+        storage.attempts.load(Ordering::SeqCst) == 2
+            && *storage.saved.lock().unwrap() == Some(expected.clone())
+    })
+    .await;
+}

@@ -1,7 +1,9 @@
 ---
 section: Migration notes
 ---
-- **Endpoint stop (Rust API, #2617):** let go of any database guard you hold
-  before `EndpointSession::stop()` when storage must hold what the objects
-  serve once it returns; a guard still held then leaves the settling to a
-  task that runs once it is free.
+- **Endpoint stop (Rust API, #2617):** let go of every database guard before
+  `EndpointSession::stop()` where storage must be settled when it returns.
+  With one held, a task settles the objects once it is free; a runtime shut
+  down first drops that task, and storage is put back only as the objects
+  drop. After stop, let a runtime turn pass before `Arc::try_unwrap` of the
+  database: the server lets go of its handle from a task.

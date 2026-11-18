@@ -694,7 +694,7 @@ async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
             let error = endpoint
                 .start()
                 .await
-                .expect_err("narrow role cannot claim segmentation");
+                .expect_err("the session's roles cannot claim segmentation yet");
             assert!(error.to_string().contains("segmentation NO_SEGMENTATION"));
             // Failed validation leaves configuration and the unstarted transport
             // reusable. A valid identity can start the exact same session.

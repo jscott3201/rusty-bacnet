@@ -2,6 +2,8 @@
 section: Changed
 ---
 - **Breaking (Rust API):** An endpoint session's stop settles its objects'
-  saves through its server's stop, as a standalone server's does: a
-  database guard the application holds no longer holds the stop up, and the
-  objects settle once it is let go (#2617).
+  saves as a standalone server's stop does: a database guard held at that
+  moment hands the settling to a task, so the stop may return before
+  storage is settled
+  ([details](docs/rust-api.md#endpoint-shutdown-and-the-object-database),
+  #2617).

@@ -297,6 +297,39 @@ async fn a_server_only_session_runs_the_read_only_server() {
     session.stop().await.unwrap();
 }
 
+/// A start cancelled after the session runs but before it builds its server
+/// leaves a running session with no server and its database as it was,
+/// and a stop then completes.
+#[tokio::test(start_paused = true)]
+async fn a_start_cancelled_before_its_server_is_built_leaves_none() {
+    let wire = Wire::new();
+    let (mut session, _) = default_session(&wire);
+    let pauses = super::StartPauses {
+        after_link: Duration::from_secs(5),
+        ..Default::default()
+    };
+    let start = Box::pin(super::START_PAUSES.scope(pauses, session.start()));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), start)
+            .await
+            .is_err()
+    );
+    assert!(session.is_running(), "the cancelled start left it running");
+    assert!(session.server().is_none(), "no server was built");
+    let pv = PropertyIdentifier::PRESENT_VALUE;
+    let database = session.database.as_ref().unwrap().read().await;
+    let value = database
+        .get(&ai1())
+        .unwrap()
+        .read_property(pv, None)
+        .unwrap();
+    assert_eq!(value, PropertyValue::Real(0.0), "nothing changed");
+    drop(database);
+    let stopped = tokio::time::timeout(WAIT, session.stop()).await;
+    assert!(stopped.is_ok(), "the stop completes");
+    assert!(!session.is_running());
+}
+
 /// A request already on the link when the session starts reaches the
 /// server: the session takes the server's seat as soon as its link is up,
 /// before it builds the server, so the request waits in the seat's queue

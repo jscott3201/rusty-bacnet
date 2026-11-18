@@ -17,8 +17,9 @@
 //! exact lease when cancelled. Source-audited calls transfer to bounded session
 //! ownership before egress admission, so dropping their caller does not cancel
 //! admitted work. `stop()` stops the server first, whose own stop settles its
-//! objects' saves, then seals admission, closes roles, joins dispatch and owned
-//! workers, and stops ingress. Undelivered audit records may be lost on shutdown.
+//! objects' saves, or hands that to a task while the database is held (see
+//! [`stop`](EndpointSession::stop)), then seals admission, closes roles, joins
+//! dispatch and owned workers, and stops ingress. Undelivered audit records may be lost on shutdown.
 //! Cloned role handles keep working until shutdown, then fail closed; after
 //! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
 //! call reports shutdown.
@@ -634,16 +635,33 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// shutdown and fail closed.
     ///
     /// The session's server ([`with_server`](Self::with_server), or the
-    /// read-only one) is stopped first: its work joins and its objects'
-    /// saves settle while the link is still up, as
+    /// read-only one) is stopped first, while the link is still up, as
     /// [`BACnetServer::stop`](bacnet_server::server::BACnetServer::stop)
     /// describes, and its stop error, if any, is this call's. Only the
-    /// server stages saves on the session's database, so storage that
-    /// stalls keeps this call pending there, while a database guard the
-    /// application holds does not (the objects settle once it is let go);
-    /// completion does not certify backend success or power-loss
-    /// durability. A session with a source Audit Reporter waits for the
-    /// database's lock to take the Reporter's recipient owner out.
+    /// server stages saves on the session's database. Its stop joins its
+    /// work, waits up to 5 s for local writes dropped with their stage still
+    /// held to let go of it, then settles the objects' forgotten staged
+    /// writes and waits for their saves: storage that stalls keeps this call
+    /// pending, and completion does not certify backend success or
+    /// power-loss durability.
+    ///
+    /// Settling needs the database's guard. If any guard is held at that
+    /// moment, the application's or even a background reader's brief one,
+    /// the server hands the settling to a task that runs once the guard is
+    /// free, and nothing waits for that task's saves, so this call can return
+    /// before storage holds what the objects serve. It still waits for the
+    /// guard where an Audit Reporter is taken out under it (the session's
+    /// source Reporter, or the server's own Audit Reporters), but the
+    /// settling has been handed off by then. A runtime that shuts down
+    /// before that task runs drops it, and storage is then put back only as
+    /// the objects are dropped: a process that exits without running
+    /// destructors can lose it. Let go of every guard first where storage
+    /// must be settled when this returns.
+    ///
+    /// The stopped server lets go of its database handle from a task, a
+    /// runtime turn after this call returns, as a standalone server's drop
+    /// does: code that takes the database back once the session is gone
+    /// (`Arc::try_unwrap` of a clone it kept) lets that turn pass first.
     ///
     /// A [`full_client`](Self::full_client) still alive doesn't hold the
     /// stop up (#2617): its tasks end, the link stops, and its requests
