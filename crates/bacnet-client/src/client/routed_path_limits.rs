@@ -16,7 +16,7 @@ use crate::tsm::CompletionOutcome;
 /// conforming router never refuses a frame this small as too long, so a
 /// reason 4 claimed by a request whose largest frame is no larger is not
 /// about that frame ([`RoutedPathLimits::claim_active`]).
-const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
+pub(super) const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
 /// Hard bound covering gates, configured evidence, and learned evidence.
 pub(super) const MAX_ROUTED_PATH_ENTRIES: usize = 256;
 
@@ -197,6 +197,33 @@ impl RoutedPathLimits {
     /// See [`BACnetClient::below_minimum_reject_drops`].
     pub(super) fn below_minimum_drops(&self) -> u64 {
         self.state().below_minimum_drops
+    }
+
+    /// What [`BACnetClient::routed_path_limits`] lists: each path with a
+    /// configured or learned limit or a below-minimum reject seen, by router
+    /// MAC and then network. One lock, as every other reader takes it.
+    pub(super) fn listing(&self) -> Vec<super::RoutedPathLimit> {
+        let state = self.state();
+        let mut paths: Vec<super::RoutedPathLimit> = state
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry.configured.is_some() || entry.learned.is_some() || entry.below_minimum_warned
+            })
+            .map(|(key, entry)| super::RoutedPathLimit {
+                router_mac: key.immediate_router_mac.clone(),
+                dnet: key.dnet,
+                configured_max_npdu: entry.configured.as_ref().map(|limit| limit.max_npdu),
+                learned_max_npdu: entry
+                    .learned
+                    .as_ref()
+                    .map(|limit| limit.exclusive_max_npdu.saturating_sub(1)),
+                below_minimum_reject_seen: entry.below_minimum_warned,
+            })
+            .collect();
+        drop(state);
+        paths.sort_by(|a, b| (&a.router_mac, a.dnet).cmp(&(&b.router_mac, b.dnet)));
+        paths
     }
 
     /// Whether the path's below-minimum warning has fired and not been reset.
@@ -476,7 +503,8 @@ impl RoutedPathLimits {
                     "Ignored a reason-4 (too long) network reject for a frame within \
                      the 228-octet routed minimum of Table 6-1; a router refusing a frame that \
                      small is outside the standard. If this router really limits the path \
-                     below that, set the limit by hand with configure_routed_path_max_npdu"
+                     below that, requests through it time out until the path's limit is set \
+                     by hand (BACnetClient::configure_routed_path_max_npdu)"
                 );
             }
             return None;
@@ -688,7 +716,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// replaces the previous configured value and deliberately clears learned
     /// reason-4 evidence for that path. A router MAC outside 1 to
     /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets or a DNET outside 1..=65534 is
-    /// refused with [`Error::Encoding`].
+    /// refused with [`Error::Encoding`], and so is a `max_npdu` that can
+    /// carry no request: one under the 50-octet minimum APDU plus the
+    /// smallest NPCI a router adds to a request from this client, 10 octets
+    /// and the client's own MAC (66 on B/IP, 61 on MS/TP). A limit under
+    /// 228 octets is otherwise taken, for a router that forwards less than
+    /// every router must. A station whose longer MAC leaves a request less
+    /// than the minimum still fails that request, with
+    /// [`Error::RoutedPathTooLong`].
     pub async fn configure_routed_path_max_npdu(
         &self,
         router_mac: &[u8],
@@ -696,6 +731,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         max_npdu: u16,
     ) -> Result<(), Error> {
         check_remote_dnet(dnet)?;
+        let smallest = smallest_usable_max_npdu(self.local_mac.len());
+        if max_npdu < smallest {
+            return Err(Error::Encoding(format!(
+                "a routed path limit of {max_npdu} NPDU octets carries no request: after the \
+                 {} octets of NPCI a router adds at the least, the APDU would be under the \
+                 {}-octet minimum; give at least {smallest}",
+                smallest - bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE,
+                bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE,
+            )));
+        }
         let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
         lease.configure(max_npdu);
         Ok(())
@@ -714,6 +759,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         lease.clear();
         Ok(())
     }
+}
+
+/// The smallest path limit that leaves a request the minimum APDU
+/// ([`MINIMUM_MESSAGE_SIZE`](bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE))
+/// once a router adds its NPCI ([`forwarded_npci_len`]) for the shortest
+/// DADR, one octet, and the client's own MAC of `local_mac_len` octets as
+/// SADR. Below it every request through the path would fail.
+pub(super) fn smallest_usable_max_npdu(local_mac_len: usize) -> u16 {
+    let npci = 10u16.saturating_add(u16::try_from(local_mac_len).unwrap_or(u16::MAX));
+    bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE.saturating_add(npci)
 }
 
 /// Whether `dnet` names one remote network: 1..=65534. DNET 0 names no
