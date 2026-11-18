@@ -191,7 +191,7 @@ impl Harness {
     }
 
     /// [`Self::new`] for a session that builds a full server from
-    /// `builder` at start (#2617), in place of its narrow server role.
+    /// `builder` at start (#2617), in place of the read-only one.
     pub async fn with_server(
         mode: MstpExecutionMode,
         role: SessionRole,

@@ -9,8 +9,7 @@
 //! token/PFM traffic during application work preserves postponed
 //! ownership; queue/admission bounds release (MAC `WouldBlock`,
 //! egress-full, layer full-drop); cancellation and stop with an outstanding
-//! request; responder denial releases the one-use sender; non-routing
-//! discard.
+//! request; non-routing discard.
 //!
 //! Evidence level: simulator (LoopbackSerial), NOT physical bench or
 //! on-wire conformance; timing qualification is RB-26, routing is RB-25.
@@ -29,22 +28,19 @@ use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_endpoint::session::SessionRole;
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointIngress};
-use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
+use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
-use bacnet_objects::database::ObjectDatabase;
-use bacnet_server::server::__endpoint_EndpointResponder as EndpointResponder;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::mstp::{
     LoopbackSerial, MstpConfig, MstpExecutionMode, MstpTransport, SerialPort,
 };
-use bacnet_transport::port::{DataAttribute, TransportPort, TransportProvenance};
+use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_transport::test_transport::{StartMode, TestTransport};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bytes::{Bytes, BytesMut};
 use mstp_wire::{FrameType, MstpFrame, pfm_frame, token_frame};
 use rb17_harness::*;
-use tokio::sync::{RwLock, oneshot};
 
 async fn dropped_sender_impl(mode: MstpExecutionMode, frames: Frames) {
     // Client-only session has no server role: the lone reply sender is
@@ -449,44 +445,6 @@ async fn mstp_stop_with_outstanding_extended_tokio() {
 #[tokio::test(start_paused = true)]
 async fn mstp_stop_with_outstanding_extended_dedicated() {
     stop_outstanding_impl(dedicated(), Frames::Extended).await;
-}
-
-#[tokio::test]
-async fn mstp_responder_denial_releases_reply() {
-    // Denial (closed responder) releases the one-use reply sender without
-    // bytes: the receiver observes closure and the peer sees no traffic.
-    let (endpoint_side, mut peer_side) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let mut peer_rx = peer_side.start().await.unwrap();
-    let mut ingress = EndpointIngress::new(endpoint_side, 2);
-    let receivers = ingress.start().await.unwrap();
-    let responder = EndpointResponder::new(
-        Arc::new(RwLock::new(ObjectDatabase::new())),
-        receivers.egress,
-    );
-    responder.close();
-    let (reply_tx, reply_rx) = oneshot::channel();
-    let err = responder
-        .handle(ReceivedApdu {
-            router_response: None,
-            direct_response: None,
-            apdu: read_request_apdu(7, 1),
-            source_mac: MacAddr::from_slice(&[0x02]),
-            ingress_network: None,
-            source_network: None,
-            link_layer_group: false,
-            is_group: false,
-            global_broadcast: false,
-            data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
-            reply_tx: Some(reply_tx),
-        })
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("endpoint shutdown"));
-    assert!(reply_rx.await.is_err(), "denial must release the sender");
-    assert!(peer_rx.try_recv().is_err(), "denial must send no bytes");
-    ingress.stop().await.unwrap();
-    peer_side.stop().await.unwrap();
 }
 
 async fn nonrouting_impl(mode: MstpExecutionMode, frames: Frames) {

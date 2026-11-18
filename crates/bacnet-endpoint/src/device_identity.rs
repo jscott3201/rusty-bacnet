@@ -68,13 +68,7 @@ impl<T: TransportPort + 'static> Drop for IdentityPreparation<'_, T> {
 impl<T: TransportPort + 'static> EndpointSession<T> {
     pub(super) async fn prepare_start(
         &mut self,
-    ) -> Result<
-        (
-            Option<bacnet_types::primitives::ObjectIdentifier>,
-            Option<crate::source_audit::recipient::SourceRoutes>,
-        ),
-        Error,
-    > {
+    ) -> Result<Option<crate::source_audit::recipient::SourceRoutes>, Error> {
         let mut preparation = IdentityPreparation {
             original: self.identity.clone(),
             had_database: self.database.is_some(),
@@ -91,7 +85,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         preparation.session.validate_segmentation().await?;
         preparation.session.prepare_identity().await?;
         preparation.session.check_server_settings().await?;
-        let device = preparation.session.validate_device_execution()?;
         let routes = preparation.session.prepare_source_audit_reporter()?;
         // Bind the database to the identity's Device from here on, as a
         // server's is, even beside a lower one added later (#2227); with no
@@ -100,9 +93,44 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         preparation.session.bind_identity_device()?;
         preparation.bound = true;
         preparation.session.prepare_registered_port().await?;
-        preparation.session.commit_device_profile(device);
         preparation.committed = true;
-        Ok((device, routes))
+        Ok(routes)
+    }
+
+    /// The session's roles take no segmented request or answer yet: refuse
+    /// an identity, or an attached database's Device, that declares
+    /// segmentation other than NO_SEGMENTATION.
+    async fn validate_segmentation(&self) -> Result<(), Error> {
+        use bacnet_types::enums::{PropertyIdentifier, Segmentation};
+        use bacnet_types::primitives::PropertyValue;
+        if self
+            .identity
+            .as_ref()
+            .is_some_and(|identity| identity.segmentation() != Segmentation::NO_SEGMENTATION)
+        {
+            return Err(Error::Encoding(
+                "EndpointSession roles require segmentation NO_SEGMENTATION".into(),
+            ));
+        }
+        if let Some(database) = self.database.as_ref() {
+            let database = database.read().await;
+            if let Some(oid) = database.selected_device() {
+                let device = database
+                    .get(&oid)
+                    .expect("selected under same database guard");
+                let mode =
+                    device.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)?;
+                if mode
+                    != PropertyValue::Enumerated(u32::from(Segmentation::NO_SEGMENTATION.to_raw()))
+                {
+                    return Err(Error::Encoding(
+                        "EndpointSession selected Device requires segmentation NO_SEGMENTATION"
+                            .into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 

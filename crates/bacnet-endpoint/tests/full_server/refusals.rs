@@ -75,60 +75,6 @@ async fn a_full_server_the_session_could_not_build_is_refused_before_the_link_st
         session = session.with_server(builder);
         refused(&mut session, &link, why).await;
     }
-    // Beside each of the narrow role's opt-ins.
-    let narrow = |n: u8, config: SessionConfig| {
-        let port = wire.port(n);
-        let link = port.handle();
-        let session = EndpointSession::new(port.build(), SessionRole::Both, config)
-            .unwrap()
-            .device(identity())
-            .with_server(BACnetServer::generic_builder());
-        (session, link)
-    };
-    let opt_ins: [(EndpointSession<TestTransport>, TestTransportHandle, &str); 5] = [
-        {
-            let (session, link) = narrow(10, SessionConfig::default());
-            let cov = bacnet_device_core::report::ReportConfig::default();
-            (session.with_cov(cov), link, "with_cov")
-        },
-        {
-            let (session, link) = narrow(11, SessionConfig::default());
-            (
-                session.with_device_writes(std::sync::Arc::new(|_| true)),
-                link,
-                "with_device_writes",
-            )
-        },
-        {
-            let (session, link) = narrow(12, SessionConfig::default());
-            (
-                session.with_reinitialize(|_, _| Ok(())),
-                link,
-                "with_reinitialize",
-            )
-        },
-        {
-            // A password alone names its own option, not the handler's.
-            let (session, link) = narrow(14, SessionConfig::default());
-            (
-                session.with_reinit_password("pw"),
-                link,
-                "with_reinit_password",
-            )
-        },
-        {
-            let config = SessionConfig {
-                read_work_limit: 7,
-                ..SessionConfig::default()
-            };
-            let (session, link) = narrow(13, config);
-            (session, link, "read_work_limit")
-        },
-    ];
-    for (mut session, link, why) in opt_ins {
-        refused(&mut session, &link, why).await;
-    }
-
     // Corrected, it starts and serves.
     let port = wire.port(OTHER);
     let link = port.handle();

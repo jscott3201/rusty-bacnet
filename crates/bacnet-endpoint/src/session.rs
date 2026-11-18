@@ -16,11 +16,10 @@
 //! Outbound leases use RAII guards. Ordinary `read_property*` calls release their
 //! exact lease when cancelled. Source-audited calls transfer to bounded session
 //! ownership before egress admission, so dropping their caller does not cancel
-//! admitted work. `stop()` seals admission, closes roles, joins dispatch and owned
-//! workers, then stops ingress. Undelivered audit records may be lost on shutdown.
-//! Before reporting termination, it settles forgotten durable writes and awaits
-//! queued save attempts with the database guard released. Canceling this wait
-//! preserves one settlement task for the next `stop()` call to join.
+//! admitted work. `stop()` stops the server first, whose own stop settles its
+//! objects' saves, or hands that to a task while the database is held (see
+//! [`stop`](EndpointSession::stop)), then seals admission, closes roles, joins
+//! dispatch and owned workers, and stops ingress. Undelivered audit records may be lost on shutdown.
 //! Cloned role handles keep working until shutdown, then fail closed; after
 //! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
 //! call reports shutdown.
@@ -84,27 +83,15 @@ pub(crate) mod source_reporter;
 #[path = "session_start.rs"]
 mod startup;
 
-#[path = "device_writes.rs"]
-mod device_writes;
-pub use device_writes::{RESPONDER_OPT_IN_SERVICES, RESPONDER_SERVICES, ResponderOptIn};
-mod cov;
-pub use cov::{
-    COV_CONFIRMED_IN_FLIGHT, COV_CONFIRMED_TIMEOUT_MAX_MS, COV_OUTBOX_MAX_ENTRIES,
-    COV_OUTBOX_MAX_OCTETS,
-};
 mod frame_observation;
-mod local_writes;
 #[path = "registered_port.rs"]
 mod registered_port;
 
 use crate::roles::{
-    ClientRoleHandle, ServerRoleHandle, SessionToken, admit_once, decode_terminal,
-    inbound_canonical_peer, is_requester_lease,
+    ClientRoleHandle, SessionToken, admit_once, decode_terminal, is_requester_lease,
 };
 use bacnet_server::server::{
-    __endpoint_EndpointResponder as EndpointResponder,
-    __endpoint_NotificationTransactions as NotificationTransactions,
-    __endpoint_settle_durable_writes as settle_durable_writes, drop_database_off_runtime,
+    __endpoint_NotificationTransactions as NotificationTransactions, drop_database_off_runtime,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -151,9 +138,9 @@ pub enum SessionRole {
 /// Session tuning (bounded queues, client timers).
 ///
 /// Typed at the public boundary: every field is validated where it matters
-/// (`queue_capacity == 0`, `read_work_limit == 0` or a
-/// `min_request_interval_ms` past an hour fails [`EndpointSession::new`];
-/// APDU/timer values flow into the client role config unchanged).
+/// (`queue_capacity == 0` or a `min_request_interval_ms` past an hour fails
+/// [`EndpointSession::new`]; APDU/timer values flow into the client role
+/// config unchanged).
 ///
 /// ```
 /// use bacnet_endpoint::session::SessionConfig;
@@ -161,7 +148,6 @@ pub enum SessionRole {
 /// let config = SessionConfig::default();
 /// assert_eq!(config.queue_capacity, 256);
 /// assert_eq!(config.max_apdu_length, 480);
-/// assert_eq!(config.read_work_limit, 256);
 /// assert_eq!(config.min_request_interval_ms, 0);
 /// ```
 #[derive(Clone, Debug)]
@@ -218,23 +204,6 @@ pub struct SessionConfig {
     /// identity's ceiling resolved against the transport's stable local
     /// receive capacity (480 for standard MS/TP, 1476 for extended MS/TP).
     pub max_apdu_length: u16,
-    /// Result rows one ReadProperty served by the narrow server role may
-    /// expand (default 256). That role is gone (#2617): a session with a
-    /// server role refuses at start a value other than the default, and its
-    /// server's own budget,
-    /// [`ServerBuilder::read_property_multiple_budget`](bacnet_server::server::ServerBuilder::read_property_multiple_budget),
-    /// carries the limit. A later step of #2617 removes the field.
-    ///
-    /// It was the endpoint's counterpart of the server's
-    /// [`ReadPropertyMultipleBudget::max_result_elements`](bacnet_device_core::read::ReadPropertyMultipleBudget::max_result_elements),
-    /// with the same default. A read counts its own row, and a Group's
-    /// Present_Value adds one row per member property after ALL, REQUIRED
-    /// and OPTIONAL expand. A read past the limit is answered with an Abort
-    /// carrying OUT_OF_RESOURCES before any member is read.
-    ///
-    /// Must be greater than zero; [`EndpointSession::new`] returns
-    /// [`Error::Encoding`] otherwise.
-    pub read_work_limit: usize,
     /// Least time, in milliseconds, between the client role's confirmed
     /// requests to one destination (default 0: no pacing), measured as
     /// [`ClientConfig::min_request_interval_ms`] says for `BACnetClient`
@@ -258,11 +227,6 @@ impl SessionConfig {
                 "endpoint session queue capacity must be greater than zero".into(),
             ));
         }
-        if self.read_work_limit == 0 {
-            return Err(Error::Encoding(
-                "endpoint session read work limit must be greater than zero".into(),
-            ));
-        }
         let interval = self.min_request_interval_ms;
         if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
             return Err(Error::Encoding(format!(
@@ -281,8 +245,6 @@ impl Default for SessionConfig {
             apdu_timeout_ms: 6_000,
             apdu_retries: 3,
             max_apdu_length: 480,
-            read_work_limit: bacnet_device_core::read::ReadPropertyMultipleBudget::default()
-                .max_result_elements,
             min_request_interval_ms: 0,
         }
     }
@@ -304,8 +266,6 @@ pub struct PolicyCountersSnapshot {
     pub no_client_role: u64,
     /// Terminal responses no lease claimed (unknown/peer/service/policy).
     pub unclaimed_terminal: u64,
-    /// Responder declined (group/unsupported/closed).
-    pub responder_declined: u64,
     /// Unconfirmed requests past their share of the full request queue
     /// (see [`SessionConfig::queue_capacity`]).
     pub unconfirmed_full_drops: u64,
@@ -329,7 +289,6 @@ struct PolicyCounters {
     no_server_role: u64,
     no_client_role: u64,
     unclaimed_terminal: u64,
-    responder_declined: u64,
 }
 
 struct SessionShared {
@@ -376,10 +335,10 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     coordinator: Arc<OutboundTransactionCoordinator>,
     ingress: Option<EndpointIngress<T>>,
     requester: Option<EndpointRequester>,
-    responder: Option<Arc<EndpointResponder>>,
+    /// The source Audit's pool of notifications on a session with no
+    /// server; beside a server, its pool is the server's.
     notifications: Option<Arc<NotificationTransactions>>,
     client_handle: Option<ClientRoleHandle>,
-    server_handle: Option<ServerRoleHandle>,
     /// The full server's builder until start ([`Self::with_server`]), then
     /// the server until stop (#2617), and the error its stop gave.
     server_builder: Option<bacnet_server::server::ServerBuilder<T>>,
@@ -404,16 +363,12 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     pub(crate) source_audit_routed_bindings: Vec<(ObjectIdentifier, u16, bacnet_types::MacAddr)>,
     source_recipient: Option<Arc<crate::source_audit::recipient::SourceRecipient>>,
     stop_exit: Option<Result<SessionExit, Error>>,
-    durable_settlement: Option<JoinHandle<()>>,
     ingress_stopped: bool,
     identity: Option<crate::identity::DeviceIdentity>,
     local_receive_capacity: u16,
     bip_local_address: Option<std::net::SocketAddrV4>,
     registered_network_port: Option<ObjectIdentifier>,
     registered_port_lease: std::sync::Weak<()>,
-    device_write_authorizer: Option<bacnet_server::mutation::DeviceWriteAuthorizer>,
-    pub(crate) reinitialize: Option<bacnet_server::server::ReinitializeHandler>,
-    pub(crate) reinit_password: Option<String>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
     /// The B/IP transport's own exchanges, when the B/IP builder built it.
     pub(crate) bip_status: Option<bacnet_transport::bip::BvlcClientStatus>,
@@ -424,8 +379,6 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     pub(crate) mstp_diagnostics: Option<bacnet_transport::mstp::MstpDiagnostics>,
     /// The SC transport's events and link status, when the SC builder built it.
     pub(crate) sc_link: Option<bacnet_transport::sc::ScLinkMonitor>,
-    /// COV reporting, when enabled (#2490).
-    cov: cov::CovRole,
 }
 
 /// Terminal state of the session dispatch task.
@@ -444,9 +397,9 @@ pub enum SessionExit {
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Creates a session owning `transport` (not yet started).
     ///
-    /// Returns [`Error::Encoding`] when `config.queue_capacity` or
-    /// `config.read_work_limit` is zero, or `config.min_request_interval_ms`
-    /// is more than an hour. Normally built via
+    /// Returns [`Error::Encoding`] when `config.queue_capacity` is zero or
+    /// `config.min_request_interval_ms` is more than an hour. Normally built
+    /// via
     /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder),
     /// [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder), or
     /// [`MstpEndpointBuilder`](crate::mstp::MstpEndpointBuilder) instead of
@@ -488,16 +441,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     no_server_role: 0,
                     no_client_role: 0,
                     unclaimed_terminal: 0,
-                    responder_declined: 0,
                 }),
             }),
             coordinator,
             ingress: Some(ingress),
             requester: None,
-            responder: None,
             notifications: None,
             client_handle: None,
-            server_handle: None,
             server_builder: None,
             server: None,
             server_stop_error: None,
@@ -517,22 +467,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             source_audit_routed_bindings: Vec::new(),
             source_recipient: None,
             stop_exit: None,
-            durable_settlement: None,
             ingress_stopped: false,
             identity: None,
             bip_local_address: None,
             registered_network_port: None,
             registered_port_lease: std::sync::Weak::new(),
-            device_write_authorizer: None,
-            reinitialize: None,
-            reinit_password: None,
             egress: None,
             bip_status: None,
             bip_tables: None,
             frame_tap: None,
             mstp_diagnostics: None,
             sc_link: None,
-            cov: cov::CovRole::default(),
         })
     }
 
@@ -659,7 +604,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
-        let (device_target, source_routes) = self.prepare_start().await?;
+        let source_routes = self.prepare_start().await?;
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
             Lifecycle::Running as u8,
@@ -671,7 +616,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
-        if let Err(error) = self.start_link(device_target, source_routes).await {
+        if let Err(error) = self.start_link(source_routes).await {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;
@@ -689,19 +634,39 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// `&mut self` so only the owner can stop; cloned role handles observe
     /// shutdown and fail closed.
     ///
-    /// The session's server ([`with_server`](Self::with_server)) is
-    /// stopped first: its work joins and its saves settle while the link is
-    /// still up, and its stop error, if any, is this call's.
+    /// The session's server ([`with_server`](Self::with_server), or the
+    /// read-only one) is stopped first, while the link is still up, as
+    /// [`BACnetServer::stop`](bacnet_server::server::BACnetServer::stop)
+    /// describes, and its stop error, if any, is this call's. Only the
+    /// server stages saves on the session's database. Its stop joins its
+    /// work, waits up to 5 s for local writes dropped with their stage still
+    /// held to let go of it, then settles the objects' forgotten staged
+    /// writes and waits for their saves: storage that stalls keeps this call
+    /// pending, and completion does not certify backend success or
+    /// power-loss durability.
     ///
-    /// With an attached database, waits for its lock and for queued durable save
-    /// attempts, including corrections for abandoned staged writes. A
-    /// [`full_client`](Self::full_client) still alive doesn't hold the stop
-    /// up (#2617): its tasks end, the link stops, and its requests after
-    /// that fail with the transport's stopped error; dropping it later
-    /// changes nothing. Release any
-    /// application-held database guard so shutdown can progress. A stalled backend
-    /// keeps this call pending; completion does not certify backend success or
-    /// power-loss durability. The database remains attached after termination.
+    /// Settling needs the database's guard. If any guard is held at that
+    /// moment, the application's or even a background reader's brief one,
+    /// the server hands the settling to a task that runs once the guard is
+    /// free, and nothing waits for that task's saves, so this call can return
+    /// before storage holds what the objects serve. It still waits for the
+    /// guard where an Audit Reporter is taken out under it (the session's
+    /// source Reporter, or the server's own Audit Reporters), but the
+    /// settling has been handed off by then. A runtime that shuts down
+    /// before that task runs drops it, and storage is then put back only as
+    /// the objects are dropped: a process that exits without running
+    /// destructors can lose it. Let go of every guard first where storage
+    /// must be settled when this returns.
+    ///
+    /// The stopped server lets go of its database handle from a task, a
+    /// runtime turn after this call returns, as a standalone server's drop
+    /// does: code that takes the database back once the session is gone
+    /// (`Arc::try_unwrap` of a clone it kept) lets that turn pass first.
+    ///
+    /// A [`full_client`](Self::full_client) still alive doesn't hold the
+    /// stop up (#2617): its tasks end, the link stops, and its requests
+    /// after that fail with the transport's stopped error; dropping it later
+    /// changes nothing. The database remains attached after termination.
     pub async fn stop(&mut self) -> Result<SessionExit, Error> {
         let state = self.lifecycle.load(Ordering::Acquire);
         if state != Lifecycle::Running as u8 && state != Lifecycle::Stopping as u8 {
@@ -721,9 +686,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.stop_server().await;
         if let Some(requester) = &self.requester {
             requester.close();
-        }
-        if let Some(responder) = &self.responder {
-            responder.close();
         }
         if let Some(notifications) = &self.notifications {
             notifications.close();
@@ -745,7 +707,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 NotificationTransactions::observe(Some(result));
             }
         }
-        self.cov.stop().await;
         if !self.ingress_stopped {
             if let Some(ingress) = self.ingress.as_mut()
                 && let Err(error) = ingress.stop().await
@@ -772,22 +733,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.source_audit.take();
         self.notifications.take();
         self.requester.take();
-        self.responder.take();
         self.client_handle = None;
-        self.server_handle = None;
-        if self.durable_settlement.is_none()
-            && let Some(db) = &self.database
-        {
-            self.durable_settlement = Some(tokio::spawn(settle_durable_writes(Arc::clone(db))));
-        }
-        if let Some(task) = self.durable_settlement.as_mut() {
-            // Keep the one settlement owner across canceled stop waiters.
-            let result = task.await;
-            self.durable_settlement = None;
-            result.map_err(|error| {
-                Error::Encoding(format!("endpoint durable settlement failed: {error}"))
-            })?;
-        }
         self.lifecycle
             .store(Lifecycle::Stopped as u8, Ordering::Release);
         let exit = self.stop_exit.take().expect("joined dispatch");
@@ -830,7 +776,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             no_server_role: counters.no_server_role,
             no_client_role: counters.no_client_role,
             unclaimed_terminal: counters.unclaimed_terminal,
-            responder_declined: counters.responder_declined,
             unconfirmed_full_drops: drops.unconfirmed_full_drops,
             confirmed_full_drops: drops.confirmed_full_drops,
             answer_full_drops: drops.answer_full_drops,
@@ -1009,9 +954,6 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         if let Some(requester) = self.requester.take() {
             requester.close();
         }
-        if let Some(responder) = self.responder.take() {
-            responder.close();
-        }
         if let Some(notifications) = self.notifications.take() {
             notifications.close();
         }
@@ -1021,16 +963,12 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         if let Some(task) = self.dispatch_task.take() {
             task.abort();
         }
-        if let Some(task) = self.durable_settlement.take() {
-            task.abort();
-        }
         // The server's own drop aborts its work and lets go of the node's
         // DeviceCommunicationControl hold.
         drop(self.server.take());
-        self.cov.abort();
         // The session's own handle, kept through stop(), goes off the
         // runtime if it is the last (#1561). Every other endpoint holder
-        // (responder, source Audit, the aborted tasks' handles) lets go the
+        // (the server, source Audit, the aborted tasks' handles) lets go the
         // same way when it drops, whichever goes last.
         if let Some(db) = self.database.take() {
             drop(drop_database_off_runtime(db));
@@ -1043,15 +981,12 @@ struct DispatchParts {
     terminal: mpsc::Receiver<ReceivedApdu>,
     policy: mpsc::Receiver<PolicyOutcome>,
     requester: Option<EndpointRequester>,
-    responder: Option<Arc<EndpointResponder>>,
     notifications: Option<Arc<NotificationTransactions>>,
     coordinator: Arc<OutboundTransactionCoordinator>,
     shared: Arc<SessionShared>,
     /// The layer's network number, which the session's Number owner
     /// publishes; answers relayed with it as SNET match like direct ones.
     local_network: LocalNetworkNumber,
-    /// COV reporting, which the answers to its notifications go to (#2490).
-    cov: Option<Arc<cov::CovHost>>,
 }
 
 #[path = "session_dispatch.rs"]
@@ -1069,7 +1004,7 @@ async fn dispatch_loop(mut parts: DispatchParts, mut cancel: oneshot::Receiver<(
         };
         match event {
             DispatchEvent::Worker(joined) => NotificationTransactions::observe(Some(joined)),
-            DispatchEvent::Inbound(received) => handle_inbound(&mut parts, received).await,
+            DispatchEvent::Inbound(received) => handle_inbound(&parts.shared, received).await,
             DispatchEvent::Terminal(received) => handle_terminal(&mut parts, received).await,
             DispatchEvent::Policy(outcome) => handle_ingress_policy(&parts.shared, outcome).await,
             DispatchEvent::Closed => return SessionExit::ReceiversClosed,
@@ -1077,52 +1012,13 @@ async fn dispatch_loop(mut parts: DispatchParts, mut cancel: oneshot::Receiver<(
     }
 }
 
-async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
-    // Preserve the full envelope structurally (raw + effective group,
-    // attributes, ingress identity, provenance) — no new decisions here
-    // beyond role presence + responder scope.
-    let _peer = inbound_canonical_peer(&received, parts.local_network.get());
-    let _link_group = received.link_layer_group;
-    let _is_group = received.is_group;
-    let _attributes = received.data_attributes.clone();
-    let _provenance = &received.provenance;
-    let _ingress = received.ingress_network;
-    let Some(responder) = parts.responder.as_ref() else {
-        let mut counters = parts.shared.counters.lock().await;
-        counters.no_server_role += 1;
-        // One-use reply ownership: release a lone reply sender without
-        // sending bytes, mirroring queue-admission drop semantics.
-        if let Some(reply_tx) = received.reply_tx {
-            drop(reply_tx);
-        }
-        return;
-    };
-    // RB-17 deferred-reply wiring (minimal correlation, session-side): when
-    // the one-shot suspension arm is set and this request carries the MS/TP
-    // one-use prompt reply sender, drop the sender BEFORE the responder sees
-    // it. Dropping releases the MAC to send ReplyPostponed; the responder
-    // then observes `reply_tx: None` and answers through the single
-    // EndpointEgress → queue_npdu path, which the MAC transmits as
-    // DataNotExpectingReply at the next token opportunity with the identical
-    // wire invoke ID + destination. Prompt (sender present, unarmed) and
-    // token-owned (sender absent) stay distinct by construction: the
-    // responder never sees both for one request. No second serial owner, no
-    // MAC state duplication, no transport change.
-    let mut received = received;
-    if !received.provenance.is_direct_peer()
-        && received.direct_response.is_none()
-        && received.reply_tx.is_some()
-        && parts.shared.token.take_suspend()
-    {
-        let _ = received.reply_tx.take();
-    }
-    match responder.handle(received).await {
-        Ok(true) | Ok(false) => {}
-        Err(_) => {
-            let mut counters = parts.shared.counters.lock().await;
-            counters.responder_declined += 1;
-        }
-    }
+/// A request in the session's own request queue, which no server takes: the
+/// session has no server role, or its server's seat is gone (#2617). It is
+/// counted (`no_server_role`), and its one-use reply sender is released
+/// without sending, as a full queue's drop releases one.
+async fn handle_inbound(shared: &SessionShared, received: ReceivedApdu) {
+    shared.counters.lock().await.no_server_role += 1;
+    drop(received.reply_tx);
 }
 
 #[cfg(test)]

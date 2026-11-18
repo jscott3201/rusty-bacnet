@@ -423,9 +423,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///   It rejects no other Confirmed-Request, and a
     ///   ConfirmedEventNotification is published to
     ///   [`Self::event_notifications`] without an acknowledgment, which is
-    ///   the server role's to send. An endpoint's narrow server role doesn't
-    ///   execute that service and answers it with a Reject (unrecognized
-    ///   service); a full server on the node's seat acknowledges it. With no
+    ///   the server role's to send: the full server on the node's seat
+    ///   acknowledges it. With no
     ///   server role the client answers as a standalone client does;
     /// - the node has the one owner of the local network number. This
     ///   client still asks What-Is-Network-Number on first need, but it

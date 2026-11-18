@@ -1,6 +1,6 @@
 //! RB-18 public API tests (Loopback + real B/IP loopback, deterministic).
 //!
-//! Covers the promotion contract: public paths resolve, role handles are
+//! Covers the promotion contract: public paths resolve, the role handle is
 //! `Send + Sync` (clones survive session drop as fail-closed values), owner
 //! shutdown with live handles, use-after-stop, role teardown while others
 //! remain, migration-adapter builds, and BBMD experimental ordering.
@@ -13,7 +13,7 @@ use std::time::Duration;
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::{DeviceIdentity, NetworkPortEntry, build_database_with_extra};
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
-use bacnet_endpoint::roles::{ClientRoleHandle, ServerRoleHandle};
+use bacnet_endpoint::roles::ClientRoleHandle;
 use bacnet_endpoint::sc::ScEndpointBuilder;
 use bacnet_endpoint::session::{
     EndpointSession, PolicyCountersSnapshot, SessionConfig, SessionExit, SessionRole,
@@ -38,9 +38,8 @@ fn promoted_paths_and_thread_safety_resolve() {
         takes_top_identity(identity);
     }
     let _ = takes_mod;
-    // Role handles are Send + Sync, including clones that outlive the borrow.
+    // The role handle is Send + Sync, including clones that outlive the borrow.
     assert_send_sync::<ClientRoleHandle>();
-    assert_send_sync::<ServerRoleHandle>();
     // Session-level types resolve.
     let _ = SessionRole::Both;
     let _ = SessionConfig::default();

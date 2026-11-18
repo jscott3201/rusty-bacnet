@@ -475,8 +475,12 @@ async fn network_number_real_owner_stop_cancel_joins_control_and_keeps_socket_le
         .await;
     }
 }
+/// A control waiting for the database's guard, which the application holds,
+/// is cancelled at stop, and the stop doesn't wait for the guard: the
+/// standalone server's and the endpoint's alike, whose server stops as the
+/// standalone one does (#2617).
 #[tokio::test]
-async fn network_number_held_database_cancels_control_before_endpoint_settlement() {
+async fn network_number_held_database_cancels_control_at_stop() {
     for full in [true, false] {
         let mut f = Fixture::start(full, true, 0).await;
         let db = f.database();
@@ -492,25 +496,15 @@ async fn network_number_held_database_cancels_control_before_endpoint_settlement
         })
         .await
         .unwrap();
-        if full {
-            tokio::time::timeout(Duration::from_secs(1), f.stop())
-                .await
-                .unwrap();
-        } else {
-            // Endpoint stop now waits for the database's durable settlement,
-            // but first aborts and joins the queued Number control task.
-            assert!(
-                tokio::time::timeout(Duration::from_millis(20), f.stop())
-                    .await
-                    .is_err()
-            );
-            let Owner::Endpoint(endpoint) = &f.owner else {
-                unreachable!()
-            };
+        tokio::time::timeout(Duration::from_secs(1), f.stop())
+            .await
+            .unwrap();
+        if let Owner::Endpoint(endpoint) = &f.owner {
+            // The stop aborted and joined the queued Number control task.
             assert!(endpoint.network_number_task.is_none());
             assert_eq!(
                 endpoint.lifecycle.load(Ordering::Acquire),
-                Lifecycle::Stopping as u8
+                Lifecycle::Stopped as u8
             );
         }
         assert_eq!(
@@ -525,11 +519,6 @@ async fn network_number_held_database_cancels_control_before_endpoint_settlement
             PropertyValue::Unsigned(0)
         );
         drop(guard);
-        if !full {
-            tokio::time::timeout(Duration::from_secs(1), f.stop())
-                .await
-                .unwrap();
-        }
         assert!(db.write().await.remove(&selected()).unwrap().is_some());
     }
 }
