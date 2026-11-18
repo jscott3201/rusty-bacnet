@@ -11,7 +11,10 @@
 //! of its own and boxed (`heap::boxed`), and that `read` needs 288 KiB.
 //!
 //! A command arm that awaits its future inline puts that future back in
-//! the dispatch's state, which these bounds catch. They are the sizes with
+//! the dispatch's state, which these bounds catch. They do not catch a box
+//! made from an already built future (`Box::pin(cmd(..))`), which leaves the
+//! state small and puts a full-size temporary back in the poll frame: only
+//! CI's 1 MiB stack step sees that. The bounds are the sizes with
 //! this change (debug, 64-bit, Rust 1.99.0) on macOS arm64, plus 32 bytes.
 //! A change that has to grow a future past its bound first shows CI's
 //! 1 MiB stack step still passes on Windows, then moves the bound. A
