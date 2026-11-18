@@ -7464,7 +7464,8 @@ connection times out, since the endpoint's client role makes no retries.
 Reporter (#2348, #2357), the Python side of the Rust session's
 `with_source_audit_reporter`. Through it the session
 reports the ReinitializeDevice resets, backup steps and restore steps it
-carries out for peers and each `report_device_reset_local()` call, each
+carries out for peers and each call of its server's
+`report_device_reset_local()`, each
 filtered by the Reporter's Audit_Level and Auditable_Operations, and sends
 the records to the Device's Audit recipient. It also audits the reads and
 writes of the endpoint's client (#2617; see

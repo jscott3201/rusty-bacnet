@@ -173,6 +173,15 @@ class EndpointServerLifetimeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "came from is closed"):
             await asyncio.wait_for(server.read_property(AI1, PV), 5)
 
+    async def test_first_clients_asked_together_are_one_client(self):
+        # client() shares the session lock with the server's calls (#2617),
+        # and its slot's own lock keeps one client per session: callers
+        # racing for the first one all get it, and none is refused.
+        for _ in range(20):
+            async with endpoint() as owner:
+                clients = await asyncio.gather(*(owner.client() for _ in range(8)))
+                self.assertTrue(all(client is clients[0] for client in clients), clients)
+
     async def test_a_handle_from_before_a_restart_never_reaches_the_new_server(self):
         owner = endpoint()
         async with owner:
