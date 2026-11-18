@@ -42,9 +42,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             match input {
                 AccessControlInput::AccessEvent(report) => {
                     srv.report_access_event_local(&oid, report).await

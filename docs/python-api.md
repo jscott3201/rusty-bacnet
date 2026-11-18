@@ -6187,10 +6187,11 @@ server = BACnetServer(1234, reinit_password="secret",
 endpoint's only Audit Reporter is its source Reporter, which Clause 19.6.2
 casts as the operation source's; writing the DEVICE_RESET, DEVICE_BACKUP and
 DEVICE_RESTORE records of requests it carries out through that Reporter is
-this library's local choice. Endpoints take `await endpoint.report_device_reset_local()`
-too (#1837), recorded through that Reporter when one is selected (see
+this library's local choice. On an endpoint, `report_device_reset_local()` is
+the endpoint's server's (`await endpoint.server()`, #1837, #2617), recorded
+through that Reporter when one is selected (see
 [Endpoint source Audit Reporter](#endpoint-source-audit-reporter)) and a
-no-op otherwise; it raises RuntimeError when the endpoint is not running.
+no-op otherwise; it raises RuntimeError once the endpoint has closed.
 
 ### Runtime Object Access
 
@@ -6316,11 +6317,11 @@ denied.
 
 Invalid mode strings raise `ValueError`; other non-callables raise `TypeError`
 during construction, before startup drains registrations or performs I/O. DCC,
-ReinitializeDevice, LifeSafety and Audit keep separate policies; this option
-doesn't configure endpoint Device-write authorization, which the endpoints'
-own `device_write_policy` callable decides (see
-[Endpoint](#endpoint-one-transport-both-roles)). See [Server authorization policy](mutation-policy.md) for exact
-service coverage, validation precedence and exclusions.
+ReinitializeDevice, LifeSafety and Audit keep separate policies. The
+endpoints take the same keyword for the server each runs, which without one
+is read-only (see [The endpoint's server](#the-endpoints-server)). See
+[Server authorization policy](mutation-policy.md) for exact service coverage,
+validation precedence and exclusions.
 
 #### `set_reliability_local(object_id, reliability)`
 
@@ -7187,12 +7188,13 @@ Two limits:
 ## Endpoint (one transport, both roles)
 
 `BipEndpoint`, `ScEndpoint`, and `MstpEndpoint` own one transport above both
-roles. `await endpoint.client()` is a `BACnetClient` on that transport, and
-`await endpoint.server()` the `EndpointServer` handle, which holds no
-lifecycle and fails closed with `BacnetError` after the owner closes (see
-[The endpoint's client](#the-endpoints-client)). Builder-time config only:
-`DeviceIdentity` (instance/vendor/APDU/segmentation/services/ports/UUID) is
-validated in the constructor; there is no post-start owner mutation. A
+roles. `await endpoint.client()` is a `BACnetClient` on that transport (see
+[The endpoint's client](#the-endpoints-client)), and `await endpoint.server()`
+the `BACnetServer` the endpoint's session runs there (see
+[The endpoint's server](#the-endpoints-server)); the endpoint starts and
+stops both. Builder-time config only: `DeviceIdentity`
+(instance/vendor/APDU/segmentation/ports/UUID) is validated in the
+constructor; there is no post-start owner mutation. A
 `device_instance` of 4194303, which no object may have, or anything larger
 raises `ValueError` there, as `BACnetServer`'s does (#2171).
 
@@ -7210,11 +7212,12 @@ as `BACnetServer`'s (#1867), checked by the same code: `tags`,
 `profile_location` and `profile_name` on all four, and `present_value_access`
 and `value_source_tracking` on the two Value builders (see
 [Object profiles and Value_Source](#object-profiles-and-value_source)).
-The endpoint serves those rows to ReadProperty, the one object service its
-server role answers besides the COV subscriptions `cov` turns on
-([Endpoint COV](#endpoint-cov)). Peers can't write these objects through an endpoint, so
-there `present_value_access` and `value_source_tracking` only describe the
-object: a tracked object's Value_Source reads null.
+The endpoint's server serves those objects as a standalone server serves
+its own, and a peer writes them as far as the endpoint's `mutation_policy`
+lets it: under the read-only default no peer writes, so there
+`present_value_access` and `value_source_tracking` describe the object and
+its local writes. Other object types aren't available on an endpoint yet;
+use a standalone `BACnetServer` for them.
 
 `await endpoint.status()` returns a redacted snapshot (`is_running`,
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
@@ -7242,10 +7245,11 @@ reads a BBMD's tables with `read_bdt()` and `read_fdt()` (see
 [Endpoint BBMD table reads](#endpoint-bbmd-table-reads)). `local_address()` is `"ip:port"`
 (BIP), VMAC hex (SC), or station string (MS/TP). The owner broadcasts one
 I-Am for its identity with `await endpoint.broadcast_i_am()`; concurrent use
-is `asyncio.gather` over the client's calls plus `is_session_alive()`
-polling. The Rust-calls-Python paths are the owner's
-optional `on_reinitialize` / `after_reinitialize` pair and its optional
-`device_write_policy` callable. Interpreter
+is `asyncio.gather` over the client's and the server's calls. The
+Rust-calls-Python paths are the owner's optional `on_reinitialize` /
+`after_reinitialize` pair and its optional `mutation_policy` callable.
+`status()` also counts what the server was handed and what its full queue
+dropped (`server_seat_apdus`, `server_seat_full_drops`). Interpreter
 finalization only seals forcefully; always await `close()` or context exit.
 BIPv6/Ethernet have no endpoint owner; use the standalone path there.
 
@@ -7299,9 +7303,8 @@ async with BipEndpoint(1001, interface="192.168.1.10", broadcast_address="192.16
   not in `confirmed_full_drops`.
 - **Answers.** Beside the server role, the client answers only the COV
   notifications of its own subscriptions; the server role answers the
-  rest. A ConfirmedEventNotification is published to
-  `event_notifications()` and answered with a Reject (unrecognized
-  service) until the full server takes a seat (#2617 step 4).
+  rest. A ConfirmedEventNotification is the server's to acknowledge, and
+  the client publishes a copy to `event_notifications()`.
 - **SC.** The client starts after the hub link is up, so its
   `connection_events()` begins at that call, after the first `connected`:
   read the link at once with its `connection_status()`, or use the
@@ -7325,93 +7328,93 @@ async with BipEndpoint(1001, interface="192.168.1.10", broadcast_address="192.16
   off by the endpoint's close, or by the client's `stop()`, is not
   recorded.
 
-Python endpoint server roles execute and advertise ReadProperty, plus
-ReinitializeDevice when built with `on_reinitialize` (the keywords and rules of
-[ReinitializeDevice](#reinitializedevice), with `reinit_password` needing a
-handler; `EndpointServer.service_scope()` then lists `reinitialize_device`).
+### The endpoint's server
 
-The keyword-only `device_write_policy` (#2033) turns on WriteProperty to the
-endpoint's local Device, its `Description` and installed Audit recipient, as
-the Rust session's Device-write authorizer does; `service_scope()` then lists
-`write_property`. The callable gets the same frozen `MutationContext` a
-`BACnetServer` `mutation_policy` callable gets (service `"write_property"`)
-and follows its fail-closed rules: `True` allows, while `False`, an exception
-(reported through `sys.unraisablehook`), a non-bool answer, a coroutine or
-interpreter shutdown denies with SERVICES / SERVICE_REQUEST_DENIED before
-anything changes. Writes to other objects or properties are refused as
-before, and a value that isn't a callable or `None` raises `TypeError` in the
-constructor:
-
-```python
-def device_writes(context: MutationContext) -> bool:
-    return context.source_network is None  # local network only
-
-endpoint = BipEndpoint(1001, device_write_policy=device_writes)
-```
-
-The endpoint answers requests on one dispatch task, so a slow callable stalls
-every request, and `close()` waits for a `device_write_policy` call that is
-still running. The callables run with no lock held (`on_reinitialize` aside),
-but starting a binding operation from one is refused. Without `cov` the
-Device has neither COV list property. A supplied `services` list must include RP and
-cannot claim unsupported execution; incompatible server-role profiles fail
-startup before ingress.
-ClientOnly has no responder and keeps its service list as a local declaration.
-
-### Endpoint COV
-
-The keyword-only `cov` (#2490), an `EndpointCov` dict, turns on SubscribeCOV,
-SubscribeCOVProperty and SubscribeCOVPropertyMultiple for the endpoint's
-objects, on `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` alike. The session
-runs the Rust endpoint's COV reporting: the notifications follow a
-subscription, its renewal and each change the application makes with
-`set_present_value_local` or `set_reliability_local`, which take the values
-and raise the errors of `BACnetServer`'s methods of the same names. The Device
-then advertises the three services and lists Active_COV_Subscriptions and
-Active_COV_Multiple_Subscriptions, and `service_scope()` lists
-`subscribe_cov`, `subscribe_cov_property` and
-`subscribe_cov_property_multiple`. Without `cov` the three services are
-refused with UNRECOGNIZED_SERVICE, as before.
-
-Every key is optional, so `cov={}` takes the Rust defaults:
-
-| Key | Default | What it sets |
-|---|---|---|
-| `policy` | `CovPolicy` defaults | the subscription caps and per-change budget, read as `BACnetServer(cov_policy=...)` is |
-| `outbox_entries` | 16 | notifications queued at once, 1 to 65,535 |
-| `outbox_octets` | 2048 | their octets, together, 1 to 16,777,216 (16 MiB) |
-| `confirmed_timeout_ms` | 3000 | how long a confirmed notification waits for its answer, 1 to 3,600,000 (an hour) |
-| `confirmed_retries` | 3 | resends after the first |
-
-An unknown key or a value of the wrong type raises `TypeError`, an integer out
-of range of its type `OverflowError`, and a value outside the ranges above
-`ValueError`, in the constructor. The outbox is allocated whole when the
-endpoint starts. Size `outbox_octets` for the largest notification the
-objects call for, up to the endpoint's `max_apdu`: a notification larger than
-it is never queued, so with too small an outbox a subscription is acknowledged
-and then hears nothing. At most 64 confirmed notifications are out at once,
-so subscribers that stop answering can't take every invoke ID from the client
-role.
+`await endpoint.server()` returns a `BACnetServer` (#2617): the standalone
+class, on the full server the endpoint's session runs on its one address,
+with the endpoint's objects. Its runtime calls are a standalone server's:
+`read_property`, `write_property_local`, `set_present_value_local`,
+`set_reliability_local` and the other `*_local` calls, `comm_state()`, the
+counters (`cov_counters()`, `request_admission_counters()`,
+`event_notification_counters()`, `dcc_outcome_counters()`) and
+`report_device_reset_local()`, which on an endpoint records through its
+`source_audit_reporter` (the endpoint has no method of its own for it). Its
+local changes reach COV subscribers and run the event pass as on a
+standalone server; so do a peer's writes that the policy allows.
 
 ```python
 from rusty_bacnet import BipEndpoint, ObjectIdentifier, ObjectType, PropertyValue
 
 zone_temp = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
-endpoint = BipEndpoint(1001, cov={"policy": {"max_subscriptions_global": 256}})
+endpoint = BipEndpoint(1001, cov_policy={"max_subscriptions_global": 256})
 endpoint.add_analog_input(instance=1, name="Zone Temp", present_value=21.5)
 async with endpoint:
+    server = await endpoint.server()
     # Zone Temp's subscribers hear of this.
-    await endpoint.set_present_value_local(zone_temp, PropertyValue.real(22.0))
+    await server.set_present_value_local(zone_temp, PropertyValue.real(22.0))
 ```
 
-A Python endpoint has no Device clock. A timestamped
-SubscribeCOVPropertyMultiple reference is therefore refused with SERVICES /
-OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, while an untimestamped one is taken, and
-no notification the endpoint sends carries a time of change. A client's write
-reaches only the Device's Description and Audit recipient, and the Device
-takes no subscription, so it notifies nobody. The endpoint runs no event pass:
-a Reliability set here shows FAULT in Status_Flags, but Event_State stays as it
-is.
+- **What it executes.** Every service a standalone server executes, Who-Is
+  and Who-Has among them, so the endpoint is discoverable, and the Device's
+  Protocol_Services_Supported lists them, with the client's I-Am, I-Have and
+  COV notifications beside them. A ConfirmedEventNotification is the
+  server's to acknowledge. Segmentation stays as the identity declares it:
+  `segmentation` must still be NO_SEGMENTATION on an endpoint.
+- **Who may write.** The keyword-only `mutation_policy` takes what
+  `BACnetServer`'s does: `"permissive"` (any peer), `"deny_all"` (no peer,
+  COV subscriptions included) or a callable that gets a `MutationContext`
+  for each covered mutation of every object and returns a bool, with that
+  keyword's fail-closed rules (see
+  [Server authorization policy](mutation-policy.md)). **Without it the
+  server is read-only:** a peer's write, create or delete (WriteProperty,
+  WritePropertyMultiple, CreateObject, DeleteObject and the list writes) is
+  denied with SERVICES / SERVICE_REQUEST_DENIED and an inbound WriteGroup is
+  skipped, while reads, discovery, the three COV subscriptions and
+  AcknowledgeAlarm are answered. DeviceCommunicationControl,
+  ReinitializeDevice without `on_reinitialize` and LifeSafetyOperation stay
+  denied, as on any server. Given a policy, the server is the one
+  `BACnetServer(mutation_policy=...)` is, but for time synchronization.
+- **Time synchronization is off unless asked for**, whatever the
+  `mutation_policy`: **this default differs from `BACnetServer()`'s**, which
+  takes every valid request. A peer's TimeSynchronization and
+  UTCTimeSynchronization are ignored, and a `mutation_policy` callable is
+  never asked about them. The keyword-only `time_sync_policy` turns them on:
+  a dict read as `BACnetServer`'s keyword of the same name reads it, so `{}`
+  takes every valid request and the other keys restrict sources, the step
+  and the rate. The Device's Protocol_Services_Supported lists both services
+  either way.
+- **The other server keywords.** `cov_policy` is read as `BACnetServer`'s;
+  `on_reinitialize`, `after_reinitialize` and `reinit_password` are its
+  keywords of the same names (see [ReinitializeDevice](#reinitializedevice));
+  `read_work_limit` is its `rpm_max_result_elements` (see
+  [Endpoint Groups and the read work limit](#endpoint-groups-and-the-read-work-limit)).
+  Confirmed notifications time out and retry as the endpoint's
+  `apdu_timeout_ms` and `apdu_retries` say, the Device's APDU_Timeout and
+  Number_Of_APDU_Retries. The server's other `BACnetServer` keywords keep
+  their defaults on an endpoint for now (#1138).
+- **Objects.** An endpoint has builders for Analog Input, Analog Value,
+  Binary Input, Binary Value, Group and Audit Reporter objects only, each
+  before its start; the server's `add_*` calls are refused once it runs, as
+  on a running standalone server. Use a standalone `BACnetServer` for the
+  other object types until the endpoints take the server's builders
+  (#1138).
+- **Its lifetime is the endpoint's.** Each call returns a new handle on the
+  one server. Its `start()` and `stop()` raise `RuntimeError`: the endpoint
+  starts it, and the endpoint's `close()` stops it, waiting for the calls in
+  flight as a standalone server's `stop()` does. After the close each call
+  raises `RuntimeError` at once, and a handle kept across a restart never
+  reaches the new server: `await endpoint.server()` again. `configure_*`
+  raises `RuntimeError` too. The endpoint's `client()` doesn't wait for a
+  server call in flight.
+- **Invoke IDs.** The server and the client share the endpoint's 256: the
+  server holds at most 64 at once for its confirmed COV, event and Audit
+  notifications. Past them a confirmed COV notification is skipped with a
+  warning, and the subscriber hears the next change.
+- **Callables.** A `mutation_policy` callable runs on Tokio's blocking pool
+  while its request waits, so a slow one delays only its own request, as
+  on a standalone server. The callables run with no lock held
+  (`on_reinitialize` aside), and starting a binding operation from one is
+  refused.
 
 ### ScEndpoint reconnect, failover hub and link events
 
@@ -7461,7 +7464,8 @@ connection times out, since the endpoint's client role makes no retries.
 Reporter (#2348, #2357), the Python side of the Rust session's
 `with_source_audit_reporter`. Through it the session
 reports the ReinitializeDevice resets, backup steps and restore steps it
-carries out for peers and each `report_device_reset_local()` call, each
+carries out for peers and each call of its server's
+`report_device_reset_local()`, each
 filtered by the Reporter's Audit_Level and Auditable_Operations, and sends
 the records to the Device's Audit recipient. It also audits the reads and
 writes of the endpoint's client (#2617; see
@@ -7474,8 +7478,8 @@ endpoint = BipEndpoint(
     1001, interface="192.168.1.10", port=47808,
     on_reinitialize=lambda request: None,
     # Only the trusted workstation (192.168.1.5:47808, as a B/IP MAC) may
-    # change the Device's Audit recipient.
-    device_write_policy=lambda context: context.source_mac == bytes([192, 168, 1, 5, 0xBA, 0xC0]),
+    # change anything, the Device's Audit recipient included.
+    mutation_policy=lambda context: context.source_mac == bytes([192, 168, 1, 5, 0xBA, 0xC0]),
     source_audit_reporter=reporter,
     audit_recipient={"kind": "device", "object_identifier": logger},
     audit_device_bindings=[(logger, "192.168.1.20:47808")],
@@ -7497,11 +7501,13 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
   never the link's broadcast address at any port. A Device recipient with no
   binding starts, records nothing, and the Reporter's Reliability reads
   CONFIGURATION_ERROR.
-- The Reporter needs `device_write_policy` and `audit_recipient`. With both
-  roles running, the Rust session requires a Device-write authorizer,
-  because the Device's Audit recipient is writable: a policy that allows
-  every peer lets any of them redirect the audit trail, so allow only the
-  sources you trust.
+- The Reporter needs `audit_recipient` and a server whose `mutation_policy`
+  decides writes: the read-only default, `"deny_all"` or a callable, never
+  `"permissive"` (`ValueError`). The Device's Audit recipient is writable,
+  and a policy that allows every peer lets any of them redirect the audit
+  trail, so a callable should allow that write only from the sources you
+  trust. A peer's write of the recipient that the policy allows is recorded
+  with the peer as its source.
 - **When keywords are refused:** construction raises ValueError for anything
   it can check: an identifier that isn't a concrete Audit Reporter, a
   recipient or binding without a Reporter, a recipient the session could
@@ -7536,7 +7542,7 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
 endpoint = MstpEndpoint(
     1001, "/dev/ttyUSB0", mstp_mac=3,
     on_reinitialize=lambda request: None,
-    device_write_policy=lambda context: context.source_mac == bytes([7]),
+    mutation_policy=lambda context: context.source_mac == bytes([7]),
     source_audit_reporter=reporter,
     audit_recipient={"kind": "device", "object_identifier": logger},
     audit_device_bindings=[(logger, "7")],
@@ -7587,7 +7593,7 @@ lifecycle lock, so they cannot observe a half-published session.
 
 `add_group(instance, name, members=None)` registers a Group before start.
 `members` uses the `read_property_multiple` spec shape,
-`[(object_id, [(property_id, array_index), ...]), ...]`, and the server role
+`[(object_id, [(property_id, array_index), ...]), ...]`, and the server
 rebuilds Present_Value from it on every read, one result per member. A member
 with an empty property list, or one that reports a Group or Global Group's
 Present_Value, raises `ValueError` when it is added; the message names the
@@ -7595,14 +7601,15 @@ member's position and the rule it breaks. Any property identifier is taken,
 including those ASHRAE assigns above 4194303, such as `DEFAULT_COLOR`. As for `read_property_multiple` specs,
 an array index outside unsigned32 raises `OverflowError` during conversion.
 
-Each owner takes a keyword-only `read_work_limit=256`: the result rows one
-ReadProperty served by the server role may expand. A read counts its own row,
-and a Group's Present_Value adds a row for every member property after ALL,
-REQUIRED and OPTIONAL expand. A read over the limit is answered with an Abort
-carrying OUT_OF_RESOURCES (a peer `BACnetClient` raises `BacnetAbortError` with
+Each owner takes a keyword-only `read_work_limit=256`, the endpoint server's
+`rpm_max_result_elements` (#2617): the result rows a ReadProperty or a
+ReadPropertyMultiple may expand. A read counts its own row, and a Group's
+Present_Value adds a row for every member property after ALL, REQUIRED and
+OPTIONAL expand. A read over the limit is answered with an Abort carrying
+OUT_OF_RESOURCES (a peer `BACnetClient` raises `BacnetAbortError` with
 `reason == 9`) before any member is read. Zero raises `ValueError`, negative or
-native-overflow values raise `OverflowError`, all in the constructor. It is the
-endpoint counterpart of `BACnetServer`'s `rpm_max_result_elements`; see
+native-overflow values raise `OverflowError`, all in the constructor. The
+budget's encoded-size bound keeps `BACnetServer`'s default; see
 [RPM budgets](rpm-budget.md).
 
 Each owner also takes a keyword-only `min_request_interval_ms=0`, the least
@@ -7735,6 +7742,28 @@ on the endpoint's link. Its calls keep their names and result shapes:
 Not yet routed on the full client: the COV subscriptions and the other
 typed calls take a local address only; reach a routed device through a `device()` handle or the `_from_device` and
 `_to_device` forms. #2588 brings a routed form to every service.
+
+### Migration: `EndpointServer` to the endpoint's `BACnetServer` (#2617)
+
+`EndpointServer` is gone: `await endpoint.server()` returns a `BACnetServer`
+on the full server the endpoint runs, which executes what a standalone
+server executes. Without a `mutation_policy` it is read-only, so an endpoint
+that had no `device_write_policy` stays closed to every peer's write.
+
+| 0.15.0 | Now |
+|---|---|
+| `EndpointServer.is_session_alive()` | none: the endpoint's `status()["is_running"]`, or a server call, which raises `RuntimeError` once the endpoint closed |
+| `EndpointServer.service_scope()` | the Device's Protocol_Services_Supported: `await server.read_property(device, PropertyIdentifier.PROTOCOL_SERVICES_SUPPORTED)` |
+| `EndpointServer.suspend_next_reply()` | none |
+| `device_write_policy=callable` (WriteProperty of the Device's Description and Audit recipient) | `mutation_policy=callable`, asked about every covered mutation of every object: check `context.object_identifier` and `context.property_identifier` to keep the old scope, and allow `"subscribe_cov"`, `"subscribe_cov_property"` and `"subscribe_cov_property_multiple"` when subscriptions should work |
+| no `device_write_policy` (no WriteProperty) | no `mutation_policy`: the read-only server |
+| `services=[...]` | gone: the Device lists what the server executes |
+| `read_work_limit` | the same keyword, now the server's `rpm_max_result_elements`, which bounds ReadPropertyMultiple too |
+| `on_reinitialize`, `after_reinitialize`, `reinit_password` | the same keywords, the server's; without `on_reinitialize` a ReinitializeDevice is denied with SERVICES / SERVICE_REQUEST_DENIED rather than rejected |
+| status key `responder_declined` | gone: the server's counters, `server_seat_apdus` and `server_seat_full_drops` |
+| TimeSynchronization refused | still off by default, whatever the `mutation_policy`; `time_sync_policy={}` turns it on |
+| Reject (unrecognized service) for every service but ReadProperty, and Device WriteProperty or ReinitializeDevice when opted in | the server's answer: reads answered, writes denied by the read-only policy, Who-Is and Who-Has answered, TimeSynchronization ignored |
+
 
 ### Migration: separately-constructed client/server to endpoint
 

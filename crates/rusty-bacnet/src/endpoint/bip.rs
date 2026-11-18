@@ -22,11 +22,9 @@ use pyo3::types::PyDict;
 
 use crate::endpoint::common::{
     PendingObject, build_database, build_identity, build_pending_boxes, lifecycle_error,
-    parse_device_uuid, parse_ipv4, parse_read_work_limit, parse_segmentation, parse_services,
-    pending_group, with_bip_port,
+    parse_device_uuid, parse_ipv4, parse_segmentation, pending_group, with_bip_port,
 };
 use crate::endpoint::lifecycle::Lifecycle;
-use crate::endpoint::roles::PyEndpointServer;
 use crate::endpoint::running::Running;
 use crate::errors::to_py_err;
 use crate::types::{PyReadAccessSpec, PySegmentation};
@@ -45,7 +43,6 @@ struct BipEndpointConfig {
     share_wildcard_port: bool,
     identity: DeviceIdentity,
     queue_capacity: usize,
-    read_work_limit: usize,
     apdu_timeout_ms: u64,
     apdu_retries: u8,
     registered_network_port: Option<u32>,
@@ -54,23 +51,20 @@ struct BipEndpointConfig {
     mode: BipMode,
     /// The B/IP multicast group `multicast=` asked for (#941).
     multicast: Option<bacnet_transport::bip::BipMulticast>,
-    reinitialize: crate::reinitialize::EndpointReinitialize,
-    /// The `device_write_policy` callable, if any (#2033).
-    device_writes: crate::mutation_policy::DeviceWritePolicy,
+    /// The full server's keywords (#2617).
+    server: super::server_role::ServerKeywords,
     /// The source Audit Reporter keywords, if any (#2348).
     source_audit: Option<super::source_audit::SourceAuditKeywords>,
-    /// The `cov` keyword's configuration, when COV is on (#2490).
-    cov: Option<bacnet_device_core::report::ReportConfig>,
 }
 
 /// The running session's BBMD table reader, taken under the session lock
 /// and used after it is released, so a read waiting on its answer never
 /// holds up `close()`.
 async fn bvlc_tables(
-    session: &tokio::sync::Mutex<Option<Running>>,
+    session: &tokio::sync::RwLock<Option<Running>>,
 ) -> PyResult<bacnet_transport::bip::BvlcTableReader> {
     session
-        .lock()
+        .read()
         .await
         .as_ref()
         .and_then(|session| session.bvlc_tables())
@@ -113,7 +107,6 @@ impl BipEndpointConfig {
             .share_wildcard_port(config.share_wildcard_port)
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
-            .read_work_limit(config.read_work_limit)
             .client_timers(config.apdu_timeout_ms, config.apdu_retries)
             .min_request_interval_ms(config.min_request_interval_ms)
             .mode(config.mode.clone())
@@ -131,17 +124,13 @@ impl BipEndpointConfig {
         if let Some(source) = &config.source_audit {
             builder = source.bind(builder);
         }
-        if let Some(cov) = config.cov.clone() {
-            builder = builder.cov(cov);
-        }
         let mut session = builder
             .build_session_wrapped(crate::app_transport::AppTransport::from)
             .map_err(to_py_err)?;
         if let Some(source) = &config.source_audit {
             session = source.select(session);
         }
-        let session = config.device_writes.install(session);
-        Ok(Running::new(config.reinitialize.install(session)))
+        Ok(Running::new(config.server.install(session)))
     }
 }
 
@@ -209,8 +198,6 @@ impl PyBipEndpoint {
     ///         the B/IP link before Device construction. Request headers use
     ///         the largest supported code that does not exceed it.
     ///     segmentation: `Segmentation` override (default NO_SEGMENTATION, the proven value).
-    ///     services: Optional service-bit list (default `[READ_PROPERTY]`, the
-    ///         narrow endpoint reality; wider profiles need the full server).
     ///     device_uuid: Optional 16-byte UUID (zeros allowed for BIP-only;
     ///         stored into DEVICE_UUID, single identity source).
     ///     queue_capacity: Bounded queue capacity (must be >0, default 256).
@@ -218,10 +205,12 @@ impl PyBipEndpoint {
     ///         (`status()`'s `*_full_drops`); it never ends the session.
     ///     apdu_timeout_ms / apdu_retries: The client role's APDU timeout
     ///         and retries (default 6000 ms and 3).
-    ///     read_work_limit: Keyword-only. Result rows one ReadProperty served
-    ///         by the server role may expand (must be >0, default 256): its
-    ///         own row plus, for a Group's Present_Value, one per member
-    ///         property. A read past it is aborted with OUT_OF_RESOURCES.
+    ///     read_work_limit: Keyword-only. The server's
+    ///         ReadPropertyMultiple budget of result rows (must be >0,
+    ///         default 256), `BACnetServer`'s `rpm_max_result_elements`: a
+    ///         ReadProperty counts its own row plus, for a Group's
+    ///         Present_Value, one per member property, and a read past it
+    ///         is aborted with OUT_OF_RESOURCES.
     ///     share_port_by_address: Keyword-only (default False). Bind the
     ///         interface address itself, so endpoints on other addresses of
     ///         this host can share the port; needs an explicit interface and
@@ -242,40 +231,37 @@ impl PyBipEndpoint {
     ///     on_reinitialize / after_reinitialize / reinit_password:
     ///         Keyword-only. Execute ReinitializeDevice, as `BACnetServer`'s
     ///         keywords of the same names do (#1566).
-    ///     device_write_policy: Keyword-only (default None). A callable that
-    ///         decides each WriteProperty to the local Device's Description
-    ///         or installed Audit recipient (#2033). It gets a
-    ///         `MutationContext` and returns a bool, with the fail-closed
-    ///         rules of `BACnetServer`'s `mutation_policy` callable. Without
-    ///         it the endpoint executes no WriteProperty.
+    ///     mutation_policy: Keyword-only (default None). Who may change the
+    ///         endpoint's objects (#2617): `"permissive"`, `"deny_all"` or a
+    ///         callable, as `BACnetServer`'s keyword of the same name takes.
+    ///         Without it the server is read-only: every write, create and
+    ///         delete is denied, and reads, discovery and COV subscriptions
+    ///         are answered.
+    ///     cov_policy: Keyword-only (default None, the Rust defaults). The
+    ///         server's COV policy, as `BACnetServer`'s keyword of the same
+    ///         name reads it.
+    ///     time_sync_policy: Keyword-only (default None: off). A dict read
+    ///         as `BACnetServer`'s keyword of the same name reads it turns
+    ///         TimeSynchronization and UTCTimeSynchronization on (`{}` takes
+    ///         every valid request). Unlike `BACnetServer()`'s default,
+    ///         time synchronization is off on an endpoint unless asked for,
+    ///         whatever its `mutation_policy` (#2617).
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only (#2348). `source_audit_reporter` is the
     ///         `ObjectIdentifier` of an Audit Reporter added with
     ///         `add_audit_reporter`; the session reports through it the
     ///         ReinitializeDevice resets, backups and restores it carries
-    ///         out, `report_device_reset_local()` calls, and the reads
-    ///         and writes of its `client()` (#2617). It needs
-    ///         `device_write_policy` and `audit_recipient`, the Device's
-    ///         Audit recipient (an
-    ///         `AuditRecipientInput`). `audit_device_bindings` is a list of
+    ///         out, its server's `report_device_reset_local()` calls, and
+    ///         the reads and writes of its `client()` (#2617). It needs
+    ///         `audit_recipient`, the Device's Audit recipient (an
+    ///         `AuditRecipientInput`), and a `mutation_policy` that decides
+    ///         writes: none (read-only), `"deny_all"` or a callable, never
+    ///         `"permissive"`. `audit_device_bindings` is a list of
     ///         `(ObjectIdentifier, "ipv4:port")` routes to recipient
     ///         Devices, or `"network:0xMAC"` for one behind a router
     ///         (#2371). A Reporter identifier of another type, and other
     ///         shapes construction can check, raise ValueError here; a
     ///         Reporter that wasn't added raises BacnetError at start.
-    ///     cov: Keyword-only (default None, no COV). An `EndpointCov` dict
-    ///         turns on SubscribeCOV, SubscribeCOVProperty and
-    ///         SubscribeCOVPropertyMultiple for the endpoint's objects, with
-    ///         the COV notifications their subscriptions call for after
-    ///         `set_present_value_local` and `set_reliability_local` (#2490).
-    ///         Its keys, all optional (`{}` takes the defaults), are
-    ///         `policy` (a `CovPolicy`, as `BACnetServer`'s `cov_policy`),
-    ///         `outbox_entries` (16), `outbox_octets` (2048),
-    ///         `confirmed_timeout_ms` (3000) and `confirmed_retries` (3).
-    ///         An unknown key or a wrong type raises TypeError, and an outbox
-    ///         or timeout outside 1 to the endpoint's bounds (65535 entries,
-    ///         16 MiB, one hour) ValueError. The endpoint has no clock, so
-    ///         a timestamped COV-multiple reference is refused.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -288,7 +274,6 @@ impl PyBipEndpoint {
         network_port_instance=1,
         max_apdu=1476,
         segmentation=None,
-        services=None,
         device_uuid=None,
         queue_capacity=256,
         apdu_timeout_ms=6000,
@@ -305,11 +290,12 @@ impl PyBipEndpoint {
         on_reinitialize=None,
         after_reinitialize=None,
         reinit_password=None,
-        device_write_policy=None,
+        mutation_policy=None,
+        cov_policy=None,
+        time_sync_policy=None,
         source_audit_reporter=None,
         audit_recipient=None,
-        audit_device_bindings=None,
-        cov=None
+        audit_device_bindings=None
     ))]
     fn new(
         device_instance: u32,
@@ -322,7 +308,6 @@ impl PyBipEndpoint {
         network_port_instance: u32,
         max_apdu: u16,
         segmentation: Option<PySegmentation>,
-        services: Option<Vec<u8>>,
         device_uuid: Option<Vec<u8>>,
         queue_capacity: usize,
         apdu_timeout_ms: u64,
@@ -338,19 +323,22 @@ impl PyBipEndpoint {
         on_reinitialize: Option<&Bound<'_, PyAny>>,
         after_reinitialize: Option<&Bound<'_, PyAny>>,
         reinit_password: Option<String>,
-        device_write_policy: Option<&Bound<'_, PyAny>>,
+        mutation_policy: Option<&Bound<'_, PyAny>>,
+        cov_policy: Option<&Bound<'_, PyDict>>,
+        time_sync_policy: Option<&Bound<'_, PyDict>>,
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
         audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
-        cov: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        let reinitialize = crate::reinitialize::EndpointReinitialize::parse(
+        let server = super::server_role::ServerKeywords::parse(
+            mutation_policy,
+            read_work_limit,
+            cov_policy,
+            time_sync_policy,
             on_reinitialize,
             after_reinitialize,
             reinit_password,
         )?;
-        let device_writes = crate::mutation_policy::DeviceWritePolicy::parse(device_write_policy)?;
-        let cov = super::cov::parse(cov)?;
         let mode = crate::bip_options::bip_mode("bip", bbmd, foreign_device)?;
         let multicast = crate::bip_options::bip_multicast(
             "bip",
@@ -365,7 +353,6 @@ impl PyBipEndpoint {
                 "queue_capacity must be greater than zero",
             ));
         }
-        let read_work_limit = parse_read_work_limit(read_work_limit)?;
         let min_request_interval_ms =
             crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
         let interface_ip = parse_ipv4(interface, "interface")?;
@@ -376,7 +363,7 @@ impl PyBipEndpoint {
             audit_device_bindings,
             device_instance,
             super::source_audit::AuditLink::Bip(broadcast),
-            device_writes.enabled(),
+            server.decides_mutations(),
         )?;
         if let Some(selected) = registered_network_port
             && (!(1..=255).contains(&selected)
@@ -391,7 +378,6 @@ impl PyBipEndpoint {
             ));
         }
         let segmentation = parse_segmentation(segmentation);
-        let service_list = parse_services(services);
         let uuid = parse_device_uuid(device_uuid, false, "device_uuid")?;
         let identity = build_identity(
             device_instance,
@@ -399,7 +385,6 @@ impl PyBipEndpoint {
             vendor_id,
             max_apdu,
             segmentation,
-            &service_list,
             uuid,
         )?
         .resolve(BipTransport::new(interface_ip, port, broadcast).local_receive_apdu_capacity())
@@ -425,17 +410,14 @@ impl PyBipEndpoint {
                 share_wildcard_port,
                 identity,
                 queue_capacity,
-                read_work_limit,
                 apdu_timeout_ms,
                 apdu_retries,
                 registered_network_port,
                 min_request_interval_ms,
                 mode,
                 multicast,
-                reinitialize,
-                device_writes,
+                server,
                 source_audit,
-                cov,
             },
         })
     }
@@ -469,7 +451,7 @@ impl PyBipEndpoint {
         crate::logging_bridge::refresh_at_start(py);
         let lifecycle = self.lifecycle.clone();
         let config = self.config.clone();
-        config.reinitialize.bind_event_loop(py)?;
+        config.server.bind_event_loop(py)?;
         crate::py_async::future_into_py(py, async move {
             lifecycle
                 .start(false, |objects| config.prepare(objects))
@@ -496,7 +478,7 @@ impl PyBipEndpoint {
             let borrowed = slf.borrow();
             (borrowed.lifecycle.clone(), borrowed.config.clone())
         };
-        config.reinitialize.bind_event_loop(py)?;
+        config.server.bind_event_loop(py)?;
         crate::py_async::future_into_py(py, async move {
             lifecycle
                 .start(true, |objects| config.prepare(objects))
@@ -529,7 +511,7 @@ impl PyBipEndpoint {
         let lifecycle = self.lifecycle.clone();
         let frames = self.frames.clone();
         crate::py_async::future_into_py(py, async move {
-            let guard = lifecycle.session.lock().await;
+            let guard = lifecycle.session.read().await;
             let session = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
@@ -558,7 +540,7 @@ impl PyBipEndpoint {
         let frames = self.frames.clone();
         let instance = self.config.identity.instance();
         crate::py_async::future_into_py(py, async move {
-            let guard = lifecycle.session.lock().await;
+            let guard = lifecycle.session.read().await;
             let not_started = || PyRuntimeError::new_err("endpoint not started");
             let session = guard.as_ref().ok_or_else(not_started)?;
             let receiver = session.frames(capacity).ok_or_else(not_started)?;
@@ -585,33 +567,19 @@ impl PyBipEndpoint {
         crate::py_async::future_into_py(py, client)
     }
 
-    /// Clone the server role (fails with RuntimeError before start/after close).
+    /// The `BACnetServer` the endpoint's session runs on its socket
+    /// (#2617): the standalone class, with its calls, on the endpoint's one
+    /// address and its objects. Each call returns a new handle on the one
+    /// server. Its `start()` and `stop()` raise RuntimeError: the endpoint
+    /// starts it, and the endpoint's close stops it, after which its calls
+    /// raise RuntimeError too. RuntimeError before start and after close.
     fn server<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.lifecycle.session.clone();
-        let reinitialize = self.config.reinitialize.enabled();
-        let device_writes = self.config.device_writes.enabled();
-        let cov = self.config.cov.is_some();
-        crate::py_async::future_into_py(py, async move {
-            let handle = {
-                let guard = inner.lock().await;
-                let session = guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "endpoint not started — use 'async with' or await start()",
-                    )
-                })?;
-                session.cloned_responder_handle().ok_or_else(|| {
-                    PyRuntimeError::new_err(
-                        "endpoint not started — use 'async with' or await start()",
-                    )
-                })?
-            };
-            Ok(PyEndpointServer::new(
-                handle,
-                reinitialize,
-                device_writes,
-                cov,
-            ))
-        })
+        let server = super::running::server(
+            self.lifecycle.session.clone(),
+            "bip",
+            self.config.identity.instance(),
+        );
+        crate::py_async::future_into_py(py, server)
     }
 
     /// Actual announced IP and bound UDP port while the endpoint is active.
@@ -619,7 +587,7 @@ impl PyBipEndpoint {
     fn local_address<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.lifecycle.session.clone();
         crate::py_async::future_into_py(py, async move {
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             guard
                 .as_ref()
                 .and_then(|session| session.bip_local_address())
@@ -637,7 +605,7 @@ impl PyBipEndpoint {
         let config = self.config.clone();
         crate::py_async::future_into_py(py, async move {
             let snapshot = {
-                let guard = inner.lock().await;
+                let guard = inner.read().await;
                 let session = guard
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
@@ -664,7 +632,6 @@ impl PyBipEndpoint {
                 dict.set_item("no_server_role", snapshot.0.no_server_role)?;
                 dict.set_item("no_client_role", snapshot.0.no_client_role)?;
                 dict.set_item("unclaimed_terminal", snapshot.0.unclaimed_terminal)?;
-                dict.set_item("responder_declined", snapshot.0.responder_declined)?;
                 dict.set_item("unconfirmed_full_drops", snapshot.0.unconfirmed_full_drops)?;
                 dict.set_item("confirmed_full_drops", snapshot.0.confirmed_full_drops)?;
                 dict.set_item("answer_full_drops", snapshot.0.answer_full_drops)?;
@@ -682,7 +649,7 @@ impl PyBipEndpoint {
         let inner = self.lifecycle.session.clone();
         crate::py_async::future_into_py(py, async move {
             let registration = {
-                let guard = inner.lock().await;
+                let guard = inner.read().await;
                 guard
                     .as_ref()
                     .and_then(|session| session.foreign_registration())
@@ -756,7 +723,7 @@ impl PyBipEndpoint {
     fn broadcast_i_am<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.lifecycle.session.clone();
         let future = async move {
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             let session = guard.as_ref().ok_or_else(|| {
                 PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
             })?;

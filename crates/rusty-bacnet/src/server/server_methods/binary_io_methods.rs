@@ -29,9 +29,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.set_physical_input_local(&oid, on)
                 .await
                 .map_err(to_py_err)
@@ -61,9 +59,7 @@ impl BACnetServer {
         let polarity = Polarity::from_raw(polarity);
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.set_polarity_local(&oid, polarity)
                 .await
                 .map_err(to_py_err)
@@ -90,9 +86,7 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         crate::py_async::future_into_py(py, async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.physical_output_local(&oid).await.map_err(to_py_err)
         })
     }

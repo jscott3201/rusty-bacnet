@@ -98,7 +98,6 @@ fn mstp_python_wrapper_owns_one_serial_and_returns_none() {
         480,
         None,
         None,
-        None,
         16,
         6000,
         0,
@@ -106,6 +105,7 @@ fn mstp_python_wrapper_owns_one_serial_and_returns_none() {
         0,
         false,
         false,
+        None,
         None,
         None,
         None,
@@ -323,7 +323,6 @@ fn mstp_python_wrapper_applies_its_read_work_limit() {
         480,
         None,
         None,
-        None,
         16,
         6000,
         0,
@@ -343,9 +342,9 @@ fn mstp_python_wrapper_applies_its_read_work_limit() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
-    assert_eq!(endpoint.config.read_work_limit, 2);
     endpoint.config.serial_opener = Some(Arc::new({
         let peer = peer.clone();
         move |_| {
@@ -432,7 +431,6 @@ fn mstp_python_wrapper_hands_out_a_bacnet_client() {
         480,
         None,
         None,
-        None,
         16,
         6000,
         0,
@@ -440,6 +438,7 @@ fn mstp_python_wrapper_hands_out_a_bacnet_client() {
         0,
         false,
         false,
+        None,
         None,
         None,
         None,

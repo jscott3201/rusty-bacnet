@@ -28,9 +28,7 @@ impl BACnetServer {
 
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.purge_audit_log(&oid).await.map_err(to_py_err)
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -39,16 +37,12 @@ impl BACnetServer {
     /// Record a reset the application makes for its own reasons: a
     /// DEVICE_RESET Audit record from this device, with no invoke ID
     /// (#1564). A peer's accepted restart is recorded already. RuntimeError
-    /// when the server is not running.
+    /// when the server is not running. On an endpoint's server (#2617) the
+    /// record goes through the endpoint's `source_audit_reporter`, as its
+    /// peers' resets do.
     fn report_device_reset_local<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let future = async move {
-            let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-            srv.report_device_reset_local().await.map_err(to_py_err)
-        };
+        let future = async move { inner.read().await.report_device_reset_local().await };
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 }

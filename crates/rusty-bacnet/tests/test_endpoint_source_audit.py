@@ -22,7 +22,7 @@ def endpoint(destination, **overrides):
     """A B/IP endpoint reporting to the sink Device at `destination`."""
     keywords = {
         "interface": "127.0.0.1", "port": 0, "broadcast_address": "127.255.255.255",
-        "on_reinitialize": lambda request: None, "device_write_policy": lambda context: True,
+        "on_reinitialize": lambda request: None,
         "source_audit_reporter": REPORTER,
         "audit_recipient": {"kind": "device", "object_identifier": SINK_DEVICE},
         "audit_device_bindings": [(SINK_DEVICE, destination)],
@@ -74,7 +74,7 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
             address = await owner.local_address()
             await self.client.reinitialize_device(address, rb.ReinitializedState.WARMSTART)
             peer = await self.wait_for(1)
-            self.assertIsNone(await owner.report_device_reset_local())
+            self.assertIsNone(await (await owner.server()).report_device_reset_local())
             found = await self.wait_for(2)
         # The log lists the newest first: the local reset, then the peer's.
         found.reverse()
@@ -92,6 +92,21 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found[1]["source_device"], this_device)
         self.assertIsNone(found[1]["invoke_id"])
 
+    async def test_a_policy_that_decides_writes_takes_a_source_reporter(self):
+        # The read-only default, "deny_all" and a callable each decide every
+        # mutation, so the session takes the source Reporter beside them
+        # (#2617); "permissive" is refused (test_bad_keywords_are_refused).
+        for count, policy in enumerate(("deny_all", lambda context: False), start=1):
+            with self.subTest(policy=policy):
+                owner = endpoint(self.destination, mutation_policy=policy)
+                owner.add_audit_reporter(1, "Source", audit_level="audit_all",
+                                         auditable_operations=RESET,
+                                         issue_confirmed_notifications=True)
+                async with owner:
+                    await (await owner.server()).report_device_reset_local()
+                    found = await self.wait_for(count)
+                self.assertEqual(found[0]["operation"], rb.AuditOperation.DEVICE_RESET)
+
     async def test_the_reporters_operations_filter_both_paths(self):
         owner = endpoint(self.destination)
         owner.add_audit_reporter(1, "Source", audit_level="audit_all",
@@ -99,7 +114,7 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
         async with owner:
             address = await owner.local_address()
             await self.client.reinitialize_device(address, rb.ReinitializedState.WARMSTART)
-            await owner.report_device_reset_local()
+            await (await owner.server()).report_device_reset_local()
             # A backup step passes the filter; it is the first record built.
             await self.client.reinitialize_device(address, rb.ReinitializedState.START_BACKUP)
             found = await self.wait_for(1)
@@ -116,7 +131,7 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
         async with owner:
             address = await owner.local_address()
             await self.client.reinitialize_device(address, rb.ReinitializedState.WARMSTART)
-            await owner.report_device_reset_local()
+            await (await owner.server()).report_device_reset_local()
             await asyncio.sleep(0.3)
             self.assertEqual(await self.records(), [])
 
@@ -125,7 +140,7 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
         owner.add_audit_reporter(1, "Source", audit_level="audit_all",
                                  auditable_operations=RESET)
         async with owner:
-            await owner.report_device_reset_local()
+            await (await owner.server()).report_device_reset_local()
             address = await owner.local_address()
             reliability = await self.client.read_property(
                 address, REPORTER, rb.PropertyIdentifier.RELIABILITY)
@@ -137,7 +152,7 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
         plain.add_audit_reporter(1, "Unselected", audit_level="audit_all",
                                  auditable_operations=RESET)
         async with plain:
-            await plain.report_device_reset_local()
+            await (await plain.server()).report_device_reset_local()
             self.assertEqual(await self.records(), [])
 
     async def test_bad_keywords_are_refused(self):
@@ -146,7 +161,7 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
         refused_at_construction = [
             {"source_audit_reporter": rb.ObjectIdentifier(O.ANALOG_VALUE, 1)},
             {"source_audit_reporter": rb.ObjectIdentifier(O.AUDIT_REPORTER, 4194303)},
-            {"device_write_policy": None},
+            {"mutation_policy": "permissive"},
             {"audit_recipient": None},
             {"audit_recipient": {"kind": "device",
                                  "object_identifier": rb.ObjectIdentifier(O.DEVICE, ENDPOINT)}},
@@ -175,6 +190,9 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
                     endpoint(destination, **overrides)
                 if overrides.get("audit_recipient"):
                     self.assertIn("audit_recipient", str(raised.exception))
+                if "mutation_policy" in overrides:
+                    # Any peer could redirect the audit trail (#2617).
+                    self.assertIn("mutation_policy that decides writes", str(raised.exception))
                 bindings = overrides.get("audit_device_bindings") or []
                 if len(bindings) == 1:
                     self.assertIn("audit_device_bindings[0]", str(raised.exception))
@@ -187,7 +205,7 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
         # Without a Reporter the local report stays a no-op.
         async with rb.BipEndpoint(ENDPOINT, interface="127.0.0.1", port=0,
                                   broadcast_address="127.255.255.255") as plain:
-            self.assertIsNone(await plain.report_device_reset_local())
+            self.assertIsNone(await (await plain.server()).report_device_reset_local())
 
     def test_add_audit_reporter_checks_its_keywords(self):
         owner = endpoint(self.destination)

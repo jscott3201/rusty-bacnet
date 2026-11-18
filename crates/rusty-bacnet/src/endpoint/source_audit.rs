@@ -202,19 +202,20 @@ impl SourceAuditKeywords {
     /// `audit_device_bindings`. What construction can check is refused here
     /// with ValueError or TypeError: a Reporter identifier that names no
     /// concrete Audit Reporter, a recipient or binding without a Reporter, a
-    /// Reporter without a recipient or without `device_write_policy`, a
-    /// recipient the session can never deliver to (this device, the global
-    /// network, or an address that isn't another node's unicast MAC by
-    /// `link`'s rule), and bad or duplicate bindings, by the same rule. Whether the
-    /// Reporter is in the database is checked at start, once the `add_*`
-    /// calls are in.
+    /// Reporter without a recipient, or beside a server whose policy leaves
+    /// mutations undecided (`decides_mutations` false: `mutation_policy=
+    /// "permissive"`), a recipient the session can never deliver to (this
+    /// device, the global network, or an address that isn't another node's
+    /// unicast MAC by `link`'s rule), and bad or duplicate bindings, by the
+    /// same rule. Whether the Reporter is in the database is checked at
+    /// start, once the `add_*` calls are in.
     pub(super) fn parse(
         reporter: Option<PyObjectIdentifier>,
         recipient: Option<&Bound<'_, PyAny>>,
         bindings: Option<Vec<(PyObjectIdentifier, String)>>,
         device_instance: u32,
         link: AuditLink,
-        device_writes: bool,
+        decides_mutations: bool,
     ) -> PyResult<Option<Self>> {
         let Some(reporter) = reporter.map(|oid| oid.to_rust()) else {
             if recipient.is_some() || bindings.is_some() {
@@ -231,10 +232,12 @@ impl SourceAuditKeywords {
                 "source_audit_reporter must name a concrete Audit Reporter object",
             ));
         }
-        if !device_writes {
+        if !decides_mutations {
             return Err(PyValueError::new_err(
-                "source_audit_reporter needs device_write_policy: the Audit recipient \
-                 it reports to is writable on the local Device",
+                "source_audit_reporter needs a mutation_policy that decides writes, since \
+                 the Device's Audit recipient is writable: leave mutation_policy out (the \
+                 read-only server) or give 'deny_all' or a callable; 'permissive' lets any \
+                 peer redirect the audit trail",
             ));
         }
         let recipient = recipient

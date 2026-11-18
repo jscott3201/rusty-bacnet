@@ -446,16 +446,19 @@ class LocalResetTests(unittest.IsolatedAsyncioTestCase):
             await owner.stop()
 
     async def test_a_local_reset_report_needs_a_running_endpoint(self):
-        # #1837: the endpoints' counterpart. A Python endpoint has no source
-        # Reporter, so a running one records nothing and raises nothing.
+        # #1837: the endpoints' counterpart, on the endpoint's server
+        # (#2617). With no source Reporter a running one records nothing
+        # and raises nothing; its handle raises once the endpoint closed.
         endpoint = BipEndpoint(4106, interface="127.0.0.1", port=0,
                                broadcast_address="127.255.255.255")
+        self.assertFalse(hasattr(endpoint, "report_device_reset_local"))
         with self.assertRaisesRegex(RuntimeError, "endpoint not started"):
-            await endpoint.report_device_reset_local()
+            await endpoint.server()
         async with endpoint:
-            self.assertIsNone(await endpoint.report_device_reset_local())
-        with self.assertRaisesRegex(RuntimeError, "endpoint not started"):
-            await endpoint.report_device_reset_local()
+            server = await endpoint.server()
+            self.assertIsNone(await server.report_device_reset_local())
+        with self.assertRaisesRegex(RuntimeError, "came from is closed"):
+            await server.report_device_reset_local()
 
 
 class EndpointTests(unittest.IsolatedAsyncioTestCase):
@@ -477,8 +480,12 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                                    notified.append(request.invoke_id), peer.mark()))
         try:
             async with endpoint:
-                scope = (await endpoint.server()).service_scope()
-                self.assertEqual(scope["executes"], ["read_property", "reinitialize_device"])
+                # The endpoint's full server executes it, with the handler
+                # and password its keywords gave (#2617).
+                services = (await (await endpoint.server()).read_property(
+                    ObjectIdentifier(ObjectType.DEVICE, 4103),
+                    P.PROTOCOL_SERVICES_SUPPORTED)).value
+                self.assertIn("REINITIALIZE_DEVICE", services.names)
                 address = await endpoint.local_address()
                 self.assertEqual(await peer.ask(address, 1, S.WARMSTART, "secret"),
                                  error(1, *CONFIGURATION_IN_PROGRESS))
@@ -495,11 +502,21 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [1, 2, 4])
         self.assertEqual(notified, [4])
 
-    async def test_without_a_handler_the_endpoint_executes_read_property_only(self):
-        async with BipEndpoint(4104, interface="127.0.0.1", port=0,
-                               broadcast_address="127.0.0.1") as endpoint:
-            scope = (await endpoint.server()).service_scope()
-            self.assertEqual(scope["executes"], ["read_property"])
+    async def test_without_a_handler_the_endpoint_denies_reinitialize_device(self):
+        # As a standalone server does: the full server answers it with
+        # SERVICES / SERVICE_REQUEST_DENIED, where the narrow responder
+        # rejected it as an unrecognized service (#2617).
+        peer = Peer()
+        try:
+            async with BipEndpoint(4104, interface="127.0.0.1", port=0,
+                                   broadcast_address="127.0.0.1") as endpoint:
+                address = await endpoint.local_address()
+                self.assertEqual(await peer.ask(address, 1, S.WARMSTART),
+                                 error(1, *SERVICE_REQUEST_DENIED))
+                self.assertEqual(await peer.ask(address, 2, S.WARMSTART, "secret"),
+                                 error(2, *SERVICE_REQUEST_DENIED))
+        finally:
+            peer.close()
 
 
 if __name__ == "__main__":

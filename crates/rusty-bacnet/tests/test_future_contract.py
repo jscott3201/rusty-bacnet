@@ -92,7 +92,7 @@ class NativeFutureTests(unittest.IsolatedAsyncioTestCase):
             role = await self.future_result("BipEndpoint", "client", endpoint.client())
             self.assertIsInstance(role, rb.BACnetClient)
             owner_role = await self.future_result("BipEndpoint", "server", endpoint.server())
-            self.assertIsInstance(owner_role, rb.EndpointServer)
+            self.assertIsInstance(owner_role, rb.BACnetServer)
             oid = rb.ObjectIdentifier(rb.ObjectType.DEVICE, 858)
             value = await self.future_result("BACnetClient", "read_property",
                                             role.read_property(address, oid, rb.PropertyIdentifier.OBJECT_NAME))

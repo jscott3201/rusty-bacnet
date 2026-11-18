@@ -29,7 +29,6 @@ HUB_VMAC = b"\x02\x00\x00\x00\x00\x01"
 def source(**overrides):
     keywords = {
         "on_reinitialize": lambda request: None,
-        "device_write_policy": lambda context: True,
         "source_audit_reporter": REPORTER,
         "audit_recipient": {"kind": "device", "object_identifier": LOGGER},
     }
@@ -76,7 +75,7 @@ class LinkBindingTests(unittest.TestCase):
         for make in (sc_endpoint, mstp_endpoint):
             refused = [
                 {"source_audit_reporter": ObjectIdentifier(O.ANALOG_VALUE, 1)},
-                {"device_write_policy": None},
+                {"mutation_policy": "permissive"},
                 {"audit_recipient": None},
                 {"audit_device_bindings": [(LOGGER, "7"), (LOGGER, "8")]},
                 {"source_audit_reporter": None, "audit_device_bindings": [(LOGGER, "7")]},
@@ -232,7 +231,7 @@ class ScSessionTests(unittest.IsolatedAsyncioTestCase):
                                      auditable_operations=RESET)
             await asyncio.wait_for(added.start(), 15)
             try:
-                self.assertIsNone(await added.report_device_reset_local())
+                self.assertIsNone(await (await added.server()).report_device_reset_local())
             finally:
                 await asyncio.wait_for(added.close(), 5)
         finally:
@@ -299,7 +298,7 @@ class ScSessionTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     address = await owner.local_address()
                     await client.reinitialize_device(address, ReinitializedState.WARMSTART)
-                    self.assertIsNone(await owner.report_device_reset_local())
+                    self.assertIsNone(await (await owner.server()).report_device_reset_local())
                     async with asyncio.timeout(10):
                         while len(found := await records()) < before + 2:
                             await asyncio.sleep(0.05)

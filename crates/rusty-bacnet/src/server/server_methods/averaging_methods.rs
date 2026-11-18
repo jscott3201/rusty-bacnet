@@ -54,9 +54,7 @@ impl BACnetServer {
 
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.add_averaging_sample_local(&oid, sample)
                 .await
                 .map_err(to_py_err)

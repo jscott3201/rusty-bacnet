@@ -261,7 +261,10 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
                                    broadcast_address="127.0.0.1") as other:
             self.assertEqual(await other.read_property(self.local, AI_1, P.PRESENT_VALUE),
                              rb.PropertyValue.real(21.5))
-        self.assertTrue((await self.endpoint.server()).is_session_alive())
+        # The server role answers on: its own read sees the object.
+        server = await self.endpoint.server()
+        self.assertEqual(await server.read_property(AI_1, P.PRESENT_VALUE),
+                         rb.PropertyValue.real(21.5))
         fresh = await self.endpoint.client()
         _, peer_address = await self.server(PEER)
         self.assertEqual(await fresh.read_property(peer_address, AI_1, P.PRESENT_VALUE),
@@ -376,7 +379,6 @@ class AuditedEndpointTests(unittest.IsolatedAsyncioTestCase):
         # A recipient on 127.0.0.1 can't share the link's broadcast address.
         self.endpoint = endpoint(
             broadcast_address="127.255.255.255",
-            device_write_policy=lambda context: True,
             source_audit_reporter=rb.ObjectIdentifier(O.AUDIT_REPORTER, 1),
             audit_recipient={"kind": "device", "object_identifier": sink_device},
             audit_device_bindings=[(sink_device, self.sink_address)])

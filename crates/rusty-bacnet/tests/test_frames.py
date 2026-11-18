@@ -14,7 +14,7 @@ import time
 import unittest
 
 from port_retry import rerun_on_lost_port
-from rusty_bacnet import BACnetClient, BACnetServer, BipEndpoint, Frame, FrameIterator
+from rusty_bacnet import BACnetClient, BACnetServer, BipEndpoint, EnableDisable, Frame, FrameIterator
 from rusty_bacnet import ObjectIdentifier, ObjectType, PropertyIdentifier, PropertyValue
 from sc_client_fixture import ClientScFixture
 from test_bip6_vmac import free_udp6_port, ipv6_loopback
@@ -153,7 +153,8 @@ class FrameTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(StopAsyncIteration):
                 await asyncio.wait_for(waiter, 10)
         # Observation close leaves both protocol roles alive.
-        self.assertTrue((await endpoint.server()).is_session_alive())
+        server = await endpoint.server()
+        self.assertEqual(await server.comm_state(), EnableDisable.ENABLE)
 
     async def test_endpoint_close_and_restart_keep_generations_separate(self):
         endpoint = await self.endpoint()

@@ -8,13 +8,11 @@ impl BACnetServer {
     /// `BACnetClient.foreign_registration()` reports it. Sends nothing.
     /// Raises RuntimeError before start and after stop.
     fn foreign_registration<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
+        let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let registration = {
                 let guard = inner.read().await;
-                let server = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+                let server = guard.server()?;
                 // A B/IPv6 server reports its own shape (#2365).
                 if let Some(bip6) = server.transport().and_then(|t| t.bip6_transport()) {
                     let status = bip6.foreign_status().unwrap_or_default();

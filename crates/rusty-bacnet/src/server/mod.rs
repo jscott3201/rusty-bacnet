@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use tokio::sync::RwLock;
 
 use bacnet_objects::access_control::{
     AccessCredentialObject, AccessDoorObject, AccessPointObject, AccessRightsObject,
@@ -62,9 +61,11 @@ use crate::types::{PyEventType, PyObjectIdentifier, PyPropertyIdentifier, PyProp
 
 mod audit_configuration;
 use audit_configuration::AuditNotificationSink;
+mod host;
 pub(crate) use audit_configuration::{
     reporter_audit_level, reporter_auditable_operations, validate_audit_recipient,
 };
+pub(crate) use host::{SeatedHost, ServerHost};
 
 /// Async BACnet server that hosts objects and responds to requests.
 ///
@@ -99,8 +100,9 @@ pub struct BACnetServer {
     /// The running server. Every call takes a read guard, so a local write
     /// that waits for its event notifications (a Device recipient's I-Am,
     /// #2537) holds up no other call; `start` and `stop` take the write
-    /// guard, `stop` once the calls in flight have returned.
-    inner: Arc<RwLock<Option<server::BACnetServer<AppTransport>>>>,
+    /// guard, `stop` once the calls in flight have returned. An endpoint's
+    /// server takes its endpoint's session lock in the same way (#2617).
+    inner: ServerHost,
     device_instance: u32,
     segmentation_supported: bacnet_types::enums::Segmentation,
     apdu_segment_timeout_ms: u64,
@@ -202,12 +204,26 @@ impl BACnetServer {
     /// Prevents TOCTOU race between checking `started` and modifying `pending_objects`.
     fn push_pending(&self, obj: Box<dyn BACnetObject + Send>) -> PyResult<()> {
         let mut guard = self.lock_pending()?;
+        self.check_takes_objects()?;
+        guard.push(obj);
+        Ok(())
+    }
+
+    /// Refuse an object once the server runs (call it under the pending
+    /// lock). An endpoint's server (#2617) takes its objects from the
+    /// endpoint only.
+    fn check_takes_objects(&self) -> PyResult<()> {
+        if self.inner.is_seated() {
+            return Err(PyRuntimeError::new_err(
+                "an endpoint's server takes its objects from the endpoint: add them with the \
+                 endpoint's add_* calls before its start",
+            ));
+        }
         if self.started.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err(
                 "cannot add objects after start() — server is already running",
             ));
         }
-        guard.push(obj);
         Ok(())
     }
 
@@ -229,8 +245,9 @@ impl BACnetServer {
     }
 }
 
-// The endpoints' `cov` dict reads its `policy` as `cov_policy` is read (#2490).
-pub(crate) use server_methods::{cov_policy, policy_dict};
+// The endpoints' `cov_policy` and `time_sync_policy` keywords are read as
+// `BACnetServer`'s are (#2617).
+pub(crate) use server_methods::{cov_policy, time_sync_policy};
 
 mod server_methods {
     mod access_control_methods;
@@ -258,13 +275,13 @@ mod server_methods {
     mod loop_methods;
     mod network_port;
     mod notification_forwarder;
-    pub(crate) mod policy_dict;
+    mod policy_dict;
     mod program_methods;
     mod registration;
     mod reliability_methods;
     mod request_admission;
     mod sc_npdu;
-    mod time_sync_policy;
+    pub(crate) mod time_sync_policy;
     mod trend_log_methods;
     mod value_registration;
 }

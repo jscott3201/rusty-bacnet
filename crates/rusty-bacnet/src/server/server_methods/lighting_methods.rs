@@ -234,9 +234,7 @@ impl BACnetServer {
             // the read holds one lock.
             let db = {
                 let guard = inner.read().await;
-                let srv = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+                let srv = guard.server()?;
                 srv.database().clone()
             };
             let color = db.read().await.lighting_color(&oid);
