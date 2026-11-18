@@ -473,7 +473,7 @@ impl RoutedPathLimits {
                     dnet,
                     npdu_octets = largest,
                     minimum_npdu_octets = CONSERVATIVE_ROUTED_PATH_MAX_NPDU,
-                    "Dropped a Reject-Message-To-Network (message too long) for a frame within \
+                    "Ignored a reason-4 (too long) network reject for a frame within \
                      the 228-octet routed minimum of Table 6-1; a router refusing a frame that \
                      small is outside the standard. If this router really limits the path \
                      below that, set the limit by hand with configure_routed_path_max_npdu"
