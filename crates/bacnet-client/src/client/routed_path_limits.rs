@@ -10,7 +10,12 @@ use tokio::time::Instant as TokioInstant;
 use super::*;
 use crate::tsm::CompletionOutcome;
 
-/// Smallest routed NPDU envelope required across the standard data links.
+/// The smallest NPDU a router must be able to forward between any two data
+/// links, the lowest of the per-link figures in Table 6-1 (Clause 6.6). It is
+/// the default path limit, and also the floor of what a path can learn: a
+/// conforming router never refuses a frame this small as too long, so a
+/// reason 4 claimed by a request whose largest frame is no larger is not
+/// about that frame ([`RoutedPathLimits::claim_active`]).
 const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
 /// Hard bound covering gates, configured evidence, and learned evidence.
 pub(super) const MAX_ROUTED_PATH_ENTRIES: usize = 256;
@@ -142,8 +147,9 @@ struct RoutedPathState {
     entries: HashMap<RoutedPathKey, RoutedPathEntry>,
     next_use: u64,
     capacity: usize,
-    /// Reason-4 rejects dropped because they could belong to an earlier
-    /// answered generation's frame.
+    /// Reason-4 rejects dropped because they cannot belong to the active
+    /// request's frames: it sent nothing above the conservative limit, or
+    /// the reject could be an earlier answered generation's.
     dropped_rejects: u64,
 }
 
@@ -409,7 +415,10 @@ impl RoutedPathLimits {
     /// ingress before the request was installed is not its own. One that
     /// could be for an earlier answered generation's larger frame is
     /// dropped and counted, and the request runs on to its own answer,
-    /// retry or timeout.
+    /// retry or timeout. So is one claimed by a request whose largest frame is
+    /// within [`CONSERVATIVE_ROUTED_PATH_MAX_NPDU`]: no conforming router
+    /// refuses such a frame, so the reject was for other traffic, and
+    /// believing it would pin the path below any link's minimum.
     fn claim_active(
         &self,
         router_mac: &[u8],
@@ -429,6 +438,10 @@ impl RoutedPathLimits {
             return None;
         }
         let largest = entry.generation_largest_npdu;
+        if largest <= CONSERVATIVE_ROUTED_PATH_MAX_NPDU {
+            state.dropped_rejects = state.dropped_rejects.saturating_add(1);
+            return None;
+        }
         // The clock is read only for a path with answered frames on record.
         let answered = match entry.answered {
             Some(_) => entry.answered_at(TokioInstant::now()),
@@ -456,6 +469,9 @@ impl RoutedPathLimits {
             .entries
             .get_mut(&active.path)
             .expect("the reason-4 claimant still holds its routed path gate");
+        // A learned limit stays at the conservative one or above, whatever
+        // the caller passes (`claim_active` already drops smaller frames).
+        let attempted_npdu = attempted_npdu.max(CONSERVATIVE_ROUTED_PATH_MAX_NPDU + 1);
         let exclusive_max_npdu = entry.learned.as_ref().map_or(attempted_npdu, |learned| {
             learned.exclusive_max_npdu.min(attempted_npdu)
         });

@@ -20,7 +20,7 @@ async fn reason_4_during_segmented_send_prevents_window_retransmission() {
         .unwrap(),
     );
     client
-        .configure_routed_path_max_npdu(&router, DNET, 128)
+        .configure_routed_path_max_npdu(&router, DNET, 300)
         .await
         .unwrap();
 
@@ -29,7 +29,7 @@ async fn reason_4_during_segmented_send_prevents_window_retransmission() {
         router.clone(),
         DNET,
         dadr.clone(),
-        vec![0x77; 300],
+        vec![0x77; 800],
     );
     let first = confirmed_request(outbound.recv().await.unwrap(), &router);
     assert!(first.segmented);

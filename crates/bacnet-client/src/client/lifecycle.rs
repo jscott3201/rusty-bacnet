@@ -470,15 +470,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Reject-Message-To-Network messages with reason 4 (message too long)
-    /// dropped since start because they could answer a frame of an earlier
-    /// request on the same router and network rather than the request
-    /// active there (#2651). A request the device answered after more than
+    /// dropped since start because they cannot be pinned on the request
+    /// active on that router and network (#2651, #2665). One is dropped
+    /// when that request's largest frame is within the 228-octet routed
+    /// NPDU every router must carry (Table 6-1): a conforming router never
+    /// refuses a frame that small as too long, so the reject belongs to
+    /// other traffic, and learning from it would pin the path below any
+    /// link's minimum. A request the device answered after more than
     /// one frame, a retry or segments, frees its path at once; for the
     /// window it would have held the path before (the APDU timeout times the
     /// attempts), a reason 4 fails a later request on that path only when
     /// that request sent a frame at least as large as the answered one's
     /// largest. A smaller request runs on to its own answer, retry or
-    /// timeout, and the reject is counted here.
+    /// timeout, and the reject is counted here. A router that really limits
+    /// a path below 228 octets needs
+    /// [`configure_routed_path_max_npdu`](Self::configure_routed_path_max_npdu);
+    /// its requests time out until then.
     pub fn too_long_reject_drops(&self) -> u64 {
         self.routed_path_limits.dropped_rejects()
     }

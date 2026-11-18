@@ -48,6 +48,12 @@ async fn a_reject_reaches_the_path_limits_and_the_subscribers() {
         .await
         .unwrap(),
     );
+    // On a wide path the request goes out whole: its frame is above the
+    // conservative limit, so a reason 4 can be believed (#2665).
+    client
+        .configure_routed_path_max_npdu(&router, DNET, 1497)
+        .await
+        .unwrap();
     let mut reports = client.network_reports();
     let task = routed_request(
         Arc::clone(&client),

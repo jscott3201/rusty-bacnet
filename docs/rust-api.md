@@ -9693,6 +9693,16 @@ the wrong request (#2651):
   request's only frame, on a path with no answered frames on record, frees
   the path at once: among this client's confirmed requests on the path,
   that frame is the only one it can be for.
+- A reason 4 never teaches a path a limit below 228 octets of NPDU, the
+  smallest size every router must forward between any two data links (Table
+  6-1). A conforming router never refuses a frame that small as too long, so
+  a reason 4 that lands on a request whose largest frame is that size or
+  smaller is for other traffic to the network: it is dropped, counted in
+  `BACnetClient::too_long_reject_drops()`, and the request runs on to its own
+  answer, retry or timeout (#2665). A router that really limits a path below
+  228 octets is a router outside the standard: against it such requests end
+  by timeout, not as `RoutedPathTooLong`, until the limit is set with
+  `configure_routed_path_max_npdu`, which accepts any value, 228 or below.
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
 
