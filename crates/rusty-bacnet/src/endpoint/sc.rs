@@ -189,9 +189,10 @@ impl PyScEndpoint {
     ///     on_reinitialize / after_reinitialize / reinit_password: Execute
     ///         ReinitializeDevice, as `BACnetServer`'s keywords of the same
     ///         names do (#1566).
-    ///     mutation_policy / cov_policy: Keyword-only (default None), as on
-    ///         `BipEndpoint` (#2617): without `mutation_policy` the server is
-    ///         read-only.
+    ///     mutation_policy / cov_policy / time_sync_policy: Keyword-only
+    ///         (default None), as on `BipEndpoint` (#2617): without
+    ///         `mutation_policy` the server is read-only, and without
+    ///         `time_sync_policy` time synchronization is off.
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
     ///         address a VMAC as `local_address()` gives it
@@ -230,6 +231,7 @@ impl PyScEndpoint {
         reinit_password=None,
         mutation_policy=None,
         cov_policy=None,
+        time_sync_policy=None,
         source_audit_reporter=None,
         audit_recipient=None,
         audit_device_bindings=None,
@@ -261,6 +263,7 @@ impl PyScEndpoint {
         reinit_password: Option<String>,
         mutation_policy: Option<&Bound<'_, PyAny>>,
         cov_policy: Option<&Bound<'_, PyDict>>,
+        time_sync_policy: Option<&Bound<'_, PyDict>>,
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
         audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
@@ -272,6 +275,7 @@ impl PyScEndpoint {
             mutation_policy,
             read_work_limit,
             cov_policy,
+            time_sync_policy,
             on_reinitialize,
             after_reinitialize,
             reinit_password,

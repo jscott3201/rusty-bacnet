@@ -161,6 +161,27 @@ class EndpointCovWireTests(unittest.IsolatedAsyncioTestCase):
         finally:
             subscriber.close()
 
+    async def test_the_cov_policy_caps_a_peers_subscriptions(self):
+        # The endpoint's cov_policy reaches its server: past the peer's
+        # quota of one, a subscription is refused for want of room.
+        owner = endpoint(cov_policy={"max_subscriptions_per_peer": 1})
+        subscriber = Subscriber()
+        try:
+            async with owner:
+                to = await owner.local_address()
+                await subscriber.send(to, 1, SUBSCRIBE_COV, BODIES[SUBSCRIBE_COV])
+                self.assertEqual(await subscriber.apdu(), bytes([0x20, 1, SUBSCRIBE_COV]))
+                await subscriber.apdu()  # its first notification
+                second = BODIES[SUBSCRIBE_COV].replace("09 01", "09 02", 1)
+                await subscriber.send(to, 2, SUBSCRIBE_COV, second)
+                # An Error PDU, RESOURCES (3) / NO_SPACE_TO_ADD_LIST_ELEMENT (19).
+                self.assertEqual(await subscriber.apdu(),
+                                 bytes.fromhex("50 02 05 91 03 91 13"))
+                counters = await (await owner.server()).cov_counters()
+                self.assertEqual(counters["subscriptions_rejected_quota"], 1)
+        finally:
+            subscriber.close()
+
     async def test_a_timestamped_reference_is_taken_with_the_servers_clock(self):
         # The narrow endpoint had no clock and refused it; the full server
         # has one (#2617).

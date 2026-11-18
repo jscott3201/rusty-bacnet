@@ -99,6 +99,31 @@ impl HostGuard<'_> {
                 .ok_or_else(endpoint_closed),
         }
     }
+
+    /// Record a reset the application makes for its own reasons (#1837):
+    /// a standalone server through its target Audit Reporters, an
+    /// endpoint's through the session's source Reporter, the one the
+    /// endpoint's server reports its peers' resets through (#2617); with
+    /// none, nothing. The server must run, as for any other call.
+    pub(crate) async fn report_device_reset_local(&self) -> PyResult<()> {
+        let server = self.server()?;
+        match self {
+            Self::Own(_) => server
+                .report_device_reset_local()
+                .await
+                .map_err(crate::errors::to_py_err),
+            Self::Endpoint(guard, _) => {
+                let running = guard
+                    .as_deref()
+                    .and_then(Option::as_ref)
+                    .ok_or_else(endpoint_closed)?;
+                running
+                    .report_device_reset_local()
+                    .await
+                    .map_err(crate::errors::to_py_err)
+            }
+        }
+    }
 }
 
 /// An endpoint's server after the endpoint's close (or its drop).

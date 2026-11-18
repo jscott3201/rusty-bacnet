@@ -2629,7 +2629,9 @@ def report_device_reset_local(self) -> Awaitable[None]
 Record a reset the application makes for its own reasons: a
 DEVICE\_RESET Audit record from this device, with no invoke ID
 (#1564). A peer's accepted restart is recorded already. RuntimeError
-when the server is not running.
+when the server is not running. On an endpoint's server (#2617) the
+record goes through the endpoint's `source_audit_reporter`, as its
+peers' resets do, and nothing is recorded without one.
 
 ### BACnetServer.purge_audit_log
 

@@ -256,3 +256,31 @@ fn a_server_call_runs_while_another_thread_holds_the_interpreter() {
     });
     close_endpoint(&globals);
 }
+
+/// `endpoint.client()` shares the session lock with the server's calls
+/// (#2617): it is handed out while a server call is in flight, rather than
+/// waiting for it as it would behind a write lock.
+#[test]
+fn the_client_is_handed_out_beside_a_server_call_in_flight() {
+    let (globals, host) = started_server(2621);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let in_flight = runtime.block_on(host.read());
+    assert!(in_flight.server().is_ok());
+    let asking = std::thread::spawn({
+        let globals = Python::attach(|py| globals.clone_ref(py));
+        move || {
+            run(
+                &globals,
+                pyo3::ffi::c_str!(
+                    "import asyncio\nasync def ask():\n    global client\n    client = await endpoint.client()\nasyncio.run(ask())\n"
+                ),
+            );
+        }
+    });
+    join_within(asking, "endpoint.client() beside a server call");
+    drop(in_flight);
+    close_endpoint(&globals);
+}

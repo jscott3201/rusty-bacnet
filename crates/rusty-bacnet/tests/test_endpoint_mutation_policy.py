@@ -192,7 +192,7 @@ class EndpointMutationPolicyTests(unittest.IsolatedAsyncioTestCase):
             import rusty_bacnet
             parameters = inspect.signature(getattr(rusty_bacnet, owner)).parameters
             with self.subTest(owner=owner):
-                for keyword in ("mutation_policy", "cov_policy"):
+                for keyword in ("mutation_policy", "cov_policy", "time_sync_policy"):
                     self.assertIs(parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY)
                     self.assertIsNone(parameters[keyword].default)
                 for gone in ("device_write_policy", "cov", "services"):
@@ -203,6 +203,10 @@ class EndpointMutationPolicyTests(unittest.IsolatedAsyncioTestCase):
             BipEndpoint(INSTANCE, mutation_policy=1)
         with self.assertRaisesRegex(TypeError, "device_write_policy"):
             BipEndpoint(INSTANCE, device_write_policy=lambda context: True)
+        # time_sync_policy is read as BACnetServer's is.
+        with self.assertRaisesRegex(TypeError,
+                                    r"^time_sync_policy got an unexpected key 'enable'$"):
+            BipEndpoint(INSTANCE, time_sync_policy={"enable": True})
 
 
 if __name__ == "__main__":

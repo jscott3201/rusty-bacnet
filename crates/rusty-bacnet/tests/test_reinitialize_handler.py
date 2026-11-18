@@ -446,16 +446,19 @@ class LocalResetTests(unittest.IsolatedAsyncioTestCase):
             await owner.stop()
 
     async def test_a_local_reset_report_needs_a_running_endpoint(self):
-        # #1837: the endpoints' counterpart. A Python endpoint has no source
-        # Reporter, so a running one records nothing and raises nothing.
+        # #1837: the endpoints' counterpart, on the endpoint's server
+        # (#2617). With no source Reporter a running one records nothing
+        # and raises nothing; its handle raises once the endpoint closed.
         endpoint = BipEndpoint(4106, interface="127.0.0.1", port=0,
                                broadcast_address="127.255.255.255")
+        self.assertFalse(hasattr(endpoint, "report_device_reset_local"))
         with self.assertRaisesRegex(RuntimeError, "endpoint not started"):
-            await endpoint.report_device_reset_local()
+            await endpoint.server()
         async with endpoint:
-            self.assertIsNone(await endpoint.report_device_reset_local())
-        with self.assertRaisesRegex(RuntimeError, "endpoint not started"):
-            await endpoint.report_device_reset_local()
+            server = await endpoint.server()
+            self.assertIsNone(await server.report_device_reset_local())
+        with self.assertRaisesRegex(RuntimeError, "came from is closed"):
+            await server.report_device_reset_local()
 
 
 class EndpointTests(unittest.IsolatedAsyncioTestCase):
@@ -514,7 +517,6 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                                  error(2, *SERVICE_REQUEST_DENIED))
         finally:
             peer.close()
-
 
 
 if __name__ == "__main__":

@@ -235,18 +235,24 @@ impl PyBipEndpoint {
     ///         endpoint's objects (#2617): `"permissive"`, `"deny_all"` or a
     ///         callable, as `BACnetServer`'s keyword of the same name takes.
     ///         Without it the server is read-only: every write, create and
-    ///         delete is denied, time synchronization is ignored, and reads,
-    ///         discovery and COV subscriptions are answered.
+    ///         delete is denied, and reads, discovery and COV subscriptions
+    ///         are answered.
     ///     cov_policy: Keyword-only (default None, the Rust defaults). The
     ///         server's COV policy, as `BACnetServer`'s keyword of the same
     ///         name reads it.
+    ///     time_sync_policy: Keyword-only (default None: off). A dict read
+    ///         as `BACnetServer`'s keyword of the same name reads it turns
+    ///         TimeSynchronization and UTCTimeSynchronization on (`{}` takes
+    ///         every valid request). Unlike `BACnetServer()`'s default,
+    ///         time synchronization is off on an endpoint unless asked for,
+    ///         whatever its `mutation_policy` (#2617).
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only (#2348). `source_audit_reporter` is the
     ///         `ObjectIdentifier` of an Audit Reporter added with
     ///         `add_audit_reporter`; the session reports through it the
     ///         ReinitializeDevice resets, backups and restores it carries
-    ///         out, `report_device_reset_local()` calls, and the reads
-    ///         and writes of its `client()` (#2617). It needs
+    ///         out, its server's `report_device_reset_local()` calls, and
+    ///         the reads and writes of its `client()` (#2617). It needs
     ///         `audit_recipient`, the Device's Audit recipient (an
     ///         `AuditRecipientInput`), and a `mutation_policy` that decides
     ///         writes: none (read-only), `"deny_all"` or a callable, never
@@ -286,6 +292,7 @@ impl PyBipEndpoint {
         reinit_password=None,
         mutation_policy=None,
         cov_policy=None,
+        time_sync_policy=None,
         source_audit_reporter=None,
         audit_recipient=None,
         audit_device_bindings=None
@@ -318,6 +325,7 @@ impl PyBipEndpoint {
         reinit_password: Option<String>,
         mutation_policy: Option<&Bound<'_, PyAny>>,
         cov_policy: Option<&Bound<'_, PyDict>>,
+        time_sync_policy: Option<&Bound<'_, PyDict>>,
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
         audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
@@ -326,6 +334,7 @@ impl PyBipEndpoint {
             mutation_policy,
             read_work_limit,
             cov_policy,
+            time_sync_policy,
             on_reinitialize,
             after_reinitialize,
             reinit_password,

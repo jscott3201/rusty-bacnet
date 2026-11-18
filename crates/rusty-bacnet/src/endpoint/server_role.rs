@@ -6,14 +6,17 @@
 //!
 //! Without `mutation_policy` the server takes the read-only stance of
 //! [`bacnet_endpoint::session::read_only_server`]: no peer writes, creates
-//! or deletes, and time synchronization is off, so an endpoint nobody gave
-//! a policy is never writable by a peer. With one, it is the server
-//! `BACnetServer(mutation_policy=...)` is, with that policy as given.
+//! or deletes, so an endpoint nobody gave a policy is never writable by a
+//! peer. With one, it is the server `BACnetServer(mutation_policy=...)` is,
+//! with that policy as given. Time synchronization is off on every
+//! endpoint unless `time_sync_policy` turns it on, whatever the mutation
+//! policy (maintainer decision on #2617): unlike `BACnetServer()`, whose
+//! default takes every valid request.
 
 use bacnet_device_core::cov::CovPolicy;
 use bacnet_device_core::read::ReadPropertyMultipleBudget;
 use bacnet_server::mutation::MutationPolicy;
-use bacnet_server::server::{BACnetServer, ServerBuilder};
+use bacnet_server::server::{BACnetServer, ServerBuilder, TimeSyncPolicy};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -32,17 +35,22 @@ pub(crate) struct ServerKeywords {
     read_work_limit: usize,
     /// `cov_policy`, read as `BACnetServer`'s is.
     cov_policy: CovPolicy,
+    /// `time_sync_policy`, read as `BACnetServer`'s is; off when not given.
+    time_sync: TimeSyncPolicy,
     /// `on_reinitialize`, `after_reinitialize` and `reinit_password`.
     reinitialize: EndpointReinitialize,
 }
 
 impl ServerKeywords {
     /// Parse the keywords, refusing what `BACnetServer`'s constructor
-    /// refuses in the same ones, and `read_work_limit=0`.
+    /// refuses in the same ones, and `read_work_limit=0`. A
+    /// `time_sync_policy` of `None` is time synchronization off; a dict is
+    /// read as `BACnetServer`'s, so `{}` takes every valid request.
     pub(crate) fn parse(
         mutation_policy: Option<&Bound<'_, PyAny>>,
         read_work_limit: usize,
         cov_policy: Option<&Bound<'_, PyDict>>,
+        time_sync_policy: Option<&Bound<'_, PyDict>>,
         on_reinitialize: Option<&Bound<'_, PyAny>>,
         after_reinitialize: Option<&Bound<'_, PyAny>>,
         reinit_password: Option<String>,
@@ -57,6 +65,13 @@ impl ServerKeywords {
             mutation,
             read_work_limit: super::common::parse_read_work_limit(read_work_limit)?,
             cov_policy: crate::server::cov_policy::cov_policy(cov_policy)?,
+            time_sync: match time_sync_policy {
+                Some(dict) => crate::server::time_sync_policy::time_sync_policy(Some(dict))?,
+                None => TimeSyncPolicy {
+                    enabled: false,
+                    ..TimeSyncPolicy::default()
+                },
+            },
             reinitialize,
         })
     }
@@ -99,7 +114,8 @@ impl ServerKeywords {
                 max_result_elements: self.read_work_limit,
                 ..ReadPropertyMultipleBudget::default()
             })
-            .cov_policy(self.cov_policy.clone());
+            .cov_policy(self.cov_policy.clone())
+            .time_sync_policy(self.time_sync.clone());
         self.reinitialize.install(builder)
     }
 }

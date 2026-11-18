@@ -239,9 +239,10 @@ impl PyMstpEndpoint {
     ///     on_reinitialize / after_reinitialize / reinit_password:
     ///         Keyword-only. Execute ReinitializeDevice, as `BACnetServer`'s
     ///         keywords of the same names do (#1566).
-    ///     mutation_policy / cov_policy: Keyword-only (default None), as on
-    ///         `BipEndpoint` (#2617): without `mutation_policy` the server is
-    ///         read-only.
+    ///     mutation_policy / cov_policy / time_sync_policy: Keyword-only
+    ///         (default None), as on `BipEndpoint` (#2617): without
+    ///         `mutation_policy` the server is read-only, and without
+    ///         `time_sync_policy` time synchronization is off.
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
     ///         address a station in decimal digits (`"2"`), as
@@ -278,6 +279,7 @@ impl PyMstpEndpoint {
         reinit_password=None,
         mutation_policy=None,
         cov_policy=None,
+        time_sync_policy=None,
         source_audit_reporter=None,
         audit_recipient=None,
         audit_device_bindings=None
@@ -310,6 +312,7 @@ impl PyMstpEndpoint {
         reinit_password: Option<String>,
         mutation_policy: Option<&Bound<'_, PyAny>>,
         cov_policy: Option<&Bound<'_, PyDict>>,
+        time_sync_policy: Option<&Bound<'_, PyDict>>,
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
         audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
@@ -318,6 +321,7 @@ impl PyMstpEndpoint {
             mutation_policy,
             read_work_limit,
             cov_policy,
+            time_sync_policy,
             on_reinitialize,
             after_reinitialize,
             reinit_password,

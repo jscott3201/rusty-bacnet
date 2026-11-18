@@ -6187,10 +6187,11 @@ server = BACnetServer(1234, reinit_password="secret",
 endpoint's only Audit Reporter is its source Reporter, which Clause 19.6.2
 casts as the operation source's; writing the DEVICE_RESET, DEVICE_BACKUP and
 DEVICE_RESTORE records of requests it carries out through that Reporter is
-this library's local choice. Endpoints take `await endpoint.report_device_reset_local()`
-too (#1837), recorded through that Reporter when one is selected (see
+this library's local choice. On an endpoint, `report_device_reset_local()` is
+the endpoint's server's (`await endpoint.server()`, #1837, #2617), recorded
+through that Reporter when one is selected (see
 [Endpoint source Audit Reporter](#endpoint-source-audit-reporter)) and a
-no-op otherwise; it raises RuntimeError when the endpoint is not running.
+no-op otherwise; it raises RuntimeError once the endpoint has closed.
 
 ### Runtime Object Access
 
@@ -7336,9 +7337,10 @@ with the endpoint's objects. Its runtime calls are a standalone server's:
 `set_reliability_local` and the other `*_local` calls, `comm_state()`, the
 counters (`cov_counters()`, `request_admission_counters()`,
 `event_notification_counters()`, `dcc_outcome_counters()`) and
-`report_device_reset_local()`. Its local changes reach COV subscribers and run
-the event pass as on a standalone server; so do a peer's writes that the
-policy allows.
+`report_device_reset_local()`, which on an endpoint records through its
+`source_audit_reporter` (the endpoint has no method of its own for it). Its
+local changes reach COV subscribers and run the event pass as on a
+standalone server; so do a peer's writes that the policy allows.
 
 ```python
 from rusty_bacnet import BipEndpoint, ObjectIdentifier, ObjectType, PropertyValue
@@ -7366,13 +7368,21 @@ async with endpoint:
   [Server authorization policy](mutation-policy.md)). **Without it the
   server is read-only:** a peer's write, create or delete (WriteProperty,
   WritePropertyMultiple, CreateObject, DeleteObject and the list writes) is
-  denied with SERVICES / SERVICE_REQUEST_DENIED, an inbound WriteGroup is
-  skipped, and TimeSynchronization and UTCTimeSynchronization are ignored,
-  while reads, discovery, the three COV subscriptions and AcknowledgeAlarm
-  are answered. DeviceCommunicationControl, ReinitializeDevice without
-  `on_reinitialize` and LifeSafetyOperation stay denied, as on any server.
-  Given a policy, the server is the one `BACnetServer(mutation_policy=...)`
-  is, time synchronization included.
+  denied with SERVICES / SERVICE_REQUEST_DENIED and an inbound WriteGroup is
+  skipped, while reads, discovery, the three COV subscriptions and
+  AcknowledgeAlarm are answered. DeviceCommunicationControl,
+  ReinitializeDevice without `on_reinitialize` and LifeSafetyOperation stay
+  denied, as on any server. Given a policy, the server is the one
+  `BACnetServer(mutation_policy=...)` is, but for time synchronization.
+- **Time synchronization is off unless asked for**, whatever the
+  `mutation_policy`: **this default differs from `BACnetServer()`'s**, which
+  takes every valid request. A peer's TimeSynchronization and
+  UTCTimeSynchronization are ignored, and a `mutation_policy` callable is
+  never asked about them. The keyword-only `time_sync_policy` turns them on:
+  a dict read as `BACnetServer`'s keyword of the same name reads it, so `{}`
+  takes every valid request and the other keys restrict sources, the step
+  and the rate. The Device's Protocol_Services_Supported lists both services
+  either way.
 - **The other server keywords.** `cov_policy` is read as `BACnetServer`'s;
   `on_reinitialize`, `after_reinitialize` and `reinit_password` are its
   keywords of the same names (see [ReinitializeDevice](#reinitializedevice));
@@ -7381,15 +7391,21 @@ async with endpoint:
   Confirmed notifications time out and retry as the endpoint's
   `apdu_timeout_ms` and `apdu_retries` say, the Device's APDU_Timeout and
   Number_Of_APDU_Retries. The server's other `BACnetServer` keywords keep
-  their defaults on an endpoint for now.
+  their defaults on an endpoint for now (#1138).
+- **Objects.** An endpoint has builders for Analog Input, Analog Value,
+  Binary Input, Binary Value, Group and Audit Reporter objects only, each
+  before its start; the server's `add_*` calls are refused once it runs, as
+  on a running standalone server. Use a standalone `BACnetServer` for the
+  other object types until the endpoints take the server's builders
+  (#1138).
 - **Its lifetime is the endpoint's.** Each call returns a new handle on the
   one server. Its `start()` and `stop()` raise `RuntimeError`: the endpoint
   starts it, and the endpoint's `close()` stops it, waiting for the calls in
   flight as a standalone server's `stop()` does. After the close each call
   raises `RuntimeError` at once, and a handle kept across a restart never
-  reaches the new server: `await endpoint.server()` again. `add_*` and
-  `configure_*` raise `RuntimeError` too: add the objects with the
-  endpoint's own `add_*` calls before its start.
+  reaches the new server: `await endpoint.server()` again. `configure_*`
+  raises `RuntimeError` too. The endpoint's `client()` doesn't wait for a
+  server call in flight.
 - **Invoke IDs.** The server and the client share the endpoint's 256: the
   server holds at most 64 at once for its confirmed COV, event and Audit
   notifications. Past them a confirmed COV notification is skipped with a
@@ -7744,7 +7760,8 @@ that had no `device_write_policy` stays closed to every peer's write.
 | `read_work_limit` | the same keyword, now the server's `rpm_max_result_elements`, which bounds ReadPropertyMultiple too |
 | `on_reinitialize`, `after_reinitialize`, `reinit_password` | the same keywords, the server's; without `on_reinitialize` a ReinitializeDevice is denied with SERVICES / SERVICE_REQUEST_DENIED rather than rejected |
 | status key `responder_declined` | gone: the server's counters, `server_seat_apdus` and `server_seat_full_drops` |
-| Reject (unrecognized service) for every service but ReadProperty | the server's answer: reads answered, writes denied by the read-only policy, Who-Is and Who-Has answered, TimeSynchronization ignored |
+| TimeSynchronization refused | still off by default, whatever the `mutation_policy`; `time_sync_policy={}` turns it on |
+| Reject (unrecognized service) for every service but ReadProperty, and Device WriteProperty or ReinitializeDevice when opted in | the server's answer: reads answered, writes denied by the read-only policy, Who-Is and Who-Has answered, TimeSynchronization ignored |
 
 
 ### Migration: separately-constructed client/server to endpoint

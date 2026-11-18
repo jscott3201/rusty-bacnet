@@ -107,7 +107,7 @@ class EndpointStubParityTests(unittest.TestCase):
                            "read_work_limit", "share_port_by_address", "share_wildcard_port",
                            "min_request_interval_ms", "bbmd", "foreign_device", "multicast",
                            "on_reinitialize", "after_reinitialize", "reinit_password",
-                           "mutation_policy", "cov_policy", "source_audit_reporter",
+                           "mutation_policy", "cov_policy", "time_sync_policy", "source_audit_reporter",
                            "audit_recipient", "audit_device_bindings"]),
             (ScEndpoint, ["device_instance", "sc_hub", "sc_vmac", "sc_ca_cert",
                           "sc_client_cert", "sc_client_key", "sc_device_uuid",
@@ -117,7 +117,7 @@ class EndpointStubParityTests(unittest.TestCase):
                           "queue_capacity", "read_work_limit",
                           "min_request_interval_ms", "on_reinitialize",
                           "after_reinitialize", "reinit_password",
-                          "mutation_policy", "cov_policy", "source_audit_reporter",
+                          "mutation_policy", "cov_policy", "time_sync_policy", "source_audit_reporter",
                           "audit_recipient", "audit_device_bindings", "reconnect",
                           "sc_failover_hub", "sc_connect_timeout_ms"]),
             (MstpEndpoint, ["device_instance", "serial_port", "device_name", "vendor_id",
@@ -130,7 +130,7 @@ class EndpointStubParityTests(unittest.TestCase):
                             "mstp_transmit_latency_pad_ms", "mstp_usage_timeout_ms",
                             "mstp_reply_timeout_ms", "on_reinitialize",
                             "after_reinitialize", "reinit_password",
-                            "mutation_policy", "cov_policy", "source_audit_reporter",
+                            "mutation_policy", "cov_policy", "time_sync_policy", "source_audit_reporter",
                             "audit_recipient", "audit_device_bindings"]),
         ]
         for cls, expected in cases:
@@ -143,7 +143,7 @@ class EndpointStubParityTests(unittest.TestCase):
                 # being so) on either side fails here.
                 self.assertEqual(runtime_arg_kinds(cls), stub_arg_kinds(method))
                 for keyword in ("read_work_limit", "min_request_interval_ms",
-                                "mutation_policy", "cov_policy"):
+                                "mutation_policy", "cov_policy", "time_sync_policy"):
                     self.assertEqual(
                         inspect.signature(cls).parameters[keyword].kind,
                         inspect.Parameter.KEYWORD_ONLY,
@@ -156,12 +156,12 @@ class EndpointStubParityTests(unittest.TestCase):
         for cls, methods in (
             (BipEndpoint, ["start", "close", "client", "server", "local_address",
                            "status", "foreign_registration", "read_bdt", "read_fdt",
-                           "broadcast_i_am", "report_device_reset_local"]),
+                           "broadcast_i_am"]),
             (ScEndpoint, ["start", "close", "client", "server", "local_address",
-                          "status", "broadcast_i_am", "report_device_reset_local",
+                          "status", "broadcast_i_am",
                           "connection_events", "connection_status"]),
             (MstpEndpoint, ["start", "close", "client", "server", "local_address",
-                            "status", "broadcast_i_am", "report_device_reset_local"]),
+                            "status", "broadcast_i_am"]),
         ):
             for name in methods:
                 with self.subTest(cls=cls.__name__, method=name):

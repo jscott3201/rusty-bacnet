@@ -17,7 +17,9 @@ from rusty_bacnet import (
     PropertyIdentifier, PropertyValue,
 )
 from test_endpoint_cov import DENIED, Subscriber
-from test_time_sync_policy import UTC, time_sync_frame, udp_socket
+from test_time_sync_policy import (
+    TIME_SYNCHRONIZATION, UTC, UTC_TIME_SYNCHRONIZATION, time_sync_frame, udp_socket,
+)
 
 INSTANCE = 2617
 DEVICE = ObjectIdentifier(ObjectType.DEVICE, INSTANCE)
@@ -87,26 +89,48 @@ class EndpointServerWireTests(unittest.IsolatedAsyncioTestCase):
                     return counters["unconfirmed_admitted_total"]
                 await asyncio.sleep(0.01)
 
-    async def year_after_a_time_sync(self, owner):
-        """Send a TimeSynchronization to 2001 and read the Device's year."""
+    async def year_after_a_time_sync(self, owner, service, year):
+        """Send a time sync to `year` in `service` and read the Device's year."""
         server = await owner.server()
         admitted = await self.settled(server, 0)
         sock = udp_socket()
         self.addCleanup(sock.close)
         ip, port = (await owner.local_address()).rsplit(":", 1)
-        when = datetime.datetime(2001, 2, 3, 10, tzinfo=UTC)
-        await asyncio.get_running_loop().sock_sendto(sock, time_sync_frame(when),
-                                                     (ip, int(port)))
+        when = datetime.datetime(year, 2, 3, 10, tzinfo=UTC)
+        await asyncio.get_running_loop().sock_sendto(
+            sock, time_sync_frame(when, service=service), (ip, int(port)))
         await self.settled(server, admitted + 1)
         return (await server.read_property(DEVICE, PropertyIdentifier.LOCAL_DATE)).value[0]
 
-    async def test_the_read_only_stance_ignores_time_synchronization(self):
-        async with endpoint() as owner:
-            self.assertNotEqual(await self.year_after_a_time_sync(owner), 2001)
+    async def test_time_synchronization_is_off_whatever_the_mutation_policy(self):
+        # Off unless asked for (maintainer decision on #2617), unlike
+        # BACnetServer()'s default: under the read-only stance, a permissive
+        # or deny-all policy and a callable, which is never asked about it.
+        asked = []
 
-    async def test_a_given_policy_takes_time_synchronization_as_a_server_does(self):
-        async with endpoint(mutation_policy="permissive") as owner:
-            self.assertEqual(await self.year_after_a_time_sync(owner), 2001)
+        def callable_policy(context):
+            asked.append(context.service)
+            return True
+
+        for policy in (None, "permissive", "deny_all", callable_policy):
+            async with endpoint(mutation_policy=policy) as owner:
+                for service, year in ((TIME_SYNCHRONIZATION, 2001),
+                                      (UTC_TIME_SYNCHRONIZATION, 2002)):
+                    with self.subTest(policy=policy, service=service):
+                        self.assertNotEqual(
+                            await self.year_after_a_time_sync(owner, service, year), year)
+        self.assertEqual(asked, [])
+
+    async def test_a_time_sync_policy_turns_it_on_in_both_services(self):
+        # `{}` takes every valid request, as BACnetServer's default does; the
+        # mutation policy has no say in it.
+        for policy in (None, "deny_all"):
+            async with endpoint(mutation_policy=policy, time_sync_policy={}) as owner:
+                for service, year in ((TIME_SYNCHRONIZATION, 2001),
+                                      (UTC_TIME_SYNCHRONIZATION, 2002)):
+                    with self.subTest(policy=policy, service=service):
+                        self.assertEqual(
+                            await self.year_after_a_time_sync(owner, service, year), year)
 
     async def test_the_endpoint_is_discoverable_and_lists_the_servers_services(self):
         # The narrow responder answered no Who-Is and listed ReadProperty

@@ -648,7 +648,6 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                     live_server.read_property(oid, PropertyIdentifier.PRESENT_VALUE), 5
                 )
             # Owner borrows released at termination.
-
             with self.assertRaisesRegex(RuntimeError, "not started"):
                 await first.client()
         finally:

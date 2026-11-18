@@ -8,7 +8,9 @@
 //! One client per session: while it runs, `endpoint.client()` returns the
 //! same object; once its `stop()` has finished, a fresh one. The session
 //! lock orders `client()` against close, and close stops the session, then
-//! the client (the `stop` of its lifecycle `Session` impl).
+//! the client (the `stop` of its lifecycle `Session` impl). `client()`
+//! shares that lock, as server calls do, and takes the client slot's own
+//! lock for no await, so it never waits for a server call in flight.
 //!
 //! The session owns its full server (#2617), and `endpoint.server()` hands
 //! out a Python `BACnetServer` that borrows it through the session lock on
@@ -42,7 +44,10 @@ static RUNS: AtomicU64 = AtomicU64::new(0);
 /// A running session, and the client `endpoint.client()` last handed out.
 pub(crate) struct Running {
     session: Session,
-    client: Option<Seated>,
+    /// Under a lock of its own, so `endpoint.client()` shares the session
+    /// lock with the server's calls rather than waiting for them all. It is
+    /// held for no await.
+    client: std::sync::Mutex<Option<Seated>>,
     /// This run's number: a server handle names the run it came from, so
     /// one kept past a close never reaches a later start's server.
     run: u64,
@@ -59,7 +64,7 @@ impl Running {
     pub(crate) fn new(session: Session) -> Self {
         Self {
             session,
-            client: None,
+            client: std::sync::Mutex::new(None),
             run: RUNS.fetch_add(1, Ordering::Relaxed) + 1,
         }
     }
@@ -77,11 +82,15 @@ impl Running {
     /// with the session's full client. A client still stopping refuses,
     /// since it may hold the session's one seat.
     fn client(
-        &mut self,
+        &self,
         candidate: Arc<Py<BACnetClient>>,
         state: ClientInner,
     ) -> PyResult<Arc<Py<BACnetClient>>> {
-        if let Some(seated) = &self.client {
+        let mut slot = self
+            .client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(seated) = slot.as_ref() {
             match seated.state.liveness() {
                 Liveness::Started => return Ok(Arc::clone(&seated.object)),
                 Liveness::Stopping => {
@@ -106,7 +115,7 @@ impl Running {
                 "the endpoint's new client is already started",
             ));
         }
-        self.client = Some(Seated {
+        *slot = Some(Seated {
             object: Arc::clone(&candidate),
             state,
         });
@@ -153,7 +162,12 @@ impl super::lifecycle::Session for Running {
     /// stop fails keeps its state; the error says the link is released.
     async fn stop(&mut self) -> PyResult<()> {
         let stopped = self.session.stop().await.map(drop).map_err(to_py_err);
-        let closed = match self.client.take() {
+        let seated = self
+            .client
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let closed = match seated {
             Some(seated) => crate::client::close(seated.state).await.map_err(|error| {
                 PyRuntimeError::new_err(format!(
                     "the endpoint stopped and released its link, but its client failed to \
@@ -254,8 +268,8 @@ pub(crate) fn client(
     let candidate = Arc::new(candidate);
     Ok(async move {
         let chosen = {
-            let mut guard = session.write().await;
-            let running = guard.as_mut().ok_or_else(|| {
+            let guard = session.read().await;
+            let running = guard.as_ref().ok_or_else(|| {
                 PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
             })?;
             running.client(Arc::clone(&candidate), state)?

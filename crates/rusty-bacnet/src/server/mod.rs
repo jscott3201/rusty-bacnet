@@ -245,8 +245,9 @@ impl BACnetServer {
     }
 }
 
-// The endpoints' `cov_policy` keyword is read as `BACnetServer`'s is (#2617).
-pub(crate) use server_methods::cov_policy;
+// The endpoints' `cov_policy` and `time_sync_policy` keywords are read as
+// `BACnetServer`'s are (#2617).
+pub(crate) use server_methods::{cov_policy, time_sync_policy};
 
 mod server_methods {
     mod access_control_methods;
@@ -280,7 +281,7 @@ mod server_methods {
     mod reliability_methods;
     mod request_admission;
     mod sc_npdu;
-    mod time_sync_policy;
+    pub(crate) mod time_sync_policy;
     mod trend_log_methods;
     mod value_registration;
 }

@@ -4,10 +4,9 @@
 //! `present_value_access`, `value_source_tracking` and the Audit policy on
 //! the Value objects, and the event algorithm parameter keywords (#2410).
 //! Each call builds its object once, so a bad keyword fails there, and
-//! keeps the parsed parameters for the rebuild at start.
-//! The same generated block carries `report_device_reset_local` (#1837):
-//! the application's own changes to its objects go through
-//! `await endpoint.server()` (#2617).
+//! keeps the parsed parameters for the rebuild at start. The application's
+//! own changes to its objects, and its own resets' Audit records, go
+//! through `await endpoint.server()` (#2617).
 
 use pyo3::prelude::*;
 
@@ -248,35 +247,6 @@ macro_rules! endpoint_builders {
                 };
                 pending.build()?;
                 self.push_pending(pending)
-            }
-
-            /// Record a reset the application makes for its own reasons: a
-            /// DEVICE_RESET Audit record from this device, with no invoke ID,
-            /// through the session's source Reporter when it has one, as
-            /// `BACnetServer.report_device_reset_local` does (#1837). Each
-            /// endpoint selects one with `source_audit_reporter` (#2348,
-            /// #2357), and its level and operations filter the record;
-            /// without one this records nothing. A peer's accepted restart
-            /// is recorded already. RuntimeError when the endpoint is not
-            /// running.
-            fn report_device_reset_local<'py>(
-                &self,
-                py: Python<'py>,
-            ) -> PyResult<Bound<'py, PyAny>> {
-                let inner = self.lifecycle.session.clone();
-                let future = async move {
-                    let guard = inner.read().await;
-                    let session = guard.as_ref().ok_or_else(|| {
-                        pyo3::exceptions::PyRuntimeError::new_err(
-                            "endpoint not started — use 'async with' or await start()",
-                        )
-                    })?;
-                    session
-                        .report_device_reset_local()
-                        .await
-                        .map_err(crate::errors::to_py_err)
-                };
-                crate::py_async::future_into_py(py, crate::unit_result(future))
             }
         }
     };

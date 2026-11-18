@@ -231,7 +231,7 @@ class ScSessionTests(unittest.IsolatedAsyncioTestCase):
                                      auditable_operations=RESET)
             await asyncio.wait_for(added.start(), 15)
             try:
-                self.assertIsNone(await added.report_device_reset_local())
+                self.assertIsNone(await (await added.server()).report_device_reset_local())
             finally:
                 await asyncio.wait_for(added.close(), 5)
         finally:
@@ -298,7 +298,7 @@ class ScSessionTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     address = await owner.local_address()
                     await client.reinitialize_device(address, ReinitializedState.WARMSTART)
-                    self.assertIsNone(await owner.report_device_reset_local())
+                    self.assertIsNone(await (await owner.server()).report_device_reset_local())
                     async with asyncio.timeout(10):
                         while len(found := await records()) < before + 2:
                             await asyncio.sleep(0.05)

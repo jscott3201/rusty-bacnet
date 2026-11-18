@@ -1,10 +1,10 @@
 ---
 section: Migration notes
 ---
-- **Endpoint server (Python API, #2617):** replace `device_write_policy=f`
-  with `mutation_policy=f`, now asked about every mutation of every object,
-  subscriptions included; leave it out for a read-only server. Drop
-  `services=`. Read the Device's Protocol_Services_Supported for
-  `service_scope()`, and use `status()` or a server call for
-  `is_session_alive()` (table in
-  [docs/python-api.md](docs/python-api.md#migration-endpointserver-to-the-endpoints-bacnetserver-2617)).
+- **Endpoint mutation policy (Python API, #2617):** `device_write_policy=f`
+  becomes `mutation_policy=f`, asked about every mutation of every object. A
+  0.15.0 callable such as `return context.source_network is None` then lets
+  every local peer write any writable property (WriteProperty and each
+  WritePropertyMultiple element), change the Device's Description, create
+  and delete objects, and use the list services, AtomicWriteFile and
+  WriteGroup.

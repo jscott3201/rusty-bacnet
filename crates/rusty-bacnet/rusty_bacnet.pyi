@@ -9013,7 +9013,9 @@ class BACnetServer:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID
         (#1564). A peer's accepted restart is recorded already. RuntimeError
-        when the server is not running."""
+        when the server is not running. On an endpoint's server (#2617) the
+        record goes through the endpoint's ``source_audit_reporter``, as its
+        peers' resets do, and nothing is recorded without one."""
         ...
 
     def purge_audit_log(self, object_id: ObjectIdentifier) -> Awaitable[None]:
@@ -9611,8 +9613,10 @@ class BipEndpoint:
     does, answers Who-Is and Who-Has, and lists those services in the
     Device's Protocol_Services_Supported. Without ``mutation_policy`` it is
     read-only: a peer's write, create or delete is denied with SERVICES /
-    SERVICE_REQUEST_DENIED, time synchronization is ignored, and reads,
-    discovery, COV subscriptions and alarm acknowledgments are answered.
+    SERVICE_REQUEST_DENIED, and reads, discovery, COV subscriptions and alarm
+    acknowledgments are answered. Time synchronization is off on every
+    endpoint until ``time_sync_policy`` turns it on, whatever the
+    ``mutation_policy``: a default that differs from ``BACnetServer()``'s.
 
     ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
     no object may have it, so it, or anything larger, raises ValueError at
@@ -9655,6 +9659,7 @@ class BipEndpoint:
         reinit_password: Optional[str] = None,
         mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
         cov_policy: CovPolicy | None = None,
+        time_sync_policy: TimeSyncPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
@@ -9665,21 +9670,28 @@ class BipEndpoint:
         subscriptions included) or a callable that gets a ``MutationContext``
         for each mutation and returns a bool, with that keyword's fail-closed
         rules. Without it (None, the default) the server is read-only: every
-        write, create and delete is denied, time synchronization is ignored,
-        and reads, discovery, COV subscriptions and alarm acknowledgments are
-        answered. Given one, the server is the one ``BACnetServer`` with that
-        policy is, time synchronization included. ``cov_policy``: the
-        server's ``CovPolicy``, read as ``BACnetServer``'s is. The application
-        changes its objects through ``await endpoint.server()``, whose COV
-        and event notifications follow as on a standalone server.
-        ``ScEndpoint`` and ``MstpEndpoint`` take both too.
+        write, create and delete is denied, and reads, discovery, COV
+        subscriptions and alarm acknowledgments are answered. Given one, the
+        server is the one ``BACnetServer`` with that policy is, but for time
+        synchronization. ``cov_policy``: the server's ``CovPolicy``, read as
+        ``BACnetServer``'s is. ``time_sync_policy``: None, the default, leaves
+        TimeSynchronization and UTCTimeSynchronization off whatever the
+        ``mutation_policy``, a default that differs from ``BACnetServer()``'s,
+        which takes every valid request; a ``TimeSyncPolicy`` dict, read as
+        ``BACnetServer``'s is, turns them on (``{}`` takes every valid
+        request). The application changes its objects through
+        ``await endpoint.server()``, whose COV and event notifications follow
+        as on a standalone server, and records its own resets through that
+        server's ``report_device_reset_local()``. ``ScEndpoint`` and
+        ``MstpEndpoint`` take all three too.
 
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings`` (#2348): the Audit Reporter, added with
         ``add_audit_reporter``, through which the session reports the
         ReinitializeDevice resets, backups and restores the server carries
-        out, ``report_device_reset_local()`` calls and the reads and writes
-        of its ``client()`` (#2617), each filtered by the Reporter's level and
+        out, its server's ``report_device_reset_local()`` calls and the reads
+        and writes of its ``client()`` (#2617), each filtered by the
+        Reporter's level and
         operations. It needs ``audit_recipient`` (the Device's Audit
         recipient) and a ``mutation_policy`` that decides writes, so that no
         peer redirects the audit trail unasked: none (read-only),
@@ -9861,17 +9873,6 @@ class BipEndpoint:
         """Broadcast one I-Am consistent with the composed identity."""
         ...
 
-    def report_device_reset_local(self) -> Awaitable[None]:
-        """Record a reset the application makes for its own reasons: a
-        DEVICE_RESET Audit record from this device, with no invoke ID, through
-        the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837): with
-        ``source_audit_reporter`` set, a DEVICE_RESET naming this device as
-        source and target, filtered by that Reporter's level and operations;
-        without one, nothing. A peer's accepted restart is recorded already.
-        RuntimeError when the endpoint is not running."""
-        ...
-
     @property
     def device_instance(self) -> int: ...
     @property
@@ -9912,6 +9913,7 @@ class ScEndpoint:
         reinit_password: Optional[str] = None,
         mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
         cov_policy: CovPolicy | None = None,
+        time_sync_policy: TimeSyncPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
@@ -9921,7 +9923,8 @@ class ScEndpoint:
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password``,
-        ``mutation_policy`` and ``cov_policy`` are as for ``BipEndpoint``.
+        ``mutation_policy``, ``cov_policy`` and ``time_sync_policy`` are as
+        for ``BipEndpoint``.
 
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
@@ -10057,17 +10060,6 @@ class ScEndpoint:
         or after close."""
         ...
 
-    def report_device_reset_local(self) -> Awaitable[None]:
-        """Record a reset the application makes for its own reasons: a
-        DEVICE_RESET Audit record from this device, with no invoke ID, through
-        the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837): with
-        ``source_audit_reporter`` set (#2357), a DEVICE_RESET naming this
-        device as source and target, filtered by that Reporter's level and
-        operations; without one, nothing. A peer's accepted restart is
-        recorded already. RuntimeError when the endpoint is not running."""
-        ...
-
     @property
     def device_instance(self) -> int: ...
     @property
@@ -10112,13 +10104,15 @@ class MstpEndpoint:
         reinit_password: Optional[str] = None,
         mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
         cov_policy: CovPolicy | None = None,
+        time_sync_policy: TimeSyncPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password``,
-        ``mutation_policy`` and ``cov_policy`` are as for ``BipEndpoint``. Here
+        ``mutation_policy``, ``cov_policy`` and ``time_sync_policy`` are as
+        for ``BipEndpoint``. Here
         ``after_reinitialize`` runs once the SimpleACK is queued, before the
         token sends it: stopping the endpoint at once can drop the reply, so
         wait a short while first.
@@ -10242,17 +10236,6 @@ class MstpEndpoint:
 
     def broadcast_i_am(self) -> Awaitable[None]:
         """Broadcast one I-Am (MS/TP local broadcast)."""
-        ...
-
-    def report_device_reset_local(self) -> Awaitable[None]:
-        """Record a reset the application makes for its own reasons: a
-        DEVICE_RESET Audit record from this device, with no invoke ID, through
-        the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837): with
-        ``source_audit_reporter`` set (#2357), a DEVICE_RESET naming this
-        device as source and target, filtered by that Reporter's level and
-        operations; without one, nothing. A peer's accepted restart is
-        recorded already. RuntimeError when the endpoint is not running."""
         ...
 
     @property
