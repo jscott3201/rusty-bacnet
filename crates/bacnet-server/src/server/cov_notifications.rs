@@ -2,7 +2,7 @@ use super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
 use crate::cov::InFlightAcquireError;
 use bacnet_device_core::cov::{CovReport, Delivery, Evaluation, EventBudget};
-use confirmed::ConfirmedSend;
+use confirmed::{ConfirmedSend, Refusal};
 
 mod confirmed;
 mod life_safety;
@@ -273,24 +273,34 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // invoke IDs) and awaits nothing, and nothing here runs beside
             // an unpolled future that holds a guard (#1494).
             let mut table = cov_table.write().await;
+            let revisits = Arc::clone(table.revisits());
             // An unconfirmed report needs nothing of the host before its send.
             let reports = table.evaluate(object, subs, evaluation, budget, |sub, _| {
                 if !sub.issue_confirmed_notifications {
                     return Some(None);
                 }
-                Self::admit_confirmed(
+                match Self::admit_confirmed(
                     handles,
                     sub,
                     ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
                     "COV notification",
-                )
-                .map(Some)
+                ) {
+                    Ok(lease) => Some(Some(lease)),
+                    // Its baseline stays; it is looked at again once an
+                    // invoke ID comes back (#2661).
+                    Err(Refusal::InvokeId) => {
+                        revisits.owe([sub.key().clone()]);
+                        None
+                    }
+                    // A reference already waiting keeps its place.
+                    Err(Refusal::InFlight) => {
+                        revisits.keep_waiting(sub.key());
+                        None
+                    }
+                    Err(Refusal::Other) => None,
+                }
             });
-            (
-                reports,
-                Arc::clone(table.revisits()),
-                tokio::time::Instant::now(),
-            )
+            (reports, revisits, tokio::time::Instant::now())
         };
 
         // Every confirmed worker starts before any unconfirmed send is

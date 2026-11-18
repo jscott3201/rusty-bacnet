@@ -6,7 +6,8 @@
 //! the usual fanout, so it reports whatever now differs from its baseline
 //! (Status_Flags and queued timestamped changes included) and nothing when it
 //! is unchanged. References whose outstanding report was fenced by a route
-//! change or re-subscription come through here too.
+//! change or re-subscription come through here too, and so do references
+//! whose report found no invoke ID free, once one comes back (#2661).
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
 use bacnet_device_core::cov::CovSubscriptionKey;
