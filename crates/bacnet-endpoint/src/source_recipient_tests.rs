@@ -50,9 +50,8 @@ async fn current(session: &EndpointSession<TestTransport>) -> PropertyValue {
         .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
         .unwrap()
 }
-/// The application's own write of the recipient: through the session's
-/// server when it has one, which the session refuses its own call for
-/// (#2617), and through the session otherwise.
+/// The application's own write of the recipient, through the session's
+/// server (#2617).
 async fn write_recipient_locally(
     session: &EndpointSession<TestTransport>,
     value: PropertyValue,
@@ -61,18 +60,11 @@ async fn write_recipient_locally(
     let oid = oid(ObjectType::DEVICE, 123);
     let property = PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT;
     let source = bacnet_device_core::write::local::LocalCommandSource::ServerDevice;
-    match session.server() {
-        Some(server) => {
-            server
-                .write_local(&oid, property, None, value, priority, source)
-                .await
-        }
-        None => {
-            session
-                .write_local(&oid, property, None, value, priority, source)
-                .await
-        }
-    }
+    session
+        .server()
+        .expect("a session with a server role")
+        .write_local(&oid, property, None, value, priority, source)
+        .await
 }
 async fn wire(
     session: &EndpointSession<TestTransport>,
@@ -538,41 +530,32 @@ async fn source_recipient_unresolved_device_preserves_read_and_rejects_live_chan
     peer.stop().await.unwrap();
 }
 
-/// A local write of the recipient (#2468) takes the route a client's write
-/// and `write_audit_recipient` take: one record to the old recipient and
-/// one to the new, from this Device with no invoke ID, in either role.
+/// The server's local write of the recipient (#2468) takes the route a
+/// client's write and `write_audit_recipient` take: one record to the old
+/// recipient and one to the new, from this Device with no invoke ID.
 #[tokio::test(start_paused = true)]
 async fn a_local_write_of_the_recipient_tells_the_old_and_the_new_one() {
     let (old, mut old_records) = network().await;
     let (new, mut new_records) = network().await;
-    for role in [SessionRole::ClientOnly, SessionRole::Both] {
-        let mut db = database(false);
-        db.set_clock_reader(None);
-        let mut session = session(db, role, &old);
-        session.start().await.unwrap();
-        let next = direct(&new);
-        write_recipient_locally(&session, PropertyValue::ApplicationData(value(&next)), None)
-            .await
-            .unwrap();
-        let (first, _) = notification(&receive(&mut old_records).await, false);
-        let (second, _) = notification(&receive(&mut new_records).await, false);
-        assert_eq!(first, second);
-        assert_record(
-            &first,
-            &device(999),
-            &next,
-            device(123),
-            None,
-            role == SessionRole::Both,
-        );
-        assert_eq!(
-            current(&session).await,
-            PropertyValue::ApplicationData(value(&next))
-        );
-        assert!(old_records.try_recv().is_err());
-        assert!(new_records.try_recv().is_err());
-        session.stop().await.unwrap();
-    }
+    let mut db = database(false);
+    db.set_clock_reader(None);
+    let mut session = session(db, SessionRole::Both, &old);
+    session.start().await.unwrap();
+    let next = direct(&new);
+    write_recipient_locally(&session, PropertyValue::ApplicationData(value(&next)), None)
+        .await
+        .unwrap();
+    let (first, _) = notification(&receive(&mut old_records).await, false);
+    let (second, _) = notification(&receive(&mut new_records).await, false);
+    assert_eq!(first, second);
+    assert_record(&first, &device(999), &next, device(123), None, true);
+    assert_eq!(
+        current(&session).await,
+        PropertyValue::ApplicationData(value(&next))
+    );
+    assert!(old_records.try_recv().is_err());
+    assert!(new_records.try_recv().is_err());
+    session.stop().await.unwrap();
     old.stop().await.unwrap();
     new.stop().await.unwrap();
 }

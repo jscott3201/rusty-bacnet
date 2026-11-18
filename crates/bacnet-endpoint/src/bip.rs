@@ -11,7 +11,7 @@
 //! confirmed traffic, I-Am identical to Device ReadProperty. BBMD and foreign
 //! modes have local Network Number wire coverage: ServerOnly BBMD admission
 //! and Original-Broadcast replies, ClientOnly foreign DBTN/retry and
-//! alternate forwarders, and Both requester/responder progress with cleanup.
+//! alternate forwarders, and Both client and server progress with cleanup.
 //! The modes themselves run on the same transport as the standalone client
 //! and server. [`EndpointSession::foreign_registration`] reports a foreign
 //! device's registration, and [`EndpointSession::bvlc_tables`] reads a
@@ -40,7 +40,6 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
-use bacnet_device_core::report::ReportConfig;
 use bacnet_objects::database::ObjectDatabase;
 use std::sync::Arc;
 
@@ -68,10 +67,6 @@ pub struct BipEndpointBuilder {
     database: Option<ObjectDatabase>,
     registered_network_port: Option<ObjectIdentifier>,
     identity: Option<crate::identity::DeviceIdentity>,
-    device_write_authorizer: Option<bacnet_server::mutation::DeviceWriteAuthorizer>,
-    reinitialize: Option<bacnet_server::server::ReinitializeHandler>,
-    reinit_password: Option<String>,
-    cov: Option<ReportConfig>,
     source_audit_bindings: Vec<(ObjectIdentifier, SocketAddrV4)>,
     source_audit_routed: crate::session::RoutedBindings,
     mode: BipMode,
@@ -99,10 +94,6 @@ impl BipEndpointBuilder {
             database: None,
             registered_network_port: None,
             identity: None,
-            device_write_authorizer: None,
-            reinitialize: None,
-            reinit_password: None,
-            cov: None,
             source_audit_bindings: Vec::new(),
             source_audit_routed: Vec::new(),
             mode: BipMode::Normal,
@@ -149,21 +140,6 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Sets the server role's read work limit (default 256): the result rows
-    /// one ReadProperty may expand, a Group's member rows included. See
-    /// [`SessionConfig::read_work_limit`]; zero fails
-    /// [`build_session`](Self::build_session) via [`EndpointSession::new`].
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder with a
-    /// `read_property_multiple_budget`. A later step of #2617
-    /// removes this call.
-    pub fn read_work_limit(mut self, limit: usize) -> Self {
-        self.session.read_work_limit = limit;
-        self
-    }
-
     /// Sets the node's APDU timeout and retries (default 6000 ms and 3; see
     /// [`SessionConfig::apdu_timeout_ms`]): the client roles' request
     /// timing, and a full server's confirmed notifications and its Device's
@@ -183,7 +159,7 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Attaches the object database for the server responder.
+    /// Attaches the object database, which a server role's server serves.
     ///
     /// Build it from the same identity passed to
     /// [`device`](Self::device) so Device readback agrees with I-Am.
@@ -208,86 +184,6 @@ impl BipEndpointBuilder {
     /// selected Device must match. No additional socket is created.
     pub fn device(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         self.identity = Some(identity);
-        self
-    }
-
-    /// Enables authorized writes to the local Device's Description and installed Audit recipient.
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder whose policy
-    /// decides mutations. A later step of #2617
-    /// removes this call.
-    ///
-    /// The mandatory callback and atomic startup requirements are those of
-    /// [`EndpointSession::with_device_writes`]. Other objects/properties and
-    /// WritePropertyMultiple remain unsupported. Requires `build_session()`;
-    /// a bare transport cannot retain this session-owned authorization.
-    pub fn device_writes(
-        mut self,
-        authorizer: bacnet_server::mutation::DeviceWriteAuthorizer,
-    ) -> Self {
-        self.device_write_authorizer = Some(authorizer);
-        self
-    }
-
-    /// Enables ReinitializeDevice. The handler must reply before restarting
-    /// and stay quick, or it stalls the session; see
-    /// [`EndpointSession::with_reinitialize`]. Requires `build_session()`.
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder with
-    /// `on_reinitialize`. A later step of #2617
-    /// removes this call.
-    pub fn reinitialize<F>(mut self, handler: F) -> Self
-    where
-        F: Fn(
-                &bacnet_server::server::ReinitializeContext,
-                &mut ObjectDatabase,
-            ) -> Result<(), Error>
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.reinitialize = Some(std::sync::Arc::new(handler));
-        self
-    }
-
-    /// Sets the password a ReinitializeDevice request must carry. Requires
-    /// [`reinitialize`](Self::reinitialize) and `build_session()`; see
-    /// [`EndpointSession::with_reinit_password`].
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder with
-    /// `reinit_password`. A later step of #2617
-    /// removes this call.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.reinit_password = Some(password.into());
-        self
-    }
-
-    /// Enables SubscribeCOV, SubscribeCOVProperty and
-    /// SubscribeCOVPropertyMultiple for the objects of the database, with
-    /// the COV notifications they call for, under `config`.
-    /// Its bounds, startup requirements and refusals are those of
-    /// [`EndpointSession::with_cov`]. Requires `build_session()`.
-    /// The outbox holds at most
-    /// [`COV_OUTBOX_MAX_ENTRIES`](crate::session::COV_OUTBOX_MAX_ENTRIES)
-    /// entries and
-    /// [`COV_OUTBOX_MAX_OCTETS`](crate::session::COV_OUTBOX_MAX_OCTETS)
-    /// octets, and the confirmed timeout is 1 ms to
-    /// [`COV_CONFIRMED_TIMEOUT_MAX_MS`](crate::session::COV_CONFIRMED_TIMEOUT_MAX_MS);
-    /// past either, startup fails before the transport starts.
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder with a
-    /// `cov_policy`. A later step of #2617
-    /// removes this call.
-    pub fn cov(mut self, config: ReportConfig) -> Self {
-        self.cov = Some(config);
         self
     }
 
@@ -370,27 +266,13 @@ impl BipEndpointBuilder {
     ///
     /// Returns a typed [`Error::Encoding`] when any session-owned
     /// configuration is set, since a bare transport would discard it: a
-    /// Network Port registration, Device writes, a ReinitializeDevice handler
-    /// or password (a password alone included), COV, or source Audit route
-    /// data. Those require [`build_session`](Self::build_session).
+    /// Network Port registration or source Audit route data. Those require
+    /// [`build_session`](Self::build_session).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
         if self.registered_network_port.is_some() {
             return Err(Error::Encoding(
                 "Network Port registration requires build_session()".into(),
             ));
-        }
-        if self.device_write_authorizer.is_some() {
-            return Err(Error::Encoding(
-                "Device writes require build_session()".into(),
-            ));
-        }
-        if self.reinitialize.is_some() || self.reinit_password.is_some() {
-            return Err(Error::Encoding(
-                "ReinitializeDevice and its password require build_session()".into(),
-            ));
-        }
-        if self.cov.is_some() {
-            return Err(Error::Encoding("COV requires build_session()".into()));
         }
         if !self.source_audit_bindings.is_empty() || !self.source_audit_routed.is_empty() {
             return Err(Error::Encoding(
@@ -476,10 +358,6 @@ impl BipEndpointBuilder {
         mut self,
         transport: impl FnOnce(Self) -> Result<T, Error>,
     ) -> Result<EndpointSession<T>, Error> {
-        let device_write_authorizer = self.device_write_authorizer.take();
-        let reinitialize = self.reinitialize.take();
-        let reinit_password = self.reinit_password.take();
-        let cov = self.cov.take();
         let bindings = std::mem::take(&mut self.source_audit_bindings);
         let routed = std::mem::take(&mut self.source_audit_routed);
         crate::source_audit::recipient::SourceRoutes::new(
@@ -499,17 +377,9 @@ impl BipEndpointBuilder {
         if let Some(id) = identity {
             endpoint = endpoint.device(id);
         }
-        if let Some(authorizer) = device_write_authorizer {
-            endpoint = endpoint.with_device_writes(authorizer);
-        }
         if let Some(oid) = registered_network_port {
             endpoint = endpoint.with_registered_network_port(oid);
         }
-        if let Some(config) = cov {
-            endpoint = endpoint.with_cov(config);
-        }
-        endpoint.reinitialize = reinitialize;
-        endpoint.reinit_password = reinit_password;
         endpoint.source_audit_bindings = bindings;
         endpoint.source_audit_routed_bindings = routed;
         Ok(endpoint)

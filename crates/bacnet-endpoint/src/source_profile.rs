@@ -58,6 +58,39 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         runtime.write_local(&mut db, recipient)
     }
 
+    /// Reports a reset the application carries out for its own reasons, not
+    /// at a peer's ReinitializeDevice request: a DEVICE_RESET Audit record
+    /// from this device, with no invoke ID (Clause 19.6, Table 19-5 covers
+    /// resets for any reason, #1837). The counterpart of
+    /// `BACnetServer::report_device_reset_local`.
+    ///
+    /// An accepted WARMSTART or COLDSTART is recorded already; don't report
+    /// it again. The record goes through the session's source Reporter
+    /// ([`with_source_audit_reporter`](Self::with_source_audit_reporter)),
+    /// filtered by its Audit_Level and Auditable_Operations as a peer's
+    /// reset's is, and nothing is recorded without one. It returns once the
+    /// record is admitted, not delivered, so call it before the restart
+    /// begins and give delivery time before the process exits.
+    ///
+    /// # Errors
+    /// [`Error::Encoding`] when the session is not running.
+    pub async fn report_device_reset_local(&self) -> Result<(), Error> {
+        if !self.is_running() {
+            return Err(Error::Encoding("endpoint session is not running".into()));
+        }
+        let (Some(source), Some(database)) = (&self.source_audit, &self.database) else {
+            return Ok(());
+        };
+        // Synchronous under the guard: no await while it is held.
+        let mut db = database.write().await;
+        source.device_operation(
+            &mut db,
+            bacnet_types::enums::AuditOperation::DEVICE_RESET,
+            None,
+        );
+        Ok(())
+    }
+
     /// Bind a Device to `mac` on this session's link, for source Audit
     /// delivery to that Device (#2357), on any link but IPv4 B/IP, whose
     /// bindings are [`BipEndpointBuilder::source_audit_device_binding`]'s.
@@ -212,7 +245,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let db = self.database.as_mut().ok_or_else(|| {
             Error::Encoding("source Audit Reporter requires an attached local database".into())
         })?;
-        // Ready sessions have not shared the Arc with a responder. Synchronous,
+        // Ready sessions have not shared the Arc with a server. Synchronous,
         // exclusive validation has no await/cancellation or concurrent mutation.
         let db = Arc::get_mut(db)
             .expect("database is unshared before startup")

@@ -74,12 +74,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// settings that contradict the session's as above; a builder whose
     /// settings a server's start would refuse, which the session checks as
     /// the server will get them (policies and budgets, device bindings,
-    /// Audit Reporters and their routes, the Device's segment timeout); a
-    /// server role beside the gone narrow server role's opt-ins
-    /// ([`with_cov`](Self::with_cov), [`with_device_writes`](Self::with_device_writes),
-    /// [`with_reinitialize`](Self::with_reinitialize), a non-default
-    /// [`SessionConfig::read_work_limit`]), whose places the builder's
-    /// settings take; and, beside a source Audit Reporter
+    /// Audit Reporters and their routes, the Device's segment timeout); and,
+    /// beside a source Audit Reporter
     /// ([`with_source_audit_reporter`](Self::with_source_audit_reporter)),
     /// a builder with Audit Reporters of its own (the Device has one Audit
     /// recipient) or one that decides no mutations: give it a policy whose
@@ -174,20 +170,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.server.as_ref()
     }
 
-    /// The gone narrow server role's handle: always `None`, since a session
-    /// with a server role runs a full server, which [`server`](Self::server)
-    /// borrows (#2617). A later step of #2617 removes this call.
-    pub fn responder(&self) -> Option<&ServerRoleHandle> {
-        self.server_handle.as_ref()
-    }
-
-    /// The gone narrow server role's handle, cloned: always `None`, as
-    /// [`responder`](Self::responder) is. A later step of #2617 removes
-    /// this call.
-    pub fn cloned_responder_handle(&self) -> Option<ServerRoleHandle> {
-        self.server_handle.clone()
-    }
-
     /// What ingress handed to the full server's seat, and what it dropped
     /// because the server had left its queue full.
     pub fn server_seat_counters(&self) -> ServerSeatCounters {
@@ -238,34 +220,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                  or make a node that only asks a SessionRole::ClientOnly session (a link \
                  builder's role(), or the role EndpointSession::new takes)",
             );
-        }
-        let narrow = [
-            (
-                self.cov.config.is_some(),
-                "with_cov (the server reports COV itself)",
-            ),
-            (
-                self.device_write_authorizer.is_some(),
-                "with_device_writes (give with_server a builder whose policy decides writes)",
-            ),
-            (
-                self.reinitialize.is_some(),
-                "with_reinitialize (give with_server a builder with on_reinitialize)",
-            ),
-            (
-                self.reinit_password.is_some(),
-                "with_reinit_password (give with_server a builder with reinit_password)",
-            ),
-            (
-                self.config.read_work_limit != SessionConfig::default().read_work_limit,
-                "a read_work_limit (give with_server a builder with a \
-                 read_property_multiple_budget)",
-            ),
-        ];
-        if let Some((_, opt_in)) = narrow.iter().find(|(set, _)| *set) {
-            return refused(&format!(
-                "the narrow server role is gone, and with it {opt_in}"
-            ));
         }
         let facts = builder.node_facts();
         if facts.transport {
@@ -324,7 +278,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// server takes its requests once all of it is done (#2617).
     pub(super) async fn start_link(
         &mut self,
-        device_target: Option<ObjectIdentifier>,
         source_routes: Option<crate::source_audit::recipient::SourceRoutes>,
     ) -> Result<(), Error> {
         let ingress = self.ingress.as_mut().ok_or_else(missing_ingress)?;
@@ -369,12 +322,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             Some(database) => Some(database.write().await),
             None => None,
         };
-        let started = self.start_roles(
-            receivers,
-            source_routes,
-            device_target,
-            guard.as_deref_mut(),
-        );
+        let started = self.start_roles(receivers, source_routes, guard.as_deref_mut());
         drop(guard);
         started?;
         if let Some(audit) = &self.source_audit {

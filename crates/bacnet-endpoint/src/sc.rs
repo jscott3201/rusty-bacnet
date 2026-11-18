@@ -32,7 +32,6 @@ over a `TlsWebSocket` connected to a local constrained-TLS `ScHub` for RB-16 pro
 //! reuse them for the device lifetime; all-zero is rejected before any hub
 //! I/O.
 
-use bacnet_device_core::report::ReportConfig;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
 use bacnet_transport::sc_frame::Vmac;
@@ -74,7 +73,6 @@ pub struct ScEndpointBuilder {
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
     reconnect: Option<ScReconnectConfig>,
-    cov: Option<ReportConfig>,
     source_audit_bindings: Vec<(ObjectIdentifier, MacAddr)>,
     source_audit_routed: crate::session::RoutedBindings,
 }
@@ -96,7 +94,6 @@ impl ScEndpointBuilder {
             heartbeat_interval_ms: 30_000,
             heartbeat_timeout_ms: 60_000,
             reconnect: None,
-            cov: None,
             source_audit_bindings: Vec::new(),
             source_audit_routed: Vec::new(),
         }
@@ -142,21 +139,6 @@ impl ScEndpointBuilder {
         self
     }
 
-    /// Sets the server role's read work limit (default 256): the result rows
-    /// one ReadProperty may expand, a Group's member rows included. See
-    /// [`SessionConfig::read_work_limit`]; zero fails the
-    /// session builds via [`EndpointSession::new`].
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder with a
-    /// `read_property_multiple_budget`. A later step of #2617
-    /// removes this call.
-    pub fn read_work_limit(mut self, limit: usize) -> Self {
-        self.session.read_work_limit = limit;
-        self
-    }
-
     /// Least time between the client role's confirmed requests to one
     /// destination (default 0: no pacing). See
     /// [`SessionConfig::min_request_interval_ms`]; more than an hour fails
@@ -167,7 +149,7 @@ impl ScEndpointBuilder {
         self
     }
 
-    /// Attaches the object database for the server responder.
+    /// Attaches the object database, which a server role's server serves.
     ///
     /// Build it from the same identity passed to
     /// [`device`](Self::device) so I-Am vs ReadProperty agree.
@@ -206,30 +188,6 @@ impl ScEndpointBuilder {
     /// caller-owned config.
     pub fn reconnect(mut self, config: ScReconnectConfig) -> Self {
         self.reconnect = Some(config);
-        self
-    }
-
-    /// Enables SubscribeCOV, SubscribeCOVProperty and
-    /// SubscribeCOVPropertyMultiple for the objects of the database, with
-    /// the COV notifications they call for, under `config`, as
-    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov)
-    /// does. Its bounds, startup requirements and refusals are those of
-    /// [`EndpointSession::with_cov`].
-    /// The outbox holds at most
-    /// [`COV_OUTBOX_MAX_ENTRIES`](crate::session::COV_OUTBOX_MAX_ENTRIES)
-    /// entries and
-    /// [`COV_OUTBOX_MAX_OCTETS`](crate::session::COV_OUTBOX_MAX_OCTETS)
-    /// octets, and the confirmed timeout is 1 ms to
-    /// [`COV_CONFIRMED_TIMEOUT_MAX_MS`](crate::session::COV_CONFIRMED_TIMEOUT_MAX_MS);
-    /// past either, startup fails before the transport starts.
-    ///
-    /// **Gone with the narrow server role (#2617).** A session with a server
-    /// role runs a full server, and its start refuses this setting: give
-    /// the session a server builder with a
-    /// `cov_policy`. A later step of #2617
-    /// removes this call.
-    pub fn cov(mut self, config: ReportConfig) -> Self {
-        self.cov = Some(config);
         self
     }
 
@@ -454,9 +412,6 @@ impl ScEndpointBuilder {
         }
         if let Some(id) = self.identity.take() {
             endpoint = endpoint.device(id);
-        }
-        if let Some(config) = self.cov.take() {
-            endpoint = endpoint.with_cov(config);
         }
         Ok(endpoint.with_source_audit_device_bindings(
             std::mem::take(&mut self.source_audit_bindings),

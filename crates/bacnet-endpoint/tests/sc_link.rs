@@ -520,7 +520,6 @@ async fn sc_hub_settings_are_checked_before_any_dial() {
     // The session's own settings too, which only starting a session checked.
     let session_errors = [
         (builder().queue_capacity(0), "queue capacity"),
-        (builder().read_work_limit(0), "read work limit"),
         (
             builder().min_request_interval_ms(3_600_001),
             "min-request-interval",
