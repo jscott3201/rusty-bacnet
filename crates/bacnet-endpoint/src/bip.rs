@@ -153,6 +153,12 @@ impl BipEndpointBuilder {
     /// one ReadProperty may expand, a Group's member rows included. See
     /// [`SessionConfig::read_work_limit`]; zero fails
     /// [`build_session`](Self::build_session) via [`EndpointSession::new`].
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder with a
+    /// `read_property_multiple_budget`. A later step of #2617
+    /// removes this call.
     pub fn read_work_limit(mut self, limit: usize) -> Self {
         self.session.read_work_limit = limit;
         self
@@ -207,6 +213,12 @@ impl BipEndpointBuilder {
 
     /// Enables authorized writes to the local Device's Description and installed Audit recipient.
     ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder whose policy
+    /// decides mutations. A later step of #2617
+    /// removes this call.
+    ///
     /// The mandatory callback and atomic startup requirements are those of
     /// [`EndpointSession::with_device_writes`]. Other objects/properties and
     /// WritePropertyMultiple remain unsupported. Requires `build_session()`;
@@ -222,6 +234,12 @@ impl BipEndpointBuilder {
     /// Enables ReinitializeDevice. The handler must reply before restarting
     /// and stay quick, or it stalls the session; see
     /// [`EndpointSession::with_reinitialize`]. Requires `build_session()`.
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder with
+    /// `on_reinitialize`. A later step of #2617
+    /// removes this call.
     pub fn reinitialize<F>(mut self, handler: F) -> Self
     where
         F: Fn(
@@ -239,6 +257,12 @@ impl BipEndpointBuilder {
     /// Sets the password a ReinitializeDevice request must carry. Requires
     /// [`reinitialize`](Self::reinitialize) and `build_session()`; see
     /// [`EndpointSession::with_reinit_password`].
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder with
+    /// `reinit_password`. A later step of #2617
+    /// removes this call.
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.reinit_password = Some(password.into());
         self
@@ -256,6 +280,12 @@ impl BipEndpointBuilder {
     /// octets, and the confirmed timeout is 1 ms to
     /// [`COV_CONFIRMED_TIMEOUT_MAX_MS`](crate::session::COV_CONFIRMED_TIMEOUT_MAX_MS);
     /// past either, startup fails before the transport starts.
+    ///
+    /// **Gone with the narrow server role (#2617).** A session with a server
+    /// role runs a full server, and its start refuses this setting: give
+    /// the session a server builder with a
+    /// `cov_policy`. A later step of #2617
+    /// removes this call.
     pub fn cov(mut self, config: ReportConfig) -> Self {
         self.cov = Some(config);
         self

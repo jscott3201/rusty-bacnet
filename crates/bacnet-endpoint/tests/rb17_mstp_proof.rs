@@ -264,20 +264,19 @@ async fn mstp_bidirectional_extended_dedicated() {
 
 async fn deferred_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = Harness::new(mode, SessionRole::Both, frames).await;
-    // Arm suspension: the next prompt-capable request answers token-owned.
-    h.session
-        .responder()
-        .expect("server role")
-        .suspend_next_reply()
-        .expect("arm suspension");
+    // The server's read waits for the database the test holds, so its
+    // answer can't be prompt.
+    let database = std::sync::Arc::clone(h.session.server().expect("server role").database());
+    let held = database.write().await;
     h.peer_deliver(&data_expecting(1, 33)).await;
-    // The MAC releases ReplyPostponed once dispatch drops the prompt sender.
+    // The MAC releases ReplyPostponed once its reply window passes.
     let postponed = h
         .wait_for("ReplyPostponed", |f| {
             f.frame_type == FrameType::REPLY_POSTPONED && f.destination == PEER_MAC
         })
         .await;
     assert_eq!(postponed.destination, PEER_MAC);
+    drop(held);
     // The deferred response follows at a token opportunity with the
     // postponed identity (same destination + invoke ID + value).
     let late = h

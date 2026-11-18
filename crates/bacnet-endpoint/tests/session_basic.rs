@@ -39,7 +39,9 @@ fn object_id(instance: u32) -> bacnet_types::primitives::ObjectIdentifier {
 #[tokio::test(start_paused = true)]
 async fn start_once_stop_once() {
     let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let mut session = EndpointSession::new(transport, SessionRole::Both, session_config()).unwrap();
+    let mut session = EndpointSession::new(transport, SessionRole::Both, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(901, 42).unwrap());
     session.start().await.unwrap();
     // Second start fails (start-once).
     assert!(session.start().await.is_err());
@@ -57,12 +59,13 @@ async fn client_only_and_server_only_compose() {
     let mut server =
         EndpointSession::new(server_transport, SessionRole::ServerOnly, session_config())
             .unwrap()
+            .device(bacnet_endpoint::DeviceIdentity::new(902, 42).unwrap())
             .with_database(database_with_analog(7, 42.0));
     client.start().await.unwrap();
     server.start().await.unwrap();
     assert!(client.client().is_some());
-    assert!(client.responder().is_none());
-    assert!(server.responder().is_some());
+    assert!(client.server().is_none());
+    assert!(server.server().is_some());
     assert!(server.client().is_none());
 
     let ack = tokio::time::timeout(
@@ -88,9 +91,11 @@ async fn both_roles_round_trip() {
     let (transport_a, transport_b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session_a = EndpointSession::new(transport_a, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(903, 42).unwrap())
         .with_database(database_with_analog(1, 11.0));
     let mut session_b = EndpointSession::new(transport_b, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(904, 42).unwrap())
         .with_database(database_with_analog(2, 22.0));
     session_a.start().await.unwrap();
     session_b.start().await.unwrap();
@@ -136,9 +141,11 @@ async fn concurrent_equal_inbound_outbound_ids_stay_unambiguous() {
     let (transport_a, transport_b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session_a = EndpointSession::new(transport_a, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(905, 42).unwrap())
         .with_database(database_with_analog(1, 1.0));
     let mut session_b = EndpointSession::new(transport_b, SessionRole::Both, session_config())
         .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(906, 42).unwrap())
         .with_database(database_with_analog(1, 2.0));
     session_a.start().await.unwrap();
     session_b.start().await.unwrap();

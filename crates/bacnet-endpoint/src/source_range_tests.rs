@@ -118,10 +118,7 @@ async fn source_read_range_choices_empty_and_multiple_items_both_modes() {
                 let (record, delivery_id) = notification(&envelope, confirmed);
                 assert_eq!(record.invoke_id, Some(invoke));
                 assert_eq!(record.operation, AuditOperation::READ);
-                assert_eq!(
-                    record.source_timestamp,
-                    Some(BACnetTimeStamp::SequenceNumber(sequence))
-                );
+                assert_stamp(&record.source_timestamp, true, sequence);
                 sequence += 1;
                 assert_eq!(
                     record.source_device,

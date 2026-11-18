@@ -155,7 +155,13 @@ pub async fn start(builder: BipEndpointBuilder) -> std::io::Result<(Endpoint, So
         AnalogInputObject::new(1, "Number progress", EngineeringUnits::SQUARE_METERS).unwrap();
     analog.set_present_value(42.0);
     db.add(Box::new(analog)).unwrap();
-    let mut endpoint = builder.database(db).build_session().unwrap();
+    // A server role runs a full server on the node's identity.
+    let identity = bacnet_endpoint::DeviceIdentity::new(1001, 42).unwrap();
+    let mut endpoint = builder
+        .database(db)
+        .device(identity)
+        .build_session()
+        .unwrap();
     bounded(endpoint.start())
         .await
         .map_err(crate::port_retry::bind_error)?;

@@ -289,11 +289,10 @@ SERVICES / SERVICE_REQUEST_DENIED.
   `set_present_value_local`, life-safety arming) stay ungated by design — the
   same documented bypass contract as the RB-09 precedent. No raw
   server-receive path skips `mutations::Request`.
-- The shared endpoint has a separate narrow [Device-write authorizer](rust-api.md#authorized-endpoint-device-writes);
-  the server policy does not configure it. A session given a full server
-  (`with_server`) takes that server's policy instead. Python endpoints always
-  run the full server and take `mutation_policy` with the values above;
-  without one their server is read-only (#2617).
+- An endpoint session with a server role runs a full server, which takes
+  the policy of the builder given to `with_server`, and without one is
+  read-only (#2617). Python endpoints take `mutation_policy` with the
+  values above; without one their server is read-only too.
 
 - DeviceCommunicationControl and ReinitializeDevice keep their separate
   configuration paths.

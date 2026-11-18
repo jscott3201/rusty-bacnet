@@ -24,7 +24,7 @@ test('shared-endpoint MDX and raw export use the complete canonical program and 
   assert.equal(toml[0][1], manifest, 'raw manifest bytes, including the final newline');
   for (const heading of [
     'One session owns the connection',
-    'Check requester and responder scope separately',
+    'Check requester and server scope separately',
     'Add source READ or WRITE Audit reporting deliberately',
     'Close the owner, including after cancellation',
     'Next steps',

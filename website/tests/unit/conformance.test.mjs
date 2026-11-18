@@ -33,10 +33,9 @@ test('support.json has the generated shape and records the release the site name
   for (const service of support.services) {
     assert.ok(['confirmed', 'unconfirmed'].includes(service.kind), service.label);
     for (const flag of flags) assert.equal(typeof service[flag], 'boolean', `${service.label}.${flag}`);
-    assert.ok(service.endpoint === null || typeof service.endpoint === 'string', service.label);
-    assert.ok(flags.some(flag => service[flag]) || service.endpoint, `${service.label} is on some surface`);
+    assert.ok(flags.some(flag => service[flag]), `${service.label} is on some surface`);
   }
-  assert.ok(support.services.some(service => service.label === 'ReadProperty' && service.endpoint === 'always'));
+  assert.ok(support.services.some(service => service.label === 'ReadProperty' && service.serverExecutes));
   for (const link of support.dataLinks) {
     assert.equal(typeof link.python, 'boolean', link.id);
     assert.deepEqual(Object.keys(link.cli).sort(), [...support.cliTargets].sort(), link.id);
@@ -83,9 +82,9 @@ test('table cells follow the data', () => {
     objectTypes: [{ id: 13, name: 'MULTI_STATE_INPUT', create: true, delete: false }],
     excludedObjectTypes: [],
     services: [
-      { label: 'ReadProperty', kind: 'confirmed', serverExecutes: true, serverInitiates: false, clientSends: true, endpoint: 'always', pythonSends: true },
-      { label: 'WriteProperty', kind: 'confirmed', serverExecutes: true, serverInitiates: false, clientSends: true, endpoint: 'with_device_writes', pythonSends: false },
-      { label: 'I-Am', kind: 'unconfirmed', serverExecutes: false, serverInitiates: true, clientSends: false, endpoint: null, pythonSends: false },
+      { label: 'ReadProperty', kind: 'confirmed', serverExecutes: true, serverInitiates: false, clientSends: true, pythonSends: true },
+      { label: 'WriteProperty', kind: 'confirmed', serverExecutes: true, serverInitiates: false, clientSends: true, pythonSends: false },
+      { label: 'I-Am', kind: 'unconfirmed', serverExecutes: false, serverInitiates: true, clientSends: false, pythonSends: false },
     ],
     cliTargets: ['a', 'b'],
     dataLinks: [
@@ -97,9 +96,8 @@ test('table cells follow the data', () => {
   const tables = supportTables(data);
   assert.deepEqual(tables.objects.rows, [['Multi State Input', '13', 'Yes', 'No']]);
   assert.match(tables.objects.caption, /^1 constructible object types; not built: none$/);
-  assert.deepEqual(tables['services-confirmed'].rows.map(row => row[4]),
-    ['Always', { text: 'Opt-in: ', code: 'with_device_writes()' }]);
-  assert.deepEqual(tables['services-unconfirmed'].rows, [['I-Am', 'No', 'Yes', 'No', 'No', 'No']]);
+  assert.deepEqual(tables['services-confirmed'].rows.map(row => row[4]), ['Yes', 'No']);
+  assert.deepEqual(tables['services-unconfirmed'].rows, [['I-Am', 'No', 'Yes', 'No', 'No']]);
   assert.deepEqual(tables.links.rows, [
     ['Always', 'Always built', 'Yes', 'Every release target'],
     ['Some', { code: 'serial' }, 'No', { code: 'b' }],

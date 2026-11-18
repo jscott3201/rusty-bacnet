@@ -168,11 +168,14 @@ impl Site {
             apdu_retries: 0,
             ..SessionConfig::default()
         };
-        Self::start_with(confirmed, operations, config).await
+        Self::start_with(SessionRole::Both, confirmed, operations, config).await
     }
 
-    /// [`Site::start`], with the session's `config`.
+    /// [`Site::start`], with a session of `role` and the session's
+    /// `config`. A server role runs a full server that lets any peer write
+    /// and carries out ReinitializeDevice.
     async fn start_with(
+        role: SessionRole,
         confirmed: bool,
         operations: &[AuditOperation],
         config: SessionConfig,
@@ -212,7 +215,7 @@ impl Site {
                 None,
             )
             .unwrap();
-        let mut session = EndpointSession::new(near, SessionRole::Both, config)
+        let mut session = EndpointSession::new(near, role, config)
             .unwrap()
             .with_database(db)
             .with_source_audit_routed_device_binding(
@@ -220,9 +223,12 @@ impl Site {
                 REMOTE,
                 MacAddr::from_slice(&STATION),
             )
-            .with_source_audit_reporter(selected())
-            .with_device_writes(Arc::new(|_| true))
-            .with_reinitialize(|_, _| Ok(()));
+            .with_source_audit_reporter(selected());
+        if role != SessionRole::ClientOnly {
+            session = session
+                .device(crate::DeviceIdentity::new(123, 42).unwrap())
+                .with_server(allowing().on_reinitialize(|_, _| Ok(())));
+        }
         session.start().await.unwrap();
         let mut peer = NetworkLayer::new(station);
         let rx = peer.start().await.unwrap();
@@ -412,7 +418,7 @@ async fn lost_routed_records_are_counted_and_summarized_there() {
         AuditOperation::AUDITING_FAILURE,
     ];
     let mut site = Site::start(false, &operations).await;
-    let owner = Arc::clone(site.session.notifications.as_ref().unwrap());
+    let owner = Arc::clone(site.session.server().unwrap().notification_pool());
     let permits: Vec<_> = (0..64).map(|_| owner.try_admit_audit().unwrap()).collect();
     for _ in 0..2 {
         site.session.report_device_reset_local().await.unwrap();
@@ -590,6 +596,159 @@ async fn a_refused_record_keeps_its_router() {
             "{refusal}"
         );
     }
+    site.stop().await;
+}
+
+/// The session learns a network's router at its ingress, whichever role
+/// takes the traffic (#2617): an answer from there that no lease of the
+/// session's holds, which any station may send, teaches nothing; a request
+/// from there, which the server takes, does.
+#[tokio::test(start_paused = true)]
+async fn only_a_request_or_a_held_answer_teaches_the_router() {
+    let mut site = Site::start(false, &[AuditOperation::READ]).await;
+    let stray = Apdu::SimpleAck(SimpleAck {
+        invoke_id: 99,
+        service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+    });
+    site.send(stray, false).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(site.learned(), None, "a stray answer taught a router");
+
+    let mut service = BytesMut::new();
+    bacnet_services::read_property::ReadPropertyRequest {
+        object_identifier: oid(ObjectType::DEVICE, 123),
+        property_identifier: PropertyIdentifier::OBJECT_NAME,
+        property_array_index: None,
+    }
+    .encode(&mut service);
+    let request = Apdu::ConfirmedRequest(ConfirmedRequest {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: false,
+        max_segments: None,
+        max_apdu_length: 480,
+        invoke_id: 4,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_request: service.freeze(),
+    });
+    site.send(request, true).await;
+    let answer = decode_apdu(site.receive().await.apdu).unwrap();
+    assert!(matches!(answer, Apdu::ComplexAck(ack) if ack.invoke_id == 4));
+    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    site.stop().await;
+}
+
+/// A client-only site whose session reads the station behind the router:
+/// the site, the read, its invoke ID and its request.
+async fn client_only_read() -> (
+    Site,
+    tokio::task::JoinHandle<Result<(), Error>>,
+    u8,
+    ReadPropertyRequest,
+) {
+    let config = SessionConfig {
+        apdu_timeout_ms: 1_000,
+        apdu_retries: 0,
+        ..SessionConfig::default()
+    };
+    let operations = [AuditOperation::READ];
+    let mut site = Site::start_with(SessionRole::ClientOnly, false, &operations, config).await;
+    assert_eq!(site.learned(), None);
+    let client = site.session.cloned_client_handle().unwrap();
+    let read = tokio::spawn(async move {
+        client
+            .read_property_with_destination(
+                EndpointApduDestination::Routed {
+                    destination_network: REMOTE,
+                    destination_mac: MacAddr::from_slice(&STATION),
+                    router_mac: MacAddr::from_slice(&ROUTER_NEAR),
+                },
+                Vec::new(),
+                target(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .await
+            .map(|_| ())
+    });
+    let request = site.receive().await;
+    let (invoke, rp) = read_request(&request);
+    (site, read, invoke, rp)
+}
+
+/// A client-only session, whose own dispatch takes the answers to its
+/// requests, learns the router from such an answer at its ingress too
+/// (#2617): the answer to its read of the station there teaches it, and one
+/// with the read's invoke ID but another service, which admission refuses
+/// too, doesn't.
+#[tokio::test(start_paused = true)]
+async fn a_client_only_session_learns_the_router_from_an_answer() {
+    let (site, read, invoke, rp) = Box::pin(client_only_read()).await;
+    let other_service = Apdu::SimpleAck(SimpleAck {
+        invoke_id: invoke,
+        service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+    });
+    site.send(other_service, false).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(site.learned(), None, "another service's answer taught it");
+    site.send(ack(invoke, &rp), false).await;
+    assert!(read.await.unwrap().is_ok());
+    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    site.stop().await;
+}
+
+/// An Error is matched by its service too: one naming another service
+/// teaches no router, one naming the read's does.
+#[tokio::test(start_paused = true)]
+async fn an_error_teaches_the_router_only_for_the_leases_service() {
+    let (site, read, invoke, _) = Box::pin(client_only_read()).await;
+    let error = |service| {
+        Apdu::Error(ErrorPdu {
+            invoke_id: invoke,
+            service_choice: service,
+            error_class: ErrorClass::PROPERTY,
+            error_code: ErrorCode::UNKNOWN_PROPERTY,
+            error_data: Bytes::new(),
+        })
+    };
+    site.send(error(ConfirmedServiceChoice::WRITE_PROPERTY), false)
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(site.learned(), None, "another service's Error taught it");
+    site.send(error(ConfirmedServiceChoice::READ_PROPERTY), false)
+        .await;
+    assert!(read.await.unwrap().is_err());
+    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    site.stop().await;
+}
+
+/// A segmented Complex-ACK's first segment carries its service after the
+/// sequence number and window: it is matched by its peer and invoke ID, as
+/// admission matches it, and teaches the router.
+#[tokio::test(start_paused = true)]
+async fn a_held_segment_teaches_the_router() {
+    let (site, read, invoke, _) = Box::pin(client_only_read()).await;
+    let segment = Apdu::ComplexAck(ComplexAck {
+        segmented: true,
+        more_follows: true,
+        invoke_id: invoke,
+        sequence_number: Some(0),
+        proposed_window_size: Some(1),
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_ack: Bytes::from_static(&[0x0c, 0, 0, 0, 1]),
+    });
+    site.send(segment, false).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let learned = site.learned();
+    assert_eq!(
+        learned.as_deref(),
+        Some(&ROUTER_NEAR[..]),
+        "a held segment didn't teach"
+    );
+    read.abort();
+    let _ = read.await;
     site.stop().await;
 }
 

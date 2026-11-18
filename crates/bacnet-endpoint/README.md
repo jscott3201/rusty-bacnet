@@ -31,15 +31,17 @@ tokio = { version = "1", features = ["macros", "rt", "time"] }
 ```
 
 Run a client-only session and a server-only session over paired in-process
-loopback channels. The server holds an Analog Input with Present_Value 72.5.
-The client reads it under a two-second timeout and checks the returned object,
-property, array index and literal application-tagged REAL bytes. Both sessions
-are stopped explicitly; no socket, retry or sleep is needed.
+loopback channels. The server is Device 1001 and holds an Analog Input with
+Present_Value 72.5; a session with a server role runs a full `bacnet-server`
+`BACnetServer`, read-only unless given a server builder. The client reads the
+input under a two-second timeout and checks the returned object, property,
+array index and literal application-tagged REAL bytes. Both sessions are
+stopped explicitly; no socket, retry or sleep is needed.
 
 ```rust
-use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
+use bacnet_endpoint::{DeviceIdentity, EndpointSession, SessionConfig, SessionRole};
+use bacnet_endpoint::build_database_with_extra;
 use bacnet_objects::analog::AnalogInputObject;
-use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -50,8 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (client_port, server_port) = LoopbackTransport::pair(vec![1], vec![2]);
     let mut analog = AnalogInputObject::new(7, "room-temperature", EngineeringUnits::DEGREES_FAHRENHEIT)?;
     analog.set_present_value(72.5);
-    let mut database = ObjectDatabase::new();
-    database.add(Box::new(analog))?;
+    let identity = DeviceIdentity::new(1001, 42)?;
+    let database = build_database_with_extra(&identity, vec![Box::new(analog)])?;
     let config = SessionConfig {
         queue_capacity: 16,
         apdu_timeout_ms: 1_000,
@@ -61,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut client = EndpointSession::new(client_port, SessionRole::ClientOnly, config.clone())?;
     let mut server = EndpointSession::new(server_port, SessionRole::ServerOnly, config)?
+        .device(identity)
         .with_database(database);
     client.start().await?;
     server.start().await?;
@@ -140,12 +143,10 @@ segmented reads, files, COV, router discovery, and the link's own calls and
 frame tap through its `transport()`. It shares the session's invoke-ID pool,
 so its requests and the server role's notifications never collide, and
 `bacnet_ops::Client::over` takes it as it is. Beside a server role the client
-answers only the COV notifications of its own subscriptions; the server role
-answers everything else. The narrow server role doesn't execute
-ConfirmedEventNotification: the node answers one with a Reject (unrecognized
-service) while the full client still publishes it; a full server on the
-session (below) acknowledges it. The session has the one owner of the local
-network number. With a source Audit Reporter the session audits the full client's reads and
+answers only the COV notifications of its own subscriptions; the server
+answers everything else, a ConfirmedEventNotification among them, which the
+client hears a copy of. The session has the one owner of the local network
+number. With a source Audit Reporter the session audits the full client's reads and
 writes, each owned by the session once admitted (#2617). One stop stops the session with the client
 still alive (#2617): its tasks end, its open requests fail and the link stops.
 From then on the client sends nothing more: its requests and unconfirmed sends
@@ -153,31 +154,40 @@ fail at once, and a call made directly on its `transport()`, such as a BVLC
 query, fails with the transport's stopped error. Dropping the client afterwards
 changes nothing.
 
-[`EndpointSession::with_server`](session::EndpointSession::with_server) has
-the session build a full `bacnet-server` `BACnetServer` at start, on the same
-transport, from a builder such as `BACnetServer::generic_builder()` with the
-policies you want. The session owns it:
-[`server`](session::EndpointSession::server) borrows it while the session
-runs, and [`stop`](session::EndpointSession::stop) stops it first, so its work
-joins and its saves settle while the link is still up. The session hands it
-its database, and it answers every request but the full client's COV
-notifications in place of the narrow server role
-([`responder`](session::EndpointSession::responder) is then `None`). The
-server's seat is attached as the link starts, before its first request is
-classified, so a request that arrives while the server builds waits for it;
-its queue is as deep as the session's request queue. A builder setting a
-server's start would refuse is refused before the link starts, leaving the
-session ready to retry with its database; only target Audit's recipient as
-the started link sees it is checked after. It shares the session's invoke-ID pool, holding at
-most 64 of the 256 at once so the client keeps the rest, and the session's
-network-number owner, which target Audit follows. The session's registered
-Network Port and source Audit Reporter work beside it. The builder's policies
-apply as given: a builder with none lets any peer write, create and delete, as
-a standalone server does. A server-role session without `with_server` keeps
-the narrow server role for now.
+## The server role
 
-The node is one device. The session needs a Device identity for a full server,
-and the server serves the node's Device from the session's settings: its
+A session with a server role (`ServerOnly` or `Both`) runs a full
+`bacnet-server` `BACnetServer` on the same transport, which the session builds
+at start (#2617). Without a builder it is the read-only server of
+[`read_only_server`](session::read_only_server): peers read, discover the node
+and its objects and subscribe to COV, while every write, create and delete is
+denied, ReinitializeDevice and DeviceCommunicationControl are refused, and
+time synchronization is ignored, so a node nobody gave a policy is never
+writable by a peer. AcknowledgeAlarm is executed, as on any server.
+[`EndpointSession::with_server`](session::EndpointSession::with_server) gives
+the session a builder instead, such as `BACnetServer::generic_builder()` with
+the policies you want, whose policies then apply as given: a builder with none
+lets any peer write, create and delete, as a standalone server does.
+
+The session owns the server: [`server`](session::EndpointSession::server)
+borrows it while the session runs, and [`stop`](session::EndpointSession::stop)
+stops it first, so its work joins and its saves settle while the link is
+still up. The session hands it its database, and it answers every request but
+the full client's COV notifications. The server's seat is attached as the
+link starts, before its first request is classified, so a request that
+arrives while the server builds waits for it; its queue is as deep as the
+session's request queue. A builder setting a server's start would refuse is
+refused before the link starts, leaving the session ready to retry with its
+database; only target Audit's recipient as the started link sees it is
+checked after. It shares the session's invoke-ID pool, holding at most 64 of
+the 256 at once so the client keeps the rest, and the session's
+network-number owner, which target Audit follows. The session's registered
+Network Port and source Audit Reporter work beside it.
+
+The node is one device. A session with a server role needs a Device identity
+([`device`](session::EndpointSession::device)); its start refuses one without,
+before the link starts. The server serves the node's Device from the
+session's settings: its
 identity, Max_APDU_Length_Accepted the smaller of the two roles', the session's
 APDU timeout and retries (which the server's confirmed notifications use too),
 and on a `Both` session the client's executed services beside the server's. A
@@ -210,46 +220,16 @@ segmentation settings for now (a later step of #2617).
   `DEVICE_UUID`, and service-profile alignment are exercised on
   `LoopbackTransport` / `LoopbackWebSocket` for determinism, not as
   on-wire claims.
-- Narrow server scope: the endpoint server role executes `ReadProperty`
-  (+ `Reject`/`Abort` + segmentation-`Abort`). Explicit
-  [`EndpointSession::with_device_writes`](session::EndpointSession::with_device_writes)
-  enables authorized writes to the one local Device's Description and its
-  installed source Audit recipient, and explicit
-  [`EndpointSession::with_reinitialize`](session::EndpointSession::with_reinitialize)
-  enables ReinitializeDevice through an application handler, each with
-  deterministic and real B/IP loopback tests. Explicit
-  [`EndpointSession::with_cov`](session::EndpointSession::with_cov), or
-  the builders' `cov` ([`BipEndpointBuilder::cov`](bip::BipEndpointBuilder::cov),
-  [`MstpEndpointBuilder::cov`](mstp::MstpEndpointBuilder::cov),
-  [`ScEndpointBuilder::cov`](sc::ScEndpointBuilder::cov)), enables
-  SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple over
-  bacnet-device-core's `Reporter`, with unconfirmed and confirmed COV
-  notifications whose octets and parameters match `bacnet-server`'s on
-  paused-time in-memory tests. A timestamped COV-multiple reference needs a
-  clock reader on the database. The Device takes no subscription, so a
-  client's Device write notifies nobody.
-  Its confirmed
-  notifications share the client role's 256 invoke IDs but hold at most
-  [`COV_CONFIRMED_IN_FLIGHT`](session::COV_CONFIRMED_IN_FLIGHT) (64) at once,
-  so subscribers that stop answering can't leave the client role without one;
-  four silent subscribers fill it at the default per-subscriber limit.
-  Full `bacnet-server`
-  dispatch parity is out of scope. Accepted-direct replies preserve the original
-  sealed response capability through the bounded endpoint queue, before any
-  prompt reply channel. Retired/invalid authority never falls back by address;
-  committed writes retain their admitting authorization. Saved direct link
-  limits constrain response size; this responder uses its existing Abort when
-  a ComplexACK cannot fit and does not add response segmentation.
-- The application's own changes:
-  [`EndpointSession::write_local`](session::EndpointSession::write_local),
-  [`set_present_value_local`](session::EndpointSession::set_present_value_local)
-  and [`set_reliability_local`](session::EndpointSession::set_reliability_local)
-  change an object of the session's database under its guard, as the
-  server's calls of the same names do, saved and audited as the endpoint's
-  network writes are. With `with_cov`, a change that writes is reported to
-  its COV subscribers. No event notification follows: the endpoint runs no
-  event pass, and a Command, Channel or Timer run a write starts ends at
-  once, unmade.
+- The server role is the full server's, with its own tests in
+  `bacnet-server`. On the session, in-memory wire tests show the read-only
+  server a session runs by default deny every write, create and delete
+  (WriteProperty, WritePropertyMultiple, AddListElement, RemoveListElement,
+  CreateObject, DeleteObject, AtomicWriteFile, an inbound WriteGroup),
+  refuse ReinitializeDevice and DeviceCommunicationControl, leave the clock
+  alone on both time synchronizations, and still answer reads, Who-Is,
+  Who-Has and COV subscriptions. Make the application's own changes through
+  the server's `write_local`, `set_present_value_local` and
+  `set_reliability_local`, whose COV and event work follows them.
 
 ## Data-link support matrix (explicit, not silent)
 
@@ -271,10 +251,11 @@ dial, and MS/TP station/timing knobs stay transport-specific by design.
   start-once/completed-stop-once; canceled stop can resume joining. `Drop`
   aborts owned tasks and retains Audit membership through their quiescence. Role handles
   expose no lifecycle methods.
-- Role handles ([`ClientRoleHandle`], [`ServerRoleHandle`]) hold only a
+- The narrow client's handle ([`ClientRoleHandle`]) holds only a
   [`Weak`](std::sync::Weak) session token plus role state. Dropping or
-  stopping the session ends role work even when a handle was cloned out
+  stopping the session ends its work even when a handle was cloned out
   beforehand; cloned handles survive the drop as values but fail closed.
+  The server is the session's, borrowed through `server()`.
 - `start(&mut self)` / `stop(&mut self)` take `&mut` so only the owner can
   drive lifecycle; `&self` borrows (`client`, `server`, counters,
   `broadcast_i_am`) stay usable while running. Cancellation is
@@ -305,15 +286,6 @@ handle.stop();
 # }
 ```
 
-```compile_fail,E0599
-// `close_for_owner` is owner-only (`pub(crate)`): external callers cannot
-// drive role shutdown directly.
-# use bacnet_endpoint::roles::ServerRoleHandle;
-# fn forbidden(handle: ServerRoleHandle) {
-handle.close_for_owner();
-# }
-```
-
 ## Trust: verified-origin getters
 
 Provenance stays on [`bacnet_transport::port::TransportProvenance`];
@@ -336,8 +308,8 @@ transport (including caller-supplied doubles) reports unverified.
 
 Standalone `BACnetClient` and `BACnetServer` remain public APIs with their own
 service and data-link capabilities; they are not deprecated. Use the endpoint
-builders when both roles need one transport and lifecycle owner, accounting
-for the narrower endpoint responder scope above.
+builders when both roles need one transport and lifecycle owner; the
+endpoint's server role is the full server, read-only unless given a builder.
 
 | Standalone construction | Shared endpoint composition |
 |---------------------|---------------------|
@@ -366,9 +338,7 @@ See `docs/rust-api.md` for the same table with service-scope notes.
 - [`roles`] — [`ClientRoleHandle`] (`read_property`,
   `read_property_multiple` and `read_range`, each with a `_with_destination`
   form addressed by [`EndpointApduDestination`], plus `read_log_page` and
-  `write_property`) +
-  [`ServerRoleHandle`] (inbound / liveness / suspend /
-  notification admit-complete).
+  `write_property`).
 - [`identity`] — [`DeviceIdentity`],
   [`NetworkPortEntry`],
   [`build_database_with_extra`].

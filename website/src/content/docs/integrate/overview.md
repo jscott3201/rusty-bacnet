@@ -19,7 +19,7 @@ description: "Choose an application owner and find release API contracts and evi
 | Decide which peers may write to or control your server | [Restrict who can change a device](/rusty-bacnet/integrate/security/) |
 | Describe your device's objects and services in a PICS | [Generate a PICS for your device](/rusty-bacnet/integrate/pics/) |
 
-Shared endpoints deliberately have a narrower responder than the full server. Transport implementation, language binding and actual runtime evidence are separate choices; compare the [transport matrix](/rusty-bacnet/reference/transports/) before selecting a path.
+A shared endpoint's server role is the full server, read-only unless given a policy. Transport implementation, language binding and actual runtime evidence are separate choices; compare the [transport matrix](/rusty-bacnet/reference/transports/) before selecting a path.
 
 ## Working on the repository
 

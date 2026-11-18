@@ -179,7 +179,7 @@ pub trait TransportPort: Send + Sync {
 }
 ```
 
-`TransportPort` owns data-link framing and link-specific controls. `NetworkLayer` owns NPDU addressing and APDU delivery forms. The private `bacnet-endpoint-core` runtime can own one network lifecycle and expose bounded ingress and network-service egress to application-role adapters; those role handles cannot start or stop the network or transport. The public `bacnet-endpoint` crate composes sibling requester and bounded responder roles on that private foundation. One `EndpointSession` owns one B/IP, SC or MS/TP transport; this is not a multi-link router or full `bacnet-server` responder replacement. See [endpoint scope](rust-api.md#bacnet-endpoint).
+`TransportPort` owns data-link framing and link-specific controls. `NetworkLayer` owns NPDU addressing and APDU delivery forms. The private `bacnet-endpoint-core` runtime can own one network lifecycle and expose bounded ingress and network-service egress to application-role adapters; those role handles cannot start or stop the network or transport. The public `bacnet-endpoint` crate composes sibling client and server roles on that private foundation: a session with a server role runs a full `bacnet-server` server on its seat, read-only unless given a builder (#2617). One `EndpointSession` owns one B/IP, SC or MS/TP transport; this is not a multi-link router. See [endpoint scope](rust-api.md#bacnet-endpoint).
 
 Local nonrouter Number controls take a separate bounded path: one serial state owner per standalone client, full server or shared endpoint consumes eligible parsed controls without blocking independent APDU dispatch. Raw network controls remain available for other consumers, including routed Reject correlation. A client or unregistered owner starts UNKNOWN on an opted-in transport; the standalone client asks once, on first need (before its first Who-Is, or when it first stores a routed row), and again when the link reports coming back while the number is still unknown (#2572). Only an explicitly registered B/IP receiving-port object, in any B/IP mode, supplies configured number authority; an unrelated database declaration cannot supply it. The capability is separate from registration metadata and from multiport/router behavior. See [Number controls and lifecycle](rust-api.md#local-network-number-controls).
 
@@ -467,4 +467,4 @@ step is audited as Table 19-5 maps it (#1564). The mutation policy doesn't cover
 service; the handler restricts sources through its context. A handler panic
 or a returned Reject is answered `SERVICES / OTHER`, since by then the request
 can no longer be rejected (Clause 20.1.8). Endpoint sessions run the same
-handler through their narrow responder.
+handler through their full server (#2617).

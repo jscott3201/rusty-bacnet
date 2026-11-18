@@ -35,7 +35,9 @@ fn migrate_bip_client(
 }
 
 /// Old: `BACnetServer::bip_builder().database(db)...build().await`
-/// New: server-only endpoint session with the identity-built database.
+/// New: server-only endpoint session with the identity-built database. It
+/// runs the read-only server; give `with_server` a builder for another
+/// policy.
 fn migrate_bip_server(
     interface: Ipv4Addr,
     port: u16,
@@ -59,7 +61,7 @@ fn migrate_sc_loopback(
     ws: LoopbackWebSocket,
 ) -> Result<EndpointSession<ScTransport<LoopbackWebSocket>>, bacnet_types::error::Error> {
     ScEndpointBuilder::new(vmac, uuid)
-        .role(SessionRole::Both)
+        .role(SessionRole::ClientOnly)
         .build_loopback_session(ws)
 }
 
@@ -70,7 +72,7 @@ fn migrate_mstp<S: bacnet_transport::mstp::SerialPort>(
     station: u8,
 ) -> Result<EndpointSession<MstpTransport<S>>, bacnet_types::error::Error> {
     MstpEndpointBuilder::new(serial, station)
-        .role(SessionRole::Both)
+        .role(SessionRole::ClientOnly)
         .build_session()
 }
 
@@ -78,10 +80,15 @@ fn migrate_mstp<S: bacnet_transport::mstp::SerialPort>(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Standalone Loopback composition keeps working untouched; the endpoint
     // equivalent owns the same transport shape above both roles.
+    // A session with a server role names its Device, which its read-only
+    // default server serves.
     let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let standalone_shape =
-        EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
+    let mut standalone_shape =
+        EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?
+            .device(DeviceIdentity::new(1002, 42)?);
+    standalone_shape.start().await?;
     assert_eq!(standalone_shape.active_leases(), 0);
+    standalone_shape.stop().await?;
     println!("loopback shape OK.");
 
     let client = migrate_bip_client(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)?;

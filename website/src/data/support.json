@@ -471,7 +471,6 @@
     {
       "bit": 0,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "AcknowledgeAlarm",
       "name": "ACKNOWLEDGE_ALARM",
@@ -482,7 +481,6 @@
     {
       "bit": 8,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "AddListElement",
       "name": "ADD_LIST_ELEMENT",
@@ -493,7 +491,6 @@
     {
       "bit": 6,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "AtomicReadFile",
       "name": "ATOMIC_READ_FILE",
@@ -504,7 +501,6 @@
     {
       "bit": 7,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "AtomicWriteFile",
       "name": "ATOMIC_WRITE_FILE",
@@ -515,7 +511,6 @@
     {
       "bit": 45,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "AuditLogQuery",
       "name": "AUDIT_LOG_QUERY",
@@ -526,7 +521,6 @@
     {
       "bit": 44,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "ConfirmedAuditNotification",
       "name": "CONFIRMED_AUDIT_NOTIFICATION",
@@ -537,7 +531,6 @@
     {
       "bit": 1,
       "clientSends": false,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "ConfirmedCOVNotification",
       "name": "CONFIRMED_COV_NOTIFICATION",
@@ -548,7 +541,6 @@
     {
       "bit": 42,
       "clientSends": false,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "ConfirmedCOVNotificationMultiple",
       "name": "CONFIRMED_COV_NOTIFICATION_MULTIPLE",
@@ -559,7 +551,6 @@
     {
       "bit": 2,
       "clientSends": false,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "ConfirmedEventNotification",
       "name": "CONFIRMED_EVENT_NOTIFICATION",
@@ -570,7 +561,6 @@
     {
       "bit": 18,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "ConfirmedPrivateTransfer",
       "name": "CONFIRMED_PRIVATE_TRANSFER",
@@ -581,7 +571,6 @@
     {
       "bit": 19,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "ConfirmedTextMessage",
       "name": "CONFIRMED_TEXT_MESSAGE",
@@ -592,7 +581,6 @@
     {
       "bit": 10,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "CreateObject",
       "name": "CREATE_OBJECT",
@@ -603,7 +591,6 @@
     {
       "bit": 11,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "DeleteObject",
       "name": "DELETE_OBJECT",
@@ -614,7 +601,6 @@
     {
       "bit": 17,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "DeviceCommunicationControl",
       "name": "DEVICE_COMMUNICATION_CONTROL",
@@ -625,7 +611,6 @@
     {
       "bit": 3,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "GetAlarmSummary",
       "name": "GET_ALARM_SUMMARY",
@@ -636,7 +621,6 @@
     {
       "bit": 4,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "GetEnrollmentSummary",
       "name": "GET_ENROLLMENT_SUMMARY",
@@ -647,7 +631,6 @@
     {
       "bit": 39,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "GetEventInformation",
       "name": "GET_EVENT_INFORMATION",
@@ -658,7 +641,6 @@
     {
       "bit": 37,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "LifeSafetyOperation",
       "name": "LIFE_SAFETY_OPERATION",
@@ -669,7 +651,6 @@
     {
       "bit": 12,
       "clientSends": true,
-      "endpoint": "always",
       "kind": "confirmed",
       "label": "ReadProperty",
       "name": "READ_PROPERTY",
@@ -680,7 +661,6 @@
     {
       "bit": 14,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "ReadPropertyMultiple",
       "name": "READ_PROPERTY_MULTIPLE",
@@ -691,7 +671,6 @@
     {
       "bit": 35,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "ReadRange",
       "name": "READ_RANGE",
@@ -702,7 +681,6 @@
     {
       "bit": 20,
       "clientSends": true,
-      "endpoint": "with_reinitialize",
       "kind": "confirmed",
       "label": "ReinitializeDevice",
       "name": "REINITIALIZE_DEVICE",
@@ -713,7 +691,6 @@
     {
       "bit": 9,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "RemoveListElement",
       "name": "REMOVE_LIST_ELEMENT",
@@ -724,7 +701,6 @@
     {
       "bit": 5,
       "clientSends": true,
-      "endpoint": "with_cov",
       "kind": "confirmed",
       "label": "SubscribeCOV",
       "name": "SUBSCRIBE_COV",
@@ -735,7 +711,6 @@
     {
       "bit": 38,
       "clientSends": true,
-      "endpoint": "with_cov",
       "kind": "confirmed",
       "label": "SubscribeCOVProperty",
       "name": "SUBSCRIBE_COV_PROPERTY",
@@ -746,7 +721,6 @@
     {
       "bit": 41,
       "clientSends": true,
-      "endpoint": "with_cov",
       "kind": "confirmed",
       "label": "SubscribeCOVPropertyMultiple",
       "name": "SUBSCRIBE_COV_PROPERTY_MULTIPLE",
@@ -757,7 +731,6 @@
     {
       "bit": 22,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "VT-Close",
       "name": "VT_CLOSE",
@@ -768,7 +741,6 @@
     {
       "bit": 23,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "VT-Data",
       "name": "VT_DATA",
@@ -779,7 +751,6 @@
     {
       "bit": 21,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "VT-Open",
       "name": "VT_OPEN",
@@ -790,7 +761,6 @@
     {
       "bit": 15,
       "clientSends": true,
-      "endpoint": "with_device_writes",
       "kind": "confirmed",
       "label": "WriteProperty",
       "name": "WRITE_PROPERTY",
@@ -801,7 +771,6 @@
     {
       "bit": 16,
       "clientSends": true,
-      "endpoint": null,
       "kind": "confirmed",
       "label": "WritePropertyMultiple",
       "name": "WRITE_PROPERTY_MULTIPLE",
@@ -812,7 +781,6 @@
     {
       "bit": 26,
       "clientSends": false,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "I-Am",
       "name": "I_AM",
@@ -823,7 +791,6 @@
     {
       "bit": 27,
       "clientSends": false,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "I-Have",
       "name": "I_HAVE",
@@ -834,7 +801,6 @@
     {
       "bit": 32,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "TimeSynchronization",
       "name": "TIME_SYNCHRONIZATION",
@@ -845,7 +811,6 @@
     {
       "bit": 36,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "UTCTimeSynchronization",
       "name": "UTC_TIME_SYNCHRONIZATION",
@@ -856,7 +821,6 @@
     {
       "bit": 46,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "UnconfirmedAuditNotification",
       "name": "UNCONFIRMED_AUDIT_NOTIFICATION",
@@ -867,7 +831,6 @@
     {
       "bit": 28,
       "clientSends": false,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "UnconfirmedCOVNotification",
       "name": "UNCONFIRMED_COV_NOTIFICATION",
@@ -878,7 +841,6 @@
     {
       "bit": 43,
       "clientSends": false,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "UnconfirmedCOVNotificationMultiple",
       "name": "UNCONFIRMED_COV_NOTIFICATION_MULTIPLE",
@@ -889,7 +851,6 @@
     {
       "bit": 29,
       "clientSends": false,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "UnconfirmedEventNotification",
       "name": "UNCONFIRMED_EVENT_NOTIFICATION",
@@ -900,7 +861,6 @@
     {
       "bit": 30,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "UnconfirmedPrivateTransfer",
       "name": "UNCONFIRMED_PRIVATE_TRANSFER",
@@ -911,7 +871,6 @@
     {
       "bit": 31,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "UnconfirmedTextMessage",
       "name": "UNCONFIRMED_TEXT_MESSAGE",
@@ -922,7 +881,6 @@
     {
       "bit": 47,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "Who-Am-I",
       "name": "WHO_AM_I",
@@ -933,7 +891,6 @@
     {
       "bit": 33,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "WhoHas",
       "name": "WHO_HAS",
@@ -944,7 +901,6 @@
     {
       "bit": 34,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "WhoIs",
       "name": "WHO_IS",
@@ -955,7 +911,6 @@
     {
       "bit": 40,
       "clientSends": true,
-      "endpoint": null,
       "kind": "unconfirmed",
       "label": "WriteGroup",
       "name": "WRITE_GROUP",

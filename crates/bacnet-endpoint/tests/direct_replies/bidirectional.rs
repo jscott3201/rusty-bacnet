@@ -255,6 +255,7 @@ async fn outbound_tls_live_endpoint_and_server_return_data_on_original_socket() 
             let mut session =
                 EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
                     .unwrap()
+                    .device(node())
                     .with_database(database("outbound"));
             session.start().await.unwrap();
             peer.send(&read_name(73)).await;

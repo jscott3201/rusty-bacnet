@@ -15,9 +15,8 @@ While a complete target or source runtime is active, `Audit_Notification_Recipie
 required and writable, appears in Property_List and RPM REQUIRED, and has one
 Device-owned value. Its metadata retains the optional base table code and active
 Audit Reporting condition. Device Audit_Level and Auditable_Operations are not
-made mandatory. Endpoint service scope remains narrower than the object metadata:
-its responder accepts WP only with the explicit Device authorizer, and does not
-execute RPM or WPM.
+made mandatory. An endpoint session's server role is the full server
+(#2617), whose policy decides each write.
 
 The standalone target uses immutable explicitly configured local or routed Device
 bindings. A routed binding whose network is this device's own number, once the
@@ -94,8 +93,9 @@ The standalone target uses the existing server mutation policy. Its default rema
 Permissive without a `ServerPolicy`; enabling Audit does not authenticate callers.
 Applications needing admission control must configure that policy. WPM preserves
 its committed prefix and stops at the failing element. The endpoint source in
-`Both` instead requires an explicit `with_device_writes` authorizer; no callback
-means startup rejection. Endpoint WPM remains unsupported. Successful delivery is
+`Both` requires a server whose policy decides mutations, which the read-only
+server a session runs without a builder does; one that decides none means
+startup rejection (#2617). Successful delivery is
 separate from write acceptance: after commit, each destination has an independent
 attempt within one three-second deadline, with no retry or durable outbox. A send
 or ACK failure does not roll back the recipient. Either attempt's failure survives

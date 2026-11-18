@@ -146,10 +146,7 @@ async fn source_rpm_ordered_occurrences_mixed_results_both_roles_modes() {
             let actual = records(&mut received, &sink, confirmed, 5).await;
             for (i, record) in actual.iter().enumerate() {
                 assert_eq!(record.invoke_id, Some(invoke));
-                assert_eq!(
-                    record.source_timestamp,
-                    Some(BACnetTimeStamp::SequenceNumber(0))
-                );
+                assert_stamp(&record.source_timestamp, role == SessionRole::Both, 0);
                 assert_eq!(
                     record.target_device,
                     BACnetRecipient::Device(oid(ObjectType::DEVICE, 10))

@@ -90,16 +90,9 @@ async fn a_full_client_read_records_what_the_narrow_requester_records() {
             let (invoke, full) =
                 answered_read(full, &peer, &mut requests, &sink, &mut records, confirmed).await;
             assert_eq!(full.invoke_id, Some(invoke));
-            assert_eq!(
-                (
-                    narrow.source_timestamp.clone(),
-                    full.source_timestamp.clone()
-                ),
-                (
-                    Some(BACnetTimeStamp::SequenceNumber(0)),
-                    Some(BACnetTimeStamp::SequenceNumber(1))
-                )
-            );
+            let clocked = role == SessionRole::Both;
+            assert_stamp(&narrow.source_timestamp, clocked, 0);
+            assert_stamp(&full.source_timestamp, clocked, 1);
             assert_eq!(
                 fields(full),
                 fields(narrow),

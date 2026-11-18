@@ -111,8 +111,9 @@ pub struct Fixture {
     admitted: mpsc::Receiver<ReceivedNpdu>,
     pub incoming: mpsc::Sender<ReceivedNpdu>,
     pub generic: mpsc::UnboundedReceiver<Npdu>,
-    pub attributes: Attributes,
     gate: GateSlot,
+    /// The data attributes of every ordinary send that carried some.
+    pub attributes: Attributes,
 }
 impl Fixture {
     pub async fn new(ca: &TestCa) -> (Self, TestTransport) {
@@ -129,16 +130,16 @@ impl Fixture {
         .unwrap();
         let (incoming, rx) = mpsc::channel(32);
         let (generic, observed) = mpsc::unbounded_channel();
-        let attributes = Attributes::default();
         let gate = GateSlot::default();
+        let attributes = Attributes::default();
         (
             Self {
                 listener,
                 admitted,
                 incoming,
                 generic: observed,
-                attributes: attributes.clone(),
                 gate: gate.clone(),
+                attributes: attributes.clone(),
             },
             queued_port(rx, generic, gate, attributes),
         )
@@ -240,6 +241,11 @@ pub fn confirmed(service: ConfirmedServiceChoice, invoke_id: u8, data: Bytes) ->
 pub fn unsupported(invoke: u8) -> Apdu {
     confirmed(ConfirmedServiceChoice::from_raw(254), invoke, Bytes::new())
 }
+/// The endpoint's Device: a session with a server role runs a full server,
+/// which serves the node's identity (#2617).
+pub fn node() -> bacnet_endpoint::DeviceIdentity {
+    bacnet_endpoint::DeviceIdentity::new(1001, 42).unwrap()
+}
 pub fn csv_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap()
 }
@@ -297,6 +303,7 @@ impl Consumer {
                 Default::default(),
             )
             .unwrap()
+            .device(node())
             .with_database(database("original"));
             session.start().await.unwrap();
             Self::Endpoint(Box::new(session))
@@ -325,22 +332,5 @@ impl Fixture {
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         *self.gate.lock().unwrap() = Some(gate.clone());
         gate
-    }
-}
-pub fn received_apdu(envelope: ReceivedNpdu) -> bacnet_network::layer::ReceivedApdu {
-    let npdu = decode_npdu(envelope.npdu).unwrap();
-    bacnet_network::layer::ReceivedApdu {
-        apdu: npdu.payload,
-        source_mac: envelope.source_mac,
-        source_network: npdu.source,
-        ingress_network: None,
-        link_layer_group: envelope.link_layer_group,
-        is_group: envelope.link_layer_group,
-        global_broadcast: false,
-        data_attributes: envelope.data_attributes,
-        provenance: envelope.provenance,
-        router_response: None,
-        direct_response: envelope.direct_response,
-        reply_tx: envelope.reply_tx,
     }
 }

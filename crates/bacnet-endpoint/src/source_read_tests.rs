@@ -41,10 +41,11 @@ fn target() -> ObjectIdentifier {
     oid(ObjectType::ANALOG_VALUE, 7)
 }
 fn database(confirmed: bool) -> ObjectDatabase {
-    let mut db = crate::DeviceIdentity::new(123, 42)
-        .unwrap()
-        .build_database()
-        .unwrap();
+    database_for(&crate::DeviceIdentity::new(123, 42).unwrap(), confirmed)
+}
+/// [`database`] for Device `identity`.
+fn database_for(identity: &crate::DeviceIdentity, confirmed: bool) -> ObjectDatabase {
+    let mut db = identity.build_database().unwrap();
     let mut reporter = AuditReporterObject::new(1, "Source").unwrap();
     reporter
         .audit_reporter_mut()
@@ -97,11 +98,37 @@ fn session(
     session
         .source_audit_bindings
         .push((oid(ObjectType::DEVICE, 999), address(sink)));
+    // A server role runs a full server on the node's identity; this one
+    // lets any peer write, and decides mutations, as source Audit requires.
     if role == SessionRole::Both {
-        session.with_device_writes(Arc::new(|_| true))
+        session
+            .device(crate::DeviceIdentity::new(123, 42).unwrap())
+            .with_server(allowing())
     } else {
         session
     }
+}
+/// Check a record's timestamp: the Device's date and time where the
+/// session runs a full server (`clocked`), whose clock the database reads
+/// (#2617), and its `sequence` number otherwise.
+#[track_caller]
+fn assert_stamp(stamp: &Option<BACnetTimeStamp>, clocked: bool, sequence: u16) {
+    if clocked {
+        assert!(
+            matches!(stamp, Some(BACnetTimeStamp::DateTime { .. })),
+            "{stamp:?}"
+        );
+    } else {
+        assert_eq!(stamp, &Some(BACnetTimeStamp::SequenceNumber(sequence)));
+    }
+}
+/// A server whose policy lets any peer write: it decides mutations.
+fn allowing<T: TransportPort + 'static>() -> bacnet_server::server::ServerBuilder<T> {
+    bacnet_server::server::BACnetServer::generic_builder().policy(
+        bacnet_server::policy::FnPolicy::new()
+            .inline()
+            .mutation(|_| true),
+    )
 }
 /// A session on its own [`bus_port`], with no database or source Audit.
 fn bare_session(role: SessionRole, config: SessionConfig) -> EndpointSession<TestTransport> {
@@ -229,10 +256,7 @@ async fn source_read_wire_fields_both_roles_modes_and_result_before_delivery() {
             // Confirmed audit ACK deliberately withheld until after caller result.
             let envelope = receive(&mut records).await;
             let (record, notification_invoke) = notification(&envelope, confirmed);
-            assert_eq!(
-                record.source_timestamp,
-                Some(BACnetTimeStamp::SequenceNumber(0))
-            );
+            assert_stamp(&record.source_timestamp, role == SessionRole::Both, 0);
             assert_eq!(
                 record.source_device,
                 BACnetRecipient::Device(oid(ObjectType::DEVICE, 123))
@@ -436,10 +460,7 @@ async fn source_read_dropped_waiter_retries_once_per_logical_request() {
     let (record, _) = notification(&receive(&mut records).await, false);
     assert_eq!(record.invoke_id, Some(invoke));
     assert_eq!(record.result, None);
-    assert_eq!(
-        record.source_timestamp,
-        Some(BACnetTimeStamp::SequenceNumber(0))
-    );
+    assert_stamp(&record.source_timestamp, true, 0);
     assert!(
         timeout(Duration::from_millis(30), records.recv())
             .await

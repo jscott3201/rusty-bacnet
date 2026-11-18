@@ -237,6 +237,7 @@ impl Owner {
                 let mut session =
                     EndpointSession::new(transport, SessionRole::Both, Default::default())
                         .unwrap()
+                        .device(bacnet_endpoint::DeviceIdentity::new(901, 42).unwrap())
                         .with_database(db);
                 link.bounded(session.start()).await.unwrap();
                 Self::Endpoint(Box::new(session))
