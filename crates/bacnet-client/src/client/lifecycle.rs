@@ -478,9 +478,25 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// attempts), a reason 4 fails a later request on that path only when
     /// that request sent a frame at least as large as the answered one's
     /// largest. A smaller request runs on to its own answer, retry or
-    /// timeout, and the reject is counted here.
+    /// timeout, and the reject is counted here. This clears by itself;
+    /// see [`below_minimum_reject_drops`](Self::below_minimum_reject_drops)
+    /// for the drop that may need action.
     pub fn too_long_reject_drops(&self) -> u64 {
         self.routed_path_limits.dropped_rejects()
+    }
+
+    /// Reason-4 rejects dropped since start because the request they landed
+    /// on had sent nothing above 228 octets of NPDU, the smallest size every
+    /// router must forward (Table 6-1, #2665). A conforming router never
+    /// refuses a frame that small as too long, so the reject belongs to
+    /// other traffic, and learning from it would pin the path below any
+    /// link's minimum. A rise can also mean a router that really limits the
+    /// path below 228 octets: its requests then end by timeout, and the limit
+    /// is set by hand with
+    /// [`configure_routed_path_max_npdu`](Self::configure_routed_path_max_npdu).
+    /// The first drop on each path logs a warning.
+    pub fn below_minimum_reject_drops(&self) -> u64 {
+        self.routed_path_limits.below_minimum_drops()
     }
     /// Get the client's local MAC address.
     pub fn local_mac(&self) -> &[u8] {
