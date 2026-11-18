@@ -6,17 +6,26 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         receivers: bacnet_endpoint_core::endpoint_ingress::IngressReceivers,
         mut source_routes: Option<crate::source_audit::recipient::SourceRoutes>,
         device_target: Option<ObjectIdentifier>,
+        source_database: Option<&mut ObjectDatabase>,
     ) -> Result<(), Error> {
         let egress = receivers.egress.clone();
         self.egress = Some(egress.clone());
         // Role registration shares ONE coordinator + ONE egress. No second
         // demultiplexer, no role-side Invoke-ID allocation: the requester and
         // notification pool reserve from `self.coordinator`; the responder
-        // reuses the wire invoke ID directly.
-        self.notifications = (matches!(self.role, SessionRole::ServerOnly | SessionRole::Both)
-            || self.source_audit_reporter.is_some())
+        // reuses the wire invoke ID directly. A full server's pool is its
+        // own, and the source Audit sends through it (#2617): the server
+        // completes and joins those records.
+        let server_pool = self
+            .server
+            .as_ref()
+            .map(|server| Arc::clone(server.notification_pool()));
+        self.notifications = (server_pool.is_none()
+            && (matches!(self.role, SessionRole::ServerOnly | SessionRole::Both)
+                || self.source_audit_reporter.is_some()))
         .then(|| NotificationTransactions::with_coordinator(Arc::clone(&self.coordinator)));
         let notifications = self.notifications.clone();
+        let source_pool = server_pool.or_else(|| notifications.clone());
         let (source_audit, source_recipient) = if let Some(selected) = self.source_audit_reporter {
             use crate::source_audit::recipient::SourceLink;
             let mut routes = source_routes.take().expect("preflight routes");
@@ -44,11 +53,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             routes.finalize(link, egress.local_network_number().clone());
             let (source, recipient) = crate::source_audit::SourceAudit::new(
                 Arc::clone(self.database.as_ref().expect("validated source database")),
+                source_database.expect("the source database's guard"),
                 selected,
                 routes,
                 broadcast,
                 egress.clone(),
-                notifications.as_ref().expect("source worker owner"),
+                source_pool.as_ref().expect("source worker owner"),
                 self.client_config.max_apdu_length,
             )?;
             (Some(source), Some(recipient))
@@ -82,55 +92,56 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             } else {
                 (None, None)
             };
-        let (responder, server_handle, cov) =
-            if matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
-                let db = self
-                    .database
-                    .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
-                let mut responder = EndpointResponder::new(Arc::clone(db), egress.clone())
-                    .with_read_work_limit(self.config.read_work_limit);
-                // COV reporting, with its sending task, when enabled (#2490).
-                let cov = self.cov.start(&self.coordinator, &egress, db);
-                if let Some(cov) = &cov {
-                    responder = responder.with_cov(Arc::clone(cov) as _);
+        // The narrow server role, unless a full server took its place.
+        let (responder, server_handle, cov) = if self.server.is_none()
+            && matches!(self.role, SessionRole::ServerOnly | SessionRole::Both)
+        {
+            let db = self
+                .database
+                .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
+            let mut responder = EndpointResponder::new(Arc::clone(db), egress.clone())
+                .with_read_work_limit(self.config.read_work_limit);
+            // COV reporting, with its sending task, when enabled (#2490).
+            let cov = self.cov.start(&self.coordinator, &egress, db);
+            if let Some(cov) = &cov {
+                responder = responder.with_cov(Arc::clone(cov) as _);
+            }
+            if let Some(identity) = &self.identity {
+                responder = responder.with_device(identity.clone());
+            }
+            if let Some(oid) = self.registered_network_port {
+                responder = responder.with_registered_port(oid, self.registered_port_lease.clone());
+            }
+            if let (Some(device), Some(authorizer)) =
+                (device_target, self.device_write_authorizer.clone())
+            {
+                responder = responder.with_device_writes(device, authorizer);
+            }
+            if let Some(handler) = self.reinitialize.clone() {
+                responder = responder.with_reinitialize(handler, self.reinit_password.clone());
+                // The session's Reporter records an accepted reset,
+                // backup or restore step (#1564). Weak, so the
+                // responder never keeps the source owner alive.
+                if let Some(source) = source_audit.as_ref().map(Arc::downgrade) {
+                    responder = responder.with_reinitialize_audit(Arc::new(
+                        move |db, operation, requester| {
+                            if let Some(source) = source.upgrade() {
+                                source.device_operation(db, operation, Some(requester));
+                            }
+                        },
+                    ));
                 }
-                if let Some(identity) = &self.identity {
-                    responder = responder.with_device(identity.clone());
-                }
-                if let Some(oid) = self.registered_network_port {
-                    responder =
-                        responder.with_registered_port(oid, self.registered_port_lease.clone());
-                }
-                if let (Some(device), Some(authorizer)) =
-                    (device_target, self.device_write_authorizer.clone())
-                {
-                    responder = responder.with_device_writes(device, authorizer);
-                }
-                if let Some(handler) = self.reinitialize.clone() {
-                    responder = responder.with_reinitialize(handler, self.reinit_password.clone());
-                    // The session's Reporter records an accepted reset,
-                    // backup or restore step (#1564). Weak, so the
-                    // responder never keeps the source owner alive.
-                    if let Some(source) = source_audit.as_ref().map(Arc::downgrade) {
-                        responder = responder.with_reinitialize_audit(Arc::new(
-                            move |db, operation, requester| {
-                                if let Some(source) = source.upgrade() {
-                                    source.device_operation(db, operation, Some(requester));
-                                }
-                            },
-                        ));
-                    }
-                }
-                let responder = Arc::new(responder);
-                let handle = ServerRoleHandle::new(
-                    &self.shared.token,
-                    Arc::clone(&responder),
-                    Arc::clone(notifications.as_ref().expect("server worker owner")),
-                );
-                (Some(responder), Some(handle), cov)
-            } else {
-                (None, None, None)
-            };
+            }
+            let responder = Arc::new(responder);
+            let handle = ServerRoleHandle::new(
+                &self.shared.token,
+                Arc::clone(&responder),
+                Arc::clone(notifications.as_ref().expect("server worker owner")),
+            );
+            (Some(responder), Some(handle), cov)
+        } else {
+            (None, None, None)
+        };
 
         // Routed source Audit bindings' routers, which traffic and router
         // announcements teach (#2371).

@@ -32,24 +32,19 @@ async fn dcc_lab(config: SessionConfig) -> Lab {
     let mut session = EndpointSession::new(port.build(), SessionRole::Both, config)
         .unwrap()
         .device(DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
-        .with_database(database(NODE_DEVICE, 20.0));
-    session.start().await.unwrap();
-    let server = session
-        .full_server(
+        .with_database(database(NODE_DEVICE, 42.0))
+        .with_server(
             BACnetServer::generic_builder()
-                .database(database(NODE_DEVICE, 42.0))
                 .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive)
                 .on_reinitialize(|_, _| Ok(())),
-        )
-        .await
-        .unwrap();
+        );
+    session.start().await.unwrap();
     let client = session.full_client().unwrap();
     Lab {
         wire,
         session,
         node_sent,
         node_link,
-        server,
         client,
         peer,
         other,
@@ -134,7 +129,7 @@ async fn disable_initiation_stops_every_initiation_on_the_node() {
         matches!(narrow, Err(Error::InitiationDisabled { sent: false })),
         "{narrow:?}"
     );
-    assert!(lab.server.broadcast_i_am().await.is_err());
+    assert!(lab.server().broadcast_i_am().await.is_err());
     assert_eq!(lab.node_sent.len(), before, "the node sent nothing");
 
     // ENABLE lifts it for both roles.
@@ -196,14 +191,12 @@ async fn the_duration_and_a_restart_enable_the_node_again() {
     stop(lab).await;
 }
 
-/// A client started while the node is disabled starts disabled; one its
-/// operator starts outside the node's control keeps initiating; and the
-/// server's stop enables the node again.
+/// A client started while the node is disabled starts disabled, and one
+/// its operator starts outside the node's control keeps initiating.
 #[tokio::test(start_paused = true)]
-async fn an_operator_override_and_the_servers_stop() {
+async fn an_operator_override() {
     let Lab {
         mut session,
-        mut server,
         client,
         mut peer,
         mut other,
@@ -229,11 +222,6 @@ async fn an_operator_override_and_the_servers_stop() {
         .unwrap();
     client_reads(&exempt).await.unwrap();
     drop(exempt);
-
-    server.stop().await.unwrap();
-    let after = session.full_client().unwrap();
-    client_reads(&after).await.unwrap();
-    drop(after);
     session.stop().await.unwrap();
     assert_eq!(node_link.stops(), 1);
     other.stop().await.unwrap();
@@ -339,8 +327,8 @@ async fn the_node_device_states_both_roles() {
 }
 
 /// The node's settings have one place, the session's Device identity: a
-/// session without one has no full server, and a builder's other identity
-/// is refused rather than replaced.
+/// session without one builds no full server, and a builder's other
+/// identity is refused rather than replaced, both before the link starts.
 #[tokio::test(start_paused = true)]
 async fn the_node_settings_have_one_place() {
     let wire = Wire::new();
@@ -349,27 +337,29 @@ async fn the_node_settings_have_one_place() {
         SessionRole::Both,
         SessionConfig::default(),
     )
-    .unwrap();
-    anonymous.start().await.unwrap();
+    .unwrap()
+    .with_server(BACnetServer::generic_builder());
     let error = anonymous
-        .full_server(BACnetServer::generic_builder())
+        .start()
         .await
-        .err()
-        .expect("no identity, no full server");
+        .expect_err("no identity, no full server");
     assert!(error.to_string().contains("identity"), "{error}");
-    anonymous.stop().await.unwrap();
 
-    let (mut session, _, _) = super::session(&wire, SessionRole::Both).await;
+    let mut session = EndpointSession::new(
+        wire.port(PEER).build(),
+        SessionRole::Both,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .device(DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
+    .with_server(
+        BACnetServer::generic_builder().device(DeviceIdentity::new(NODE_DEVICE + 1, 42).unwrap()),
+    );
     let error = session
-        .full_server(
-            BACnetServer::generic_builder()
-                .device(DeviceIdentity::new(NODE_DEVICE + 1, 42).unwrap()),
-        )
+        .start()
         .await
-        .err()
-        .expect("another identity is refused");
+        .expect_err("another identity is refused");
     assert!(error.to_string().contains("Device identity"), "{error}");
-    session.stop().await.unwrap();
 }
 
 /// On a link that takes 480 octets, as every MS/TP node's does, a builder
@@ -386,18 +376,17 @@ async fn the_sessions_own_identity_is_taken_on_a_small_link() {
         SessionConfig::default(),
     )
     .unwrap()
-    .device(identity.clone());
-    session.start().await.unwrap();
-    let mut server = session
-        .full_server(
-            BACnetServer::generic_builder().device(identity.clone().with_services(&[
-                ServiceSupported::READ_PROPERTY,
-                ServiceSupported::WRITE_PROPERTY,
-            ])),
-        )
-        .await
-        .expect("the session's own identity");
-    let accepted = server
+    .device(identity.clone())
+    .with_server(
+        BACnetServer::generic_builder().device(identity.clone().with_services(&[
+            ServiceSupported::READ_PROPERTY,
+            ServiceSupported::WRITE_PROPERTY,
+        ])),
+    );
+    session.start().await.expect("the session's own identity");
+    let accepted = session
+        .server()
+        .unwrap()
         .read_local(
             &identity.device_oid(),
             PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED,
@@ -406,7 +395,6 @@ async fn the_sessions_own_identity_is_taken_on_a_small_link() {
         .await
         .unwrap();
     assert_eq!(accepted, PropertyValue::Unsigned(480));
-    server.stop().await.unwrap();
     session.stop().await.unwrap();
 }
 
@@ -459,15 +447,12 @@ async fn a_who_is_behind_the_number_question_is_held_back() {
     let mut session =
         EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
             .unwrap()
-            .device(DeviceIdentity::new(NODE_DEVICE, 42).unwrap());
+            .device(DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
+            .with_server(
+                BACnetServer::generic_builder()
+                    .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive),
+            );
     session.start().await.unwrap();
-    let mut server = session
-        .full_server(
-            BACnetServer::generic_builder()
-                .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive),
-        )
-        .await
-        .unwrap();
     let client = session.full_client().unwrap();
 
     let who_is = Box::pin(client.who_is(Broadcast::Global, None));
@@ -495,6 +480,5 @@ async fn a_who_is_behind_the_number_question_is_held_back() {
     });
     assert!(!who_is_sent, "the Who-Is went out");
     drop(client);
-    server.stop().await.unwrap();
     session.stop().await.unwrap();
 }

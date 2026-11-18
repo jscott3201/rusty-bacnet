@@ -198,7 +198,7 @@ async fn endpoint_client_only_keeps_local_declaration_without_responder_claim() 
             .with_services(&declared),
     );
     session.start().await.unwrap();
-    assert!(session.server().is_none());
+    assert!(session.responder().is_none());
     assert_eq!(session.identity().unwrap().services(), declared);
     assert_eq!(starts.starts(), 1);
     session.stop().await.unwrap();

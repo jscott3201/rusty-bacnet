@@ -622,5 +622,8 @@ mod full_client;
 #[path = "source_reinitialize_tests.rs"]
 mod reinitialize;
 
+#[path = "source_server_tests.rs"]
+mod server;
+
 #[path = "source_link_tests.rs"]
 mod links;

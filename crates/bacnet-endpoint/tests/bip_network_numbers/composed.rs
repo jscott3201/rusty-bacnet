@@ -18,9 +18,9 @@ async fn endpoint_number_bbmd_both_roles_progress_stop_and_drop() {
             let query_peer = udp().await;
             let responder_peer = udp().await;
             let requester_peer = udp().await;
-            assert!(endpoint.server().is_some());
+            assert!(endpoint.responder().is_some());
             let client = endpoint.cloned_client_handle().unwrap();
-            let server = endpoint.cloned_server_handle().unwrap();
+            let server = endpoint.cloned_responder_handle().unwrap();
             let group = SocketAddrV4::new(BROADCAST, local.port());
             send(&query_peer, group, &frame(0x0b, &number(77, 1))).await;
             send(&query_peer, local, &frame(0x0a, QUERY)).await;

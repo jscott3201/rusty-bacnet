@@ -96,7 +96,8 @@ pub type ReinitializeHandler =
 /// Records an accepted ReinitializeDevice request on an endpoint session
 /// (#1564): the Table 19-5 operation and the requester, called under the
 /// database guard once the request is accepted. The session supplies it
-/// when its Audit Reporter is configured.
+/// when its Audit Reporter is configured, to its narrow server role or to
+/// the full server on its seat (#2617).
 pub type EndpointReinitializeAudit = Arc<
     dyn Fn(&mut ObjectDatabase, AuditOperation, &bacnet_objects::device::AuditWriteSource)
         + Send
@@ -428,6 +429,10 @@ pub(in crate::server) async fn server_response<T: TransportPort + 'static>(
             }
             if let Some(operation) = audit_operation(context.state) {
                 audit.device_operation(db, operation);
+                // A node's source Audit records it too (#2617).
+                if let Some(observer) = &services.config.accepted_reinitialize_audit {
+                    observer(db, operation, &context.audit_source());
+                }
             }
         },
     )

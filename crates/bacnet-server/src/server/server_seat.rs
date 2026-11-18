@@ -34,9 +34,14 @@
 //!   the client's executed services beside the server's;
 //! - target Audit follows the number the node's Number owner publishes.
 //!
-//! What a seat can't take yet: a registered Network Port, whose reservation
-//! needs the transport before it starts. A seated build refuses one before
-//! it changes anything.
+//! A registered Network Port is the node's: the node reserves it before its
+//! link starts and publishes it after, and a seated build takes the port it
+//! names ([`SeatedServerBuilder::node_registered_port`]) for wildcard reads,
+//! refusing one the builder names itself.
+//!
+//! The seat holds at most a quarter of the node's invoke IDs at once
+//! ([`SEAT_LEASES`](super::notification_transactions::SEAT_LEASES)), so the
+//! node's client keeps the rest.
 
 use std::any::Any;
 use std::future::Future;
@@ -62,11 +67,29 @@ impl Apdus for ApduReceiver {
     }
 }
 
-/// A seat's queue, which the node's ingress fills.
-impl Apdus for mpsc::Receiver<ReceivedApdu> {
-    #[inline(always)]
+/// A seat's queue, which the node's ingress fills, and the node's word that
+/// the server may start taking from it.
+pub(super) struct SeatApdus {
+    /// Until the node lets go of it, or drops it, nothing is taken: what
+    /// ingress hands the server waits in the queue.
+    gate: Option<oneshot::Receiver<()>>,
+    queue: mpsc::Receiver<ReceivedApdu>,
+}
+
+impl Apdus for SeatApdus {
+    // The trait asks for a `Send` future, which an `async fn` here would
+    // leave the compiler to infer.
+    #[allow(clippy::manual_async_fn)]
     fn recv(&mut self) -> impl Future<Output = Option<ReceivedApdu>> + Send + '_ {
-        mpsc::Receiver::recv(self)
+        async move {
+            // Cancel safe: an unfinished wait is polled again, and a
+            // finished one is let go of in the same poll.
+            if let Some(gate) = self.gate.as_mut() {
+                let _ = gate.await;
+                self.gate = None;
+            }
+            self.queue.recv().await
+        }
     }
 }
 
@@ -153,11 +176,11 @@ impl<T: TransportPort + 'static> Link<T> for Own<T> {
     }
 }
 
-/// A node's seat.
-pub(super) struct Seat<T: TransportPort>(ServerSeat<T>);
+/// A node's seat, and the node's gate on its queue.
+pub(super) struct Seat<T: TransportPort>(ServerSeat<T>, Option<oneshot::Receiver<()>>);
 
 impl<T: TransportPort + 'static> Link<T> for Seat<T> {
-    type Apdus = mpsc::Receiver<ReceivedApdu>;
+    type Apdus = SeatApdus;
 
     fn transport(&self) -> &T {
         self.0.network.transport()
@@ -184,10 +207,16 @@ impl<T: TransportPort + 'static> Link<T> for Seat<T> {
         let audit_routes = routes.settle(db, config, &network)?;
         Ok(Started {
             network,
-            apdus,
+            apdus: SeatApdus {
+                gate: self.1,
+                queue: apdus,
+            },
             audit_routes: Arc::new(audit_routes),
             controls: None,
-            notification_transactions: NotificationTransactions::with_coordinator(coordinator),
+            notification_transactions: NotificationTransactions::with_lease_cap(
+                coordinator,
+                super::notification_transactions::SEAT_LEASES,
+            ),
             seated: Some(Seated::new(&holds)),
             execution: match node {
                 Some(node) if node.client => DeviceExecution::Node,
@@ -232,6 +261,10 @@ pub struct SeatedServerBuilder<T: TransportPort> {
     /// The node's Device identity, which the server serves on a seat that
     /// carries the node's device settings.
     node_identity: Option<bacnet_objects::DeviceIdentity>,
+    /// The node's gate on the seat's queue.
+    gate: Option<oneshot::Receiver<()>>,
+    /// The node's registered Network Port, which it reserved and published.
+    node_port: Option<ObjectIdentifier>,
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
@@ -249,8 +282,97 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
             clock_zone: self.clock_zone,
             had_transport: self.transport.is_some(),
             node_identity: None,
+            gate: None,
+            node_port: None,
         }
     }
+
+    /// What a node checks of this builder before its link starts (#2617).
+    #[doc(hidden)]
+    pub fn node_facts(&self) -> NodeBuilderFacts {
+        NodeBuilderFacts {
+            transport: self.transport.is_some(),
+            database: self.db.is_some(),
+            registered_network_port: self.config.registered_network_port.is_some(),
+            audit_reporters: self.config.audit_reporters.is_some(),
+            decides_mutations: self.config.mutation_policy
+                == crate::mutation::MutationPolicy::DenyAll
+                || self
+                    .config
+                    .policy
+                    .as_ref()
+                    .is_some_and(|policy| policy.decides_mutations()),
+            reinitialize_handler: self.config.on_reinitialize.is_some(),
+        }
+    }
+
+    /// Refuse, before a node's link starts, what a seated build of this
+    /// builder would refuse without the started link (#2617), so the node
+    /// stays as it was: an identity, `cov_retry_timeout_ms` or
+    /// `notification_retries` that contradicts the node's, a database
+    /// Device, the node's own `db`, that declares other APDU timing, and
+    /// whatever every start checks of its settings (its policies and
+    /// budgets, the Device's segment timeout, the device bindings against
+    /// the link's group rule, the Audit Reporters and their routes), on the
+    /// settings the seat gives the server. Checking the Audit routes marks
+    /// each Reporter's route as a start does, which the start marks again.
+    #[doc(hidden)]
+    pub fn check_node(
+        &self,
+        identity: &bacnet_objects::DeviceIdentity,
+        node: NodeDevice,
+        link: &NodeLink<'_>,
+        db: Option<&mut ObjectDatabase>,
+    ) -> Result<(), Error> {
+        node_contradictions(&self.config, identity, node, link.capacity, db.as_deref())?;
+        let mut config = self.config.clone();
+        config.device = identity
+            .resolve(node.client_max_apdu_length)?
+            .resolve(link.capacity)?;
+        config.cov_retry_timeout_ms = node.apdu_timeout_ms;
+        config.notification_retries = node.apdu_retries;
+        let bindings = self.configured_device_bindings.clone();
+        let settled = super::lifecycle::settings::settle(&mut config, bindings, link.is_group)?;
+        if let Some(db) = db {
+            crate::local_device::validate_startup(db, &config.device)?;
+            let bindings = &settled.device_bindings;
+            AuditRoutes::prepare_for(db, &config, bindings, link.bip_broadcast, link.is_group)?;
+        }
+        Ok(())
+    }
+}
+
+/// What a node's link says of itself before it starts (#2617), for
+/// [`ServerBuilder::check_node`].
+#[doc(hidden)]
+pub struct NodeLink<'a> {
+    /// The largest APDU the link will accept.
+    pub capacity: u16,
+    /// The link's own group check, its transport's
+    /// [`TransportPort::is_group_destination`], which a server's start asks.
+    pub is_group: &'a dyn Fn(&[u8]) -> bool,
+    /// The link's B/IP broadcast endpoint, on B/IP.
+    pub bip_broadcast: Option<std::net::SocketAddrV4>,
+}
+
+/// What a node checks of a [`ServerBuilder`] before it builds the server on
+/// its seat, so a refusal leaves its link unstarted (#2617).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NodeBuilderFacts {
+    /// A transport of its own is set.
+    pub transport: bool,
+    /// A database is set.
+    pub database: bool,
+    /// A registered Network Port is named.
+    pub registered_network_port: bool,
+    /// Target Audit Reporters are configured.
+    pub audit_reporters: bool,
+    /// Something decides the covered mutations: an installed policy that
+    /// decides them, or [`MutationPolicy::DenyAll`](crate::mutation::MutationPolicy::DenyAll).
+    pub decides_mutations: bool,
+    /// A ReinitializeDevice handler is set.
+    pub reinitialize_handler: bool,
 }
 
 /// Follow the node's Number owner for target Audit: each publication may
@@ -344,8 +466,8 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
         }
         if self.config.registered_network_port.is_some() {
             return Err(Error::Encoding(
-                "a server on a node's seat takes no registered Network Port: the node owns \
-                 the link"
+                "a server on a node's seat takes no registered Network Port of its own: the \
+                 node reserves and publishes its port"
                     .into(),
             ));
         }
@@ -359,6 +481,13 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
             self.db,
             self.seat.network.transport().local_receive_apdu_capacity(),
         )?;
+        // The node's port serves wildcard reads, and written values take
+        // effect through this server's ReinitializeDevice handler, as on a
+        // server's own link.
+        if let Some(oid) = self.node_port {
+            db.set_network_port_activation_internal(oid, self.config.on_reinitialize.is_some())?;
+            self.config.registered_network_port = Some(oid);
+        }
         // The Device states the node's timing: a stock one, and a supplied
         // one that declares the object model's defaults.
         if let (Some(node), true) = (node, state_timing)
@@ -374,7 +503,7 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
         BACnetServer::start_on_link(
             self.config,
             db,
-            Seat(self.seat),
+            Seat(self.seat, self.gate),
             Some(self.clock_zone),
             self.configured_device_bindings,
         )
@@ -392,6 +521,36 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
         self
     }
 
+    /// Take nothing from the seat's queue until `gate` is sent or dropped:
+    /// the node finishes its own start first, and what arrives meanwhile
+    /// waits in the queue, which the node's ingress bounds (#2617). The
+    /// hold delays only the server's reading of its queue: its stop and
+    /// drop end its dispatch whether or not the node has let go.
+    #[doc(hidden)]
+    pub fn hold_requests_until(mut self, gate: oneshot::Receiver<()>) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// Serve `oid`, the registered Network Port the node reserved and
+    /// published, for wildcard reads (#2617).
+    #[doc(hidden)]
+    pub fn node_registered_port(mut self, oid: ObjectIdentifier) -> Self {
+        self.node_port = Some(oid);
+        self
+    }
+
+    /// Tell `observer` of each ReinitializeDevice the server accepts: the
+    /// node's source Audit records it (#2617).
+    #[doc(hidden)]
+    pub fn on_accepted_reinitialize(
+        mut self,
+        observer: super::reinitialize::EndpointReinitializeAudit,
+    ) -> Self {
+        self.config.accepted_reinitialize_audit = Some(observer);
+        self
+    }
+
     /// Take the node's device settings in place of the builder's, refusing
     /// any the builder set that differ from them (#2617). Whether the
     /// Device is to be given the node's timing: a stock one is, and a
@@ -401,89 +560,9 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
         let identity = self.node_identity.take().ok_or_else(|| {
             Error::Encoding("a server on a node's seat needs the node's Device identity".into())
         })?;
-        let defaults = ServerConfig::default();
-        // Compared as the link serves them: the node resolved its identity
-        // against the link at start, so on a link that takes less than the
-        // identity asks (480 octets on MS/TP) the two differ only there. The
-        // identity's service list is left out: the server serves the node's
-        // executed services whatever it says.
         let capacity = self.seat.network.transport().local_receive_apdu_capacity();
-        let served = |identity: &bacnet_objects::DeviceIdentity| {
-            identity
-                .resolve(capacity)
-                .map(|resolved| resolved.with_services(&[]))
-        };
-        if self.config.device == defaults.device {
-            tracing::debug!("a seated server serves the node's Device identity");
-        } else if served(&self.config.device)? != served(&identity)? {
-            return Err(contradicts("Device identity"));
-        } else if self.config.device.services() != identity.services() {
-            tracing::debug!(
-                "a seated server serves the node's Device identity in place of the builder's, \
-                 which differs only in its service list"
-            );
-        }
-        let timing = [
-            (
-                "cov_retry_timeout_ms",
-                self.config.cov_retry_timeout_ms,
-                defaults.cov_retry_timeout_ms,
-                node.apdu_timeout_ms,
-            ),
-            (
-                "notification_retries",
-                u64::from(self.config.notification_retries),
-                u64::from(defaults.notification_retries),
-                u64::from(node.apdu_retries),
-            ),
-        ];
-        for (setting, set, default, node) in timing {
-            if set == default {
-                tracing::debug!(
-                    setting,
-                    default,
-                    node,
-                    "a seated server takes the node's value"
-                );
-            } else if set != node {
-                return Err(contradicts(match setting {
-                    "cov_retry_timeout_ms" => "APDU timeout (cov_retry_timeout_ms)",
-                    _ => "APDU retries (notification_retries)",
-                }));
-            }
-        }
-        let mut state_timing = true;
-        if let Some(db) = &self.db {
-            let device = identity.device_oid();
-            let declared = (
-                declared(db, &device, PropertyIdentifier::APDU_TIMEOUT),
-                declared(db, &device, PropertyIdentifier::NUMBER_OF_APDU_RETRIES),
-            );
-            let model = bacnet_objects::device::DeviceConfig::default();
-            let defaults = (
-                Some(u64::from(model.apdu_timeout)),
-                Some(u64::from(model.apdu_retries)),
-            );
-            let node_timing = (
-                Some(node.apdu_timeout_ms),
-                Some(u64::from(node.apdu_retries)),
-            );
-            state_timing = declared == defaults;
-            if state_timing {
-                tracing::debug!(
-                    apdu_timeout_ms = node.apdu_timeout_ms,
-                    apdu_retries = node.apdu_retries,
-                    "the database's Device declares the object model's default APDU timing: \
-                     it is given the node's"
-                );
-            } else if declared != node_timing && declared != (None, None) {
-                return Err(Error::Encoding(format!(
-                    "a server on a node's seat serves the node's APDU_Timeout ({} ms) and \
-                     Number_Of_APDU_Retries ({}): the database's Device declares others",
-                    node.apdu_timeout_ms, node.apdu_retries
-                )));
-            }
-        }
+        let state_timing =
+            node_contradictions(&self.config, &identity, node, capacity, self.db.as_ref())?;
         // The node accepts the smaller of its roles' largest APDUs
         // (Clause 12.11.18); the link's capacity bounds it further at start.
         self.config.device = identity.resolve(node.client_max_apdu_length)?;
@@ -491,6 +570,101 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
         self.config.notification_retries = node.apdu_retries;
         Ok(state_timing)
     }
+}
+
+/// Refuse the device settings in `config` and `db` that contradict the
+/// node's, as [`SeatedServerBuilder::take_node`] takes them: whether the
+/// Device is to be given the node's timing.
+fn node_contradictions(
+    config: &ServerConfig,
+    identity: &bacnet_objects::DeviceIdentity,
+    node: NodeDevice,
+    capacity: u16,
+    db: Option<&ObjectDatabase>,
+) -> Result<bool, Error> {
+    let defaults = ServerConfig::default();
+    // Compared as the link serves them: the node resolved its identity
+    // against the link at start, so on a link that takes less than the
+    // identity asks (480 octets on MS/TP) the two differ only there. The
+    // identity's service list is left out: the server serves the node's
+    // executed services whatever it says.
+    let served = |identity: &bacnet_objects::DeviceIdentity| {
+        identity
+            .resolve(capacity)
+            .map(|resolved| resolved.with_services(&[]))
+    };
+    if config.device == defaults.device {
+        tracing::debug!("a seated server serves the node's Device identity");
+    } else if served(&config.device)? != served(identity)? {
+        return Err(contradicts("Device identity"));
+    } else if config.device.services() != identity.services() {
+        tracing::debug!(
+            "a seated server serves the node's Device identity in place of the builder's, \
+                 which differs only in its service list"
+        );
+    }
+    let timing = [
+        (
+            "cov_retry_timeout_ms",
+            config.cov_retry_timeout_ms,
+            defaults.cov_retry_timeout_ms,
+            node.apdu_timeout_ms,
+        ),
+        (
+            "notification_retries",
+            u64::from(config.notification_retries),
+            u64::from(defaults.notification_retries),
+            u64::from(node.apdu_retries),
+        ),
+    ];
+    for (setting, set, default, node) in timing {
+        if set == default {
+            tracing::debug!(
+                setting,
+                default,
+                node,
+                "a seated server takes the node's value"
+            );
+        } else if set != node {
+            return Err(contradicts(match setting {
+                "cov_retry_timeout_ms" => "APDU timeout (cov_retry_timeout_ms)",
+                _ => "APDU retries (notification_retries)",
+            }));
+        }
+    }
+    let mut state_timing = true;
+    if let Some(db) = db {
+        let device = identity.device_oid();
+        let declared = (
+            declared(db, &device, PropertyIdentifier::APDU_TIMEOUT),
+            declared(db, &device, PropertyIdentifier::NUMBER_OF_APDU_RETRIES),
+        );
+        let model = bacnet_objects::device::DeviceConfig::default();
+        let defaults = (
+            Some(u64::from(model.apdu_timeout)),
+            Some(u64::from(model.apdu_retries)),
+        );
+        let node_timing = (
+            Some(node.apdu_timeout_ms),
+            Some(u64::from(node.apdu_retries)),
+        );
+        state_timing = declared == defaults;
+        if state_timing {
+            tracing::debug!(
+                apdu_timeout_ms = node.apdu_timeout_ms,
+                apdu_retries = node.apdu_retries,
+                "the database's Device declares the object model's default APDU timing: \
+                     it is given the node's"
+            );
+        } else if declared != node_timing && declared != (None, None) {
+            return Err(Error::Encoding(format!(
+                "a server on a node's seat serves the node's APDU_Timeout ({} ms) and \
+                     Number_Of_APDU_Retries ({}): the database's Device declares others",
+                node.apdu_timeout_ms, node.apdu_retries
+            )));
+        }
+    }
+    Ok(state_timing)
 }
 
 impl<T: TransportPort> BACnetServer<T> {

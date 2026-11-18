@@ -599,7 +599,7 @@ impl PyBipEndpoint {
                         "endpoint not started — use 'async with' or await start()",
                     )
                 })?;
-                session.cloned_server_handle().ok_or_else(|| {
+                session.cloned_responder_handle().ok_or_else(|| {
                     PyRuntimeError::new_err(
                         "endpoint not started — use 'async with' or await start()",
                     )

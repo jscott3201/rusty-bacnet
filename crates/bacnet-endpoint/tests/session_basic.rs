@@ -61,8 +61,8 @@ async fn client_only_and_server_only_compose() {
     client.start().await.unwrap();
     server.start().await.unwrap();
     assert!(client.client().is_some());
-    assert!(client.server().is_none());
-    assert!(server.server().is_some());
+    assert!(client.responder().is_none());
+    assert!(server.responder().is_some());
     assert!(server.client().is_none());
 
     let ack = tokio::time::timeout(

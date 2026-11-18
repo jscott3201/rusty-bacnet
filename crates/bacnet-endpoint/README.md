@@ -153,14 +153,28 @@ fail at once, and a call made directly on its `transport()`, such as a BVLC
 query, fails with the transport's stopped error. Dropping the client afterwards
 changes nothing.
 
-[`EndpointSession::full_server`](session::EndpointSession::full_server) builds
-a full `bacnet-server` `BACnetServer` on the same transport, from a
-`BACnetServer::generic_builder()`. While it lives it answers every request but
-the full client's COV notifications, from its own database, in place of the
-narrow server role, which answers again once the server is stopped or dropped.
-Its queue is as deep as the session's request queue. It shares the session's
-invoke-ID pool and network-number owner, and target Audit follows that owner.
-Stop the server, then the session.
+[`EndpointSession::with_server`](session::EndpointSession::with_server) has
+the session build a full `bacnet-server` `BACnetServer` at start, on the same
+transport, from a builder such as `BACnetServer::generic_builder()` with the
+policies you want. The session owns it:
+[`server`](session::EndpointSession::server) borrows it while the session
+runs, and [`stop`](session::EndpointSession::stop) stops it first, so its work
+joins and its saves settle while the link is still up. The session hands it
+its database, and it answers every request but the full client's COV
+notifications in place of the narrow server role
+([`responder`](session::EndpointSession::responder) is then `None`). The
+server's seat is attached as the link starts, before its first request is
+classified, so a request that arrives while the server builds waits for it;
+its queue is as deep as the session's request queue. A builder setting a
+server's start would refuse is refused before the link starts, leaving the
+session ready to retry with its database; only target Audit's recipient as
+the started link sees it is checked after. It shares the session's invoke-ID pool, holding at
+most 64 of the 256 at once so the client keeps the rest, and the session's
+network-number owner, which target Audit follows. The session's registered
+Network Port and source Audit Reporter work beside it. The builder's policies
+apply as given: a builder with none lets any peer write, create and delete, as
+a standalone server does. A server-role session without `with_server` keeps
+the narrow server role for now.
 
 The node is one device. The session needs a Device identity for a full server,
 and the server serves the node's Device from the session's settings: its
@@ -172,7 +186,7 @@ the server accepts binds the whole node (Clause 16.1): the full client's
 requests, the narrow client's and the session's own I-Am fail with
 `Error::InitiationDisabled` until it ends, unless an operator starts a client
 with `ClientOptions::with_node_dcc_override`. The full client keeps its own
-segmentation settings until the session builds its server itself.
+segmentation settings for now (a later step of #2617).
 
 ## What is proven
 

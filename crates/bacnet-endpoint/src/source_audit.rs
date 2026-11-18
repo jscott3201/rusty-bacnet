@@ -66,8 +66,11 @@ pub(crate) struct SourceAudit {
 }
 
 impl SourceAudit {
+    /// Install the source on `database`, the guarded contents of `db`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         db: Arc<RwLock<ObjectDatabase>>,
+        database: &mut ObjectDatabase,
         selected: ObjectIdentifier,
         routes: SourceRoutes,
         broadcast: Ipv4Addr,
@@ -75,7 +78,6 @@ impl SourceAudit {
         notifications: &Arc<NotificationTransactions>,
         max_apdu: u16,
     ) -> Result<(Arc<Self>, Arc<SourceRecipient>), Error> {
-        let mut database = db.try_write().expect("unshared startup database");
         let device = database
             .local_device()
             .identifier()

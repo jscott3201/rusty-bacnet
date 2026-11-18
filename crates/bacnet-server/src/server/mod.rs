@@ -608,7 +608,7 @@ mod request_services;
 mod request_tasks;
 mod server_seat;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
-pub use server_seat::SeatedServerBuilder;
+pub use server_seat::{NodeBuilderFacts, NodeLink, SeatedServerBuilder};
 mod shutdown;
 pub use shutdown::drop_database_off_runtime;
 

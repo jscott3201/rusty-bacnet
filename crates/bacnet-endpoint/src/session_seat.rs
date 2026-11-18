@@ -61,16 +61,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// server role doesn't execute ConfirmedEventNotification, so the node
     /// answers one with a Reject (unrecognized service) while the client
     /// still publishes it to its `event_notifications()`; a notifier that
-    /// needs the acknowledgment gets it from a
-    /// [`full_server`](Self::full_server). A session with no server role
+    /// needs the acknowledgment gets it from a full server
+    /// ([`with_server`](Self::with_server)). A session with no server role
     /// leaves the client to answer as a standalone one does, acknowledgment
     /// included.
     ///
     /// **One device.** A DeviceCommunicationControl DISABLE_INITIATION a
-    /// [`full_server`](Self::full_server) accepts binds this client too: its
+    /// full server ([`with_server`](Self::with_server)) accepts binds this client too: its
     /// requests and unconfirmed sends fail with
     /// [`Error::InitiationDisabled`]
-    /// until the control ends (see [`full_server`](Self::full_server)). An
+    /// until the control ends (see [`with_server`](Self::with_server)). An
     /// operator's own tool may start its client outside the node's control
     /// with [`full_client_with`](Self::full_client_with) and
     /// [`ClientOptions::with_node_dcc_override`], an override of Clause 16.1

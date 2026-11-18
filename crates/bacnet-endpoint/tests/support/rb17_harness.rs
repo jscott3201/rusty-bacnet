@@ -22,6 +22,7 @@ use bacnet_endpoint::session::{EndpointSession, SessionRole};
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_server::server::ServerBuilder;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::mstp::{
     LoopbackSerial, MstpExecutionMode, MstpThreadConfig, MstpTransport, SerialPort,
@@ -186,6 +187,30 @@ impl Harness {
         id: DeviceIdentity,
         db: ObjectDatabase,
     ) -> Self {
+        Self::build(mode, role, frames, id, db, None).await
+    }
+
+    /// [`Self::new`] for a session that builds a full server from
+    /// `builder` at start (#2617), in place of its narrow server role.
+    pub async fn with_server(
+        mode: MstpExecutionMode,
+        role: SessionRole,
+        frames: Frames,
+        builder: ServerBuilder<MstpTransport<ObservedSerial>>,
+    ) -> Self {
+        let id = identity(frames);
+        let db = db_with_analog(&id, 1, 11.0);
+        Self::build(mode, role, frames, id, db, Some(builder)).await
+    }
+
+    async fn build(
+        mode: MstpExecutionMode,
+        role: SessionRole,
+        frames: Frames,
+        id: DeviceIdentity,
+        db: ObjectDatabase,
+        server: Option<ServerBuilder<MstpTransport<ObservedSerial>>>,
+    ) -> Self {
         let (session_end, peer_end) = LoopbackSerial::pair();
         let (write_tx, writes) = mpsc::unbounded_channel();
         let observed = ObservedSerial {
@@ -204,6 +229,9 @@ impl Harness {
             .device(id)
             .build_session()
             .expect("mstp session must build");
+        if let Some(builder) = server {
+            session = session.with_server(builder);
+        }
         session.start().await.expect("mstp session must start");
         let peer = Arc::new(peer_end);
         let drain_peer = Arc::clone(&peer);
