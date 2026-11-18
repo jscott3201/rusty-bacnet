@@ -52,8 +52,8 @@ impl ConfirmedFlight {
 ///
 /// Beside them wait the references whose confirmed report found no invoke
 /// ID free (#2661), each looked at again once IDs come back, oldest first,
-/// and only as many at a time as there are IDs free, so a wait at the limit
-/// never spins.
+/// and only as many at a time as the IDs and in-flight slots free let go,
+/// so a wait at a limit never spins.
 #[derive(Debug, Default)]
 pub(crate) struct CovRevisits {
     pending: Mutex<Pending>,
@@ -75,7 +75,8 @@ struct Pending {
 /// References whose confirmed report found no invoke ID free, in the order
 /// each was first owed one (#2661). A reference holds one place however
 /// often it is refused, and keeps it through a look that is refused again,
-/// as when other work takes the freed ID first.
+/// as when other work takes the freed ID first or its peer's in-flight
+/// slots are full.
 #[derive(Debug, Default)]
 struct OwedIds {
     /// The references waiting, by place.
@@ -106,17 +107,29 @@ impl OwedIds {
         }
     }
 
-    /// Take up to `count` references, oldest first, for a look; each
-    /// keeps its place until [`Self::looked`].
-    fn take(&mut self, count: usize) -> Vec<CovSubscriptionKey> {
-        let mut keys = Vec::new();
-        while keys.len() < count {
-            let Some((_, key)) = self.queue.pop_first() else {
-                break;
-            };
-            keys.push(key);
-        }
-        keys
+    /// Queue `key` again in its place if it has one: it waits, or is being
+    /// looked at. Whether it was queued.
+    fn requeue(&mut self, key: CovSubscriptionKey) -> bool {
+        self.places.contains_key(&key) && self.owe(key)
+    }
+
+    /// Take the references `admit` lets go, oldest first, for a look; each
+    /// keeps its place until [`Self::looked`], and those it holds back
+    /// keep theirs in the queue.
+    fn take(
+        &mut self,
+        mut admit: impl FnMut(&CovSubscriptionKey) -> bool,
+    ) -> Vec<CovSubscriptionKey> {
+        let places: Vec<u64> = self
+            .queue
+            .iter()
+            .filter(|(_, key)| admit(key))
+            .map(|(place, _)| *place)
+            .collect();
+        places
+            .iter()
+            .filter_map(|place| self.queue.remove(place))
+            .collect()
     }
 
     /// The look at `keys` is over: those it didn't owe an ID again give
@@ -192,10 +205,26 @@ impl CovRevisits {
     /// once one comes back (#2661), and wake the wait for one. Whether any
     /// wasn't waiting already.
     pub(crate) fn owe(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) -> bool {
+        self.queue(keys, OwedIds::owe)
+    }
+
+    /// Keep waiting those of `keys` that wait for an invoke ID already,
+    /// whose look an in-flight limit refused: each in its place, looked at
+    /// again once its peer has room. Others, a first send among them, are
+    /// left as the limit left them.
+    pub(crate) fn keep_waiting(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) {
+        self.queue(keys, OwedIds::requeue);
+    }
+
+    fn queue(
+        &self,
+        keys: impl IntoIterator<Item = CovSubscriptionKey>,
+        mut queue: impl FnMut(&mut OwedIds, CovSubscriptionKey) -> bool,
+    ) -> bool {
         let mut pending = self.pending();
         let mut added = 0;
         for key in keys {
-            added += usize::from(pending.owed.owe(key));
+            added += usize::from(queue(&mut pending.owed, key));
         }
         drop(pending);
         count(&self.counters.owed_id_revisits_queued, added);
@@ -216,10 +245,14 @@ impl CovRevisits {
         !self.pending().owed.queue.is_empty()
     }
 
-    /// Take up to `free` of the references waiting for an invoke ID,
-    /// oldest first, for a look; [`Self::looked`] ends it.
-    pub(crate) fn take_owed(&self, free: usize) -> Vec<CovSubscriptionKey> {
-        let keys = self.pending().owed.take(free);
+    /// Take the references waiting for an invoke ID that `admit` lets go,
+    /// oldest first, for a look; [`Self::looked`] ends it. Those held back
+    /// keep their places.
+    pub(crate) fn take_owed(
+        &self,
+        admit: impl FnMut(&CovSubscriptionKey) -> bool,
+    ) -> Vec<CovSubscriptionKey> {
+        let keys = self.pending().owed.take(admit);
         count(&self.counters.owed_id_revisits_delivered, keys.len());
         keys
     }

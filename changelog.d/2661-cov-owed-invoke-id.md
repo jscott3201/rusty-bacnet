@@ -2,6 +2,6 @@
 section: Fixed
 ---
 - **Wire:** A confirmed COV notification that finds no invoke ID free no
-  longer waits for the next change: its subscription is looked at again once
-  an ID comes back, in the order subscriptions were refused, and reports its
-  current value if that still differs from the last acknowledged (#2661).
+  longer waits for the next change: it is looked at again, in the order
+  refused, once an ID and an in-flight slot come back. A first notification
+  refused by an in-flight limit still waits for the next change (#2661).

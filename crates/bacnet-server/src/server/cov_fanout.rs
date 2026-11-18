@@ -4,6 +4,7 @@ use super::cov_notify_context::CovNotifyContext;
 use super::event_delivery::EventDelivery;
 use super::*;
 use crate::committed_cov::CommittedCov;
+use bacnet_device_core::cov::CovSubscriptionKey;
 
 /// Shared handles for fanning COV out from a background task (#889). It uses
 /// the write path's post-commit fanout, so the ordering, budget and DCC rules
@@ -112,9 +113,19 @@ impl<T: TransportPort + 'static> CovFanout<T> {
     /// (#2661). Runs until the server aborts it.
     pub(super) async fn run_revisits(self) {
         use futures_util::FutureExt;
-        let (revisits, timed) = {
+        let (revisits, timed, in_flight) = {
             let table = self.cov_table.read().await;
-            (Arc::clone(table.revisits()), table.timed().clone())
+            (
+                Arc::clone(table.revisits()),
+                table.timed().clone(),
+                Arc::clone(table.in_flight_tracker()),
+            )
+        };
+        let room = OwedRoom {
+            ids: &self.notification_transactions,
+            in_flight: &in_flight,
+            pool: &self.cov_in_flight,
+            per_peer: self.config.cov_policy.max_confirmed_in_flight_per_peer,
         };
         loop {
             // No wait loses work when another wins: revisits stay queued, a
@@ -124,7 +135,7 @@ impl<T: TransportPort + 'static> CovFanout<T> {
             let (keys, owed) = tokio::select! {
                 keys = revisits.next() => (keys, false),
                 keys = timed.next_due() => (keys, false),
-                keys = owed_look(&revisits, &self.notification_transactions) => (keys, true),
+                keys = owed_look(&revisits, &room) => (keys, true),
             };
             let ctx = self.notify_context();
             let batch = BACnetServer::<T>::fire_cov_revisits(&ctx, &keys);
@@ -146,33 +157,106 @@ impl<T: TransportPort + 'static> CovFanout<T> {
     }
 }
 
+/// What lets references owed an invoke ID go (#2661): the IDs free, and
+/// the confirmed COV notifications in flight, in the pool and per peer.
+struct OwedRoom<'a> {
+    ids: &'a NotificationTransactions,
+    in_flight: &'a crate::cov::CovInFlightTracker,
+    pool: &'a Semaphore,
+    per_peer: usize,
+}
+
+impl OwedRoom<'_> {
+    /// One pass's admission, from the room there is now. Each coordinate
+    /// (a subscription, or a whole COV-multiple context) takes an ID, a slot
+    /// of the pool and one of its peer's, as its report will. One that
+    /// can't go keeps its place, and those behind it are still looked at,
+    /// so no reservation is tried that would be refused for want of room.
+    fn admit(&self) -> impl FnMut(&CovSubscriptionKey) -> bool + use<> {
+        let (mut ids, mut pool) = (self.ids.free_invoke_ids(), self.pool.available_permits());
+        let mut peers = self.in_flight.in_flight();
+        let per_peer = self.per_peer;
+        let mut contexts = std::collections::HashSet::new();
+        move |key| {
+            let context = key.multiple_context();
+            if context.is_some_and(|context| contexts.contains(context)) {
+                return true;
+            }
+            let peer = peers.entry(recipient(key).clone()).or_default();
+            if ids == 0 || pool == 0 || *peer >= per_peer {
+                return false;
+            }
+            *peer += 1;
+            ids -= 1;
+            pool -= 1;
+            contexts.extend(context.cloned());
+            true
+        }
+    }
+}
+
+/// The peer a reference's confirmed reports count against.
+fn recipient(key: &CovSubscriptionKey) -> &bacnet_device_core::cov::CovRecipient {
+    match key {
+        CovSubscriptionKey::Object { recipient, .. }
+        | CovSubscriptionKey::Property { recipient, .. } => recipient,
+        CovSubscriptionKey::Multiple { context, .. } => &context.recipient,
+    }
+}
+
 /// Wait until references owed an invoke ID can be looked at again, and take
-/// as many as there are IDs free, oldest first (#2661). Each look follows a
-/// lease ending, or a reference owed while IDs were free, so at the limit
-/// it waits rather than spins: a reference refused again keeps its place
-/// for the next ID. While none is owed it waits for one to be, and an ID
-/// coming back costs nothing. Cancel-safe: references are taken only in the
-/// poll that returns them.
+/// those the room lets go, oldest first (#2661). A pass follows a lease
+/// ending, a confirmed notification in flight ending, or a reference owed,
+/// and takes only what can go, so at a limit it waits rather than spins:
+/// a reference held back, or refused again, keeps its place. While none is
+/// owed it waits for one to be, and nothing coming back costs anything.
+/// Cancel-safe: references are taken only in the poll that returns them.
 async fn owed_look(
     revisits: &crate::cov::CovRevisits,
-    ids: &NotificationTransactions,
-) -> Vec<bacnet_device_core::cov::CovSubscriptionKey> {
+    room: &OwedRoom<'_>,
+) -> Vec<CovSubscriptionKey> {
     loop {
         let owed = revisits.owed_notified();
         if !revisits.owes_invoke_id() {
             owed.await;
             continue;
         }
-        // Made before the count, so a lease that ends after it still ends
-        // this wait.
-        let released = ids.released();
-        let keys = revisits.take_owed(ids.free_invoke_ids());
+        // Made before the room is read, so an ID or a slot that comes back
+        // after it still ends this wait.
+        let released = room.ids.released();
+        let ended = room.in_flight.ended();
+        let keys = revisits.take_owed(room.admit());
         if !keys.is_empty() {
             return keys;
         }
+        #[cfg(test)]
+        owed_gap::run();
         tokio::select! {
             () = released => {}
+            () = ended => {}
             () = owed => {}
+        }
+    }
+}
+
+/// A test's hook between a pass that took nothing and its wait, where a
+/// lease or a slot coming back must still end the wait.
+#[cfg(test)]
+pub(super) mod owed_gap {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static GAP: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, in the next such gap on this thread.
+    pub(in crate::server) fn set(hook: impl FnOnce() + 'static) {
+        GAP.with(|gap| *gap.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn run() {
+        if let Some(hook) = GAP.with(|gap| gap.borrow_mut().take()) {
+            hook();
         }
     }
 }

@@ -292,7 +292,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         revisits.owe([sub.key().clone()]);
                         None
                     }
-                    Err(Refusal::Slot) => None,
+                    // A reference already waiting keeps its place.
+                    Err(Refusal::InFlight) => {
+                        revisits.keep_waiting([sub.key().clone()]);
+                        None
+                    }
+                    Err(Refusal::Other) => None,
                 }
             });
             (reports, revisits, tokio::time::Instant::now())

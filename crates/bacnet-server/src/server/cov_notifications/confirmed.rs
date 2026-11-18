@@ -79,12 +79,16 @@ pub(in crate::server) struct ConfirmedSend {
 /// Why [`BACnetServer::admit_confirmed`] gave a report nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::server) enum Refusal {
-    /// An in-flight limit, or a pool that is closed: counted or logged,
-    /// and the report's references wait for their next fanout.
-    Slot,
+    /// The peer's in-flight limit or the pool of in-flight slots, counted
+    /// or logged. References already waiting for an invoke ID keep their
+    /// places; others wait for their next fanout (a deliberate throttle,
+    /// #533).
+    InFlight,
     /// Every invoke ID the server may hold is leased: the report's
     /// references are owed a look once one comes back (#2661).
     InvokeId,
+    /// A closed or broken pool, logged.
+    Other,
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -116,14 +120,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 counters
                     .notifications_throttled_peer
                     .fetch_add(1, Ordering::Relaxed);
-                return Err(Refusal::Slot);
+                return Err(Refusal::InFlight);
             }
             Err(InFlightAcquireError::GlobalPoolExhausted) => {
                 warn!(
                     object = ?route.monitored_object_identifier,
                     "255 confirmed COV notifications in-flight, skipping {label}"
                 );
-                return Err(Refusal::Slot);
+                return Err(Refusal::InFlight);
             }
         };
         let (operation, result_rx) = match ctx
@@ -140,7 +144,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             Err(error) => {
                 warn!(%error, "No invoke ID for confirmed {label}");
-                return Err(Refusal::Slot);
+                return Err(Refusal::Other);
             }
         };
         Ok(ConfirmedLease {
@@ -150,13 +154,34 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         })
     }
 
-    /// `report` was refused an invoke ID: its timestamped history goes
-    /// back to its references first, then they are owed a look once an ID
-    /// comes back (#2661). No other lock is held here.
-    async fn owe_invoke_id(handles: &CovFanoutHandles<'_, '_, T>, report: ConfirmedReport) {
-        let keys: Vec<_> = report.keys().collect();
+    /// `report`, a COV-multiple context's, was refused (#2661). Its
+    /// timestamped history, deferred parts included, goes back to its
+    /// references first. Refused an invoke ID, every reference of the
+    /// context is then owed a look once one comes back: a split report's
+    /// later parts as much as its first, which alone it carried. Refused an
+    /// in-flight slot, those already waiting keep their places. No other
+    /// lock is held here; the references are read live under the table's,
+    /// so one cancelled meanwhile isn't queued.
+    async fn after_refusal(
+        handles: &CovFanoutHandles<'_, '_, T>,
+        report: ConfirmedReport,
+        refusal: Refusal,
+    ) {
+        let context = report.route.key().multiple_context().cloned();
+        let carried: Vec<_> = report.keys().collect();
         drop(report);
-        handles.ctx.cov_table.read().await.revisits().owe(keys);
+        let table = handles.ctx.cov_table.read().await;
+        let keys = match &context {
+            Some(context) => table.context_keys(context),
+            None => carried,
+        };
+        match refusal {
+            Refusal::InvokeId => {
+                table.revisits().owe(keys);
+            }
+            Refusal::InFlight => table.revisits().keep_waiting(keys),
+            Refusal::Other => {}
+        }
     }
 
     /// Admit `report` against the peer and global in-flight limits, an invoke
@@ -175,8 +200,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Ok(lease) => lease,
             // Boxed, and only on a refusal: inline, its wait would add the
             // whole report to every fanout's future, on the request path.
-            Err(Refusal::InvokeId) => return Box::pin(Self::owe_invoke_id(handles, report)).await,
-            Err(Refusal::Slot) => return,
+            Err(refusal @ (Refusal::InvokeId | Refusal::InFlight)) => {
+                return Box::pin(Self::after_refusal(handles, report, refusal)).await;
+            }
+            Err(Refusal::Other) => return,
         };
         let buf = match encode(lease.invoke_id()) {
             Ok(buf) => buf,

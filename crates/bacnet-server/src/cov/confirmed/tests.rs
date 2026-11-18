@@ -446,8 +446,13 @@ fn owed_references_keep_their_places() {
     assert!(!revisits.owe([a.clone()]), "one wait per reference");
     assert_eq!(revisits.owed(), [c.clone(), a.clone(), b.clone()]);
 
-    // Two IDs free: the two oldest are looked at; `c` is refused again.
-    let looked = revisits.take_owed(2);
+    // Room for two: the two oldest are looked at; `c` is refused again.
+    let mut room = 2_usize;
+    let looked = revisits.take_owed(|_| {
+        let go = room > 0;
+        room = room.saturating_sub(1);
+        go
+    });
     assert_eq!(looked, [c.clone(), a.clone()]);
     assert!(revisits.owe([c.clone()]));
     revisits.looked(&looked);
@@ -459,13 +464,27 @@ fn owed_references_keep_their_places() {
         [c.clone(), b.clone(), d.clone(), a.clone()]
     );
 
+    // `c` can't go (its peer is full, say): those behind it still do, and
+    // it keeps the head. Refused an in-flight slot during its look, `b`
+    // keeps its place too; a first send (`d`, served) is not queued.
+    let looked = revisits.take_owed(|key| key != &c && key != &a);
+    assert_eq!(looked, [b.clone(), d.clone()]);
+    revisits.keep_waiting([b.clone()]);
+    revisits.looked(&looked);
+    revisits.keep_waiting([d.clone()]);
+    assert_eq!(revisits.owed(), [c.clone(), b.clone(), a.clone()]);
+
     assert!(table.unsubscribe(&b));
-    assert_eq!(revisits.owed(), [c, d, a]);
+    assert_eq!(revisits.owed(), [c, a]);
     let counters = table.counters();
-    assert_eq!(counters.owed_id_revisits_queued.load(Relaxed), 6);
-    assert_eq!(counters.owed_id_revisits_delivered.load(Relaxed), 2);
+    assert_eq!(counters.owed_id_revisits_queued.load(Relaxed), 7);
+    assert_eq!(counters.owed_id_revisits_delivered.load(Relaxed), 4);
     assert_eq!(counters.owed_id_revisits_dropped.load(Relaxed), 1);
-    assert_eq!(revisits.take_owed(0), Vec::new(), "no ID, no look");
+    assert_eq!(
+        revisits.take_owed(|_| false),
+        Vec::new(),
+        "no room, no look"
+    );
 }
 
 #[tokio::test(start_paused = true)]

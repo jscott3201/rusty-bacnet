@@ -681,6 +681,8 @@ mod cov_notifications_tests;
 #[cfg(test)]
 mod cov_owed_id_forms_tests;
 #[cfg(test)]
+mod cov_owed_id_room_tests;
+#[cfg(test)]
 mod cov_owed_id_tests;
 #[cfg(test)]
 mod cov_quota_tests;

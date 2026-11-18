@@ -187,6 +187,14 @@ impl CovSubscriptionTable {
         self.core.multiple_context_references(context)
     }
 
+    /// The keys of every accepted reference of one Multiple context.
+    pub(crate) fn context_keys(&self, context: &MultipleContextKey) -> Vec<CovSubscriptionKey> {
+        self.core
+            .multiple_context_references(context)
+            .map(|sub| sub.key().clone())
+            .collect()
+    }
+
     /// Whether an exact subscription identity is present.
     pub fn contains(&self, key: &CovSubscriptionKey) -> bool {
         self.core.contains(key)
