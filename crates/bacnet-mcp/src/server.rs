@@ -616,6 +616,17 @@ impl<T: TransportPort + 'static> McpServer<T> {
         let read = boxed(|| resources::read(&self.ctx, &request.uri, context.ct));
         contained(&self.ctx.panics, read).await.map(Into::into)
     }
+
+    /// The sizes of [`serve_call`](Self::serve_call)'s and
+    /// [`serve_read`](Self::serve_read)'s futures, for
+    /// `tools::future_size_tests`.
+    #[cfg(test)]
+    pub(crate) fn serve_sizes() -> (usize, usize) {
+        fn returns<A, B, C, F: Future>(_: impl FnOnce(A, B, C) -> F) -> usize {
+            size_of::<F>()
+        }
+        (returns(Self::serve_call), returns(Self::serve_read))
+    }
 }
 
 impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
