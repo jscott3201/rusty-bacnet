@@ -167,8 +167,12 @@ class RoutedPathLimitWireTests(unittest.IsolatedAsyncioTestCase):
             async with asyncio.timeout(5):
                 while await self.client.below_minimum_reject_drops() < 1:
                     await asyncio.sleep(0.01)
-        finally:
+        except TimeoutError:
             counted.set()
+            read.cancel()
+            await asyncio.gather(read, return_exceptions=True)
+            raise
+        counted.set()
         value = await asyncio.wait_for(read, 5)
         self.assertEqual(value, rb.PropertyValue.unsigned(0))
         self.assertEqual(await self.client.below_minimum_reject_drops(), 1)

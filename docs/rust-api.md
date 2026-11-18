@@ -9723,7 +9723,8 @@ hold in place, so the next request still waits it out, at the new limit; a
 reason 4 that lands in the hold finds no active request and is discarded, as
 any reject there is, so it can't move the new limit. Configuring replaces the
 prior value and deliberately resets learned evidence, while clearing removes
-configured and learned evidence. Active Clause 19.4
+configured and learned evidence; clearing a path the client holds nothing for
+reserves no entry, so it can't fail for capacity. Active Clause 19.4
 path probing and cache persistence across process restarts are not provided.
 
 The client retains at most 256 routed-path entries. At capacity it

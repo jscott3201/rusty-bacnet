@@ -201,12 +201,15 @@ async fn timed_out_path() -> Path {
 }
 
 /// A change of the limit after a timeout applies at once instead of waiting
-/// out the hold, and leaves the hold in place: the next request still waits
-/// it out, sized to the new limit (480 octets: 469 of APDU, so 304 go out
-/// whole, where the default would segment them).
+/// out the hold, and leaves the hold as it was: made 10 s into it, the next
+/// request still goes out when the hold ends, 10 s short of a full window,
+/// sized to the new limit (480 octets: 469 of APDU, so 304 go out whole,
+/// where the default would segment them).
 #[tokio::test(start_paused = true)]
 async fn a_change_after_a_timeout_applies_at_once_and_the_hold_stays() {
     let mut path = timed_out_path().await;
+    let into = Duration::from_secs(10);
+    sleep(into).await;
     let from = Instant::now();
     path.client
         .configure_routed_path_max_npdu(&ROUTER, DNET, 300)
@@ -225,8 +228,46 @@ async fn a_change_after_a_timeout_applies_at_once_and_the_hold_stays() {
         Duration::ZERO,
         "a change waited out the hold"
     );
-    let first = path.next_goes_out_after(LARGE, WINDOW, 469).await;
+    let first = path.next_goes_out_after(LARGE, WINDOW - into, 469).await;
     assert!(!first.segmented);
+    path.stop().await;
+}
+
+/// A request already queued on the path holds it while it waits out the
+/// hold, so a change made then waits for that request to end, and the
+/// request goes out at the old size (228 octets: segments of 217 APDU
+/// octets). The request after it is sized to the new limit.
+#[tokio::test(start_paused = true)]
+async fn a_change_waits_for_a_request_queued_in_the_hold() {
+    let mut path = timed_out_path().await;
+    let queued = path.request(LARGE, 0x42);
+    sleep(Duration::from_millis(1)).await;
+    let change = {
+        let client = Arc::clone(&path.client);
+        tokio::spawn(async move {
+            client
+                .configure_routed_path_max_npdu(&ROUTER, DNET, 480)
+                .await
+        })
+    };
+    sleep(Duration::from_millis(10)).await;
+    assert!(
+        !change.is_finished(),
+        "the change ran ahead of the queued request"
+    );
+    let first = path.next_frame().await;
+    assert!(first.segmented);
+    assert_eq!(
+        first.service_request.len(),
+        217 - 6,
+        "sized by the old limit"
+    );
+    assert!(!change.is_finished());
+    path.finish_segmented(first, 217).await;
+    assert!(queued.await.unwrap().unwrap().is_empty());
+    change.await.unwrap().unwrap();
+    let next = path.next_goes_out_after(LARGE, Duration::ZERO, 469).await;
+    assert!(!next.segmented);
     path.stop().await;
 }
 
@@ -260,4 +301,38 @@ async fn a_reject_in_the_hold_after_a_change_is_discarded() {
         .await;
     assert!(!first.segmented);
     path.stop().await;
+}
+
+/// Clearing a path the table doesn't hold reserves nothing, so it succeeds
+/// on a full table instead of failing for capacity; a bad router MAC is
+/// still refused.
+#[tokio::test]
+async fn clearing_an_unknown_path_reserves_nothing() {
+    use super::routed_path_limits::MAX_ROUTED_PATH_ENTRIES;
+    let (transport, _inbound, _outbound) = harness(&[1], 1490);
+    let mut client = BACnetClient::generic_builder()
+        .transport(transport)
+        .build()
+        .await
+        .unwrap();
+    for path in 1..=MAX_ROUTED_PATH_ENTRIES {
+        let path = u16::try_from(path).unwrap();
+        client
+            .configure_routed_path_max_npdu(&path.to_be_bytes(), path, 1497)
+            .await
+            .unwrap();
+    }
+    client
+        .clear_routed_path_limit(&[0xff, 0xfe], 300)
+        .await
+        .unwrap();
+    assert_eq!(
+        client.routed_path_limits.entry_count(),
+        MAX_ROUTED_PATH_ENTRIES
+    );
+    assert!(matches!(
+        client.clear_routed_path_limit(&[], 300).await,
+        Err(Error::Encoding(_))
+    ));
+    client.stop().await.unwrap();
 }

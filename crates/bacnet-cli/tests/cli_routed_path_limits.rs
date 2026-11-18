@@ -255,6 +255,14 @@ async fn timeout_names_the_flag(command: &[&str]) {
         hint.contains(&format!("--routed-path-limit {router}/5=SIZE")),
         "{command:?}: {hint}"
     );
+    if command[0] == "read" {
+        assert!(
+            stderr
+                .lines()
+                .any(|line| line.starts_with("Error:") && line.contains("tsm-timeout")),
+            "{stderr}"
+        );
+    }
 }
 
 /// A limit set by flag is used and listed: with `-v` the summary shows it
