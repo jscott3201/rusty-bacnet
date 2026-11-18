@@ -1034,6 +1034,8 @@ mod routed_max_apdu_tests;
 #[cfg(test)]
 mod routed_path_answered_tests;
 #[cfg(test)]
+mod routed_path_floor_tests;
+#[cfg(test)]
 mod routed_path_limit_tests;
 #[cfg(test)]
 mod routed_reply_tests;
