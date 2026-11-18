@@ -17,6 +17,8 @@ pub(crate) mod describe;
 pub(crate) mod discover;
 pub(crate) mod export;
 mod find;
+#[cfg(test)]
+mod future_size_tests;
 mod list;
 mod log_pages;
 mod log_records;
@@ -48,6 +50,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::{Call, Ctx};
 use crate::errors::ToolError;
+use crate::heap::boxed;
 use crate::policy::Policy;
 
 /// One tool's definition.
@@ -219,20 +222,26 @@ pub(crate) async fn call<T: TransportPort + 'static>(
     let call = Call::new(budget, Arc::clone(&account));
     // The export's Turtle, which goes beside the summary.
     let mut turtle = None;
+    // The tool's own future goes on the heap (`heap`, #2656), so the
+    // budget, account and cancel around it hold a pointer.
     let run = async {
+        let (call, args) = (&call, &args);
         match request {
-            Request::Discover(a) => discover::run(ctx, &call, a, &args).await,
-            Request::Read(a) => read::run(ctx, &call, a, &args).await,
-            Request::List(a) => list::run(ctx, &call, a, &args).await,
-            Request::Describe(a) => describe::run(ctx, &call, a).await,
-            Request::Find(a) => find::run(ctx, &call, a, &args).await,
-            Request::NetworkMap(a) => netmap::run(ctx, &call, a).await,
-            Request::Trend(a) => trend::run(ctx, &call, a, &args).await,
-            Request::LogRecords(a) => log_records::run(ctx, &call, a, &args).await,
-            Request::Alarms(a) => alarms::run(ctx, &call, a, &args).await,
-            Request::Decode(a) => decode::run(ctx, &call, a).await,
-            Request::Watch(a) => watch::run(ctx, &call, a, &args).await,
-            Request::Export(a) => export::run(ctx, &call, a, &args, &mut turtle).await,
+            Request::Discover(a) => boxed(move || discover::run(ctx, call, a, args)).await,
+            Request::Read(a) => boxed(move || read::run(ctx, call, a, args)).await,
+            Request::List(a) => boxed(move || list::run(ctx, call, a, args)).await,
+            Request::Describe(a) => boxed(move || describe::run(ctx, call, a)).await,
+            Request::Find(a) => boxed(move || find::run(ctx, call, a, args)).await,
+            Request::NetworkMap(a) => boxed(move || netmap::run(ctx, call, a)).await,
+            Request::Trend(a) => boxed(move || trend::run(ctx, call, a, args)).await,
+            Request::LogRecords(a) => boxed(move || log_records::run(ctx, call, a, args)).await,
+            Request::Alarms(a) => boxed(move || alarms::run(ctx, call, a, args)).await,
+            Request::Decode(a) => boxed(move || decode::run(ctx, call, a)).await,
+            Request::Watch(a) => boxed(move || watch::run(ctx, call, a, args)).await,
+            Request::Export(a) => {
+                let out = &mut turtle;
+                boxed(move || export::run(ctx, call, a, args, out)).await
+            }
         }
     };
     // A cancelled call (`notifications/cancelled`, or the host going away)
@@ -476,11 +485,13 @@ async fn attempt<T: TransportPort + 'static>(
     let account = account.unwrap_or_else(|| ctx.account());
     let budget = ctx.policy.caps.budget;
     let call = Call::new(budget, Arc::clone(&account));
+    // On the heap, as a tool's future is in [`call`].
     let run = async {
+        let call = &call;
         if name == write::NAME {
-            write::run(ctx, &call, args, retry, peer).await
+            boxed(move || write::run(ctx, call, args, retry, peer)).await
         } else {
-            revert::run(ctx, &call, args, peer).await
+            boxed(move || revert::run(ctx, call, args, peer)).await
         }
     };
     let work = tokio::time::timeout(budget + GRACE, charged(account, run));
