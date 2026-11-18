@@ -63,14 +63,11 @@ impl BACnetServer {
     /// sampled independently, not as an atomic aggregate. Raises
     /// RuntimeError("server not started") before start and after stop.
     fn cov_counters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
+        let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let counters = {
                 let guard = inner.read().await;
-                guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("server not started"))?
-                    .cov_counters()
+                guard.server()?.cov_counters()
             };
             // Owned Rust data only; the bridge builds the dict while attached.
             Ok(cov_counter_entries(counters))

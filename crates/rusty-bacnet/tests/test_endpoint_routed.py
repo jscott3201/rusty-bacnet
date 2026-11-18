@@ -616,7 +616,6 @@ class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):
         # A recipient on 127.0.0.1 can't share the link's broadcast address.
         endpoint = self.endpoint(
             broadcast_address="127.255.255.255",
-            device_write_policy=lambda context: True,
             source_audit_reporter=rb.ObjectIdentifier(O.AUDIT_REPORTER, 1),
             audit_recipient={"kind": "device", "object_identifier": sink_device},
             audit_device_bindings=[(sink_device, sink_address)],

@@ -5,13 +5,11 @@ impl BACnetServer {
     /// Copy this started SC transport's lifetime NPDU drop counters.
     /// Requires a started SC server, even when its Hub is disconnected.
     fn sc_npdu_drop_counts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
+        let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let counts = {
                 let guard = inner.read().await;
-                let server = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+                let server = guard.server()?;
                 match server.transport().and_then(AppTransport::link) {
                     Some(AnyTransport::Sc(transport)) => transport.npdu_drop_counts(),
                     _ => {

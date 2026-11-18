@@ -29,7 +29,6 @@ HUB_VMAC = b"\x02\x00\x00\x00\x00\x01"
 def source(**overrides):
     keywords = {
         "on_reinitialize": lambda request: None,
-        "device_write_policy": lambda context: True,
         "source_audit_reporter": REPORTER,
         "audit_recipient": {"kind": "device", "object_identifier": LOGGER},
     }
@@ -76,7 +75,7 @@ class LinkBindingTests(unittest.TestCase):
         for make in (sc_endpoint, mstp_endpoint):
             refused = [
                 {"source_audit_reporter": ObjectIdentifier(O.ANALOG_VALUE, 1)},
-                {"device_write_policy": None},
+                {"mutation_policy": "permissive"},
                 {"audit_recipient": None},
                 {"audit_device_bindings": [(LOGGER, "7"), (LOGGER, "8")]},
                 {"source_audit_reporter": None, "audit_device_bindings": [(LOGGER, "7")]},

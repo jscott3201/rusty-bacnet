@@ -26,16 +26,9 @@ const POLICY: &str = "cov_policy";
 /// the policy uses `..`, so a field added to `CovPolicy` stops the bindings
 /// compiling until it is bound here, and a bound field no key assigns is an
 /// unneeded `mut`, which the warning gate rejects.
+/// The endpoints' `cov_policy` keyword is read here too (#2617).
 pub(crate) fn cov_policy(dict: Option<&Bound<'_, PyDict>>) -> PyResult<CovPolicy> {
-    cov_policy_named(POLICY, dict)
-}
-
-/// [`cov_policy`] for a dict the errors call `name`, such as an endpoint's
-/// `cov['policy']`.
-pub(crate) fn cov_policy_named(
-    name: &str,
-    dict: Option<&Bound<'_, PyDict>>,
-) -> PyResult<CovPolicy> {
+    let name = POLICY;
     let CovPolicy {
         mut max_subscriptions_global,
         mut max_subscriptions_per_peer,

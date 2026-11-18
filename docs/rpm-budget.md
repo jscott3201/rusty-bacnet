@@ -43,9 +43,12 @@ own row plus one row per member property and abort with OUT_OF_RESOURCES past
 it. The shared endpoint (`bacnet-endpoint`) has no `ServerConfig`, so its
 ReadProperty takes the limit from `SessionConfig::read_work_limit` instead
 (default 256, zero rejected by `EndpointSession::new`), set directly or with the
-`read_work_limit(...)` method on the B/IP, SC and MS/TP endpoint builders. The
-Python `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` constructors take it as
-keyword-only `read_work_limit=256`, refusing zero with `ValueError`.
+`read_work_limit(...)` method on the B/IP, SC and MS/TP endpoint builders. A
+session given a full server (`with_server`) takes the server builder's budget
+instead. The Python `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` run that
+full server, and their keyword-only `read_work_limit=256` is its
+`max_result_elements` (#2617), refusing zero with `ValueError`.
+
 
 The unbudgeted public helper `handlers::handle_read_property_multiple` is
 gone (#2178). A host without a server reads ReadPropertyMultiple through

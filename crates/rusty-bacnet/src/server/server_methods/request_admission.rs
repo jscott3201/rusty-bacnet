@@ -5,14 +5,11 @@ impl BACnetServer {
     /// Sample independent request-admission counters; not an atomic aggregate.
     /// Like comm_state(), raises RuntimeError before start and after stop.
     fn request_admission_counters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
+        let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let counters = {
                 let guard = inner.read().await;
-                guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("server not started"))?
-                    .request_admission_counters()
+                guard.server()?.request_admission_counters()
             };
             // Owned Rust data only; no Python borrow or server guard escapes.
             Ok(std::collections::HashMap::from([

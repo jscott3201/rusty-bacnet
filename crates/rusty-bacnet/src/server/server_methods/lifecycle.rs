@@ -21,8 +21,11 @@ fn refused_object(error: bacnet_types::error::Error) -> PyErr {
 
 #[pymethods]
 impl BACnetServer {
-    /// Start the server. It will begin responding to BACnet requests.
+    /// Start the server. It will begin responding to BACnet requests. An
+    /// endpoint's server (#2617) raises RuntimeError: it started with its
+    /// endpoint.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.owned("start()")?;
         crate::logging_bridge::refresh_at_start(py);
         // Validate the selected sink before TLS/serial/network preparation or
         // ownership transfer. Keep registration stable until it is drained.
@@ -101,7 +104,6 @@ impl BACnetServer {
             None
         };
 
-        let inner = self.inner.clone();
         let started = self.started.clone();
         let device_instance = self.device_instance;
         let audit_recipient = recipient_input.take();
@@ -353,9 +355,10 @@ impl BACnetServer {
     /// notifications returns within the COV retry timeout.
     /// Cancellation keeps shutdown available for a later stop to join.
     /// Waits, with no limit, for the saves durable objects have queued, and
-    /// warns while storage holds it up (#1363).
+    /// warns while storage holds it up (#1363). An endpoint's server
+    /// (#2617) raises RuntimeError: the endpoint's close stops it.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let inner = self.inner.owned("stop()")?;
         let started = self.started.clone();
         let future = async move {
             let mut guard = inner.write().await;
@@ -380,9 +383,7 @@ impl BACnetServer {
         let transport_type = self.transport_type.clone();
         crate::py_async::future_into_py(py, async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             let mac = srv.local_mac();
             match transport_type.as_str() {
                 "bip" => {
@@ -461,9 +462,7 @@ impl BACnetServer {
         crate::py_async::future_into_py(py, async move {
             let value = {
                 let guard = inner.read().await;
-                let srv = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+                let srv = guard.server()?;
                 srv.read_local(&oid, pid, array_index)
                     .await
                     .map_err(to_py_err)?
@@ -536,9 +535,7 @@ impl BACnetServer {
             // borrows `srv` and runs the post-write COV/event trigger path,
             // so the server must stay alive across the await.
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.write_local_encoded(&oid, pid, array_index, &encoded, priority, source)
                 .await
                 .map_err(to_py_err)
@@ -568,9 +565,7 @@ impl BACnetServer {
 
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.set_present_value_local(&oid, prop_value)
                 .await
                 .map_err(to_py_err)
@@ -587,9 +582,7 @@ impl BACnetServer {
 
         crate::py_async::future_into_py(py, async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             Ok(crate::types::PyEnableDisable {
                 inner: bacnet_types::enums::EnableDisable::from(srv.comm_state()),
             })

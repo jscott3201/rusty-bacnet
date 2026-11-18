@@ -68,11 +68,7 @@ impl BACnetServer {
         }));
         let counters = (instance, nf.save_counters());
         let mut pending = self.lock_pending()?;
-        if self.started.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(
-                "cannot add objects after start() — server is already running",
-            ));
-        }
+        self.check_takes_objects()?;
         self.pending_forwarder_save_counters
             .lock()
             .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?
@@ -88,13 +84,11 @@ impl BACnetServer {
     /// `storage_path` stays at zero. Raises RuntimeError("server not
     /// started") before start and after stop.
     fn forwarder_save_counters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
+        let inner = self.inner.clone();
         let counters = Arc::clone(&self.forwarder_save_counters);
         crate::py_async::future_into_py(py, async move {
             let guard = inner.read().await;
-            if guard.is_none() {
-                return Err(PyRuntimeError::new_err("server not started"));
-            }
+            guard.server()?;
             let entries = counters
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?

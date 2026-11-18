@@ -477,8 +477,12 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
                                    notified.append(request.invoke_id), peer.mark()))
         try:
             async with endpoint:
-                scope = (await endpoint.server()).service_scope()
-                self.assertEqual(scope["executes"], ["read_property", "reinitialize_device"])
+                # The endpoint's full server executes it, with the handler
+                # and password its keywords gave (#2617).
+                services = (await (await endpoint.server()).read_property(
+                    ObjectIdentifier(ObjectType.DEVICE, 4103),
+                    P.PROTOCOL_SERVICES_SUPPORTED)).value
+                self.assertIn("REINITIALIZE_DEVICE", services.names)
                 address = await endpoint.local_address()
                 self.assertEqual(await peer.ask(address, 1, S.WARMSTART, "secret"),
                                  error(1, *CONFIGURATION_IN_PROGRESS))
@@ -495,11 +499,22 @@ class EndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [1, 2, 4])
         self.assertEqual(notified, [4])
 
-    async def test_without_a_handler_the_endpoint_executes_read_property_only(self):
-        async with BipEndpoint(4104, interface="127.0.0.1", port=0,
-                               broadcast_address="127.0.0.1") as endpoint:
-            scope = (await endpoint.server()).service_scope()
-            self.assertEqual(scope["executes"], ["read_property"])
+    async def test_without_a_handler_the_endpoint_denies_reinitialize_device(self):
+        # As a standalone server does: the full server answers it with
+        # SERVICES / SERVICE_REQUEST_DENIED, where the narrow responder
+        # rejected it as an unrecognized service (#2617).
+        peer = Peer()
+        try:
+            async with BipEndpoint(4104, interface="127.0.0.1", port=0,
+                                   broadcast_address="127.0.0.1") as endpoint:
+                address = await endpoint.local_address()
+                self.assertEqual(await peer.ask(address, 1, S.WARMSTART),
+                                 error(1, *SERVICE_REQUEST_DENIED))
+                self.assertEqual(await peer.ask(address, 2, S.WARMSTART, "secret"),
+                                 error(2, *SERVICE_REQUEST_DENIED))
+        finally:
+            peer.close()
+
 
 
 if __name__ == "__main__":

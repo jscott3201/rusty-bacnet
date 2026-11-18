@@ -6957,6 +6957,14 @@ class BACnetServer:
     no object may have it, so it, or anything larger, raises ValueError at
     construction (#2171).
 
+    ``await endpoint.server()`` returns this class too (#2617): the server
+    the endpoint's session runs on the endpoint's one address, with its
+    objects and the endpoint's server keywords. Its runtime calls work as
+    here. Its ``start()`` and ``stop()`` raise RuntimeError, since the
+    endpoint starts it and the endpoint's ``close()`` stops it, after which
+    its calls raise RuntimeError too; so do its ``add_*`` and ``configure_*``
+    calls, since the endpoint configures it before its start.
+
     Usage::
 
         server = BACnetServer(device_instance=1234, device_name="My Device")
@@ -8611,12 +8619,15 @@ class BACnetServer:
         An added object the database won't take raises ValueError: "duplicate
         object name: ..." for a name another object holds, or "object
         refused: ..." for any other reason, an instance of 4194303 among them
-        (#2171).
+        (#2171). An endpoint's server (``await endpoint.server()``) raises
+        RuntimeError: it started with its endpoint.
         """
         ...
 
     def stop(self) -> Awaitable[None]:
-        """Join admitted work and release the owned transport.
+        """Join admitted work and release the owned transport. An endpoint's
+        server (``await endpoint.server()``) raises RuntimeError: the
+        endpoint's ``close()`` stops it.
 
         Cancelling the returned Future retains shutdown ownership. Call stop()
         again to join it; a cleanup error also retains the owner for retry.
@@ -9477,25 +9488,6 @@ class RoutedTarget:
 # Endpoint (RB-19): one transport above both roles
 # ---------------------------------------------------------------------------
 
-class EndpointCov(TypedDict, total=False):
-    """``BipEndpoint``/``ScEndpoint``/``MstpEndpoint(cov=...)``: turns COV on
-    for the endpoint's objects (#2490), checked at construction; omitted keys
-    keep their defaults, so ``{}`` turns it on with them all. ``policy`` is
-    read as ``BACnetServer(cov_policy=...)`` is. ``outbox_entries`` (16, 1
-    to 65535) and ``outbox_octets`` (2048, 1 to 16777216) bound the
-    notifications queued at once, allocated when the endpoint starts;
-    ``outbox_octets`` must hold the largest notification the objects call
-    for, up to ``max_apdu``, or a subscription is acknowledged and then hears
-    nothing. ``confirmed_timeout_ms`` (3000, 1 to 3600000) and
-    ``confirmed_retries`` (3) time a confirmed notification. An unknown key
-    or a wrong type raises TypeError, an integer out of range of its type
-    OverflowError, and a value outside those ranges ValueError."""
-    policy: CovPolicy
-    outbox_entries: int
-    outbox_octets: int
-    confirmed_timeout_ms: int
-    confirmed_retries: int
-
 class EndpointStatus(TypedDict):
     """Bounded endpoint snapshot: liveness, identity, transport, leases, policy counts.
 
@@ -9523,7 +9515,6 @@ class EndpointStatus(TypedDict):
     no_server_role: int
     no_client_role: int
     unclaimed_terminal: int
-    responder_declined: int
     unconfirmed_full_drops: int
     confirmed_full_drops: int
     answer_full_drops: int
@@ -9534,6 +9525,12 @@ class EndpointStatus(TypedDict):
     """APDUs the client's queue refused, never waited for: those it had no room for, and those its tiers held back (copies of unconfirmed requests use at most half of it, confirmed requests to the client all but the quarter kept for its answers). On an endpoint with no server role, a confirmed request refused here is counted here, not in ``confirmed_full_drops``."""
     client_seat_control_full_drops: int
     """Network controls dropped the same way."""
+    server_seat_apdus: int
+    """APDUs handed to the endpoint's server (#2617), over the session's run."""
+    server_seat_full_drops: int
+    """APDUs the server's queue refused, never waited for, as the client's
+    are counted: a confirmed request counted here went unanswered, and its
+    requester's retry is its recovery."""
 
 class ReadRangeResult(TypedDict):
     object_id: ObjectIdentifier
@@ -9593,32 +9590,6 @@ class ReadAccessResult(TypedDict):
     object_id: ObjectIdentifier
     results: list[ReadPropertyResult]
 
-class EndpointServer:
-    """Server role cloned from a running endpoint (no lifecycle).
-
-    The responder executes ``read_property`` automatically, WriteProperty to
-    the local Device through the owner's ``device_write_policy``, and
-    ReinitializeDevice through the owner's ``on_reinitialize``, the one
-    Python callback that runs under a native lock; this handle exposes
-    liveness plus the MS/TP deferred-reply seam.
-    """
-
-    def is_session_alive(self) -> bool:
-        """True while the owning endpoint is alive and open."""
-        ...
-
-    def suspend_next_reply(self) -> None:
-        """Arm one-shot deferred-reply suspension (MS/TP wiring)."""
-        ...
-
-    def service_scope(self) -> dict[str, Any]:
-        """Narrow scope: executes ``read_property``, plus ``write_property``
-        when the owner has ``device_write_policy``, ``reinitialize_device``
-        when it has ``on_reinitialize``, and ``subscribe_cov``,
-        ``subscribe_cov_property`` and ``subscribe_cov_property_multiple``
-        when it has ``cov``."""
-        ...
-
 class BipEndpoint:
     """B/IP endpoint: one UDP socket that both initiates and executes.
 
@@ -9634,6 +9605,14 @@ class BipEndpoint:
     cancellation can race publication, so always await close for cleanup.
     Setup errors are delivered by awaiting start/context entry. BIPv6/Ethernet
     have no endpoint owner.
+
+    The server role is a full ``BACnetServer`` (#2617), from
+    ``await endpoint.server()``: it executes the services a standalone server
+    does, answers Who-Is and Who-Has, and lists those services in the
+    Device's Protocol_Services_Supported. Without ``mutation_policy`` it is
+    read-only: a peer's write, create or delete is denied with SERVICES /
+    SERVICE_REQUEST_DENIED, time synchronization is ignored, and reads,
+    discovery, COV subscriptions and alarm acknowledgments are answered.
 
     ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
     no object may have it, so it, or anything larger, raises ValueError at
@@ -9658,7 +9637,6 @@ class BipEndpoint:
         network_port_instance: int = 1,
         max_apdu: int = 1476,
         segmentation: Optional[Segmentation] = None,
-        services: Optional[list[int]] = None,
         device_uuid: Optional[Union[bytes, bytearray]] = None,
         queue_capacity: int = 256,
         apdu_timeout_ms: int = 6000,
@@ -9675,34 +9653,38 @@ class BipEndpoint:
         on_reinitialize: Optional[ReinitializeHandler] = None,
         after_reinitialize: Optional[AfterReinitialize] = None,
         reinit_password: Optional[str] = None,
-        device_write_policy: Optional[MutationHandler] = None,
+        mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
+        cov_policy: CovPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
-        cov: EndpointCov | None = None,
     ) -> None:
-        """``cov``: an ``EndpointCov`` turns on SubscribeCOV, SubscribeCOVProperty
-        and SubscribeCOVPropertyMultiple for the endpoint's objects (#2490),
-        with the notifications their subscriptions call for after
-        ``set_present_value_local`` and ``set_reliability_local``; without it
-        all three are refused as unrecognized services. At most 64 confirmed
-        notifications are out at once, so subscribers that stop answering
-        leave the client role invoke IDs of its own. The endpoint has no
-        Device clock: a timestamped COV-multiple reference is refused with
-        SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, untimestamped ones
-        are taken, and nothing it sends carries a time of change. A client's
-        write reaches only the Device, which takes no subscription, so it
-        notifies nobody. ``ScEndpoint`` and ``MstpEndpoint`` take it too.
+        """``mutation_policy`` (#2617): who may change the endpoint's
+        objects, as ``BACnetServer``'s keyword of the same name takes it:
+        ``"permissive"`` (any peer), ``"deny_all"`` (no peer, COV
+        subscriptions included) or a callable that gets a ``MutationContext``
+        for each mutation and returns a bool, with that keyword's fail-closed
+        rules. Without it (None, the default) the server is read-only: every
+        write, create and delete is denied, time synchronization is ignored,
+        and reads, discovery, COV subscriptions and alarm acknowledgments are
+        answered. Given one, the server is the one ``BACnetServer`` with that
+        policy is, time synchronization included. ``cov_policy``: the
+        server's ``CovPolicy``, read as ``BACnetServer``'s is. The application
+        changes its objects through ``await endpoint.server()``, whose COV
+        and event notifications follow as on a standalone server.
+        ``ScEndpoint`` and ``MstpEndpoint`` take both too.
 
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings`` (#2348): the Audit Reporter, added with
         ``add_audit_reporter``, through which the session reports the
-        ReinitializeDevice resets, backups and restores it carries out,
-        ``report_device_reset_local()`` calls and the reads and writes of
-        its ``client()`` (#2617), each filtered by the Reporter's level and
-        operations. It needs
-        ``device_write_policy`` and ``audit_recipient`` (the Device's Audit
-        recipient); the bindings are ``(Device identifier, "ipv4:port")``
+        ReinitializeDevice resets, backups and restores the server carries
+        out, ``report_device_reset_local()`` calls and the reads and writes
+        of its ``client()`` (#2617), each filtered by the Reporter's level and
+        operations. It needs ``audit_recipient`` (the Device's Audit
+        recipient) and a ``mutation_policy`` that decides writes, so that no
+        peer redirects the audit trail unasked: none (read-only),
+        ``"deny_all"`` or a callable, never ``"permissive"`` (ValueError).
+        The bindings are ``(Device identifier, "ipv4:port")``
         routes to recipient Devices, or ``"network:0xMAC"`` for one behind a
         router on that network (#2371; network 1 to 65534, MAC 1 to 18
         octets). A Reporter identifier of another type and
@@ -9714,22 +9696,15 @@ class BipEndpoint:
         ReinitializeDevice, as ``BACnetServer``'s keywords do (#1566);
         ``reinit_password`` (needs ``on_reinitialize``, else ValueError; 1 to
         20 characters, else ValueError) is the password a request must
-        carry. The callable runs on the session's
-        one dispatch task, so a slow one stalls every request.
-        ``device_write_policy``: a callable that decides each WriteProperty
-        to the local Device's Description or installed Audit recipient
-        (#2033). It gets a ``MutationContext`` and returns a bool, with the
-        fail-closed rules of ``BACnetServer``'s ``mutation_policy`` callable:
-        an exception, a non-bool or interpreter shutdown denies with SERVICES
-        / SERVICE_REQUEST_DENIED. Without it the endpoint executes no
-        WriteProperty. It runs with no lock held, but on the session's one
-        dispatch task, so it too should decide quickly: while it runs, other
-        requests and ``close()`` wait for it.
+        carry. Without ``on_reinitialize`` the server denies every
+        ReinitializeDevice.
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the endpoint as a BBMD, or register it as a foreign device (#938).
-        ``read_work_limit``: result rows one ReadProperty served by the
-        server role may expand, a Group's member rows included; a read past it
-        is aborted with OUT_OF_RESOURCES. Zero raises ValueError.
+        ``read_work_limit``: the server's ReadPropertyMultiple budget of
+        result rows, ``BACnetServer``'s ``rpm_max_result_elements``: a
+        ReadProperty counts its own row and a Group's member rows, a
+        ReadPropertyMultiple every result, and one past it is aborted with
+        OUT_OF_RESOURCES. Zero raises ValueError.
         ``share_port_by_address`` (default False): bind the interface address
         itself, so endpoints on other addresses of this host can share the
         port. Needs an explicit interface and a nonzero port; broadcasts and
@@ -9822,8 +9797,14 @@ class BipEndpoint:
         and writes (#2617)."""
         ...
 
-    def server(self) -> Awaitable[EndpointServer]:
-        """Clone the server role (RuntimeError before start/after close)."""
+    def server(self) -> Awaitable[BACnetServer]:
+        """The ``BACnetServer`` the endpoint's session runs on its socket
+        (#2617): the standalone class, with its runtime calls, on the
+        endpoint's one address and its objects. Each call returns a new
+        handle on the one server. Its ``start()`` and ``stop()`` raise
+        RuntimeError: the endpoint starts it, and the endpoint's
+        ``close()`` stops it, after which its calls raise RuntimeError
+        rather than wait. RuntimeError before start and after close."""
         ...
 
     def local_address(self) -> Awaitable[str]:
@@ -9891,29 +9872,6 @@ class BipEndpoint:
         RuntimeError when the endpoint is not running."""
         ...
 
-    def set_present_value_local(
-        self,
-        object_id: ObjectIdentifier,
-        value: PropertyValue,
-    ) -> Awaitable[None]:
-        """Supply an object's Present_Value from the application, as
-        ``BACnetServer.set_present_value_local`` does, with the same values
-        taken and the same errors (#2490). With ``cov``, the object's COV
-        subscribers hear of the change. RuntimeError before ``start()``."""
-        ...
-
-    def set_reliability_local(
-        self,
-        object_id: ObjectIdentifier,
-        reliability: Reliability,
-    ) -> Awaitable[None]:
-        """Set the Reliability the application works out for an object, as
-        ``BACnetServer.set_reliability_local`` does, with the same objects and
-        errors (#2490). Status_Flags' FAULT follows it, and with ``cov`` the
-        object's COV subscribers hear of it. The endpoint runs no event pass,
-        so Event_State stays as it is. RuntimeError before ``start()``."""
-        ...
-
     @property
     def device_instance(self) -> int: ...
     @property
@@ -9946,25 +9904,24 @@ class ScEndpoint:
         network_port_instance: int = 2,
         max_apdu: int = 1476,
         segmentation: Optional[Segmentation] = None,
-        services: Optional[list[int]] = None,
         queue_capacity: int = 256,
         read_work_limit: int = 256,
         min_request_interval_ms: int = 0,
         on_reinitialize: Optional[ReinitializeHandler] = None,
         after_reinitialize: Optional[AfterReinitialize] = None,
         reinit_password: Optional[str] = None,
-        device_write_policy: Optional[MutationHandler] = None,
+        mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
+        cov_policy: CovPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
         reconnect: Optional[ScReconnect] = None,
         sc_failover_hub: str | None = None,
         sc_connect_timeout_ms: int | None = None,
-        cov: EndpointCov | None = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password``,
-        ``device_write_policy`` and ``cov`` are as for ``BipEndpoint``.
+        ``mutation_policy`` and ``cov_policy`` are as for ``BipEndpoint``.
 
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
@@ -10067,8 +10024,9 @@ class ScEndpoint:
         events from the start."""
         ...
 
-    def server(self) -> Awaitable[EndpointServer]:
-        """Clone the server role."""
+    def server(self) -> Awaitable[BACnetServer]:
+        """The ``BACnetServer`` the endpoint's session runs on its hub
+        connection (#2617), as ``BipEndpoint.server()`` gives one."""
         ...
 
     def local_address(self) -> Awaitable[str]:
@@ -10110,29 +10068,6 @@ class ScEndpoint:
         recorded already. RuntimeError when the endpoint is not running."""
         ...
 
-    def set_present_value_local(
-        self,
-        object_id: ObjectIdentifier,
-        value: PropertyValue,
-    ) -> Awaitable[None]:
-        """Supply an object's Present_Value from the application, as
-        ``BACnetServer.set_present_value_local`` does, with the same values
-        taken and the same errors (#2490). With ``cov``, the object's COV
-        subscribers hear of the change. RuntimeError before ``start()``."""
-        ...
-
-    def set_reliability_local(
-        self,
-        object_id: ObjectIdentifier,
-        reliability: Reliability,
-    ) -> Awaitable[None]:
-        """Set the Reliability the application works out for an object, as
-        ``BACnetServer.set_reliability_local`` does, with the same objects and
-        errors (#2490). Status_Flags' FAULT follows it, and with ``cov`` the
-        object's COV subscribers hear of it. The endpoint runs no event pass,
-        so Event_State stays as it is. RuntimeError before ``start()``."""
-        ...
-
     @property
     def device_instance(self) -> int: ...
     @property
@@ -10159,7 +10094,6 @@ class MstpEndpoint:
         mstp_max_info_frames: int = 1,
         max_apdu: int = 480,
         segmentation: Optional[Segmentation] = None,
-        services: Optional[list[int]] = None,
         device_uuid: Optional[Union[bytes, bytearray]] = None,
         queue_capacity: int = 256,
         apdu_timeout_ms: int = 6000,
@@ -10176,15 +10110,15 @@ class MstpEndpoint:
         on_reinitialize: Optional[ReinitializeHandler] = None,
         after_reinitialize: Optional[AfterReinitialize] = None,
         reinit_password: Optional[str] = None,
-        device_write_policy: Optional[MutationHandler] = None,
+        mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
+        cov_policy: CovPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
-        cov: EndpointCov | None = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password``,
-        ``device_write_policy`` and ``cov`` are as for ``BipEndpoint``. Here
+        ``mutation_policy`` and ``cov_policy`` are as for ``BipEndpoint``. Here
         ``after_reinitialize`` runs once the SimpleACK is queued, before the
         token sends it: stopping the endpoint at once can drop the reply, so
         wait a short while first.
@@ -10292,8 +10226,10 @@ class MstpEndpoint:
         answers do."""
         ...
 
-    def server(self) -> Awaitable[EndpointServer]:
-        """Clone the server role."""
+    def server(self) -> Awaitable[BACnetServer]:
+        """The ``BACnetServer`` the endpoint's session runs on its serial
+        link (#2617), as ``BipEndpoint.server()`` gives one. Its answers
+        wait for this node's token, as the client's requests do."""
         ...
 
     def local_address(self) -> Awaitable[str]:
@@ -10317,29 +10253,6 @@ class MstpEndpoint:
         device as source and target, filtered by that Reporter's level and
         operations; without one, nothing. A peer's accepted restart is
         recorded already. RuntimeError when the endpoint is not running."""
-        ...
-
-    def set_present_value_local(
-        self,
-        object_id: ObjectIdentifier,
-        value: PropertyValue,
-    ) -> Awaitable[None]:
-        """Supply an object's Present_Value from the application, as
-        ``BACnetServer.set_present_value_local`` does, with the same values
-        taken and the same errors (#2490). With ``cov``, the object's COV
-        subscribers hear of the change. RuntimeError before ``start()``."""
-        ...
-
-    def set_reliability_local(
-        self,
-        object_id: ObjectIdentifier,
-        reliability: Reliability,
-    ) -> Awaitable[None]:
-        """Set the Reliability the application works out for an object, as
-        ``BACnetServer.set_reliability_local`` does, with the same objects and
-        errors (#2490). Status_Flags' FAULT follows it, and with ``cov`` the
-        object's COV subscribers hear of it. The endpoint runs no event pass,
-        so Event_State stays as it is. RuntimeError before ``start()``."""
         ...
 
     @property

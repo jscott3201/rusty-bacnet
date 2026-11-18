@@ -6,11 +6,11 @@
 
 use std::future::Future;
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{RwLock, oneshot};
 
 /// The concrete owner must finish failed-start cleanup before returning Err;
 /// stop must settle teardown even when it reports a terminal dispatch error.
-pub(crate) trait Session: Send + 'static {
+pub(crate) trait Session: Send + Sync + 'static {
     type Error: Send + 'static;
     fn start(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn stop(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
@@ -46,7 +46,10 @@ impl Drop for CloseRequest {
 }
 
 pub(crate) struct Lifecycle<S, P> {
-    pub(crate) session: Arc<Mutex<Option<S>>>,
+    /// The running session. Start and close take it whole; every other
+    /// call shares it, so a server call that waits long holds up no other
+    /// call, and close waits for the calls in flight (#2617).
+    pub(crate) session: Arc<RwLock<Option<S>>>,
     on_close: Option<Arc<dyn Fn() + Send + Sync>>,
     pending: Arc<StdMutex<Pending<P>>>,
     preparing: Arc<StdMutex<Preparation>>,
@@ -66,7 +69,7 @@ impl<S, P> Clone for Lifecycle<S, P> {
 impl<S, P> Lifecycle<S, P> {
     pub(crate) fn new() -> Self {
         Self {
-            session: Arc::new(Mutex::new(None)),
+            session: Arc::new(RwLock::new(None)),
             on_close: None,
             preparing: Arc::new(StdMutex::new(Preparation::default())),
             pending: Arc::new(StdMutex::new(Pending {
@@ -114,7 +117,7 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
         F: FnOnce(Vec<P>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<S, S::Error>> + Send,
     {
-        let mut session = self.session.clone().lock_owned().await;
+        let mut session = self.session.clone().write_owned().await;
         if session.is_some() {
             return if reenter {
                 Ok(())
@@ -197,7 +200,7 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
             }
             CloseRequest(self.preparing.clone())
         };
-        let mut session = self.session.clone().lock_owned().await;
+        let mut session = self.session.clone().write_owned().await;
         drop(request);
         if let Some(observer) = &self.on_close {
             observer();
@@ -252,7 +255,7 @@ mod admission_gap_tests {
         });
         // One runtime worker holds session and waits on this exact private barrier.
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while owner.session.try_lock().is_ok() {
+            while owner.session.try_write().is_ok() {
                 tokio::task::yield_now().await;
             }
         })

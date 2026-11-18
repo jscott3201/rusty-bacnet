@@ -11300,8 +11300,9 @@ and trusted local writes stay outside it. The shared endpoint's narrow
 [Device-write authorizer](#authorized-endpoint-device-writes) is configured
 separately. Python exposes the same native policy through
 `BACnetServer(..., mutation_policy="permissive" | "deny_all" | callable)`, and
-the endpoints' Device-write authorizer through their `device_write_policy`
-callable (#2033). See
+the endpoints take the same keyword for the full server each runs, which is
+read-only without one (#2617). See
+
 [Server authorization policy](mutation-policy.md).
 
 ### Program_State from the application
@@ -13556,7 +13557,10 @@ session.stop().await?; // stops the server, then the link
   until a stop has stopped it; a cancelled start or stop leaves it `Some`.
 - The builder's policies apply as given. A builder with none lets any peer
   write, create and delete, as a standalone server does; give it a
-  `ServerPolicy` or `MutationPolicy::DenyAll` to close it.
+  `ServerPolicy` or `MutationPolicy::DenyAll` to close it, or start from
+  `bacnet_endpoint::session::read_only_server()`, the read-only stance
+  described below, as an ordinary builder to set the rest on. The Python
+  endpoints build their server from it unless given a `mutation_policy`.
 - From the first request: the server's seat is attached as the link starts,
   before its first request is classified, and the server takes what waits
   there once the session's start is done, so nothing is dropped as finding no
@@ -13675,14 +13679,17 @@ session.stop().await?; // stops the server, then the link
   an Address naming this network by its number or a group address only the
   bound link reveals. That refusal ends the session and drops the database
   the server was given.
-- Where this is going (maintainer decisions on #2617): in Python, `await
-  endpoint.server()` returns this `BACnetServer`. Then the narrow server role
+- Where this is going (maintainer decisions on #2617): the Python endpoints
+  already run this server, and `await endpoint.server()` returns it as a
+  `BACnetServer`. Next the narrow server role
   goes, taking the session's own COV reporting, local writes, Device-write
   authorizer, ReinitializeDevice opt-in and `read_work_limit` with it, and a
   server-role session always builds a full server: without a builder, a
-  read-only one that answers reads, discovery and COV subscriptions and
-  refuses every write, create and delete (SERVICES / SERVICE_REQUEST_DENIED),
-  so a 0.15.0 endpoint that upgrades doesn't become writable by any peer.
+  read-only one (`read_only_server()`) that answers reads, discovery and COV
+  subscriptions and refuses every write, create and delete (SERVICES /
+  SERVICE_REQUEST_DENIED), so a 0.15.0 endpoint that upgrades doesn't become
+  writable by any peer.
+
   It also ignores time synchronization, local and UTC (Clauses 16.7 and
   16.8). What the server's policy doesn't decide keeps the server's
   defaults, so any peer may still acknowledge an alarm (AcknowledgeAlarm,

@@ -9,10 +9,15 @@
 //! same object; once its `stop()` has finished, a fresh one. The session
 //! lock orders `client()` against close, and close stops the session, then
 //! the client (the `stop` of its lifecycle `Session` impl).
+//!
+//! The session owns its full server (#2617), and `endpoint.server()` hands
+//! out a Python `BACnetServer` that borrows it through the session lock on
+//! each call ([`crate::server::ServerHost`]); the session's stop stops it.
 
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_endpoint::session::EndpointSession;
 use pyo3::exceptions::PyRuntimeError;
@@ -21,6 +26,7 @@ use pyo3::prelude::*;
 use crate::app_transport::AppTransport;
 use crate::client::{BACnetClient, ClientInner, Liveness};
 use crate::errors::to_py_err;
+use crate::server::{BACnetServer, SeatedHost};
 
 #[cfg(test)]
 #[path = "running_tests.rs"]
@@ -30,10 +36,16 @@ mod tests;
 /// Python `BACnetClient`'s.
 pub(crate) type Session = EndpointSession<AppTransport>;
 
+/// The runs started in this process, so each has its own number.
+static RUNS: AtomicU64 = AtomicU64::new(0);
+
 /// A running session, and the client `endpoint.client()` last handed out.
 pub(crate) struct Running {
     session: Session,
     client: Option<Seated>,
+    /// This run's number: a server handle names the run it came from, so
+    /// one kept past a close never reaches a later start's server.
+    run: u64,
 }
 
 /// The Python client on the session's link, and its state, which the
@@ -48,7 +60,17 @@ impl Running {
         Self {
             session,
             client: None,
+            run: RUNS.fetch_add(1, Ordering::Relaxed) + 1,
         }
+    }
+
+    /// The session's full server, when this is run `run` and the server
+    /// runs: what an endpoint's `BACnetServer` calls.
+    pub(crate) fn server_of_run(
+        &self,
+        run: u64,
+    ) -> Option<&bacnet_server::server::BACnetServer<AppTransport>> {
+        (self.run == run).then(|| self.session.server()).flatten()
     }
 
     /// The client to hand out: the one now running, or `candidate`, filled
@@ -144,15 +166,18 @@ impl super::lifecycle::Session for Running {
     }
 }
 
-/// The full client's seat, as an endpoint's `status()` shows it: the APDUs
-/// handed to it, and those dropped at once because its queue was full,
-/// never waited for (and the same for network controls). The counts cover
-/// the session's whole run, every client on it.
+/// The two seats, as an endpoint's `status()` shows them: the APDUs handed
+/// to the full client and to the full server, and those dropped at once
+/// because a seat's queue was full, never waited for (and the same for the
+/// client's network controls). The counts cover the session's whole run,
+/// every client on it.
 #[derive(Clone, Copy)]
 pub(crate) struct SeatCounts {
     apdus: u64,
     full_drops: u64,
     control_full_drops: u64,
+    server_apdus: u64,
+    server_full_drops: u64,
 }
 
 impl SeatCounts {
@@ -161,20 +186,56 @@ impl SeatCounts {
         dict.set_item("client_seat_apdus", self.apdus)?;
         dict.set_item("client_seat_full_drops", self.full_drops)?;
         dict.set_item("client_seat_control_full_drops", self.control_full_drops)?;
+        dict.set_item("server_seat_apdus", self.server_apdus)?;
+        dict.set_item("server_seat_full_drops", self.server_full_drops)?;
         Ok(())
     }
 }
 
 impl Running {
-    /// The seat's counts now.
+    /// The seats' counts now.
     pub(crate) fn seat_counts(&self) -> SeatCounts {
         let counters = self.session.client_seat_counters();
+        let server = self.session.server_seat_counters();
         SeatCounts {
             apdus: counters.apdus,
             full_drops: counters.full_drops,
             control_full_drops: counters.control_full_drops,
+            server_apdus: server.apdus,
+            server_full_drops: server.full_drops,
         }
     }
+}
+
+/// What `await endpoint.server()` awaits (#2617): a `BACnetServer` on the
+/// full server the endpoint's session owns, on a `transport` link
+/// (`"bip"`, `"sc"` or `"mstp"`), for the endpoint's `device_instance`.
+/// Each call makes a new handle on the run's one server. It names this
+/// run, so after a close it raises rather than reach a later start's
+/// server. Made with the interpreter attached once the session lock is
+/// let go.
+pub(crate) async fn server(
+    session: Arc<tokio::sync::RwLock<Option<Running>>>,
+    transport: &'static str,
+    device_instance: u32,
+) -> PyResult<Py<BACnetServer>> {
+    let run = {
+        let guard = session.read().await;
+        let running = guard.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
+        })?;
+        running
+            .server_of_run(running.run)
+            .ok_or_else(|| PyRuntimeError::new_err("the endpoint's server is not running"))?;
+        running.run
+    };
+    let host = SeatedHost {
+        session: Arc::downgrade(&session),
+        run,
+    };
+    crate::py_async::attach(move |py| {
+        Py::new(py, BACnetServer::seated(host, transport, device_instance))
+    })
 }
 
 /// What `await endpoint.client()` awaits on an endpoint whose link takes
@@ -183,7 +244,7 @@ impl Running {
 /// Audit Reporter, the session audits its reads and writes (#2617).
 pub(crate) fn client(
     py: Python<'_>,
-    session: Arc<tokio::sync::Mutex<Option<Running>>>,
+    session: Arc<tokio::sync::RwLock<Option<Running>>>,
     transport: &'static str,
 ) -> PyResult<impl Future<Output = PyResult<Py<BACnetClient>>> + Send + 'static> {
     // Made here, with the interpreter attached, and filled under the
@@ -193,7 +254,7 @@ pub(crate) fn client(
     let candidate = Arc::new(candidate);
     Ok(async move {
         let chosen = {
-            let mut guard = session.lock().await;
+            let mut guard = session.write().await;
             let running = guard.as_mut().ok_or_else(|| {
                 PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
             })?;

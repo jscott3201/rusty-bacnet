@@ -25,9 +25,7 @@ impl BACnetServer {
 
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.set_program_state_local(&oid, prop_value)
                 .await
                 .map_err(to_py_err)

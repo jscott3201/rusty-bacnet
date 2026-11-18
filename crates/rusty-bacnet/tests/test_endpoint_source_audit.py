@@ -22,7 +22,7 @@ def endpoint(destination, **overrides):
     """A B/IP endpoint reporting to the sink Device at `destination`."""
     keywords = {
         "interface": "127.0.0.1", "port": 0, "broadcast_address": "127.255.255.255",
-        "on_reinitialize": lambda request: None, "device_write_policy": lambda context: True,
+        "on_reinitialize": lambda request: None,
         "source_audit_reporter": REPORTER,
         "audit_recipient": {"kind": "device", "object_identifier": SINK_DEVICE},
         "audit_device_bindings": [(SINK_DEVICE, destination)],
@@ -146,7 +146,7 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
         refused_at_construction = [
             {"source_audit_reporter": rb.ObjectIdentifier(O.ANALOG_VALUE, 1)},
             {"source_audit_reporter": rb.ObjectIdentifier(O.AUDIT_REPORTER, 4194303)},
-            {"device_write_policy": None},
+            {"mutation_policy": "permissive"},
             {"audit_recipient": None},
             {"audit_recipient": {"kind": "device",
                                  "object_identifier": rb.ObjectIdentifier(O.DEVICE, ENDPOINT)}},
@@ -175,6 +175,9 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
                     endpoint(destination, **overrides)
                 if overrides.get("audit_recipient"):
                     self.assertIn("audit_recipient", str(raised.exception))
+                if "mutation_policy" in overrides:
+                    # Any peer could redirect the audit trail (#2617).
+                    self.assertIn("mutation_policy that decides writes", str(raised.exception))
                 bindings = overrides.get("audit_device_bindings") or []
                 if len(bindings) == 1:
                     self.assertIn("audit_device_bindings[0]", str(raised.exception))

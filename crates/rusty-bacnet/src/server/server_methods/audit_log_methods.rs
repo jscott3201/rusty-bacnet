@@ -28,9 +28,7 @@ impl BACnetServer {
 
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.purge_audit_log(&oid).await.map_err(to_py_err)
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -44,9 +42,7 @@ impl BACnetServer {
         let inner = self.inner.clone();
         let future = async move {
             let guard = inner.read().await;
-            let srv = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            let srv = guard.server()?;
             srv.report_device_reset_local().await.map_err(to_py_err)
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))

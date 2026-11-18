@@ -15,8 +15,8 @@ from pathlib import Path
 import rusty_bacnet
 from rusty_bacnet import (
     BACnetClient,
+    BACnetServer,
     BipEndpoint,
-    EndpointServer,
     MstpEndpoint,
     ScEndpoint,
 )
@@ -77,13 +77,10 @@ class EndpointStubParityTests(unittest.TestCase):
     def test_endpoint_classes_present_in_runtime_and_stub(self):
         tree = installed_stub()
         classes = stub_classes(tree)
-        # TypedDicts (EndpointStatus, EndpointCov) exist in the stub only,
-        # like ScHubStatus.
-        for name in ("EndpointStatus", "EndpointCov"):
-            with self.subTest(symbol=name):
-                self.assertIn(name, classes)
+        # The TypedDict EndpointStatus exists in the stub only, like
+        # ScHubStatus.
+        self.assertIn("EndpointStatus", classes)
         for name in (
-            "EndpointServer",
             "BipEndpoint",
             "ScEndpoint",
             "MstpEndpoint",
@@ -91,10 +88,12 @@ class EndpointStubParityTests(unittest.TestCase):
             with self.subTest(symbol=name):
                 self.assertIn(name, classes)
                 self.assertTrue(hasattr(rusty_bacnet, name), f"runtime missing {name}")
-        # The narrow client class is gone: endpoint.client() is a
-        # BACnetClient (#2617).
-        self.assertNotIn("EndpointClient", classes)
-        self.assertFalse(hasattr(rusty_bacnet, "EndpointClient"))
+        # The narrow role classes are gone: endpoint.client() is a
+        # BACnetClient and endpoint.server() a BACnetServer (#2617).
+        for gone in ("EndpointClient", "EndpointServer", "EndpointCov"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, classes)
+                self.assertFalse(hasattr(rusty_bacnet, gone))
 
     def test_runtime_signatures_match_stub(self):
         tree = installed_stub()
@@ -103,36 +102,36 @@ class EndpointStubParityTests(unittest.TestCase):
             (BipEndpoint, ["device_instance", "device_name", "vendor_id", "interface",
                            "port", "broadcast_address", "network_number",
                            "network_port_instance", "max_apdu", "segmentation",
-                           "services", "device_uuid", "queue_capacity",
+                           "device_uuid", "queue_capacity",
                            "apdu_timeout_ms", "apdu_retries", "registered_network_port",
                            "read_work_limit", "share_port_by_address", "share_wildcard_port",
                            "min_request_interval_ms", "bbmd", "foreign_device", "multicast",
                            "on_reinitialize", "after_reinitialize", "reinit_password",
-                           "device_write_policy", "source_audit_reporter",
-                           "audit_recipient", "audit_device_bindings", "cov"]),
+                           "mutation_policy", "cov_policy", "source_audit_reporter",
+                           "audit_recipient", "audit_device_bindings"]),
             (ScEndpoint, ["device_instance", "sc_hub", "sc_vmac", "sc_ca_cert",
                           "sc_client_cert", "sc_client_key", "sc_device_uuid",
                           "device_name", "vendor_id", "sc_heartbeat_interval_ms",
                           "sc_heartbeat_timeout_ms", "network_number",
                           "network_port_instance", "max_apdu", "segmentation",
-                          "services", "queue_capacity", "read_work_limit",
+                          "queue_capacity", "read_work_limit",
                           "min_request_interval_ms", "on_reinitialize",
                           "after_reinitialize", "reinit_password",
-                          "device_write_policy", "source_audit_reporter",
+                          "mutation_policy", "cov_policy", "source_audit_reporter",
                           "audit_recipient", "audit_device_bindings", "reconnect",
-                          "sc_failover_hub", "sc_connect_timeout_ms", "cov"]),
+                          "sc_failover_hub", "sc_connect_timeout_ms"]),
             (MstpEndpoint, ["device_instance", "serial_port", "device_name", "vendor_id",
                             "mstp_baud", "mstp_mac", "mstp_max_master",
                             "mstp_max_info_frames", "max_apdu", "segmentation",
-                            "services", "device_uuid", "queue_capacity",
+                            "device_uuid", "queue_capacity",
                             "apdu_timeout_ms", "apdu_retries", "read_work_limit",
                             "min_request_interval_ms", "mstp_extended_frames",
                             "mstp_echo", "mstp_echo_grace_ms",
                             "mstp_transmit_latency_pad_ms", "mstp_usage_timeout_ms",
                             "mstp_reply_timeout_ms", "on_reinitialize",
                             "after_reinitialize", "reinit_password",
-                            "device_write_policy", "source_audit_reporter",
-                            "audit_recipient", "audit_device_bindings", "cov"]),
+                            "mutation_policy", "cov_policy", "source_audit_reporter",
+                            "audit_recipient", "audit_device_bindings"]),
         ]
         for cls, expected in cases:
             with self.subTest(cls=cls.__name__):
@@ -143,7 +142,8 @@ class EndpointStubParityTests(unittest.TestCase):
                 # Kinds too: a parameter that turns keyword-only (or stops
                 # being so) on either side fails here.
                 self.assertEqual(runtime_arg_kinds(cls), stub_arg_kinds(method))
-                for keyword in ("read_work_limit", "min_request_interval_ms"):
+                for keyword in ("read_work_limit", "min_request_interval_ms",
+                                "mutation_policy", "cov_policy"):
                     self.assertEqual(
                         inspect.signature(cls).parameters[keyword].kind,
                         inspect.Parameter.KEYWORD_ONLY,
@@ -172,6 +172,8 @@ class EndpointStubParityTests(unittest.TestCase):
                     self.assertEqual(ast.unparse(method.returns.value), "Awaitable")
                     if name == "client":
                         self.assertEqual(ast.unparse(method.returns), "Awaitable[BACnetClient]")
+                    if name == "server":
+                        self.assertEqual(ast.unparse(method.returns), "Awaitable[BACnetServer]")
         # Sync pending seam.
         for cls in (BipEndpoint, ScEndpoint, MstpEndpoint):
             for name in (
@@ -243,9 +245,18 @@ class EndpointStubParityTests(unittest.TestCase):
                 self.assertEqual(ast.unparse(node.args.args[1].annotation), "str | RoutedTarget")
                 self.assertEqual(runtime_arg_kinds(getattr(BACnetClient, name)),
                                  stub_arg_kinds(node))
-        self.assertTrue(hasattr(EndpointServer, "is_session_alive"))
-        stub_method(classes["EndpointServer"], "is_session_alive")
-        stub_method(classes["EndpointServer"], "suspend_next_reply")
+        # The server role is the standalone class, whose runtime calls the
+        # endpoint's server has.
+        for name in ("read_property", "write_property_local", "set_present_value_local",
+                     "set_reliability_local", "comm_state", "start", "stop"):
+            with self.subTest(method=name):
+                self.assertTrue(callable(getattr(BACnetServer, name)))
+                stub_method(classes["BACnetServer"], name)
+        # The local changes are the server's, not the endpoint's (#2617).
+        for cls in (BipEndpoint, ScEndpoint, MstpEndpoint):
+            for gone in ("set_present_value_local", "set_reliability_local"):
+                with self.subTest(cls=cls.__name__, gone=gone):
+                    self.assertFalse(hasattr(cls, gone))
 
     def test_repo_and_installed_stubs_agree(self):
         repo_stub = (
@@ -262,8 +273,8 @@ class EndpointStubParityTests(unittest.TestCase):
                 "class BipEndpoint",
                 "class ScEndpoint",
                 "class MstpEndpoint",
-                "class EndpointServer",
                 "class EndpointStatus",
+
                 "class RoutedTarget",
             ):
                 with self.subTest(symbol=symbol):

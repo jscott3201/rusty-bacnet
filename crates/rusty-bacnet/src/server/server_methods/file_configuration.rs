@@ -179,75 +179,11 @@ mod tests {
     use std::borrow::Cow;
 
     fn test_server() -> BACnetServer {
-        BACnetServer {
-            registered_network_port: None,
-            inner: Arc::new(RwLock::new(None)),
-            device_instance: 1,
-            segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
-            apdu_segment_timeout_ms: 5000,
-            device_name: "Test Device".into(),
-            transport_type: "bip".into(),
-            interface: "0.0.0.0".into(),
-            port: 0,
-            broadcast_address: "255.255.255.255".into(),
-            share_port_by_address: false,
-            share_wildcard_port: false,
-            bip_mode: Default::default(),
-            bip6_foreign: None,
-            multicast: None,
-            sc_hub: None,
-            sc_vmac: None,
-            sc_device_uuid: [0; 16],
-            sc_npdu_admission_policy: Default::default(),
-            sc_ca_cert: None,
-            sc_client_cert: None,
-            sc_client_key: None,
-            sc_heartbeat_interval_ms: None,
-            sc_heartbeat_timeout_ms: None,
-            ipv6_interface: None,
-            mstp: crate::mstp_py::MstpOptions {
-                serial_port: None,
-                baud: 38_400,
-                mac: 1,
-                max_master: 127,
-                max_info_frames: 1,
-                extended_frames: false,
-                echo: false,
-                echo_grace_ms: None,
-                timing: crate::mstp_py::MstpTiming::default(),
-            },
-            dcc_password: None,
-            mutation_policy: bacnet_server::mutation::MutationPolicy::default(),
-            mutation_callback: None,
-            dcc_policy: server::DccPolicy::default(),
-            dcc_source_restriction: None,
-            dcc_disable_rate_limit: None,
-            reinit_password: None,
-            reinitialize: None,
-            request_admission_policy: server::RequestAdmissionPolicy::default(),
-            read_property_multiple_budget:
-                bacnet_device_core::read::ReadPropertyMultipleBudget::default(),
-            get_alarm_summary_budget: server::GetAlarmSummaryBudget::default(),
-            get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget::default(),
-            atomic_read_file_budget: server::AtomicReadFileBudget::default(),
-            atomic_write_file_budget: server::AtomicWriteFileBudget::default(),
-            read_range_budget: server::ReadRangeBudget::default(),
-            get_event_information_budget:
-                bacnet_device_core::event::GetEventInformationBudget::default(),
-            cov_policy: bacnet_device_core::cov::CovPolicy::default(),
-            time_sync_policy: server::TimeSyncPolicy::default(),
-            clock_zone: server::ClockConfig::default(),
-            audit_notification_sink: None,
-            audit_reporters: None,
-            audit_recipient: std::sync::Mutex::new(None),
-            device_bindings: std::collections::BTreeMap::new(),
-            forwarding_configuration_started: AtomicBool::new(false),
-            started: Arc::new(AtomicBool::new(false)),
-            pending_objects: std::sync::Mutex::new(Vec::new()),
-            pending_forwarder_save_counters: std::sync::Mutex::new(Vec::new()),
-            forwarder_save_counters: Arc::new(std::sync::Mutex::new(Vec::new())),
-            router: None,
-        }
+        let mut server = BACnetServer::unconfigured(crate::server::ServerHost::own(), 1);
+        server.device_name = "Test Device".into();
+        server.interface = "0.0.0.0".into();
+        server.broadcast_address = "255.255.255.255".into();
+        server
     }
 
     fn file(instance: u32, name: &str, data: &[u8]) -> FileObject {

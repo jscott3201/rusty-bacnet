@@ -31,8 +31,8 @@ from rusty_bacnet import (
     BacnetError,
     BacnetProtocolError,
     BACnetClient,
+    BACnetServer,
     BipEndpoint,
-    EndpointServer,
     ScHub,
     MstpEndpoint,
     ObjectIdentifier,
@@ -76,11 +76,13 @@ class EndpointSurfaceTests(unittest.TestCase):
         self.assertIsNone(getattr(rusty_bacnet, "EthernetEndpoint", None))
         self.assertIsNone(getattr(rusty_bacnet, "BacnetEndpoint", None))
 
-    def test_roles_expose_no_lifecycle(self):
-        # The client role is a BACnetClient (#2617), whose stop() ends the
-        # role alone; the server role still has no lifecycle.
-        for forbidden in ("start", "stop", "close"):
-            self.assertNotIn(forbidden, dir(EndpointServer), f"EndpointServer.{forbidden}")
+    def test_the_roles_are_the_standalone_classes(self):
+        # The client role is a BACnetClient and the server role a
+        # BACnetServer (#2617): the narrow classes are gone.
+        import rusty_bacnet
+
+        for gone in ("EndpointServer", "EndpointClient", "EndpointCov"):
+            self.assertIsNone(getattr(rusty_bacnet, gone, None), gone)
 
     def test_no_python_callback_registry(self):
         for cls in (BipEndpoint, ScEndpoint, MstpEndpoint):
@@ -402,7 +404,6 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     "no_server_role",
                     "no_client_role",
                     "unclaimed_terminal",
-                    "responder_declined",
                     "unconfirmed_full_drops",
                     "confirmed_full_drops",
                     "answer_full_drops",
@@ -410,6 +411,8 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     "client_seat_apdus",
                     "client_seat_full_drops",
                     "client_seat_control_full_drops",
+                    "server_seat_apdus",
+                    "server_seat_full_drops",
                 },
             )
             self.assertTrue(status["is_running"])
@@ -592,20 +595,25 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                         addr_a, oid, PropertyIdentifier.PRESENT_VALUE
                     )
 
-                async def poll_liveness():
+                async def read_own():
+                    # The endpoint's server reads its own objects beside
+                    # the two network reads (#2617).
                     for _ in range(10):
-                        self.assertTrue(first_server.is_session_alive())
+                        value = await first_server.read_property(
+                            oid, PropertyIdentifier.PRESENT_VALUE
+                        )
+                        self.assertEqual(value.value, 5.0)
                         await asyncio.sleep(0.01)
                     return True
 
-                a_val, b_val, alive = await asyncio.gather(
+                a_val, b_val, own = await asyncio.gather(
                     asyncio.wait_for(asyncio.ensure_future(read_a_to_b()), 10),
                     asyncio.wait_for(asyncio.ensure_future(read_b_to_a()), 10),
-                    poll_liveness(),
+                    read_own(),
                 )
                 self.assertEqual(a_val.value, 6.0)
                 self.assertEqual(b_val.value, 5.0)
-                self.assertTrue(alive)
+                self.assertTrue(own)
 
     async def test_owner_close_with_live_handles_fails_closed(self):
         first = BipEndpoint(**bip_kwargs(port=0, device_instance=5001))
@@ -619,10 +627,13 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
             live_client = await first.client()
             self.assertIsInstance(live_client, BACnetClient)
             live_server = await first.server()
-            self.assertTrue(live_server.is_session_alive())
-            await asyncio.wait_for(first.close(), 5)
-            self.assertFalse(live_server.is_session_alive())
+            self.assertIsInstance(live_server, BACnetServer)
             oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+            self.assertEqual(
+                (await live_server.read_property(oid, PropertyIdentifier.PRESENT_VALUE)).value,
+                1.0,
+            )
+            await asyncio.wait_for(first.close(), 5)
             # The close stopped the client on its link first (#2617).
             with self.assertRaisesRegex(RuntimeError, "ran on an endpoint"):
                 await asyncio.wait_for(
@@ -631,9 +642,13 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                     ),
                     10,
                 )
-            with self.assertRaises(BacnetError):
-                live_server.suspend_next_reply()
+            # The close stopped the server too: its calls raise at once.
+            with self.assertRaisesRegex(RuntimeError, "came from is closed"):
+                await asyncio.wait_for(
+                    live_server.read_property(oid, PropertyIdentifier.PRESENT_VALUE), 5
+                )
             # Owner borrows released at termination.
+
             with self.assertRaisesRegex(RuntimeError, "not started"):
                 await first.client()
         finally:

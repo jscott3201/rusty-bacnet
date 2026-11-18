@@ -120,7 +120,7 @@ async fn close_waits_for_admitted_start_then_drops_resource() {
     starting.await.unwrap().unwrap();
     closing.await.unwrap().unwrap();
     assert_eq!(live.load(Ordering::SeqCst), 0);
-    assert!(owner.session.lock().await.is_none());
+    assert!(owner.session.read().await.is_none());
     owner.push(8).unwrap();
 }
 
@@ -358,7 +358,7 @@ async fn cancelled_waiter_drops_unbounded_preparation_before_close_returns() {
 #[tokio::test]
 async fn cancellation_while_waiting_for_admission_never_acquires_resource() {
     let owner = Owner::new();
-    let guard = owner.session.lock().await;
+    let guard = owner.session.write().await;
     let calls = Arc::new(AtomicUsize::new(0));
     let start = tokio::spawn({
         let owner = owner.clone();
@@ -419,7 +419,7 @@ async fn cancelled_close_before_admission_cannot_cancel_a_later_start() {
         task::{Context, Poll, Waker},
     };
     let owner = Owner::new();
-    let guard = owner.session.lock().await;
+    let guard = owner.session.write().await;
     {
         let close = owner.close();
         tokio::pin!(close);
