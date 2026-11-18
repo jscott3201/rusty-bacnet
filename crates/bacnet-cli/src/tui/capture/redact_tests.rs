@@ -376,8 +376,9 @@ fn a_password_that_claims_too_little_is_masked_to_the_end() {
 }
 
 /// Masked segments of a ReinitializeDevice request decode with the
-/// password hidden: the first segment's tag walk names it hidden, and a
-/// later segment is one opaque leaf. Neither the secret nor its mask shows.
+/// password hidden: the first segment's tag walk shows the state, then the
+/// password in one hidden leaf, and a later segment is one opaque leaf.
+/// Neither the secret nor its mask shows.
 #[test]
 fn the_decode_tree_of_masked_segments_hides_the_password() {
     let mut body = BytesMut::new();
@@ -396,7 +397,7 @@ fn the_decode_tree_of_masked_segments_hides_the_password() {
     ]
     .concat();
     for (apdu, expected) in [
-        (first, "Password: (hidden)"),
+        (first, "Hidden: may hold a password"),
         (
             later,
             "Segment data: 11 octets, hidden (may hold a password)",

@@ -40,6 +40,7 @@ libc.workspace = true
 bacnet-ops = { workspace = true, features = ["test-support"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-transport = { workspace = true, features = ["test-support"] }
+proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = "3"
 
