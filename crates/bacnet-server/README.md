@@ -7,9 +7,8 @@ objects. [`server::ServerBuilder`] accepts a caller-selected transport, Device
 identity and database.
 
 This hosted crate requires `std`, Tokio and allocating state. It has no
-alloc-only or no-heap profile. The standalone server's service dispatcher is
-separate from the narrower server role in `bacnet-endpoint`; their service
-contracts are not interchangeable.
+alloc-only or no-heap profile. A `bacnet-endpoint` session with a server role
+runs this server on its link, beside the node's client.
 
 ## Read a property using development source
 

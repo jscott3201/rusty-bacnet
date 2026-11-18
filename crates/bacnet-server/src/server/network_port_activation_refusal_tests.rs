@@ -113,15 +113,9 @@ async fn reinitialize(
     };
     let requester = Requester::new(&[10, 0, 0, 7], None, TransportProvenance::unverified());
     let mut accepted = false;
-    let (reply, hooks) = response(
-        db,
-        &request,
-        &None,
-        Some(handler),
-        requester,
-        || Ok(()),
-        |_, _| accepted = true,
-    )
+    let (reply, hooks) = response(db, &request, &None, Some(handler), requester, |_, _| {
+        accepted = true
+    })
     .await;
     // The Audit record and the DCC transition follow acceptance, which a
     // refused activation never reaches (#1564).

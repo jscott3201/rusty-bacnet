@@ -118,23 +118,18 @@ fn context_and_ordinary_reads_do_not_sample_the_clock() {
     );
 }
 
+/// A profile whose time-sync policy is off lists neither service and never
+/// asks the installed clock, on a node's seat as standalone (#2674).
 #[test]
-fn endpoint_services_do_not_sample_the_clock() {
+fn services_without_time_sync_do_not_sample_the_clock() {
     let clock = CountingClock::new(true);
     let db = database(Some(clock.clone()));
-    for writes in [false, true] {
-        for reinitialize in [false, true] {
-            let context =
-                DeviceReadContext::new(&db, DeviceExecution::endpoint(writes, reinitialize, false));
-            let value = services(&context, &db);
-            assert_clock_services(value.clone(), false);
-            let supported = supported(value);
-            assert_eq!(supported.contains(ServiceSupported::WRITE_PROPERTY), writes);
-            assert_eq!(
-                supported.contains(ServiceSupported::REINITIALIZE_DEVICE),
-                reinitialize
-            );
-        }
+    for execution in [
+        DeviceExecution::FullServer { time_sync: false },
+        DeviceExecution::Node { time_sync: false },
+    ] {
+        let context = DeviceReadContext::new(&db, execution);
+        assert_clock_services(services(&context, &db), false);
     }
     assert_eq!(clock.reads(), 0);
 }

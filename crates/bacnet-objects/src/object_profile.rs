@@ -12,7 +12,6 @@
 //! source tracking; input profiles are independent of Out_Of_Service, and output
 //! profiles are independent of command priorities, sources and feedback. Device
 //! profiles preserve identity, clock, service declarations and Audit ownership.
-//! Endpoint responders retain their separate, narrow Device write admission.
 //!
 //! - Tags is a BACnetARRAY of BACnetNameValue that peers may write: whole, an
 //!   element by index, or its size at index 0, which truncates or appends

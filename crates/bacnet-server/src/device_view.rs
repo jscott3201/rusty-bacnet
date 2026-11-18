@@ -53,44 +53,16 @@ pub(crate) enum DeviceExecution {
     /// whole node executes (Clause 12.11.14). `time_sync` as for
     /// [`FullServer`](Self::FullServer).
     Node { time_sync: bool },
-    /// An endpoint's responder: ReadProperty, and each service its session
-    /// enabled.
-    Endpoint(EndpointServices),
 }
 
 const _: () = assert!(std::mem::size_of::<DeviceExecution>() == 2);
 
-/// The services an endpoint's responder runs beside ReadProperty, packed
-/// into one octet, so the execution profile a read carries is two octets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EndpointServices(u8);
-
-impl EndpointServices {
-    const WRITES: u8 = 1;
-    const REINITIALIZE: u8 = 2;
-    const COV: u8 = 4;
-
-    /// WriteProperty, ReinitializeDevice, and with `cov` SubscribeCOV,
-    /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple (#2490), each
-    /// when its session enabled it.
-    pub(crate) fn new(writes: bool, reinitialize: bool, cov: bool) -> Self {
-        let mut enabled = 0;
-        for (on, service) in [
-            (writes, Self::WRITES),
-            (reinitialize, Self::REINITIALIZE),
-            (cov, Self::COV),
-        ] {
-            if on {
-                enabled |= service;
-            }
-        }
-        Self(enabled)
-    }
-
-    fn has(self, service: u8) -> bool {
-        self.0 & service != 0
-    }
-}
+/// The Device's COV subscription lists every profile serves (Table 12-13,
+/// notes 9 and 18): the server runs SubscribeCOVPropertyMultiple too.
+const COV_LISTS: &[P] = &[
+    P::ACTIVE_COV_SUBSCRIPTIONS,
+    P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+];
 
 impl DeviceExecution {
     /// A full server's profile, beside a node's client role when `node`,
@@ -104,17 +76,11 @@ impl DeviceExecution {
         }
     }
 
-    /// An endpoint's responder's profile: see [`EndpointServices::new`].
-    pub(crate) fn endpoint(writes: bool, reinitialize: bool, cov: bool) -> Self {
-        Self::Endpoint(EndpointServices::new(writes, reinitialize, cov))
-    }
-
     /// Whether the profile executes both time-synchronization services
-    /// once a Device clock is installed; an endpoint's responder never does.
+    /// once a Device clock is installed.
     fn time_sync(self) -> bool {
         match self {
             Self::FullServer { time_sync } | Self::Node { time_sync } => time_sync,
-            Self::Endpoint(_) => false,
         }
     }
 
@@ -129,21 +95,6 @@ impl DeviceExecution {
                 .chain(NODE_CLIENT_SERVICES)
                 .copied()
                 .collect(),
-            Self::Endpoint(enabled) => {
-                let mut services = vec![ServiceSupported::READ_PROPERTY];
-                if enabled.has(EndpointServices::WRITES) {
-                    services.push(ServiceSupported::WRITE_PROPERTY);
-                }
-                if enabled.has(EndpointServices::REINITIALIZE) {
-                    services.push(ServiceSupported::REINITIALIZE_DEVICE);
-                }
-                if enabled.has(EndpointServices::COV) {
-                    services.push(ServiceSupported::SUBSCRIBE_COV);
-                    services.push(ServiceSupported::SUBSCRIBE_COV_PROPERTY);
-                    services.push(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE);
-                }
-                services
-            }
         };
         services.into_iter().filter(move |service| {
             clock
@@ -153,20 +104,6 @@ impl DeviceExecution {
                         | ServiceSupported::UTC_TIME_SYNCHRONIZATION
                 )
         })
-    }
-
-    /// The Device's COV subscription lists this execution serves: both for
-    /// the full server and for an endpoint with COV on, which runs
-    /// SubscribeCOVPropertyMultiple too (Table 12-13, notes 9 and 18);
-    /// neither for an endpoint without it.
-    fn cov_lists(self) -> &'static [P] {
-        match self {
-            Self::Endpoint(enabled) if !enabled.has(EndpointServices::COV) => &[],
-            Self::FullServer { .. } | Self::Node { .. } | Self::Endpoint(_) => &[
-                P::ACTIVE_COV_SUBSCRIPTIONS,
-                P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
-            ],
-        }
     }
 }
 
@@ -268,7 +205,7 @@ impl DeviceReadView<'_> {
         self.object.object_identifier().object_type() == ObjectType::DEVICE
     }
     fn cov_present(&self, property: P) -> bool {
-        self.context.execution.cov_lists().contains(&property)
+        COV_LISTS.contains(&property)
     }
 }
 
@@ -316,8 +253,8 @@ impl BACnetObject for DeviceReadView<'_> {
                 })
             }
             // The server's bindings, as the request sampled them for the
-            // local Device, the identity's (#1369, #2227). Any other Device, and an endpoint,
-            // which keeps no bindings to serve, read an empty list.
+            // local Device, the identity's (#1369, #2227). Any other Device
+            // reads an empty list.
             P::DEVICE_ADDRESS_BINDING => Ok(self
                 .context
                 .live
@@ -368,7 +305,7 @@ impl BACnetObject for DeviceReadView<'_> {
                 PropertyWriteCapability::ReadOnly,
             ));
         }
-        for &property in self.context.execution.cov_lists() {
+        for &property in COV_LISTS {
             rows.push(PropertyMetadata::new(
                 property,
                 PropertyConformance::Optional,

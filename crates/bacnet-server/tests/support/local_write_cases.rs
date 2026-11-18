@@ -1,19 +1,14 @@
-//! The local-write cases (#2446, #2468), one list for every host that
-//! makes the application's own writes: the server and bacnet-device-core,
-//! side by side in the parity tests' `local_write`, and the endpoint
-//! session, whose `local_write_tests` in `bacnet-endpoint` includes this
-//! file by path, as `bacnet-server` includes `bacnet-endpoint`'s
-//! `tests/support/port_retry.rs`.
+//! The local-write cases (#2446), one list for both hosts that make the
+//! application's own writes: the server and bacnet-device-core, side by
+//! side in the parity tests' `local_write`.
 //!
-//! Both crates call every case function here, so a case added for one
-//! host that the other doesn't run is dead code there, which the lint gate
-//! refuses. A case is a list of steps on one fresh [`database`]; each step
-//! says what it is, the change, how many COV notifications the server and
-//! the core send for it (the endpoint sends none) and the result.
+//! A case is a list of steps on one fresh [`database`]; each step says what
+//! it is, the change, how many COV notifications the server and the core
+//! send for it and the result.
 //!
 //! An object whose event detection is on starts by switching it off, so
-//! the server's event pass, which neither the core nor the endpoint runs,
-//! has nothing to do; BO-1 starts with it off.
+//! the server's event pass, which the core doesn't run, has nothing to do;
+//! BO-1 starts with it off.
 
 use bacnet_device_core::write::local::{LocalChange, LocalCommandSource};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
@@ -109,7 +104,6 @@ pub(crate) enum Step {
         /// The change.
         change: Change,
         /// The COV notifications the server and the core send for it.
-        #[allow(dead_code)] // The endpoint sends none and doesn't read it.
         notifications: usize,
         /// The result on every host.
         expected: Outcome,
@@ -249,8 +243,7 @@ pub(crate) fn database(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatab
 }
 
 /// A write of Event_Detection_Enable. Off, the server's event pass has
-/// nothing to do for the object, as the core and the endpoint, which run
-/// none, haven't.
+/// nothing to do for the object, as the core, which runs none, hasn't.
 pub(crate) fn detection(on: bool) -> Change {
     Change::Write(P::EVENT_DETECTION_ENABLE, PropertyValue::Boolean(on))
 }

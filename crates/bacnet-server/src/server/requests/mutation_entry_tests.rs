@@ -2,11 +2,9 @@
 //!
 //! In-memory, deterministic, no sleeps. Pins DenyAll dominance over an
 //! allow-all authorizer; overload abort before mutation with zero side
-//! effects; the read-only shared endpoint rejecting every mutation choice;
-//! read-only and discovery controls unaffected by DenyAll; and direct-SC
-//! versus hub-mediated-unknown through one verified-only gate.
+//! effects; read-only and discovery controls unaffected by DenyAll; and
+//! direct-SC versus hub-mediated-unknown through one verified-only gate.
 
-use super::endpoint_responder::EndpointResponder;
 #[cfg(feature = "sc-tls")]
 use super::mutation_tests::MutationAuthorizer;
 use super::mutation_tests::{Fixture, SOURCE, apdu, assert_denied, cases, oid, route};
@@ -17,9 +15,6 @@ use crate::mutation::{MutationDecisionCounters, MutationPolicy};
 use crate::server::request_admission::{Class, RequestAdmissionPolicy};
 use crate::server::request_peer::canonical_requester;
 use crate::server::test_transport::TestTransport;
-use bacnet_encoding::apdu::decode_apdu;
-use bacnet_encoding::npdu::decode_npdu;
-use bacnet_endpoint_core::endpoint_ingress::EndpointIngress;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
@@ -28,7 +23,6 @@ use bacnet_services::file::{AtomicReadFileRequest, FileAccessMethod};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::read_range::ReadRangeRequest;
 use bacnet_services::rpm::ReadPropertyMultipleRequest;
-use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{AcknowledgmentFilter, EnableDisable};
@@ -248,97 +242,6 @@ async fn overload_abort_precedes_mutation_with_zero_side_effect() {
     assert_eq!(before, after);
     assert!(server.test_network().transport().sent().is_empty());
     server.stop().await.unwrap();
-}
-
-/// The shared endpoint stays read-only: every mutation choice is rejected
-/// through the existing responder with no policy contact, while the same
-/// WriteProperty bytes succeed through ordinary dispatch.
-#[tokio::test]
-async fn shared_endpoint_rejects_every_mutation_choice() {
-    let (service, bytes, _) = cases().remove(0);
-    let ordinary = Fixture::new(None);
-    let accepted = ordinary.dispatch(service, bytes.clone(), 19).await.unwrap();
-    assert!(matches!(apdu(accepted), Apdu::SimpleAck(_)));
-
-    let (endpoint_transport, mut peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let mut peer_rx = peer_transport.start().await.unwrap();
-    let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
-    let ingress = endpoint.start().await.unwrap();
-    let responder = EndpointResponder::new(
-        Arc::new(RwLock::new(ObjectDatabase::new())),
-        ingress.egress.clone(),
-    );
-    for (service, bytes, _) in cases() {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let mut encoded = BytesMut::new();
-        encode_apdu(
-            &mut encoded,
-            &Apdu::ConfirmedRequest(confirmed(service, bytes, 20)),
-        )
-        .unwrap();
-        assert!(
-            responder
-                .handle(ReceivedApdu {
-                    router_response: None,
-                    direct_response: None,
-                    apdu: encoded.freeze(),
-                    source_mac: MacAddr::from_slice(SOURCE),
-                    ingress_network: None,
-                    source_network: route(),
-                    link_layer_group: false,
-                    is_group: false,
-                    global_broadcast: false,
-                    data_attributes: vec![],
-                    provenance: TransportProvenance::unverified(),
-                    reply_tx: Some(reply_tx),
-                })
-                .await
-                .unwrap()
-        );
-        let reply = reply_rx.await.unwrap();
-        let rejected = decode_apdu(decode_npdu(reply).unwrap().payload).unwrap();
-        assert!(
-            matches!(rejected, Apdu::Reject(reject) if reject.reject_reason == RejectReason::UNRECOGNIZED_SERVICE && reject.invoke_id == 20),
-            "{service:?}"
-        );
-    }
-    // Segmented mutations draw segmentation-not-supported, still read-only.
-    let (reply_tx, reply_rx) = oneshot::channel();
-    let mut segmented = confirmed(service, bytes, 21);
-    segmented.segmented = true;
-    let mut encoded = BytesMut::new();
-    encode_apdu(&mut encoded, &Apdu::ConfirmedRequest(segmented)).unwrap();
-    assert!(
-        responder
-            .handle(ReceivedApdu {
-                router_response: None,
-                direct_response: None,
-                apdu: encoded.freeze(),
-                source_mac: MacAddr::from_slice(SOURCE),
-                ingress_network: None,
-                source_network: route(),
-                link_layer_group: false,
-                is_group: false,
-                global_broadcast: false,
-                data_attributes: vec![],
-                provenance: TransportProvenance::unverified(),
-                reply_tx: Some(reply_tx),
-            })
-            .await
-            .unwrap()
-    );
-    let reply = reply_rx.await.unwrap();
-    let aborted = decode_apdu(decode_npdu(reply).unwrap().payload).unwrap();
-    assert!(
-        matches!(aborted, Apdu::Abort(abort) if abort.abort_reason == AbortReason::SEGMENTATION_NOT_SUPPORTED && abort.invoke_id == 21)
-    );
-    assert!(matches!(
-        peer_rx.try_recv(),
-        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-    ));
-    responder.close();
-    endpoint.stop().await.unwrap();
-    peer_transport.stop().await.unwrap();
 }
 
 fn assert_not_policy_denied(bytes: Bytes, id: u8) {

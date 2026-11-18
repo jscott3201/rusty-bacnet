@@ -97,10 +97,7 @@ impl Drop for Release {
 /// The gate [`StageReleases::hold_next`] set, which a release task passes
 /// once it holds the guard, before it releases. Only tests have one.
 #[cfg(test)]
-pub(super) async fn gate(release: Option<&Release>) {
-    let Some(release) = release else {
-        return;
-    };
+pub(super) async fn gate(release: &Release) {
     let gate = release.0.hooks.gate.lock().unwrap().take();
     if let Some((reached, go)) = gate {
         let _ = reached.send(());
