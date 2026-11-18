@@ -3932,6 +3932,12 @@ for exact timing, validation and exclusions.
 
 All `add_*` methods must be called before `server.start()`. Objects cannot be added after the server is running.
 
+The Device's Object_List names the Device, then each object in the order it
+was added, and follows a peer's CreateObject and DeleteObject while the
+server runs. Database_Revision starts at the number of objects (the Device
+included) and moves by one with each object created, deleted or renamed
+(#2669).
+
 #### Core I/O Objects
 
 ```python

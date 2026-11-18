@@ -14,17 +14,15 @@ use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 
 fn test_db_with_ao() -> (Arc<RwLock<ObjectDatabase>>, ObjectIdentifier) {
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let mut db = ObjectDatabase::new();
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::new(1234, 0)
             .expect("valid Device identity")
             .with_name("COV-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
-    device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(
         AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
@@ -209,17 +207,15 @@ async fn fair_distribution_between_single_and_multiple_notifications() {
 #[tokio::test]
 async fn expired_subscription_releases_quota_on_handle_subscribe_cov() {
     let (transport, _sent) = recording_transport();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let mut db = ObjectDatabase::new();
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::new(1234, 0)
             .expect("valid Device identity")
             .with_name("COV-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
-    device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(
         AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
@@ -286,17 +282,15 @@ async fn expired_subscription_releases_quota_on_handle_subscribe_cov() {
 #[tokio::test]
 async fn expired_subscription_purged_before_cov_property_multiple_admission() {
     let (transport, _sent) = recording_transport();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let mut db = ObjectDatabase::new();
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::new(1234, 0)
             .expect("valid Device identity")
             .with_name("COV-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
-    device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(
         AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),

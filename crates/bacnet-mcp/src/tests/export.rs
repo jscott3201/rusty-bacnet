@@ -14,7 +14,7 @@ use bacnet_ops::export::s223::testing::check_structure;
 use bacnet_ops::export::s223::{Model, TurtleOptions, inventory_options, to_turtle};
 use bacnet_ops::parse::parse_object_type;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::PropertyValue;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -500,18 +500,14 @@ async fn a_cancel_stops_the_export() {
     lab.stop().await;
 }
 
-/// Keep only the first `keep` entries of the lab device's Object_List, as
-/// a site change taking points out would.
+/// Remove every object past the first `keep` entries of the lab device's
+/// Object_List, as a site change taking points out would.
 async fn keep_only(lab: &Lab, keep: usize) {
     let mut db = lab.server.database().write().await;
-    let device = ObjectIdentifier::new(ObjectType::DEVICE, LAB).unwrap();
-    let mut objects = db.list_objects();
-    objects.sort_by_key(|o| (o.object_type() != device.object_type(), o.instance_number()));
-    objects.truncate(keep);
-    db.get_mut(&device)
-        .and_then(|device| device.device_authority_internal())
-        .expect("the lab Device")
-        .set_object_list(objects);
+    let gone: Vec<_> = db.object_list().skip(keep).collect();
+    for object in gone {
+        db.remove(&object).unwrap().expect("listed");
+    }
 }
 
 /// A cursor is bound to the Object_List its page was cut from. Once the

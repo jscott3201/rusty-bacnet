@@ -16,7 +16,7 @@ expression: text
 "│ Object types      64 supported             ││ priority            [255, 255, 255]                                    │"
 "│ Max APDU          1476                     ││ ack-required        none                                               │"
 "│ Segmentation      no-segmentation          ││ recipient-list      [device 99 process 7: Mon-Fri 08:00-17:00,         │"
-"│ Database revision 0                        ││                     confirmed, to-offnormal | to-fault]                │"
+"│ Database revision 8                        ││                     confirmed, to-offnormal | to-fault]                │"
 "└────────────────────────────────────────────┘│                                                                        │"
 "┌ Objects (8) ───────────────────────────────┐│                                                                        │"
 "│ analog-input (1)                           ││                                                                        │"

@@ -387,7 +387,7 @@ impl ObjectDatabase {
                 ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
             ));
         }
-        match target.read_property(property, index) {
+        match self.read_object_property(target, property, index) {
             Ok(value) => Ok((value, target)),
             Err(
                 Error::Remote(RemoteError::Error { class, code })

@@ -19,11 +19,10 @@ fn server_database() -> (
 ) {
     use bacnet_objects::analog::AnalogInputObject;
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
-    use bacnet_objects::traits::BACnetObject;
     let identity = bacnet_objects::DeviceIdentity::new(SERVER_INSTANCE, 260)
         .and_then(|identity| identity.with_max_apdu(480))
         .unwrap();
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: identity.clone(),
         ..Default::default()
     })
@@ -35,7 +34,6 @@ fn server_database() -> (
     )
     .unwrap();
     ai2.set_present_value(51.0);
-    device.set_object_list(vec![device.object_identifier(), ai2.object_identifier()]);
     let mut db = bacnet_objects::database::ObjectDatabase::new();
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(ai2)).unwrap();

@@ -70,16 +70,11 @@ fn staging(instance: u32, name: &str) -> StagingObject {
 fn gating_db() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
 
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: bacnet_objects::DeviceIdentity::default().with_name("GateDevice"),
         ..Default::default()
     })
     .unwrap();
-    // A deterministic OBJECT_LIST: [device, AI-1].
-    device.set_object_list(vec![
-        oid(ObjectType::DEVICE, 1),
-        oid(ObjectType::ANALOG_INPUT, 1),
-    ]);
     db.add(Box::new(device)).unwrap();
 
     db.add(Box::new(
@@ -328,7 +323,8 @@ fn list_properties_reject_indexed_write_property_and_write_property_multiple() {
 fn true_arrays_pass_the_gate_on_read_property() {
     let db = gating_db();
 
-    // OBJECT_LIST index 0 = element count, index 1..N = the Nth member.
+    // OBJECT_LIST index 0 = element count (every object the database
+    // holds, #2669), index 1..N = the Nth member.
     let mut buf = BytesMut::new();
     ReadPropertyRequest {
         object_identifier: oid(ObjectType::DEVICE, 1),
@@ -341,7 +337,7 @@ fn true_arrays_pass_the_gate_on_read_property() {
     let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
     let (count, _) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
-    assert_eq!(count, PropertyValue::Unsigned(2));
+    assert_eq!(count, PropertyValue::Unsigned(db.len() as u64));
 
     read_indexed(
         &db,

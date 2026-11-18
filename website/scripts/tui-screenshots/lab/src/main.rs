@@ -100,7 +100,7 @@ fn identity(instance: u32, name: &str) -> DeviceIdentity {
 }
 
 fn database(instance: u32, name: &str, model: &str, objects: Vec<Boxed>) -> ObjectDatabase {
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(DeviceConfig {
         identity: identity(instance, name),
         vendor_name: "Rusty Lab".into(),
         model_name: model.into(),
@@ -109,9 +109,6 @@ fn database(instance: u32, name: &str, model: &str, objects: Vec<Boxed>) -> Obje
         ..Default::default()
     })
     .expect("device object");
-    let mut list = vec![device.object_identifier()];
-    list.extend(objects.iter().map(|o| o.object_identifier()));
-    device.set_object_list(list);
     let mut db = ObjectDatabase::new();
     db.add(Box::new(device)).unwrap();
     for o in objects {

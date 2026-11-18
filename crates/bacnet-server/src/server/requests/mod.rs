@@ -89,6 +89,8 @@ mod reporting_durable_types_tests;
 mod state_count_durable_tests;
 
 #[cfg(test)]
+mod config_file_revision_tests;
+#[cfg(test)]
 mod create_config_live_tests;
 #[cfg(test)]
 mod create_config_types_wire_tests;

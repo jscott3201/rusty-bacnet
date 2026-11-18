@@ -128,9 +128,11 @@ fn identity_builds_device_plus_ports_plus_uuid() {
         other => panic!("expected BitString, got {other:?}"),
     }
     // Object_List contains Device + both ports (port rule: one entry per
-    // bound transport; instances caller-stable, B/IP=1 SC=2 here).
-    match dev
-        .read_property(PropertyIdentifier::OBJECT_LIST, Some(0))
+    // bound transport; instances caller-stable, B/IP=1 SC=2 here). The
+    // database keeps it for the local Device (#2669).
+    assert!(db.keeps_device_property(dev, PropertyIdentifier::OBJECT_LIST));
+    match db
+        .read_device_property(PropertyIdentifier::OBJECT_LIST, Some(0))
         .unwrap()
     {
         PropertyValue::Unsigned(n) => assert_eq!(n, 3),

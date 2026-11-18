@@ -318,9 +318,11 @@ async fn write_member<H: RunHost>(
         match remote {
             Some((device, datatype)) => (Some(device), datatype),
             None => {
+                // Read as any reference reads (#2669). For the Device's
+                // read-only Object_List and Database_Revision the datatype
+                // comes out the same either way.
                 let value = db.get(&reference.object_identifier).and_then(|object| {
-                    object
-                        .read_property(property, reference.property_array_index)
+                    db.read_object_property(object, property, reference.property_array_index)
                         .ok()
                 });
                 let object_type = reference.object_identifier.object_type();

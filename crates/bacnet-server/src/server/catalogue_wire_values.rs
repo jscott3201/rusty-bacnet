@@ -1,8 +1,9 @@
 //! The check each value an RPM ALL reads over the wire gets (#2175): it
 //! decodes, encodes back, has its row's datatype and equals the object's
-//! own read.
+//! own read, or the database's for a property it keeps (#2669).
 
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
+use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::rpm::ReadResultElement;
@@ -47,8 +48,9 @@ pub(super) fn range_only_refusal(object: &dyn BACnetObject, result: &ReadResultE
         && result.error == Some((ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED))
 }
 
-/// Check one result of an RPM ALL on `object`, whose row is `row`.
+/// Check one result of an RPM ALL on `object` in `db`, whose row is `row`.
 pub(super) fn check(
+    db: &ObjectDatabase,
     object: &dyn BACnetObject,
     row: &PropertyMetadata,
     result: &ReadResultElement,
@@ -101,10 +103,14 @@ pub(super) fn check(
         }
     }
 
-    // The object's own read, encoded, is what the server sent.
-    let direct = object
-        .read_property(property, None)
-        .map_err(|error| format!("the object's own read failed: {error:?}"))?;
+    // The object's own read, encoded, is what the server sent; the
+    // database's, for the local Device's Object_List and Database_Revision.
+    let direct = if db.keeps_device_property(object, property) {
+        db.read_device_property(property, None)
+    } else {
+        object.read_property(property, None)
+    }
+    .map_err(|error| format!("the object's own read failed: {error:?}"))?;
     let mut expected = BytesMut::new();
     encode_property_value(&mut expected, &direct).map_err(|error| format!("{error:?}"))?;
     if expected[..] != octets[..] {

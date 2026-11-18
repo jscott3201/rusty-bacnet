@@ -10,6 +10,7 @@ mod continuity;
 mod custom_state;
 mod delays;
 mod detection_enable;
+mod device_lists;
 mod event_type;
 mod floating_limit;
 mod foreign_state;

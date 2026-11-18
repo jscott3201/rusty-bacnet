@@ -238,8 +238,6 @@ pub struct DeviceObject {
     recipient: audit_recipient::RecipientState,
     properties: HashMap<PropertyIdentifier, PropertyValue>,
     profile: ProfileState,
-    /// Cached object list for array-indexed reads.
-    object_list: Vec<ObjectIdentifier>,
     /// Protocol_Object_Types_Supported — bitstring indicating which object
     /// types this device supports (one bit per type, MSB-first within each byte).
     protocol_object_types_supported: Vec<u8>,
@@ -316,6 +314,8 @@ impl DeviceObject {
             PropertyIdentifier::NUMBER_OF_APDU_RETRIES,
             PropertyValue::Unsigned(config.apdu_retries as u64),
         );
+        // Database_Revision: 0 on its own. The database keeps the revision
+        // and the read services serve it for the local Device (#2669).
         properties.insert(
             PropertyIdentifier::DATABASE_REVISION,
             PropertyValue::Unsigned(0),
@@ -410,7 +410,6 @@ impl DeviceObject {
             recipient: Default::default(),
             profile: ProfileState::default(),
             properties,
-            object_list: vec![oid], // Device itself is always in the list
             protocol_object_types_supported,
             configured_services_supported: EXECUTED_SERVICES.to_vec(),
             clock: None,
@@ -469,25 +468,11 @@ impl DeviceObject {
         self.profile.wait_for_saves();
     }
 
-    /// Update the object-list with the current database contents.
-    pub fn set_object_list(&mut self, oids: Vec<ObjectIdentifier>) {
-        self.object_list = oids;
-    }
-
     /// Set `System_Status`, the device's reported operating state.
     pub fn set_system_status(&mut self, status: DeviceStatus) {
         self.properties.insert(
             PropertyIdentifier::SYSTEM_STATUS,
             PropertyValue::Enumerated(status.to_raw()),
-        );
-    }
-
-    /// Set `Database_Revision`, which a client compares against its cached copy to see whether
-    /// objects were created, deleted, renamed or re-identified, or a restore happened.
-    pub fn set_database_revision(&mut self, revision: u32) {
-        self.properties.insert(
-            PropertyIdentifier::DATABASE_REVISION,
-            PropertyValue::Unsigned(u64::from(revision)),
         );
     }
 
@@ -661,31 +646,10 @@ impl BACnetObject for DeviceObject {
             return self.read_audit_recipient(array_index);
         }
         if property == PropertyIdentifier::OBJECT_LIST {
-            return match array_index {
-                None => {
-                    let elements = self
-                        .object_list
-                        .iter()
-                        .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                        .collect();
-                    Ok(PropertyValue::List(elements))
-                }
-                Some(0) => {
-                    // Index 0 = array length per BACnet convention
-                    Ok(PropertyValue::Unsigned(self.object_list.len() as u64))
-                }
-                Some(idx) => {
-                    let i = (idx - 1) as usize; // BACnet arrays are 1-based
-                    if i < self.object_list.len() {
-                        Ok(PropertyValue::ObjectIdentifier(self.object_list[i]))
-                    } else {
-                        Err(Error::protocol(
-                            ErrorClass::PROPERTY,
-                            ErrorCode::INVALID_ARRAY_INDEX,
-                        ))
-                    }
-                }
-            };
+            // On its own the Device knows only itself. The database keeps
+            // the list of every object, and the read services serve that
+            // for the local Device (`ObjectDatabase::object_list`, #2669).
+            return read_array(vec![PropertyValue::ObjectIdentifier(self.oid)], array_index);
         }
 
         if property == PropertyIdentifier::PROPERTY_LIST {

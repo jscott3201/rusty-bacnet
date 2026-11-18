@@ -115,8 +115,8 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         let read_index = write.array_index.filter(|_| {
             bacnet_objects::property_metadata::is_array_property(object, write.property)
         });
-        let current_value = object
-            .read_property(write.property, read_index)
+        let current_value = db
+            .read_object_property(object, write.property, read_index)
             .ok()
             .and_then(|value| small_value(&value));
         self.pending = Some(Box::new(PendingWrite {

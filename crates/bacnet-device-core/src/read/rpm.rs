@@ -3,6 +3,7 @@
 use super::budget::{ReadFailure, Work};
 use super::group::{self, GroupMembers};
 use super::property;
+use super::source::RowSource;
 use super::{LiveLists, ReadOverlay, ReadScope};
 use alloc::vec::Vec;
 use bacnet_encoding::constructed::check_property_value;
@@ -24,11 +25,12 @@ pub(crate) struct PlannedObject {
     pub(crate) properties: Vec<PlannedRow>,
 }
 
-/// One expanded result row. A row that reads a Group's whole Present_Value
-/// also carries the Group's members, planned and charged with the row.
+/// One expanded result row and where its value comes from. A row that
+/// reads a Group's whole Present_Value carries the Group's members, planned
+/// and charged with the row.
 pub(crate) struct PlannedRow {
     pub(crate) reference: PropertyReference,
-    pub(crate) members: Option<GroupMembers>,
+    pub(crate) source: RowSource,
 }
 
 /// Visit the properties `reference` expands to on `object`, in order: ALL,
@@ -112,7 +114,7 @@ pub(crate) fn live_cov_selection<'a>(
     };
     for (oid, row) in rows {
         select(oid, row);
-        for (member, member_row) in row.members.iter().flat_map(GroupMembers::rows) {
+        for (member, member_row) in row.source.group().into_iter().flat_map(GroupMembers::rows) {
             select(member, member_row);
         }
     }
@@ -258,15 +260,18 @@ pub(crate) fn plan_specs<O: ReadOverlay>(
                         None
                     },
                 };
-                let members = match object {
+                let source = match object {
                     Some(object) if groups => {
-                        group::plan_members(db, scope, overlay, object, &row, work)?
+                        group::plan_source(db, scope, overlay, object, &row, work)?
                     }
-                    _ => None,
+                    // A Group's member rows expand no Group, but read a
+                    // property the database keeps from it.
+                    Some(object) => RowSource::kept(db, object, id),
+                    None => RowSource::Object,
                 };
                 properties.push(PlannedRow {
                     reference: row,
-                    members,
+                    source,
                 });
                 Ok(())
             };
@@ -286,18 +291,22 @@ pub(crate) fn plan_specs<O: ReadOverlay>(
 }
 
 /// Read one planned row. `object` is the effective read view of the row's
-/// target, if it exists; a Group's Present_Value row is built from the members
-/// it planned, every other row is the object's own answer.
+/// target, if it exists; the row's value comes from where its plan chose,
+/// as [`group::read_served_property`] reads it.
 pub(crate) fn read_row<O: ReadOverlay>(
     db: &ObjectDatabase,
     overlay: Option<&O>,
     object: Option<&dyn BACnetObject>,
     row: PlannedRow,
 ) -> ReadResultElement {
-    let PlannedRow { reference, members } = row;
-    element(object, &reference, |object| match members {
-        Some(members) => group::value(db, overlay, members),
-        None => object.read_property(
+    let PlannedRow { reference, source } = row;
+    element(object, &reference, |object| match source {
+        RowSource::Object => object.read_property(
+            reference.property_identifier,
+            reference.property_array_index,
+        ),
+        RowSource::Group(members) => group::value(db, overlay, members),
+        RowSource::Database => db.read_device_property(
             reference.property_identifier,
             reference.property_array_index,
         ),
