@@ -49,8 +49,7 @@ impl DeviceIdentity {
     /// Creates an identity with endpoint-composed defaults.
     ///
     /// Defaults: `max_apdu = 1476`, `segmentation = NO_SEGMENTATION`,
-    /// `services = [READ_PROPERTY]` (narrow endpoint reality, no superset),
-    /// no ports, zero UUID (B/IP-only may keep zeros; SC dial requires
+    /// `services = [READ_PROPERTY]`, no ports, zero UUID (B/IP-only may keep zeros; SC dial requires
     /// [`with_device_uuid`](Self::with_device_uuid)). Returns
     /// [`Error::Range`] for an instance past 4194303, or for 4194303 itself,
     /// which no object may have (Clause 12.1.1, #2171).
@@ -101,17 +100,13 @@ impl DeviceIdentity {
         self
     }
 
-    /// Overrides the services profile (must equal what roles can do; no superset).
+    /// Overrides the services profile: the Protocol_Services_Supported of a
+    /// Device [`build_database`](Self::build_database) builds (default
+    /// `[READ_PROPERTY]`). List only services the device executes.
     ///
-    /// Default `[READ_PROPERTY]` matches the narrow endpoint responder.
-    /// `EndpointSession::with_device_writes` adds `WRITE_PROPERTY`,
-    /// `EndpointSession::with_reinitialize` adds `REINITIALIZE_DEVICE` and
-    /// `EndpointSession::with_cov` adds `SUBSCRIBE_COV`,
-    /// `SUBSCRIBE_COV_PROPERTY` and `SUBSCRIBE_COV_PROPERTY_MULTIPLE`; other
-    /// service bits are rejected. Server-role startup also rejects missing
-    /// ReadProperty or unsupported bits with neither opt-in, before ingress starts.
-    /// ClientOnly has no responder and retains this as a local declaration.
-    /// Broader executing profiles require a matching full server.
+    /// An endpoint session with a server role doesn't use it: its full
+    /// server lists what the node executes (#2617). A client-only session
+    /// keeps it as a local declaration.
     pub fn with_services(mut self, services: &[ServiceSupported]) -> Self {
         self.services = services.to_vec();
         self

@@ -13650,9 +13650,8 @@ session.stop().await?; // stops the server, then the link
   reads its runs make. Past that each does what it does when the pool is
   empty: a confirmed event notification waits for an ID, an Audit record is
   counted lost, and a confirmed COV notification's subscription waits for one
-  of the server's IDs to come back and is then looked at again (#2661), as
-  the endpoint's own COV reporting (`with_cov`) queued its notifications past
-  its 64. The client's requests find the rest of the pool.
+  of the server's IDs to come back and is then looked at again (#2661). The
+  client's requests find the rest of the pool.
 - The session keeps the one owner of the local network number; the server
   runs none and takes the number it publishes. Target Audit routes its
   recipient by that number, so a seated server takes `audit_reporters`.
@@ -13714,10 +13713,7 @@ session.stop().await?; // stops the server, then the link
 - Refused at start, before the link starts, leaving the session ready to
   correct and start again: `with_server` on a session with no server role (a
   full client there answers every request itself); a server role without a
-  Device identity; a server role beside the gone narrow server role's
-  opt-ins (`with_cov`, `with_device_writes`, `with_reinitialize`, a
-  non-default `SessionConfig::read_work_limit`), whose places a builder's
-  settings take; a builder with a transport, a database
+  Device identity; a builder with a transport, a database
   (give it to the session) or a `registered_network_port` (name it on the
   session); a builder identity, `cov_retry_timeout_ms` or
   `notification_retries`, or a database Device's largest APDU or APDU timing,
@@ -13738,37 +13734,40 @@ session.stop().await?; // stops the server, then the link
   session's holds that comes from such a network, whichever role takes it.
 - Where this is going (maintainer decisions on #2617): the Python endpoints
   run this server too, and `await endpoint.server()` returns it as a
-  `BACnetServer`. Next the narrow server role's leftover API goes (see
-  [The narrow server role is gone](#the-narrow-server-role-is-gone)), then
-  the full client follows the node's segmentation.
+  `BACnetServer`. Next the full client follows the node's segmentation. The
+  narrow server role this server replaced is
+  [gone](#the-narrow-server-role-is-gone).
 
 ### Endpoint shutdown and the object database
 
-`EndpointSession::stop()` joins its request owners, removes source membership,
-then settles forgotten staged writes and waits for queued durable save attempts,
-including any correction that restores the state the object serves (#1581).
-This applies to every session role with an attached database. It awaits the
-database lock, so release application-held guards to let shutdown progress;
-the guard is released before waiting for storage. A stalled backend keeps
-shutdown pending and produces periodic warnings. Completion means those save
-attempts finished, not that the backend succeeded or the data survived power loss.
-Application work that continues independently of the session is not joined.
+`EndpointSession::stop()` stops the session's server first. The server's own
+stop joins its requests, settles forgotten staged writes and waits for the
+saves its objects have queued, including any correction that restores the
+state an object serves (#1581), as `BACnetServer::stop` describes: storage
+that stalls keeps shutdown pending, with periodic warnings, while a database
+guard the application holds does not (the objects settle from a task once it
+is let go). Only the server stages saves on the session's database, so a
+client-only session has none to settle (#2617). Completion means those save
+attempts finished, not that the backend succeeded or the data survived power
+loss. With a source Audit Reporter the stop then waits for the database's
+lock to take the Reporter's recipient owner out, so release application-held
+guards there. Application work that continues independently of the session
+is not joined.
 
-Canceling `stop()` retains its original dispatch or ingress outcome and one
-settlement task. Call it again to finish waiting. The session stays stopping
-until settlement completes, then returns the saved outcome. It keeps its object
-database through `stop()` and lets go of it when it drops.
+Canceling `stop()` retains its original dispatch or ingress outcome and the
+server it has not finished stopping. Call it again to finish. The session
+stays stopping until then, and returns the saved outcome. It keeps its
+object database through `stop()` and lets go of it when it drops.
 
 Every endpoint holder of the database lets go through
 `bacnet_server::server::drop_database_off_runtime` (#1561): the session, its
 server (whose aborted tasks may hold it last), the source Audit runtime (which
-an audited request in flight may hold last), the session's Number task and its
-settlement task. So whichever goes last, in async
-code a durable object's final saves run on Tokio's blocking pool, not on a
-runtime worker. Dropping a session aborts its settlement task without awaiting
-it; storage may still change after drop returns. Await `stop()` for the joined
-settlement boundary.
-
+an audited request in flight may hold last) and the session's Number task. So
+whichever goes last, in async code a durable object's final saves run on
+Tokio's blocking pool, not on a runtime worker. A dropped server hands its
+handle to a task that lets go of it on the runtime's next turn, after a
+graceful stop too, as a standalone server does; storage may still change after
+a drop returns. Await `stop()` for the joined save boundary.
 
 ### The narrow server role is gone
 
@@ -13776,19 +13775,25 @@ Through 0.15.0 a session with a server role ran a narrow responder: it
 executed ReadProperty, and WriteProperty of the Device's Description and
 Audit recipient and ReinitializeDevice only when opted in; it ignored every
 unconfirmed request, Who-Is among them, and rejected every other service as
-unrecognized. A session with a server role now runs the full server instead
-(#2617), and the start refuses the narrow role's opt-ins. A later step of
-#2617 removes them:
+unrecognized. A session with a server role now runs the full server instead,
+and the narrow role's settings and handle are removed (#2617):
 
-| The narrow role's | The full server's |
+| Removed (0.15.0) | Use instead |
 |---|---|
-| `with_device_writes(authorizer)`, the builders' `device_writes` | a builder for `with_server` whose `ServerPolicy` decides mutations (`FnPolicy::new().mutation(..)`), which it asks about every covered mutation of every object |
-| `with_reinitialize(handler)`, `with_reinit_password(..)`, the builders' `reinitialize` and `reinit_password` | the builder's `on_reinitialize(handler)` and `reinit_password(..)` |
-| `with_cov(config)`, the builders' `cov` | nothing to turn on: the server answers subscriptions; the builder's `cov_policy` bounds them |
-| `SessionConfig::read_work_limit`, the builders' `read_work_limit` | the builder's `read_property_multiple_budget`, whose `max_result_elements` has the same default |
-| `write_local`, `set_present_value_local`, `set_reliability_local` on the session, now refused with a server role (a client-only session keeps them) | the same calls on `server()`, whose COV and event work follows them |
-| `responder()`, `cloned_responder_handle()`, `ServerRoleHandle` | `server()`, which borrows the server |
-| `PolicyCountersSnapshot::responder_declined` | the server's own counters |
+| `EndpointSession::with_device_writes(authorizer)`, `BipEndpointBuilder::device_writes` | a builder for `with_server` whose `ServerPolicy` decides mutations (`FnPolicy::new().mutation(..)`), which it asks about every covered mutation of every object |
+| `with_reinitialize(handler)`, `with_reinit_password(..)`, `BipEndpointBuilder::reinitialize` and `reinit_password` | the builder's `on_reinitialize(handler)` and `reinit_password(..)` |
+| `SessionConfig::read_work_limit`, the three builders' `read_work_limit` | the builder's `read_property_multiple_budget`, whose `max_result_elements` has the same default (256) and the same Abort |
+| `RESPONDER_SERVICES`, `RESPONDER_OPT_IN_SERVICES`, `ResponderOptIn` | the Device's Protocol_Services_Supported (`server().read_local(..)`), or `bacnet_objects::device::EXECUTED_SERVICES` for what the server's dispatch executes |
+| `ServerRoleHandle` (`is_session_alive`, `suspend_next_reply`, the hidden `handle_inbound` and `complete_notification_pre_admitted`), `server()` and `cloned_server_handle()` returning it | `server()`, which borrows the full server; `is_running()` for liveness; a held `server().database()` guard to make a request wait (on MS/TP the MAC then sends Reply Postponed) |
+| `PolicyCountersSnapshot::responder_declined` | `server_seat_counters()` and the server's own counters (`request_admission_counters()` and the rest) |
+
+The endpoint's own COV reporting (`with_cov`, the builders' `cov`, the
+`COV_*` limits), the session's `write_local`, `set_present_value_local` and
+`set_reliability_local` and the interim `responder()` and
+`cloned_responder_handle()` were never released and are gone too: the
+server answers subscriptions (its builder's `cov_policy` bounds them), and
+its calls of those names make the application's own changes. A client-only
+session has no server database to change.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 

@@ -15,8 +15,8 @@
 //! Endpoint ingress decides from an APDU's first octets, after its own
 //! validity checks. The server seat, while it is attached, takes the place
 //! of the endpoint's own request queue: what that queue would take goes to
-//! the full server instead, and the endpoint's narrow server role gets it
-//! again only once the full server is gone.
+//! the full server instead, and goes back to that queue, where the endpoint
+//! counts and drops it, only once the full server is gone.
 //!
 //! - an Unconfirmed-Request goes to the server role (the server seat, or
 //!   the endpoint's request queue), and a copy with no reply authority to
