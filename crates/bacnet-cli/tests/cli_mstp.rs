@@ -149,7 +149,6 @@ mod pty {
     use bacnet_objects::analog::AnalogInputObject;
     use bacnet_objects::database::ObjectDatabase;
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
-    use bacnet_objects::traits::BACnetObject;
     use bacnet_server::server::BACnetServer;
     use bacnet_transport::mstp::{MstpConfig, MstpTransport, SerialPort};
     use bacnet_types::enums::EngineeringUnits;
