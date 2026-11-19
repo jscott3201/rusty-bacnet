@@ -1,9 +1,10 @@
 //! Outputs that wait in the queue, and how each is written when polled.
 
 use super::Storage;
-use super::config::PortConfig;
+use super::config::{PortConfig, isolated_pair};
 use super::counters::bump;
 use super::output::{Cause, Current, Kind, Target};
+use crate::discovery::Omitted;
 use crate::message::{NetworkNumberIs, Networks, RoutingEntries};
 use crate::npdu::{Address, NetworkPriority, Npdu};
 use crate::npdu::{NetworkMessageType, RejectMessageReason, RejectMessageToNetwork};
@@ -14,7 +15,7 @@ use crate::{Mac, PortId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TaskKind {
     Empty,
-    /// A Who-Is-Router for `network` on every port but `port`.
+    /// A Who-Is-Router for `network` on the eligible ports still needing a search.
     Solicit,
     /// A reject with `reason` naming `network`, unicast to `to` on `port`,
     /// with `origin` as its DNET and DADR when `origin_network` isn't 0.
@@ -43,6 +44,7 @@ pub(super) struct Task {
     to: Mac,
     origin_network: u16,
     origin: Mac,
+    search_gap: Omitted,
     pub(super) cursor: u32,
 }
 
@@ -55,6 +57,7 @@ impl Task {
         to: Mac::EMPTY,
         origin_network: 0,
         origin: Mac::EMPTY,
+        search_gap: Omitted::None,
         cursor: 0,
     };
 
@@ -65,10 +68,11 @@ impl Task {
         task
     }
 
-    /// A Who-Is-Router for `network` on every port but `except`.
-    pub(super) fn solicit(except: PortId, network: u16) -> Self {
+    /// Search from `except`, restricted to a previous search's gap when it has one.
+    pub(super) fn solicit(except: PortId, network: u16, search_gap: Omitted) -> Self {
         Self {
             network,
+            search_gap,
             ..Self::of(TaskKind::Solicit, except)
         }
     }
@@ -152,13 +156,16 @@ fn write_message(
 
 /// The routes from network `from` on that have a wire Port ID, ascending,
 /// as (network, Port ID).
-fn wire_entries<const R: usize, const H: usize>(
-    table: &Table<R, H>,
+fn wire_entries<'a, G, const R: usize, const H: usize>(
+    table: &'a Table<R, H>,
+    ports: &'a [PortConfig<G>],
+    requester: PortId,
     from: u32,
-) -> impl Iterator<Item = (u16, u8)> + Clone + '_ {
+) -> impl Iterator<Item = (u16, u8)> + Clone + 'a {
     table
         .routes()
         .filter(move |(network, _)| u32::from(*network) >= from)
+        .filter(move |(_, route)| !isolated_pair(ports, requester, route.port()))
         .filter_map(|(network, route)| Some((network, route.port().wire_id()?)))
 }
 
@@ -170,7 +177,9 @@ fn other_networks<G>(
     ports
         .iter()
         .enumerate()
-        .filter(move |(index, _)| *index != usize::from(port.0))
+        .filter(move |(index, _)| {
+            *index != usize::from(port.0) && !isolated_pair(ports, port, PortId(*index as u8))
+        })
         .map(|(_, config)| config.network)
 }
 
@@ -199,12 +208,12 @@ impl<
                 let data = task.network.to_be_bytes();
                 let npdu = Npdu::message(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK, &data);
                 let len = npdu.encode_into(&mut self.scratch).ok();
-                Some((
-                    len,
-                    Kind::Solicit,
-                    Cause::Ingress,
-                    Target::AllBut(task.port),
-                ))
+                let target = match task.search_gap {
+                    Omitted::None => Target::AllBut(task.port),
+                    Omitted::IsolatedPorts => Target::IsolatedBut(task.port),
+                    Omitted::OrdinaryPort(port) => Target::Broadcast(port),
+                };
+                Some((len, Kind::Solicit, Cause::Ingress, target))
             }
             TaskKind::Reject => {
                 let data = RejectMessageToNetwork {
@@ -224,11 +233,13 @@ impl<
                 Some((len, Kind::Reject(task.reason), Cause::Ingress, target))
             }
             TaskKind::IAmAnswer => {
+                let ports = &self.ports;
                 let mut others = self
                     .table
                     .routes()
                     .filter(move |(_, route)| {
                         route.port() != task.port
+                            && !isolated_pair(ports, task.port, route.port())
                             && route.reachability() != Reachability::Unreachable
                     })
                     .map(|(network, _)| network)
@@ -259,7 +270,8 @@ impl<
                 Some((len, kind, Cause::Ingress, target))
             }
             TaskKind::TableAck => {
-                let entries = wire_entries(&self.table, task.cursor).take(ACK_ENTRIES);
+                let entries = wire_entries(&self.table, &self.ports, task.port, task.cursor)
+                    .take(ACK_ENTRIES);
                 let last = entries.clone().last().map(|(network, _)| network);
                 // The first Ack goes even for an empty table, with a count
                 // of 0; later ones only while routes remain.
@@ -347,7 +359,10 @@ impl<
                 return Some((at, self.write_number_is(port)));
             }
             if self.port_count > 1 {
-                let others = other_networks(&self.ports[..self.port_count], port);
+                let mut others = other_networks(&self.ports[..self.port_count], port).peekable();
+                if others.peek().is_none() {
+                    continue;
+                }
                 let len = write_message(
                     &mut self.scratch,
                     NetworkMessageType::I_AM_ROUTER_TO_NETWORK,

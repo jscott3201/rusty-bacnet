@@ -208,7 +208,10 @@ impl<
             Ok(WhoIsRouter::Network(network)) => network,
         };
         match self.table.lookup(network) {
-            Some(route) if route.port() != at.port => {
+            Some(route)
+                if route.port() != at.port
+                    && !super::config::isolated_pair(&self.ports, at.port, route.port()) =>
+            {
                 self.out.push(Task::i_am_answer(at.port, Some(network)));
                 return Received::Handled;
             }
@@ -370,6 +373,11 @@ impl<
             host.observe(Event::RouteCap { class });
             return false;
         }
+        if route
+            .is_some_and(|route| super::config::isolated_pair(&self.ports, at.port, route.port()))
+        {
+            return true;
+        }
         let moving = route.is_some_and(|route| !route.is_direct() && route.port() != at.port);
         if moving && !claimed.insert(network) {
             return true;
@@ -473,6 +481,9 @@ impl<
                         .table
                         .is_served_via_peer(reject.network, at.port, at.source)
             });
+        if self.hidden_from(at.port, reject.network) {
+            return self.pass_on_reject(at, npdu, host);
+        }
         let effect = if off_path {
             bump(&mut self.counters.not_next_hop);
             RejectEffect::NotNextHop

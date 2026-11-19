@@ -54,6 +54,7 @@ pub struct RouterOptions<
     authorizer: Option<ControlAuthorizer>,
     network_control: bool,
     engine: Options,
+    pub(super) isolated_ports: Vec<usize>,
     receivers: PhantomData<fn() -> (A, C)>,
 }
 
@@ -81,6 +82,7 @@ impl RouterOptions {
             authorizer: None,
             network_control: false,
             engine: OPTIONS,
+            isolated_ports: Vec::new(),
             receivers: PhantomData,
         }
     }
@@ -93,6 +95,20 @@ impl Default for RouterOptions {
 }
 
 impl<A, C> RouterOptions<A, C> {
+    /// Isolate the selected zero-based indices in the input port list.
+    ///
+    /// Distinct selected ports exchange no transit traffic through this
+    /// router. Ordinary ports can still reach every port. Route discovery
+    /// and management replies on isolated ports omit peer-isolated routes.
+    /// The router's local application can still use every configured port.
+    /// The default selection is empty. Startup refuses an out-of-range
+    /// index before starting any transport. Repeated indices are equivalent
+    /// to selecting the port once.
+    pub fn isolated_ports(mut self, ports: impl IntoIterator<Item = usize>) -> Self {
+        self.isolated_ports = ports.into_iter().collect();
+        self
+    }
+
     /// Return the local APDU receiver as an [`AdmissionReceiver`], which
     /// exposes queue-admission snapshots and enforces a per-source quota.
     ///
@@ -300,6 +316,7 @@ impl<A, C> RouterOptions<A, C> {
             authorizer: self.authorizer,
             network_control: self.network_control,
             engine: self.engine,
+            isolated_ports: self.isolated_ports,
             receivers: PhantomData,
         }
     }
@@ -315,6 +332,7 @@ impl<A, C> fmt::Debug for RouterOptions<A, C> {
             )
             .field("network_control", &self.network_control)
             .field("engine", &self.engine)
+            .field("isolated_ports", &self.isolated_ports)
             .field("apdus", &std::any::type_name::<A>())
             .field("controls", &std::any::type_name::<C>())
             .finish()

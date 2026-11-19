@@ -128,3 +128,11 @@ async fn cancellation_while_awaiting_failed_start_rollback_keeps_cleanup_running
     assert_eq!(first.dropped.load(Ordering::SeqCst), 1);
     assert_eq!(second.dropped.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn unknown_isolated_index_refuses_configuration_before_starting_ports() {
+    let (first, probe) = port(false);
+    let result = BACnetRouter::start(vec![first], RouterOptions::new().isolated_ports([1])).await;
+    assert!(matches!(result, Err(Error::Encoding(message)) if message.contains("index 1")));
+    assert_eq!(probe.starts.load(Ordering::SeqCst), 0);
+}

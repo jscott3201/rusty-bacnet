@@ -6,6 +6,7 @@ use super::config::Options;
 use super::counters::bump;
 use super::host::Host;
 use super::tasks::Task;
+use crate::discovery::Omitted;
 pub(super) use crate::node::is_unconfirmed;
 use crate::node::{admit_npdu, admit_source};
 use crate::npdu::RejectMessageReason;
@@ -344,6 +345,42 @@ impl<
         own
     }
 
+    /// Ask only links that this request can reach and that still need the
+    /// search. With isolation off the historical per-DNET cooldown applies.
+    pub(super) fn solicit(
+        &mut self,
+        except: PortId,
+        network: u16,
+        now: Instant,
+        options: &Options,
+    ) {
+        let ports = &self.ports[..self.port_count];
+        let omitted = if !self.has_isolated_pair || except == super::NO_PORT {
+            Omitted::None
+        } else if super::config::isolated(ports, except) {
+            if ports.iter().all(|p| p.isolated) {
+                return;
+            }
+            Omitted::IsolatedPorts
+        } else {
+            Omitted::OrdinaryPort(except)
+        };
+        if let Some(gap) = self
+            .discovery
+            .search(network, now, options.discovery_cooldown, omitted)
+        {
+            bump(&mut self.counters.solicitations);
+            self.out.push(Task::solicit(except, network, gap));
+        }
+    }
+
+    /// Whether a network's current egress is isolated from the requester.
+    pub(super) fn hidden_from(&self, port: PortId, network: u16) -> bool {
+        self.table
+            .lookup(network)
+            .is_some_and(|route| super::config::isolated_pair(&self.ports, port, route.port()))
+    }
+
     /// The usable route to `dnet`, marked as used; or, when the table has
     /// none or can't use it now, `None`, with the search and the reject
     /// that answer the frame queued (Clauses 6.6.3.1, 6.6.3.5, 6.6.3.6).
@@ -360,13 +397,7 @@ impl<
         let route = self.table.lookup(dnet);
         let reachability = self.table.effective_reachability(dnet, at.now);
         let Some(route) = route else {
-            if self
-                .discovery
-                .should_solicit(dnet, at.now, options.discovery_cooldown)
-            {
-                bump(&mut self.counters.solicitations);
-                self.out.push(Task::solicit(at.port, dnet));
-            }
+            self.solicit(at.port, dnet, at.now, options);
             self.reject(
                 at,
                 npdu.source,
@@ -376,6 +407,9 @@ impl<
             );
             return None;
         };
+        if super::config::isolated_pair(&self.ports, at.port, route.port()) {
+            return None;
+        }
         self.table.touch(dnet, at.now);
         let refusal = match reachability {
             Some(Reachability::Busy) => RejectMessageReason::ROUTER_BUSY,

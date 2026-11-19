@@ -111,7 +111,7 @@ impl<
     ) {
         if let Some(origin) = self.reject_origin(at, origin, network) {
             self.queue_reject(origin, reason);
-        } else {
+        } else if origin.is_some_and(|address| self.is_own(address)) {
             host.observe(Event::OwnOrigin { network });
         }
     }
@@ -131,7 +131,11 @@ impl<
                 match ports.iter().position(|port| port.network == origin.network) {
                     // At most 255 ports.
                     Some(index) => {
-                        RejectOrigin::new(PortId(index as u8), origin.mac, None, network)
+                        let port = PortId(index as u8);
+                        if super::config::isolated_pair(ports, at.port, port) {
+                            return None;
+                        }
+                        RejectOrigin::new(port, origin.mac, None, network)
                     }
                     None => RejectOrigin::new(at.port, at.source, Some(origin), network),
                 }
@@ -169,6 +173,9 @@ impl<
         };
         match route {
             // Never as a broadcast (decisions L23 and L24 on #1677).
+            Some(route) if super::config::isolated_pair(&self.ports, at.port, route.port()) => {
+                Received::Handled
+            }
             Some(route) if self.group_of(&route, npdu) != Group::No => self.group_drop(),
             Some(route) => self.forward(at, npdu, &route, host),
             None => {

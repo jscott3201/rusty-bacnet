@@ -54,7 +54,7 @@ impl<
         }
         for entry in entries.iter() {
             let network = entry.network;
-            if network == 0 || network == GLOBAL_NETWORK {
+            if network == 0 || network == GLOBAL_NETWORK || self.hidden_from(at.port, network) {
                 continue;
             }
             if entry.port_id == 0 {
@@ -70,6 +70,9 @@ impl<
                 });
                 continue;
             };
+            if super::config::isolated_pair(&self.ports, at.port, port) {
+                continue;
+            }
             if self.table.len() >= options.cap(R) && self.table.lookup(network).is_none() {
                 self.table.record_learning_cap();
                 host.observe(Event::RouteCap {

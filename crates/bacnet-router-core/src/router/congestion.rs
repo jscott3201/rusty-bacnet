@@ -255,7 +255,10 @@ impl<
         let limit = self.ports[..count]
             .iter()
             .enumerate()
-            .filter(|(other, _)| *other != index)
+            .filter(|(other, _)| {
+                *other != index
+                    && !super::config::isolated_pair(&self.ports, port, PortId(*other as u8))
+            })
             .map(|(_, config)| usize::from(config.max_npdu.broadcast))
             .min();
         let Some(limit) = limit else {

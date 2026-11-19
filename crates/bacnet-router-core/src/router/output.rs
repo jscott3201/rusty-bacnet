@@ -9,6 +9,7 @@
 //! queues at most two tasks, and a frame's own output always comes before
 //! them, so the queue never fills.
 
+use super::config::{PortConfig, isolated, isolated_pair};
 use super::counters::bump;
 use super::host::{Event, Host};
 use super::tasks::{Task, TaskKind};
@@ -149,6 +150,17 @@ pub(super) enum Target<'m> {
     Broadcast(PortId),
     /// A broadcast on every port but this one.
     AllBut(PortId),
+    /// A follow-up search restricted to isolated ports.
+    IsolatedBut(PortId),
+}
+
+/// A mixed network-list relay sends its full list to ordinary ports before
+/// compacting that same scratch buffer for isolated ports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Recipients {
+    All,
+    Ordinary,
+    Isolated,
 }
 
 /// The NPDU in the scratch and where it goes next.
@@ -167,6 +179,7 @@ pub(super) struct Current {
     port: PortId,
     /// The next port a fan-out tries.
     next: u16,
+    recipients: Recipients,
     /// Where the NPDU starts in the scratch: 0 but for a tail.
     start: u16,
     /// A fan-out's trailing send to `port`, of the same NPDU without its
@@ -194,6 +207,7 @@ impl Current {
         fan_out: false,
         port: PortId(0),
         next: 0,
+        recipients: Recipients::All,
         start: 0,
         tail: 0,
         tail_control: 0,
@@ -248,6 +262,11 @@ impl Current {
                 current.port = port;
                 current.broadcast = true;
             }
+            Target::IsolatedBut(port) => {
+                current.port = port;
+                current.fan_out = true;
+                current.recipients = Recipients::Isolated;
+            }
             Target::AllBut(port) => {
                 current.port = port;
                 current.fan_out = true;
@@ -272,12 +291,25 @@ impl Current {
         self
     }
 
-    /// Whether it has a send left on a router of `ports` ports.
-    fn has_more(&self, ports: usize) -> bool {
+    /// Whether the current fan-out should send on this port.
+    fn eligible<G>(&self, ports: &[PortConfig<G>], port: PortId) -> bool {
+        port != self.port
+            && (self.tag == Tag::Originate || !isolated_pair(ports, self.port, port))
+            && match self.recipients {
+                Recipients::All => true,
+                Recipients::Ordinary => !isolated(ports, port),
+                Recipients::Isolated => isolated(ports, port),
+            }
+    }
+
+    /// Whether the current output has another send to poll.
+    fn has_more<G>(&self, ports: &[PortConfig<G>]) -> bool {
         self.active
             && (!self.fan_out
                 || self.tail != 0
-                || (usize::from(self.next)..ports).any(|port| port != usize::from(self.port.0)))
+                || self.recipients == Recipients::Ordinary
+                || (usize::from(self.next)..ports.len())
+                    .any(|p| self.eligible(ports, PortId(p as u8))))
     }
 
     fn kind(&self) -> Kind {
@@ -321,7 +353,7 @@ impl Outputs {
 
     /// How many outputs wait on a router of `ports` ports: the current
     /// one, if it has sends left, and the tasks.
-    pub(super) fn pending(&self, ports: usize) -> usize {
+    pub(super) fn pending<G>(&self, ports: &[PortConfig<G>]) -> usize {
         usize::from(self.current.has_more(ports)) + self.len
     }
 
@@ -376,7 +408,7 @@ impl<
         let announcements = self.flows[..self.port_count]
             .iter_mut()
             .fold(0, |count, flow| count + usize::from(flow.take_pending()));
-        let pending = self.out.pending(self.port_count) + announcements;
+        let pending = self.out.pending(&self.ports[..self.port_count]) + announcements;
         if pending > 0 {
             let pending = u32::try_from(pending).unwrap_or(u32::MAX);
             self.counters.undrained = self.counters.undrained.saturating_add(pending);
@@ -388,7 +420,7 @@ impl<
     /// writer refuses is counted and sends nothing.
     pub(super) fn write_now(&mut self, npdu: &Npdu<'_>, kind: Kind, target: Target<'_>) -> bool {
         debug_assert_eq!(
-            self.out.pending(self.port_count),
+            self.out.pending(&self.ports[..self.port_count]),
             0,
             "a frame's output comes first"
         );
@@ -420,9 +452,45 @@ impl<
         }
         let octets = self.out.current.len;
         let ports = &self.ports[..self.port_count];
+        let listed = matches!(
+            kind,
+            Kind::Relay(
+                NetworkMessageType::I_AM_ROUTER_TO_NETWORK
+                    | NetworkMessageType::ROUTER_BUSY_TO_NETWORK
+                    | NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK
+            )
+        );
+        // A bare list has a three-octet header. The common list contains
+        // networks outside the isolated set, preserving order and duplicates.
+        let hidden_bytes = if listed && self.has_isolated_pair && !isolated(ports, except) {
+            npdu.payload
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .filter(|n| self.isolated_network(u16::from_be_bytes(**n)))
+                .count()
+                * 2
+        } else {
+            0
+        };
+        if hidden_bytes != 0 {
+            self.out.current.recipients = Recipients::Ordinary;
+        }
         for (index, config) in ports.iter().enumerate() {
+            let port = PortId(index as u8);
+            if port == except || isolated_pair(ports, except, port) {
+                continue;
+            }
+            let octets = if config.isolated && hidden_bytes != 0 {
+                if hidden_bytes == npdu.payload.len() {
+                    continue;
+                }
+                octets - hidden_bytes
+            } else {
+                octets
+            };
             let limit = config.max_npdu.get(true);
-            if index != usize::from(except.0) && octets > limit {
+            if octets > limit {
                 host.observe(Event::TooLong {
                     // At most 255 ports, so the index fits in a u8.
                     port: PortId(index as u8),
@@ -433,6 +501,35 @@ impl<
             }
         }
         true
+    }
+
+    fn isolated_network(&self, network: u16) -> bool {
+        self.table
+            .lookup(network)
+            .is_some_and(|r| isolated(&self.ports, r.port()))
+    }
+
+    /// The full network-list relay is drained. Reuse its buffer for the
+    /// ordinary networks visible from every isolated port. An empty result
+    /// must be suppressed, especially for Busy/Available where it means all.
+    fn prepare_isolated_relay(&mut self) -> bool {
+        if self.out.current.recipients != Recipients::Ordinary {
+            return false;
+        }
+        let mut write = 3;
+        for read in (3..self.out.current.len).step_by(2) {
+            let network = u16::from_be_bytes([self.scratch[read], self.scratch[read + 1]]);
+            if !self.isolated_network(network) {
+                self.scratch[write..write + 2].copy_from_slice(&network.to_be_bytes());
+                write += 2;
+            }
+        }
+        let current = &mut self.out.current;
+        current.recipients = Recipients::Isolated;
+        current.len = write;
+        current.next = 0;
+        current.active = write > 3;
+        current.active
     }
 
     /// The next action: the current output's next send, or the next task's
@@ -460,6 +557,9 @@ impl<
                         Cause::Ingress
                     },
                 });
+            }
+            if self.prepare_isolated_relay() {
+                continue;
             }
             if !self.write_task() {
                 return Action::Idle;
@@ -494,7 +594,7 @@ impl<
             // At most 255 ports, so the index fits in a u8.
             let port = PortId(current.next as u8);
             current.next += 1;
-            if port == current.port {
+            if !current.eligible(ports, port) {
                 continue;
             }
             if fits(port, true) {

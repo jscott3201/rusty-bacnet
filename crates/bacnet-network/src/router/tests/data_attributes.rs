@@ -131,13 +131,13 @@ async fn forward_broadcast_preserves_data_attributes_on_each_output_port() {
     h.assert_quiet();
 }
 
-#[tokio::test]
-async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
+async fn two_sc_ports(
+    options: RouterOptions,
+) -> (StartedRouter, LoopbackWebSocket, LoopbackWebSocket) {
     let (ws_client_a, ws_hub_a) = LoopbackWebSocket::pair();
     let (ws_client_b, ws_hub_b) = LoopbackWebSocket::pair();
     let hub_a_vmac: Vmac = [0xA0; 6];
     let hub_b_vmac: Vmac = [0xB0; 6];
-    let dest_vmac: Vmac = [0x22; 6];
 
     let accept_a = tokio::spawn(async move {
         sc_hub_accept(&ws_hub_a, hub_a_vmac).await;
@@ -156,16 +156,17 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
         transport: ScTransport::new(ws_client_b, [0x02; 6]).with_device_uuid([1; 16]),
         network_number: 2000,
     };
-    let StartedRouter {
-        mut router,
-        apdus: _local_rx,
-        ..
-    } = BACnetRouter::start(vec![port_a, port_b], RouterOptions::new())
+    let started = BACnetRouter::start(vec![port_a, port_b], options)
         .await
         .unwrap();
-    let ws_hub_a = accept_a.await.unwrap();
-    let ws_hub_b = accept_b.await.unwrap();
+    (started, accept_a.await.unwrap(), accept_b.await.unwrap())
+}
 
+#[tokio::test]
+async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
+    let (StartedRouter { mut router, .. }, ws_hub_a, ws_hub_b) =
+        two_sc_ports(RouterOptions::new()).await;
+    let dest_vmac: Vmac = [0x22; 6];
     let apdu = Bytes::from_static(&[0x10, 0x08]);
     let npdu = Npdu {
         expecting_reply: false,
@@ -185,7 +186,7 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
     let inbound = ScMessage {
         function: ScFunction::EncapsulatedNpdu,
         message_id: 0x2233,
-        originating_vmac: Some(hub_a_vmac),
+        originating_vmac: Some([0xA0; 6]),
         destination_vmac: None,
         dest_options: Vec::new(),
         data_options: vec![
@@ -233,5 +234,66 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
     assert!(!msg.data_options[1].must_understand);
     assert_eq!(msg.data_options[1].data, vec![0x12, 0x34, 0x56]);
 
+    router.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn isolated_sc_links_only_deliver_the_local_application_marker() {
+    let options = RouterOptions::new().isolated_ports([0, 1]);
+    let (
+        StartedRouter {
+            mut router,
+            mut apdus,
+            ..
+        },
+        a,
+        b,
+    ) = two_sc_ports(options).await;
+    let peer = [0x22; 6];
+    let blocked = apdu_to(2000, &peer, 255);
+    let local = Npdu {
+        payload: Bytes::from_static(&[0x10, 0x05]),
+        ..Npdu::default()
+    };
+    // The local delivery establishes that the prior transit request was processed.
+    for npdu in [blocked, local] {
+        let mut encoded = BytesMut::new();
+        encode_npdu(&mut encoded, &npdu).unwrap();
+        let mut frame = BytesMut::new();
+        encode_sc_message(
+            &mut frame,
+            &ScMessage {
+                function: ScFunction::EncapsulatedNpdu,
+                message_id: 1,
+                originating_vmac: Some([0xA0; 6]),
+                destination_vmac: None,
+                dest_options: Vec::new(),
+                data_options: Vec::new(),
+                payload: encoded.freeze(),
+            },
+        );
+        a.send(&frame).await.unwrap();
+    }
+    assert_eq!(apdus.recv().await.unwrap().apdu.as_ref(), [0x10, 0x05]);
+    // The router's own marker joins the same output queue after any transit.
+    router
+        .originate(&bacnet_router_core::router::Request::new(
+            bacnet_npdu::Address {
+                network: 2000,
+                mac: &peer,
+            },
+            &[0x10, 0x07],
+        ))
+        .unwrap();
+    loop {
+        let message = decode_sc_message(&b.recv().await.unwrap()).unwrap();
+        if message.destination_vmac == Some(peer) {
+            assert_eq!(
+                decode_npdu(message.payload).unwrap().payload.as_ref(),
+                [0x10, 0x07]
+            );
+            break;
+        }
+    }
     router.stop().await.unwrap();
 }
