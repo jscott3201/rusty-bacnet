@@ -1958,6 +1958,23 @@ the one with MSRV and audit and deny, is green. The release's
 [CI gate](#ci-gate) requires the CI run of the tag's own push, which runs
 them.
 
+### Temporary dependency maintenance exceptions
+
+Cargo Audit checks the workspace lockfile and fails on vulnerabilities and
+unsoundness advisories. It reports both accepted maintenance warnings.
+Review both exceptions by **2026-12-19 UTC**.
+
+- **chrono (RUSTSEC-2026-0543)**. The MCP server needs `rmcp` 3.9.0,
+  which depends on chrono directly and through `schemars` 1.2.2.
+  Cargo Deny permits those two parents through December 19 and rejects
+  other parents. Remove the exception when a released SDK can build
+  the server without chrono. [Upstream SDK change](https://github.com/modelcontextprotocol/rust-sdk/pull/1474)
+- **humantime (RUSTSEC-2026-0542)**. The stress-test benchmark uses
+  `console-subscriber` 0.5.0 for its optional Tokio Console support.
+  Cargo Deny excludes the benchmark. Cargo Audit keeps the warning visible.
+  Recheck the subscriber for a release that removes humantime by the review
+  date. [Tokio Console releases](https://github.com/tokio-rs/console/releases)
+
 ## Release
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds,
