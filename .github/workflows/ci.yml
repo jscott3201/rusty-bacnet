@@ -537,7 +537,7 @@ jobs:
       - name: Install cargo-audit and cargo-deny
         run: bash scripts/ci/install-tools.sh cargo-audit cargo-deny
       - name: Cargo Audit
-        run: cargo audit --color always
+        run: cargo audit --deny unsound --color always
       - name: Cargo Deny
         if: ${{ !cancelled() }}
         run: cargo deny --all-features check

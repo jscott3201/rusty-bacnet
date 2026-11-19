@@ -149,7 +149,7 @@ libc = "0.2"
 nix = { version = "0.31", default-features = false }
 getrandom = "0.3"
 # 0.9.0 was yanked.
-heapless = "0.9.1"
+heapless = "0.9.4"
 proptest = "1"
 # Startup code for the firmware link test's images (#1626): Cortex-M and RISC-V.
 cortex-m-rt = "0.7.7"
