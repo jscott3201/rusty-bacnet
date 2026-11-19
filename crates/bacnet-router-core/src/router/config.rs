@@ -42,6 +42,10 @@ pub struct PortConfig<G = Groups> {
     /// the router runs has it replaced with
     /// [`Router::set_port_max_npdu`](super::Router::set_port_max_npdu).
     pub max_npdu: NpduLimits,
+    /// Isolate this port from other ports marked isolated on the same router.
+    /// Transit traffic and route advertisements can still cross between this
+    /// port and any ordinary port. Defaults to false.
+    pub isolated: bool,
     /// The link's destination classifier, supplied by its configuration.
     pub groups: G,
 }
@@ -54,6 +58,7 @@ impl<G> PortConfig<G> {
             network,
             mac,
             max_npdu,
+            isolated: false,
             groups,
         }
     }
@@ -66,7 +71,17 @@ impl<G: GroupClassifier> PortConfig<G> {
         mac: Mac::EMPTY,
         max_npdu: NpduLimits::both(0),
         groups: G::NONE,
+        isolated: false,
     };
+}
+
+/// Whether two distinct configured ports belong to the isolation set.
+pub(super) fn isolated_pair<G>(ports: &[PortConfig<G>], a: PortId, b: PortId) -> bool {
+    a != b && isolated(ports, a) && isolated(ports, b)
+}
+
+pub(super) fn isolated<G>(ports: &[PortConfig<G>], port: PortId) -> bool {
+    ports.get(usize::from(port.0)).is_some_and(|p| p.isolated)
 }
 
 /// A router's policy values and timers.
@@ -90,7 +105,8 @@ pub struct Options {
     /// The table's timers: the busy period, the reject hold-down and the
     /// corroboration window.
     pub timing: Timing,
-    /// The least time between two searches for one network.
+    /// The least time between repeat searches for one network on the same
+    /// port. Isolation can leave other ports available to a later search.
     pub discovery_cooldown: Duration,
     /// How long a search is remembered.
     pub discovery_age: Duration,

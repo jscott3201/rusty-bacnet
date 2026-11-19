@@ -21,10 +21,10 @@
 
 use core::fmt;
 
+use super::NO_PORT;
 use super::counters::bump;
 use super::ingress::is_unconfirmed;
 use super::output::{Cause, Current, Kind, Target};
-use super::tasks::Task;
 use super::{Group, Storage};
 use crate::npdu::{Address, GLOBAL_NETWORK, NetworkPriority, Npdu};
 use crate::table::Reachability;
@@ -161,9 +161,6 @@ impl fmt::Display for OriginateError {
 
 impl core::error::Error for OriginateError {}
 
-/// No port: a fan-out to "every port but this one" reaches every port.
-const NO_PORT: PortId = PortId(u8::MAX);
-
 impl<
     const P: usize,
     const R: usize,
@@ -210,13 +207,7 @@ impl<
         }
         let dnet = destination.network;
         let Some(route) = self.table.lookup(dnet) else {
-            if self
-                .discovery
-                .should_solicit(dnet, now, options.discovery_cooldown)
-            {
-                bump(&mut self.counters.solicitations);
-                self.out.push(Task::solicit(NO_PORT, dnet));
-            }
+            self.solicit(NO_PORT, dnet, now, options);
             return Err(OriginateError::NoRoute);
         };
         self.table.touch(dnet, now);

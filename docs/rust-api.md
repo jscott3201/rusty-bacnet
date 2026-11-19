@@ -3647,6 +3647,18 @@ described below (`network_control_receiver_with_admission()` for a tracked
 one). The start returns a `StartedRouter` holding the router, the
 local APDU receiver and, when asked for, the network-control receiver.
 
+To allow each SC hub to reach a shared B/IP network while keeping the hubs
+separate, select their zero-based positions in the input port list. With
+ports ordered as B/IP, SC A, SC B, use
+`RouterOptions::new().isolated_ports([1, 2])`. The router blocks transit
+between those two ports, including routed broadcasts and learned routes.
+The router filters its own discovery replies and route announcements, and
+the broadcast route and congestion lists it relays. It forwards the contents
+of third-party messages addressed across permitted links unchanged.
+The router's local application retains access to all ports. The policy
+applies to traffic crossing this router. Other routers on a shared network
+make their own forwarding decisions. The default selection is empty.
+
 Every port of one router has the same transport type. `RouterPort`'s
 defaults to `AnyTransport` (#2043), so a router that mixes link types takes
 a `Vec<RouterPort>` of `AnyTransport` ports; one whose ports share a
