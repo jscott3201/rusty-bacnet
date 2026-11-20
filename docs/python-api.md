@@ -1518,6 +1518,17 @@ socket that sets `SO_REUSEADDR` bind a specific address on the port, and
 get the unicast sent there. On Linux a B/IP multicast member with its group
 on its own port binds its `interface` address instead of `0.0.0.0`.
 
+For loopback discovery, set `interface="127.0.0.1"` and
+`broadcast_address="127.255.255.255"` on a host with the usual loopback /8.
+When an explicit loopback interface uses a wildcard send socket, a local B/IP
+broadcast to `255.255.255.255` raises `BacnetTransportError` before the send.
+The OS could otherwise transmit it on a LAN and return the endpoint's own
+I-Am with the LAN source address. Unicast and foreign-device traffic to a BBMD
+can use this endpoint. With an explicit non-loopback interface and a wildcard
+socket, the OS still chooses the route and source for a limited broadcast.
+Use that interface's subnet broadcast for discovery. In per-address mode the
+primary socket binds the configured source address.
+
 The keyword-only `share_wildcard_port=True` keeps the old sharing, for a
 setup that runs two stacks on one port of one host. Broadcasts then reach
 both, but each unicast reaches only one of them (on Linux the one that
