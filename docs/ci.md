@@ -1960,8 +1960,9 @@ them.
 
 ### Temporary dependency maintenance exceptions
 
-Cargo Audit checks the workspace lockfile and fails on vulnerabilities and
-unsoundness advisories. It reports both accepted maintenance warnings.
+Cargo Audit checks the whole workspace lockfile, fails on vulnerabilities and
+reports both accepted maintenance warnings. Cargo Deny is the gate with
+scoped, expiring exceptions.
 Review both exceptions by **2026-12-19 UTC**.
 
 - **chrono (RUSTSEC-2026-0543)**. The MCP server needs `rmcp` 3.9.0,
