@@ -5166,6 +5166,9 @@ class BACnetClient:
     colon hex such as ``"01:02:03:04:05:06"`` (SC, or ``"00:04:d2"`` for a
     VMAC), or an MS/TP station. ``"[ip]:port"`` raises ValueError: use
     ``resolve_vmac``. So does a ``bip6:`` address on any other transport.
+
+    For B/IP, ``interface`` accepts an IPv4 literal or the exact OS interface
+    name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
     """
 
     def __init__(
@@ -7077,6 +7080,9 @@ class BACnetServer:
         server = BACnetServer(device_instance=1234, device_name="My Device")
         server.add_analog_input(1, "Temperature", units=62)
         await server.start()
+
+    For B/IP, ``interface`` accepts an IPv4 literal or the exact OS interface
+    name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
     """
 
     def __init__(
@@ -9728,6 +9734,9 @@ class BipEndpoint:
     ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
     no object may have it, so it, or anything larger, raises ValueError at
     construction (#2171).
+
+    For B/IP, ``interface`` accepts an IPv4 literal or the exact OS interface
+    name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
     """
 
     # network_port_instance declares a snapshot; registered_network_port explicitly
@@ -10362,6 +10371,9 @@ class BipRouterPort:
     Bbmd's default refusal of foreign-device registrations is unchanged.
     Invalid IPv4 addresses raise ValueError; out-of-range integers raise
     OverflowError. Construction opens no socket.
+
+    For B/IP, ``interface`` accepts an IPv4 literal or the exact OS interface
+    name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
     """
     def __init__(self, network_number: int, *, interface: str = "0.0.0.0", port: int = 47808, broadcast_address: str = "255.255.255.255", bbmd: Bbmd | None = None, foreign_device: ForeignDevice | None = None) -> None: ...
     @property

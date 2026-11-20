@@ -174,7 +174,7 @@ impl super::BACnetServer {
             apdu_segment_timeout_ms: 5000,
             device_name: String::new(),
             transport_type: "bip".into(),
-            interface: String::new(),
+            interface: std::net::Ipv4Addr::UNSPECIFIED,
             port: 0,
             broadcast_address: String::new(),
             share_port_by_address: false,

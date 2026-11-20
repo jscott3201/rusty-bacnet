@@ -438,12 +438,18 @@ impl PyMulticast {
     }
 }
 
+/// Resolve an IPv4 literal or exact OS interface name while the GIL is released.
+pub(crate) fn interface_ipv4(py: Python<'_>, interface: &str) -> PyResult<Ipv4Addr> {
+    py.detach(|| bacnet_transport::bip::resolve_interface_ipv4(interface))
+        .map_err(|error| PyValueError::new_err(format!("invalid interface: {error}")))
+}
+
 /// The group the `multicast=` keyword asks for: only on B/IP, with an
 /// explicit interface, and not for a foreign device. A BBMD with a group
 /// serves it (Annex J.8.3).
 pub(crate) fn bip_multicast(
     transport: &str,
-    interface: &str,
+    interface: Ipv4Addr,
     port: u16,
     share_port_by_address: bool,
     mode: &BipMode,
@@ -463,7 +469,7 @@ pub(crate) fn bip_multicast(
              through its BBMD",
         ));
     }
-    if parse_ip(interface, "interface")?.is_unspecified() {
+    if interface.is_unspecified() {
         return Err(PyValueError::new_err(
             "multicast needs an explicit interface address, not 0.0.0.0",
         ));
