@@ -2,10 +2,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use bacnet_encoding::tags::MAX_CONTEXT_NESTING_DEPTH;
-use pyo3::types::PyTuple;
+#[path = "property_value_pickle.rs"]
+mod pickle;
 
 use super::constructed_read::{Element, TypedElement};
 use super::date::{date_from_value, date_value};
+use super::network_port_value::NetworkPortTable;
 use super::timestamp::time_value;
 use super::*;
 
@@ -58,6 +60,8 @@ pub(crate) enum Form {
     Typed(Element),
     /// A value with no typed form read as its tags (#2618; see `tag_tree`).
     Tagged,
+    /// A whole Network Port BDT or FDT, retaining its exact value bytes.
+    NetworkPortTable(NetworkPortTable),
 }
 
 impl Form {
@@ -65,6 +69,7 @@ impl Form {
     fn octets_to_py(self, py: Python<'_>, octets: &[u8]) -> PyResult<Py<PyAny>> {
         match self {
             Self::Typed(element) => element.to_py(py, octets),
+            Self::NetworkPortTable(table) => table.to_py(py, octets),
             Self::Tagged => super::tag_tree::nodes_to_py(py, octets),
             Self::Plain => Ok(PyBytes::new(py, octets).into_any().unbind()),
         }
@@ -353,10 +358,14 @@ impl PyPropertyValue {
     /// The BACnet type tag (e.g. "real", "unsigned", "boolean"). One element
     /// of a typed constructed read is named by its production
     /// ("destination", "port_permission", ...); a whole one is a "list".
+    /// A whole Network Port table is tagged "bdt" or "fdt".
     #[getter]
     fn tag(&self) -> &str {
         match (&self.inner, self.form) {
             (primitives::PropertyValue::ApplicationData(_), Form::Tagged) => TAGGED,
+            (primitives::PropertyValue::ApplicationData(_), Form::NetworkPortTable(table)) => {
+                table.tag()
+            }
             (primitives::PropertyValue::ApplicationData(_), Form::Typed(element)) => element.tag(),
             (inner, _) => tag(inner),
         }
@@ -370,7 +379,7 @@ impl PyPropertyValue {
         match (&self.inner, self.form) {
             (
                 primitives::PropertyValue::ApplicationData(octets),
-                form @ (Form::Typed(_) | Form::Tagged),
+                form @ (Form::Typed(_) | Form::Tagged | Form::NetworkPortTable(_)),
             ) => form.octets_to_py(py, octets),
             (primitives::PropertyValue::List(items), form @ (Form::Typed(_) | Form::Tagged)) => {
                 let list = pyo3::types::PyList::empty(py);
@@ -416,6 +425,9 @@ impl PyPropertyValue {
 
     fn __repr__(&self) -> String {
         match (&self.inner, self.form) {
+            (primitives::PropertyValue::ApplicationData(octets), Form::NetworkPortTable(table)) => {
+                format!("PropertyValue.{}(<{} bytes>)", table.tag(), octets.len())
+            }
             (primitives::PropertyValue::ApplicationData(octets), Form::Tagged) => {
                 format!("PropertyValue.{TAGGED}(<{} bytes>)", octets.len())
             }
@@ -445,84 +457,6 @@ impl PyPropertyValue {
         hash_value(&self.inner, &mut state);
         self.form.hash(&mut state);
         state.finish()
-    }
-
-    /// What `copy` and `pickle` call (#1500): the constructor `tag` names
-    /// and its arguments, taken from the value as stored, so the copy is
-    /// equal. A list passes its items as PropertyValues, keeping each one's
-    /// tag, where `.value` would give `real` and `double` alike as a float.
-    /// A typed constructed element (#1310) rebuilds from its octets as read
-    /// through `_typed_element`: `.value` is decoded from those octets and
-    /// needn't encode back to them. A value read from a property (#2080)
-    /// rebuilds through `_read_from` with the value and that property, so the
-    /// copy keeps its names.
-    fn __reduce__<'py>(
-        slf: &Bound<'py, Self>,
-    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
-        use primitives::PropertyValue as V;
-        let py = slf.py();
-        let this = slf.get();
-        if let Some(property) = this.property {
-            let mut value = this.clone();
-            value.property = None;
-            let arguments = (value, PyPropertyIdentifier { inner: property }).into_pyobject(py)?;
-            return Ok((slf.get_type().getattr("_read_from")?, arguments));
-        }
-        if let (V::ApplicationData(octets), Form::Tagged) = (&this.inner, this.form) {
-            let arguments = (PyBytes::new(py, octets),).into_pyobject(py)?;
-            return Ok((slf.get_type().getattr(TAGGED)?, arguments));
-        }
-        let constructor = match (&this.inner, this.form) {
-            (V::ApplicationData(_), Form::Typed(_)) => "_typed_element",
-            (inner, _) => tag(inner),
-        };
-        let arguments = match (&this.inner, this.form) {
-            (V::ApplicationData(octets), Form::Typed(element)) => {
-                (element.tag(), PyBytes::new(py, octets)).into_pyobject(py)?
-            }
-            (V::List(items), form) => {
-                // A list's application data items are read in its form.
-                let items: Vec<Self> = items
-                    .iter()
-                    .map(|item| Self {
-                        form: match item {
-                            V::ApplicationData(_) => form,
-                            _ => Form::Plain,
-                        },
-                        ..Self::from_rust(item.clone())
-                    })
-                    .collect();
-                (items,).into_pyobject(py)?
-            }
-            (V::Null, _) => PyTuple::empty(py),
-            (V::Boolean(value), _) => (*value,).into_pyobject(py)?,
-            (V::Unsigned(value), _) => (*value,).into_pyobject(py)?,
-            (V::Signed(value), _) => (*value,).into_pyobject(py)?,
-            (V::Real(value), _) => (f64::from(*value),).into_pyobject(py)?,
-            (V::Double(value), _) => (*value,).into_pyobject(py)?,
-            (V::CharacterString(value), _) => (value.as_str(),).into_pyobject(py)?,
-            (V::Enumerated(value), _) => (*value,).into_pyobject(py)?,
-            (V::OctetString(octets) | V::ApplicationData(octets), _) => {
-                (PyBytes::new(py, octets),).into_pyobject(py)?
-            }
-            (V::BitString { unused_bits, data }, _) => {
-                (*unused_bits, PyBytes::new(py, data)).into_pyobject(py)?
-            }
-            (V::Date(date), _) => date_value(date).into_pyobject(py)?,
-            (V::Time(time), _) => time_value(time).into_pyobject(py)?,
-            (V::ObjectIdentifier(oid), _) => {
-                (PyObjectIdentifier::from_rust(*oid),).into_pyobject(py)?
-            }
-        };
-        Ok((slf.get_type().getattr(constructor)?, arguments))
-    }
-
-    /// `value` as read from `property`, so its enumerated value and bit
-    /// string come out named: what `__reduce__` makes `copy` and `pickle`
-    /// call for a value a read gave.
-    #[staticmethod]
-    fn _read_from(value: Self, property: PyPropertyIdentifier) -> Self {
-        value.read_from(property.to_rust())
     }
 
     /// A value as its tags, from its octets (#2618), as a read of a value

@@ -42,6 +42,7 @@ mod enums;
 mod event_parameter_py;
 pub(crate) mod int_enums;
 mod mapping;
+mod network_port_value;
 mod notification_parameters_py;
 mod object_identifier;
 mod object_profile;

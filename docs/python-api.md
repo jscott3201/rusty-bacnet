@@ -1137,6 +1137,16 @@ Code that handled `application_data` reads should expect:
   tag) anywhere in it, or more than 10,000 elements. Accept `"tagged"` and
   `"application_data"`, and read the octets from `.octets`, which both
   give. Broken framing still raises as for any read.
+- A whole Network Port property 414 (BBMD_Broadcast_Distribution_Table)
+  has tag `bdt`. Its `value` is a list in wire order. Each row has an
+  `address_kind` of `"ip"`, `"name"` or `"none"`, an `address` containing
+  the IP text, host name or `None`, a UDP `port`, and a `broadcast_mask` as
+  dotted IPv4 text or `None`. Property 415 (BBMD_Foreign_Device_Table) has
+  tag `fdt`. Its rows have an IP `address`, UDP `port`, `ttl` and
+  `seconds_remaining`. Empty tables keep their tag and return `[]`.
+  Accessing `value` gives fresh dictionaries. Passing the `PropertyValue`
+  to a write retains its original wire bytes. Well-framed values that
+  fail table decoding retain their bytes as `tagged` or `application_data`.
 - **Failed typed reads.** A typed constructed property whose octets don't
   decode as its elements (a malformed Recipient_List, say) falls back to
   `tagged` too.

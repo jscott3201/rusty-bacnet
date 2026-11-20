@@ -2575,6 +2575,7 @@ class PropertyValue:
         'octet_string', 'character_string', 'bit_string', 'enumerated',
         'date', 'time', 'object_identifier', 'list', 'application_data',
         'tagged' (a value read as its tags, ``value`` a list of ``TagNode``),
+        'bdt' or 'fdt' for a whole Network Port table,
         or one typed constructed element: 'destination', 'port_permission',
         'read_access_specification', 'read_access_result', 'action_list',
         'device_object_reference', 'authentication_factor_format',
@@ -2591,7 +2592,8 @@ class PropertyValue:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
         ObjectIdentifier, BitString, list, or None); ``application_data`` is ``bytes``
         (except a DateTime Value's set Priority_Array slot, ``[date, time]``),
-        ``tagged`` a list of ``TagNode``,
+        ``tagged`` a list of ``TagNode``, ``bdt`` a list of
+        ``NetworkPortBdtEntry``, ``fdt`` a list of ``NetworkPortFdtEntry``,
         and a typed constructed element the form its typed write takes, or
         the form docs/python-api.md gives it. A date is ``(year, month, day,
         day_of_week)`` with the full year, or 255 for an unspecified year,
@@ -4431,6 +4433,20 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     refused: int
     unanswered: int
 
+
+class NetworkPortBdtEntry(TypedDict):
+    """One BBMD_Broadcast_Distribution_Table property entry."""
+    address_kind: Literal["ip", "name", "none"]
+    address: str | None
+    port: int
+    broadcast_mask: str | None
+
+class NetworkPortFdtEntry(TypedDict):
+    """One BBMD_Foreign_Device_Table property entry."""
+    address: str
+    port: int
+    ttl: int
+    seconds_remaining: int
 
 class FdtEntry(TypedDict):
     """A Foreign Device Table entry, as ``read_fdt()`` returns it.
