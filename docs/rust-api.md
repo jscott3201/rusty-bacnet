@@ -12327,6 +12327,10 @@ by the I-Am times. A directed Who-Is accepts
 `bacnet_client::client::Station`. A remote station keeps its DNET and DADR
 through an explicit or learned router. With no known next hop it uses a local
 link broadcast carrying that same destination.
+`BACnetClient::localized_device_snapshot()` returns the number used to
+localize the snapshot together with its rows in address order. When a relayed
+copy and local row identify one station, the local row wins unless it is an
+`add_device` placeholder and the relayed row has known capabilities.
 
 `bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
 `bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,

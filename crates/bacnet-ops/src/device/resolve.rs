@@ -359,12 +359,8 @@ impl<T: TransportPort + 'static> Client<T> {
                 }
             }
         }
-        let table = self.low_level().discovered_devices().await;
-        Ok(discovery_results(
-            table,
-            heard,
-            self.low_level().network_number(),
-        ))
+        let (own, table) = self.low_level().localized_device_snapshot();
+        Ok(discovery_results(table, heard, own))
     }
 
     /// Every instance two or more addresses claim in the discovery table,
@@ -401,35 +397,27 @@ pub(super) fn discovery_results(
         .into_iter()
         .map(|(address, instance)| (address.localized(own), instance))
         .collect();
-    let mut stations = BTreeMap::new();
-    for row in table {
-        let Some(address) = DeviceAddress::of(&row) else {
-            continue;
-        };
-        let key = (
-            address.localized(own),
-            row.object_identifier.instance_number(),
-        );
-        // A queued router copy can coexist with the station's local row
-        // while a network-number change is folding the discovery table.
-        if row.is_local() {
-            stations.insert(key, row);
-        } else {
-            stations.entry(key).or_insert(row);
-        }
-    }
     let mut claims = BTreeMap::new();
-    for (_, instance) in stations.keys() {
-        *claims.entry(*instance).or_insert(0usize) += 1;
-    }
+    let stations: Vec<_> = table
+        .into_iter()
+        .filter_map(|entry| {
+            let address = DeviceAddress::of(&entry)?;
+            let instance = entry.object_identifier.instance_number();
+            *claims.entry(instance).or_insert(0usize) += 1;
+            Some((address, instance, entry))
+        })
+        .collect();
     stations
         .into_iter()
-        .filter(|(key, _)| heard.contains(key))
-        .map(|((address, instance), entry)| Discovered {
-            address,
-            instance,
-            duplicate: claims[&instance] > 1,
-            entry,
+        .filter_map(|(address, instance, entry)| {
+            heard
+                .contains(&(address.clone(), instance))
+                .then(|| Discovered {
+                    address,
+                    instance,
+                    duplicate: claims[&instance] > 1,
+                    entry,
+                })
         })
         .collect()
 }

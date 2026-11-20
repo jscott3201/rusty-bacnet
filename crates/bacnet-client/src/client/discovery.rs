@@ -141,6 +141,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.device_table.lock().all()
     }
 
+    /// Snapshot the discovered stations using the current local network number.
+    /// The returned number is the one used to place the rows. A routed copy
+    /// from that network appears at its local MAC. When a local row already
+    /// exists there it wins, except that an announced or explicitly configured
+    /// routed row supersedes an `add_device` placeholder. This reads the table
+    /// without changing its rows or emitting device events.
+    pub fn localized_device_snapshot(&self) -> (Option<u16>, Vec<DiscoveredDevice>) {
+        let table = self.device_table.lock();
+        let own = self.network_number();
+        (own, table.localized_rows(own))
+    }
+
     /// Look up the discovered device that claims `instance`, or `Ok(None)`
     /// when no address does.
     ///

@@ -16,7 +16,64 @@ pub(crate) struct Folded {
     pub(crate) placeholder: Option<DiscoveredDevice>,
 }
 
+/// Which row wins when the remote network is this link. A real local
+/// station wins over its relayed copy. A real relayed row supersedes a
+/// local placeholder.
+fn use_routed(local: Option<&TableEntry>, routed: &TableEntry) -> bool {
+    local.is_none_or(|local| {
+        local.segmentation == PeerSegmentation::Placeholder
+            && routed.segmentation != PeerSegmentation::Placeholder
+    })
+}
+
+fn local_device(row: &DiscoveredDevice, mac: &MacAddr) -> DiscoveredDevice {
+    DiscoveredDevice {
+        mac_address: mac.clone(),
+        source_network: None,
+        source_address: None,
+        ..row.clone()
+    }
+}
+
 impl DeviceTable {
+    /// A read-only view with the same winners and address order as a fold.
+    pub(crate) fn localized_rows(&self, own: Option<u16>) -> Vec<DiscoveredDevice> {
+        let Some(number @ 1..=0xfffe) = own else {
+            return self.all();
+        };
+        let first = Key::at(number, &[]);
+        let mut aliases = self
+            .rows
+            .range(first..)
+            .take_while(|(k, _)| k.network == number)
+            .peekable();
+        if aliases.peek().is_none() {
+            return self.all();
+        }
+        let mut stations: BTreeMap<_, _> = self
+            .rows
+            .iter()
+            .filter(|(key, _)| key.network != number)
+            .map(|(key, row)| (key.clone(), row))
+            .collect();
+        for (key, row) in aliases {
+            let local = Key::at(0, &key.mac);
+            if use_routed(self.rows.get(&local), row) {
+                stations.insert(local, row);
+            }
+        }
+        stations
+            .into_iter()
+            .map(|(key, row)| {
+                if row.device.source_network == own {
+                    local_device(&row.device, &key.mac)
+                } else {
+                    row.device.clone()
+                }
+            })
+            .collect()
+    }
+
     /// How many rows claim `instance`, counting to two.
     fn claim_count(&self, instance: u32) -> usize {
         self.claims_of(instance).take(2).count()
@@ -49,22 +106,11 @@ impl DeviceTable {
             .collect();
         for key in routed {
             let local = Key::at(0, &key.mac);
-            let placeholder = self
-                .rows
-                .get(&local)
-                .map(|row| row.segmentation == PeerSegmentation::Placeholder);
-            let routed_real = self
-                .rows
-                .get(&key)
-                .is_some_and(|row| row.segmentation != PeerSegmentation::Placeholder);
-            let moving = match placeholder {
-                None => true,
-                Some(placeholder) => placeholder && routed_real,
-            };
-            let mut touched = Vec::new();
             let Some(entry) = self.rows.get(&key) else {
                 continue;
             };
+            let moving = use_routed(self.rows.get(&local), entry);
+            let mut touched = Vec::new();
             touched.push(entry.device.object_identifier.instance_number());
             if moving && let Some(row) = self.rows.get(&local) {
                 let other = row.device.object_identifier.instance_number();
@@ -82,12 +128,7 @@ impl DeviceTable {
                     self.claims.remove(&(old, local.clone()));
                     row.device
                 });
-                let device = DiscoveredDevice {
-                    mac_address: local.mac.clone(),
-                    source_network: None,
-                    source_address: None,
-                    ..entry.device.clone()
-                };
+                let device = local_device(&entry.device, &local.mac);
                 let row = TableEntry {
                     device: device.clone(),
                     segmentation: entry.segmentation,

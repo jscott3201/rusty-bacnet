@@ -177,19 +177,17 @@ impl Station {
         })
     }
 
-    /// Same-station aliases in the table identify one destination.
+    /// Resolve against the client's canonical one-row-per-station snapshot.
     fn known(
         &self,
         dnet: u16,
         own: Option<u16>,
         devices: &[DiscoveredDevice],
     ) -> Option<Result<Destination, String>> {
-        let mut found: Vec<_> = devices
+        let found: Vec<_> = devices
             .iter()
             .filter_map(|row| self.destination(dnet, own, row))
             .collect();
-        found.sort_by(|a, b| (&a.address, a.instance).cmp(&(&b.address, b.instance)));
-        found.dedup();
         match found.as_slice() {
             [] => None,
             [station] => Some(Ok(station.clone())),
@@ -231,8 +229,7 @@ async fn find_routed<T: TransportPort + 'static>(
     station: &Station,
     wait: Duration,
 ) -> Result<Destination, String> {
-    let cached = client.discovered_devices().await;
-    let own = client.network_number();
+    let (own, cached) = client.localized_device_snapshot();
     if let Some(found) = station.known(dnet, own, &cached) {
         return found;
     }
@@ -269,17 +266,29 @@ async fn find_routed<T: TransportPort + 'static>(
                 ));
             }
             Ok(Ok(event)) => {
-                if event.kind != DeviceEventKind::Lost
-                    && let Some(found) =
-                        station.destination(dnet, client.network_number(), &event.device)
-                {
-                    return Ok(found);
+                // The queued copy can name a previous instance of the local
+                // station. Match its link identity first and consult the
+                // current snapshot for its network, instance and route.
+                let relevant = match station {
+                    Station::Mac(mac) => {
+                        DeviceAddress::of(&event.device).is_some_and(|at| at.mac() == mac)
+                    }
+                    Station::Instance(instance) => {
+                        event.device.object_identifier.instance_number() == *instance
+                            || event.device.source_network == Some(dnet)
+                    }
+                };
+                if event.kind != DeviceEventKind::Lost && relevant {
+                    let (own, cached) = client.localized_device_snapshot();
+                    if let Some(found) = station.known(dnet, own, &cached) {
+                        return found;
+                    }
                 }
             }
             // Missed events may include the answer; the table holds it.
             Ok(Err(RecvError::Lagged(_))) => {
-                let cached = client.discovered_devices().await;
-                if let Some(found) = station.known(dnet, client.network_number(), &cached) {
+                let (own, cached) = client.localized_device_snapshot();
+                if let Some(found) = station.known(dnet, own, &cached) {
                     return found;
                 }
             }

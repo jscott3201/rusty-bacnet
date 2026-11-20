@@ -121,7 +121,7 @@ async fn site() -> (BACnetClient<TestTransport>, SendLog) {
 #[tokio::test(start_paused = true)]
 async fn a_queued_routed_answer_and_its_local_alias_match_the_canonical_destination() {
     let (mut client, _) = site().await;
-    let queued = client.get_device_at(DNET, &[STATION]).await.unwrap();
+    let mut queued = client.get_device_at(DNET, &[STATION]).await.unwrap();
     let mut local = queued.clone();
     local.mac_address = queued.source_address.clone().unwrap();
     local.source_network = None;
@@ -136,10 +136,22 @@ async fn a_queued_routed_answer_and_its_local_alias_match_the_canonical_destinat
             Some(expected.clone())
         );
         assert_eq!(
-            target.known(DNET, Some(DNET), &[queued.clone(), local.clone()]),
+            target.known(DNET, Some(DNET), std::slice::from_ref(&local)),
             Some(Ok(expected.clone()))
         );
     }
+    queued.object_identifier = ObjectIdentifier::new(ObjectType::DEVICE, INSTANCE + 1).unwrap();
+    let stale = Station::Instance(INSTANCE + 1);
+    assert!(stale.destination(DNET, Some(DNET), &queued).is_some());
+    assert!(
+        stale
+            .known(DNET, Some(DNET), std::slice::from_ref(&local))
+            .is_none()
+    );
+    assert_eq!(
+        Station::Mac(vec![STATION]).known(DNET, Some(DNET), std::slice::from_ref(&local)),
+        Some(Ok(expected))
+    );
     let mut different = local.clone();
     different.mac_address = bacnet_types::MacAddr::from_slice(&[STATION + 1]);
     assert!(
