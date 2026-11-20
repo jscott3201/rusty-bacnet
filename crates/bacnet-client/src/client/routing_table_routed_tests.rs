@@ -196,3 +196,42 @@ async fn routing_table_localizes_own_network_and_reuses_an_exactly_cached_route(
     }
     client.stop().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn routing_table_refuses_an_apparently_unique_hop_after_losing_reports() {
+    let (inbound, inbound_rx) = mpsc::channel(1024);
+    let (sent, mut frames) = mpsc::unbounded_channel();
+    let transport = TestTransport::builder()
+        .local_mac(&[1])
+        .inbound(inbound_rx)
+        .on_send(move |frame| {
+            sent.send(frame.npdu).unwrap();
+            async { Ok(()) }
+        })
+        .build();
+    let mut client = BACnetClient::start(ClientConfig::default(), transport)
+        .await
+        .unwrap();
+    // Only the first report announces one peer. All retained reports
+    // can name the other peer once the subscriber overruns its queue.
+    inbound.try_send(i_am_router_npdu(&[2])).unwrap();
+    for _ in 0..300 {
+        inbound.try_send(i_am_router_npdu(&[3])).unwrap();
+    }
+    let error = client
+        .routing_table(&Station::remote(9, &[4]), RoutingTableWait::default())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, RoutingTableError::DiscoveryIncomplete { network: 9, lost } if lost > 0)
+    );
+    assert!(error.to_string().contains("explicit next hop"));
+    let question = decode_npdu(frames.try_recv().unwrap()).unwrap();
+    assert_eq!(question.message_type, Some(Msg::WHO_IS_ROUTER_TO_NETWORK));
+    assert_eq!(question.payload.as_ref(), [0, 9]);
+    assert!(
+        frames.try_recv().is_err(),
+        "no routing-table query may follow"
+    );
+    client.stop().await.unwrap();
+}

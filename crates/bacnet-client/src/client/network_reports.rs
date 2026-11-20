@@ -190,8 +190,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         destination_mac: Option<&[u8]>,
         wait: Duration,
     ) -> Result<Vec<DiscoveredRouter>, Error> {
-        self.collect_routers(network, destination_mac, wait, destination_mac.is_some())
-            .await
+        let (routers, _) = self
+            .collect_routers(network, destination_mac, wait, destination_mac.is_some())
+            .await?;
+        Ok(routers)
     }
 
     pub(super) async fn collect_routers(
@@ -200,14 +202,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         destination_mac: Option<&[u8]>,
         wait: Duration,
         local_only: bool,
-    ) -> Result<Vec<DiscoveredRouter>, Error> {
+    ) -> Result<(Vec<DiscoveredRouter>, u64), Error> {
         // Subscribe first, so no answer can arrive before the receiver.
         let mut rx = self.network_reports();
         self.who_is_router_to_network(network, destination_mac)
             .await?;
         let deadline = tokio::time::Instant::now() + wait;
         let mut routers: Vec<DiscoveredRouter> = Vec::new();
-        collect_until(&mut rx, deadline, "I-Am-Router-To-Network", |received| {
+        let lost = collect_until(&mut rx, deadline, "I-Am-Router-To-Network", |received| {
             let NetworkReport::IAmRouterToNetwork(listed) = received.report else {
                 return;
             };
@@ -220,7 +222,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             record(&mut routers, received.source_mac, listed);
         })
         .await;
-        Ok(routers)
+        Ok((routers, lost))
     }
 }
 

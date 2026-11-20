@@ -47,7 +47,8 @@ async fn a_lagging_collector_keeps_the_newest() {
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     let mut seen = Vec::new();
-    collect_until(&mut rx, deadline, "test", |n| seen.push(n)).await;
+    let lost = collect_until(&mut rx, deadline, "test", |n| seen.push(n)).await;
+    assert_eq!(lost, 3);
     assert_eq!(seen, [3, 4]);
     assert_eq!(tokio::time::Instant::now(), deadline);
 }

@@ -69,9 +69,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             Ok(Station::Remote { .. }) => unreachable!("a fixed route has a next hop"),
             Err(Error::UnknownDevice { .. }) => {
-                let routers = self
+                let (routers, lost) = self
                     .collect_routers(Some(network), None, wait, true)
                     .await?;
+                if lost != 0 {
+                    return Err(RoutingTableError::DiscoveryIncomplete { network, lost });
+                }
                 if self.network_number() == Some(network) {
                     return Ok(QueryTarget {
                         hop: destination.mac_address,

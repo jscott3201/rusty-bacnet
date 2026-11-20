@@ -5724,10 +5724,10 @@ class BACnetClient:
         one Initialize-Routing-Table with a port count of zero, which only
         asks; no argument can make it an update.
 
-        ``router`` is the router's address on the local link: ``bytes`` as
-        given, such as a ``DiscoveredRouter``'s ``mac``, or a string in the
+        For a local router, pass its MAC as ``bytes`` or a string in the
         binding's address forms (``"ip:port"``, ``"bip6:N"``, hex octets, an
-        MS/TP station). An empty or broadcast address raises ValueError.
+        MS/TP station). For a remote router, pass a RoutedTarget. An empty
+        or broadcast link address raises ValueError.
 
         A long table comes as several acknowledgements with nothing to mark
         the last, so the call returns once ``quiet`` seconds pass after the
@@ -5749,15 +5749,18 @@ class BACnetClient:
         one that answers from another address or port), and neither is an
         empty table. A Reject-Message-To-Network from the router before any
         acknowledgement raises BacnetNetworkRejectError; rejects with
-        reasons 1, 2 and 4 concern a DNET and are ignored. Each bound is 0 to
+        reasons 1, 2 and 4 are ignored for local queries. Each bound is 0 to
         3600 seconds and ``wait`` may not exceed ``total`` (ValueError
         otherwise). A client stopped mid-call raises RuntimeError. A
         RoutedTarget selects the remote router, using its explicit or cached
         next hop. Without either, one router-discovery window of up to
         ``wait`` seconds must identify a single local next hop for its network.
+        Zero or multiple next hops, or a discovery overrun, raise BacnetError.
         Replies must carry the remote station's source network and address and
         arrive through the selected hop. A local-only reply may cause a timeout.
-        A reject from the next hop for the requested DNET ends a routed query.
+        A reject from the next hop for the requested DNET before the first
+        ack ends a routed query. A simultaneous request through that path can
+        produce the same reject because network messages have no invoke ID.
         One query runs at a time per client; a second call waits for
         the first. It holds the started client for the whole wait, so
         ``stop()`` waits for it."""

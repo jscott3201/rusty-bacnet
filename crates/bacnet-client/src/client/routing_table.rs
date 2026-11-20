@@ -108,6 +108,14 @@ pub enum RoutingTableError {
         /// The number of distinct local peers that advertised it.
         candidates: usize,
     },
+    /// Reports were lost during router discovery, so the client could not
+    /// establish that a single next hop advertised the destination.
+    DiscoveryIncomplete {
+        /// The destination network.
+        network: u16,
+        /// Network reports lost before the collector read them.
+        lost: u64,
+    },
     /// The query was not sent: the link failed or the client's node had
     /// stopped.
     Send(Error),
@@ -128,6 +136,10 @@ impl core::fmt::Display for RoutingTableError {
             ),
             Self::InvalidArgument(why) => write!(f, "routing-table query refused: {why}"),
             Self::ClientStopped => f.write_str("the client stopped during the routing-table query"),
+            Self::DiscoveryIncomplete { network, lost } => write!(
+                f,
+                "lost {lost} reports discovering routers for network {network}. Specify an explicit next hop"
+            ),
             Self::RouteUnresolved {
                 network,
                 candidates,
@@ -248,7 +260,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// can end a routed query before its first ack.
     ///
     /// Nothing pairs an answer with its question, so a late ack of an
-    /// earlier query can be counted by the next query to the same router:
+    /// earlier query can be counted by the next query to the same router,
+    /// and a reject from the selected hop naming the same DNET may also
+    /// concern a concurrent routed request. For repeated table queries,
     /// leave a gap between repeated queries. Entries are reported as
     /// received, not deduplicated, so a network number can appear twice.
     ///

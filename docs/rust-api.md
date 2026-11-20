@@ -10656,14 +10656,22 @@ match client.routing_table(&router_mac, RoutingTableWait::default()).await {
 }
 ```
 
-The data is fixed inside the network layer
-(`NetworkLayer::send_routing_table_query` takes only the router's address),
-so the update form of Initialize-Routing-Table cannot be sent.
-`NetworkReport::RoutingTable(Vec<RoutingTableEntry>)` carries one ack's
-entries to `network_reports()` subscribers. No answer is `NoAnswer`, never
-an empty table; an empty table is `Ok` with no entries. `first_answer` may
-not exceed `total` (`InvalidArgument`), and a client runs one such query at
-a time. Only a router on the local link can be asked.
+The network layer fixes the payload to a zero port count.
+`NetworkLayer::send_routing_table_query(next_hop, destination)` takes the
+local peer's MAC and an optional `NpduAddress`. Pass `None` for a local query.
+`BACnetClient::routing_table` accepts a `ToStation`, including a local MAC
+or `Station::routed(next_hop, network, address)`. With `Station::remote`, the
+client uses a cached route or spends one additional first-answer window
+discovering a local next hop. Zero or multiple candidates yield
+`RoutingTableError::RouteUnresolved`. Lost discovery reports yield
+`RoutingTableError::DiscoveryIncomplete`. Neither outcome sends a table query.
+Routed acks must match the selected hop and original station. A matching hop's
+reject naming the target DNET before the first ack ends the query, though a
+concurrent request through the same hop to that DNET can produce the same reject.
+`NetworkReport::RoutingTable` reports each ack. An empty ack is a successful
+empty table. Silence after the table query was sent yields `NoAnswer`.
+A client runs one query at a time. A `first_answer` greater than `total`
+returns `InvalidArgument`.
 
 ### Device Management
 

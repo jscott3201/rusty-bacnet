@@ -7,6 +7,16 @@ from bvll_peer import RawPeer, bvll, mac
 
 
 class RoutedRoutingTableTests(unittest.IsolatedAsyncioTestCase):
+    async def test_target_forms_and_missing_next_hop_diagnostic(self):
+        async with rb.BipEndpoint(2612, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.255.255.255") as endpoint:
+            client = await endpoint.client()
+            with self.assertRaisesRegex(TypeError, "str, bytes, or RoutedTarget"):
+                client.routing_table(object())
+            with self.assertRaisesRegex(rb.BacnetError, "explicit next hop") as caught:
+                await client.routing_table(rb.RoutedTarget(9, b"\x03"), wait=0)
+            self.assertIs(type(caught.exception), rb.BacnetError)
+
     async def test_endpoint_correlates_routed_acks_and_reuses_a_cancelled_query(self):
         arrivals = asyncio.Queue()
         loop = asyncio.get_running_loop()
