@@ -135,6 +135,15 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn an_address_label_is_not_an_interface_name() {
+        assert_eq!(
+            resolve_interface_ipv4("lo:zz").unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn resolves_the_reported_windows_loopback_friendly_name() {

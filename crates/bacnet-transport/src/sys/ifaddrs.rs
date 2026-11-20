@@ -34,6 +34,12 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// The current index of an exact OS interface name, including interfaces
 /// without an IP address.
 pub(crate) fn interface_index(name: &str) -> io::Result<Option<u32>> {
+    // Linux's interface-index ioctl treats a colon suffix as an IPv4 address
+    // label and can return the base device's index even for an unknown label.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if name.contains(':') {
+        return Ok(None);
+    }
     let name = std::ffi::CString::new(name)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     // SAFETY: the CString remains live and NUL-terminated throughout the call.
