@@ -232,6 +232,8 @@ impl BACnetClient {
     }
 
     /// Write multiple properties to multiple objects in a single request.
+    /// `address` is a local address or a `RoutedTarget`, as for
+    /// `write_property` (#2612).
     #[pyo3(signature = (address, specs))]
     fn write_property_multiple<'py>(
         &self,
