@@ -26,7 +26,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::client::{ResolveScope, timed_out as is_timed_out, unreachable as is_unreachable};
+use crate::client::{Scope, timed_out as is_timed_out, unreachable as is_unreachable};
 use crate::device::DeviceAddress;
 use crate::format::PropertyError;
 use crate::label::kebab;
@@ -71,13 +71,13 @@ pub enum OpsError {
         /// The device as it was named: an instance (`1234`, `2:1234`) or an
         /// address (`2:0x05`).
         target: String,
-        /// Where the one Who-Is for it went unanswered: the network a
-        /// target or address named, or for a bare instance the client's
-        /// [`ResolveScope`]; `None` when none was sent. For
-        /// `Some(ResolveScope::Local)`, a bare instance asked on this
+        /// Where the one Who-Is for it went unanswered: the named station
+        /// or network, or for a bare instance the client's
+        /// [`crate::ResolveScope`]; `None` when none was sent. For
+        /// `Some(Scope::Local)`, a bare instance asked on this
         /// network alone (the default), the text says how to reach
         /// further.
-        asked: Option<ResolveScope>,
+        asked: Option<Scope>,
     },
     /// Two or more addresses claim the instance named, so which device is
     /// meant is unknown. Nothing was sent. Name one of `candidates` by its
@@ -316,7 +316,7 @@ impl fmt::Display for OpsError {
             }
             Self::UnknownDevice {
                 target,
-                asked: Some(ResolveScope::Local),
+                asked: Some(Scope::Local),
             } => write!(
                 f,
                 "device {target} did not answer a Who-Is on this network, the only one \
@@ -325,15 +325,22 @@ impl fmt::Display for OpsError {
             ),
             Self::UnknownDevice {
                 target,
-                asked: Some(ResolveScope::Network(network)),
+                asked: Some(Scope::Network(network)),
             } => write!(
                 f,
                 "device {target} did not answer a Who-Is on network {network}"
             ),
             Self::UnknownDevice {
                 target,
-                asked: Some(ResolveScope::Global),
+                asked: Some(Scope::Global),
             } => write!(f, "device {target} did not answer a Who-Is on any network"),
+            Self::UnknownDevice {
+                target,
+                asked: Some(Scope::Directed(_)),
+            } => write!(
+                f,
+                "device {target} did not answer a station-directed Who-Is"
+            ),
             Self::Ambiguous {
                 instance,
                 candidates,

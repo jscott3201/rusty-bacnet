@@ -102,7 +102,7 @@ async fn an_explicit_scope_reaches_the_wire_as_named() {
     client.find(quick(Scope::Global)).await.unwrap();
     assert_eq!(the_who_has(&sent), (remote(0xFFFF), true));
     let found = client
-        .find(quick(Scope::Directed(at(2))).wait(Duration::from_millis(500)))
+        .find(quick(Scope::Directed(at(2).into())).wait(Duration::from_millis(500)))
         .await
         .unwrap();
     assert_eq!(found, [at_two("A")]);
@@ -138,7 +138,7 @@ async fn a_refused_scope_or_range_sends_nothing() {
             "Find::within(Scope::Global)",
         ),
         (
-            find().within(Scope::Directed(routed)),
+            find().within(Scope::Directed(routed.into())),
             "address",
             "a directed Who-Has goes to one station on this network: \
              Find::within(Scope::Network(2))",
@@ -244,7 +244,7 @@ async fn a_directed_search_lists_only_its_station() {
     let found = found_within(
         &client,
         &bus,
-        Scope::Directed(at(2)),
+        Scope::Directed(at(2).into()),
         &[(3, None), (2, None)],
     )
     .await;

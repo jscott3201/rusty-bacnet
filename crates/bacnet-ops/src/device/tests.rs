@@ -12,7 +12,7 @@ use bacnet_types::error::Error;
 
 use super::test_bus::{Bus, N, at, client, client_on, name_of, requests, server, settle, stop};
 use super::*;
-use crate::client::{Discover, ResolveScope};
+use crate::client::Discover;
 
 /// From an address a handle is pinned, from an instance claimed once it
 /// follows, from a discovery result it is pinned and knows the instance;
@@ -239,7 +239,7 @@ async fn an_unclaimed_instance_is_asked_for_once() {
     assert_eq!(sent.broadcasts().len(), 1, "one Who-Is");
     let error = client.device(4242).await.unwrap_err();
     assert!(
-        matches!(&error, OpsError::UnknownDevice { target, asked: Some(ResolveScope::Local) } if target == "4242")
+        matches!(&error, OpsError::UnknownDevice { target, asked: Some(crate::Scope::Local) } if target == "4242")
     );
     let silent = client.with_resolve_wait(None);
     assert_eq!(silent.clone().resolve_wait(), None, "kept by its clones");

@@ -110,6 +110,84 @@ async fn the_default_discovery_stays_on_this_network() {
     lab.stop().await;
 }
 
+/// Cold, learned and explicit next hops carry the same station address.
+#[tokio::test(start_paused = true)]
+async fn directed_who_is_reaches_only_the_named_remote_station() {
+    use bacnet_client::client::Station;
+    use bacnet_encoding::apdu::Apdu;
+    use bacnet_services::who_is::WhoIsRequest;
+
+    let lab = Routed::new(|near| near.port(1)).await;
+    let station = DeviceAddress::new(2, &mac(5)).unwrap();
+    for (to, broadcast) in [
+        (Station::remote(2, &mac(5)), true),
+        (Station::remote(2, &mac(5)), false),
+        (Station::routed(&mac(254), 2, &mac(5)), false),
+    ] {
+        lab.sent.clear();
+        let request = Discover::directed(to)
+            .range(N..=N)
+            .wait(Duration::from_millis(500));
+        let (found, ()) = tokio::join!(lab.client.discover(request), async {
+            settle().await;
+            lab.near.i_am_from(254, Some((3, &mac(6))), N);
+        });
+        let found = found.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].address, station);
+        let frames = super::discover_tests::who_is_frames(&lab.sent);
+        let [frame] = frames.as_slice() else {
+            panic!("one Who-Is: {frames:?}")
+        };
+        assert_eq!(frame.broadcast, broadcast);
+        if !broadcast {
+            assert_eq!(frame.mac.as_slice(), mac(254));
+        }
+        let to = frame.decode_npdu().destination.unwrap();
+        assert_eq!(to.network, 2);
+        assert_eq!(to.mac_address.as_slice(), mac(5));
+        let Apdu::UnconfirmedRequest(apdu) = frame.apdu() else {
+            panic!("Who-Is")
+        };
+        let range = WhoIsRequest::decode(&apdu.service_request)
+            .unwrap()
+            .range
+            .unwrap();
+        assert!(range.contains(N) && !range.contains(N - 1) && !range.contains(N + 1));
+    }
+    // Unrelated I-Ams still enter the client's inventory.
+    assert!(
+        lab.client
+            .low_level()
+            .get_device_at(3, &mac(6))
+            .await
+            .is_some()
+    );
+    lab.stop().await;
+}
+
+/// A bad explicit next hop fails before the first network-number question.
+#[tokio::test(start_paused = true)]
+async fn directed_who_is_validates_the_router_before_preflight() {
+    use bacnet_client::client::Station;
+    let port = TestTransport::builder()
+        .local_mac(&mac(1))
+        .number_controls()
+        .data_link(bacnet_types::data_link::DataLink::Bip)
+        .build();
+    let (client, sent) = client_on(port).await;
+    for router in [&[][..], &[255, 255, 255, 255, 0xba, 0xc0]] {
+        let target = Station::routed(router, 2, &mac(5));
+        let error = client
+            .low_level()
+            .who_is_directed(&target, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("unicast router"), "{error}");
+        assert!(sent.is_empty());
+    }
+}
+
 /// A search that names no scope stays on this network as a discovery does
 /// (#2596): neither routed device hears its Who-Has, so it comes back
 /// empty, though one has the object. Network 2 named finds station 5's,
@@ -326,7 +404,7 @@ async fn a_directed_who_is_on_the_own_network_is_a_local_unicast() {
     lab.sent.clear();
     let station = DeviceAddress::new(1, &mac(9)).unwrap();
     lab.client
-        .discover(Discover::directed(station).wait(Duration::ZERO))
+        .discover(Discover::directed(station.into()).wait(Duration::ZERO))
         .await
         .unwrap();
     let frames = super::discover_tests::who_is_frames(&lab.sent);
@@ -382,7 +460,7 @@ async fn a_miss_on_the_own_network_keeps_the_target_as_written() {
     assert!(
         matches!(
             &named,
-            crate::OpsError::UnknownDevice { target, asked: Some(ResolveScope::Network(1)) }
+            crate::OpsError::UnknownDevice { target, asked: Some(crate::Scope::Network(1)) }
                 if target == "1:4242"
         ),
         "{named:?}"

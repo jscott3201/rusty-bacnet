@@ -11,7 +11,7 @@
 //!   [`DeviceAddress`]): pinned to it and made at once, sending nothing for
 //!   a local address. One on the client's own network, once the client
 //!   knows that network's number, is the local station. A remote one the
-//!   discovery table holds no router for asks its network with a Who-Is
+//!   discovery table holds no router for is asked with a station-directed Who-Is
 //!   first. Its instance, when a call needs it and the table doesn't say,
 //!   comes from one read of the Device object by the wildcard instance,
 //!   remembered by the client.

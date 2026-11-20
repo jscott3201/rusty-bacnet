@@ -4,7 +4,7 @@
 //! A local address is used as written. A device instance goes to the
 //! address that claims it in the client's discovery table, and a device
 //! behind a router (`dnet:instance`, `dnet:0xMAC`) to its station there,
-//! asking its network with a Who-Is when the table doesn't hold it yet.
+//! asking for the named instance or station with a Who-Is when the table doesn't hold it yet.
 //! Every service then goes to that address through the client's address
 //! entry points: to a local station at its MAC, and to a routed one
 //! through the router its row names, with its network and MAC in the NPDU
@@ -67,7 +67,7 @@ pub fn with_link_flag(reason: String) -> String {
 
 /// Resolve `text` to a [`Destination`]. An address names its station, and
 /// nothing is sent to resolve a local one or a routed one the discovery
-/// table holds. A routed target asks its network with a Who-Is when the
+/// table holds. A routed target asks for its instance or station when the
 /// table doesn't hold it yet, and waits up to `wait` for the answer.
 pub async fn resolve<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
@@ -185,7 +185,7 @@ impl Station {
 
 /// The device `station` names on network `dnet`: its address, from the
 /// discovery table or, failing that, from its answer to a Who-Is sent to
-/// that network (to its one instance when the target names it). A routed
+/// that instance on its network or directly to the named MAC. A routed
 /// MAC the table holds needs nothing sent, and nor does one on this
 /// client's own network, once it knows the number: that is the local
 /// station. `dnet:instance` claimed twice on that network is ambiguous.
@@ -196,7 +196,13 @@ async fn find_routed<T: TransportPort + 'static>(
     wait: Duration,
 ) -> Result<Destination, String> {
     let own = client.network_number() == Some(dnet);
-    let scope = if own { 0 } else { dnet };
+    let scope = || {
+        if client.network_number() == Some(dnet) {
+            0
+        } else {
+            dnet
+        }
+    };
     if let (true, Station::Mac(mac)) = (own, station) {
         let mut found = Destination::local(mac)?;
         found.instance = client
@@ -208,7 +214,7 @@ async fn find_routed<T: TransportPort + 'static>(
     let known = |devices: Vec<DiscoveredDevice>| {
         let found: Vec<DiscoveredDevice> = devices
             .into_iter()
-            .filter(|device| station.matches(scope, device))
+            .filter(|device| station.matches(scope(), device))
             .collect();
         match found.as_slice() {
             [] => None,
@@ -232,28 +238,33 @@ async fn find_routed<T: TransportPort + 'static>(
     }
     // Subscribe before asking, so the answer can't slip in between.
     let mut events = client.device_events();
-    let range = match station {
+    let asked = match station {
         Station::Instance(instance) => {
-            Some(DeviceInstanceRange::new(*instance, *instance).map_err(text)?)
+            let range = DeviceInstanceRange::new(*instance, *instance).map_err(text)?;
+            client
+                .who_is(Broadcast::Network(dnet), Some(range))
+                .await
+                .map_err(text)?;
+            format!("a Who-Is on network {dnet}")
         }
-        Station::Mac(_) => None,
+        Station::Mac(mac) => {
+            let to = bacnet_client::client::Station::remote(dnet, mac);
+            client.who_is_directed(&to, None).await.map_err(text)?;
+            "a station-directed Who-Is".into()
+        }
     };
-    client
-        .who_is(Broadcast::Network(dnet), range)
-        .await
-        .map_err(text)?;
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {
             Err(_) => {
                 return Err(format!(
-                    "device {} did not answer a Who-Is on network {dnet} within {} ms",
+                    "device {} did not answer {asked} within {} ms",
                     station.name(dnet),
                     wait.as_millis()
                 ));
             }
             Ok(Ok(event)) => {
-                if event.kind != DeviceEventKind::Lost && station.matches(scope, &event.device) {
+                if event.kind != DeviceEventKind::Lost && station.matches(scope(), &event.device) {
                     return Destination::of(&event.device);
                 }
             }

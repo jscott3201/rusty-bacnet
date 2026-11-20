@@ -751,7 +751,7 @@ pub(crate) async fn send_who_is<T: TransportPort + 'static>(
         WhoIsScope::Directed {
             to: DirectedTo::Mac(mac),
             ..
-        } => Scope::Directed(DeviceAddress::local(mac)?),
+        } => Scope::Directed(DeviceAddress::local(mac)?.into()),
         WhoIsScope::Directed {
             to: DirectedTo::Bip6(peer),
             ..

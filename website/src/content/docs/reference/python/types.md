@@ -1403,7 +1403,7 @@ forms or as `bytes`, such as a routed `DiscoveredDevice`'s
 `mac_address`, or `BACnetClient.discover_routers()`' `mac`; each
 request goes through it. Without one, the client uses the route it
 knows: the router its discovery table names for the station, after
-one Who-Is to the station's network when it has none, as
+one Who-Is addressed to that station when it has none, as
 `BACnetClient.device()` does. A station that doesn't answer raises
 `BacnetLookupError`, and for 30 seconds a call to it with no router
 raises at once without asking again, unless an I-Am from it arrives

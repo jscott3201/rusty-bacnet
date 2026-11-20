@@ -151,7 +151,7 @@ async fn default_policy_coalesces_a_reused_routed_cli_source() {
     let first_source = sources.lock().unwrap()[0].clone();
     let reused_port = source_port(&first_source);
     let second = query(port, reused_port).await;
-    failure(&second, "did not answer a Who-Is on network 2");
+    failure(&second, "did not answer a station-directed Who-Is");
     check(&server, 2, 1, 1);
     assert_eq!(sources.lock().unwrap()[1], first_source);
     assert_eq!(tokio::time::Instant::now(), start);

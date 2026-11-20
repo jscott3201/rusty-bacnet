@@ -87,7 +87,7 @@ async fn an_explicit_scope_reaches_the_wire_as_named() {
     client.discover(quick(Discover::global())).await.unwrap();
     assert_eq!(the_who_is(&sent), (remote(0xFFFF), true));
     client
-        .discover(quick(Discover::directed(at(2))))
+        .discover(quick(Discover::directed(at(2).into())))
         .await
         .unwrap();
     let frames = who_is_frames(&sent);
@@ -99,23 +99,16 @@ async fn an_explicit_scope_reaches_the_wire_as_named() {
 
 /// A scope or range that can't be sent is refused before anything goes,
 /// as text to fix, with the scope to use instead: network 0 (this one is
-/// local), 65535 (every one is global) and a directed address behind a
-/// router (its network's scope); an empty range or one past the highest
+/// local), 65535 (every one is global); an empty range or one past the highest
 /// instance.
 #[tokio::test(start_paused = true)]
 async fn a_refused_scope_or_range_sends_nothing() {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
-    let routed = super::DeviceAddress::new(2, &[5]).unwrap();
     let (low, high) = (5, 3);
     for (request, what, says) in [
         (Discover::network(0), "network", "Discover::local()"),
         (Discover::network(0xFFFF), "network", "Discover::global()"),
-        (
-            Discover::directed(routed),
-            "address",
-            "Discover::network(2)",
-        ),
         (Discover::local().range(low..=high), "range", "5"),
         (Discover::local().range(0..=4_194_304), "range", "4194303"),
     ] {
@@ -167,8 +160,8 @@ async fn an_i_am_from_outside_the_scope_is_no_answer() {
     };
     for (request, expected) in [
         (Discover::network(7), vec![]),
-        (Discover::directed(at(2)), vec![1002]),
-        (Discover::directed(at(3)), vec![1003]),
+        (Discover::directed(at(2).into()), vec![1002]),
+        (Discover::directed(at(3).into()), vec![1003]),
         (Discover::local(), vec![1002, 1003]),
         (Discover::global(), vec![1002, 1003]),
     ] {
@@ -186,6 +179,31 @@ async fn an_i_am_from_outside_the_scope_is_no_answer() {
         bus.i_am(2, 1002);
         bus.i_am(3, 1003);
     }
+}
+
+/// The network number becomes known after the directed request has gone
+/// out. A local answer now identifies the station named by that network.
+#[tokio::test(start_paused = true)]
+async fn a_directed_scope_localizes_answers_when_the_network_is_learned_during_the_wait() {
+    use super::test_bus::{client_on, settle};
+    use bacnet_client::client::Station;
+
+    let bus = Bus::new();
+    let (client, sent) = client_on(bus.numbered_port(1)).await;
+    let target = Station::remote(5, &mac(2));
+    let request = Discover::directed(target).wait(Duration::from_secs(2));
+    let (found, ()) = tokio::join!(client.discover(request), async {
+        sent.wait_for_len(2).await; // What-Is-Network-Number and the Who-Is.
+        bus.number_is(254, 5);
+        settle().await;
+        assert_eq!(client.low_level().network_number(), Some(5));
+        bus.i_am(2, 1002);
+        bus.i_am(3, 1002);
+    });
+    let found = found.unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].address, at(2));
+    assert!(found[0].duplicate);
 }
 
 /// The one rule for which answers a scope covers, a Who-Is's and a
@@ -207,8 +225,13 @@ fn a_scope_covers_stations_by_where_they_are() {
         (Scope::Local, None, &routed, false),
         (Scope::Local, Some(5), &own_routed, true),
         (Scope::Local, None, &local, true),
-        (Scope::Directed(local.clone()), Some(5), &own_routed, true),
-        (Scope::Directed(local.clone()), None, &routed, false),
+        (
+            Scope::Directed(local.clone().into()),
+            Some(5),
+            &own_routed,
+            true,
+        ),
+        (Scope::Directed(local.clone().into()), None, &routed, false),
         (Scope::Global, None, &routed, true),
     ] {
         assert_eq!(

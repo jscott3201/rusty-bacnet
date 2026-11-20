@@ -89,7 +89,7 @@ fn device_range(
 /// on; `"global"` is every network; a number from 1 to 65534 is that
 /// remote network; and any other text is one station's address in the
 /// target grammar (`"192.168.1.10"`, `"mstp:5"`), asked by unicast
-/// (#2561, where `who_is_directed` was). Anything else raises before
+/// (#2561). Who-Is also accepts a `RoutedTarget` (#2599). Anything else raises before
 /// anything is sent: `ValueError` for another number, or for text that
 /// names a device instance or a routed target and not a station,
 /// `TypeError` for another type. A client on a router's application
@@ -118,6 +118,17 @@ fn discovery_scope(
     let Some(scope) = scope.filter(|scope| !scope.is_none()) else {
         return local("local").map(|()| ScopeArg::Fixed(Scope::Local));
     };
+    if service == "Who-Is"
+        && let Ok(target) = scope.cast::<crate::types::PyRoutedTarget>()
+    {
+        local("directed")?;
+        let (network, mac, router) = target.get().parts();
+        let station = match router {
+            Some(router) => client::Station::routed(router, network, mac),
+            None => client::Station::remote(network, mac),
+        };
+        return Ok(ScopeArg::Fixed(Scope::Directed(station)));
+    }
     if let Ok(name) = scope.cast::<PyString>() {
         let text = name.to_str()?.trim();
         return match text {
@@ -176,7 +187,7 @@ impl ScopeArg {
             .await
             .map_err(|reason| PyValueError::new_err(crate::high_level::link_hint(reason)))?;
         DeviceAddress::local(&mac)
-            .map(Scope::Directed)
+            .map(|address| Scope::Directed(address.into()))
             .map_err(PyValueError::new_err)
     }
 }

@@ -321,7 +321,7 @@ async fn who_is<T: TransportPort + 'static>(
                 .station_mac(address)
                 .await
                 .map_err(|e| invalid(e.to_string()))?;
-            Discover::directed(DeviceAddress::local(&mac).map_err(invalid)?)
+            Discover::directed(DeviceAddress::local(&mac).map_err(invalid)?.into())
         }
         (Scope::Global, ..) => {
             if ctx.policy.networks.is_some() {
@@ -337,14 +337,13 @@ async fn who_is<T: TransportPort + 'static>(
     };
     // Whether the discovery table knows a device at a directed Who-Is's
     // station.
-    let known_station = match request.scope() {
-        bacnet_ops::Scope::Directed(station) => client
-            .devices()
-            .await
-            .iter()
-            .any(|found| found.is_local() && found.mac_address.as_slice() == station.mac()),
-        _ => false,
-    };
+    let known_station =
+        match request.scope() {
+            bacnet_ops::Scope::Directed(station) => client.devices().await.iter().any(|found| {
+                found.is_local() && found.mac_address.as_slice() == station.address().1
+            }),
+            _ => false,
+        };
     if broad(ctx, args.scope, range, known_station)? {
         broad_allowed(ctx)?;
     }

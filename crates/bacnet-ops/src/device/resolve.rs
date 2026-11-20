@@ -92,7 +92,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// A handle pinned to `address`, with the instance the discovery table
     /// holds for it. An address on this client's own network is the local
     /// station at its MAC, which the link must be able to reach. A remote
-    /// address without a row asks its network first.
+    /// address without a row gets a station-directed Who-Is first.
     async fn at(&self, address: DeviceAddress) -> Result<Device<T>, OpsError> {
         let address = self.localized(address);
         if address.is_local() {
@@ -213,7 +213,7 @@ impl<T: TransportPort + 'static> Client<T> {
         let sent_to = network.map_or(self.resolve_scope(), ResolveScope::on);
         let asked = named.map_or(sent_to, ResolveScope::Network);
         let found = self
-            .wait_for(sent_to, Some(range), SETTLE, |row| {
+            .wait_for(&sent_to.into(), Some(range), SETTLE, |row| {
                 row.object_identifier.instance_number() == instance
                     && network.is_none_or(|n| {
                         DeviceAddress::of(row)
@@ -226,7 +226,7 @@ impl<T: TransportPort + 'static> Client<T> {
             match OpsError::from(unknown(instance, named)) {
                 OpsError::UnknownDevice { target, .. } => OpsError::UnknownDevice {
                     target,
-                    asked: sent.then_some(asked),
+                    asked: sent.then(|| asked.into()),
                 },
                 other => other,
             }
@@ -234,16 +234,17 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// The row of the station at the remote `address`, once it answers a
-    /// Who-Is to its network (for `range`, or every device).
+    /// Who-Is to that station, optionally limited to `range`.
     async fn find_station(
         &self,
         address: &DeviceAddress,
         range: Option<DeviceInstanceRange>,
     ) -> Result<DiscoveredDevice, OpsError> {
-        let asked = ResolveScope::on(address.network());
+        let asked = Scope::Directed(address.clone().into());
         let found = self
-            .wait_for(asked, range, Duration::ZERO, |row| {
-                DeviceAddress::of(row).as_ref() == Some(address)
+            .wait_for(&asked, range, Duration::ZERO, |row| {
+                DeviceAddress::of(row)
+                    .is_some_and(|at| asked.covers(&at, self.low_level().network_number()))
             })
             .await?;
         found.ok_or_else(|| OpsError::UnknownDevice {
@@ -260,7 +261,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// every answer reads the table after.
     async fn wait_for(
         &self,
-        asked: ResolveScope,
+        asked: &Scope,
         range: Option<DeviceInstanceRange>,
         settle: Duration,
         wanted: impl Fn(&DiscoveredDevice) -> bool,
@@ -270,7 +271,7 @@ impl<T: TransportPort + 'static> Client<T> {
         };
         // Subscribed before asking, so the answer can't slip in between.
         let mut events = self.device_events();
-        self.who_is(&Scope::from(asked), range).await?;
+        self.who_is(asked, range).await?;
         let mut deadline = tokio::time::Instant::now() + wait;
         let mut first: Option<DiscoveredDevice> = None;
         loop {
@@ -367,6 +368,9 @@ impl<T: TransportPort + 'static> Client<T> {
             }
         }
         let table = self.low_level().discovered_devices().await;
+        let own = self.low_level().network_number();
+        let heard: std::collections::BTreeSet<_> =
+            heard.into_iter().map(|a| a.localized(own)).collect();
         let claimed = |instance| {
             table
                 .iter()
@@ -376,7 +380,8 @@ impl<T: TransportPort + 'static> Client<T> {
         Ok(table
             .iter()
             .filter_map(|row| {
-                let address = DeviceAddress::of(row).filter(|a| heard.contains(a))?;
+                let address =
+                    DeviceAddress::of(row).filter(|a| heard.contains(&a.clone().localized(own)))?;
                 let instance = row.object_identifier.instance_number();
                 Some(Discovered {
                     address,

@@ -230,6 +230,16 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         !mac.is_empty() && !self.local_broadcasts.contains(mac)
     }
 
+    /// Whether a link destination addresses one local station, including the
+    /// address form and group destinations of this transport. For B/IP this
+    /// can look up local subnet masks without sending a packet.
+    pub async fn is_local_unicast_station(&self, mac: &[u8]) -> Result<bool, Error> {
+        if !self.is_routing_table_target(mac) || self.transport.is_group_destination(mac) {
+            return Ok(false);
+        }
+        router_station(self.transport.data_link(), mac).await
+    }
+
     /// Build and send one local network message. Private: its callers fix
     /// the type and, for the query, the payload.
     async fn send_local_message(
@@ -249,10 +259,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         encode_npdu(&mut buf, &npdu)?;
         match destination_mac {
             Some(mac) if message_type == NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK => {
-                if !self.is_routing_table_target(mac)
-                    || self.transport.is_group_destination(mac)
-                    || !router_station(self.transport.data_link(), mac).await?
-                {
+                if !self.is_local_unicast_station(mac).await? {
                     return Err(Error::Encoding(
                         "directed router discovery needs one local station's unicast address"
                             .into(),

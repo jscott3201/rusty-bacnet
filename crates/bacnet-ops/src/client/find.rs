@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Broadcast, ReceivedIHave, collect_answers};
+use bacnet_client::client::{BACnetClient, Broadcast, ReceivedIHave, Station, collect_answers};
 use bacnet_services::who_has::WhoHasObject;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -132,7 +132,7 @@ impl Scope {
     pub(crate) async fn send_who_has<T: TransportPort + 'static>(
         &self,
         client: &BACnetClient<T>,
-        station: Option<&[u8]>,
+        station: Option<&Station>,
         object: &WhoHasObject,
         range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
@@ -147,7 +147,9 @@ impl Scope {
                     .who_has(Broadcast::Network(*network), object, range)
                     .await
             }
-            (Self::Directed(_), Some(mac)) => client.who_has_directed(mac, object, range).await,
+            (Self::Directed(_), Some(station)) => {
+                client.who_has_directed(station, object, range).await
+            }
             (Self::Directed(_), None) => unreachable!("a directed Who-Has has its station"),
             (Self::Global, _) => client.who_has(Broadcast::Global, object, range).await,
         }
@@ -200,7 +202,7 @@ fn station_key(reply: &ReceivedIHave, own: Option<u16>) -> StationKey {
 pub(crate) async fn replies<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     scope: &Scope,
-    station: Option<&[u8]>,
+    station: Option<&Station>,
     object: &WhoHasObject,
     range: Option<DeviceInstanceRange>,
     wait: Duration,
@@ -228,10 +230,10 @@ pub(crate) async fn replies<T: TransportPort + 'static>(
 
 /// Check `scope` for a Who-Has before anything is sent: the station's MAC
 /// for a directed one.
-pub(crate) fn station<T: TransportPort + 'static>(
+pub(crate) fn station<'a, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    scope: &Scope,
-) -> Result<Option<Vec<u8>>, OpsError> {
+    scope: &'a Scope,
+) -> Result<Option<&'a Station>, OpsError> {
     scope.station(client, Ask::WhoHas)
 }
 
@@ -273,11 +275,13 @@ impl<T: TransportPort + 'static> Client<T> {
         let station = station(client, &request.scope)?;
         // The network the Who-Has goes out on takes its slot, as a
         // Who-Is's does; a global one takes the global slot alone.
-        self.limits().slot(request.scope.network()).await;
+        self.limits()
+            .slot(request.scope.network(client.network_number()))
+            .await;
         let heard = replies(
             client,
             &request.scope,
-            station.as_deref(),
+            station,
             &request.object,
             range,
             request.wait,

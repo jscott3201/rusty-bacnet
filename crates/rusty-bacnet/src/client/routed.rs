@@ -11,8 +11,8 @@
 //! A `str` stays an address on the local link and is never read as a
 //! routed one. With `router` given, the request goes through that router.
 //! With `router=None` the client uses the route it knows for the station,
-//! the router its discovery-table row names, and asks the station's network
-//! with a Who-Is first when it has no row, as `device()` does; a station
+//! the router its discovery-table row names, and asks the station
+//! with a directed Who-Is first when it has no row, as `device()` does; a station
 //! that doesn't answer raises `BacnetLookupError`, which says to pass
 //! `router=`, and the client doesn't ask for it again for [`MISS_MEMORY`]
 //! unless an I-Am from it arrives. A station on this client's own network,
@@ -126,7 +126,7 @@ impl Routed {
                             Ok(None) | Err(_) => continue,
                         }
                     }
-                    // Asks the network with a Who-Is, as device() does.
+                    // Asks the station with a directed Who-Is, as device() does.
                     Turn::Ask(asking) => match client.device(address.clone()).await {
                         Ok(device) => {
                             drop(device);
@@ -287,7 +287,7 @@ impl RecentMisses {
     }
 }
 
-/// Whether the client asked the station's network for it.
+/// Whether the client asked the station.
 #[derive(Clone, Copy)]
 enum Asked {
     /// Just now, with no answer.
@@ -304,11 +304,11 @@ fn no_route(at: &DeviceAddress, network: u16, asked: Asked) -> PyErr {
     let seconds = MISS_MEMORY.as_secs();
     let why = match asked {
         Asked::Now => format!(
-            "it didn't answer a Who-Is on network {network}, and the client won't ask that \
-             network for it again for {seconds} s unless an I-Am from it arrives"
+            "it didn't answer a station-directed Who-Is, and the client won't ask that \
+             station again for {seconds} s unless an I-Am from it arrives"
         ),
         Asked::Recently => format!(
-            "it didn't answer a Who-Is on network {network} in the last {seconds} s, and no \
+            "it didn't answer a station-directed Who-Is in the last {seconds} s, and no \
              I-Am from it has arrived since"
         ),
         Asked::Never => {

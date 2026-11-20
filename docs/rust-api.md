@@ -12268,7 +12268,7 @@ covers (an I-Am heard from elsewhere during the wait is no answer) that answered
 within its wait (3 s unless `.wait(..)` says otherwise). With no scope named
 (`Discover::default()`) the Who-Is is a local broadcast, which no router
 passes on; `Discover::network(n)`, `Discover::global()` and
-`Discover::directed(address)` are the explicit choices (#2560), and
+`Discover::directed(station)` are the explicit choices (#2560), and
 `bacnet_ops::raw::who_is(&low_level, &scope, range)` sends the same Who-Is
 on a low-level client, with no rate cap. `client.find(Find::name("Zone Temp"))`
 (or `Find::object(id)`) sends one Who-Has under the same rate cap and returns
@@ -12323,7 +12323,10 @@ handles following it). A clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
 handle stays, and `Device::moved_to` says where its instance is heard now,
-by the I-Am times.
+by the I-Am times. A directed Who-Is accepts
+`bacnet_client::client::Station`. A remote station keeps its DNET and DADR
+through an explicit or learned router. With no known next hop it uses a local
+link broadcast carrying that same destination.
 
 `bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
 `bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,

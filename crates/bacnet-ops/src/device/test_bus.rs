@@ -182,6 +182,11 @@ impl Bus {
 
     /// Broadcast an I-Am for `instance` from station `n`.
     pub(crate) fn i_am(&self, n: u8, instance: u32) {
+        self.i_am_from(n, None, instance);
+    }
+
+    /// Inject an I-Am from a local station or through a router with SNET/SADR.
+    pub(super) fn i_am_from(&self, n: u8, routed: Option<(u16, &[u8])>, instance: u32) {
         let mut service = BytesMut::new();
         IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
@@ -198,6 +203,10 @@ impl Bus {
         encode_apdu(&mut payload, &apdu).unwrap();
         let mut npdu = BytesMut::new();
         let frame = Npdu {
+            source: routed.map(|(network, mac)| NpduAddress {
+                network,
+                mac_address: MacAddr::from_slice(mac),
+            }),
             payload: payload.freeze(),
             ..Npdu::default()
         };

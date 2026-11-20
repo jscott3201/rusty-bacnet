@@ -73,8 +73,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.tell_all(scope, WhoIsRequest { range }).await
     }
 
-    /// Send a directed (unicast) WhoIs to the station `to`, with the same
-    /// `range` as [`Self::who_is`].
+    /// Send one Who-Is to `to`, limited to `range` as in [`Self::who_is`].
+    /// A remote station's network and MAC are carried in the NPDU. An
+    /// explicit or learned router receives it by unicast. Without a known
+    /// router it goes onto the local link by broadcast, still addressed to
+    /// that one remote station.
     pub async fn who_is_directed(
         &self,
         to: &(impl ToStation + ?Sized),

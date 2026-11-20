@@ -44,7 +44,7 @@ async fn a_bare_instance_is_asked_for_on_this_network() {
     assert!(
         matches!(
             &error,
-            OpsError::UnknownDevice { target, asked: Some(ResolveScope::Local) }
+            OpsError::UnknownDevice { target, asked: Some(crate::Scope::Local) }
                 if target == "4242"
         ),
         "{error:?}"
@@ -72,7 +72,7 @@ async fn a_wider_resolve_scope_is_honoured() {
         assert_eq!(wider.clone().resolve_scope(), scope, "kept by its clones");
         let error = wider.device(4242).await.unwrap_err();
         assert!(
-            matches!(&error, OpsError::UnknownDevice { asked: Some(asked), .. } if *asked == scope),
+            matches!(&error, OpsError::UnknownDevice { asked: Some(asked), .. } if *asked == scope.into()),
             "{error:?}"
         );
         assert!(error.to_string().contains(says), "{error}");
@@ -97,7 +97,7 @@ async fn a_named_network_is_asked_whatever_the_resolve_scope() {
         assert!(
             matches!(
                 &error,
-                OpsError::UnknownDevice { target, asked: Some(ResolveScope::Network(5)) }
+                OpsError::UnknownDevice { target, asked: Some(crate::Scope::Network(5)) }
                     if target == "5:4242"
             ),
             "{error:?}"
@@ -150,28 +150,32 @@ async fn network_0_and_65535_resolve_scopes_are_local_and_global() {
         assert_eq!(scoped.resolve_scope(), is);
         let error = scoped.device(4242).await.unwrap_err();
         assert!(
-            matches!(&error, OpsError::UnknownDevice { asked: Some(asked), .. } if *asked == is),
+            matches!(&error, OpsError::UnknownDevice { asked: Some(asked), .. } if *asked == is.into()),
             "{error:?}"
         );
         assert_eq!(the_who_is(&sent), (to, true), "{set:?}");
     }
 }
 
-/// A remote address the table holds no row for asks its network, and a
+/// A remote address the table holds no row for asks the station, and a
 /// miss says so: the network named, with no hint to widen anything.
 #[tokio::test(start_paused = true)]
-async fn a_remote_address_miss_says_its_network_was_asked() {
+async fn a_remote_address_miss_says_its_station_was_asked() {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
     let error = client.device("5:0x05").await.unwrap_err();
     assert!(
         matches!(
             &error,
-            OpsError::UnknownDevice { target, asked: Some(ResolveScope::Network(5)) }
-                if target == "5:0x05"
+            OpsError::UnknownDevice { target, asked: Some(crate::Scope::Directed(station)) }
+                if target == "5:0x05" && station.address() == (5, &[5][..])
         ),
         "{error:?}"
     );
     assert!(!error.to_string().contains("resolve scope"), "{error}");
-    assert_eq!(the_who_is(&sent), (remote(5), true));
+    let (destination, broadcast) = the_who_is(&sent);
+    let destination = destination.unwrap();
+    assert_eq!(destination.network, 5);
+    assert_eq!(&destination.mac_address[..], &[5]);
+    assert!(broadcast);
 }

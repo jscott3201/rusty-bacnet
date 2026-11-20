@@ -543,6 +543,7 @@ for found in await client.discover():                    # this network
     print(found.address, found.instance)
 far = await client.discover(scope=5, low=1000, high=1999, wait=5.0)
 one = await client.discover(scope="192.168.1.10")        # one station, by unicast
+station = await client.discover(scope=RoutedTarget(5, b"\x07", router="192.0.2.1:47808"))
 ahu = await client.device(far[0])
 ```
 
@@ -2508,7 +2509,7 @@ async for notif in notifications:
 
 #### `who_is(*, low=None, high=None, scope="local")`
 
-Broadcast a WhoIs request. By default it goes to this network alone: a
+Send a Who-Is request. By default it goes to this network alone: a
 local broadcast, which reaches the whole BACnet network (across BBMDs, and
 to foreign devices) but which no router passes on (#2560). `scope="global"`
 sends it to every network, and a network number from 1 to 65534 to that
@@ -2521,7 +2522,12 @@ and another type `TypeError`, before anything is sent; a station the
 client's link can't reach raises `ValueError` on await. A client on a
 router's application (`transport="router"`) has no network of its own, so
 its Who-Is names a network, or every one: a local or directed one raises
-`ValueError` saying so. The Who-Has calls take the same scopes.
+`ValueError` saying so. A `RoutedTarget` in `who_is` or `discover` selects one station by its
+network and MAC. The explicit or learned next hop receives a unicast.
+With no learned next hop the client broadcasts on the local link while
+keeping the remote station's DNET and DADR. Discovery collects answers from
+that address during the wait. Who-Has accepts the broadcast scopes and a
+local station address.
 
 ```python
 await client.who_is()                    # all devices on this network
@@ -7754,7 +7760,7 @@ async with endpoint:
 With a `router`, each request goes to that router with the station's
 network and MAC as its destination. Without one, the client uses the route
 it knows, as `device()` does: the router its discovery table names for the
-station, after one Who-Is to the station's network when it has no row.
+station, after one Who-Is addressed to the station when it has no row.
 Calls made together for one station share that Who-Is and its answer. A
 station that doesn't answer raises `BacnetLookupError`, and for 30 seconds
 a call to it with no router raises at once, without asking again, unless an

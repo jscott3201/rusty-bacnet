@@ -75,7 +75,7 @@ pub async fn who_is<T: TransportPort + 'static>(
 ) -> Result<(), OpsError> {
     let station = scope.station(client, Ask::WhoIs)?;
     scope
-        .send(client, station.as_deref(), range)
+        .send(client, station, range)
         .await
         .map_err(OpsError::Client)
 }
@@ -99,7 +99,7 @@ pub async fn who_has<T: TransportPort + 'static>(
 ) -> Result<(), OpsError> {
     let station = find::station(client, scope)?;
     scope
-        .send_who_has(client, station.as_deref(), object, range)
+        .send_who_has(client, station, object, range)
         .await
         .map_err(OpsError::Client)
 }
@@ -125,7 +125,7 @@ pub async fn who_has_replies<T: TransportPort + 'static>(
     wait: Duration,
 ) -> Result<Vec<ReceivedIHave>, OpsError> {
     let station = find::station(client, scope)?;
-    find::replies(client, scope, station.as_deref(), object, range, wait)
+    find::replies(client, scope, station, object, range, wait)
         .await
         .map_err(OpsError::Client)
 }
