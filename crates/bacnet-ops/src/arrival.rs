@@ -134,6 +134,8 @@ pub struct IAmArrival {
     /// SNET and SADR: the device's network and its MAC there, when a router
     /// relayed the I-Am.
     pub source_network: Option<NpduAddress>,
+    /// The NPDU destination, preserving an empty DADR for a network broadcast.
+    pub destination: Option<NpduAddress>,
     /// A link broadcast, or a broadcast on a network.
     pub broadcast: bool,
     /// Frames of any kind the subscription lost just before this record,
@@ -233,6 +235,12 @@ impl IAmArrival {
             original_source: link.origin,
             forwarded,
             source_network,
+            destination: decoded.dest_network.zip(decoded.dest_address).map(
+                |(network, mac_address)| NpduAddress {
+                    network,
+                    mac_address,
+                },
+            ),
             broadcast: link.broadcast || decoded.broadcast,
             missed_before: frame.missed_before,
         }))
@@ -369,6 +377,11 @@ impl IAmArrivals {
     /// the last record.
     pub fn missed(&self) -> u64 {
         self.receiver.dropped()
+    }
+
+    /// Detach this subscription and return the final number of frames its queue lost.
+    pub fn close(self) -> u64 {
+        self.receiver.close()
     }
 
     /// Inbound I-Am frames that made no record (see [`MalformedIAm`]).

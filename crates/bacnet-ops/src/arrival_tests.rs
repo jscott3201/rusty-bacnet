@@ -457,12 +457,14 @@ fn a_global_broadcast_sent_by_unicast_is_a_broadcast() {
     encode_npdu(&mut data, &global).unwrap();
     let record = arrival(DataLink::Bip, TapPeer::Udp(ROUTER), &bip(&data, false));
     assert!(record.broadcast);
+    assert_eq!(record.destination, global.destination);
     let local = arrival(
         DataLink::Bip,
         TapPeer::Udp(ROUTER),
         &bip(&npdu(&i_am(77), false), false),
     );
     assert!(!local.broadcast);
+    assert!(local.destination.is_none());
 }
 
 struct Woken(std::sync::atomic::AtomicBool);

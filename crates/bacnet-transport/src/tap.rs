@@ -358,6 +358,23 @@ impl FrameTapReceiver {
         self.rx.try_recv().ok()
     }
 
+    /// Unsubscribe, discard queued frames and return the final overflow count.
+    /// This includes a full-queue rejection that a publisher was still counting
+    /// when the receiver closed.
+    pub fn close(mut self) -> u64 {
+        self.rx.close();
+        if let Some(shared) = self.shared.upgrade() {
+            // A publisher may have observed Full just before the queue closed.
+            // Its increment completes under this lock before the final snapshot.
+            shared
+                .sinks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .retain(|sink| !sink.tx.is_closed());
+        }
+        self.dropped()
+    }
+
     /// Frames dropped for this receiver because its queue was full, so far:
     /// the gaps the queued frames' [`TappedFrame::missed_before`] report,
     /// and any frames lost after the last one queued.

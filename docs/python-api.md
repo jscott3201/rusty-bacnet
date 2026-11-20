@@ -7195,6 +7195,9 @@ in the scanner's terms:
 
 - `device_address`: the device as `device()` takes it, `link_source` for one
   on this link, `"5:0x07"` for one behind a router;
+- `destination_network` and `destination_address`: DNET and DADR carried by
+  the observed NPDU. Both are `None` without a destination. A broadcast on
+  a numbered network or on every network has an empty address (`b""`).
 - `next_hop_router`: `link_source` when routed, else None;
 - `forwarding_bbmd`: `link_sender` when `forwarded`, else None.
 
