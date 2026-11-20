@@ -1156,11 +1156,63 @@ Code that handled `application_data` reads should expect:
   the write and read values by `.octets`, or compare the read value with
   `PropertyValue.tagged(octets)`.
 
-The value doesn't say which object, property or vendor it came from: keep
-the object and property you read, and the device's `vendor_id` from
-[`DiscoveredDevice`](#discovereddevice) (or a read of the Device object's
-Vendor_Identifier), since one proprietary property number means different
-things from different vendors (Clause 23.3).
+#### Interpreting vendor property values
+
+A successful `read_property` or `read_property_multiple` value carries a frozen
+`read_context` with the ACK's `object_id`, numeric `property_id`, optional
+`array_index` and exact property-value bytes in `raw`. Copying or pickling the
+value retains this context. Its equality, hash and write encoding remain those
+of the ordinary `PropertyValue`. For example, an Unsigned 2 received as
+`22 00 02` has those three context bytes and writes back as `21 02` via
+`.octets`. Constructed values created locally, local server reads, COV values
+and the children of a Group's embedded read results have no read context.
+
+Select the vendor from the responding station's I-Am or its Device
+Vendor_Identifier. The same property number can describe different datatypes
+across vendors and object types. This example uses a separately installed
+`ace-bacnet-devices` catalogue and a value read from a TAC MicroNet Device.
+Load the definition once for that station.
+
+```python
+from ace_bacnet_devices import vendors
+from rusty_bacnet import ObjectType, decode_property_as
+
+definition = vendors.load("tac-micronet")
+ctx = value.read_context
+if definition.vendor_id == station_vendor_id and ctx.object_id.object_type == ObjectType.DEVICE:
+    prop = next((p for ext in definition.object_extensions if ext.object_type == "device"
+                 for p in ext.properties if p.identifier == ctx.property_id), None)
+    if prop is not None:
+        spec = prop.datatype
+        names = {v.value: v.name for v in spec.values} if spec.semantics == "enumeration" else None
+        result = decode_property_as(ctx.raw, spec.primitive.value, shape=spec.shape.value,
+                                    array_index=ctx.array_index, array_length=spec.array_length,
+                                    value_names=names)
+```
+
+For a proprietary object type, select the matching numeric `identifier` in
+`definition.object_types` and search its `properties`. Without a declaration,
+keep the ordinary value and its context. TAC vendor 11, Device property 1330
+declares Unsigned with name `foreignDevice` for 2. Carrier vendor 16 declares
+Device property 4151 as an array of Unsigned, while OEMCtrl vendor 446 declares
+it as a scalar. Honeywell vendor 17 declares property 760 differently on
+Analog Input, Binary Input and Multi-state Input. These examples use catalogue
+metadata. The test octets are synthetic.
+
+`decode_property_as` accepts Null, Boolean, Unsigned, Integer (signed), Real,
+Double, OctetString, CharacterString, BitString, Enumerated, Date, Time and
+ObjectIdentifier. A whole array or list always gives a list, including zero or
+one item. A positive array index gives one element and index zero gives an
+Unsigned count. Supply `array_length` for fixed arrays. Optional integer names
+are a tuple aligned with the decoded elements, with `None` for missing names
+and an empty tuple for a count. Names leave numeric values intact.
+
+A result has `status="decoded"` and a value on success. A wrong tag or count
+gives `type_mismatch`; an unknown or context encoding gives
+`unsupported_encoding`; invalid framing or primitive payload gives
+`malformed`; exceeding the tag reader's depth or node budget gives
+`limit_exceeded`. All four keep `raw` and supply a diagnostic with no decoded
+value. Invalid declarations raise `ValueError`.
 
 #### Typed constructed values
 

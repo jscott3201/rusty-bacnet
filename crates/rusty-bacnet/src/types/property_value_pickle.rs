@@ -20,6 +20,19 @@ impl PyPropertyValue {
         use primitives::PropertyValue as V;
         let py = slf.py();
         let this = slf.get();
+        if let Some(context) = &this.context {
+            let mut value = this.clone();
+            value.context = None;
+            let arguments = (
+                value,
+                context.object_id(),
+                context.property_id,
+                context.array_index,
+                context.raw(py),
+            )
+                .into_pyobject(py)?;
+            return Ok((slf.get_type().getattr("_with_read_context")?, arguments));
+        }
         if let Some(property) = this.property {
             let mut value = this.clone();
             value.property = None;

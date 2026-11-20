@@ -158,7 +158,9 @@ class ClientReadShapeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.role.read_property(self.address, oid, prop, index), value)
         self.assertEqual(rpm_values(await self.role.read_property_multiple(self.address, spec)),
                          [value])
-        self.assertEqual(await self.server.read_property(oid, prop, index), value)
+        local = await self.server.read_property(oid, prop, index)
+        self.assertIsNone(local.read_context)
+        self.assertEqual(local, value)
         return value
 
     async def test_a_whole_object_list_is_complete(self) -> None:
@@ -222,6 +224,10 @@ class ClientReadShapeTests(unittest.IsolatedAsyncioTestCase):
         value = await self.read(GROUP_1, P.PRESENT_VALUE)
         self.assertEqual(value.value,
                          await self.client.read_property_multiple(self.address, GROUP_MEMBERS))
+        self.assertEqual(value.read_context.object_id, GROUP_1)
+        for member in value.value:
+            for row in member["results"]:
+                self.assertIsNone(row["value"].read_context)
         self.assertEqual(len(value.value), 2)
         self.assertEqual(await self.read(GROUP_2, P.PRESENT_VALUE), PropertyValue.list([]))
 
@@ -250,6 +256,7 @@ class ClientReadShapeTests(unittest.IsolatedAsyncioTestCase):
                 await listener
         values = {item["property_id"]: item["value"] for item in notification.values}
         self.assertEqual(values[P.START_TIME], await self.server.read_property(LC_1, P.START_TIME))
+        self.assertIsNone(values[P.START_TIME].read_context)
         self.assertEqual(len(values[P.START_TIME].value), 2)
         # Requested_Shed_Level is a context-tagged CHOICE, read typed (#1499).
         shed = await self.server.read_property(LC_1, P.REQUESTED_SHED_LEVEL)

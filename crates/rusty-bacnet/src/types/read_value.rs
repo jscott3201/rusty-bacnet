@@ -164,12 +164,23 @@ fn application_elements(octets: &[u8]) -> Result<Option<Vec<usize>>, Error> {
 /// Decode a ReadProperty ACK's value, shaped by the object, property and
 /// array index the ACK names.
 pub(crate) fn decode_read_ack(ack: &ReadPropertyACK) -> Result<PyPropertyValue, Error> {
-    decode_read_value(
-        ack.object_identifier.object_type(),
+    decode_ack_value(
+        ack.object_identifier,
         ack.property_identifier,
         ack.property_array_index,
         &ack.property_value,
     )
+}
+
+/// Decode a successful RP or RPM value and retain the fields returned by its ACK.
+pub(super) fn decode_ack_value(
+    object: bacnet_types::primitives::ObjectIdentifier,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    raw: &[u8],
+) -> Result<PyPropertyValue, Error> {
+    let value = decode_read_value(object.object_type(), property, index, raw)?;
+    Ok(value.with_read_context(object, property.to_raw(), index, raw))
 }
 
 #[cfg(test)]

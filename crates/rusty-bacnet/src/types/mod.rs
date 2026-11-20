@@ -46,8 +46,10 @@ mod network_port_value;
 mod notification_parameters_py;
 mod object_identifier;
 mod object_profile;
+mod property_decode;
 mod property_reference;
 mod property_value;
+mod read_context;
 mod read_value;
 mod routed_target;
 mod rpm_wpm;
@@ -82,6 +84,7 @@ pub(crate) use property_reference::{
     check_device, local_device, localize, property_reference_from_py, property_references_from_py,
 };
 pub use property_value::PyPropertyValue;
+use read_context::PyPropertyReadContext;
 pub(crate) use read_value::{decode_read_ack, decode_read_value};
 pub(crate) use routed_target::PyRoutedTarget;
 pub(crate) use rpm_wpm::{
@@ -167,6 +170,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Composite types
     m.add_class::<PyObjectIdentifier>()?;
     m.add_class::<PyPropertyValue>()?;
+    m.add_class::<PyPropertyReadContext>()?;
+    property_decode::register(m)?;
     m.add_class::<tag_tree::PyTagNode>()?;
     m.add_class::<PyBitString>()?;
     m.add_function(wrap_pyfunction!(bit_string::enum_name, m)?)?;

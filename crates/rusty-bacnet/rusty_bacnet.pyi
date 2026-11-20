@@ -11,7 +11,7 @@ import enum
 import ipaddress
 import os
 import pathlib
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, Awaitable, Literal, NotRequired, Optional, TypedDict, Union
 
 UNSPECIFIED: Literal[255]
@@ -2402,6 +2402,50 @@ def enum_name(property: PropertyIdentifier, value: int) -> str | None:
     ...
 
 
+class PropertyReadContext:
+    """Address and exact property value octets returned in a successful RP or RPM ACK."""
+
+    @property
+    def object_id(self) -> ObjectIdentifier: ...
+    @property
+    def property_id(self) -> int: ...
+    @property
+    def array_index(self) -> int | None: ...
+    @property
+    def raw(self) -> bytes: ...
+
+
+class PropertyDecodeResult:
+    """Outcome of interpreting property octets under a caller-supplied declaration."""
+
+    @property
+    def status(self) -> Literal["decoded", "type_mismatch", "unsupported_encoding", "malformed", "limit_exceeded"]: ...
+    @property
+    def value(self) -> PropertyValue | None: ...
+    @property
+    def raw(self) -> bytes: ...
+    @property
+    def diagnostic(self) -> str | None: ...
+    @property
+    def value_names(self) -> tuple[str | None, ...] | None: ...
+
+
+def decode_property_as(
+    octets: bytes,
+    primitive: str,
+    *,
+    shape: Literal["scalar", "array", "list"] = "scalar",
+    array_index: int | None = None,
+    array_length: int | None = None,
+    value_names: Mapping[int, str] | None = None,
+) -> PropertyDecodeResult:
+    """Decode application-tagged property octets offline under an explicit primitive and shape.
+    Whole arrays and lists keep their collection shape at every length. A read of
+    array index zero gives its unsigned count. The result keeps the original bytes
+    and a diagnostic for any refusal. Invalid declarations raise ValueError."""
+    ...
+
+
 class PropertyValue:
     """A decoded BACnet property value with tag and Python-native value.
 
@@ -2609,6 +2653,11 @@ class PropertyValue:
         None. ``value`` stays the number. Values built with the constructors
         carry no property, so their name is None; copies and pickles of a
         read value keep it."""
+        ...
+
+    @property
+    def read_context(self) -> PropertyReadContext | None:
+        """Returned object, numeric property, optional index and exact wire bytes for an RP or RPM value."""
         ...
 
     @property

@@ -22,6 +22,25 @@ The name of enumerated `value` as read from `property`
 None when the property's enumeration isn't known from the property alone
 (Present\_Value, vendor properties) or the number has no name in it.
 
+## decode_property_as
+
+```python
+def decode_property_as(
+    octets: bytes,
+    primitive: str,
+    *,
+    shape: Literal["scalar", "array", "list"] = "scalar",
+    array_index: int | None = None,
+    array_length: int | None = None,
+    value_names: Mapping[int, str] | None = None,
+) -> PropertyDecodeResult
+```
+
+Decode application-tagged property octets offline under an explicit primitive and shape.
+Whole arrays and lists keep their collection shape at every length. A read of
+array index zero gives its unsigned count. The result keeps the original bytes
+and a diagnostic for any refusal. Invalid declarations raise ValueError.
+
 ## decode_log_records
 
 ```python

@@ -140,6 +140,29 @@ def __getitem__(self, index: int) -> bool
 Bit `index` (negative counts from the last bit); IndexError
 past the end.
 
+## PropertyReadContext
+
+Address and exact property value octets returned in a successful RP or RPM ACK.
+
+Properties:
+
+- `object_id: ObjectIdentifier`
+- `property_id: int`
+- `array_index: int | None`
+- `raw: bytes`
+
+## PropertyDecodeResult
+
+Outcome of interpreting property octets under a caller-supplied declaration.
+
+Properties:
+
+- `status: Literal["decoded", "type_mismatch", "unsupported_encoding", "malformed", "limit_exceeded"]`
+- `value: PropertyValue | None`
+- `raw: bytes`
+- `diagnostic: str | None`
+- `value_names: tuple[str | None, ...] | None`
+
 ## PropertyValue
 
 A decoded BACnet property value with tag and Python-native value.
@@ -253,6 +276,7 @@ Properties:
 - `tag: str`: Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double', 'octet\_string', 'character\_string', 'bit\_string', 'enumerated', 'date', 'time', 'object\_identifier', 'list', 'application\_data', 'tagged' (a value read as its tags, `value` a list of `TagNode`), 'bdt' or 'fdt' for a whole Network Port table, or one typed constructed element: 'destination', 'port\_permission', 'read\_access\_specification', 'read\_access\_result', 'action\_list', 'device\_object\_reference', 'authentication\_factor\_format', 'stage\_limit\_value', 'access\_rule', 'device\_object\_property\_reference', 'object\_property\_reference', 'property\_access\_result', 'recipient', 'daily\_schedule', 'special\_event', 'calendar\_entry', 'date\_range', 'timestamp', 'cov\_subscription', 'value\_source', 'scale', 'prescale', 'address\_binding', 'shed\_level', 'authentication\_factor', 'event\_parameter'.
 - `value: Any`: The Python-native value (int, float, str, bytes, bool, dict, tuple, ObjectIdentifier, BitString, list, or None); `application_data` is `bytes` (except a DateTime Value's set Priority\_Array slot, `[date, time]`), `tagged` a list of `TagNode`, `bdt` a list of `NetworkPortBdtEntry`, `fdt` a list of `NetworkPortFdtEntry`, and a typed constructed element the form its typed write takes, or the form docs/python-api.md gives it. A date is `(year, month, day, day_of_week)` with the full year, or 255 for an unspecified year, as in every other date the binding reads. A bit string is a `BitString`, named when the value was read from a property of known bit-string type.
 - `name: str | None`: The name of an enumerated value read from a property whose enumeration is known (`"HIGH_LIMIT"` for an Event\_State of 3), else None. `value` stays the number. Values built with the constructors carry no property, so their name is None; copies and pickles of a read value keep it.
+- `read_context: PropertyReadContext | None`: Returned object, numeric property, optional index and exact wire bytes for an RP or RPM value.
 - `octets: bytes`: The value's octets as a write of it carries them: a typed constructed element's are the octets it was read from, a whole typed collection's its elements' back to back, and any other value its application-tagged encoding. Raises ValueError for a value that doesn't encode.
 
 ### PropertyValue.null

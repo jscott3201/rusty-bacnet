@@ -40,6 +40,8 @@ use super::*;
 pub struct PyPropertyValue {
     /// The value as it travels: what a write of this value encodes.
     pub(crate) inner: primitives::PropertyValue,
+    /// Provenance of an actual network read, independent of the value and its write encoding.
+    pub(super) context: Option<PyPropertyReadContext>,
     /// How `tag` and `value` read `inner`'s application data.
     pub(crate) form: Form,
     /// The property a read took the value from (#2080), which names its
@@ -92,6 +94,7 @@ impl PyPropertyValue {
             inner: value,
             form: Form::Plain,
             property: None,
+            context: None,
         }
     }
 
