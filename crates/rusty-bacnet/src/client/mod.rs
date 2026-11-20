@@ -122,12 +122,7 @@ fn discovery_scope(
         && let Ok(target) = scope.cast::<crate::types::PyRoutedTarget>()
     {
         local("directed")?;
-        let (network, mac, router) = target.get().parts();
-        let station = match router {
-            Some(router) => client::Station::routed(router, network, mac),
-            None => client::Station::remote(network, mac),
-        };
-        return Ok(ScopeArg::Fixed(Scope::Directed(station)));
+        return Ok(ScopeArg::Fixed(Scope::Directed(target.get().station())));
     }
     if let Ok(name) = scope.cast::<PyString>() {
         let text = name.to_str()?.trim();

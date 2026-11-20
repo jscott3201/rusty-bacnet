@@ -436,3 +436,71 @@ async fn the_routing_table_of_a_three_port_router_is_read() {
     );
     client.stop().await.unwrap();
 }
+
+/// Two routing engines with no hosted Device. Network 2 joins them, and
+/// network 3 holds the far router's other port.
+#[tokio::test(start_paused = true)]
+async fn routing_table_reaches_a_second_router_by_either_of_its_ports() {
+    let port = |transport, network_number| RouterPort {
+        transport: AnyTransport::Loopback(transport),
+        network_number,
+    };
+    let (node, first) = LoopbackTransport::pair(vec![10], vec![11]);
+    let (middle_first, middle_second) = LoopbackTransport::pair(vec![21], vec![22]);
+    let (far, _peer) = LoopbackTransport::pair(vec![32], vec![33]);
+    let mut r1 = BACnetRouter::start(
+        vec![port(first, 1), port(middle_first, 2)],
+        RouterOptions::new(),
+    )
+    .await
+    .unwrap()
+    .router;
+    let mut r2 = BACnetRouter::start(
+        vec![port(middle_second, 2), port(far, 3)],
+        RouterOptions::new(),
+    )
+    .await
+    .unwrap()
+    .router;
+    let mut client = client(node).await;
+    let wait = RoutingTableWait::default();
+    let near = client.routing_table(&[11], wait).await.unwrap();
+    for target in [
+        Station::routed(&[11], 2, &[22]),
+        Station::remote(2, &[22]),
+        Station::routed(&[11], 3, &[32]),
+    ] {
+        let mut reports = client.network_reports();
+        let table = client.routing_table(&target, wait).await.unwrap();
+        assert!(!table.truncated);
+        assert_ne!(table.entries, near.entries);
+        assert!(
+            table
+                .entries
+                .iter()
+                .any(|entry| entry.network == 2 && entry.port_id == 1)
+        );
+        assert!(
+            table
+                .entries
+                .iter()
+                .any(|entry| entry.network == 3 && entry.port_id == 2)
+        );
+        let answer = loop {
+            let report = next_report(&mut reports).await;
+            if matches!(report.report, NetworkReport::RoutingTable(_)) {
+                break report;
+            }
+        };
+        assert_eq!(answer.source_mac.as_slice(), [11]);
+        let source = answer.source_network.unwrap();
+        assert_eq!(
+            (source.network, source.mac_address.as_slice()),
+            target.address()
+        );
+    }
+    assert!(client.discovered_devices().await.is_empty());
+    client.stop().await.unwrap();
+    r2.stop().await.unwrap();
+    r1.stop().await.unwrap();
+}

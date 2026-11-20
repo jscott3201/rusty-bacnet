@@ -634,3 +634,6 @@ async fn a_lagging_collector_marks_the_table_truncated() {
     assert!(table.truncated, "{table:?}");
     client.stop().await.unwrap();
 }
+
+#[path = "routing_table_routed_tests.rs"]
+mod routed;

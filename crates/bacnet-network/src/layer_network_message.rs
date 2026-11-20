@@ -191,7 +191,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             .await
     }
 
-    /// Send a routing-table query to one router on the local network: an
+    /// Send a routing-table query through one local unicast peer.
+    /// An optional `destination` addresses a router on another network: an
     /// Initialize-Routing-Table with a port count of zero, which asks the
     /// router to return its whole table in Initialize-Routing-Table-Acks
     /// and change nothing (Clauses 6.4.7 and 6.6.3.8). The acks come as
@@ -205,22 +206,38 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// that is what lets the router answer inside the reply window
     /// instead of waiting for the token.
     ///
-    /// `router_mac` must be one router's own address: a link-wide
+    /// `router_mac` is the immediate peer for this query: a link-wide
     /// broadcast destination, or an empty one, is refused before anything
     /// is sent.
-    pub async fn send_routing_table_query(&self, router_mac: &[u8]) -> Result<(), Error> {
-        if !self.is_routing_table_target(router_mac) {
+    pub async fn send_routing_table_query(
+        &self,
+        router_mac: &[u8],
+        destination: Option<&NpduAddress>,
+    ) -> Result<(), Error> {
+        if !self.is_local_unicast_station(router_mac).await? {
             return Err(Error::Encoding(
-                "a routing-table query goes to one router's own address, not a broadcast".into(),
+                "a routing-table query goes to one router's own address on this link, using unicast".into(),
             ));
         }
-        self.send_local_message(
-            NetworkMessageType::INITIALIZE_ROUTING_TABLE,
-            &ROUTING_TABLE_QUERY,
-            true,
-            Some(router_mac),
-        )
-        .await
+        if destination.is_some_and(|address| {
+            is_reserved(address.network)
+                || address.mac_address.is_empty()
+                || address.mac_address.len() > bacnet_npdu::MAX_MAC_LEN
+        }) {
+            return Err(Error::Encoding(
+                "a routed table query needs one valid destination station".into(),
+            ));
+        }
+        let npdu = Npdu {
+            message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE),
+            payload: Bytes::from_static(&ROUTING_TABLE_QUERY),
+            expecting_reply: true,
+            destination: destination.cloned(),
+            ..Npdu::default()
+        };
+        let mut buf = BytesMut::new();
+        encode_npdu(&mut buf, &npdu)?;
+        self.transport.send_unicast(&buf, router_mac).await
     }
 
     /// Whether `mac` can be a router's own address for

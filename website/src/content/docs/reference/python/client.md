@@ -658,7 +658,7 @@ to finish or be cancelled.
 ```python
 def routing_table(
     self,
-    router: str | bytes,
+    router: str | bytes | RoutedTarget,
     *,
     wait: float = 3.0,
     quiet: float = 0.5,
@@ -667,8 +667,7 @@ def routing_table(
 ) -> Awaitable[RoutingTable]
 ```
 
-Read the routing table of the router at `router`, a station on
-this client's own link, without changing it (#2612). The call sends
+Read the routing table of a local or routed station (#2612). The call sends
 one Initialize-Routing-Table with a port count of zero, which only
 asks; no argument can make it an update.
 
@@ -699,9 +698,14 @@ empty table. A Reject-Message-To-Network from the router before any
 acknowledgement raises BacnetNetworkRejectError; rejects with
 reasons 1, 2 and 4 concern a DNET and are ignored. Each bound is 0 to
 3600 seconds and `wait` may not exceed `total` (ValueError
-otherwise). A client stopped mid-call raises RuntimeError. Only a
-router on the local link can be asked; one behind another router
-cannot. One query runs at a time per client; a second call waits for
+otherwise). A client stopped mid-call raises RuntimeError. A
+RoutedTarget selects the remote router, using its explicit or cached
+next hop. Without either, one router-discovery window of up to
+`wait` seconds must identify a single local next hop for its network.
+Replies must carry the remote station's source network and address and
+arrive through the selected hop. A local-only reply may cause a timeout.
+A reject from the next hop for the requested DNET ends a routed query.
+One query runs at a time per client; a second call waits for
 the first. It holds the started client for the whole wait, so
 `stop()` waits for it.
 

@@ -1,7 +1,7 @@
 //! The read-only routing-table query (#2612): `routing_table(router)`.
 //!
 //! One Initialize-Routing-Table with a port count of zero goes to a router
-//! on the client's own link, and the acknowledgements are collected into a
+//! locally or through a next hop, and the acknowledgements are collected into a
 //! frozen `RoutingTable`. The binding has no way to send the update form:
 //! the Rust call takes no payload.
 
@@ -58,10 +58,14 @@ impl RouterArg {
     }
 }
 
+enum QueryRouter {
+    Local(RouterArg),
+    Station(client::Station),
+}
+
 #[pymethods]
 impl BACnetClient {
-    /// Read the routing table of the router at `router`, a station on this
-    /// client's own link, without changing it, and return a frozen
+    /// Read the routing table of a local or routed station and return a frozen
     /// `RoutingTable`: its `entries`, how many acknowledgements carried
     /// them (`acks`), and whether a bound cut the answer short
     /// (`truncated`).
@@ -88,13 +92,17 @@ impl BACnetClient {
     /// address or port), and neither is an empty table. A router that
     /// refuses with a Reject-Message-To-Network before any acknowledgement
     /// raises `BacnetNetworkRejectError` with its `reason` and `network`;
-    /// rejects with reasons 1, 2 and 4 concern a DNET and are ignored. The
+    /// a reject from the next hop for the queried DNET also ends a routed call. The
     /// bounds are 0 to 3600 seconds, and `wait` may not exceed `total`
     /// (`ValueError` otherwise). A client stopped mid-call raises
-    /// `RuntimeError`. A router behind another router can't be asked: the
-    /// query is a local message. One query runs at a time per client; a
-    /// second call waits for the first. The call holds the started client
-    /// for the whole wait, so `stop()` waits for it.
+    /// `RuntimeError`. A `RoutedTarget` selects the remote router. Supply
+    /// its next hop explicitly, or use the station's cached path. Without
+    /// either, router discovery spends up to `wait` additional seconds looking
+    /// for a single local next hop advertising the network. It needs no device
+    /// I-Am. A routed answer must arrive through that hop and carry the queried
+    /// source network and address. A router replying only locally may time out.
+    /// One query runs at a time. The call holds the started client through
+    /// resolution, sending and collection, so `stop()` waits for it.
     #[pyo3(signature = (router, *, wait=3.0, quiet=0.5, total=10.0, max_entries=4096))]
     fn routing_table<'py>(
         &self,
@@ -105,7 +113,10 @@ impl BACnetClient {
         total: f64,
         max_entries: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let router = RouterArg::read(&router)?;
+        let router = match router.cast::<crate::types::PyRoutedTarget>() {
+            Ok(target) => QueryRouter::Station(target.get().station()),
+            Err(_) => QueryRouter::Local(RouterArg::read(&router)?),
+        };
         let bounds = client::RoutingTableWait {
             first_answer: seconds(wait, "wait")?,
             quiet: seconds(quiet, "quiet")?,
@@ -123,11 +134,16 @@ impl BACnetClient {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
-            let mac = router
-                .on(&c, "a routing-table query goes to a router's address")
-                .await?;
+            let station = match router {
+                QueryRouter::Station(station) => station,
+                QueryRouter::Local(argument) => client::Station::local(
+                    &argument
+                        .on(&c, "a routing-table query goes to a router's address")
+                        .await?,
+                ),
+            };
             let table = c
-                .routing_table(&mac, bounds)
+                .routing_table(&station, bounds)
                 .await
                 .map_err(routing_table_err)?;
             Ok(PyRoutingTable(table))

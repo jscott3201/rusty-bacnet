@@ -203,7 +203,7 @@ async fn the_query_is_a_zero_count_and_expects_a_reply() {
     let mut rx = b.start().await.unwrap();
     let mut layer = NetworkLayer::new(a);
     let _apdus = layer.start().await.unwrap();
-    layer.send_routing_table_query(&[2]).await.unwrap();
+    layer.send_routing_table_query(&[2], None).await.unwrap();
     let frame = tokio::time::timeout(Duration::from_millis(200), rx.recv())
         .await
         .unwrap()
@@ -223,7 +223,7 @@ async fn a_broadcast_query_is_refused() {
     let _apdus = layer.start().await.unwrap();
     for destination in [&[0xFF][..], &[]] {
         let error = layer
-            .send_routing_table_query(destination)
+            .send_routing_table_query(destination, None)
             .await
             .unwrap_err()
             .to_string();

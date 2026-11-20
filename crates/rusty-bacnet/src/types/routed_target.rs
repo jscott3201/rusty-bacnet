@@ -48,6 +48,15 @@ pub(crate) struct PyRoutedTarget {
 }
 
 impl PyRoutedTarget {
+    pub(crate) fn station(&self) -> bacnet_client::client::Station {
+        use bacnet_client::client::Station;
+        let (network, mac, router) = self.parts();
+        match router {
+            Some(router) => Station::routed(router, network, mac),
+            None => Station::remote(network, mac),
+        }
+    }
+
     /// The station's network, its MAC there, and the router's MAC, if named.
     pub(crate) fn parts(&self) -> (u16, &[u8], Option<&[u8]>) {
         (self.network, &self.address, self.router.as_deref())

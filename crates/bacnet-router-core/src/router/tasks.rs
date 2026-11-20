@@ -1,9 +1,9 @@
 //! Outputs that wait in the queue, and how each is written when polled.
 
-use super::Storage;
 use super::config::PortConfig;
 use super::counters::bump;
 use super::output::{Cause, Current, Kind, Target};
+use super::{ReplyPlan, Storage};
 use crate::message::{NetworkNumberIs, Networks, RoutingEntries};
 use crate::npdu::{Address, NetworkPriority, Npdu};
 use crate::npdu::{NetworkMessageType, RejectMessageReason, RejectMessageToNetwork};
@@ -37,31 +37,25 @@ pub(super) enum TaskKind {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Task {
     pub(super) kind: TaskKind,
-    port: PortId,
+    reply: ReplyPlan,
     network: u16,
     reason: RejectMessageReason,
-    to: Mac,
-    origin_network: u16,
-    origin: Mac,
     pub(super) cursor: u32,
 }
 
 impl Task {
     pub(super) const EMPTY: Self = Self {
         kind: TaskKind::Empty,
-        port: PortId(0),
+        reply: ReplyPlan::return_to(PortId(0), Mac::EMPTY, None),
         network: 0,
         reason: RejectMessageReason::OTHER,
-        to: Mac::EMPTY,
-        origin_network: 0,
-        origin: Mac::EMPTY,
         cursor: 0,
     };
 
     const fn of(kind: TaskKind, port: PortId) -> Self {
         let mut task = Self::EMPTY;
         task.kind = kind;
-        task.port = port;
+        task.reply = ReplyPlan::return_to(port, Mac::EMPTY, None);
         task
     }
 
@@ -87,9 +81,7 @@ impl Task {
         Self {
             network,
             reason,
-            to: mac(to),
-            origin_network: origin.map_or(0, |origin| origin.network),
-            origin: origin.map_or(Mac::EMPTY, |origin| mac(origin.mac)),
+            reply: ReplyPlan::return_to(port, mac(to), origin.map(|a| (a.network, mac(a.mac)))),
             ..Self::of(TaskKind::Reject, port)
         }
     }
@@ -106,17 +98,21 @@ impl Task {
     /// The data-less Ack to an update, to `to` on `port`.
     pub(super) fn update_ack(port: PortId, to: Mac) -> Self {
         Self {
-            to,
+            reply: ReplyPlan::return_to(port, to, None),
             ..Self::of(TaskKind::UpdateAck, port)
         }
     }
 
     /// The whole table, in Acks to `to` on `port`.
-    pub(super) fn table_ack(port: PortId, to: Mac) -> Self {
+    pub(super) fn table_ack(reply: ReplyPlan) -> Self {
         Self {
-            to,
-            ..Self::of(TaskKind::TableAck, port)
+            reply,
+            ..Self::of(TaskKind::TableAck, reply.port())
         }
+    }
+
+    pub(super) fn table_continuation(self) -> Option<(ReplyPlan, u32)> {
+        (self.kind == TaskKind::TableAck && self.cursor != 0).then_some((self.reply, self.cursor))
     }
 
     /// A Network-Number-Is on `port`.
@@ -130,11 +126,6 @@ impl Task {
     }
 }
 
-/// Entries per Ack of a table answer: as many as fit an NPDU of 501
-/// octets, the most a standard MS/TP frame carries (Clause 9.3), so every
-/// link can take the answer. That is 124.
-const ACK_ENTRIES: usize = (501 - 3 - 1) / RoutingEntries::ENTRY_LEN;
-
 /// Write a network message of type `kind` with no addresses into `scratch`:
 /// the three-octet header, then the data `data` writes behind it.
 fn write_message(
@@ -142,7 +133,14 @@ fn write_message(
     kind: NetworkMessageType,
     data: impl FnOnce(&mut [u8]) -> Option<usize>,
 ) -> Option<usize> {
-    let header = Npdu::message(kind, &[]);
+    write_with_header(scratch, Npdu::message(kind, &[]), data)
+}
+
+fn write_with_header(
+    scratch: &mut [u8],
+    header: Npdu<'_>,
+    data: impl FnOnce(&mut [u8]) -> Option<usize>,
+) -> Option<usize> {
     let at = header.encoded_len();
     let (head, rest) = scratch.split_at_mut_checked(at)?;
     let len = data(rest)?;
@@ -203,7 +201,7 @@ impl<
                     len,
                     Kind::Solicit,
                     Cause::Ingress,
-                    Target::AllBut(task.port),
+                    Target::AllBut(task.reply.port()),
                 ))
             }
             TaskKind::Reject => {
@@ -213,14 +211,9 @@ impl<
                 }
                 .to_bytes();
                 let mut npdu = Npdu::message(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, &data);
-                if task.origin_network != 0 {
-                    npdu.destination = Some(Address {
-                        network: task.origin_network,
-                        mac: task.origin.as_slice(),
-                    });
-                }
+                npdu.destination = task.reply.destination();
                 let len = npdu.encode_into(&mut self.scratch).ok();
-                let target = Target::Unicast(task.port, task.to.as_slice());
+                let target = Target::Unicast(task.reply.port(), task.reply.peer());
                 Some((len, Kind::Reject(task.reason), Cause::Ingress, target))
             }
             TaskKind::IAmAnswer => {
@@ -228,13 +221,13 @@ impl<
                     .table
                     .routes()
                     .filter(move |(_, route)| {
-                        route.port() != task.port
+                        route.port() != task.reply.port()
                             && route.reachability() != Reachability::Unreachable
                     })
                     .map(|(network, _)| network)
                     .peekable();
                 let kind = Kind::Answer(NetworkMessageType::I_AM_ROUTER_TO_NETWORK);
-                let target = Target::Broadcast(task.port);
+                let target = Target::Broadcast(task.reply.port());
                 let message = NetworkMessageType::I_AM_ROUTER_TO_NETWORK;
                 if task.network != 0 {
                     let len = write_message(&mut self.scratch, message, |data| {
@@ -255,35 +248,67 @@ impl<
                 let npdu = Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK, &[]);
                 let len = npdu.encode_into(&mut self.scratch).ok();
                 let kind = Kind::Answer(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK);
-                let target = Target::Unicast(task.port, task.to.as_slice());
+                let target = Target::Unicast(task.reply.port(), task.reply.peer());
                 Some((len, kind, Cause::Ingress, target))
             }
             TaskKind::TableAck => {
-                let entries = wire_entries(&self.table, task.cursor).take(ACK_ENTRIES);
-                let last = entries.clone().last().map(|(network, _)| network);
-                // The first Ack goes even for an empty table, with a count
-                // of 0; later ones only while routes remain.
-                if task.cursor != 0 && last.is_none() {
+                let message = NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK;
+                let header = Npdu {
+                    source: task.reply.source(),
+                    destination: task.reply.destination(),
+                    ..Npdu::message(message, &[])
+                };
+                let port = task.reply.port();
+                let link_limit = self.ports[usize::from(port.0)].max_npdu.get(false);
+                let budget = link_limit.min(self.scratch.len()).min(501);
+                // A relay may retain the destination and add its ingress source.
+                // Reserve that header on the 501-octet path even on a larger link.
+                let relayed = if header.destination.is_some() && header.source.is_none() {
+                    Npdu {
+                        source: Some(Address {
+                            network: 1,
+                            mac: &[0; crate::MAX_MAC_LEN],
+                        }),
+                        ..header
+                    }
+                    .encoded_len()
+                } else {
+                    header.encoded_len()
+                };
+                let room = budget
+                    .saturating_sub(header.encoded_len() + 1)
+                    .min(501usize.saturating_sub(relayed + 1));
+                let per_ack = room / RoutingEntries::ENTRY_LEN;
+                let entries = wire_entries(&self.table, task.cursor);
+                let more = entries.clone().nth(per_ack).is_some();
+                let chunk = entries.take(per_ack);
+                let last = chunk.clone().last();
+                let len = if more && last.is_none() {
                     None
                 } else {
-                    let message = NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK;
-                    let len = write_message(&mut self.scratch, message, |data| {
-                        RoutingEntries::write(entries, data).ok()
-                    });
-                    // A write that fails ends the answer, as an encode
-                    // failure does in the hosted router.
-                    next = last
-                        .filter(|_| len.is_some())
-                        .map(|network| u32::from(network) + 1);
-                    let kind = Kind::Answer(message);
-                    let target = Target::Unicast(task.port, task.to.as_slice());
-                    Some((len, kind, Cause::Ingress, target))
+                    write_with_header(&mut self.scratch[..budget], header, |data| {
+                        RoutingEntries::write(chunk, data).ok()
+                    })
+                };
+                if more && len.is_some() {
+                    next = last.map(|(network, _)| u32::from(network) + 1);
                 }
+                Some((
+                    len,
+                    Kind::Answer(message),
+                    Cause::Ingress,
+                    Target::Unicast(port, task.reply.peer()),
+                ))
             }
             TaskKind::NumberIs => {
-                let len = self.write_number_is(task.port);
+                let len = self.write_number_is(task.reply.port());
                 let kind = Kind::Answer(NetworkMessageType::NETWORK_NUMBER_IS);
-                Some((len, kind, Cause::Ingress, Target::Broadcast(task.port)))
+                Some((
+                    len,
+                    kind,
+                    Cause::Ingress,
+                    Target::Broadcast(task.reply.port()),
+                ))
             }
             TaskKind::Announce => {
                 self.next_announcement(task.cursor).map(|(at, len)| {
@@ -304,7 +329,9 @@ impl<
                 Some(len) => {
                     let mut current =
                         Current::new(len, kind, cause, NetworkPriority::Normal, target);
-                    current.table_ack = task.kind == TaskKind::TableAck;
+                    // Only this exact task remains at the queue front until
+                    // the next poll or refusal. A completed answer has no continuation.
+                    current.table_ack = task.kind == TaskKind::TableAck && next.is_some();
                     self.out.current = current;
                 }
                 None => bump(&mut self.counters.write_failures),
@@ -359,3 +386,7 @@ impl<
         None
     }
 }
+
+#[cfg(test)]
+#[path = "table_reply_tests.rs"]
+mod table_reply_tests;
