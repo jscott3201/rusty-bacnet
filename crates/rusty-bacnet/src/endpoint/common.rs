@@ -8,23 +8,22 @@ use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 
 use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
-use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
-use bacnet_objects::audit::{AuditReporterObject, ObjectAuditPolicy};
-use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
+use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::object_profile::ObjectProfile;
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::ReadAccessSpecification;
-use bacnet_types::enums::{AuditLevel, EngineeringUnits, ErrorClass, ErrorCode, Segmentation};
+use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{AuditLevel, ErrorClass, ErrorCode, Segmentation};
+use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::PyValueError;
 use pyo3::{PyErr, PyResult};
 
 use crate::algorithm_keywords::AlgorithmKeywords;
 use crate::errors::to_py_err;
 use crate::group_members;
-use crate::object_options::apply_profile;
 use crate::types::{PyReadAccessSpec, PySegmentation};
 
 /// Parse an IPv4 string at construction time (ValueError before bind).
@@ -210,6 +209,15 @@ pub(crate) enum PendingObject {
         name: String,
         units: u32,
         value: ValueKeywords,
+        present_value: Option<f32>,
+        profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
+    },
+    AnalogOutput {
+        instance: u32,
+        name: String,
+        units: u32,
+        present_value: Option<f32>,
         profile: Option<ObjectProfile>,
         parameters: AlgorithmKeywords,
     },
@@ -217,6 +225,15 @@ pub(crate) enum PendingObject {
         instance: u32,
         name: String,
         polarity: bacnet_types::enums::Polarity,
+        present_value: Option<u32>,
+        profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
+    },
+    BinaryOutput {
+        instance: u32,
+        name: String,
+        polarity: bacnet_types::enums::Polarity,
+        present_value: Option<u32>,
         profile: Option<ObjectProfile>,
         parameters: AlgorithmKeywords,
     },
@@ -224,6 +241,33 @@ pub(crate) enum PendingObject {
         instance: u32,
         name: String,
         value: ValueKeywords,
+        present_value: Option<u32>,
+        profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
+    },
+    MultiStateInput {
+        instance: u32,
+        name: String,
+        number_of_states: u32,
+        present_value: Option<u32>,
+        profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
+    },
+    MultiStateOutput {
+        instance: u32,
+        name: String,
+        number_of_states: u32,
+        present_value: Option<u32>,
+        profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
+    },
+    MultiStateValue {
+        instance: u32,
+        name: String,
+        number_of_states: u32,
+        access: PresentValueAccess,
+        value_source_tracking: bool,
+        present_value: Option<u32>,
         profile: Option<ObjectProfile>,
         parameters: AlgorithmKeywords,
     },
@@ -243,104 +287,51 @@ pub(crate) enum PendingObject {
     },
 }
 
-impl PendingObject {
-    /// Builds the object, the same way at registration and at each start.
-    pub(crate) fn build(&self) -> PyResult<Box<dyn BACnetObject>> {
-        match self {
-            Self::AnalogInput {
-                instance,
-                name,
-                units,
-                present_value,
-                profile,
-                parameters,
-            } => {
-                let mut object =
-                    AnalogInputObject::new(*instance, name, EngineeringUnits::from_raw(*units))
-                        .map_err(to_py_err)?;
-                object.set_present_value(*present_value);
-                parameters.apply(&mut object).map_err(to_py_err)?;
-                apply_profile(profile.clone(), |p| object.set_profile(p))?;
-                Ok(Box::new(object))
+#[path = "pending_build.rs"]
+mod pending_build;
+
+/// Validate the fresh object before admission, then check the entire identity
+/// and pending set under the same lock that seals registrations at startup.
+pub(super) fn register_pending<S>(
+    lifecycle: &super::lifecycle::Lifecycle<S, PendingObject>,
+    identity: &DeviceIdentity,
+    candidate: PendingObject,
+) -> PyResult<()> {
+    let (kind, instance, _) = candidate.identity();
+    ObjectIdentifier::new_addressable(kind, instance).map_err(to_py_err)?;
+    candidate.build()?;
+    lifecycle
+        .with_open_registrations(|objects| {
+            let (_, _, name) = candidate.identity();
+            let check = |other_kind, other_instance, other_name: &str| -> PyResult<()> {
+                if (kind, instance) == (other_kind, other_instance) {
+                    return Err(PyValueError::new_err(format!(
+                        "duplicate object identifier: {kind:?} {instance}"
+                    )));
+                }
+                if name == other_name {
+                    return Err(PyValueError::new_err(format!(
+                        "duplicate object name: {name}"
+                    )));
+                }
+                Ok(())
+            };
+            check(ObjectType::DEVICE, identity.instance(), identity.name())?;
+            for port in identity.network_ports() {
+                check(ObjectType::NETWORK_PORT, port.instance, &port.object_name())?;
             }
-            Self::AnalogValue {
-                instance,
-                name,
-                units,
-                value,
-                profile,
-                parameters,
-            } => {
-                let mut object = AnalogValueObject::with_access(
-                    *instance,
-                    name,
-                    EngineeringUnits::from_raw(*units),
-                    value.access,
-                )
-                .map_err(to_py_err)?;
-                object.set_audit_policy(value.audit_policy);
-                object.set_value_source_tracking(value.value_source_tracking);
-                parameters.apply(&mut object).map_err(to_py_err)?;
-                apply_profile(profile.clone(), |p| object.set_profile(p))?;
-                Ok(Box::new(object))
+            for object in objects.iter() {
+                let (kind, instance, name) = object.identity();
+                check(kind, instance, name)?;
             }
-            Self::BinaryInput {
-                instance,
-                name,
-                polarity,
-                profile,
-                parameters,
-            } => {
-                let mut object = BinaryInputObject::new(*instance, name).map_err(to_py_err)?;
-                object.set_polarity(*polarity).map_err(to_py_err)?;
-                parameters.apply(&mut object).map_err(to_py_err)?;
-                apply_profile(profile.clone(), |p| object.set_profile(p))?;
-                Ok(Box::new(object))
-            }
-            Self::BinaryValue {
-                instance,
-                name,
-                value,
-                profile,
-                parameters,
-            } => {
-                let mut object = BinaryValueObject::with_access(*instance, name, value.access)
-                    .map_err(to_py_err)?;
-                object.set_audit_policy(value.audit_policy);
-                object.set_value_source_tracking(value.value_source_tracking);
-                parameters.apply(&mut object).map_err(to_py_err)?;
-                apply_profile(profile.clone(), |p| object.set_profile(p))?;
-                Ok(Box::new(object))
-            }
-            Self::Group {
-                instance,
-                name,
-                members,
-            } => Ok(Box::new(group_members::group(*instance, name, members)?)),
-            Self::AuditReporter {
-                instance,
-                name,
-                level,
-                operations,
-                confirmed,
-            } => {
-                let mut object = AuditReporterObject::new(*instance, name).map_err(to_py_err)?;
-                object
-                    .audit_reporter_mut()
-                    .ok_or_else(|| PyValueError::new_err("Audit Reporter lacks its capability"))?
-                    .configure(
-                        *level,
-                        *operations,
-                        *confirmed,
-                        None,
-                        BACnetPriorityFilter::all(),
-                        None,
-                    )
-                    .map_err(to_py_err)?;
-                Ok(Box::new(object))
-            }
-        }
-    }
+            objects.push(candidate);
+            Ok(())
+        })
+        .ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "cannot add objects while endpoint is starting, running, or stopping",
+            )
+        })?
 }
 
 /// Builds boxes from borrowed params (params retained on error).
@@ -365,28 +356,26 @@ pub(crate) fn lifecycle_error(error: super::lifecycle::LifecycleError<PyErr>) ->
     }
 }
 
-/// Validate an `add_group` call and keep its params for the pending set.
-///
-/// `members` takes the `read_property_multiple` spec shape; the shared
-/// [`crate::group_members`] conversion checks it the way `BACnetServer`'s
-/// `add_group` does.
+/// Capture a Group's member specifications for validation at registration
+/// and reconstruction on startup through the shared [`crate::group_members`] builder.
 pub(crate) fn pending_group(
     instance: u32,
     name: &str,
     members: Option<Vec<PyReadAccessSpec>>,
-) -> PyResult<PendingObject> {
+) -> PendingObject {
     let members = group_members::members(members);
-    group_members::group(instance, name, &members)?;
-    Ok(PendingObject::Group {
+    PendingObject::Group {
         instance,
         name: name.to_string(),
         members,
-    })
+    }
 }
 
 #[cfg(test)]
 mod build_database_tests {
     use super::*;
+    use bacnet_objects::analog::AnalogInputObject;
+    use bacnet_types::enums::EngineeringUnits;
     use pyo3::Python;
 
     fn point(instance: u32, name: &str) -> Box<dyn BACnetObject> {
