@@ -148,7 +148,9 @@ impl Scope {
                     .await
             }
             (Self::Directed(_), Some(station)) => {
-                client.who_has_directed(station, object, range).await
+                client
+                    .who_has_directed(station.address().1, object, range)
+                    .await
             }
             (Self::Directed(_), None) => unreachable!("a directed Who-Has has its station"),
             (Self::Global, _) => client.who_has(Broadcast::Global, object, range).await,

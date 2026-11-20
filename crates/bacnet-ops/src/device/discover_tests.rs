@@ -206,6 +206,51 @@ async fn a_directed_scope_localizes_answers_when_the_network_is_learned_during_t
     assert!(found[0].duplicate);
 }
 
+/// Folding an own-network alias preserves separate station claims and
+/// prefers the local row for the one claim recorded both ways.
+#[tokio::test(start_paused = true)]
+async fn discovery_projects_claims_by_canonical_station_and_instance() {
+    use super::resolve::discovery_results;
+    use bacnet_types::enums::ObjectType;
+    use bacnet_types::primitives::ObjectIdentifier;
+
+    let bus = Bus::new();
+    let (client, _) = client(&bus).await;
+    let low = client.low_level();
+    low.add_device(N, &mac(2)).await.unwrap();
+    let local = low.get_device_at(0, &mac(2)).await.unwrap();
+    let mut alias = local.clone();
+    alias.mac_address = bacnet_types::MacAddr::from_slice(&mac(254));
+    alias.source_network = Some(5);
+    alias.source_address = Some(local.mac_address.clone());
+    let mut replacement = alias.clone();
+    replacement.object_identifier = ObjectIdentifier::new(ObjectType::DEVICE, N + 1).unwrap();
+    let alias_address = super::DeviceAddress::of(&alias).unwrap();
+    let heard: std::collections::BTreeSet<_> = [
+        (alias_address.clone(), N),
+        (alias_address, N + 1),
+        (at(2), N),
+    ]
+    .into();
+    let mut rows = vec![alias, replacement, local.clone()];
+    let only = discovery_results(rows.clone(), heard.clone(), Some(5));
+    assert_eq!(only.len(), 2);
+    assert!(
+        only.iter()
+            .all(|row| row.address == at(2) && !row.duplicate)
+    );
+    assert_eq!(only[0].instance, N);
+    assert!(only[0].entry.is_local());
+    assert_eq!(only[1].instance, N + 1);
+    let mut other = local;
+    other.mac_address = bacnet_types::MacAddr::from_slice(&mac(3));
+    rows.push(other); // A genuine second claim in the table, quiet in this window.
+    let duplicated = discovery_results(rows, heard, Some(5));
+    assert_eq!(duplicated.len(), 2);
+    assert!(duplicated[0].duplicate);
+    assert!(!duplicated[1].duplicate);
+}
+
 /// The one rule for which answers a scope covers, a Who-Is's and a
 /// Who-Has's alike: a network named by this client's own number takes the
 /// local stations; a local scope takes no routed station, and takes one

@@ -157,18 +157,54 @@ enum Station {
 }
 
 impl Station {
-    /// True when `device` is this station on network `dnet`, which is the
-    /// local network (0) when it is this client's own.
-    fn matches(&self, dnet: u16, device: &DiscoveredDevice) -> bool {
-        DeviceAddress::of(device).is_some_and(|at| {
-            at.network() == dnet
-                && match self {
-                    Self::Instance(instance) => {
-                        device.object_identifier.instance_number() == *instance
-                    }
-                    Self::Mac(mac) => at.mac() == mac.as_slice(),
-                }
+    /// Match a received or cached row with one snapshot of the local number.
+    fn destination(
+        &self,
+        dnet: u16,
+        own: Option<u16>,
+        device: &DiscoveredDevice,
+    ) -> Option<Destination> {
+        let address = DeviceAddress::of(device)?.localized(own);
+        let network = if Some(dnet) == own { 0 } else { dnet };
+        let instance = device.object_identifier.instance_number();
+        let selected = match self {
+            Self::Instance(wanted) => *wanted == instance,
+            Self::Mac(wanted) => wanted.as_slice() == address.mac(),
+        };
+        (selected && address.network() == network).then_some(Destination {
+            address,
+            instance: Some(instance),
         })
+    }
+
+    /// Same-station aliases in the table identify one destination.
+    fn known(
+        &self,
+        dnet: u16,
+        own: Option<u16>,
+        devices: &[DiscoveredDevice],
+    ) -> Option<Result<Destination, String>> {
+        let mut found: Vec<_> = devices
+            .iter()
+            .filter_map(|row| self.destination(dnet, own, row))
+            .collect();
+        found.sort_by(|a, b| (&a.address, a.instance).cmp(&(&b.address, b.instance)));
+        found.dedup();
+        match found.as_slice() {
+            [] => None,
+            [station] => Some(Ok(station.clone())),
+            several => {
+                let at: Vec<_> = several
+                    .iter()
+                    .map(|station| station.address.to_string())
+                    .collect();
+                Some(Err(format!(
+                    "device {} is claimed by {}; name one by its address",
+                    self.name(dnet),
+                    at.join(" and ")
+                )))
+            }
+        }
     }
 
     fn name(&self, dnet: u16) -> String {
@@ -195,46 +231,15 @@ async fn find_routed<T: TransportPort + 'static>(
     station: &Station,
     wait: Duration,
 ) -> Result<Destination, String> {
-    let own = client.network_number() == Some(dnet);
-    let scope = || {
-        if client.network_number() == Some(dnet) {
-            0
-        } else {
-            dnet
-        }
-    };
-    if let (true, Station::Mac(mac)) = (own, station) {
-        let mut found = Destination::local(mac)?;
-        found.instance = client
-            .get_device_at(0, mac)
-            .await
-            .map(|row| row.object_identifier.instance_number());
-        return Ok(found);
-    }
-    let known = |devices: Vec<DiscoveredDevice>| {
-        let found: Vec<DiscoveredDevice> = devices
-            .into_iter()
-            .filter(|device| station.matches(scope(), device))
-            .collect();
-        match found.as_slice() {
-            [] => None,
-            [device] => Some(Destination::of(device)),
-            several => {
-                let at: Vec<String> = several
-                    .iter()
-                    .filter_map(DeviceAddress::of)
-                    .map(|at| at.to_string())
-                    .collect();
-                Some(Err(format!(
-                    "device {} is claimed by {}; name one by its address",
-                    station.name(dnet),
-                    at.join(" and ")
-                )))
-            }
-        }
-    };
-    if let Some(found) = known(client.discovered_devices().await) {
+    let cached = client.discovered_devices().await;
+    let own = client.network_number();
+    if let Some(found) = station.known(dnet, own, &cached) {
         return found;
+    }
+    if let Station::Mac(mac) = station
+        && own == Some(dnet)
+    {
+        return Destination::local(mac);
     }
     // Subscribe before asking, so the answer can't slip in between.
     let mut events = client.device_events();
@@ -264,13 +269,17 @@ async fn find_routed<T: TransportPort + 'static>(
                 ));
             }
             Ok(Ok(event)) => {
-                if event.kind != DeviceEventKind::Lost && station.matches(scope(), &event.device) {
-                    return Destination::of(&event.device);
+                if event.kind != DeviceEventKind::Lost
+                    && let Some(found) =
+                        station.destination(dnet, client.network_number(), &event.device)
+                {
+                    return Ok(found);
                 }
             }
             // Missed events may include the answer; the table holds it.
             Ok(Err(RecvError::Lagged(_))) => {
-                if let Some(found) = known(client.discovered_devices().await) {
+                let cached = client.discovered_devices().await;
+                if let Some(found) = station.known(dnet, client.network_number(), &cached) {
                     return found;
                 }
             }

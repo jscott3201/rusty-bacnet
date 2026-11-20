@@ -114,6 +114,34 @@ async fn an_explicit_scope_reaches_the_wire_as_named() {
     stop(vec![lab]).await;
 }
 
+/// A directed Who-Has keeps the local station admitted before waiting for
+/// its rate slot, even when a later Network-Number-Is names a new number.
+#[tokio::test(start_paused = true)]
+async fn an_admitted_directed_who_has_keeps_its_local_mac_after_a_number_change() {
+    let bus = Bus::new();
+    let (client, sent) = client_on(bus.numbered_port(1)).await;
+    let low = client.low_level();
+    bus.number_is(254, 5);
+    settle().await;
+    assert_eq!(low.network_number(), Some(5));
+    let scope = Scope::Directed(bacnet_client::client::Station::remote(5, &mac(2)));
+    let admitted = crate::client::find::station(low, &scope).unwrap();
+    bus.number_is(254, 6);
+    settle().await;
+    assert_eq!(low.network_number(), Some(6));
+    scope
+        .send_who_has(low, admitted, &WhoHasObject::Name("A".into()), None)
+        .await
+        .unwrap();
+    let frames = who_has_frames(&sent);
+    let [frame] = frames.as_slice() else {
+        panic!("one Who-Has: {frames:?}")
+    };
+    assert!(!frame.broadcast);
+    assert_eq!(frame.mac.as_slice(), mac(2));
+    assert!(frame.decode_npdu().destination.is_none());
+}
+
 /// A scope or range that can't be sent is refused before anything goes,
 /// as text to fix, naming the scope to use instead: network 0 (this one is
 /// local), 65535 (every one is global) and a directed address behind a

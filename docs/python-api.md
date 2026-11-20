@@ -167,7 +167,7 @@ far = await client.device("2:1234")            # instance 1234 on network 2
 
 - **A pinned handle** is made at once. Nothing is sent for a station on the
   client's own network; a routed station the client knows no router for
-  asks its network with one Who-Is first. It never moves: `await
+  receives a station-directed Who-Is first. It never moves: `await
   ahu.moved_to()` says where its instance is heard now, once its own
   address has gone quiet.
 - **A following handle** needs the device's address. One address claiming

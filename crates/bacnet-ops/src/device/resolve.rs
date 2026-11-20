@@ -1,6 +1,7 @@
 //! Making handles: from a target, an address, an instance or a discovery
 //! result, and discovery by address.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use bacnet_client::client::DeviceEventKind;
@@ -335,62 +336,35 @@ impl<T: TransportPort + 'static> Client<T> {
         let range = request.instances()?;
         let mut events = self.device_events();
         self.who_is(request.scope(), range).await?;
-        let in_range = |row: &DiscoveredDevice| {
-            range.is_none_or(|r| r.contains(row.object_identifier.instance_number()))
-        };
-        // An I-Am from outside the scope asked, heard during the wait, is
-        // no answer to this Who-Is. The network number is read as each
-        // comes: it may be learned during the wait.
-        let scope = request.scope().clone();
-        let asked = |row: &DiscoveredDevice| {
+        let answered = |row: &DiscoveredDevice| {
+            let instance = row.object_identifier.instance_number();
+            let address = DeviceAddress::of(row)?;
             let own = self.low_level().network_number();
-            in_range(row) && DeviceAddress::of(row).is_some_and(|a| scope.covers(&a, own))
+            (range.is_none_or(|r| r.contains(instance)) && request.scope().covers(&address, own))
+                .then_some((address, instance))
         };
-        let mut heard = std::collections::BTreeSet::new();
+        let mut heard = BTreeSet::new();
         let deadline = tokio::time::Instant::now() + request.wait;
         loop {
             match tokio::time::timeout_at(deadline, events.recv()).await {
                 Err(_) | Ok(Err(RecvError::Closed)) => break,
-                Ok(Ok(event)) if event.kind != DeviceEventKind::Lost && asked(&event.device) => {
-                    heard.extend(DeviceAddress::of(&event.device));
+                Ok(Ok(event)) if event.kind != DeviceEventKind::Lost => {
+                    heard.extend(answered(&event.device));
                 }
                 Ok(Ok(_)) => {}
                 // Missed answers are in the table: every row in range counts.
                 Ok(Err(RecvError::Lagged(_))) => {
                     let table = self.low_level().discovered_devices().await;
-                    heard.extend(
-                        table
-                            .iter()
-                            .filter(|r| asked(r))
-                            .filter_map(DeviceAddress::of),
-                    );
+                    heard.extend(table.iter().filter_map(answered));
                 }
             }
         }
         let table = self.low_level().discovered_devices().await;
-        let own = self.low_level().network_number();
-        let heard: std::collections::BTreeSet<_> =
-            heard.into_iter().map(|a| a.localized(own)).collect();
-        let claimed = |instance| {
-            table
-                .iter()
-                .filter(|row| row.object_identifier.instance_number() == instance)
-                .count()
-        };
-        Ok(table
-            .iter()
-            .filter_map(|row| {
-                let address =
-                    DeviceAddress::of(row).filter(|a| heard.contains(&a.clone().localized(own)))?;
-                let instance = row.object_identifier.instance_number();
-                Some(Discovered {
-                    address,
-                    instance,
-                    duplicate: claimed(instance) > 1,
-                    entry: row.clone(),
-                })
-            })
-            .collect())
+        Ok(discovery_results(
+            table,
+            heard,
+            self.low_level().network_number(),
+        ))
     }
 
     /// Every instance two or more addresses claim in the discovery table,
@@ -415,6 +389,49 @@ impl<T: TransportPort + 'static> Client<T> {
             })
             .collect()
     }
+}
+
+/// Join this call's answers to the final table with one local-number snapshot.
+pub(super) fn discovery_results(
+    table: Vec<DiscoveredDevice>,
+    heard: BTreeSet<(DeviceAddress, u32)>,
+    own: Option<u16>,
+) -> Vec<Discovered> {
+    let heard: BTreeSet<_> = heard
+        .into_iter()
+        .map(|(address, instance)| (address.localized(own), instance))
+        .collect();
+    let mut stations = BTreeMap::new();
+    for row in table {
+        let Some(address) = DeviceAddress::of(&row) else {
+            continue;
+        };
+        let key = (
+            address.localized(own),
+            row.object_identifier.instance_number(),
+        );
+        // A queued router copy can coexist with the station's local row
+        // while a network-number change is folding the discovery table.
+        if row.is_local() {
+            stations.insert(key, row);
+        } else {
+            stations.entry(key).or_insert(row);
+        }
+    }
+    let mut claims = BTreeMap::new();
+    for (_, instance) in stations.keys() {
+        *claims.entry(*instance).or_insert(0usize) += 1;
+    }
+    stations
+        .into_iter()
+        .filter(|(key, _)| heard.contains(key))
+        .map(|((address, instance), entry)| Discovered {
+            address,
+            instance,
+            duplicate: claims[&instance] > 1,
+            entry,
+        })
+        .collect()
 }
 
 /// The local station at `mac`.

@@ -83,7 +83,7 @@ impl Routed {
     /// a broadcast or group address on the local link raises BacnetError:
     /// a routed request goes to its router by unicast. With no router, the
     /// discovery table's row for the station gives it, after one Who-Is to
-    /// the station's network when there is no row (`device()`'s rule);
+    /// the station when there is no row (`device()`'s rule);
     /// with none after that, BacnetLookupError, and `misses` keeps the
     /// station so a call soon after raises at once instead of asking again.
     pub(super) async fn path(self, client: &OpsClient, misses: &RecentMisses) -> PyResult<Station> {
