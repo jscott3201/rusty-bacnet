@@ -12916,11 +12916,14 @@ behind. Add a `bacnet-tool` dependency and change the paths:
 |---|---|
 | `bacnet_ops::safety` and its modules (`audit`, `desk`, `file`, `ledger`, `lock`, `plan`) | `bacnet_tool::safety` |
 | `bacnet_ops::class` | `bacnet_tool::class` |
-| `bacnet_ops::decode::tree` | `bacnet_tool::decode::tree` |
 | `bacnet_ops::bbmd` (rows, `survey`, `matrix`) | `bacnet_tool::bbmd` |
 | `engine.bip()`, `engine.registration_bbmd()` | `bacnet_tool::bbmd::bip(&client)`, `bacnet_tool::bbmd::registration_bbmd(&client)` |
 | `engine.read_bdt(bbmd)`, `engine.read_fdt(bbmd)` | `bacnet_tool::bbmd::read_bdt(&client, bbmd)`, `bacnet_tool::bbmd::read_fdt(&client, bbmd)` |
 | `bacnet_ops::destination` | private to `bacnet-cli`, its only user |
+
+Detailed frame trees also moved to the tool crate in #2560. Since #2633,
+use `bacnet_ops::decode::tree` for `Field`, `decode_tree`,
+`decode_npdu_tree` and `decode_apdu_tree`.
 
 `bacnet-ops` itself gains three public items the moved code reads:
 `client::rpm_rows`, `format::timestamp_text` and `format::alarms::cell`.

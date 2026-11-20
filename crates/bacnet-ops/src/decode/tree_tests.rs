@@ -1,7 +1,7 @@
 use bacnet_transport::mstp::codec::FrameType;
 
 use super::{Field, Framing, Range, decode_tree};
-use bacnet_ops::decode::testing::*;
+use crate::decode::testing::*;
 
 /// Every field's label, depth first, with its range.
 fn flat(fields: &[Field]) -> Vec<(String, Range<usize>)> {
@@ -165,7 +165,7 @@ fn a_character_string_is_marked_and_bare_layers_decode() {
     let apdu_octets = &data[2..];
     let tree = super::decode_apdu_tree(apdu_octets);
     assert_eq!(tree.range, 0..apdu_octets.len());
-    let summary = bacnet_ops::decode::frame::summarize_npdu(&data);
+    let summary = crate::decode::frame::summarize_npdu(&data);
     assert_eq!(summary.pdu.as_deref(), Some("Unconfirmed-Request"));
 }
 
@@ -212,5 +212,48 @@ fn an_unassigned_or_withdrawn_function_is_labelled_so() {
             labels.iter().any(|l| l == label),
             "{framing:?}: {labels:#?}"
         );
+    }
+}
+
+#[test]
+fn hidden_passwords_do_not_change_mstp_tree_labels_or_spans() {
+    // A confirmed DCC request with Enable, followed by a one-character password.
+    let make = |frame_type, letter| {
+        let data = [1, 4, 0, 5, 1, 17, 0x19, 0, 0x2a, 0, letter];
+        mstp(frame_type, 7, 3, &data)
+    };
+    for (frame_type, width, label) in [
+        (FrameType::BACNET_DATA_EXPECTING_REPLY, 2, "Data CRC: valid"),
+        (
+            FrameType::BACNET_EXTENDED_DATA_EXPECTING_REPLY,
+            5,
+            "Encoded CRC-32K: valid",
+        ),
+    ] {
+        let one = make(frame_type, b'A');
+        let two = make(frame_type, b'B');
+        let end = one.len();
+        let crc = end - width..end;
+        assert_ne!(one[crc.clone()], two[crc.clone()]);
+        let fields = decode_tree(Framing::Mstp, &one);
+        assert_eq!(fields, decode_tree(Framing::Mstp, &two));
+        let hidden = find(&fields, "Password: (hidden)");
+        assert_eq!(find(&fields, label), crc);
+        if width == 5 {
+            assert_eq!(hidden, 8..end - width);
+        }
+        // A second frame or unrelated bytes beyond the first frame's CRC
+        // cannot extend the field ranges or appear in any label.
+        let joined = [one.as_slice(), two.as_slice()].concat();
+        assert_eq!(fields, decode_tree(Framing::Mstp, &joined));
+        let mut corrupt = one.clone();
+        corrupt[end - 1] ^= 1;
+        let broken = flat(&decode_tree(Framing::Mstp, &corrupt));
+        assert!(
+            broken
+                .iter()
+                .any(|(label, _)| label.contains("data CRC mismatch"))
+        );
+        assert!(!broken.iter().any(|(label, _)| label.ends_with(": valid")));
     }
 }

@@ -4912,6 +4912,27 @@ class FrameSummary:
     @property
     def device(self) -> int | None: ...
 
+class FieldNode:
+    """One immutable decoded field, with its source span."""
+    @property
+    def label(self) -> str: ...
+    @property
+    def span(self) -> tuple[int, int]:
+        """Start and exclusive end offsets in the supplied frame."""
+        ...
+    @property
+    def children(self) -> tuple[FieldNode, ...]: ...
+    @property
+    def device_text(self) -> bool:
+        """Whether the label quotes a character string supplied by the device."""
+        ...
+
+def decode_frame_tree(octets: bytes, link: Literal["bip", "ipv6", "sc", "mstp"]) -> tuple[FieldNode, ...]:
+    """Decode ordered link, network and application fields offline. Malformed
+    input yields partial fields and diagnostics. A COBS-encoded MS/TP field
+    points to the encoded NPDU span. The input octets remain unredacted."""
+    ...
+
 def decode_frame(octets: bytes, link: Literal["bip", "ipv6", "sc", "mstp"]) -> FrameSummary:
     """Decode link/NPDU/APDU headers with Rust, without sending traffic.
 

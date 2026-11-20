@@ -177,6 +177,12 @@ fn offset_in(frame: &[u8], part: &[u8]) -> usize {
 
 /// Read the link layer of `frame`.
 pub fn link(framing: Framing, frame: &[u8]) -> Link {
+    link_details(framing, frame).0
+}
+
+/// The link and, on a validated MS/TP frame, its extent in the input.
+pub(super) fn link_details(framing: Framing, frame: &[u8]) -> (Link, Option<usize>) {
+    let mut consumed = None;
     let mut link = Link {
         name: String::new(),
         broadcast: false,
@@ -193,7 +199,7 @@ pub fn link(framing: Framing, frame: &[u8]) -> Link {
         Framing::Bip => bip(frame, &mut link),
         Framing::Bip6 => bip6(frame, &mut link),
         Framing::Sc => sc(frame, &mut link),
-        Framing::Mstp => mstp(frame, &mut link),
+        Framing::Mstp => mstp(frame, &mut link).map(|end| consumed = Some(end)),
     };
     if let Err(error) = refused {
         if link.name.is_empty() {
@@ -202,7 +208,7 @@ pub fn link(framing: Framing, frame: &[u8]) -> Link {
         link.problem = Some(format!("malformed: {error}"));
         link.malformed = true;
     }
-    link
+    (link, consumed)
 }
 
 fn bip(frame: &[u8], link: &mut Link) -> Result<(), String> {
@@ -301,7 +307,7 @@ fn sc(frame: &[u8], link: &mut Link) -> Result<(), String> {
     Ok(())
 }
 
-fn mstp(frame: &[u8], link: &mut Link) -> Result<(), String> {
+fn mstp(frame: &[u8], link: &mut Link) -> Result<usize, String> {
     if frame.len() >= 5 {
         let frame_type = FrameType::from_raw(frame[2]);
         link.name = frame_type
@@ -322,21 +328,21 @@ fn mstp(frame: &[u8], link: &mut Link) -> Result<(), String> {
     );
     if frame_type.is_cobs() {
         let mut copy = frame.to_vec();
-        let (decoded, _) = decode_frame_in_place(&mut copy).map_err(|e| e.to_string())?;
+        let (decoded, consumed) = decode_frame_in_place(&mut copy).map_err(|e| e.to_string())?;
         if carries_npdu {
             link.npdu = Some(Npdu::Encoded {
-                wire: 8..frame.len().saturating_sub(5).max(8),
+                wire: 8..consumed - 5,
                 data: decoded.data.to_vec(),
             });
         }
-        return Ok(());
+        return Ok(consumed);
     }
-    let (decoded, _) = decode_frame(frame).map_err(|e| e.to_string())?;
+    let (decoded, consumed) = decode_frame(frame).map_err(|e| e.to_string())?;
     if carries_npdu && !decoded.data.is_empty() {
         let start = offset_in(frame, decoded.data);
         link.npdu = Some(Npdu::At(start..start + decoded.data.len()));
     }
-    Ok(())
+    Ok(consumed)
 }
 
 /// Summarise a frame for the capture list. Decodes the headers only; the

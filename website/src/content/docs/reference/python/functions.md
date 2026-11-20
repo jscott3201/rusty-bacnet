@@ -132,6 +132,19 @@ Read selected files once and inspect them without network I/O; OSError retains e
 None time samples the clock once. A later connection may read changed files.
 Same interpretation and input limits as inspect\_sc\_pem; no chmod or startup gate.
 
+## decode_frame_tree
+
+```python
+def decode_frame_tree(
+    octets: bytes,
+    link: Literal["bip", "ipv6", "sc", "mstp"],
+) -> tuple[FieldNode, ...]
+```
+
+Decode ordered link, network and application fields offline. Malformed
+input yields partial fields and diagnostics. A COBS-encoded MS/TP field
+points to the encoded NPDU span. The input octets remain unredacted.
+
 ## decode_frame
 
 ```python

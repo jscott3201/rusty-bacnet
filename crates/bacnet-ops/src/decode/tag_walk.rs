@@ -22,10 +22,10 @@
 
 use std::ops::Range;
 
+use crate::octets::hex_upper;
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_encoding::tags::tree::{MAX_TAG_TREE_NODES, TagItem, TagReader, TagTreeFault};
 use bacnet_encoding::tags::{Tag, TagClass, decode_tag};
-use bacnet_ops::octets::hex_upper;
 use bacnet_types::primitives::PropertyValue;
 
 use super::{APPLICATION_TAGS, Field, value_text};

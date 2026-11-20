@@ -7078,6 +7078,18 @@ provenance. Observation opens no socket and changes no port sharing (see
 
 ### Decoded frame summaries and trap transcripts
 
+Use `decode_frame_tree(frame.octets, frame.link)` for detailed offline
+decoding. It returns an ordered tuple of immutable `FieldNode` records.
+Each node has a display `label`, a half-open `span` into the input, a
+tuple of `children`, and a `device_text` flag for labels that quote text
+from the device. A malformed frame carries the fields and diagnostics the
+decoder could recover. Decoded fields within a COBS-encoded MS/TP NPDU
+point to its encoded span.
+
+The decoder hides the password parameter in DeviceCommunicationControl
+and ReinitializeDevice requests and reports MS/TP data CRC validity.
+Input bytes and source spans remain available to the caller.
+
 `decode_frame(octets, link)` decodes link, NPDU and APDU headers through
 the stack's Rust decoder. It sends no traffic and returns a frozen
 `FrameSummary`, including for malformed input. `link` has no default; pass
