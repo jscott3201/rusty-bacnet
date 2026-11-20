@@ -2322,7 +2322,9 @@ Return format: `list[dict]` where each dict has:
 
 #### `write_property_multiple(address, specs)`
 
-Write multiple properties to multiple objects in one request. Both direct and
+Write multiple properties to multiple objects in one request. Pass a local address string
+or a `RoutedTarget`. An explicit router sets the next hop, and a target without one
+uses the client's route lookup. Both direct and
 device-directed WPM validate the entire input synchronously before creating an
 operation or starting discovery. Empty request/property lists, ALL/REQUIRED/OPTIONAL
 targets, and priorities 0 or 17–255 raise `ValueError`; integers outside the native

@@ -236,19 +236,31 @@ impl BACnetClient {
     fn write_property_multiple<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: &Bound<'py, PyAny>,
         specs: Vec<PyWriteAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let address = routed::Address::of(address)?;
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let rust_specs = py_to_wpm_specs(specs)?;
 
         let future = async move {
-            let mac = peers.parse(&address)?;
-            let c = started(&inner).await?;
-            c.write_property_multiple(&mac, rust_specs)
-                .await
-                .map_err(to_py_err)?;
+            match address {
+                routed::Address::Local(address) => {
+                    let mac = routed::Address::local(&address, peers)?;
+                    let client = started(&inner).await?;
+                    client.write_property_multiple(&mac, rust_specs).await
+                }
+                routed::Address::Routed(target) => {
+                    let client = state::high_level(&inner).await?;
+                    let station = target.path(&client, &inner.route_misses).await?;
+                    client
+                        .low_level()
+                        .write_property_multiple(&station, rust_specs)
+                        .await
+                }
+            }
+            .map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
