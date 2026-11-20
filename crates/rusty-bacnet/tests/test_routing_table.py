@@ -51,6 +51,62 @@ class RoutingTableTests(unittest.IsolatedAsyncioTestCase):
         [router] = await self.client.discover_routers(wait=1.5)
         self.assertEqual(router.networks, [5, 7])
 
+    async def test_shared_endpoint_discovers_its_selected_router_by_unicast(self):
+        router = self.ports[0]
+        async with rb.BipEndpoint(2689, interface="127.0.0.1", port=0,
+                                  foreign_device=rb.ForeignDevice(router.address, ttl=60)) as endpoint:
+            await accepted_registration(endpoint)
+            owner_address = await endpoint.local_address()
+            client = await endpoint.client()
+            frames = await endpoint.frames()
+            # A group or malformed link address must never turn into a broadcast.
+            for invalid in ("255.255.255.255:47808", "239.1.2.3:47808", "0.0.0.0:47808",
+                            "127.0.0.1:0", b"", b"xx"):
+                with self.subTest(invalid=invalid), self.assertRaises(rb.BacnetError):
+                    await client.discover_routers(destination=invalid, wait=0)
+            for network, destination, networks in [(None, router.address, [5, 7]), (7, router.mac, [7])]:
+                [heard] = await client.discover_routers(network, destination=destination, wait=1.5)
+                self.assertEqual((heard.mac, heard.networks), (router.mac, networks))
+                async with asyncio.timeout(10):
+                    async for frame in frames:
+                        summary = rb.decode_frame(frame.octets, frame.link)
+                        if frame.direction == "outbound" and summary.network_message == "who-is-router-to-network":
+                            self.assertEqual(summary.link_message, "original-unicast-npdu")
+                            self.assertEqual((frame.local_address, frame.peer), (owner_address, router.address))
+                            payload = b"" if network is None else network.to_bytes(2, "big")
+                            self.assertEqual(frame.octets[4:], bytes([1, 0x80, 0]) + payload)
+                            break
+                    else:
+                        self.fail("frame stream ended before the directed router query")
+            await frames.aclose()
+
+    async def test_cancel_directed_collection_releases_shared_endpoint(self):
+        from bvll_peer import RawPeer
+
+        silent = RawPeer(lambda data, source: None)
+        self.addCleanup(silent.close)
+        async with rb.BipEndpoint(2690, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.255.255.255") as endpoint:
+            client = await endpoint.client()
+            frames = await endpoint.frames()
+            waiting = asyncio.ensure_future(client.discover_routers(destination=silent.address, wait=60))
+            try:
+                async with asyncio.timeout(10):
+                    async for frame in frames:
+                        if frame.direction == "outbound" and frame.peer == silent.address:
+                            self.assertEqual(rb.decode_frame(frame.octets, frame.link).network_message,
+                                             "who-is-router-to-network")
+                            break
+                    else:
+                        self.fail("frame stream ended before the directed router query")
+            finally:
+                waiting.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await waiting
+            self.assertEqual(await client.discover_routers(destination=silent.address, wait=0), [])
+            await frames.aclose()
+            await asyncio.wait_for(endpoint.close(), 10)
+
     async def test_the_router_may_be_given_as_text(self):
         table = await self.client.routing_table(self.ports[0].address)
         self.assertEqual(sorted(e.network for e in table.entries), [1, 5, 7])

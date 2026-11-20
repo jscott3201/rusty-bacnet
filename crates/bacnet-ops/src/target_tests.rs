@@ -320,6 +320,17 @@ async fn a_bip6_address_resolves_to_the_vmac_of_the_node_there() {
     server.stop().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn directed_ipv6_text_needs_a_unicast_peer_before_resolving_its_vmac() {
+    let link = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(1));
+    for text in ["[::]:47808", "[ff02::1]:47808", "[::1]:0"] {
+        let error = address_mac(&link, text, "local router address")
+            .await
+            .unwrap_err();
+        assert!(error.contains("unicast IPv6 station"), "{error}");
+    }
+}
+
 #[tokio::test]
 async fn a_bip6_address_needs_the_bip6_transport() {
     let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);

@@ -31,7 +31,7 @@ The router's own application can be a client or a server too. `StartedRouter::in
 
 A node finds the router to a network with Who-Is-Router-To-Network, and each router answers with I-Am-Router-To-Network and the networks it reaches (Clauses 6.4.1 and 6.4.2):
 
-- Rust's `client.discover_routers(Some(network), wait)` and Python's `await client.discover_routers(network, wait=...)` broadcast the question and return each router that answered, with the networks it lists. Leave the network out to hear every router.
+- Rust's `client.discover_routers(Some(network), None, wait)` and Python's `await client.discover_routers(network, wait=...)` broadcast the question and return each router that answered, with the networks it lists. Leave the network out to hear every router.
 - A global Who-Is reaches every network, since routers carry it on, and each answer records the network the device is on. Rust's low-level `client.who_is(Broadcast::Global, range)` sends one; Python's `who_is()` and `discover()` and the CLI's `discover` stay on the client's own network unless told otherwise, with `scope="global"` (or a network number) and `--global` (or `--dnet`). Then Rust's `client.resolve_device(instance)` gives the station behind the router that answered, and a read to it goes through that router, as Python's `read_property_from_device(instance, ...)` does.
 - In Rust, every typed call takes a `Station`: `client.read_property(&Station::routed(&router_mac, network, &device_mac), ...)` addresses a device on another network directly, when you already know the router's address and the device's address on its own network. A `BACnetAddress` of the network and the device's MAC goes through the router the discovery table holds for it instead.
 

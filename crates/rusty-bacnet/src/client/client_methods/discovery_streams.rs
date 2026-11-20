@@ -70,26 +70,41 @@ impl BACnetClient {
         })
     }
 
-    /// Broadcast a Who-Is-Router-To-Network for `network` (or every
-    /// network) and collect the routers that answer for `wait` seconds: one
+    /// Ask `destination`, a router on the local link (address text or MAC
+    /// bytes), or broadcast when omitted. A directed call collects only
+    /// that station's own reports. The requested router may ask other
+    /// networks about an unknown `network`. Collect for `wait` seconds
+    /// after the send (an IPv6 socket address may first need VMAC resolution): one
     /// `DiscoveredRouter` per router MAC, in the order first heard. For a
     /// `network`, only the routers that list it. No answer is an empty
     /// list. `network` 0 and 65535 raise `BacnetError`. It holds the
     /// started client for the whole wait, so `stop()` (or leaving
     /// `async with`) waits up to `wait` seconds for it.
-    #[pyo3(signature = (network=None, *, wait=3.0))]
+    #[pyo3(signature = (network=None, *, destination=None, wait=3.0))]
     fn discover_routers<'py>(
         &self,
         py: Python<'py>,
         network: Option<u16>,
+        destination: Option<&Bound<'_, PyAny>>,
         wait: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let wait = discover_wait(wait)?;
+        let destination = destination
+            .map(super::routing_table::RouterArg::read)
+            .transpose()?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let routers = started(&inner)
-                .await?
-                .discover_routers(network, wait)
+            let client = started(&inner).await?;
+            let mac = match destination {
+                Some(router) => Some(
+                    router
+                        .on(&client, "destination needs a router's local address")
+                        .await?,
+                ),
+                None => None,
+            };
+            let routers = client
+                .discover_routers(network, mac.as_deref(), wait)
                 .await
                 .map_err(to_py_err)?;
             Ok(routers

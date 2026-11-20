@@ -2190,10 +2190,13 @@ concurrent-writer no-clobber guarantee.
 
 ```bash
 bacnet whois-router                       # routers and the networks they reach
-bacnet whois-router --dnet 2 --wait 5     # only the router to network 2
+bacnet whois-router --via 192.0.2.1:47808 --dnet 2 --wait 5     # only the router to network 2
 ```
 
-`whois-router` broadcasts a Who-Is-Router-To-Network and lists each router
+`whois-router` broadcasts a Who-Is-Router-To-Network by default. With
+`--via ADDRESS` it sends to one router on the local link and lists its own
+answers. The selected router may relay a question about an unknown network.
+Broadcast discovery lists each router
 that answers within `--wait` seconds (default 3), at its address on the
 local network, with every network its I-Am-Router-To-Network messages
 named. With `--json` it prints an array, empty when no router answered:

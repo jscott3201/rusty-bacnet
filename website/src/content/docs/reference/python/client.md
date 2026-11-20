@@ -631,11 +631,16 @@ def discover_routers(
     self,
     network: Optional[int] = None,
     *,
+    destination: str | bytes | None = None,
     wait: float = 3.0,
 ) -> Awaitable[list[DiscoveredRouter]]
 ```
 
-Broadcast a Who-Is-Router-To-Network for `network` (or every
+Ask one local router by address text or MAC bytes. When directed,
+only that local station's own answers count. A selected router may
+relay a question about an unknown network. An IPv6 socket address
+can need VMAC resolution before the wait. Omit `destination` to
+broadcast a Who-Is-Router-To-Network for `network` (or every
 network) and collect the routers that answer for `wait` seconds, one
 per router MAC in the order first heard; for a `network`, only the
 routers listing it. An empty list when none answer. `network` 0 or

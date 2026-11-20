@@ -411,7 +411,7 @@ impl<T: TransportPort + 'static> Client<T> {
         sent.map_err(OpsError::from)
     }
 
-    /// Broadcast one Who-Is-Router-To-Network on this network, for
+    /// Ask one local station, or broadcast with `destination_mac=None`, for
     /// `network` or every network (`None`), under the rate cap, then
     /// collect the I-Am-Router-To-Network answers heard for `wait`, or
     /// until `deadline` if that comes first (counted after the wait for
@@ -420,6 +420,7 @@ impl<T: TransportPort + 'static> Client<T> {
     pub async fn discover_routers(
         &self,
         network: Option<u16>,
+        destination_mac: Option<&[u8]>,
         wait: std::time::Duration,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<Vec<DiscoveredRouter>, OpsError> {
@@ -430,7 +431,10 @@ impl<T: TransportPort + 'static> Client<T> {
             }
             None => wait,
         };
-        let found = self.low_level().discover_routers(network, wait).await;
+        let found = self
+            .low_level()
+            .discover_routers(network, destination_mac, wait)
+            .await;
 
         // A refused send never left, so it isn't charged.
         if found.is_err() {

@@ -342,6 +342,13 @@ pub async fn address_mac<T: TransportPort + 'static>(
 ) -> Result<Vec<u8>, String> {
     match parse_target_on(transport, text)? {
         Target::Mac(mac) => Ok(mac),
+        Target::Bip6(peer)
+            if peer.ip().is_unspecified() || peer.ip().is_multicast() || peer.port() == 0 =>
+        {
+            Err(format!(
+                "'{text}' must name a unicast IPv6 station with a nonzero UDP port"
+            ))
+        }
         Target::Bip6(peer) => bip6_vmac(transport, peer)
             .await
             .map_err(|error| error.to_string()),

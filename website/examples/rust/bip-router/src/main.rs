@@ -137,7 +137,7 @@ async fn read_through_the_router(
     near: &[u8],
 ) -> Result<(), Error> {
     // Who-Is-Router-To-Network: which router reaches network 5?
-    let routers = client.discover_routers(Some(FAR), WAIT).await?;
+    let routers = client.discover_routers(Some(FAR), None, WAIT).await?;
     let [router] = routers.as_slice() else {
         return Err(format!("expected one router, heard {}", routers.len()).into());
     };

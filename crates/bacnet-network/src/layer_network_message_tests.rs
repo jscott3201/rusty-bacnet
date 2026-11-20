@@ -274,3 +274,69 @@ fn an_ack_to_a_query_lists_its_entries_and_an_update_ack_is_no_report() {
         assert_eq!(report(bytes, false), None, "{bytes:?}");
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_directed_router_query_never_falls_back_to_broadcast() {
+    use bacnet_transport::test_transport::{SendMode, TestTransport};
+    use bacnet_types::data_link::DataLink;
+
+    let broadcast = [192, 0, 2, 255, 0xba, 0xc0];
+    let group = [239, 0, 0, 1, 0xba, 0xc0];
+    let transport = TestTransport::builder()
+        .data_link(DataLink::Bip)
+        .broadcast_mac(&broadcast)
+        .group_mac(&group)
+        .unicast(SendMode::Record)
+        .broadcast(SendMode::Record)
+        .build();
+    let log = transport.sent();
+    let mut layer = NetworkLayer::new(transport);
+    let _apdus = layer.start().await.unwrap();
+    for invalid in [
+        &broadcast[..],
+        &group,
+        &[],
+        &[1, 2],
+        &[0, 0, 0, 0, 0xba, 0xc0],
+        &[192, 0, 2, 1, 0, 0],
+    ] {
+        assert!(
+            layer
+                .send_network_message(
+                    NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
+                    &[],
+                    Some(invalid)
+                )
+                .await
+                .is_err(),
+            "{invalid:?}"
+        );
+    }
+    assert!(log.is_empty());
+    let target = [192, 0, 2, 1, 0xba, 0xc0];
+    layer
+        .send_network_message(
+            NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
+            &[0, 7],
+            Some(&target),
+        )
+        .await
+        .unwrap();
+    assert_eq!(log.unicasts().len(), 1);
+    assert!(log.broadcasts().is_empty());
+    layer.stop().await.unwrap();
+}
+
+#[test]
+fn a_router_address_uses_the_station_grammar_of_its_link() {
+    use bacnet_types::data_link::DataLink::*;
+    assert!(router_station(Some(Mstp), &[0]));
+    assert!(!router_station(Some(Mstp), &[255]));
+    assert!(router_station(Some(Bip6), &[0, 0, 0]));
+    assert!(!router_station(Some(Bip6), &[1, 2]));
+    let mac = [2, 1, 2, 3, 0, 0];
+    assert!(router_station(Some(Sc), &mac));
+    assert!(router_station(Some(Ethernet), &mac));
+    assert!(!router_station(Some(Bip), &mac));
+    assert!(!router_station(Some(Sc), &[0; 6]));
+}

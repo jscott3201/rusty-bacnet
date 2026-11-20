@@ -659,6 +659,9 @@ pub(crate) enum Command {
     /// List the routers on the local network and the networks they reach
     /// (Who-Is-Router-To-Network).
     WhoisRouter {
+        /// Send directly to this local router address and collect its answers.
+        #[arg(long, value_name = "ADDRESS")]
+        via: Option<String>,
         /// Ask only for the router to this network number.
         #[arg(long)]
         dnet: Option<u16>,

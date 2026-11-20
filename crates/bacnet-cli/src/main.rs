@@ -355,8 +355,11 @@ async fn execute_command<T: TransportPort + 'static>(
         | Command::Unregister { .. } => {
             return Err("BBMD management commands (bdt, fdt, register, unregister) are only supported on BACnet/IP transport".into());
         }
-        Command::WhoisRouter { dnet, wait } => {
-            boxed(|| commands::router::whois_router_cmd(client, *dnet, *wait, format)).await?;
+        Command::WhoisRouter { dnet, via, wait } => {
+            boxed(|| {
+                commands::router::whois_router_cmd(client, *dnet, via.as_deref(), *wait, format)
+            })
+            .await?;
         }
         Command::RoutingTable { target, wait } => {
             let mac = resolve_target_mac(client, target).await?;

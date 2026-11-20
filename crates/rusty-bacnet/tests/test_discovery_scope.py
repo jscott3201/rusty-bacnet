@@ -214,9 +214,11 @@ class DiscoverySignatureTests(unittest.TestCase):
                                  & set(runtime.parameters))
                 self.assertEqual(keyword_only, {arg.arg for arg in method.args.kwonlyargs})
         routers = inspect.signature(BACnetClient.discover_routers).parameters
+        self.assertIsNone(routers["destination"].default)
+        self.assertIs(routers["destination"].kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIs(routers["wait"].kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertEqual([arg.arg for arg in self.stub_method("discover_routers").args.kwonlyargs],
-                         ["wait"])
+                         ["destination", "wait"])
         for name in ("who_is", "discover", "who_has_by_id", "who_has_by_name", "who_has_replies"):
             with self.subTest(method=name):
                 scope = inspect.signature(getattr(BACnetClient, name)).parameters["scope"]

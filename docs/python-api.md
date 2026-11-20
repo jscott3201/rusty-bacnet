@@ -2595,9 +2595,13 @@ replies = await client.who_has_replies("Zone Temperature", scope="global")
 Follow every I-Have the client receives from now on, an answer to its own
 Who-Has or not, as an async iterator of `IHave`.
 
-#### `discover_routers(network=None, *, wait=3.0) -> list[DiscoveredRouter]`
+#### `discover_routers(network=None, *, destination=None, wait=3.0) -> list[DiscoveredRouter]`
 
-Broadcast a Who-Is-Router-To-Network for `network`, or every network, and
+Pass a local router address such as `destination="192.0.2.1:47808"` or a
+router's MAC bytes to collect only that router's own answers. The router can
+relay a question about an unknown network. An IPv6 socket address may need
+VMAC resolution before the collection window. Omit `destination` to
+broadcast a Who-Is-Router-To-Network for `network`, or every network, and
 collect the routers that answer for `wait` seconds: one frozen
 `DiscoveredRouter` per router, with its `mac` (the next hop) and the
 `networks` it listed, ascending. For a `network`, only the routers listing

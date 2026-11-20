@@ -294,7 +294,7 @@ async fn ask_routers<T: TransportPort + 'static>(
         routers.asked.replace(asked)
     };
     match client
-        .discover_routers(network, wanted, Some(call.deadline))
+        .discover_routers(network, None, wanted, Some(call.deadline))
         .await
     {
         Ok(found) => {

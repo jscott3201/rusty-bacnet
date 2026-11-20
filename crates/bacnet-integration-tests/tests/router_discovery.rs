@@ -246,7 +246,7 @@ async fn the_router_and_its_remote_network_are_found_and_reached() {
         networks: vec![REMOTE],
     };
     for network in [None, Some(REMOTE)] {
-        let routers = client.discover_routers(network, WAIT).await.unwrap();
+        let routers = client.discover_routers(network, None, WAIT).await.unwrap();
         assert_eq!(
             routers,
             std::slice::from_ref(&expected),
@@ -255,16 +255,24 @@ async fn the_router_and_its_remote_network_are_found_and_reached() {
     }
     // A network nobody reaches: the router searches further and stays
     // quiet, so nothing is listed.
-    assert_eq!(client.discover_routers(Some(77), WAIT).await.unwrap(), []);
+    assert_eq!(
+        client.discover_routers(Some(77), None, WAIT).await.unwrap(),
+        []
+    );
     // Nor is the router kept when, during that wait, it lists only others.
-    let (scoped, asked) = tokio::join!(client.discover_routers(Some(77), WAIT), async {
+    let (scoped, asked) = tokio::join!(client.discover_routers(Some(77), None, WAIT), async {
         tokio::time::sleep(Duration::from_millis(10)).await;
         client.who_is_router_to_network(None, None).await
     });
     asked.unwrap();
     assert_eq!(scoped.unwrap(), []);
-    assert!(client.discover_routers(Some(0), WAIT).await.is_err());
-    assert!(client.discover_routers(Some(u16::MAX), WAIT).await.is_err());
+    assert!(client.discover_routers(Some(0), None, WAIT).await.is_err());
+    assert!(
+        client
+            .discover_routers(Some(u16::MAX), None, WAIT)
+            .await
+            .is_err()
+    );
 
     // The device behind the router is read through it.
     let ack = client

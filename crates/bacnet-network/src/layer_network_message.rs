@@ -168,9 +168,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// The NPDU names no destination network, so routers act on it
     /// themselves rather than pass it on, as Who-Is-Router-To-Network and
     /// What-Is-Network-Number need (Clauses 6.4.1 and 6.4.19). A
-    /// `destination_mac` that is one of the link's local broadcast
-    /// destinations goes out as the local broadcast, as
-    /// [`Self::send_apdu`] does. Only the two questions in
+    /// Who-Is-Router-To-Network with an explicit destination requires one
+    /// station's address. What-Is-Network-Number also accepts the link's
+    /// broadcast MAC as a local broadcast. Only the two questions in
     /// [`SENDABLE_NETWORK_MESSAGES`] are sent; any other type,
     /// Initialize-Routing-Table included (it has
     /// [`Self::send_routing_table_query`], which takes no payload), is
@@ -248,11 +248,39 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         let mut buf = BytesMut::with_capacity(3 + payload.len());
         encode_npdu(&mut buf, &npdu)?;
         match destination_mac {
+            Some(mac) if message_type == NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK => {
+                if !self.is_routing_table_target(mac)
+                    || self.transport.is_group_destination(mac)
+                    || !router_station(self.transport.data_link(), mac)
+                {
+                    return Err(Error::Encoding(
+                        "directed router discovery needs one local station's unicast address"
+                            .into(),
+                    ));
+                }
+                self.transport.send_unicast(&buf, mac).await
+            }
             Some(mac) if !self.local_broadcasts.contains(mac) => {
                 self.transport.send_unicast(&buf, mac).await
             }
             _ => self.transport.send_broadcast(&buf).await,
         }
+    }
+}
+
+/// Check the form of a station's MAC on the sending link. In particular
+/// six octets represent an IP and port only on B/IP.
+fn router_station(link: Option<bacnet_types::data_link::DataLink>, mac: &[u8]) -> bool {
+    use bacnet_types::data_link::DataLink;
+
+    match link {
+        Some(DataLink::Bip) => bacnet_transport::bvll::decode_bip_mac(mac)
+            .is_ok_and(|(ip, port)| ip != [0; 4] && port != 0),
+        Some(DataLink::Bip6) => mac.len() == 3,
+        Some(DataLink::Mstp) => matches!(mac, [0..=254]),
+        Some(DataLink::Sc) => mac.len() == 6 && mac != bacnet_transport::sc_frame::UNKNOWN_VMAC,
+        Some(DataLink::Ethernet) => mac.len() == 6 && mac != [0; 6],
+        _ => !mac.is_empty(),
     }
 }
 

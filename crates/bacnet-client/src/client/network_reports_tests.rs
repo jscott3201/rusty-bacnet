@@ -84,3 +84,57 @@ async fn a_reject_reaches_the_path_limits_and_the_subscribers() {
     let mut client = Arc::try_unwrap(client).ok().unwrap();
     client.stop().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn directed_router_discovery_collects_only_the_selected_local_station() {
+    use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+    let (transport, inbound, mut outbound) = harness(&[1], 1486);
+    let mut client = BACnetClient::start(ClientConfig::default(), transport)
+        .await
+        .unwrap();
+    let send_replies = async {
+        let sent = outbound.recv().await.unwrap();
+        assert_eq!(sent.destination.as_slice(), [2]);
+        assert_eq!(sent.npdu.as_ref(), [1, 0x80, 0, 0, 7]);
+        for (source, bytes) in [
+            (3, &[1, 0x80, 1, 0, 7, 0, 30][..]),         // another router
+            (2, &[1, 0x88, 0, 8, 1, 4, 1, 0, 7, 0, 40]), // routed through the selected peer
+            (2, &[1, 0x80, 1, 0, 90]),                   // outside the requested network
+            (2, &[1, 0x80, 1, 0, 7, 0, 12]),
+            (2, &[1, 0x80, 1, 0, 7, 0, 11]),
+        ] {
+            inbound
+                .send(ReceivedNpdu {
+                    npdu: bytes.to_vec().into(),
+                    source_mac: MacAddr::from_slice(&[source]),
+                    link_layer_group: false,
+                    data_attributes: Vec::new(),
+                    provenance: TransportProvenance::unverified(),
+                    direct_response: None,
+                    reply_tx: None,
+                })
+                .await
+                .unwrap();
+        }
+    };
+    let wait = std::time::Duration::from_secs(2);
+    let (found, ()) = tokio::join!(
+        client.discover_routers(Some(7), Some(&[2]), wait),
+        send_replies
+    );
+    assert_eq!(
+        found.unwrap(),
+        [DiscoveredRouter {
+            mac: MacAddr::from_slice(&[2]),
+            networks: vec![7, 11, 12]
+        }]
+    );
+    assert!(
+        client
+            .discover_routers(None, Some(&[4]), wait)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    client.stop().await.unwrap();
+}

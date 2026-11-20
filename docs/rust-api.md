@@ -10618,7 +10618,7 @@ let found: Vec<ReceivedIHave> = client
 let mut i_haves = client.i_have_events();                // every I-Have, asked for or not
 
 // Who-Is-Router-To-Network, then the routers heard and the networks they reach.
-let routers: Vec<DiscoveredRouter> = client.discover_routers(None, Duration::from_secs(3)).await?;
+let routers: Vec<DiscoveredRouter> = client.discover_routers(None, None, Duration::from_secs(3)).await?;
 client.who_is_router_to_network(Some(2), None).await?;   // just send it
 client.what_is_network_number(None).await?;
 

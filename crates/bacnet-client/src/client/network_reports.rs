@@ -176,26 +176,33 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         Ok(())
     }
 
-    /// Broadcast a Who-Is-Router-To-Network for `network` (or every
-    /// network), then collect the I-Am-Router-To-Network messages heard for
+    /// Send a Who-Is-Router-To-Network for `network` (or every network).
+    /// With a destination, send to that local station and keep only reports
+    /// from its own MAC without a routed source. With `None`, broadcast and
+    /// collect the I-Am-Router-To-Network messages heard for
     /// `wait`: one entry per router MAC, in the order first heard. For a
     /// `network`, only the routers that list it are kept. No answer is an
     /// empty list, not an error.
     pub async fn discover_routers(
         &self,
         network: Option<u16>,
+        destination_mac: Option<&[u8]>,
         wait: Duration,
     ) -> Result<Vec<DiscoveredRouter>, Error> {
         // Subscribe first, so no answer can arrive before the receiver.
         let mut rx = self.network_reports();
-        self.who_is_router_to_network(network, None).await?;
+        self.who_is_router_to_network(network, destination_mac)
+            .await?;
         let deadline = tokio::time::Instant::now() + wait;
         let mut routers: Vec<DiscoveredRouter> = Vec::new();
         collect_until(&mut rx, deadline, "I-Am-Router-To-Network", |received| {
             let NetworkReport::IAmRouterToNetwork(listed) = received.report else {
                 return;
             };
-            if network.is_some_and(|wanted| !listed.contains(&wanted)) {
+            if destination_mac.is_some_and(|peer| {
+                received.source_mac.as_slice() != peer || received.source_network.is_some()
+            }) || network.is_some_and(|wanted| !listed.contains(&wanted))
+            {
                 return;
             }
             record(&mut routers, received.source_mac, listed);
