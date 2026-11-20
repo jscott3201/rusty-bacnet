@@ -339,6 +339,7 @@ async fn failover_and_primary_restore_are_events_in_order() {
             initial_delay_ms: 25,
             max_delay_ms: 25,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_connector(connector(primary_up.clone(), primary_tx))
         .with_failover_connector(connector(Arc::new(AtomicBool::new(true)), failover_tx));
@@ -525,6 +526,7 @@ async fn giving_up_reports_the_attempts_made() {
         initial_delay_ms: 25,
         max_delay_ms: 25,
         max_retries: 2,
+        retry_forever: false,
     };
     let (transport, _rx, hub, mut events) =
         started(reconnect, connector(Arc::new(AtomicBool::new(false)), tx)).await;
@@ -561,6 +563,7 @@ async fn a_stop_during_backoff_ends_the_stream_without_a_terminal_event() {
         initial_delay_ms: 60_000,
         max_delay_ms: 60_000,
         max_retries: 3,
+        retry_forever: false,
     };
     let (transport, _rx, hub, mut events) =
         started(reconnect, connector(Arc::new(AtomicBool::new(true)), tx)).await;
@@ -591,6 +594,7 @@ async fn losing_the_failover_hub_tries_the_primary_first() {
             initial_delay_ms: 25,
             max_delay_ms: 25,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_connector(connector(primary_up.clone(), primary_tx))
         .with_failover_connector(connector(Arc::new(AtomicBool::new(true)), failover_tx));
@@ -680,96 +684,12 @@ async fn losing_the_failover_hub_tries_the_primary_first() {
     drop(primary_hub);
 }
 
-/// Run one reconnect episode for a lost `hub` whose socket can't be reused,
-/// with no failover connector, and collect its events.
-async fn episode(
-    hub: ScActiveHub,
-    primary: Option<super::super::WebSocketConnector<LoopbackWebSocket>>,
-) -> Vec<ScEvent> {
-    use super::super::recovery::Recovery;
-    use super::super::{HubLimits, ScConnection};
-    use tokio::sync::{Mutex, watch};
-    let (client, _hub) = LoopbackWebSocket::pair();
-    let ws = Arc::new(client);
-    let conn = Arc::new(Mutex::new(ScConnection::new([0x22; 6], [1; 16])));
-    let active_ws = Arc::new(Mutex::new(Some(ws.clone())));
-    let (state_tx, _) = watch::channel(ScConnectionState::Disconnected);
-    let mut throttle = super::super::diagnostic_throttle::DiagnosticThrottle::new();
-    let config = ScReconnectConfig {
-        initial_delay_ms: 25,
-        max_delay_ms: 25,
-        max_retries: 3,
-    };
-    let observer = ScObserver::new();
-    let mut events = observer.subscribe();
-    let limits = HubLimits::new();
-    let mut recovery = Recovery {
-        config: &config,
-        diagnostic_throttle: &mut throttle,
-        primary_connector: &primary,
-        failover_connector: &None,
-        failover_ws: &mut None,
-        conn: &conn,
-        active_ws: &active_ws,
-        state_tx: &state_tx,
-        connect_timeout_ms: 100,
-        hub_limits: &limits,
-        observer: &observer,
-    };
-    assert!(recovery.reconnect(&ws, hub, false).await.is_none());
-    let mut seen = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        seen.push(event);
-    }
-    seen
-}
-
-/// A lost failover hub that can't be redialled drops out of the episode;
-/// the primary keeps getting every attempt (Annex AB.5.2).
-#[tokio::test(start_paused = true)]
-async fn a_dead_failover_target_leaves_the_primary_in_every_attempt() {
-    let (tx, _hubs) = mpsc::unbounded_channel();
-    let down = connector(Arc::new(AtomicBool::new(false)), tx);
-    let seen = episode(ScActiveHub::Failover, Some(Arc::new(down))).await;
-    let mut expected = Vec::new();
-    for attempt in 1..=3 {
-        expected.push(("attempt", attempt));
-        expected.push(("failed", attempt));
-    }
-    let mut attempt = 0;
-    let got: Vec<_> = seen
-        .iter()
-        .take(6)
-        .map(|event| match event {
-            ScEvent::ReconnectAttempt {
-                hub: ScActiveHub::Primary,
-                attempt: a,
-                ..
-            } => {
-                attempt = *a;
-                ("attempt", *a)
-            }
-            ScEvent::ConnectFailed {
-                hub: ScActiveHub::Primary,
-                ..
-            } => ("failed", attempt),
-            other => panic!("unexpected {other:?} in {seen:?}"),
-        })
-        .collect();
-    assert_eq!(got, expected);
-    assert_eq!(seen[6..], [ScEvent::ReconnectGaveUp { attempts: 3 }]);
-}
-
-/// With nothing to dial, the episode gives up with no attempt counted.
-#[tokio::test(start_paused = true)]
-async fn giving_up_without_a_dial_counts_no_attempts() {
-    let seen = episode(ScActiveHub::Primary, None).await;
-    assert_eq!(seen, [ScEvent::ReconnectGaveUp { attempts: 0 }]);
-}
-
 #[cfg(feature = "sc-tls")]
 #[path = "observability_dial_tests.rs"]
 mod dial;
 
 #[path = "restore_failed_tests.rs"]
 mod restore_failed;
+
+#[path = "recovery_round_tests.rs"]
+mod rounds;

@@ -4469,12 +4469,13 @@ class ScReconnect:
 
     Delays must be nonzero, initial <= maximum, and maximum <= 86,400,000 ms.
     Invalid settings raise ValueError; unsigned integer overflow raises
-    OverflowError. Zero retries allows the initial connection and disables
-    active-hub retries after loss. Validation is not deployment qualification.
+    OverflowError. With retry_forever enabled, each backoff round tries the
+    primary and then an available failover, ignoring max_retries. Otherwise
+    zero retries skips the active-hub retries after loss.
     """
     def __init__(
         self, *, initial_delay_ms: int = 10000,
-        max_delay_ms: int = 600000, max_retries: int = 10,
+        max_delay_ms: int = 600000, max_retries: int = 10, retry_forever: bool = False,
     ) -> None: ...
     @property
     def initial_delay_ms(self) -> int: ...
@@ -4482,6 +4483,8 @@ class ScReconnect:
     def max_delay_ms(self) -> int: ...
     @property
     def max_retries(self) -> int: ...
+    @property
+    def retry_forever(self) -> bool: ...
 
 
 class ScCertificateMetadata:
@@ -4663,9 +4666,11 @@ class ScEvent:
     """One SC hub-connector event (#1829), frozen. Fields that don't apply
     to the event's kind are None.
 
-    A failover reads ``disconnected``, then ``reconnect_attempt`` and
+    In finite recovery, losing the primary reads ``disconnected``, then ``reconnect_attempt`` and
     ``connect_failed`` for each failed primary attempt, then
-    ``failover_engaged`` and ``connected`` on the failover hub. A primary
+    ``failover_engaged`` and ``connected`` on the failover hub. Unlimited
+    recovery reports each eligible hub attempt in primary-then-failover order.
+    Both attempts share the round number and its one backoff. A primary
     restore reads ``primary_restored``, then ``connected`` on the primary;
     each failed restore probe, at most one per restore interval, reads
     ``primary_restore_failed`` (#1828).
@@ -4736,12 +4741,12 @@ class ScEvent:
         ...
     @property
     def attempt(self) -> int | None:
-        """A ``reconnect_attempt``'s number, from 1; the attempts made, for
-        ``reconnect_gave_up``."""
+        """The reconnect round, starting at 1 and saturating at 2**32 - 1.
+        For ``reconnect_gave_up``, the last round dialled, or zero."""
         ...
     @property
     def backoff(self) -> float | None:
-        """Seconds a ``reconnect_attempt`` waited first."""
+        """Seconds waited before the round containing this ``reconnect_attempt``."""
         ...
 
 class ScLinkStatus:

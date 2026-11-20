@@ -58,6 +58,7 @@ async fn start(primary: (u16, u16)) -> Hubs {
                     initial_delay_ms: 25,
                     max_delay_ms: 25,
                     max_retries: 1,
+                    retry_forever: false,
                 })
                 .with_failover(client_failover),
             network_number: 2000,

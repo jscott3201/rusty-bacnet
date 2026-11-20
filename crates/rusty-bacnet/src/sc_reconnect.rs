@@ -6,8 +6,7 @@ use pyo3::prelude::*;
 
 /// Reconnect settings for a Python SC client.
 ///
-/// Delay validation uses the Rust policy. Zero retries permits the initial
-/// connection and disables retries after a connection loss.
+/// Delay and retry settings use the native transport policy.
 #[pyclass(
     name = "ScReconnect",
     module = "rusty_bacnet",
@@ -23,12 +22,18 @@ pub(crate) struct PyScReconnect {
 impl PyScReconnect {
     /// Create validated reconnect settings; all arguments are keyword-only.
     #[new]
-    #[pyo3(signature = (*, initial_delay_ms=10_000, max_delay_ms=600_000, max_retries=10))]
-    fn new(initial_delay_ms: u64, max_delay_ms: u64, max_retries: u32) -> PyResult<Self> {
+    #[pyo3(signature = (*, initial_delay_ms=10_000, max_delay_ms=600_000, max_retries=10, retry_forever=false))]
+    fn new(
+        initial_delay_ms: u64,
+        max_delay_ms: u64,
+        max_retries: u32,
+        retry_forever: bool,
+    ) -> PyResult<Self> {
         let config = ScReconnectConfig {
             initial_delay_ms,
             max_delay_ms,
             max_retries,
+            retry_forever,
         };
         config
             .validate()
@@ -48,16 +53,29 @@ impl PyScReconnect {
         self.config.max_delay_ms
     }
 
-    /// The maximum retry attempts after an active connection is lost.
+    /// The number of reconnect rounds when unlimited recovery is off.
     #[getter]
     fn max_retries(&self) -> u32 {
         self.config.max_retries
     }
 
+    /// Whether to retry eligible hubs without a round limit.
+    #[getter]
+    fn retry_forever(&self) -> bool {
+        self.config.retry_forever
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "ScReconnect(initial_delay_ms={}, max_delay_ms={}, max_retries={})",
-            self.config.initial_delay_ms, self.config.max_delay_ms, self.config.max_retries
+            "ScReconnect(initial_delay_ms={}, max_delay_ms={}, max_retries={}, retry_forever={})",
+            self.config.initial_delay_ms,
+            self.config.max_delay_ms,
+            self.config.max_retries,
+            if self.config.retry_forever {
+                "True"
+            } else {
+                "False"
+            }
         )
     }
 }

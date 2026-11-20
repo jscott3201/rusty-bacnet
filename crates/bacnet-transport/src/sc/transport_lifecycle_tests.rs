@@ -703,6 +703,7 @@ async fn test_reconnect_exhaustion_uses_failover_and_send_path() {
             initial_delay_ms: 25,
             max_delay_ms: 25,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_failover(failover_client);
 
@@ -767,6 +768,7 @@ async fn test_failover_restores_primary_and_send_path() {
             initial_delay_ms: 25,
             max_delay_ms: 25,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_failover(failover_client);
 
@@ -834,6 +836,7 @@ fn reconnect_exponential_backoff_sequence() {
         initial_delay_ms: 100,
         max_delay_ms: 1000,
         max_retries: 5,
+        retry_forever: false,
     };
     let mut delay = config.initial_delay_ms;
     let delays: Vec<u64> = (0..5)

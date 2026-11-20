@@ -156,14 +156,33 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         let mut backoff = initial_backoff;
         let max_backoff = Duration::from_millis(self.config.max_delay_ms);
         let mut attempts = 0;
-        // Losing the failover hub sends each attempt to the primary first,
-        // then back to the failover hub, so the connector keeps working toward
-        // the primary (Annex AB.5.2). Losing the primary retries the primary.
-        let mut targets = match active_hub {
-            ScActiveHub::Primary => vec![ScActiveHub::Primary],
-            ScActiveHub::Failover => vec![ScActiveHub::Primary, ScActiveHub::Failover],
+        // Finite recovery from primary loss has a separate, final failover
+        // attempt. All other rounds prefer primary, then try failover.
+        let mut targets = if active_hub == ScActiveHub::Primary && !self.config.retry_forever {
+            vec![ScActiveHub::Primary]
+        } else {
+            vec![ScActiveHub::Primary, ScActiveHub::Failover]
         };
-        'attempts: for attempt in 1..=self.config.max_retries {
+        let mut attempt = 0u32;
+        'attempts: loop {
+            if self.config.retry_forever {
+                // A supplied spare may have been consumed in the last round.
+                targets.retain(|hub| {
+                    (*hub == active_hub && current_reusable)
+                        || match hub {
+                            ScActiveHub::Primary => self.primary_connector.is_some(),
+                            ScActiveHub::Failover => {
+                                self.failover_connector.is_some() || self.failover_ws.is_some()
+                            }
+                        }
+                });
+            }
+            if targets.is_empty()
+                || (!self.config.retry_forever && attempt == self.config.max_retries)
+            {
+                break;
+            }
+            attempt = attempt.saturating_add(1);
             let delay = jittered_backoff(backoff, initial_backoff, max_backoff);
             tokio::time::sleep(delay).await;
             if !self.conn.lock().await.connect_retry_allowed {
@@ -196,15 +215,13 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                     Step::Stop => break 'attempts,
                 }
             }
-            if targets.is_empty() {
-                break;
-            }
             backoff = (backoff * 2).min(max_backoff);
         }
-        // Preserve the existing order: only primary exhaustion tries failover.
+        // Finite recovery makes one final failover attempt after primary exhaustion.
         // An untouched preconfigured failover is consumed once, never poisoned
         // merely because a different (primary) socket was retired.
-        if active_hub == ScActiveHub::Primary
+        if !self.config.retry_forever
+            && active_hub == ScActiveHub::Primary
             && self.conn.lock().await.connect_retry_allowed
             && let Some(failover) = dial_failover_ws(
                 self.failover_connector,
@@ -242,11 +259,18 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             }
         }
         let suppressed = self.diagnostic_throttle.take_suppressed();
-        warn!(
-            max_retries = self.config.max_retries,
-            suppressed,
-            "SC reconnection: max retries exhausted, giving up (suppressed {suppressed} reconnect diagnostics)"
-        );
+        if self.config.retry_forever {
+            warn!(
+                suppressed,
+                "SC reconnection: no eligible hub remains, giving up (suppressed {suppressed} reconnect diagnostics)"
+            );
+        } else {
+            warn!(
+                max_retries = self.config.max_retries,
+                suppressed,
+                "SC reconnection: max retries exhausted, giving up (suppressed {suppressed} reconnect diagnostics)"
+            );
+        }
         {
             let mut c = self.conn.lock().await;
             c.state = ScConnectionState::Disconnected;
@@ -271,7 +295,11 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             ScActiveHub::Primary => self.primary_connector,
             ScActiveHub::Failover => self.failover_connector,
         };
-        if connector.is_none() && reuse.is_none() {
+        let alternate_failover = target == ScActiveHub::Failover && !lost;
+        let spare_available = self.config.retry_forever
+            && target == ScActiveHub::Failover
+            && self.failover_ws.is_some();
+        if connector.is_none() && reuse.is_none() && !spare_available {
             // Without a connector only the lost hub's own socket can be
             // reused. Another hub without one is simply skipped.
             if lost {
@@ -293,8 +321,7 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             self.state_tx.send_replace(c.state);
         }
         // A fresh socket that fails is given up; a reused one is tried again.
-        let mut fresh = true;
-        let ws = match dial_reconnect_ws(
+        let dialled_ws = match dial_reconnect_ws(
             target,
             self.primary_connector,
             self.failover_connector,
@@ -302,19 +329,32 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         )
         .await
         {
-            Ok(Some(ws)) => ws,
-            Ok(None) => {
-                fresh = false;
-                reuse.expect("checked above").clone()
-            }
+            Ok(ws) => ws,
             Err(e) => {
                 self.observer.connect_failed(target, &e);
                 if let Some(suppressed) = self.retry_diagnostic() {
                     warn!(%e, attempt, suppressed, "SC reconnection redial failed (suppressed {suppressed} reconnect diagnostics)");
                 }
-                return Step::Failed;
+                if !spare_available {
+                    return Step::Failed;
+                }
+                None
             }
         };
+        let fresh_ws = dialled_ws.or_else(|| {
+            if spare_available {
+                self.failover_ws.take()
+            } else {
+                None
+            }
+        });
+        let (ws, fresh) = match fresh_ws {
+            Some(ws) => (ws, true),
+            None => (reuse.expect("checked above").clone(), false),
+        };
+        if alternate_failover {
+            self.observer.failover_engaged();
+        }
         let probe_conn = connect_probe_from(self.conn).await;
         match perform_handshake(&*ws, &probe_conn, None, self.connect_timeout_ms).await {
             Ok(()) => {
@@ -416,6 +456,7 @@ mod tests {
                 initial_delay_ms,
                 max_delay_ms,
                 max_retries: 10,
+                retry_forever: false,
             };
             config.validate().unwrap();
             let initial = Duration::from_millis(initial_delay_ms);

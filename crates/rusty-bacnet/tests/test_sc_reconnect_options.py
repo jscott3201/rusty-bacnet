@@ -8,7 +8,7 @@ from rusty_bacnet import BACnetClient, ScReconnect
 class ScReconnectOptionsTests(unittest.TestCase):
     def test_keyword_only_defaults_and_frozen_values(self):
         signature = inspect.signature(ScReconnect)
-        expected = dict(initial_delay_ms=10_000, max_delay_ms=600_000, max_retries=10)
+        expected = dict(initial_delay_ms=10_000, max_delay_ms=600_000, max_retries=10, retry_forever=False)
         self.assertEqual(list(signature.parameters), list(expected))
         options = ScReconnect()
         for name, default in expected.items():
@@ -35,6 +35,10 @@ class ScReconnectOptionsTests(unittest.TestCase):
                     ScReconnect(**{name: value})
         zero = ScReconnect(initial_delay_ms=1, max_delay_ms=1, max_retries=0)
         self.assertEqual(zero.max_retries, 0)
+        unlimited = ScReconnect(max_retries=0, retry_forever=True)
+        self.assertTrue(unlimited.retry_forever)
+        self.assertEqual(unlimited.max_retries, 0)
+        self.assertIn("retry_forever=True", repr(unlimited))
 
     def test_client_keyword_is_appended_and_sc_only(self):
         parameters = inspect.signature(BACnetClient).parameters

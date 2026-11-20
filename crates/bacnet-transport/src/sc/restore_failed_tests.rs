@@ -22,6 +22,7 @@ async fn each_failed_restore_probe_is_one_event_per_interval() {
             initial_delay_ms: INTERVAL.as_millis() as u64,
             max_delay_ms: INTERVAL.as_millis() as u64,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_connector(connector(primary_up.clone(), primary_tx))
         .with_failover_connector(connector(Arc::new(AtomicBool::new(true)), failover_tx));

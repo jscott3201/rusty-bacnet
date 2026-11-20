@@ -57,6 +57,7 @@ impl Fixture {
                 initial_delay_ms: 10,
                 max_delay_ms: 10,
                 max_retries: 1,
+                retry_forever: false,
             })
             .with_connector(move || {
                 let candidates = candidates_tx.clone();

@@ -1844,14 +1844,16 @@ Frozen SC client retry settings, copied when passed to BACnetClient.
 
 Delays must be nonzero, initial \<= maximum, and maximum \<= 86,400,000 ms.
 Invalid settings raise ValueError; unsigned integer overflow raises
-OverflowError. Zero retries allows the initial connection and disables
-active-hub retries after loss. Validation is not deployment qualification.
+OverflowError. With retry\_forever enabled, each backoff round tries the
+primary and then an available failover, ignoring max\_retries. Otherwise
+zero retries skips the active-hub retries after loss.
 
 Properties:
 
 - `initial_delay_ms: int`
 - `max_delay_ms: int`
 - `max_retries: int`
+- `retry_forever: bool`
 
 ### ScReconnect.__init__
 
@@ -1862,6 +1864,7 @@ def __init__(
     initial_delay_ms: int = 10000,
     max_delay_ms: int = 600000,
     max_retries: int = 10,
+    retry_forever: bool = False,
 ) -> None
 ```
 
@@ -1996,9 +1999,11 @@ Properties:
 One SC hub-connector event (#1829), frozen. Fields that don't apply
 to the event's kind are None.
 
-A failover reads `disconnected`, then `reconnect_attempt` and
+In finite recovery, losing the primary reads `disconnected`, then `reconnect_attempt` and
 `connect_failed` for each failed primary attempt, then
-`failover_engaged` and `connected` on the failover hub. A primary
+`failover_engaged` and `connected` on the failover hub. Unlimited
+recovery reports each eligible hub attempt in primary-then-failover order.
+Both attempts share the round number and its one backoff. A primary
 restore reads `primary_restored`, then `connected` on the primary;
 each failed restore probe, at most one per restore interval, reads
 `primary_restore_failed` (#1828).
@@ -2016,8 +2021,8 @@ Properties:
 - `cause_detail: str | None`: Diagnostic text for a `websocket`, `tls` or `other` cause; not stable.
 - `error_class: ErrorClass | None`: The NAK's error class, for a `nak` cause.
 - `error_code: ErrorCode | None`: The NAK's error code, for a `nak` cause.
-- `attempt: int | None`: A `reconnect_attempt`'s number, from 1; the attempts made, for `reconnect_gave_up`.
-- `backoff: float | None`: Seconds a `reconnect_attempt` waited first.
+- `attempt: int | None`: The reconnect round, starting at 1 and saturating at 2\*\*32 - 1. For `reconnect_gave_up`, the last round dialled, or zero.
+- `backoff: float | None`: Seconds waited before the round containing this `reconnect_attempt`.
 
 ## ScLinkStatus
 

@@ -90,6 +90,7 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
                 initial_delay_ms,
                 max_delay_ms,
                 max_retries,
+                retry_forever: false,
             });
             for _ in 0..2 {
                 let error = transport.start().await.unwrap_err();
@@ -122,6 +123,7 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
             initial_delay_ms: 1,
             max_delay_ms: 1,
             max_retries: 0,
+            retry_forever: false,
         })
         .with_heartbeat_interval_ms(30_000)
         .with_heartbeat_timeout_ms(60_000);
@@ -174,6 +176,7 @@ async fn failing_connectors_obey_reconnect_budget_plus_single_failover_allowance
                 initial_delay_ms: 2,
                 max_delay_ms: 7,
                 max_retries,
+                retry_forever: false,
             };
             config.validate().unwrap();
             let (primary, primary_hub) = LoopbackWebSocket::pair();
@@ -244,6 +247,7 @@ async fn zero_retries_skips_active_hub_retry_but_allows_initial_failover_and_res
             initial_delay_ms: 1_000,
             max_delay_ms: 1_000,
             max_retries: 0,
+            retry_forever: false,
         })
         .with_connector({
             let dials = dials.clone();
@@ -352,6 +356,7 @@ async fn check_invalid_accept_failover_and_primary_probe(field: std::ops::Range<
             initial_delay_ms: 1000,
             max_delay_ms: 1000,
             max_retries: 0,
+            retry_forever: false,
         })
         .with_connector(move || {
             let (client, hub) = LoopbackWebSocket::pair();
@@ -491,6 +496,7 @@ async fn check_invalid_accept_reconnect_probe(field: std::ops::Range<usize>) {
             initial_delay_ms: 1000,
             max_delay_ms: 1000,
             max_retries: 2,
+            retry_forever: false,
         })
         .with_connector(move || {
             let (client, hub) = LoopbackWebSocket::pair();

@@ -110,6 +110,7 @@ async fn primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe() {
             initial_delay_ms: 25,
             max_delay_ms: 25,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_failover(failover_client);
 
@@ -187,6 +188,7 @@ async fn primary_restore_reseed_failure_blocks_stale_restore_retry() {
             initial_delay_ms: 25,
             max_delay_ms: 25,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_failover(failover_client);
 
@@ -274,6 +276,7 @@ async fn primary_restore_attempts_start_one_interval_after_failover() {
             initial_delay_ms: INTERVAL.as_millis() as u64,
             max_delay_ms: INTERVAL.as_millis() as u64,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_failover(failover_client);
 

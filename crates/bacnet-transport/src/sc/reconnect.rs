@@ -3,13 +3,14 @@ use bacnet_types::error::Error;
 /// Configuration for SC transport reconnection with jittered exponential backoff.
 ///
 /// The nominal backoff starts at `initial_delay_ms` and doubles after each failed
-/// active-hub retry, capped at `max_delay_ms`. Each reconnect sleep uses fresh OS
+/// reconnect round, capped at `max_delay_ms`. Each reconnect sleep uses fresh OS
 /// randomness between `max(initial_delay_ms, backoff / 2)` and
 /// `min(max_delay_ms, backoff + backoff / 2)`, inclusive. Thus the initial delay
 /// remains a floor and the maximum remains a cap, including at the capped step.
 /// Equal initial and maximum delays leave no room for jitter. If OS randomness
-/// is unavailable, the nominal backoff is used. Jitter applies only to active-hub
-/// retries, not the separate failover attempt or primary-restoration timer.
+/// is unavailable, the nominal backoff is used. Each round sleeps once even
+/// when it tries both hubs. Finite recovery's final failover attempt runs
+/// immediately after the last primary retry.
 /// While the failover hub is active, each attempt to restore the primary
 /// starts `initial_delay_ms` after the failover connected or the previous
 /// attempt ended.
@@ -21,10 +22,14 @@ pub struct ScReconnectConfig {
     /// Maximum delay between reconnect attempts (ms), nonzero and at most
     /// 86_400_000 (24 hours). This is a local defensive cap, not a conformance limit.
     pub max_delay_ms: u64,
-    /// Maximum reconnect attempts on the active hub after a disconnect.
+    /// Maximum reconnect rounds after a disconnect when `retry_forever` is false.
     /// Zero skips these retries, not the initial connection, eligible failover,
     /// or primary restoration while connected to failover.
     pub max_retries: u32,
+    /// Keep recovering while a hub can be retried, ignoring `max_retries`.
+    /// Each round waits for backoff, then tries the primary followed by an
+    /// available failover. A response forbidding further retries ends recovery.
+    pub retry_forever: bool,
 }
 
 impl Default for ScReconnectConfig {
@@ -33,6 +38,7 @@ impl Default for ScReconnectConfig {
             initial_delay_ms: 10_000,
             max_delay_ms: 600_000,
             max_retries: 10,
+            retry_forever: false,
         }
     }
 }
@@ -98,6 +104,7 @@ mod tests {
                     initial_delay_ms,
                     max_delay_ms,
                     max_retries,
+                    retry_forever: false,
                 };
                 assert!(
                     matches!(config.validate(), Err(Error::OutOfRange(message))
@@ -117,6 +124,7 @@ mod tests {
                         initial_delay_ms,
                         max_delay_ms,
                         max_retries,
+                        retry_forever: false,
                     };
                     match config.validate() {
                         Err(Error::OutOfRange(message)) => assert_eq!(
@@ -158,6 +166,7 @@ mod tests {
                     initial_delay_ms,
                     max_delay_ms,
                     max_retries,
+                    retry_forever: false,
                 }
                 .validate()
                 .unwrap();

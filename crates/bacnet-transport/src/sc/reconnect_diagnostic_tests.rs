@@ -23,6 +23,7 @@ fn config(max_retries: u32) -> ScReconnectConfig {
         initial_delay_ms: 1,
         max_delay_ms: 1,
         max_retries,
+        retry_forever: false,
     }
 }
 

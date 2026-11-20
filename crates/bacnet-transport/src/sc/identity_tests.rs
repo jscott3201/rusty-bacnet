@@ -195,6 +195,7 @@ async fn reconnect_then_heartbeat_then_identity_error_precedence() {
             initial_delay_ms: 0,
             max_delay_ms: 1,
             max_retries: 1,
+            retry_forever: false,
         });
     let states = transport.connection_state_changes();
     let error = transport.start().await.unwrap_err();

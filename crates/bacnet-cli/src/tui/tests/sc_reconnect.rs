@@ -23,6 +23,7 @@ fn quick() -> ScReconnectConfig {
         initial_delay_ms: 100,
         max_delay_ms: 200,
         max_retries: 100,
+        retry_forever: false,
     }
 }
 

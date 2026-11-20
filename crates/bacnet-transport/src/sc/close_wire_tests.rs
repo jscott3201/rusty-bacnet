@@ -441,6 +441,7 @@ async fn a_stopping_node_reports_a_local_close_however_the_hub_answers() {
                 initial_delay_ms: 1,
                 max_delay_ms: 1,
                 max_retries: 3,
+                retry_forever: false,
             })
             .with_connector(move || {
                 redials.fetch_add(1, Ordering::SeqCst);

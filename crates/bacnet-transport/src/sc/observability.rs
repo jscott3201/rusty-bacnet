@@ -184,11 +184,12 @@ impl ScDisconnectCause {
 
 /// A hub-connector event, in the order the connector acts.
 ///
-/// - A failover reads `Disconnected`, then `ReconnectAttempt` and
+/// - After primary loss, finite recovery reads `Disconnected`, then `ReconnectAttempt` and
 ///   `ConnectFailed` for each failed primary attempt, then `FailoverEngaged`
 ///   and `Connected` on the failover hub.
-/// - Losing the failover hub retries the primary first, then the failover
-///   hub, within each attempt; both share the attempt number.
+/// - Unlimited recovery and recovery after failover loss try the primary then
+///   the available failover. Both `ReconnectAttempt` events carry the same
+///   round number and backoff. The round number saturates at `u32::MAX`.
 /// - A primary restore reads `PrimaryRestored`, then `Connected` on the
 ///   primary. The replaced failover connection gets no `Disconnected`.
 /// - While on the failover hub, each restore probe of the primary that
@@ -224,14 +225,14 @@ pub enum ScEvent {
         /// Why it failed.
         cause: ScDisconnectCause,
     },
-    /// A reconnect attempt is dialling `hub`, after waiting `backoff`.
+    /// A reconnect round is dialling `hub`.
     #[non_exhaustive]
     ReconnectAttempt {
         /// The hub being dialled.
         hub: ScActiveHub,
-        /// The attempt number, from 1.
+        /// The round number, from 1, saturating at `u32::MAX`.
         attempt: u32,
-        /// The jittered delay waited before this attempt.
+        /// The jittered delay waited once at the start of this round.
         backoff: Duration,
     },
     /// The primary hub could not be reached; the connector turns to the
@@ -250,8 +251,8 @@ pub enum ScEvent {
     #[non_exhaustive]
     ReconnectGaveUp {
         /// Attempts made in this episode, the highest `attempt` number
-        /// reported. The single failover dial after the primary attempts
-        /// are used up is not counted.
+        /// reported. The final failover dial under finite recovery
+        /// is not counted.
         attempts: u32,
     },
 }

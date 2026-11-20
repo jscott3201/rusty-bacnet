@@ -1929,14 +1929,18 @@ client = BACnetClient(
 )
 ```
 
-All three `ScReconnect` arguments are keyword-only and have the defaults shown.
+All `ScReconnect` arguments are keyword-only. The example uses the default finite policy.
 The initial delay is the minimum reconnect sleep; exponential backoff and jitter
 stay within the configured minimum and maximum. Delays must be positive,
 `initial_delay_ms <= max_delay_ms`, and the maximum must not exceed 86,400,000 ms.
 Invalid settings raise `ValueError`; negative or overflowing unsigned integers
 raise `OverflowError`. These checks do not qualify deployment timing.
 
-`max_retries=0` still permits the initial connection and disables active-hub
+With `retry_forever=True`, each backoff round tries the primary followed by
+an available failover. The rounds continue while a hub can still be retried,
+regardless of `max_retries`. Stopping the owner cancels recovery.
+
+With the default `retry_forever=False`, `max_retries=0` permits the initial connection and disables active-hub
 retries after loss. Passing a `ScReconnect` object to a non-SC client raises `ValueError`.
 Retries reuse the loaded TLS trust and operational identity, VMAC, UUID and
 heartbeat settings; credential files are loaded at entry, not reread on each
@@ -1980,9 +1984,12 @@ already behind it. `kind` is `connected`, `disconnected`, `connect_failed`,
 `reconnect_attempt`, `failover_engaged`, `primary_restored`,
 `primary_restore_failed` or `reconnect_gave_up`; `hub` (`primary` or
 `failover`), `hub_vmac`, `cause`, `attempt` and `backoff` (seconds) are set
-where they apply and None elsewhere. Losing the primary reads
+where they apply and None elsewhere. In finite recovery, losing the primary reads
 `disconnected`, a `reconnect_attempt` and `connect_failed` per failed primary
-attempt, then `failover_engaged` and `connected` on the failover hub. While on
+attempt, then `failover_engaged` and `connected` on the failover hub.
+Unlimited recovery reports attempts on the primary and available failover in
+that order. Both carry the same round number and backoff. Round numbers start
+at one and saturate at 2**32 − 1. While on
 the failover hub, each restore probe of the primary that fails reads one
 `primary_restore_failed` (`hub` is `primary`), at most one per restore
 interval (#1828).

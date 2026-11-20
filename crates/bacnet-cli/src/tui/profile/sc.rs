@@ -149,6 +149,7 @@ impl Sc {
             initial_delay_ms: self.reconnect_initial_delay_ms,
             max_delay_ms: self.reconnect_max_delay_ms,
             max_retries: self.reconnect_max_retries,
+            retry_forever: false,
         }
     }
 

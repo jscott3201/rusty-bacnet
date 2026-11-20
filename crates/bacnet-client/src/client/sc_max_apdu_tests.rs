@@ -315,6 +315,7 @@ async fn client_max_apdu_length_reflects_sc_failover_transport_limit() {
             initial_delay_ms: 25,
             max_delay_ms: 25,
             max_retries: 1,
+            retry_forever: false,
         })
         .with_failover(failover_client);
 

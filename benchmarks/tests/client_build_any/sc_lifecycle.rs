@@ -159,6 +159,7 @@ async fn erased_sc_preserves_heartbeat_retry_spacing_and_stop_cancels_pending_tl
                     initial_delay_ms: 120,
                     max_delay_ms: 120,
                     max_retries: 10,
+                    retry_forever: false,
                 })
                 .build_any(),
         ),

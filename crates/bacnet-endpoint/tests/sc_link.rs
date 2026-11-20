@@ -130,6 +130,7 @@ fn reconnect(max_retries: u32) -> ScReconnectConfig {
         initial_delay_ms: 200,
         max_delay_ms: 200,
         max_retries,
+        retry_forever: false,
     }
 }
 
@@ -664,6 +665,7 @@ async fn sc_stop_while_both_hubs_are_lost_ends_the_redials() {
         initial_delay_ms: 50,
         max_delay_ms: 50,
         max_retries: 1_000,
+        retry_forever: false,
     };
     let mut session = endpoint(hubs, [0x02, 0, 0, 0, 0, 0x39], Some(retries)).await;
     let monitor = session.sc_link().unwrap();

@@ -108,6 +108,7 @@ async fn sc_server_uuid_wire_bytes_survive_reconnect_and_fresh_builds() {
                             initial_delay_ms: 10,
                             max_delay_ms: 10,
                             max_retries: 1,
+                            retry_forever: false,
                         })
                         .build(),
                 )

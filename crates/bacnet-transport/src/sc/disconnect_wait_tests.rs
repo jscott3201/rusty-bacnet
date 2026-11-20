@@ -138,6 +138,7 @@ async fn leaving_the_failover_hub_waits_for_the_disconnect_ack() {
                 initial_delay_ms: 25,
                 max_delay_ms: 25,
                 max_retries: 1,
+                retry_forever: false,
             })
             .with_connector(move || {
                 let (socket, probe) = recorder();
@@ -227,6 +228,7 @@ async fn a_stop_held_up_by_a_silent_direct_peer_never_redials_the_hub() {
             initial_delay_ms: 1,
             max_delay_ms: 1,
             max_retries: 100,
+            retry_forever: false,
         })
         .with_connector(move || {
             redials.fetch_add(1, Ordering::SeqCst);
