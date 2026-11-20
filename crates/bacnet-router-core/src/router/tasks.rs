@@ -111,10 +111,6 @@ impl Task {
         }
     }
 
-    pub(super) fn table_continuation(self) -> Option<(ReplyPlan, u32)> {
-        (self.kind == TaskKind::TableAck && self.cursor != 0).then_some((self.reply, self.cursor))
-    }
-
     /// A Network-Number-Is on `port`.
     pub(super) fn number_is(port: PortId) -> Self {
         Self::of(TaskKind::NumberIs, port)
@@ -141,11 +137,8 @@ fn write_with_header(
     header: Npdu<'_>,
     data: impl FnOnce(&mut [u8]) -> Option<usize>,
 ) -> Option<usize> {
-    let at = header.encoded_len();
-    let (head, rest) = scratch.split_at_mut_checked(at)?;
-    let len = data(rest)?;
-    header.encode_into(head).ok()?;
-    Some(at + len)
+    let at = header.encode_into(scratch).ok()?;
+    Some(at + data(&mut scratch[at..])?)
 }
 
 /// The routes from network `from` on that have a wire Port ID, ascending,
@@ -280,14 +273,14 @@ impl<
                     .min(501usize.saturating_sub(relayed + 1));
                 let per_ack = room / RoutingEntries::ENTRY_LEN;
                 let entries = wire_entries(&self.table, task.cursor);
-                let more = entries.clone().nth(per_ack).is_some();
-                let chunk = entries.take(per_ack);
-                let last = chunk.clone().last();
+                let mut remaining = entries.clone();
+                let last = remaining.by_ref().take(per_ack).last();
+                let more = remaining.next().is_some();
                 let len = if more && last.is_none() {
                     None
                 } else {
                     write_with_header(&mut self.scratch[..budget], header, |data| {
-                        RoutingEntries::write(chunk, data).ok()
+                        RoutingEntries::write(entries.take(per_ack), data).ok()
                     })
                 };
                 if more && len.is_some() {

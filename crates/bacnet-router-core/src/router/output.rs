@@ -304,9 +304,11 @@ pub(super) struct Outputs {
     pub(super) current: Current,
     tasks: [Task; QUEUE],
     len: usize,
-    /// The exact continuation of the last table chunk polled, while it
-    /// is still at the queue front. The cursor distinguishes later chunks.
-    last_table_ack: Option<(super::ReplyPlan, u32)>,
+    /// The last send owns the current front task at its current cursor.
+    /// Advancing or removing that task ends the ownership. Appending behind
+    /// it leaves the owner intact. Keeping the marker here leaves the
+    /// original requester's return addresses in just the task itself.
+    front_is_continuation: bool,
     /// The port of the last send polled.
     last_port: PortId,
 }
@@ -316,7 +318,7 @@ impl Outputs {
         current: Current::NONE,
         tasks: [Task::EMPTY; QUEUE],
         len: 0,
-        last_table_ack: None,
+        front_is_continuation: false,
         last_port: PortId(0),
     };
 
@@ -342,6 +344,7 @@ impl Outputs {
 
     /// Move the front task's cursor on.
     pub(super) fn advance(&mut self, cursor: u32) {
+        self.front_is_continuation = false;
         if let Some(task) = self.tasks[..self.len].first_mut() {
             task.cursor = cursor;
         }
@@ -349,6 +352,7 @@ impl Outputs {
 
     /// Drop the front task.
     pub(super) fn pop(&mut self) {
+        self.front_is_continuation = false;
         if self.len > 0 {
             // The front slot moves to the back one swap at a time, with no
             // memmove (`swap_apart`).
@@ -439,13 +443,10 @@ impl<
     /// The next action: the current output's next send, or the next task's
     /// first, or [`Action::Idle`].
     pub(super) fn poll(&mut self) -> Action<'_> {
+        self.out.front_is_continuation = false;
         loop {
             if let Some((port, broadcast)) = self.next_target() {
-                self.out.last_table_ack = if self.out.current.table_ack {
-                    self.out.front().and_then(|task| task.table_continuation())
-                } else {
-                    None
-                };
+                self.out.front_is_continuation = self.out.current.table_ack;
                 self.out.last_port = port;
                 let current = &self.out.current;
                 return Action::Send(Send {
@@ -550,9 +551,7 @@ impl<
     /// The caller refused the send just polled: end the table answer it
     /// belonged to. [`Router::refused`](super::Router::refused) counts it.
     pub(super) fn end_refused_answer(&mut self) {
-        if let Some(continued) = self.out.last_table_ack.take()
-            && self.out.front().and_then(|task| task.table_continuation()) == Some(continued)
-        {
+        if self.out.front_is_continuation {
             self.out.pop();
         }
     }
