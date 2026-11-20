@@ -1150,9 +1150,10 @@ Code that handled `application_data` reads should expect:
 - **Failed typed reads.** A typed constructed property whose octets don't
   decode as its elements (a malformed Recipient_List, say) falls back to
   `tagged` too.
-- **Values written as `application_data`.** A value written with
-  `PropertyValue.application_data(octets)` reads back `tagged`, and the two
-  are not equal: compare `.octets`, or compare with
+- **Values written as `application_data`.** When a property has no typed
+  form and its context tags form a readable tree, octets written with
+  `PropertyValue.application_data(octets)` read back as `tagged`. Compare
+  the write and read values by `.octets`, or compare the read value with
   `PropertyValue.tagged(octets)`.
 
 The value doesn't say which object, property or vendor it came from: keep
