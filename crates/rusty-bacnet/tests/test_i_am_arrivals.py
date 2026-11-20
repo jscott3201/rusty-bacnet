@@ -291,10 +291,16 @@ class IAmArrivalTests(Arrivals):
         client = await endpoint.client()
         frames = await endpoint.frames()
         await client.who_is(scope="local", low=723, high=723)
-        frame = await self.next(frames)
+        # Startup's What-Is-Network-Number may precede the requested broadcast.
         _, port = self.to(await endpoint.local_address())
-        self.assertEqual((frame.direction, frame.peer, rb.decode_frame(frame.octets, frame.link).service),
-                         ("outbound", f"127.255.255.255:{port}", "who-is"))
+        async with asyncio.timeout(10):
+            async for frame in frames:
+                if frame.direction == "outbound":
+                    self.assertEqual(frame.peer, f"127.255.255.255:{port}")
+                    if rb.decode_frame(frame.octets, frame.link).service == "who-is":
+                        break
+            else:
+                self.fail("frame stream ended before the outbound Who-Is")
         await frames.aclose()
 
     async def test_an_endpoint_sees_arrivals_on_the_socket_its_roles_share(self):
