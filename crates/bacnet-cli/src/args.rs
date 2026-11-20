@@ -662,8 +662,8 @@ pub(crate) enum Command {
         /// Send directly to this local router address and collect its answers.
         #[arg(long, value_name = "ADDRESS")]
         via: Option<String>,
-        /// Ask only for the router to this network number.
-        #[arg(long)]
+        /// Ask only for the router to this network number (1 to 65534).
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=65534))]
         dnet: Option<u16>,
         /// Seconds to wait for responses.
         #[arg(long, default_value_t = 3)]

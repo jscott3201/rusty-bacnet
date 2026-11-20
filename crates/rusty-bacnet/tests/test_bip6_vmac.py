@@ -19,6 +19,7 @@ import unittest
 from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
+    BacnetError,
     BacnetTransportError,
     ObjectIdentifier,
     ObjectType,
@@ -174,6 +175,18 @@ class Bip6PairTests(unittest.IsolatedAsyncioTestCase):
                 vmac = await asyncio.wait_for(
                     first.resolve_vmac(f"[::1]:{port}"), 10)
         self.assertEqual(vmac, "bip6:0x0010E2")
+
+    async def test_reserved_router_network_is_refused_before_vmac_resolution(self) -> None:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as peer:
+            peer.bind(("::1", 0))
+            peer.setblocking(False)
+            destination = f"[::1]:{peer.getsockname()[1]}"
+            async with loopback_client() as client:
+                for number in (0, 65535):
+                    with self.assertRaisesRegex(BacnetError, f"network {number}.*1..=65534"):
+                        await client.discover_routers(number, destination=destination)
+                with self.assertRaises(BlockingIOError):
+                    peer.recvfrom(2048)  # No VAR or router query reached the uncached peer.
 
     async def test_resolve_vmac_times_out_with_a_transport_error(self) -> None:
         with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as silent:

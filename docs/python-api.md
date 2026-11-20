@@ -2600,7 +2600,9 @@ Who-Has or not, as an async iterator of `IHave`.
 Pass a local router address such as `destination="192.0.2.1:47808"` or a
 router's MAC bytes to collect only that router's own answers. The router can
 relay a question about an unknown network. An IPv6 socket address may need
-VMAC resolution before the collection window. Omit `destination` to
+VMAC resolution before the collection window. A B/IP destination must name
+one station. The host uses its local subnet masks to reject subnet broadcasts
+at any UDP port. Omit `destination` to
 broadcast a Who-Is-Router-To-Network for `network`, or every network, and
 collect the routers that answer for `wait` seconds: one frozen
 `DiscoveredRouter` per router, with its `mac` (the next hop) and the
@@ -2738,8 +2740,8 @@ first on the next call, reads complete one at a time, and each iterator
 belongs to one event loop. Iteration ends once the client stops.
 
 `who_has_replies()` and `discover_routers()` hold the started client for
-their whole `wait`, so `stop()`, or leaving `async with`, waits for them
-to finish.
+address resolution, sending and their collection window. Stopping the client
+waits for an active call to finish or be cancelled.
 
 #### `discovered_devices() -> list[DiscoveredDevice]`
 

@@ -12,6 +12,30 @@ use bacnet_bip_core::node::Groups;
 
 use super::BipTransport;
 
+/// Whether a directed router query can address the station at `mac`.
+/// The local host can identify its own subnet broadcasts even at
+/// different UDP ports. For an off-link peer, its subnet mask is unknown.
+/// Looking up an interface consults the OS without sending a datagram.
+pub async fn is_router_station(mac: &[u8]) -> std::io::Result<bool> {
+    let Ok(address) = address_from_slice(mac) else {
+        return Ok(false);
+    };
+    let ip = *address.ip();
+    if address.port() == 0 || ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast() {
+        return Ok(false);
+    }
+    // A subnet with a broadcast has at least two host bits, all ones in
+    // the broadcast address. Other addresses need no interface lookup.
+    if ip.to_bits() & 3 != 3 {
+        return Ok(true);
+    }
+    tokio::task::spawn_blocking(move || {
+        let interface = crate::local_addresses::interface_of(ip)?;
+        Ok(interface.and_then(|local| local.subnet_broadcast(ip)) != Some(ip))
+    })
+    .await?
+}
+
 /// A B/IP link's group destinations, as [`TransportPort::is_group_destination`](crate::port::TransportPort::is_group_destination)
 /// reads them (#1479): this link's broadcast MAC, the limited broadcast
 /// 255.255.255.255 or the configured broadcast IP at any UDP port, and any

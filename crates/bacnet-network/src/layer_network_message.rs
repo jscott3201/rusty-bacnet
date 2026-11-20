@@ -251,7 +251,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             Some(mac) if message_type == NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK => {
                 if !self.is_routing_table_target(mac)
                     || self.transport.is_group_destination(mac)
-                    || !router_station(self.transport.data_link(), mac)
+                    || !router_station(self.transport.data_link(), mac).await?
                 {
                     return Err(Error::Encoding(
                         "directed router discovery needs one local station's unicast address"
@@ -270,18 +270,22 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
 /// Check the form of a station's MAC on the sending link. In particular
 /// six octets represent an IP and port only on B/IP.
-fn router_station(link: Option<bacnet_types::data_link::DataLink>, mac: &[u8]) -> bool {
+async fn router_station(
+    link: Option<bacnet_types::data_link::DataLink>,
+    mac: &[u8],
+) -> Result<bool, Error> {
     use bacnet_types::data_link::DataLink;
 
-    match link {
-        Some(DataLink::Bip) => bacnet_transport::bvll::decode_bip_mac(mac)
-            .is_ok_and(|(ip, port)| ip != [0; 4] && port != 0),
+    Ok(match link {
+        Some(DataLink::Bip) => bacnet_transport::bip::is_router_station(mac)
+            .await
+            .map_err(Error::Transport)?,
         Some(DataLink::Bip6) => mac.len() == 3,
         Some(DataLink::Mstp) => matches!(mac, [0..=254]),
         Some(DataLink::Sc) => mac.len() == 6 && mac != bacnet_transport::sc_frame::UNKNOWN_VMAC,
         Some(DataLink::Ethernet) => mac.len() == 6 && mac != [0; 6],
         _ => !mac.is_empty(),
-    }
+    })
 }
 
 #[cfg(test)]

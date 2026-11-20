@@ -280,7 +280,7 @@ async fn a_directed_router_query_never_falls_back_to_broadcast() {
     use bacnet_transport::test_transport::{SendMode, TestTransport};
     use bacnet_types::data_link::DataLink;
 
-    let broadcast = [192, 0, 2, 255, 0xba, 0xc0];
+    let broadcast = [127, 0, 0, 1, 0xba, 0xc0];
     let group = [239, 0, 0, 1, 0xba, 0xc0];
     let transport = TestTransport::builder()
         .data_link(DataLink::Bip)
@@ -296,6 +296,10 @@ async fn a_directed_router_query_never_falls_back_to_broadcast() {
         &broadcast[..],
         &group,
         &[],
+        // The loopback /8's subnet broadcast can reach multiple sockets at
+        // another port, independently of the configured logical broadcast.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        &[127, 255, 255, 255, 0xba, 0xc1],
         &[1, 2],
         &[0, 0, 0, 0, 0xba, 0xc0],
         &[192, 0, 2, 1, 0, 0],
@@ -313,7 +317,8 @@ async fn a_directed_router_query_never_falls_back_to_broadcast() {
         );
     }
     assert!(log.is_empty());
-    let target = [192, 0, 2, 1, 0xba, 0xc0];
+    // The configured logical broadcast IP names one station at another port.
+    let target = [127, 0, 0, 1, 0xba, 0xc1];
     layer
         .send_network_message(
             NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
@@ -327,16 +332,16 @@ async fn a_directed_router_query_never_falls_back_to_broadcast() {
     layer.stop().await.unwrap();
 }
 
-#[test]
-fn a_router_address_uses_the_station_grammar_of_its_link() {
+#[tokio::test(start_paused = true)]
+async fn a_router_address_uses_the_station_grammar_of_its_link() {
     use bacnet_types::data_link::DataLink::*;
-    assert!(router_station(Some(Mstp), &[0]));
-    assert!(!router_station(Some(Mstp), &[255]));
-    assert!(router_station(Some(Bip6), &[0, 0, 0]));
-    assert!(!router_station(Some(Bip6), &[1, 2]));
+    assert!(router_station(Some(Mstp), &[0]).await.unwrap());
+    assert!(!router_station(Some(Mstp), &[255]).await.unwrap());
+    assert!(router_station(Some(Bip6), &[0, 0, 0]).await.unwrap());
+    assert!(!router_station(Some(Bip6), &[1, 2]).await.unwrap());
     let mac = [2, 1, 2, 3, 0, 0];
-    assert!(router_station(Some(Sc), &mac));
-    assert!(router_station(Some(Ethernet), &mac));
-    assert!(!router_station(Some(Bip), &mac));
-    assert!(!router_station(Some(Sc), &[0; 6]));
+    assert!(router_station(Some(Sc), &mac).await.unwrap());
+    assert!(router_station(Some(Ethernet), &mac).await.unwrap());
+    assert!(!router_station(Some(Bip), &mac).await.unwrap());
+    assert!(!router_station(Some(Sc), &[0; 6]).await.unwrap());
 }

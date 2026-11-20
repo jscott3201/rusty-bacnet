@@ -612,7 +612,7 @@ Usage: bacnet whois-router [OPTIONS]
 Options:
 
 - `--via <ADDRESS>`: Send directly to this local router address and collect its answers.
-- `--dnet <DNET>`: Ask only for the router to this network number.
+- `--dnet <DNET>`: Ask only for the router to this network number (1 to 65534).
 - `--wait <WAIT>`: Seconds to wait for responses. Default: `3`.
 
 ### bacnet routing-table

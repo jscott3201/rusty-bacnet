@@ -645,8 +645,9 @@ network) and collect the routers that answer for `wait` seconds, one
 per router MAC in the order first heard; for a `network`, only the
 routers listing it. An empty list when none answer. `network` 0 or
 65535 raises BacnetError (#1850). `wait` is 0 to 3600 seconds
-(`ValueError` otherwise). It holds the started client for the
-whole wait, so `stop()` waits up to `wait` seconds for it.
+(`ValueError` otherwise). It holds the started client through
+resolution, sending and collection. `stop()` waits for the call
+to finish or be cancelled.
 
 ### BACnetClient.routing_table
 

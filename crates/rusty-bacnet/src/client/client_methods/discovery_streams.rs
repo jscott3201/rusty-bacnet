@@ -78,8 +78,8 @@ impl BACnetClient {
     /// `DiscoveredRouter` per router MAC, in the order first heard. For a
     /// `network`, only the routers that list it. No answer is an empty
     /// list. `network` 0 and 65535 raise `BacnetError`. It holds the
-    /// started client for the whole wait, so `stop()` (or leaving
-    /// `async with`) waits up to `wait` seconds for it.
+    /// started client through address resolution, the send and collection.
+    /// `stop()` waits for the call to finish or be cancelled.
     #[pyo3(signature = (network=None, *, destination=None, wait=3.0))]
     fn discover_routers<'py>(
         &self,
@@ -89,6 +89,11 @@ impl BACnetClient {
         wait: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let wait = discover_wait(wait)?;
+        if let Some(network @ (0 | u16::MAX)) = network {
+            return Err(crate::errors::BacnetError::new_err(format!(
+                "network {network} is not a network number a router can reach; use 1..=65534"
+            )));
+        }
         let destination = destination
             .map(super::routing_table::RouterArg::read)
             .transpose()?;

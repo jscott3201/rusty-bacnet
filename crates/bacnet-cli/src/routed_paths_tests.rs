@@ -10,6 +10,22 @@ fn parse<const N: usize>(args: [&'static str; N]) -> Result<Cli, clap::Error> {
     })
 }
 
+#[test]
+fn a_reserved_router_network_is_rejected_by_clap_before_ipv6_resolution() {
+    for network in ["0", "65535"] {
+        let error = parse([
+            "bacnet",
+            "whois-router",
+            "--dnet",
+            network,
+            "--via",
+            "[::1]:47808",
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+}
+
 fn limit(router: &str, network: u16, max_npdu: u16) -> LimitArg {
     LimitArg {
         router: router.to_owned(),

@@ -180,7 +180,7 @@ and read at the address that claims it, a routed one through its router.
 | `read_trend(device, log, cursor, page_size)` | one page of a Trend Log, Trend Log Multiple, Event Log or Audit Log, with where to read next |
 | `alarms(device, after)` | one GetEventInformation answer |
 | `alarm_summary(device)`, `enrollment_summary(device, request)` | one GetAlarmSummary or GetEnrollmentSummary answer (phase 1) |
-| `discover_routers(network, wait)` | one Who-Is-Router-To-Network, under the local network's rate, and the routers that answered (phase 1) |
+| `discover_routers(network, None, wait, deadline)` | one Who-Is-Router-To-Network, under the local network's rate, and the routers that answered (phase 1) |
 
 A property the device can't give is a typed `PropertyError`, not text: the
 device's error (class and code, a structured Error PDU reduced to both),
