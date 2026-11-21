@@ -12911,7 +12911,7 @@ transport copies every frame once; the decode runs in the reading task.
 To carry what the records need, `decode_npdu_layer`'s `DecodedApdu` now holds
 the I-Am's decoded parameters (`i_am: Option<Result<IAmRequest, String>>`, in
 place of `device: Option<u32>`; take the instance from
-`i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`), and
+`i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`) and the DADR (`dest_address`), and
 `decode::frame::Link` the typed origin (`origin`) and the source MAC the frame
 names (`source_mac`).
 

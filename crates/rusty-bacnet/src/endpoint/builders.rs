@@ -151,9 +151,10 @@ macro_rules! endpoint_builders {
 
             /// Add a Binary Input object (before start).
             ///
-            /// `present_value` sets Present_Value directly, after Polarity is
-            /// applied. Left as `None`, the object keeps its unset
-            /// physical-input state.
+            /// `present_value` is the logical value (already after Polarity):
+            /// it sets Present_Value, and the object derives its physical
+            /// input state from it. Left as `None`, the object keeps its
+            /// unset physical-input state.
             ///
             /// Profile keywords as on `add_analog_input`, `polarity`,
             /// `alarm_value` and the delays as on `BACnetServer.add_binary_input`.
@@ -383,7 +384,7 @@ macro_rules! endpoint_builders {
                 })
             }
 
-            /// Add a Multi-state Value before startup.
+            /// Add a Multi-state Value object before startup.
             ///
             /// `present_value` is the initial value. With
             /// `present_value_access="commandable"` (the default) it sets

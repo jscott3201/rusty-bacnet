@@ -326,6 +326,10 @@ impl FrameTap {
     #[inline(never)]
     fn publish(&self, direction: TapDirection, link: DataLink, peer: TapPeer, bytes: &[u8]) {
         let bytes = Bytes::copy_from_slice(bytes);
+        // A rejected frame is counted while this lock is held: a receiver's
+        // `close` takes the lock after sealing its queue, so its final count
+        // includes a rejection in flight. Keep the count under the lock;
+        // `record_with_overflow_in_flight_for_test` mirrors this loop.
         let mut sinks = self.lock_sinks();
         // Stamped under the lock, so that frames two threads report at once
         // are queued in the order of their timestamps.
@@ -379,8 +383,8 @@ pub struct OverflowInFlight {
 #[cfg(any(test, feature = "test-support"))]
 impl OverflowInFlight {
     /// Block until every receiver that met the full queue has sealed it
-    /// (closed it or been dropped). Yields, with no sleep, and panics after
-    /// ten seconds.
+    /// (closed it or been dropped), then hold the publisher's lock for a
+    /// further 25 ms. Panics if no receiver seals within ten seconds.
     pub fn wait_until_sealed(&self) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !self.full.iter().all(mpsc::Sender::is_closed) {
@@ -393,10 +397,7 @@ impl OverflowInFlight {
         // A close that does not wait for the count reads it now. Give it
         // 25 ms to; one that waits stays blocked, so this never fails a
         // correct close.
-        let grace = std::time::Instant::now() + std::time::Duration::from_millis(25);
-        while std::time::Instant::now() < grace {
-            std::thread::yield_now();
-        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
 

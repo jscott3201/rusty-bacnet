@@ -9918,8 +9918,9 @@ class BipEndpoint:
     def add_binary_input(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Register a Binary Input before start.
 
-        ``present_value`` sets Present_Value directly, after Polarity is
-        applied. Left as ``None``, the object keeps its unset physical-input
+        ``present_value`` is the logical value (already after Polarity): it
+        sets Present_Value, and the object derives its physical input state
+        from it. Left as ``None``, the object keeps its unset physical-input
         state.
 
         Profile keywords as on ``add_analog_input``, ``polarity``,
@@ -10199,8 +10200,9 @@ class ScEndpoint:
     def add_binary_input(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Register a Binary Input before start.
 
-        ``present_value`` sets Present_Value directly, after Polarity is
-        applied. Left as ``None``, the object keeps its unset physical-input
+        ``present_value`` is the logical value (already after Polarity): it
+        sets Present_Value, and the object derives its physical input state
+        from it. Left as ``None``, the object keeps its unset physical-input
         state.
 
         Profile keywords as on ``add_analog_input``, ``polarity``,
@@ -10464,8 +10466,9 @@ class MstpEndpoint:
     def add_binary_input(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Register a Binary Input before start.
 
-        ``present_value`` sets Present_Value directly, after Polarity is
-        applied. Left as ``None``, the object keeps its unset physical-input
+        ``present_value`` is the logical value (already after Polarity): it
+        sets Present_Value, and the object derives its physical input state
+        from it. Left as ``None``, the object keeps its unset physical-input
         state.
 
         Profile keywords as on ``add_analog_input``, ``polarity``,
