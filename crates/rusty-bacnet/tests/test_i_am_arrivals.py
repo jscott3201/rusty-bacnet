@@ -140,6 +140,25 @@ class IAmArrivalTests(Arrivals):
         after = time.monotonic(), time.time()
         test_frames.FrameTests.assert_captured_between(self, records, before, after)
 
+    async def test_routed_arrivals_keep_both_npdu_addresses(self):
+        import pickle
+        client = await self.client()
+        arrivals = await client.i_am_arrivals()
+        peer = self.peer()
+        target = self.to(await self.address_of(client))
+        for dnet, dadr in ((9, bytes([17, 18])), (9, b""), (65535, b"")):
+            # Include both a destination (DNET/DADR) and a different source (SNET/SADR).
+            npdu = (bytes([1, 0x28]) + dnet.to_bytes(2, "big") + bytes([len(dadr)]) + dadr
+                    + bytes([0, 5, 1, 7, 255]) + i_am(77))
+            peer.send(bvll(ORIGINAL_UNICAST, npdu), target)
+            record = await self.next(arrivals)
+            self.assertEqual((record.source_network, record.source_address), (5, bytes([7])))
+            self.assertEqual((record.destination_network, record.destination_address), (dnet, dadr))
+            self.assertEqual(pickle.loads(pickle.dumps(record)), record)
+        peer.send(bvll(ORIGINAL_UNICAST, local(i_am(77))), target)
+        direct = await self.next(arrivals)
+        self.assertEqual((direct.destination_network, direct.destination_address), (None, None))
+
     async def test_a_forwarded_i_am_names_the_device_and_the_bbmd(self):
         client = await self.client()
         target = self.to(await self.address_of(client))

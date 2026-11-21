@@ -2208,6 +2208,8 @@ Properties:
 - `forwarded: bool`: True when the frame carried an origin other than its sender: a BBMD forwarded it. Never on SC or MS/TP.
 - `source_network: Optional[int]`: SNET, when a router relayed the I-Am from another network.
 - `source_address: Optional[bytes]`: SADR, the device's MAC on `source_network`.
+- `destination_network: Optional[int]`: DNET carried by the received NPDU.
+- `destination_address: Optional[bytes]`: DADR, empty for a network broadcast and absent without a DNET.
 - `broadcast: bool`: A link broadcast or a broadcast on a network. False for an MS/TP I-Am one station unicast to another, which the bus lets this station hear.
 - `device_address: Optional[str]`: The device's address as `BACnetClient.device()` takes it: `link_source` for a device on this link, `"5:0x07"` for one a router relayed. None when those name no one station. The calls that take an `address` don't take `"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`, `read_range`, `read_log_page`, `write_property`, `atomic_read_file` and `atomic_write_file` take `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`.
 - `next_hop_router: Optional[str]`: The router that relayed it, when `source_network` is set: its `link_source`.

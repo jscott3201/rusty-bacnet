@@ -9486,6 +9486,12 @@ BACnet/SC handshake; a client's builders start the transport. After `stop()`
 a receiver keeps waiting, since the transport may start again; `recv()`
 returns `None` once the transport is dropped and the queue is empty.
 
+`FrameTapReceiver::close()` unsubscribes, discards the queued frames and
+returns the final overflow count. It waits for a publisher that met the full
+queue at that moment, so the count includes that frame; reading `dropped()`
+just before a drop can miss it. `IAmArrivals::close()` does the same for an
+arrival subscription.
+
 The management, FDT and fanout counters count what this transport does as a
 BBMD (ACKs sent, registrations admitted, broadcasts forwarded). They stay at
 zero unless the client runs as one, from `bip_builder().mode(BipMode::Bbmd(..))`
@@ -12926,9 +12932,11 @@ the stack takes: a Forwarded-NPDU's origin, Annex J.2.5, else the UDP source;
 the source VMAC on B/IPv6, the original source's when forwarded, Annex U.2.9;
 the originating VMAC on SC, Annex AB.5.3; the station on MS/TP),
 `original_source`, `forwarded` (an origin other than the link sender),
-`source_network` (SNET and SADR, Clause 6.2.2; `link_source` is then the
+`source` (SNET and SADR, Clause 6.2.2; `link_source` is then the
 router, Clause 6.5.4, which a node may take as that network's router, Clause
-6.5.3), `broadcast` (link or network) and `missed_before`. `device_address()`,
+6.5.3), `destination` (DNET and DADR as the NPDU carried them, an empty DADR
+for a network broadcast, `None` without a DNET), `broadcast` (link or
+network) and `missed_before`. `device_address()`,
 `next_hop_router()` and `forwarding_bbmd()` say it as a scanner asks it.
 `IAmArrival::from_frame` reads one `TappedFrame`.
 
@@ -12951,7 +12959,7 @@ transport copies every frame once; the decode runs in the reading task.
 To carry what the records need, `decode_npdu_layer`'s `DecodedApdu` now holds
 the I-Am's decoded parameters (`i_am: Option<Result<IAmRequest, String>>`, in
 place of `device: Option<u32>`; take the instance from
-`i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`), and
+`i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`) and the DADR (`dest_address`), and
 `decode::frame::Link` the typed origin (`origin`) and the source MAC the frame
 names (`source_mac`).
 

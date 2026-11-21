@@ -182,9 +182,144 @@ def add_analog_input(
 ) -> None
 ```
 
+Register an Analog Input before start.
+
+`present_value` (a finite number, default 0.0) sets Present\_Value
+directly.
+
 Profile keywords as on `BACnetServer.add_analog_input`: each
 provisions its optional row, served only when given. The parameter
 keywords set those parameters as there, with the same checks.
+
+### BipEndpoint.add_analog_output
+
+```python
+def add_analog_output(
+    self,
+    instance: int,
+    name: str,
+    units: EngineeringUnits | int = 62,
+    *,
+    present_value: float | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register an Analog Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### BipEndpoint.add_binary_output
+
+```python
+def add_binary_output(
+    self,
+    instance: int,
+    name: str,
+    *,
+    present_value: int | None = None,
+    polarity: Polarity | int = 0,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Binary Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### BipEndpoint.add_multistate_input
+
+```python
+def add_multistate_input(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_values: list[int] | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Input before start.
+
+`present_value` sets Present\_Value directly. `None` keeps the
+object type's default.
+
+### BipEndpoint.add_multistate_output
+
+```python
+def add_multistate_output(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### BipEndpoint.add_multistate_value
+
+```python
+def add_multistate_value(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_values: list[int] | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Value before start.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
 
 ### BipEndpoint.add_analog_value
 
@@ -195,6 +330,7 @@ def add_analog_value(
     name: str,
     units: EngineeringUnits | int = 62,
     *,
+    present_value: float | None = None,
     present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
     value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
@@ -213,6 +349,14 @@ def add_analog_value(
 ```
 
 Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
+
 Access, Value\_Source, profile and parameter keywords as on
 `BACnetServer.add_analog_value`; tracking on a commandable object
 raises ValueError.
@@ -225,6 +369,7 @@ def add_binary_input(
     instance: int,
     name: str,
     *,
+    present_value: int | None = None,
     polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
@@ -234,6 +379,13 @@ def add_binary_input(
     time_delay_normal: int | None = None,
 ) -> None
 ```
+
+Register a Binary Input before start.
+
+`present_value` is the logical value (already after Polarity): it
+sets Present\_Value, and the object derives its physical input state
+from it. Left as `None`, the object keeps its unset physical-input
+state.
 
 Profile keywords as on `add_analog_input`, `polarity`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_input`.
@@ -246,6 +398,7 @@ def add_binary_value(
     instance: int,
     name: str,
     *,
+    present_value: int | None = None,
     present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
     value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
@@ -261,6 +414,14 @@ def add_binary_value(
 ```
 
 Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
+
 Access, Value\_Source and profile keywords as on `add_analog_value`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 
@@ -553,9 +714,144 @@ def add_analog_input(
 ) -> None
 ```
 
+Register an Analog Input before start.
+
+`present_value` (a finite number, default 0.0) sets Present\_Value
+directly.
+
 Profile keywords as on `BACnetServer.add_analog_input`: each
 provisions its optional row, served only when given. The parameter
 keywords set those parameters as there, with the same checks.
+
+### ScEndpoint.add_analog_output
+
+```python
+def add_analog_output(
+    self,
+    instance: int,
+    name: str,
+    units: EngineeringUnits | int = 62,
+    *,
+    present_value: float | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register an Analog Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### ScEndpoint.add_binary_output
+
+```python
+def add_binary_output(
+    self,
+    instance: int,
+    name: str,
+    *,
+    present_value: int | None = None,
+    polarity: Polarity | int = 0,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Binary Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### ScEndpoint.add_multistate_input
+
+```python
+def add_multistate_input(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_values: list[int] | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Input before start.
+
+`present_value` sets Present\_Value directly. `None` keeps the
+object type's default.
+
+### ScEndpoint.add_multistate_output
+
+```python
+def add_multistate_output(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### ScEndpoint.add_multistate_value
+
+```python
+def add_multistate_value(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_values: list[int] | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Value before start.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
 
 ### ScEndpoint.add_analog_value
 
@@ -566,6 +862,7 @@ def add_analog_value(
     name: str,
     units: EngineeringUnits | int = 62,
     *,
+    present_value: float | None = None,
     present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
     value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
@@ -584,6 +881,14 @@ def add_analog_value(
 ```
 
 Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
+
 Access, Value\_Source, profile and parameter keywords as on
 `BACnetServer.add_analog_value`; tracking on a commandable object
 raises ValueError.
@@ -596,6 +901,7 @@ def add_binary_input(
     instance: int,
     name: str,
     *,
+    present_value: int | None = None,
     polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
@@ -605,6 +911,13 @@ def add_binary_input(
     time_delay_normal: int | None = None,
 ) -> None
 ```
+
+Register a Binary Input before start.
+
+`present_value` is the logical value (already after Polarity): it
+sets Present\_Value, and the object derives its physical input state
+from it. Left as `None`, the object keeps its unset physical-input
+state.
 
 Profile keywords as on `add_analog_input`, `polarity`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_input`.
@@ -617,6 +930,7 @@ def add_binary_value(
     instance: int,
     name: str,
     *,
+    present_value: int | None = None,
     present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
     value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
@@ -632,6 +946,14 @@ def add_binary_value(
 ```
 
 Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
+
 Access, Value\_Source and profile keywords as on `add_analog_value`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 
@@ -896,9 +1218,144 @@ def add_analog_input(
 ) -> None
 ```
 
+Register an Analog Input before start.
+
+`present_value` (a finite number, default 0.0) sets Present\_Value
+directly.
+
 Profile keywords as on `BACnetServer.add_analog_input`: each
 provisions its optional row, served only when given. The parameter
 keywords set those parameters as there, with the same checks.
+
+### MstpEndpoint.add_analog_output
+
+```python
+def add_analog_output(
+    self,
+    instance: int,
+    name: str,
+    units: EngineeringUnits | int = 62,
+    *,
+    present_value: float | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register an Analog Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### MstpEndpoint.add_binary_output
+
+```python
+def add_binary_output(
+    self,
+    instance: int,
+    name: str,
+    *,
+    present_value: int | None = None,
+    polarity: Polarity | int = 0,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Binary Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### MstpEndpoint.add_multistate_input
+
+```python
+def add_multistate_input(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_values: list[int] | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Input before start.
+
+`present_value` sets Present\_Value directly. `None` keeps the
+object type's default.
+
+### MstpEndpoint.add_multistate_output
+
+```python
+def add_multistate_output(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Output before start.
+
+`present_value` sets Relinquish\_Default. The priority array starts
+empty, so Present\_Value reads as that value until something is
+commanded. `None` keeps the object type's default.
+
+### MstpEndpoint.add_multistate_value
+
+```python
+def add_multistate_value(
+    self,
+    instance: int,
+    name: str,
+    number_of_states: int,
+    *,
+    present_value: int | None = None,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_values: list[int] | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
+```
+
+Register a Multi-state Value before start.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
 
 ### MstpEndpoint.add_analog_value
 
@@ -909,6 +1366,7 @@ def add_analog_value(
     name: str,
     units: EngineeringUnits | int = 62,
     *,
+    present_value: float | None = None,
     present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
     value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
@@ -927,6 +1385,14 @@ def add_analog_value(
 ```
 
 Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
+
 Access, Value\_Source, profile and parameter keywords as on
 `BACnetServer.add_analog_value`; tracking on a commandable object
 raises ValueError.
@@ -939,6 +1405,7 @@ def add_binary_input(
     instance: int,
     name: str,
     *,
+    present_value: int | None = None,
     polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
@@ -948,6 +1415,13 @@ def add_binary_input(
     time_delay_normal: int | None = None,
 ) -> None
 ```
+
+Register a Binary Input before start.
+
+`present_value` is the logical value (already after Polarity): it
+sets Present\_Value, and the object derives its physical input state
+from it. Left as `None`, the object keeps its unset physical-input
+state.
 
 Profile keywords as on `add_analog_input`, `polarity`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_input`.
@@ -960,6 +1434,7 @@ def add_binary_value(
     instance: int,
     name: str,
     *,
+    present_value: int | None = None,
     present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
     value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
@@ -975,6 +1450,14 @@ def add_binary_value(
 ```
 
 Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+
+`present_value` is the initial value. With
+`present_value_access="commandable"` (the default) it sets
+Relinquish\_Default and the priority array starts empty, so
+Present\_Value reads as that value until something is commanded; with
+"writable" or "read\_only" it sets Present\_Value directly. `None`
+keeps the object type's default.
+
 Access, Value\_Source and profile keywords as on `add_analog_value`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 

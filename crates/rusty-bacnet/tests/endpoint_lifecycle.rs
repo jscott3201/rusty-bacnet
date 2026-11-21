@@ -58,6 +58,10 @@ impl Session for Resource {
 
 type Owner = Lifecycle<Resource, usize>;
 
+fn add<S>(owner: &Lifecycle<S, usize>, value: usize) -> Option<()> {
+    owner.with_open_registrations(|items| items.push(value))
+}
+
 #[tokio::test(start_paused = true)]
 async fn observations_end_at_close_admission_before_joining_teardown() {
     let closed = Arc::new(AtomicUsize::new(0));
@@ -109,7 +113,7 @@ async fn close_waits_for_admitted_start_then_drops_resource() {
         }
     });
     admitted.await.unwrap();
-    assert!(owner.push(7).is_err());
+    assert!(add(&owner, 7).is_none());
     let closing = tokio::spawn({
         let owner = owner.clone();
         async move { owner.close().await }
@@ -121,14 +125,14 @@ async fn close_waits_for_admitted_start_then_drops_resource() {
     closing.await.unwrap().unwrap();
     assert_eq!(live.load(Ordering::SeqCst), 0);
     assert!(owner.session.read().await.is_none());
-    owner.push(8).unwrap();
+    add(&owner, 8).unwrap();
 }
 
 #[tokio::test]
 async fn cancelled_start_settles_then_cleans_before_restoring_exact_registrations() {
     let owner = Owner::new();
-    owner.push(11).unwrap();
-    owner.push(22).unwrap();
+    add(&owner, 11).unwrap();
+    add(&owner, 22).unwrap();
     let live = Arc::new(AtomicUsize::new(0));
     let (entered, admitted) = oneshot::channel();
     let (release, held) = oneshot::channel();
@@ -150,7 +154,7 @@ async fn cancelled_start_settles_then_cleans_before_restoring_exact_registration
     admitted.await.unwrap();
     starting.abort();
     assert!(starting.await.unwrap_err().is_cancelled());
-    assert!(owner.push(33).is_err());
+    assert!(add(&owner, 33).is_none());
     assert_eq!(owner.pending_count(), 0);
     release.send(()).unwrap();
     owner.close().await.unwrap();
@@ -249,7 +253,7 @@ async fn cancelled_close_keeps_cleanup_owned_and_next_close_joins() {
     close.abort();
     assert!(close.await.unwrap_err().is_cancelled());
     assert_eq!(live.load(Ordering::SeqCst), 1);
-    assert!(owner.push(1).is_err());
+    assert!(add(&owner, 1).is_none());
     let next = tokio::spawn({
         let owner = owner.clone();
         async move { owner.close().await }
@@ -259,13 +263,13 @@ async fn cancelled_close_keeps_cleanup_owned_and_next_close_joins() {
     release.send(()).unwrap();
     next.await.unwrap().unwrap();
     assert_eq!(live.load(Ordering::SeqCst), 0);
-    owner.push(1).unwrap();
+    add(&owner, 1).unwrap();
 }
 
 #[tokio::test]
 async fn failed_start_restores_pending_and_permits_retry() {
     let owner = Owner::new();
-    owner.push(9).unwrap();
+    add(&owner, 9).unwrap();
     let error = owner
         .start(false, |objects| async move {
             assert_eq!(objects, vec![9]);
@@ -277,7 +281,7 @@ async fn failed_start_restores_pending_and_permits_retry() {
         Err(LifecycleError::Operation("setup failed"))
     ));
     assert_eq!(owner.pending_count(), 1);
-    owner.push(10).unwrap();
+    add(&owner, 10).unwrap();
     owner
         .start(false, |objects| async move {
             assert_eq!(objects, vec![9, 10]);
@@ -291,7 +295,7 @@ async fn failed_start_restores_pending_and_permits_retry() {
 #[tokio::test]
 async fn close_cancels_unbounded_preparation_and_restores_after_drop() {
     let owner = Owner::new();
-    owner.push(4).unwrap();
+    add(&owner, 4).unwrap();
     let live = Arc::new(AtomicUsize::new(0));
     let (entered, admitted) = oneshot::channel();
     let start = tokio::spawn({
@@ -309,7 +313,7 @@ async fn close_cancels_unbounded_preparation_and_restores_after_drop() {
         }
     });
     admitted.await.unwrap();
-    assert!(owner.push(5).is_err());
+    assert!(add(&owner, 5).is_none());
     owner.close().await.unwrap();
     assert!(matches!(
         start.await.unwrap(),
@@ -330,7 +334,7 @@ async fn close_cancels_unbounded_preparation_and_restores_after_drop() {
 #[tokio::test]
 async fn cancelled_waiter_drops_unbounded_preparation_before_close_returns() {
     let owner = Owner::new();
-    owner.push(4).unwrap();
+    add(&owner, 4).unwrap();
     let live = Arc::new(AtomicUsize::new(0));
     let (entered, admitted) = oneshot::channel();
     let start = tokio::spawn({
@@ -395,7 +399,7 @@ async fn session_start_error_releases_resources_before_registration_retry() {
     }
     let owner = Lifecycle::<FailedSession, usize>::new();
     let live = Arc::new(AtomicUsize::new(0));
-    owner.push(3).unwrap();
+    add(&owner, 3).unwrap();
     let result = owner
         .start(false, {
             let live = live.clone();
@@ -408,7 +412,7 @@ async fn session_start_error_releases_resources_before_registration_retry() {
     ));
     assert_eq!(live.load(Ordering::SeqCst), 0);
     assert_eq!(owner.pending_count(), 1);
-    owner.push(4).unwrap();
+    add(&owner, 4).unwrap();
     owner.close().await.unwrap();
 }
 
