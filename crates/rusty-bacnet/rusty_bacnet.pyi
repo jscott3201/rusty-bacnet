@@ -5168,7 +5168,9 @@ class BACnetClient:
     ``resolve_vmac``. So does a ``bip6:`` address on any other transport.
 
     For B/IP, ``interface`` accepts an IPv4 literal or the exact OS interface
-    name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+    name (the adapter friendly name on Windows), resolved once, at
+    construction, to one usable IPv4 address; ``broadcast_address`` is not
+    derived from it. See "Selecting an interface" in docs/python-api.md.
     """
 
     def __init__(
@@ -7083,7 +7085,9 @@ class BACnetServer:
         await server.start()
 
     For B/IP, ``interface`` accepts an IPv4 literal or the exact OS interface
-    name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+    name (the adapter friendly name on Windows), resolved once, at
+    construction, to one usable IPv4 address; ``broadcast_address`` is not
+    derived from it. See "Selecting an interface" in docs/python-api.md.
     """
 
     def __init__(
@@ -9737,7 +9741,9 @@ class BipEndpoint:
     construction (#2171).
 
     For B/IP, ``interface`` accepts an IPv4 literal or the exact OS interface
-    name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+    name (the adapter friendly name on Windows), resolved once, at
+    construction, to one usable IPv4 address; ``broadcast_address`` is not
+    derived from it. See "Selecting an interface" in docs/python-api.md.
     """
 
     # network_port_instance declares a snapshot; registered_network_port explicitly
@@ -10374,7 +10380,9 @@ class BipRouterPort:
     OverflowError. Construction opens no socket.
 
     For B/IP, ``interface`` accepts an IPv4 literal or the exact OS interface
-    name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+    name (the adapter friendly name on Windows), resolved once, at
+    construction, to one usable IPv4 address; ``broadcast_address`` is not
+    derived from it. See "Selecting an interface" in docs/python-api.md.
     """
     def __init__(self, network_number: int, *, interface: str = "0.0.0.0", port: int = 47808, broadcast_address: str = "255.255.255.255", bbmd: Bbmd | None = None, foreign_device: ForeignDevice | None = None) -> None: ...
     @property

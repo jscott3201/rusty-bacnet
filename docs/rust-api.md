@@ -1158,6 +1158,37 @@ only to the interface address (or, for `0.0.0.0`, to one of the host's
 addresses, below). Sends leave from it, so the OS picks their source address
 by route.
 
+The interface is an `Ipv4Addr`. To take an OS interface name as well, as the
+Python bindings do, resolve it first with
+`bacnet_transport::bip::resolve_interface_ipv4(&str) -> io::Result<Ipv4Addr>`.
+A literal, `0.0.0.0` included, is returned as is without asking the OS.
+A name (the netdev name on Unix, the adapter's exact, case-sensitive
+friendly name on Windows) must have one usable IPv4 address on an interface
+that is up; a link-local address (169.254.0.0/16) is used only when the
+interface has nothing else. An unknown name fails with `NotFound`, a name
+without a usable address with `AddrNotAvailable`, several candidates with
+`InvalidInput` listing them, and text that looks like a mistyped address
+(`"10.0.0.300"`, `"127.0.0.1/8"`, `"::1"`) and names no interface with
+`InvalidInput` too. It lists the host's interfaces, which blocks, so call it from a
+blocking thread in async code. The name is resolved once: the transport
+keeps the address, not the name, and doesn't follow a DHCP change. It
+doesn't derive the broadcast address from the interface either.
+
+With a loopback interface on the wildcard socket (any start without
+`set_share_port_by_address(true)`), a local broadcast to 255.255.255.255
+would leave through whichever interface the host routes it to, usually a
+LAN. So such a send fails with `Error::Transport` carrying
+`LoopbackBroadcastRefused` (find it with `LoopbackBroadcastRefused::from_error`)
+and counts in `send_counters().loopback_limited_broadcast`; `start()` warns
+once for that configuration (#2691). Pass the loopback subnet's broadcast
+address, `Ipv4Addr::new(127, 255, 255, 255)`, as the third argument of
+`BipTransport::new` instead (Linux delivers it to the other loopback
+sockets; see the Python guide's
+[loopback section](python-api.md#loopback-interfaces-and-broadcasts) for
+other systems). A BBMD on such an interface still forwards its own
+broadcasts and those it receives to its BDT peers and foreign devices; only
+the local rebroadcast is refused, counted the same way.
+
 #### Claiming the port
 
 The wildcard socket claims its port, whether requested or picked by the OS

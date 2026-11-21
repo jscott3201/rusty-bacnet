@@ -1,4 +1,4 @@
 ---
 section: Migration notes
 ---
-- **Breaking (Python API).** Handle an invalid B/IP `interface` at `BACnetClient` or `BACnetServer` construction. It now raises `ValueError` there. Previously, starting the client or server raised `RuntimeError` (#2614).
+- **Python API:** Breaking: an invalid B/IP `interface` given to `BACnetClient` or `BACnetServer` now raises `ValueError` at construction, where `start()` used to raise `RuntimeError`; catch it there (#2614).

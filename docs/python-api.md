@@ -8262,15 +8262,45 @@ asyncio.run(main())
 ### Selecting an interface
 
 For B/IP, pass an IPv4 literal to `interface`, or the OS interface name
-such as `en0` or `eth0`. On Windows use the adapter's exact friendly name.
-The constructor resolves a name to one assigned unicast IPv4 address on an
-interface that is up. If it has multiple addresses, the exception lists
-them so you can pass the intended literal. `"0.0.0.0"` retains wildcard
-selection. Supply a broadcast IPv4 address separately in `broadcast_address`.
+such as `en0` or `eth0`. On Windows use the adapter's friendly name
+(`Ethernet 2`), matched exactly and case-sensitively. The constructor
+resolves a name to one assigned unicast IPv4 address on an interface that
+is up:
 
-The selected address feeds the existing socket bind policy. For B/IPv6,
-`ipv6_interface` accepts an IPv6 address. `None` and `"::"` use automatic
-selection as described under [BACnet/IPv6](#bacnetipv6). Port sharing is
+- A link-local address (169.254.0.0/16) beside a routable one is skipped,
+  so an autoconfigured alias doesn't make the name ambiguous; an interface
+  with only one link-local address uses it.
+- With several usable addresses the `ValueError` lists them, so you can
+  pass the intended literal.
+- An unknown name, or an interface that is down or has no IPv4 address yet,
+  raises `ValueError` at construction. So does text that looks like a
+  mistyped address (`"10.0.0.300"`, `"127.0.0.1/8"`, `"::1"`).
+- The name is resolved once, at construction. The client, server or
+  endpoint keeps the address, so a later change (a new DHCP lease, say) is
+  not followed: construct it again.
+- Point-to-point interfaces (VPN tunnels, PPP) are not excluded.
+
+`"0.0.0.0"` keeps wildcard selection. The name selects an address, not the
+socket's device: the bind policy stays as below. `broadcast_address` is not
+derived from the named interface's netmask; it stays `255.255.255.255`
+unless you give it. Pass the interface's subnet broadcast for discovery,
+and with `lo` or `lo0` the loopback subnet's (see
+[Loopback interfaces and broadcasts](#loopback-interfaces-and-broadcasts),
+#2691).
+
+What each interface option across the stack takes today:
+
+| Option | Takes |
+|--------|-------|
+| Python `interface` (`BACnetClient`, `BACnetServer`, `BipEndpoint`, `BipRouterPort`) | An IPv4 literal or an OS interface name |
+| Python `ipv6_interface` | An IPv6 address only |
+| CLI, TUI and MCP `-i`/`--interface`, and a TUI profile's `interface` | An IPv4 literal only |
+| CLI `capture --device`, TUI `--capture-device` (pcap) | An OS device name |
+| Rust `BipTransport::new` | An `Ipv4Addr`; resolve a name with `bacnet_transport::bip::resolve_interface_ipv4` |
+| Rust `EthernetTransport::new` (Linux) | An OS interface name |
+
+For B/IPv6, `None` and `"::"` use automatic selection as described under
+[BACnet/IPv6](#bacnetipv6). Port sharing is
 set by `share_port_by_address` and `share_wildcard_port` (see
 [Claiming the port](#claiming-the-port) and
 [Sharing a port by address](#sharing-a-port-by-address)); observing frames

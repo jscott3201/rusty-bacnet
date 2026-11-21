@@ -178,7 +178,9 @@ unsafe fn copy_adapters(
     Ok(adapters)
 }
 
-/// Copy a name without reading beyond the allocation or its terminator.
+/// Copy a name without reading beyond the allocation or its terminator. A
+/// name that isn't valid UTF-16 is copied lossily, so it matches no name a
+/// caller gives, rather than failing the whole listing.
 ///
 /// # Safety
 ///
@@ -199,7 +201,7 @@ unsafe fn copy_name(base: *const u8, capacity: usize, name: *const u16) -> io::R
         // with two readable bytes; stop at the first initialized terminator.
         let unit = unsafe { base.add(offset + index * 2).cast::<u16>().read_unaligned() };
         if unit == 0 {
-            return String::from_utf16(&units).map_err(|_| invalid());
+            return Ok(String::from_utf16_lossy(&units));
         }
         units.push(unit);
     }
@@ -253,6 +255,39 @@ mod tests {
         SOCKET_ADDRESS {
             lpSockaddr: bytes.as_mut_ptr().cast(),
             iSockaddrLength: i32::try_from(bytes.len()).unwrap(),
+        }
+    }
+
+    /// A friendly name is copied up to its NUL, never past the buffer: a
+    /// pointer outside it or a name the buffer ends inside is refused, and
+    /// a name that isn't valid UTF-16 is copied lossily, not refused.
+    #[test]
+    fn copies_a_friendly_name_only_within_its_buffer() {
+        let units: [u16; 8] = [0x41, 0x42, 0, 0x43, 0xD800, 0, 0x44, 0x45];
+        let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_ne_bytes()).collect();
+        let base = bytes.as_ptr();
+        let at = |unit: usize| base.wrapping_add(unit * 2).cast::<u16>();
+        let copy = |name: *const u16, capacity: usize| {
+            // SAFETY: `base` is `bytes`, live and initialized for the whole
+            // test, and `capacity` is at most its length.
+            unsafe { copy_name(base, capacity, name) }
+        };
+        let whole = bytes.len();
+        assert_eq!(copy(at(0), whole).unwrap(), "AB");
+        assert_eq!(copy(at(3), whole).unwrap(), "C\u{FFFD}");
+        let refused = [
+            copy(at(6), whole),                       // no NUL before the buffer ends
+            copy(at(0), 4),                           // the capacity ends before the NUL
+            copy(at(8), whole),                       // at the buffer's end
+            copy(at(9), whole),                       // past it
+            copy(base.wrapping_sub(2).cast(), whole), // before it
+        ];
+        for (index, result) in refused.into_iter().enumerate() {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "case {index}"
+            );
         }
     }
 

@@ -43,7 +43,9 @@ no object may have it, so it, or anything larger, raises ValueError at
 construction (#2171).
 
 For B/IP, `interface` accepts an IPv4 literal or the exact OS interface
-name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+name (the adapter friendly name on Windows), resolved once, at
+construction, to one usable IPv4 address; `broadcast_address` is not
+derived from it. See "Selecting an interface" in docs/python-api.md.
 
 Properties:
 

@@ -70,5 +70,7 @@ class NamedBipInterfaceTests(unittest.IsolatedAsyncioTestCase):
                     owner(*args, interface="__absent_nic__")
         with self.assertRaisesRegex(ValueError, "broadcast"):
             rb.BipEndpoint(2614, interface=name, broadcast_address=name)
-        with self.assertRaisesRegex(ValueError, "interface"):
-            rb.BipEndpoint(2614, interface="127.0.0.1/8")
+        for mistyped in ("127.0.0.1/8", "10.0.0.300", "::1"):
+            with self.subTest(interface=mistyped):
+                with self.assertRaisesRegex(ValueError, "not a valid IPv4 address"):
+                    rb.BipEndpoint(2614, interface=mistyped)

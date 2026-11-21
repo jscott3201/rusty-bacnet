@@ -74,7 +74,6 @@ pub(crate) enum Address {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Flags {
     /// `IFF_UP`.
-    #[cfg_attr(not(any(feature = "ipv6", test)), allow(dead_code))]
     pub(crate) up: bool,
     /// `IFF_BROADCAST`.
     pub(crate) broadcast: bool,
