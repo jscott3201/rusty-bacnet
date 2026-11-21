@@ -263,6 +263,71 @@ class RoutedFileWireTests(unittest.IsolatedAsyncioTestCase):
 
         await self.run_both(scenario)
 
+    async def test_truncated_file_reply_releases_the_request_for_a_valid_read(self):
+        valid = stream_ack(3, b"ok", True)
+
+        async def scenario(client):
+            for address in (self.router.address, self.target):
+                for body, expect_error in ((valid[:-1], True), (valid, False)):
+                    self.wire.script = lambda request, invoke, service, request_body: [
+                        bytes([0x30, invoke, service]) + body]
+                    read = client.atomic_read_file(address, FILE_1, "stream",
+                                                   start_position=3, requested_octet_count=2)
+                    if expect_error:
+                        with self.assertRaisesRegex(rb.BacnetError, "missing closing tag"):
+                            await asyncio.wait_for(read, 5)
+                    else:
+                        reply = await asyncio.wait_for(read, 5)
+                        self.assertEqual((reply["data"], reply["start_position"], reply["end_of_file"]),
+                                         (b"ok", 3, True))
+
+        await self.run_both(scenario)
+
+    async def test_endpoint_serves_while_its_file_read_is_pending_then_reuses_the_socket(self):
+        loop = asyncio.get_running_loop()
+        admitted = loop.create_future()
+
+        def silent(request, invoke, service, body):
+            if service == READ_FILE:
+                loop.call_soon_threadsafe(admitted.set_result, invoke)
+            return None
+
+        self.wire.script = silent
+        async with rb.BipEndpoint(NEAR, interface="127.0.0.1", port=0, device_name="File test",
+                                  apdu_retries=0, apdu_timeout_ms=30000) as endpoint:
+            local = await endpoint.local_address()
+            source = ("127.0.0.1", int(local.rsplit(":", 1)[1]))
+            client = await endpoint.client()
+            pending = asyncio.ensure_future(client.atomic_read_file(self.target, FILE_1, "stream",
+                                                                   requested_octet_count=2))
+            try:
+                await asyncio.wait_for(admitted, 5)
+                self.assertEqual(self.router.received[-1][1], source)
+                self.assertEqual((await endpoint.status())["active_leases"], 1)
+                self.assertFalse(pending.done())
+                async with rb.BACnetClient(interface="127.0.0.1", port=0) as observer:
+                    name = await observer.read_property(local, rb.ObjectIdentifier(O.DEVICE, NEAR),
+                                                        rb.PropertyIdentifier.OBJECT_NAME)
+                    self.assertEqual(name, rb.PropertyValue.character_string("File test"))
+                self.assertEqual((await endpoint.status())["active_leases"], 1)
+                self.assertFalse(pending.done())
+            finally:
+                pending.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await pending
+            async with asyncio.timeout(5):
+                while (await endpoint.status())["active_leases"]:
+                    await asyncio.sleep(0)
+            self.wire.script = lambda request, invoke, service, body: [
+                bytes([0x30, invoke, service]) + stream_ack(0, b"ok", True)]
+            # A cancelled routed request holds its route for the APDU window.
+            # Address the same peer directly to check immediate socket reuse.
+            result = await asyncio.wait_for(
+                client.atomic_read_file(self.router.address, FILE_1, "stream", requested_octet_count=2), 5)
+            self.assertEqual(result["data"], b"ok")
+            self.assertEqual((await endpoint.status())["active_leases"], 0)
+            self.assertEqual(self.router.received[-1][1], source)
+
     async def test_a_routed_write_names_the_station(self):
         def script(request, invoke, service, body):
             self.assertEqual(service, WRITE_FILE)
