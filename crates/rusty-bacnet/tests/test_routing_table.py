@@ -1,6 +1,7 @@
 """The read-only routing-table query (#2612), against a real three-port router."""
 import asyncio
 import copy
+import errno
 import pickle
 import socket
 import unittest
@@ -59,13 +60,16 @@ class RoutingTableTests(unittest.IsolatedAsyncioTestCase):
             owner_address = await endpoint.local_address()
             client = await endpoint.client()
             frames = await endpoint.frames()
-            # A group or malformed link address must never turn into a broadcast.
+            # A group or malformed link address must never turn into a broadcast:
+            # it is refused as an invalid argument, with nothing sent.
             for invalid in ("255.255.255.255:47808", "239.1.2.3:47808", "0.0.0.0:47808",
                             "127.0.0.1:0", b"", b"xx"):
-                with self.subTest(invalid=invalid), self.assertRaises(rb.BacnetError):
-                    await client.discover_routers(destination=invalid, wait=0)
-            for network, destination, networks in [(None, router.address, [5, 7]), (7, router.mac, [7])]:
-                [heard] = await client.discover_routers(network, destination=destination, wait=1.5)
+                with self.subTest(invalid=invalid), \
+                        self.assertRaises(rb.BacnetTransportError) as refused:
+                    await client.discover_routers(router=invalid, wait=0)
+                self.assertEqual(refused.exception.errno, errno.EINVAL)
+            for network, asked, networks in [(None, router.address, [5, 7]), (7, router.mac, [7])]:
+                [heard] = await client.discover_routers(network, router=asked, wait=1.5)
                 self.assertEqual((heard.mac, heard.networks), (router.mac, networks))
                 async with asyncio.timeout(10):
                     async for frame in frames:
@@ -86,10 +90,10 @@ class RoutingTableTests(unittest.IsolatedAsyncioTestCase):
         silent = RawPeer(lambda data, source: None)
         self.addCleanup(silent.close)
         async with rb.BipEndpoint(2690, interface="127.0.0.1", port=0,
-                                  broadcast_address="127.255.255.255") as endpoint:
+                                  broadcast_address="127.0.0.1") as endpoint:
             client = await endpoint.client()
             frames = await endpoint.frames()
-            waiting = asyncio.ensure_future(client.discover_routers(destination=silent.address, wait=60))
+            waiting = asyncio.ensure_future(client.discover_routers(router=silent.address, wait=60))
             try:
                 async with asyncio.timeout(10):
                     async for frame in frames:
@@ -103,9 +107,44 @@ class RoutingTableTests(unittest.IsolatedAsyncioTestCase):
                 waiting.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await waiting
-            self.assertEqual(await client.discover_routers(destination=silent.address, wait=0), [])
+            self.assertEqual(await client.discover_routers(router=silent.address, wait=0), [])
             await frames.aclose()
             await asyncio.wait_for(endpoint.close(), 10)
+
+    async def test_a_silent_router_gives_an_empty_list_and_no_broadcast(self):
+        from bvll_peer import RawPeer
+
+        silent = RawPeer(lambda data, source: None)
+        self.addCleanup(silent.close)
+        marker = RawPeer(lambda data, source: None)
+        self.addCleanup(marker.close)
+        async with rb.BipEndpoint(2691, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.0.0.1") as endpoint:
+            client = await endpoint.client()
+            frames = await endpoint.frames()
+            # A real collection window with no answer in it: an empty list.
+            for network in (None, 7):
+                self.assertEqual(
+                    await client.discover_routers(network, router=silent.address, wait=0.2), [])
+            # One more directed query, to a second peer, marks the end of
+            # what the two calls sent.
+            self.assertEqual(await client.discover_routers(router=marker.address, wait=0), [])
+            sent = []
+            async with asyncio.timeout(10):
+                async for frame in frames:
+                    if frame.direction != "outbound":
+                        continue
+                    summary = rb.decode_frame(frame.octets, frame.link)
+                    if summary.network_message == "who-is-router-to-network":
+                        sent.append((frame.peer, summary.link_message))
+                    if frame.peer == marker.address:
+                        break
+                else:
+                    self.fail("frame stream ended before the marker query")
+            # Every Who-Is-Router-To-Network went to the asked peer alone.
+            self.assertEqual(sent, [(silent.address, "original-unicast-npdu")] * 2
+                             + [(marker.address, "original-unicast-npdu")])
+            await frames.aclose()
 
     async def test_the_router_may_be_given_as_text(self):
         table = await self.client.routing_table(self.ports[0].address)

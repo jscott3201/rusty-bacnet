@@ -611,7 +611,7 @@ Usage: bacnet whois-router [OPTIONS]
 
 Options:
 
-- `--via <ADDRESS>`: Send directly to this local router address and collect its answers.
+- `--router <ADDRESS>`: Ask only the router at this address on the local network and list its own answers. It answers with a local broadcast, so a B/IP router on another IP subnet is heard only through a BBMD (see --foreign-bbmd); without one, no routers is the expected result.
 - `--dnet <DNET>`: Ask only for the router to this network number (1 to 65534).
 - `--wait <WAIT>`: Seconds to wait for responses. Default: `3`.
 

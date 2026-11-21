@@ -631,23 +631,33 @@ def discover_routers(
     self,
     network: Optional[int] = None,
     *,
-    destination: str | bytes | None = None,
+    router: str | bytes | None = None,
     wait: float = 3.0,
 ) -> Awaitable[list[DiscoveredRouter]]
 ```
 
-Ask one local router by address text or MAC bytes. When directed,
-only that local station's own answers count. A selected router may
-relay a question about an unknown network. An IPv6 socket address
-can need VMAC resolution before the wait. Omit `destination` to
-broadcast a Who-Is-Router-To-Network for `network` (or every
+Broadcast a Who-Is-Router-To-Network for `network` (or every
 network) and collect the routers that answer for `wait` seconds, one
 per router MAC in the order first heard; for a `network`, only the
-routers listing it. An empty list when none answer. `network` 0 or
-65535 raises BacnetError (#1850). `wait` is 0 to 3600 seconds
-(`ValueError` otherwise). It holds the started client through
-resolution, sending and collection. `stop()` waits for the call
-to finish or be cancelled.
+routers listing it. An empty list when none answer.
+
+With `router`, the router's address on the local link (`bytes`
+such as a `DiscoveredRouter`'s `mac`, or address text as for
+`routing_table`), the question goes to that router alone and only
+its own answers count. A router asked about a network it does not
+know may ask further before it answers. An IPv6 socket address can
+need VMAC resolution before the wait. The router answers with a
+local broadcast, so a B/IP router on another IP subnet is heard only
+when a BBMD forwards its answer here, as a peer or by foreign-device
+registration: with no BBMD, an empty list is the expected result. A
+`router` that names no one
+station (empty, a broadcast or group address) raises
+BacnetTransportError and sends nothing.
+
+`network` 0 or 65535 raises BacnetError (#1850). `wait` is 0 to
+3600 seconds (`ValueError` otherwise). It holds the started client
+through resolution, sending and collection. `stop()` waits for the
+call to finish or be cancelled.
 
 ### BACnetClient.routing_table
 
@@ -671,7 +681,8 @@ asks; no argument can make it an update.
 `router` is the router's address on the local link: `bytes` as
 given, such as a `DiscoveredRouter`'s `mac`, or a string in the
 binding's address forms (`"ip:port"`, `"bip6:N"`, hex octets, an
-MS/TP station). An empty or broadcast address raises ValueError.
+MS/TP station). An empty, broadcast or group address raises
+ValueError.
 
 A long table comes as several acknowledgements with nothing to mark
 the last, so the call returns once `quiet` seconds pass after the

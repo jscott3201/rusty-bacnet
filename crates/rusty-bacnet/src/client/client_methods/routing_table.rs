@@ -69,7 +69,8 @@ impl BACnetClient {
     /// `router` is the router's address on the local link: `bytes` as
     /// given, such as a `DiscoveredRouter`'s `mac`, or a string in the
     /// binding's address forms (`"ip:port"`, `"bip6:N"`, hex octets, an
-    /// MS/TP station). An empty or broadcast address raises `ValueError`.
+    /// MS/TP station). An empty, broadcast or group address raises
+    /// `ValueError`.
     ///
     /// A long table comes as several acknowledgements with nothing to mark
     /// the last, so the call returns once `quiet` seconds pass after the

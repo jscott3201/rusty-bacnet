@@ -77,7 +77,7 @@ pub mod watch;
 pub mod write;
 
 pub use arrival::{IAmArrival, IAmArrivals};
-pub use client::{Client, Discover, Find, ResolveScope, Scope};
+pub use client::{Client, Discover, Find, ResolveScope, RouterDiscovery, Scope};
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};

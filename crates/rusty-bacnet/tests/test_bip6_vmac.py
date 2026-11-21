@@ -184,7 +184,7 @@ class Bip6PairTests(unittest.IsolatedAsyncioTestCase):
             async with loopback_client() as client:
                 for number in (0, 65535):
                     with self.assertRaisesRegex(BacnetError, f"network {number}.*1..=65534"):
-                        await client.discover_routers(number, destination=destination)
+                        await client.discover_routers(number, router=destination)
                 with self.assertRaises(BlockingIOError):
                     peer.recvfrom(2048)  # No VAR or router query reached the uncached peer.
 

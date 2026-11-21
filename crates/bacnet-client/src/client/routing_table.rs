@@ -101,7 +101,7 @@ pub enum RoutingTableError {
     Rejected(RejectMessageToNetwork),
     /// The call's arguments were refused and nothing was sent: no entries
     /// kept, a first-answer wait longer than the total, or a router
-    /// address that is empty or a broadcast.
+    /// address that names no one station.
     InvalidArgument(String),
     /// The client's dispatch task ended while the call waited (the client
     /// stopped, its link closed or a seat's node stopped). That is not
@@ -227,7 +227,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///   first ack.
     /// - [`RoutingTableError::InvalidArgument`] for `wait.max_entries` 0,
     ///   `wait.first_answer` longer than `wait.total`, or a `router` that
-    ///   is empty or a broadcast; nothing is sent.
+    ///   names no one station (empty, a broadcast or group address, or
+    ///   malformed for the link); nothing is sent.
     /// - [`RoutingTableError::ClientStopped`] when the client stops
     ///   mid-call.
     ///
@@ -266,9 +267,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 wait.first_answer, wait.total
             )));
         }
-        if !self.network.is_routing_table_target(router) {
+        if !self.network.is_local_unicast_station(router).await? {
             return Err(RoutingTableError::InvalidArgument(
-                "the router must be one station's own address, not empty or a broadcast".into(),
+                "the router must be one station's own address, not empty, a broadcast or a group"
+                    .into(),
             ));
         }
         // Held for the whole call, across its awaits: it guards no data.

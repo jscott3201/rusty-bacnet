@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::PoisonError;
 use std::time::Duration;
 
+use bacnet_ops::RouterDiscovery;
 use bacnet_transport::port::TransportPort;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -293,10 +294,13 @@ async fn ask_routers<T: TransportPort + 'static>(
         }
         routers.asked.replace(asked)
     };
-    match client
-        .discover_routers(network, None, wanted, Some(call.deadline))
-        .await
-    {
+    let mut request = RouterDiscovery::local()
+        .wait(wanted)
+        .deadline(call.deadline);
+    if let Some(network) = network {
+        request = request.network(network);
+    }
+    match client.discover_routers(request).await {
         Ok(found) => {
             let mut routers = ctx.routers.lock().unwrap_or_else(PoisonError::into_inner);
             // Asking about one network hears only its routers: keep the

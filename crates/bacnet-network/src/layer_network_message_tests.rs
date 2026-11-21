@@ -304,20 +304,28 @@ async fn a_directed_router_query_never_falls_back_to_broadcast() {
         &[0, 0, 0, 0, 0xba, 0xc0],
         &[192, 0, 2, 1, 0, 0],
     ] {
+        let refused = layer
+            .send_network_message(
+                NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
+                &[],
+                Some(invalid),
+            )
+            .await;
         assert!(
-            layer
-                .send_network_message(
-                    NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
-                    &[],
-                    Some(invalid)
-                )
-                .await
-                .is_err(),
-            "{invalid:?}"
+            matches!(&refused, Err(Error::Transport(error))
+                if error.kind() == std::io::ErrorKind::InvalidInput),
+            "{invalid:?}: {refused:?}"
         );
+        // The routing-table query takes the same check.
+        assert!(layer.send_routing_table_query(invalid).await.is_err());
     }
     assert!(log.is_empty());
-    // The configured logical broadcast IP names one station at another port.
+    // This TestTransport counts only its exact broadcast and group MACs as
+    // group destinations, so the same IP at another port is one station
+    // here. A real BipTransport refuses its configured broadcast IP at any
+    // port, unless that IP is a loopback or its own interface address (as
+    // loopback tests set up), which counts only at its own port
+    // (`bip::groups`).
     let target = [127, 0, 0, 1, 0xba, 0xc1];
     layer
         .send_network_message(
@@ -335,13 +343,57 @@ async fn a_directed_router_query_never_falls_back_to_broadcast() {
 #[tokio::test(start_paused = true)]
 async fn a_router_address_uses_the_station_grammar_of_its_link() {
     use bacnet_types::data_link::DataLink::*;
-    assert!(router_station(Some(Mstp), &[0]).await.unwrap());
-    assert!(!router_station(Some(Mstp), &[255]).await.unwrap());
-    assert!(router_station(Some(Bip6), &[0, 0, 0]).await.unwrap());
-    assert!(!router_station(Some(Bip6), &[1, 2]).await.unwrap());
+    assert!(station_form(Some(Mstp), &[0]).await.unwrap());
+    assert!(!station_form(Some(Mstp), &[255]).await.unwrap());
+    assert!(station_form(Some(Bip6), &[0, 0, 0]).await.unwrap());
+    assert!(!station_form(Some(Bip6), &[1, 2]).await.unwrap());
     let mac = [2, 1, 2, 3, 0, 0];
-    assert!(router_station(Some(Sc), &mac).await.unwrap());
-    assert!(router_station(Some(Ethernet), &mac).await.unwrap());
-    assert!(!router_station(Some(Bip), &mac).await.unwrap());
-    assert!(!router_station(Some(Sc), &[0; 6]).await.unwrap());
+    assert!(station_form(Some(Sc), &mac).await.unwrap());
+    assert!(station_form(Some(Ethernet), &mac).await.unwrap());
+    assert!(!station_form(Some(Bip), &mac).await.unwrap());
+    assert!(!station_form(Some(Sc), &[0; 6]).await.unwrap());
+}
+
+/// An Ethernet group MAC (the I/G bit set) has a station's form, so only
+/// the transport's group rule refuses it. The hook stands in for the
+/// Linux-only Ethernet transport's `is_group_mac`.
+#[tokio::test(start_paused = true)]
+async fn an_ethernet_group_mac_is_no_router_station() {
+    use bacnet_transport::test_transport::{SendMode, TestTransport};
+    use bacnet_types::data_link::DataLink;
+
+    let transport = TestTransport::builder()
+        .data_link(DataLink::Ethernet)
+        .broadcast_mac(&[0xFF; 6])
+        .on_is_group_destination(|mac| mac.len() == 6 && mac[0] & 1 == 1)
+        .unicast(SendMode::Record)
+        .broadcast(SendMode::Record)
+        .build();
+    let log = transport.sent();
+    let mut layer = NetworkLayer::new(transport);
+    let _apdus = layer.start().await.unwrap();
+    let group = [0x01, 0x80, 0xC2, 0x00, 0x00, 0x0E];
+    assert!(
+        station_form(Some(DataLink::Ethernet), &group)
+            .await
+            .unwrap()
+    );
+    assert!(!layer.is_local_unicast_station(&group).await.unwrap());
+    assert!(
+        layer
+            .send_network_message(
+                NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
+                &[],
+                Some(&group)
+            )
+            .await
+            .is_err()
+    );
+    assert!(layer.send_routing_table_query(&group).await.is_err());
+    assert!(log.is_empty());
+    let station = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+    assert!(layer.is_local_unicast_station(&station).await.unwrap());
+    layer.send_routing_table_query(&station).await.unwrap();
+    assert_eq!(log.unicasts().len(), 1);
+    layer.stop().await.unwrap();
 }

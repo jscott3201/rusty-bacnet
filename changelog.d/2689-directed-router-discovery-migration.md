@@ -1,4 +1,4 @@
 ---
 section: Migration notes
 ---
-- **Breaking (Rust API).** Pass a destination MAC before the wait in `BACnetClient::discover_routers` and `bacnet_ops::Client::discover_routers`. To broadcast, use `None` in these calls and in `who_is_router_to_network` calls that previously passed an explicit broadcast MAC (#2689).
+- **Breaking (Rust API, #2689):** `BACnetClient::who_is_router_to_network(network)` only broadcasts; send to one router with `who_is_router_to_network_directed(router, network)` or collect with `discover_routers_directed(router, network, wait)`, which refuse an address that names no one station. `bacnet_ops::Client::discover_routers` takes a `RouterDiscovery` (`local()` or `directed(router)`, then `.network(n)`, `.wait(..)`, `.deadline(..)`).

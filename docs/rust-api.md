@@ -10618,8 +10618,15 @@ let found: Vec<ReceivedIHave> = client
 let mut i_haves = client.i_have_events();                // every I-Have, asked for or not
 
 // Who-Is-Router-To-Network, then the routers heard and the networks they reach.
-let routers: Vec<DiscoveredRouter> = client.discover_routers(None, None, Duration::from_secs(3)).await?;
-client.who_is_router_to_network(Some(2), None).await?;   // just send it
+let routers: Vec<DiscoveredRouter> = client.discover_routers(None, Duration::from_secs(3)).await?;
+// The same question to one router alone, by its MAC on the local network.
+// It answers with a local broadcast (Clause 6.6.3.3): a B/IP router on
+// another IP subnet is heard only when a BBMD forwards its answer here, as
+// a peer or by foreign-device registration; with no BBMD, expect no routers.
+let one: Vec<DiscoveredRouter> = client
+    .discover_routers_directed(&routers[0].mac, Some(2), Duration::from_secs(3))
+    .await?;
+client.who_is_router_to_network(Some(2)).await?;          // just send it
 client.what_is_network_number(None).await?;
 
 // I-Am-Router-To-Network, Network-Number-Is and Reject-Message-To-Network.
@@ -12290,6 +12297,14 @@ scope, and `who_has_replies` keeps the answers from that scope
 keeps one answer per device, object and source address, at most
 `MAX_I_HAVE_REPLIES`; `bacnet_client::client::collect_answers` is that
 collector, for a caller that sends its own Who-Has.
+`client.discover_routers(RouterDiscovery::local())` broadcasts one
+Who-Is-Router-To-Network under this network's rate cap and returns the
+routers that answered with the networks they reach; `.network(n)` asks
+about one network, `.wait(..)` and `.deadline(at)` bound the collection,
+and `RouterDiscovery::directed(&router_mac)` asks one router alone,
+keeping only its own answers (#2689). That router answers with a local
+broadcast, so a B/IP router on another IP subnet is heard only when a BBMD
+forwards its answer here, as a peer or by foreign-device registration.
 `client.device(target).await?` gives a `Device` handle: from an address
 (`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there (an
 address on the client's own network, once `BACnetClient::network_number`

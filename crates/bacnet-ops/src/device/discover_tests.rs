@@ -275,3 +275,64 @@ async fn a_refused_local_broadcast_names_its_destination() {
         "{refused}"
     );
 }
+
+/// A router discovery broadcasts one Who-Is-Router-To-Network unless it
+/// names a router, which takes one unicast and no broadcast. A router
+/// address that names no one station, or a reserved network, is refused
+/// with nothing sent. A deadline ends the wait early.
+#[tokio::test(start_paused = true)]
+async fn a_router_discovery_broadcasts_unless_it_names_a_router() {
+    use crate::client::RouterDiscovery;
+
+    let who_is_router = |log: &SendLog| -> Vec<SentFrame> {
+        let frames = log.frames();
+        log.clear();
+        frames
+            .into_iter()
+            .filter(|frame| {
+                frame.decode_npdu().message_type
+                    == Some(bacnet_npdu::NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
+            })
+            .collect()
+    };
+    assert_eq!(RouterDiscovery::default(), RouterDiscovery::local());
+    assert_eq!(RouterDiscovery::local().router(), None);
+    let bus = Bus::new();
+    let (client, sent) = client(&bus).await;
+    let quick = |request: RouterDiscovery| request.wait(Duration::ZERO);
+    let found = client
+        .discover_routers(quick(RouterDiscovery::local().network(5)))
+        .await
+        .unwrap();
+    assert!(found.is_empty());
+    let [frame] = who_is_router(&sent).try_into().unwrap();
+    assert!(frame.broadcast);
+    assert_eq!(&frame.npdu[2..], [0, 0, 5]);
+
+    let directed = RouterDiscovery::directed(&mac(2));
+    assert_eq!(directed.router(), Some(&mac(2)[..]));
+    client.discover_routers(quick(directed)).await.unwrap();
+    let [frame] = who_is_router(&sent).try_into().unwrap();
+    assert!(!frame.broadcast);
+    assert_eq!(frame.mac.as_slice(), mac(2));
+
+    for refused in [
+        RouterDiscovery::directed(&[]),
+        RouterDiscovery::local().network(0),
+        RouterDiscovery::directed(&mac(2)).network(0xFFFF),
+    ] {
+        assert!(client.discover_routers(quick(refused)).await.is_err());
+    }
+    assert!(who_is_router(&sent).is_empty(), "nothing was sent");
+
+    let start = tokio::time::Instant::now();
+    let request = RouterDiscovery::local()
+        .wait(Duration::from_secs(60))
+        .deadline(start + Duration::from_secs(1));
+    client.discover_routers(request).await.unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
+    );
+}

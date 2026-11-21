@@ -12,11 +12,16 @@ use bacnet_bip_core::node::Groups;
 
 use super::BipTransport;
 
-/// Whether a directed router query can address the station at `mac`.
-/// The local host can identify its own subnet broadcasts even at
-/// different UDP ports. For an off-link peer, its subnet mask is unknown.
-/// Looking up an interface consults the OS without sending a datagram.
-pub async fn is_router_station(mac: &[u8]) -> std::io::Result<bool> {
+/// Whether `mac` names one B/IP station by unicast: a six-octet IPv4
+/// address and nonzero UDP port that is not 0.0.0.0, a multicast group, the
+/// limited broadcast, or the subnet broadcast of a local interface whose
+/// subnet holds it (at any UDP port). It says nothing about what the station
+/// is. For an off-link peer the subnet mask is unknown, so its address is
+/// taken as one station. The interface lookup asks the operating system and
+/// sends nothing. This transport's own configured broadcast is
+/// [`TransportPort::is_group_destination`](crate::port::TransportPort::is_group_destination)'s
+/// to refuse.
+pub async fn is_unicast_station(mac: &[u8]) -> std::io::Result<bool> {
     let Ok(address) = address_from_slice(mac) else {
         return Ok(false);
     };

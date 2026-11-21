@@ -119,7 +119,7 @@ async fn directed_router_discovery_collects_only_the_selected_local_station() {
     };
     let wait = std::time::Duration::from_secs(2);
     let (found, ()) = tokio::join!(
-        client.discover_routers(Some(7), Some(&[2]), wait),
+        client.discover_routers_directed(&[2], Some(7), wait),
         send_replies
     );
     assert_eq!(
@@ -131,7 +131,7 @@ async fn directed_router_discovery_collects_only_the_selected_local_station() {
     );
     assert!(
         client
-            .discover_routers(None, Some(&[4]), wait)
+            .discover_routers_directed(&[4], None, wait)
             .await
             .unwrap()
             .is_empty()

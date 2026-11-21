@@ -54,7 +54,7 @@ pub use self::connect::MstpConnect;
 pub use self::connect::ScConnect;
 pub use self::connect::{Bip6Connect, BipConnect};
 pub(crate) use self::discover::Ask;
-pub use self::discover::{DISCOVER_WAIT, Discover, ResolveScope, Scope};
+pub use self::discover::{DISCOVER_WAIT, Discover, ResolveScope, RouterDiscovery, Scope};
 pub use self::find::{FIND_WAIT, Find, FoundObject};
 pub use self::log::Naming;
 pub(crate) use self::log::PagedLog;

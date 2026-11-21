@@ -2595,20 +2595,29 @@ replies = await client.who_has_replies("Zone Temperature", scope="global")
 Follow every I-Have the client receives from now on, an answer to its own
 Who-Has or not, as an async iterator of `IHave`.
 
-#### `discover_routers(network=None, *, destination=None, wait=3.0) -> list[DiscoveredRouter]`
+#### `discover_routers(network=None, *, router=None, wait=3.0) -> list[DiscoveredRouter]`
 
-Pass a local router address such as `destination="192.0.2.1:47808"` or a
-router's MAC bytes to collect only that router's own answers. The router can
-relay a question about an unknown network. An IPv6 socket address may need
-VMAC resolution before the collection window. A B/IP destination must name
-one station. The host uses its local subnet masks to reject subnet broadcasts
-at any UDP port. Omit `destination` to
-broadcast a Who-Is-Router-To-Network for `network`, or every network, and
+Broadcast a Who-Is-Router-To-Network for `network`, or every network, and
 collect the routers that answer for `wait` seconds: one frozen
 `DiscoveredRouter` per router, with its `mac` (the next hop) and the
 `networks` it listed, ascending. For a `network`, only the routers listing
 it are kept. No answer is an empty list; `network` 0 or 65535 raises
 `BacnetError`.
+
+With `router`, the question goes to that one router and only its own
+answers count: its address on the local link, as text such as
+`router="192.0.2.1:47808"` or as MAC bytes (a `DiscoveredRouter`'s `mac`).
+A router asked about a network it does not know may ask further before it
+answers. An IPv6 socket address may need VMAC resolution before the
+collection window. The router must be one station: an empty, broadcast or
+group address raises `BacnetTransportError` with nothing sent, and on B/IP
+the host's own subnet masks catch a subnet broadcast at any UDP port.
+
+The asked router answers with a local broadcast, not to the asker alone.
+A B/IP router on another IP subnet therefore takes the question, but its
+answer reaches the client only when a BBMD forwards it here, as a peer or
+by foreign-device registration (`foreign_device=` on the client or
+endpoint); with no BBMD, an empty list is the expected result.
 
 #### `routing_table(router, *, wait=3.0, quiet=0.5, total=10.0, max_entries=4096) -> RoutingTable`
 
@@ -2617,7 +2626,7 @@ own link, without changing it (#2612). The call sends one
 Initialize-Routing-Table with a port count of zero, which only asks; no
 argument can turn it into an update. `router` is the router's address on the
 local link: `bytes` as given (a `DiscoveredRouter`'s `mac`) or a string in
-the binding's address forms. An empty or broadcast address raises
+the binding's address forms. An empty, broadcast or group address raises
 `ValueError`.
 
 The result is a frozen `RoutingTable`: `entries` (frozen `RoutingTableEntry`

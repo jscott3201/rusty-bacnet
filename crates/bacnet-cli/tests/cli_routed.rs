@@ -165,7 +165,7 @@ async fn whois_router_lists_the_router_and_its_network() {
             "2",
         ];
         if directed {
-            args.extend_from_slice(&["--via", &bbmd]);
+            args.extend_from_slice(&["--router", &bbmd]);
         }
         args.extend_from_slice(extra);
         let output = run(args).await;

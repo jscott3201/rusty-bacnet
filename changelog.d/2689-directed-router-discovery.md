@@ -1,4 +1,4 @@
 ---
 section: Added
 ---
-- **Router discovery.** Send Who-Is-Router-To-Network to one local router with Python's `discover_routers(destination=...)` or the CLI's `whois-router --via ADDRESS`. The result contains that router's own answers (#2689).
+- **Router discovery.** Ask one router alone with Python's `discover_routers(router=...)`, the CLI's `whois-router --router ADDRESS` or Rust's `discover_routers_directed`, keeping only its own answers (#2689).

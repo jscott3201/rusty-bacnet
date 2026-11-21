@@ -70,22 +70,26 @@ impl BACnetClient {
         })
     }
 
-    /// Ask `destination`, a router on the local link (address text or MAC
-    /// bytes), or broadcast when omitted. A directed call collects only
-    /// that station's own reports. The requested router may ask other
-    /// networks about an unknown `network`. Collect for `wait` seconds
-    /// after the send (an IPv6 socket address may first need VMAC resolution): one
-    /// `DiscoveredRouter` per router MAC, in the order first heard. For a
-    /// `network`, only the routers that list it. No answer is an empty
-    /// list. `network` 0 and 65535 raise `BacnetError`. It holds the
-    /// started client through address resolution, the send and collection.
+    /// Broadcast a Who-Is-Router-To-Network for `network` (or every
+    /// network), or with `router` (its address text or MAC bytes on the
+    /// local link) ask that one router and keep only its own answers.
+    /// Collect for `wait` seconds after the send (an IPv6 socket address
+    /// may first need VMAC resolution): one `DiscoveredRouter` per router
+    /// MAC, in the order first heard. For a `network`, only the routers
+    /// that list it. No answer is an empty list. The asked router answers
+    /// with a local broadcast, so a B/IP router on another IP subnet is
+    /// heard only when a BBMD forwards its answer here, as a peer or by
+    /// foreign-device registration. A `router` that names no one station
+    /// raises `BacnetTransportError`;
+    /// `network` 0 and 65535 raise `BacnetError`. It holds the started
+    /// client through address resolution, the send and collection.
     /// `stop()` waits for the call to finish or be cancelled.
-    #[pyo3(signature = (network=None, *, destination=None, wait=3.0))]
+    #[pyo3(signature = (network=None, *, router=None, wait=3.0))]
     fn discover_routers<'py>(
         &self,
         py: Python<'py>,
         network: Option<u16>,
-        destination: Option<&Bound<'_, PyAny>>,
+        router: Option<&Bound<'_, PyAny>>,
         wait: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let wait = discover_wait(wait)?;
@@ -94,24 +98,22 @@ impl BACnetClient {
                 "network {network} is not a network number a router can reach; use 1..=65534"
             )));
         }
-        let destination = destination
+        let router = router
             .map(super::routing_table::RouterArg::read)
             .transpose()?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let client = started(&inner).await?;
-            let mac = match destination {
-                Some(router) => Some(
-                    router
-                        .on(&client, "destination needs a router's local address")
-                        .await?,
-                ),
-                None => None,
-            };
-            let routers = client
-                .discover_routers(network, mac.as_deref(), wait)
-                .await
-                .map_err(to_py_err)?;
+            let routers = match router {
+                Some(router) => {
+                    let mac = router
+                        .on(&client, "router needs a router's address on the local link")
+                        .await?;
+                    client.discover_routers_directed(&mac, network, wait).await
+                }
+                None => client.discover_routers(network, wait).await,
+            }
+            .map_err(to_py_err)?;
             Ok(routers
                 .into_iter()
                 .map(PyDiscoveredRouter)

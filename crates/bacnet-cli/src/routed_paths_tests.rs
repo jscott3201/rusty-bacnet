@@ -18,7 +18,7 @@ fn a_reserved_router_network_is_rejected_by_clap_before_ipv6_resolution() {
             "whois-router",
             "--dnet",
             network,
-            "--via",
+            "--router",
             "[::1]:47808",
         ])
         .unwrap_err();
