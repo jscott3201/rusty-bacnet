@@ -893,9 +893,9 @@
 # feature alone was 1,852 / 2,140 / 2,428 / 1,852 of that (measured on
 # dfe7a4289), which already put riscv32imc over; the rest is the reject,
 # the two counts and the refusals, 140 to 188 of it for settling a
-# refusal over a whole I-Am-Router before any of it is learned. .bss is 8 octets larger, the two new
-# u32 counts in the router's storage; the .bss and ram budgets stay at
-# 17,376. The other images are unchanged.
+# refusal over a whole I-Am-Router before any of it is learned. .bss is 8
+# octets larger, the two new u32 counts in the router's storage; the .bss
+# and ram budgets stay at 17,376. The other images are unchanged.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320

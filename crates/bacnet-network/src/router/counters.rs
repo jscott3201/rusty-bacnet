@@ -94,6 +94,9 @@ pub struct Counters {
     /// through another isolated port (one on a route through an ordinary
     /// port is applied). A reject that is also on its way to a node behind
     /// the other isolated port counts here and in `isolated_drops`: one
-    /// for the mark refused, one for the frame not passed on.
+    /// for the mark refused, one for the frame not passed on. The count is
+    /// per list entry, so a network a message lists twice counts twice. An
+    /// I-Am-Router is counted to its end; a routing table Ack only up to
+    /// the entry where the route cap ends its learning.
     pub isolated_refusals: u64,
 }

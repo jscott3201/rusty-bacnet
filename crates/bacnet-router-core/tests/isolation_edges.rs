@@ -85,6 +85,73 @@ fn the_route_cap_does_not_hide_a_refused_claim() {
     assert_eq!(egress(&sent), [0, 3]);
 }
 
+/// Each list entry is looked at once, on either side of the entry where
+/// the route cap ends the learning: a refusal before it is counted by the
+/// claim, one after it by the scan of the rest, and none twice.
+#[test]
+fn refusals_on_both_sides_of_the_cap_break_count_once_each() {
+    let mut router = with_routes(options(|options| options.route_cap = Some(6)));
+    let mut host = Recorder::default();
+    // 50 is on an ordinary port, 70 is new and meets the cap, 4 is
+    // directly connected on another port.
+    let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &i_am(&[50, 70, 4]), at(1));
+    assert_eq!(outcome, Outcome::Handled);
+    assert!(sent.is_empty(), "{sent:?}");
+    assert_eq!(
+        host.events,
+        [
+            refused(50),
+            Event::RouteCap {
+                class: ControlClass::IAm
+            },
+            refused(4)
+        ]
+    );
+    assert_eq!(
+        router.counters(),
+        router_counts(|counts| counts.isolated_refusals = 2)
+    );
+}
+
+/// The count is per list entry: a refused network listed twice counts
+/// twice, and is reported twice.
+#[test]
+fn a_refused_network_listed_twice_counts_twice() {
+    let mut router = with_routes(Options::HOSTED);
+    let mut host = Recorder::default();
+    let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &i_am(&[50, 50]), at(1));
+    assert_eq!(outcome, Outcome::Handled);
+    assert!(sent.is_empty(), "{sent:?}");
+    assert_eq!(host.events, [refused(50), refused(50)]);
+    assert_eq!(router.counters().isolated_refusals, 2);
+}
+
+/// With one isolated port alone, duplicate suppression is as without
+/// isolation: a repeat from that port is dropped as a duplicate, even one
+/// that names a network on another port.
+#[test]
+fn duplicates_with_a_single_isolated_port_are_dropped_as_ever() {
+    let mut ports = ports();
+    ports[2].isolated = false;
+    let mut router = router_with(
+        &ports,
+        options(|options| options.duplicates = Some(Duplicates::DEFAULT)),
+    );
+    let r9 = Mac::from_slice(R9).unwrap();
+    assert!(router.table_mut().add_learned(50, PortId(0), r9, at(0)));
+    let mut host = Recorder::default();
+    let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &i_am(&[50, 70]), at(1));
+    assert_eq!(outcome, Outcome::Handled);
+    assert_eq!(egress(&sent), [0, 2, 3]);
+    let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &i_am(&[50, 70]), at(1));
+    assert_eq!(outcome, Outcome::Discarded(Discard::Duplicate));
+    assert!(sent.is_empty());
+    assert_eq!(
+        router.counters(),
+        router_counts(|counts| counts.duplicate_drops = 1)
+    );
+}
+
 /// A refused I-Am-Router isn't remembered as a relayed one: the same list
 /// from the network's real router, inside the duplicate time to live, is
 /// taken and passed on.

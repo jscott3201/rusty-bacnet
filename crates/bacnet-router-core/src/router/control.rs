@@ -401,13 +401,13 @@ impl<
     ///
     /// A claim from an isolated port (one with an isolated peer) for a
     /// network the table reaches through any other port, directly or not,
-    /// is refused, counted and reported
-    /// (#2684; decision of 2026-11-20). Clause 6.6.3.3 would replace the
-    /// route with the newest claimant's; here that would let one isolated
-    /// port take a network away from every other port. A network that
-    /// really moves behind an isolated port needs its old route removed
-    /// first, or a restart. Claims from an ordinary port, a refresh through
-    /// the same port, and a new network are as before.
+    /// is refused, counted and reported (#2684; decision of 2026-11-20).
+    /// Clause 6.6.3.3 would replace the route with the newest claimant's;
+    /// here that would let one isolated port take a network away from
+    /// every other port. A network that really moves behind an isolated
+    /// port needs its old route removed first, or a restart. Claims from
+    /// an ordinary port, a refresh through the same port, and a new
+    /// network are as before.
     pub(super) fn claim(
         &mut self,
         at: &Arrival<'_>,
