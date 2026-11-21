@@ -184,9 +184,6 @@ class LocalBbmdTableTests(unittest.IsolatedAsyncioTestCase):
                                          [(row["address"], row["ttl"]) for row in rows])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TypedListRebuildTests(unittest.TestCase):
     """``_typed_list``, which pickling uses to rebuild a ``bdt`` or ``fdt``."""
@@ -212,3 +209,7 @@ class TypedListRebuildTests(unittest.TestCase):
         ]:
             with self.subTest(tag=tag, items=items), self.assertRaises(ValueError):
                 rb.PropertyValue._typed_list(tag, items)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -80,6 +80,26 @@ class ForcedPropertyDecodeTests(unittest.TestCase):
                               ("3102", {"array_index": 0}), ("21022103", {"array_index": 1})]:
             self.refused(bytes.fromhex(wire), "unsigned", "type_mismatch", shape="array", **options)
 
+    def test_results_are_values(self):
+        first = rb.decode_property_as(b"\x21\x02", "unsigned", value_names={2: "two"})
+        again = rb.decode_property_as(b"\x21\x02", "unsigned", value_names={2: "two"})
+        refused = rb.decode_property_as(b"\x91\x02", "unsigned")
+        self.assertEqual(first, again)
+        self.assertEqual(hash(first), hash(again))
+        self.assertNotEqual(first, refused)
+        self.assertNotEqual(first, rb.decode_property_as(b"\x21\x02", "unsigned"))
+        self.assertNotEqual(first, "decoded")
+        for result in (first, refused):
+            for rebuilt in (copy.copy(result), copy.deepcopy(result),
+                            pickle.loads(pickle.dumps(result))):
+                self.assertEqual(rebuilt, result)
+        self.assertEqual(repr(first),
+                         "PropertyDecodeResult(status='decoded', value=PropertyValue.unsigned(2), raw=<2 bytes>)")
+        self.assertTrue(repr(refused).startswith(
+            "PropertyDecodeResult(status='type_mismatch', diagnostic='expected application tag 2"))
+        with self.assertRaises(ValueError):
+            rb.PropertyDecodeResult._restore("maybe", None, b"", None, None)
+
     def test_declaration_errors(self):
         for primitive, options in [("Signed", {}), ("Unsigned", {}), ("Integer", {}), ("integer", {}),
                                    ("list", {}), ("application_data", {}), ("tagged", {}),
@@ -105,7 +125,7 @@ class ForcedPropertyDecodeTests(unittest.TestCase):
             ("0e21020f", "unsigned", "type_mismatch", "list"),
             # A 5-octet Signed under another declaration is a mismatch first.
             ("35050100000000", "unsigned", "type_mismatch"),
-            # Valid encodings the model can't hold (Clauses 20.2.4, 20.2.5,
+            # Encodings the model can't hold (Clauses 20.2.4, 20.2.5,
             # 20.2.9 and 20.2.11 set no upper integer length).
             ("35050100000000", "signed", "unsupported_encoding"),
             ("2509010000000000000000", "unsigned", "unsupported_encoding"),
@@ -121,11 +141,24 @@ class ForcedPropertyDecodeTests(unittest.TestCase):
             ("30", "signed", "malformed"), ("20", "unsigned", "malformed"),
             ("7101", "character_string", "malformed"), ("720300", "character_string", "malformed"),
             ("7106", "character_string", "malformed"),
+            # Wrong lengths for fixed-size primitives (Clause 20.2).
+            ("12", "boolean", "malformed"), ("0100", "null", "malformed"),
+            ("a3010203", "date", "malformed"), ("b3000000", "time", "malformed"),
+            ("c3000000", "object_identifier", "malformed"),
+            # An empty bit string has no unused bits (Clause 20.2.10).
+            ("8105", "bit_string", "malformed"), ("82050f8105", "bit_string", "malformed", "list"),
             ("910222", "unsigned", "malformed"), ("09020e", "unsigned", "malformed"),
             ("d04400", "unsigned", "malformed"), ("4100", "real", "malformed"),
         ]:
             with self.subTest(wire=wire, datatype=datatype):
                 self.refused(bytes.fromhex(wire), datatype, status, *shape)
+        # An over-wide integer under a fixed length that the count misses:
+        # the shape is checked first.
+        wide = bytes.fromhex("2509010000000000000000")
+        self.refused(wide, "unsigned", "type_mismatch", "array", array_length=2)
+        self.refused(wide + wide, "unsigned", "type_mismatch", "array", array_length=3)
+        self.refused(wide + wide, "unsigned", "unsupported_encoding", "array", array_length=2)
+        self.assertEqual(self.decoded("8100", "bit_string").value.octets, b"\x81\x00")
         self.refused(b"\x0e" * 33 + b"\x0f" * 33, "null", "limit_exceeded")
         self.refused(b"\x00" * 10001, "null", "limit_exceeded", shape="array")
         self.assertEqual(len(rb.decode_property_as(b"\x00" * 10000, "null", "list").value.value), 10000)
@@ -174,11 +207,22 @@ class ReturnedPropertyContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[1]["error"], (rb.ErrorClass.PROPERTY, rb.ErrorCode.UNKNOWN_PROPERTY))
         ordinary = rb.PropertyValue.unsigned(2)
         self.assertIsNone(ordinary.read_context)
+        self.assertEqual(rp.read_context, rp.read_context)
+        self.assertNotEqual(rb.PropertyReadContext._restore(self.oid, 1330, 2), rp.read_context)
+        self.assertNotEqual(rp.read_context, (self.oid, 1330, 1))
+        self.assertEqual(repr(rp.read_context),
+                         f"PropertyReadContext(object_id={self.oid!r}, "
+                         "property_id=1330, array_index=1)")
+        self.assertEqual(len({rp.read_context, rows[0]["value"].read_context}), 1)
         for value in [rp, rows[0]["value"]]:
             for rebuilt in [value, copy.copy(value), copy.deepcopy(value), pickle.loads(pickle.dumps(value))]:
                 ctx = rebuilt.read_context
                 self.assertEqual((ctx.object_id, ctx.property_id, ctx.array_index),
                                  (self.oid, 1330, 1))
+                self.assertEqual(ctx, value.read_context)
+                self.assertEqual(hash(ctx), hash(value.read_context))
+                self.assertEqual(pickle.loads(pickle.dumps(ctx)), ctx)
+                self.assertEqual(copy.deepcopy(ctx), ctx)
                 self.assertFalse(hasattr(ctx, "raw"))
                 # A primitive's octets are its shortest encoding, not the
                 # leading-zero form received; both decode to the same value.

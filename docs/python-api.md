@@ -1156,7 +1156,10 @@ A value returned by a network `read_property` or `read_property_multiple`
 carries a `read_context`: the `object_id`, numeric `property_id` and
 `array_index` the ACK named, which can differ from the request (a wildcard
 Device instance names the device's own). Copies and pickles keep it; it
-takes no part in equality, hashing or `repr`. Local server reads, COV
+takes no part in the value's equality, hashing or `repr`. The context
+itself is a value: equal when all three fields are, and hashable. It holds
+no octets: a primitive's `.octets` are a re-encoding, so the device's
+character set and any non-minimal integer form are not kept. Local server reads, COV
 values, a Group's member results and values you build have none.
 
 The stack doesn't know a proprietary property's datatype. Choose a
@@ -1203,9 +1206,10 @@ The result's `status` is one of:
 - `decoded`: `value` holds the decoded value.
 - `type_mismatch`: the octets' tag or shape differs from the declaration,
   context-tagged or constructed content under a primitive included.
-- `unsupported_encoding`: a valid encoding the value model can't hold, such
-  as a character set the binding doesn't convert or an integer wider than
-  it keeps (an Unsigned past 8 octets, a Signed or Enumerated past 4).
+- `unsupported_encoding`: an encoding the value model can't hold, such as
+  a character set the binding doesn't convert or an integer wider than it
+  keeps (an Unsigned past 8 octets, a Signed or Enumerated past 4), whether
+  or not that encoding is minimal. A non-minimal integer that fits decodes.
 - `malformed`: any other broken encoding, reserved application tags 13 to
   15 included.
 - `limit_exceeded`: past the tag reader's depth or node bound.

@@ -44,9 +44,10 @@ every length; `array_index=0` reads an array's count as `unsigned`.
 `value_names` maps integer values to names for `value_names` on the
 result. The result's `status` is `"decoded"`, `"type_mismatch"`
 (the octets' tag or shape differs from the declaration, context-tagged
-or constructed content included), `"unsupported_encoding"` (a valid
+or constructed content included), `"unsupported_encoding"` (an
 encoding the value model cannot hold: a character set it does not
-convert, an integer wider than it keeps), `"malformed"` (any other
+convert, or an integer wider than it keeps, minimal or not; a
+non-minimal integer that fits decodes), `"malformed"` (any other
 broken encoding, reserved application tags 13 to 15 included) or
 `"limit_exceeded"` (the depth or node bound). An invalid declaration
 raises ValueError.

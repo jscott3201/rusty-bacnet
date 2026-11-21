@@ -15,7 +15,8 @@ use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyInt, PyMapping, PyTuple};
 
-/// A forced decode and the original input, including when the declaration does not fit.
+/// A declared decode and its input, kept whether or not the declaration fit.
+/// A value class: two results are equal when every field is.
 #[pyclass(
     name = "PropertyDecodeResult",
     module = "rusty_bacnet",
@@ -28,6 +29,94 @@ struct PyPropertyDecodeResult {
     raw: Py<PyBytes>,
     diagnostic: Option<String>,
     value_names: Option<Py<PyTuple>>,
+}
+
+/// The statuses a result can carry.
+const STATUSES: [&str; 5] = [
+    "decoded",
+    "type_mismatch",
+    "unsupported_encoding",
+    "malformed",
+    "limit_exceeded",
+];
+
+#[pymethods]
+impl PyPropertyDecodeResult {
+    fn __eq__(&self, py: Python<'_>, other: PyRef<'_, Self>) -> PyResult<bool> {
+        let names = match (&self.value_names, &other.value_names) {
+            (Some(a), Some(b)) => a.bind(py).eq(b.bind(py))?,
+            (None, None) => true,
+            _ => false,
+        };
+        Ok(names
+            && self.status == other.status
+            && self.value == other.value
+            && self.raw.bind(py).as_bytes() == other.raw.bind(py).as_bytes()
+            && self.diagnostic == other.diagnostic)
+    }
+
+    /// Hashes the status, input and diagnostic, which equal results share.
+    fn __hash__(&self, py: Python<'_>) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut state = std::collections::hash_map::DefaultHasher::new();
+        (self.status, self.raw.bind(py).as_bytes(), &self.diagnostic).hash(&mut state);
+        state.finish()
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let detail = match (&self.value, &self.diagnostic) {
+            (Some(value), _) => format!("value={}", Bound::new(py, value.clone())?.repr()?),
+            (None, Some(diagnostic)) => format!(
+                "diagnostic={}",
+                pyo3::types::PyString::new(py, diagnostic).repr()?
+            ),
+            (None, None) => String::new(),
+        };
+        Ok(format!(
+            "PropertyDecodeResult(status='{}', {detail}, raw=<{} bytes>)",
+            self.status,
+            self.raw.bind(py).as_bytes().len()
+        ))
+    }
+
+    /// What `copy` and `pickle` call: `_restore` with every field.
+    fn __reduce__<'py>(
+        slf: &Bound<'py, Self>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
+        let py = slf.py();
+        let this = slf.get();
+        let arguments = (
+            this.status,
+            this.value.clone(),
+            this.raw.clone_ref(py),
+            this.diagnostic.clone(),
+            this.value_names.as_ref().map(|names| names.clone_ref(py)),
+        )
+            .into_pyobject(py)?;
+        Ok((slf.get_type().getattr("_restore")?, arguments))
+    }
+
+    /// Rebuild a pickled result.
+    #[staticmethod]
+    fn _restore(
+        status: &str,
+        value: Option<PyPropertyValue>,
+        raw: Py<PyBytes>,
+        diagnostic: Option<String>,
+        value_names: Option<Py<PyTuple>>,
+    ) -> PyResult<Self> {
+        let status = STATUSES
+            .into_iter()
+            .find(|known| *known == status)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown status {status:?}")))?;
+        Ok(Self {
+            status,
+            value,
+            raw,
+            diagnostic,
+            value_names,
+        })
+    }
 }
 
 /// The datatype a declaration names, by the `PropertyValue.tag` name of the
@@ -127,7 +216,9 @@ impl Refusal {
 /// Whether an application element the decoder refused is an integer with
 /// more contents octets than the model's integer holds: Clauses 20.2.4,
 /// 20.2.5 and 20.2.11 set no upper length, but `PropertyValue` keeps an
-/// Unsigned in 64 bits and a Signed or Enumerated in 32.
+/// Unsigned in 64 bits and a Signed or Enumerated in 32. Such an encoding is
+/// `unsupported_encoding` whether or not it is minimal; a non-minimal
+/// encoding that fits the model decodes.
 fn wider_than_model(tag: u8, contents: usize) -> bool {
     match tag {
         app_tag::UNSIGNED => contents > 8,
@@ -140,8 +231,9 @@ fn wider_than_model(tag: u8, contents: usize) -> bool {
 ///
 /// A broken encoding is `malformed` wherever it is. Otherwise a shape or tag
 /// that differs from the declaration (context-tagged or constructed content
-/// under a primitive included) is `type_mismatch`, and only then is a valid
-/// encoding the model cannot hold `unsupported_encoding`.
+/// under a primitive included) is `type_mismatch`, and only then is an
+/// encoding the model cannot hold (an unconverted character set, an integer
+/// wider than the model) `unsupported_encoding`.
 fn decode(raw: &[u8], decl: &Declaration) -> Result<PropertyValue, Refusal> {
     let mut starts = Vec::new();
     let mut nodes = 0;
@@ -179,6 +271,21 @@ fn decode(raw: &[u8], decl: &Declaration) -> Result<PropertyValue, Refusal> {
                 format!(
                     "reserved application tag {} at octet {}",
                     item.tag.number, item.offset
+                ),
+            ));
+        }
+        // Clause 20.2.10: a bit string with no data octets has no unused
+        // bits. Checked here, not in the shared decoder, which every read,
+        // write and COV path uses and which stays tolerant of older devices.
+        if item.tag.class == TagClass::Application
+            && item.tag.number == app_tag::BIT_STRING
+            && matches!(item.contents, [unused] if *unused != 0)
+        {
+            return Err(Refusal::new(
+                "malformed",
+                format!(
+                    "empty bit string with {} unused bits at octet {}",
+                    item.contents[0], item.offset
                 ),
             ));
         }

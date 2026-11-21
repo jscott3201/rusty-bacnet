@@ -145,7 +145,10 @@ past the end.
 The object, property and array index the ACK of a ReadProperty or
 ReadPropertyMultiple named, which can differ from the request (a
 wildcard Device instance names the device's own). It holds no octets:
-decode a value's `.octets`.
+decode a value's `.octets`. A primitive's `.octets` are a
+re-encoding, so the device's character set and any non-minimal integer
+form are not kept. A value class: equal when all three fields are,
+hashable, and it copies and pickles on its own.
 
 Properties:
 
@@ -158,6 +161,8 @@ Properties:
 What `decode_property_as` made of some octets: `value` (with
 `value_names` when names were given) when `status` is `"decoded"`,
 otherwise a `diagnostic`. `raw` is the input, kept in every case.
+A value class: equal when every field is, hashable, and it copies and
+pickles.
 
 Properties:
 
