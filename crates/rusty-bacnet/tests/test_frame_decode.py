@@ -7,7 +7,7 @@ import unittest
 
 from rusty_bacnet import (
     BACnetClient, BipEndpoint, FrameSummary, ObjectIdentifier, ObjectType,
-    PropertyIdentifier, decode_frame,
+    PropertyIdentifier, decode_frame, decode_frame_tree,
 )
 
 # Fixed wire fixtures, decoded only by the Rust implementation under test.
@@ -113,6 +113,9 @@ class FrameDecodeTests(unittest.TestCase):
                 summary = decode_frame(octets, link=token)
                 self.assertEqual(summary.link_message, message)
                 self.assertIsNone(summary.parse_error)
+                fields = decode_frame_tree(octets, token)
+                self.assertTrue(fields[0].children)
+                self.assertFalse(any("malformed" in root.label.lower() for root in fields))
         refused = ("other", "bip6", "BIP", "Bip", "BACnet/IP", "BACnet/IPv6",
                    "BACnet/SC", "MS/TP", "Ethernet", "BACnet Ethernet", "")
         for link in refused:
