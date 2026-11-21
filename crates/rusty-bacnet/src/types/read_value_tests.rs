@@ -358,3 +358,19 @@ fn a_date_time_priority_array_splits_into_its_slots() {
     assert_eq!(slots[1], PropertyValue::ApplicationData(slot.to_vec()));
     assert_eq!(slots[15], PropertyValue::Null);
 }
+
+#[test]
+fn network_port_table_projection_honors_the_native_row_budget() {
+    // A legal FDT row repeated past the 10,000-item table and tag-tree limits.
+    let row = [0x0d, 6, 192, 0, 2, 3, 0xba, 0xc0, 0x19, 60, 0x29, 50];
+    let octets = row.repeat(10_001);
+    let value = decode_read_value(
+        ObjectType::NETWORK_PORT,
+        PropertyIdentifier::BBMD_FOREIGN_DEVICE_TABLE,
+        None,
+        &octets,
+    )
+    .unwrap();
+    assert_eq!(value.form, Form::Plain);
+    assert_eq!(value.inner, PropertyValue::ApplicationData(octets));
+}

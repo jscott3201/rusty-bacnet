@@ -1475,10 +1475,10 @@ A constructed element's `text` is for display, like the table: its wording
 may change, so don't parse it. Branch on `element`; structured fields may
 join it later without removing `text`. The kinds are `access-rule`,
 `action-list`, `address-binding`, `authentication-factor`,
-`authentication-factor-format`, `authentication-policy`, `calendar-entry`,
-`cov-subscription`, `daily-schedule`, `date-range`, `destination`,
-`device-object-property-reference`, `device-object-reference`,
-`event-parameter`, `name-value`, `object-property-reference`,
+`authentication-factor-format`, `authentication-policy`, `bdt-entry`,
+`calendar-entry`, `cov-subscription`, `daily-schedule`, `date-range`,
+`destination`, `device-object-property-reference`,
+`device-object-reference`, `event-parameter`, `fdt-entry`, `name-value`, `object-property-reference`,
 `port-permission`, `prescale`, `property-access-result`,
 `read-access-result`, `read-access-specification`, `recipient`, `scale`,
 `shed-level`, `special-event`, `stage-limit-value`, `tagged`, `time-stamp`

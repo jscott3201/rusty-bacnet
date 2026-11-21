@@ -1137,19 +1137,94 @@ Code that handled `application_data` reads should expect:
   tag) anywhere in it, or more than 10,000 elements. Accept `"tagged"` and
   `"application_data"`, and read the octets from `.octets`, which both
   give. Broken framing still raises as for any read.
+- **Network Port tables.** A whole read of a Network Port's
+  BBMD_Broadcast_Distribution_Table (414) or BBMD_Foreign_Device_Table
+  (415) is tagged `bdt` or `fdt` (#2690), not `tagged`: see
+  [Typed constructed values](#typed-constructed-values).
 - **Failed typed reads.** A typed constructed property whose octets don't
   decode as its elements (a malformed Recipient_List, say) falls back to
   `tagged` too.
-- **Values written as `application_data`.** A value written with
-  `PropertyValue.application_data(octets)` reads back `tagged`, and the two
-  are not equal: compare `.octets`, or compare with
+- **Values written as `application_data`.** When a property has no typed
+  form and its context tags form a readable tree, octets written with
+  `PropertyValue.application_data(octets)` read back as `tagged`. Compare
+  the write and read values by `.octets`, or compare the read value with
   `PropertyValue.tagged(octets)`.
 
-The value doesn't say which object, property or vendor it came from: keep
-the object and property you read, and the device's `vendor_id` from
-[`DiscoveredDevice`](#discovereddevice) (or a read of the Device object's
-Vendor_Identifier), since one proprietary property number means different
-things from different vendors (Clause 23.3).
+#### Interpreting vendor property values
+
+A value returned by a network `read_property` or `read_property_multiple`
+carries a `read_context`: the `object_id`, numeric `property_id` and
+`array_index` the ACK named, which can differ from the request (a wildcard
+Device instance names the device's own). Copies and pickles keep it; it
+takes no part in the value's equality, hashing or `repr`. The context
+itself is a value: equal when all three fields are, and hashable. It holds
+no octets: a primitive's `.octets` are a re-encoding, so the device's
+character set and any non-minimal integer form are not kept. Local server reads, COV
+values, a Group's member results and values you build have none.
+
+The stack doesn't know a proprietary property's datatype. Choose a
+declaration by the station's vendor identifier (from its I-Am, or a read of
+the Device object's Vendor_Identifier), the object type and the property
+number: the same proprietary property number can mean different datatypes
+at different vendors, and on different object types at one vendor (Clause
+23.3). Keep those declarations in your own table or a third-party registry,
+and decode the value's `.octets` with `decode_property_as`:
+
+```python
+from rusty_bacnet import ObjectType, decode_property_as
+
+# (vendor identifier, object type, property number) -> (datatype, shape)
+DECLS = {
+    (555, ObjectType.DEVICE, 1330): ("unsigned", "scalar"),
+    (555, ObjectType.DEVICE, 1331): ("unsigned", "array"),
+    (777, ObjectType.DEVICE, 1331): ("unsigned", "scalar"),
+}
+
+ctx = value.read_context
+decl = DECLS.get((vendor_id, ctx.object_id.object_type, ctx.property_id))
+if decl is not None:
+    datatype, shape = decl
+    index = {"array_index": ctx.array_index} if shape == "array" else {}
+    result = decode_property_as(value.octets, datatype, shape, **index)
+    if result.status == "decoded":
+        print(result.value.value)
+```
+
+The datatype is the `tag` name of the primitive value it decodes to:
+`null`, `boolean`, `unsigned`, `signed`, `real`, `double`, `octet_string`,
+`character_string`, `bit_string`, `enumerated`, `date`, `time` or
+`object_identifier`. The shape is `scalar`, `array` or `list`. A whole
+array or list is a list at every length, zero and one included. With
+`array_index`, a positive index gives one element and index zero the
+array's count as `unsigned`; `array_length` declares a fixed-length array.
+`value_names`, a mapping from integers to names, gives the result's
+`value_names`: a tuple aligned with the decoded elements, `None` where a
+number has no name, and empty for a count. The value keeps its numbers.
+
+The result's `status` is one of:
+
+- `decoded`: `value` holds the decoded value.
+- `type_mismatch`: the octets' tag or shape differs from the declaration,
+  context-tagged or constructed content under a primitive included.
+- `unsupported_encoding`: an encoding the value model can't hold, such as
+  a character set the binding doesn't convert or an integer wider than it
+  keeps (an Unsigned past 8 octets, a Signed or Enumerated past 4), whether
+  or not that encoding is minimal. A non-minimal integer that fits decodes.
+- `malformed`: any other broken encoding, reserved application tags 13 to
+  15 included.
+- `limit_exceeded`: past the tag reader's depth or node bound.
+
+Every result keeps its input as `raw` and, unless decoded, a `diagnostic`.
+An invalid declaration raises `ValueError`.
+
+What `.octets` holds depends on the value. A `tagged` or `application_data`
+value and a typed constructed element hold the octets exactly as received;
+a vendor value the binding can't decode as a primitive (a Signed past 4
+octets, a UCS-4 string, any context-tagged content) reads as one of those.
+A primitive, or a list of primitives, is re-encoded from its decoded value
+in the shortest form: it decodes to the same value, but can differ from what
+the device sent (an Unsigned with leading zero octets, a string sent in
+UCS-2 or ISO 8859-1, which comes back as UTF-8).
 
 #### Typed constructed values
 
@@ -1165,13 +1240,17 @@ and a read of a single value (Accompaniment, Audit_Notification_Recipient,
 Effective_Period, Last_Command_Time, Value_Source, Scale, Prescale, the shed
 levels, Event_Parameters and the others marked "one value") the element
 itself. An
-empty collection is `PropertyValue.list([])`. Each element keeps the octets it
+empty collection is `PropertyValue.list([])`, except a Network Port's
+tables: a whole BBMD_Broadcast_Distribution_Table or
+BBMD_Foreign_Device_Table read is tagged `"bdt"` or `"fdt"` (#2690), its
+`.value` a list of the entry mappings, `[]` when empty. Each element keeps the octets it
 was read from, so writing the value back (`write_property`,
 `write_property_local`) sends them unchanged. `PropertyValue.list` of
 elements of one collection, from indexed reads, equals the whole read. Two
 values are equal when they carry the same octets and the same element
 production, so a typed read doesn't equal `PropertyValue.application_data` of
-its octets. `.octets` gives those octets as `bytes` (a whole
+its octets, and two encodings of the same entry (a TTL in one octet or
+two) are unequal though their `.value` is the same. `.octets` gives those octets as `bytes` (a whole
 collection's elements back to back), for comparing with a capture or for
 `PropertyValue.application_data`.
 
@@ -1195,6 +1274,8 @@ collection's elements back to back), for comparing with a capture or for
 | Trend Log; Averaging, Event Enrollment | Log_DeviceObjectProperty; Object_Property_Reference (one value) | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | existing property writes where writable |
 | any object with intrinsic reporting | Event_Algorithm_Inhibit_Ref (one value) | `"object_property_reference"` | `{"object_identifier", "property_identifier", "property_array_index"}`: a `DeviceObjectPropertyReference` mapping without `device_identifier`; instance 4194303 while unset | existing property writes where writable |
 | Access Point; Lift, Escalator | Access_Event_Credential; Energy_Meter_Ref (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
+| Network Port | BBMD_Broadcast_Distribution_Table | `"bdt_entry"` | a `BdtEntry`: `{"address", "broadcast_mask"}`, `address` the BBMD as display text (`"ip:port"` as `read_bdt()` gives IPv4, `"[v6]:port"` or `"name:port"`; `None` for an entry that names no host), `broadcast_mask` dotted text or `None` | none yet |
+| Network Port | BBMD_Foreign_Device_Table | `"fdt_entry"` | an `FdtEntry`, as `read_fdt()` gives it: `{"address", "ttl", "seconds_remaining"}`, `address` `"ip:port"` or `"[v6]:port"` | none yet |
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
 | Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
@@ -1212,6 +1293,22 @@ collection's elements back to back), for comparing with a capture or for
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
 | any object serving Tags | Tags | `"name_value"` | `{"name": str, "value": None or PropertyValue}` | the `tags=` keyword of the object builders (see [Object profiles and Value_Source](#object-profiles-and-value_source)); read values can also be written back |
+
+A Network Port's BDT and FDT read this way through ReadProperty,
+ReadPropertyMultiple, COV values and the local `BACnetServer.read_property`
+(#2690). A BDT row's address is the `"ip:port"` text `read_bdt()` gives
+for IPv4, with `"[v6]:port"` and `"name:port"` for the other host kinds,
+so a script can compare a Network Port read with the BVLC reads of the same
+BBMD; that text is for display (a host name may itself hold a colon), and
+the value's `.octets` are the exact form. The rows are read-only for now:
+they aren't accepted as `Bbmd(bdt=)` input, no `PropertyValue` is built from
+rows, so writing a changed table means encoding its octets yourself and
+passing `PropertyValue.application_data`. Writing back a value as read
+sends its octets unchanged. Octets that aren't the entries, to the last
+octet, or more than 10,000 entries, read as `tagged` or `application_data`
+holding the octets as served; application-tagged values that aren't
+entries don't become a plain list, as they would for other typed lists. FD_BBMD_Address and BACnet_IP_Global_Address have no typed
+form yet and read as `tagged`.
 
 Single reference reads use these forms through local reads, client and endpoint
 RP/RPM, and device-aware singular and batch reads. A property-reference mapping

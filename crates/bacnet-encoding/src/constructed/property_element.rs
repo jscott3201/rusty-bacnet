@@ -109,11 +109,17 @@ pub enum ConstructedElement {
     /// An Event Enrollment's Event_Parameters, a `BACnetEventParameter`
     /// (`decode_event_parameter`).
     EventParameter,
+    /// A Network Port's BBMD_Broadcast_Distribution_Table element, a
+    /// `BACnetBDTEntry` (`decode_bdt_entry`).
+    BdtEntry,
+    /// A Network Port's BBMD_Foreign_Device_Table element, a
+    /// `BACnetFDTEntry` (`decode_fdt_entry`).
+    FdtEntry,
 }
 
 impl ConstructedElement {
     /// Every element, each once.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 30] = [
         Self::NameValue,
         Self::Destination,
         Self::PortPermission,
@@ -142,6 +148,8 @@ impl ConstructedElement {
         Self::ShedLevel,
         Self::AuthenticationFactor,
         Self::EventParameter,
+        Self::BdtEntry,
+        Self::FdtEntry,
     ];
 }
 
@@ -220,6 +228,8 @@ pub fn property_element(
         (O::DEVICE, P::DEVICE_ADDRESS_BINDING) => (E::AddressBinding, Collection),
         (O::ACCUMULATOR, P::SCALE) => (E::Scale, Single),
         (O::ACCUMULATOR, P::PRESCALE) => (E::Prescale, Single),
+        (O::NETWORK_PORT, P::BBMD_BROADCAST_DISTRIBUTION_TABLE) => (E::BdtEntry, Collection),
+        (O::NETWORK_PORT, P::BBMD_FOREIGN_DEVICE_TABLE) => (E::FdtEntry, Collection),
         // Every object type that has these properties gives them one datatype.
         (_, P::TAGS) => (E::NameValue, Collection),
         (_, P::EVENT_TIME_STAMPS | P::COMMAND_TIME_ARRAY) => (E::TimeStamp, Collection),
@@ -235,7 +245,8 @@ pub fn property_element(
 /// that starts at an offset and returning the offset just past it. `None`
 /// when an element doesn't decode or `decode` doesn't move forward, so a
 /// value that isn't wholly made of the elements is never half split. Empty
-/// octets split into no elements.
+/// octets split into no elements, and more than 10,000 elements (the bound
+/// the list codecs and the tag tree keep) into none either: `None`.
 #[cfg(feature = "alloc")]
 pub fn split_elements(
     octets: &[u8],
@@ -244,6 +255,9 @@ pub fn split_elements(
     let mut ends = alloc::vec::Vec::new();
     let mut offset = 0;
     while offset < octets.len() {
+        if ends.len() == super::MAX_FRAMED_ITEMS {
+            return None;
+        }
         let end = decode(octets, offset).ok()?;
         if end <= offset || end > octets.len() {
             return None;
@@ -289,6 +303,17 @@ mod tests {
                 P::LOG_DEVICE_OBJECT_PROPERTY,
                 Some((E::DeviceObjectPropertyReference, ElementShape::Collection)),
             ),
+            (
+                O::NETWORK_PORT,
+                P::BBMD_BROADCAST_DISTRIBUTION_TABLE,
+                Some((E::BdtEntry, ElementShape::Collection)),
+            ),
+            (
+                O::NETWORK_PORT,
+                P::BBMD_FOREIGN_DEVICE_TABLE,
+                Some((E::FdtEntry, ElementShape::Collection)),
+            ),
+            (O::ANALOG_INPUT, P::BBMD_FOREIGN_DEVICE_TABLE, None),
             (O::ANALOG_INPUT, P::PRESENT_VALUE, None),
             (O::SCHEDULE, P::PRESENT_VALUE, None),
         ] {
@@ -327,5 +352,17 @@ mod tests {
         // A decoder that doesn't move forward, or runs past the end.
         assert_eq!(split_elements(&[1], |_, offset| Ok(offset)), None);
         assert_eq!(split_elements(&[1], |_, _| Ok(5)), None);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn a_split_past_the_element_bound_is_refused() {
+        let ones = |_: &[u8], offset: usize| Ok(offset + 1);
+        let most = vec![0u8; crate::constructed::MAX_FRAMED_ITEMS];
+        assert_eq!(
+            split_elements(&most, ones).map(|ends| ends.len()),
+            Some(most.len())
+        );
+        assert_eq!(split_elements(&[most, vec![0]].concat(), ones), None);
     }
 }

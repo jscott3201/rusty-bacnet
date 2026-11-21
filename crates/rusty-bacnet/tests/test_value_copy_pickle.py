@@ -75,6 +75,16 @@ def samples() -> dict[type, list[Any]]:
     one = [PropertyValue.real(1.0), PropertyValue.double(1.0),
            PropertyValue.unsigned(1), PropertyValue.enumerated(1)]
     return {
+        rusty_bacnet.PropertyReadContext: [
+            rusty_bacnet.PropertyReadContext._restore(oid, 85, None),
+            rusty_bacnet.PropertyReadContext._restore(oid, 4194303, 4294967295),
+        ],
+        rusty_bacnet.PropertyDecodeResult: [
+            rusty_bacnet.decode_property_as(b"\x21\x02", "unsigned", value_names={2: "two"}),
+            rusty_bacnet.decode_property_as(b"\x21\x02", "unsigned", "array"),
+            rusty_bacnet.decode_property_as(b"\x81\x05", "bit_string"),
+            rusty_bacnet.decode_property_as(b"", "null", "list"),
+        ],
         ObjectIdentifier: [
             oid,
             ObjectIdentifier(ObjectType.DEVICE, 4194303),  # the wildcard instance
