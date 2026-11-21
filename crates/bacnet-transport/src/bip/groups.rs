@@ -18,7 +18,8 @@ use super::BipTransport;
 /// subnet holds it (at any UDP port). It says nothing about what the station
 /// is. For an off-link peer the subnet mask is unknown, so its address is
 /// taken as one station. The interface lookup asks the operating system and
-/// sends nothing. This transport's own configured broadcast is
+/// sends nothing; with overlapping local subnets, the first interface whose
+/// subnet holds the address decides. This transport's own configured broadcast is
 /// [`TransportPort::is_group_destination`](crate::port::TransportPort::is_group_destination)'s
 /// to refuse.
 pub async fn is_unicast_station(mac: &[u8]) -> std::io::Result<bool> {

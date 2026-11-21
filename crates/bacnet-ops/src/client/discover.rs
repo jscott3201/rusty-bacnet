@@ -347,8 +347,7 @@ impl Discover {
     /// the target grammar, [`Client::station_mac`] finds the MAC:
     ///
     /// ```no_run
-    /// use bacnet_ops::{Client, Discover};
-    /// use bacnet_client::client::Station;
+    /// use bacnet_ops::{Client, Discover, Station};
     /// # async fn example(client: Client) -> Result<(), Box<dyn std::error::Error>> {
     /// let station = Station::local(&client.station_mac("192.168.1.20").await?);
     /// let found = client.discover(Discover::directed(station)).await?;

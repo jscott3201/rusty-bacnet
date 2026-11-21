@@ -1,7 +1,6 @@
 """The read-only routing-table query (#2612), against a real three-port router."""
 import asyncio
 import copy
-import errno
 import pickle
 import socket
 import unittest
@@ -64,10 +63,8 @@ class RoutingTableTests(unittest.IsolatedAsyncioTestCase):
             # it is refused as an invalid argument, with nothing sent.
             for invalid in ("255.255.255.255:47808", "239.1.2.3:47808", "0.0.0.0:47808",
                             "127.0.0.1:0", b"", b"xx"):
-                with self.subTest(invalid=invalid), \
-                        self.assertRaises(rb.BacnetTransportError) as refused:
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     await client.discover_routers(router=invalid, wait=0)
-                self.assertEqual(refused.exception.errno, errno.EINVAL)
             for network, asked, networks in [(None, router.address, [5, 7]), (7, router.mac, [7])]:
                 [heard] = await client.discover_routers(network, router=asked, wait=1.5)
                 self.assertEqual((heard.mac, heard.networks), (router.mac, networks))

@@ -5717,8 +5717,8 @@ class BACnetClient:
         when a BBMD forwards its answer here, as a peer or by foreign-device
         registration: with no BBMD, an empty list is the expected result. A
         ``router`` that names no one
-        station (empty, a broadcast or group address) raises
-        BacnetTransportError and sends nothing.
+        station (empty, a broadcast or group address) raises ValueError, as
+        ``routing_table`` does, and sends nothing.
 
         ``network`` 0 or 65535 raises BacnetError (#1850). ``wait`` is 0 to
         3600 seconds (``ValueError`` otherwise). It holds the started client

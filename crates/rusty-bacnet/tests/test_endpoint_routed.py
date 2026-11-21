@@ -245,7 +245,8 @@ class RoutedWireTests(unittest.IsolatedAsyncioTestCase):
         self.router.handler = replies
         async with asyncio.timeout(10):
             arrivals = await self.role.i_am_arrivals()
-            found = await self.role.discover(scope=self.target, low=FAR, high=FAR)
+            # The router answers at once on loopback: a short window is enough.
+            found = await self.role.discover(scope=self.target, low=FAR, high=FAR, wait=0.5)
             [row] = found
             self.assertEqual((row.network, bytes(row.entry.source_address), row.instance,
                               row.duplicate), (5, self.STATION, FAR, True))

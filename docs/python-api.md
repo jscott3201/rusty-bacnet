@@ -2619,7 +2619,8 @@ answers count: its address on the local link, as text such as
 A router asked about a network it does not know may ask further before it
 answers. An IPv6 socket address may need VMAC resolution before the
 collection window. The router must be one station: an empty, broadcast or
-group address raises `BacnetTransportError` with nothing sent, and on B/IP
+group address raises `ValueError` with nothing sent, as `routing_table`
+does, and on B/IP
 the host's own subnet masks catch a subnet broadcast at any UDP port.
 
 The asked router answers with a local broadcast, not to the asker alone.

@@ -147,6 +147,11 @@ impl Scope {
                     .who_has(Broadcast::Network(*network), object, range)
                     .await
             }
+            // A directed Who-Has goes to one station on this network only:
+            // `station` was admitted as local when checked, before the rate
+            // slot, with the network number known then. Should the number
+            // change in between, the Who-Has still goes to the admitted
+            // local MAC, not to a station on the newly named network.
             (Self::Directed(_), Some(station)) => {
                 client
                     .who_has_directed(station.address().1, object, range)

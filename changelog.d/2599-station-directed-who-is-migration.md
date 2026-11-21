@@ -1,4 +1,4 @@
 ---
 section: Migration notes
 ---
-- **Breaking (Rust API).** Pass a `bacnet_client::client::Station` to `bacnet_ops::Scope::Directed` and `Discover::directed`. Convert an existing `DeviceAddress` with `.into()`. Match `OpsError::UnknownDevice.asked` against `Option<Scope>` to distinguish a station-directed lookup from a broadcast. (#2599).
+- **Breaking (Rust API, #2599):** `bacnet_ops::Scope::Directed` and `Discover::directed` take a `bacnet_ops::Station` (the low-level `Station`, re-exported); convert a `DeviceAddress` with `.into()`. `OpsError::UnknownDevice.asked` is an `Option<Scope>`: for a remote address it is the station's network, asked after a Who-Is addressed to the station drew nothing.

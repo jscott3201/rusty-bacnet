@@ -80,7 +80,7 @@ impl BACnetClient {
     /// with a local broadcast, so a B/IP router on another IP subnet is
     /// heard only when a BBMD forwards its answer here, as a peer or by
     /// foreign-device registration. A `router` that names no one station
-    /// raises `BacnetTransportError`;
+    /// raises `ValueError`, as `routing_table` does, with nothing sent;
     /// `network` 0 and 65535 raise `BacnetError`. It holds the started
     /// client through address resolution, the send and collection.
     /// `stop()` waits for the call to finish or be cancelled.
@@ -109,11 +109,25 @@ impl BACnetClient {
                     let mac = router
                         .on(&client, "router needs a router's address on the local link")
                         .await?;
-                    client.discover_routers_directed(&mac, network, wait).await
+                    // An address that names no one station is an argument
+                    // error with nothing sent, as `routing_table` raises it.
+                    client
+                        .discover_routers_directed(&mac, network, wait)
+                        .await
+                        .map_err(|error| match error {
+                            bacnet_types::error::Error::Transport(io)
+                                if io.kind() == std::io::ErrorKind::InvalidInput =>
+                            {
+                                PyValueError::new_err(io.to_string())
+                            }
+                            other => to_py_err(other),
+                        })?
                 }
-                None => client.discover_routers(network, wait).await,
-            }
-            .map_err(to_py_err)?;
+                None => client
+                    .discover_routers(network, wait)
+                    .await
+                    .map_err(to_py_err)?,
+            };
             Ok(routers
                 .into_iter()
                 .map(PyDiscoveredRouter)

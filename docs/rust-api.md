@@ -12288,7 +12288,11 @@ stops)
 asks fewer devices). Its Who-Has is a local broadcast too unless
 `.within(scope)` names another `Scope` (#2596): every device that hears a
 Who-Has searches its objects, so an empty list from the default says only
-that nothing on this network has it. `bacnet_ops::raw::who_has(&low_level,
+that nothing on this network has it. A directed Who-Has goes to one station
+on this network only: the station is admitted as local when the request is
+checked, before its rate slot, and should the client learn a new network
+number in between, the Who-Has still goes to that local MAC.
+`bacnet_ops::raw::who_has(&low_level,
 &scope, &object, range)` sends one on a low-level client and
 `raw::who_has_replies(.., wait)` also collects the `ReceivedIHave`s, with no
 rate cap. `BACnetClient::who_has` and `who_has_replies` take a `Broadcast`
@@ -12338,7 +12342,8 @@ handles following it). A clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
 handle stays, and `Device::moved_to` says where its instance is heard now,
-by the I-Am times. A handle made from a remote address the table holds no
+by the I-Am times. `bacnet_ops::Station` re-exports the low-level
+`Station` that `Scope::Directed` and `Discover::directed` take. A handle made from a remote address the table holds no
 row for sends a Who-Is addressed to the station, then, with no answer within
 the resolve wait, one Who-Is to its network that only an I-Am from the
 station's own address answers, as a slave proxy sends for its MS/TP slave
