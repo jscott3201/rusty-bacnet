@@ -321,8 +321,9 @@ async fn a_broadcast_racing_a_move_goes_to_the_new_bbmd() {
         own,
         bacnet_bip_core::node::Mode::Foreign(foreign(47901)),
     );
-    let node =
-        Arc::new(node::NodeHandle::new(link, socket, Arc::default(), Arc::default()).unwrap());
+    let node = Arc::new(
+        node::NodeHandle::new(link, socket, false, Arc::default(), Arc::default()).unwrap(),
+    );
     let mover = Arc::clone(&node);
     *node.before_admit.lock().unwrap() = Some(Box::new(move || {
         mover.retarget(foreign(47902)).unwrap();

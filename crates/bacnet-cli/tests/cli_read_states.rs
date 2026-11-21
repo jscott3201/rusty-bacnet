@@ -399,3 +399,23 @@ async fn a_silent_device_costs_one_text_timeout() {
     task.abort();
     server.stop().await.unwrap();
 }
+
+/// A one-shot unicast command on loopback with the default broadcast
+/// address prints no start warning about it without `-v`, and does with it
+/// (#2691): only a broadcast would be refused, and its error says so.
+#[tokio::test]
+async fn the_loopback_broadcast_warning_waits_for_verbose() {
+    const WARNING: &str = "loopback interface has broadcast address 255.255.255.255";
+    let (mut server, device) = server().await;
+    let target = device.to_string();
+    for (verbose, shown) in [(None, false), (Some("-v"), true)] {
+        let mut args = vec!["--interface", "127.0.0.1", "--port", "0"];
+        args.extend(verbose);
+        args.extend(["--format", "json", "read", &target, "av:1", "pv"]);
+        let output = support::run(args).await;
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.contains(WARNING), shown, "{verbose:?}: {stderr}");
+    }
+    server.stop().await.unwrap();
+}

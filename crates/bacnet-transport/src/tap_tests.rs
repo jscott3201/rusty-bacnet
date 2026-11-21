@@ -120,6 +120,77 @@ fn a_dropped_receiver_unsubscribes() {
     assert_eq!(tap.lock_sinks().len(), 1);
 }
 
+#[test]
+fn close_includes_an_overflow_in_progress_and_detaches_the_receiver() {
+    let tap = FrameTap::new();
+    let slow = tap.subscribe_with_capacity(1);
+    let mut witness = tap.subscribe();
+    tap.record(TapDirection::Inbound, DataLink::Sc, peer, &[1]);
+    let frame = witness.try_recv().unwrap();
+
+    // Stage a publication between its full-queue rejection and the counter
+    // increment. Hold the same lock across these steps as FrameTap::publish.
+    let sinks = tap.lock_sinks();
+    let slow_sink = &sinks[0];
+    assert!(matches!(
+        slow_sink.tx.try_send(frame),
+        Err(mpsc::error::TrySendError::Full(_))
+    ));
+    let closing = std::thread::spawn(move || slow.close());
+    // The receiver has sealed its queue. It must wait for the in-flight count.
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(slow_sink.tx.closed());
+    slow_sink.dropped.fetch_add(1, Ordering::Relaxed);
+    tap.shared.dropped.fetch_add(1, Ordering::Relaxed);
+    drop(sinks);
+
+    assert_eq!(closing.join().unwrap(), 1);
+    // The sink is gone now, not at the next frame.
+    assert_eq!(tap.lock_sinks().len(), 1);
+    assert_eq!(tap.counters().subscribers, 1);
+    tap.record(TapDirection::Inbound, DataLink::Sc, peer, &[2]);
+    assert_eq!(&witness.try_recv().unwrap().bytes[..], [2]);
+    assert_eq!(tap.counters().dropped, 1);
+}
+
+/// `close` returns the count and takes the sink out of the list at once.
+#[test]
+fn close_removes_the_sink_and_returns_the_count() {
+    let tap = FrameTap::new();
+    let slow = tap.subscribe_with_capacity(1);
+    let _witness = tap.subscribe();
+    for octet in 0..3u8 {
+        tap.record(TapDirection::Inbound, DataLink::Sc, peer, &[octet]);
+    }
+    assert_eq!(tap.lock_sinks().len(), 2);
+    assert_eq!(slow.close(), 2);
+    assert_eq!(tap.lock_sinks().len(), 1);
+    assert_eq!(tap.counters().subscribers, 1);
+}
+
+/// The staging hook counts a rejection only after the closure ran, and a
+/// receiver that closes meanwhile waits for it.
+#[test]
+fn a_close_during_a_staged_overflow_waits_for_the_count() {
+    let tap = FrameTap::new();
+    let slow = tap.subscribe_with_capacity(1);
+    tap.record(TapDirection::Inbound, DataLink::Sc, peer, &[0]);
+    let mut closing = None;
+    tap.record_with_overflow_in_flight_for_test(
+        TapDirection::Inbound,
+        DataLink::Sc,
+        peer(),
+        &[1],
+        |in_flight| {
+            closing = Some(std::thread::spawn(move || slow.close()));
+            in_flight.wait_until_sealed();
+        },
+    );
+    assert_eq!(closing.unwrap().join().unwrap(), 1);
+}
+
 #[tokio::test]
 async fn the_queue_closes_when_the_tap_is_gone() {
     let tap = FrameTap::new();

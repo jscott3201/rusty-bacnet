@@ -168,11 +168,7 @@ pub struct PyBipEndpoint {
 
 impl PyBipEndpoint {
     fn push_pending(&self, obj: PendingObject) -> PyResult<()> {
-        self.lifecycle.push(obj).map_err(|()| {
-            PyRuntimeError::new_err(
-                "cannot add objects while endpoint is starting, running, or stopping",
-            )
-        })
+        super::common::register_pending(&self.lifecycle, &self.config.identity, obj)
     }
 }
 
@@ -298,6 +294,7 @@ impl PyBipEndpoint {
         audit_device_bindings=None
     ))]
     fn new(
+        py: Python<'_>,
         device_instance: u32,
         device_name: &str,
         vendor_id: u16,
@@ -340,9 +337,10 @@ impl PyBipEndpoint {
             reinit_password,
         )?;
         let mode = crate::bip_options::bip_mode("bip", bbmd, foreign_device)?;
+        let interface_ip = crate::bip_options::interface_ipv4(py, interface)?;
         let multicast = crate::bip_options::bip_multicast(
             "bip",
-            interface,
+            interface_ip,
             port,
             share_port_by_address,
             &mode,
@@ -355,7 +353,6 @@ impl PyBipEndpoint {
         }
         let min_request_interval_ms =
             crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
-        let interface_ip = parse_ipv4(interface, "interface")?;
         let broadcast = parse_ipv4(broadcast_address, "broadcast_address")?;
         let source_audit = super::source_audit::SourceAuditKeywords::parse(
             source_audit_reporter,
@@ -443,7 +440,7 @@ impl PyBipEndpoint {
         name: &str,
         members: Option<Vec<PyReadAccessSpec>>,
     ) -> PyResult<()> {
-        self.push_pending(pending_group(instance, name, members)?)
+        self.push_pending(pending_group(instance, name, members))
     }
 
     /// Start after lifecycle admission. A second explicit start fails.

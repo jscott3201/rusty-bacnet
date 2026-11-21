@@ -140,6 +140,25 @@ class IAmArrivalTests(Arrivals):
         after = time.monotonic(), time.time()
         test_frames.FrameTests.assert_captured_between(self, records, before, after)
 
+    async def test_routed_arrivals_keep_both_npdu_addresses(self):
+        import pickle
+        client = await self.client()
+        arrivals = await client.i_am_arrivals()
+        peer = self.peer()
+        target = self.to(await self.address_of(client))
+        for dnet, dadr in ((9, bytes([17, 18])), (9, b""), (65535, b"")):
+            # Include both a destination (DNET/DADR) and a different source (SNET/SADR).
+            npdu = (bytes([1, 0x28]) + dnet.to_bytes(2, "big") + bytes([len(dadr)]) + dadr
+                    + bytes([0, 5, 1, 7, 255]) + i_am(77))
+            peer.send(bvll(ORIGINAL_UNICAST, npdu), target)
+            record = await self.next(arrivals)
+            self.assertEqual((record.source_network, record.source_address), (5, bytes([7])))
+            self.assertEqual((record.destination_network, record.destination_address), (dnet, dadr))
+            self.assertEqual(pickle.loads(pickle.dumps(record)), record)
+        peer.send(bvll(ORIGINAL_UNICAST, local(i_am(77))), target)
+        direct = await self.next(arrivals)
+        self.assertEqual((direct.destination_network, direct.destination_address), (None, None))
+
     async def test_a_forwarded_i_am_names_the_device_and_the_bbmd(self):
         client = await self.client()
         target = self.to(await self.address_of(client))
@@ -262,6 +281,46 @@ class IAmArrivalTests(Arrivals):
         self.assertEqual((record.object_identifier.instance, record.link_source), (9999, own))
         self.assertTrue(record.forwarded)
         self.assertEqual(arrivals.own_echoes, 2)
+
+    async def test_loopback_refuses_limited_broadcast_and_still_sees_a_duplicate(self):
+        endpoint = await self.endpoint(722)
+        client = await endpoint.client()
+        arrivals = await endpoint.i_am_arrivals()
+        frames = await endpoint.frames()
+        with self.assertRaisesRegex(rb.BacnetTransportError, r"127\.255\.255\.255.*\(the broadcast_address= keyword\)"):
+            await client.who_is(scope="local", low=722, high=722)
+
+        # The refused broadcast left no frame: the first tapped frame is the
+        # directed request below. A native peer on a different port
+        # genuinely owns the same Device instance.
+        second = await self.endpoint(722)
+        peer = await second.local_address()
+        await client.who_is(scope=peer, low=722, high=722)
+        sent = await self.next(frames)
+        self.assertEqual((sent.direction, sent.peer, rb.decode_frame(sent.octets, sent.link).service),
+                         ("outbound", peer, "who-is"))
+        seen = await self.next(arrivals)
+        self.assertEqual((seen.object_identifier.instance, seen.link_sender), (722, peer))
+        self.assertEqual(arrivals.own_echoes, 0)
+        await frames.aclose()
+        await arrivals.aclose()
+
+    async def test_explicit_loopback_broadcast_remains_available(self):
+        endpoint = await self.endpoint(723, broadcast_address="127.255.255.255")
+        client = await endpoint.client()
+        frames = await endpoint.frames()
+        await client.who_is(scope="local", low=723, high=723)
+        # Startup's What-Is-Network-Number may precede the requested broadcast.
+        _, port = self.to(await endpoint.local_address())
+        async with asyncio.timeout(10):
+            async for frame in frames:
+                if frame.direction == "outbound":
+                    self.assertEqual(frame.peer, f"127.255.255.255:{port}")
+                    if rb.decode_frame(frame.octets, frame.link).service == "who-is":
+                        break
+            else:
+                self.fail("frame stream ended before the outbound Who-Is")
+        await frames.aclose()
 
     async def test_an_endpoint_sees_arrivals_on_the_socket_its_roles_share(self):
         endpoint = await self.endpoint(730)

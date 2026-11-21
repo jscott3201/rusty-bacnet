@@ -274,10 +274,62 @@ impl FrameTap {
         self.record(direction, link, || peer, bytes);
     }
 
+    /// Stage the moment a publisher has met a full queue and not yet
+    /// counted it, for tests in other crates (feature `test-support`).
+    ///
+    /// Holds the sinks lock as [`Self::record`] does, offers the frame to
+    /// every receiver, and runs `while_in_flight` before it counts the
+    /// rejections. A receiver that closes inside `while_in_flight` has to
+    /// wait for the count to finish.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn record_with_overflow_in_flight_for_test(
+        &self,
+        direction: TapDirection,
+        link: DataLink,
+        peer: TapPeer,
+        bytes: &[u8],
+        while_in_flight: impl FnOnce(&OverflowInFlight),
+    ) {
+        let mut sinks = self.lock_sinks();
+        let frame = TappedFrame {
+            timestamp: SystemTime::now(),
+            monotonic_timestamp: Instant::now(),
+            direction,
+            link,
+            peer,
+            bytes: Bytes::copy_from_slice(bytes),
+            missed_before: 0,
+        };
+        let mut full = Vec::new();
+        let mut rejected = Vec::new();
+        for (index, sink) in sinks.iter_mut().enumerate() {
+            let mut copy = frame.clone();
+            copy.missed_before = sink.gap;
+            match sink.tx.try_send(copy) {
+                Ok(()) => sink.gap = 0,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    sink.gap = sink.gap.saturating_add(1);
+                    full.push(sink.tx.clone());
+                    rejected.push(index);
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {}
+            }
+        }
+        while_in_flight(&OverflowInFlight { full });
+        for index in rejected {
+            sinks[index].dropped.fetch_add(1, Ordering::Relaxed);
+            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     #[cold]
     #[inline(never)]
     fn publish(&self, direction: TapDirection, link: DataLink, peer: TapPeer, bytes: &[u8]) {
         let bytes = Bytes::copy_from_slice(bytes);
+        // A rejected frame is counted while this lock is held: a receiver's
+        // `close` takes the lock after sealing its queue, so its final count
+        // includes a rejection in flight. Keep the count under the lock;
+        // `record_with_overflow_in_flight_for_test` mirrors this loop.
         let mut sinks = self.lock_sinks();
         // Stamped under the lock, so that frames two threads report at once
         // are queued in the order of their timestamps.
@@ -321,6 +373,34 @@ impl FrameTap {
     }
 }
 
+/// Full-queue rejections a publisher has seen and not yet counted: see
+/// [`FrameTap::record_with_overflow_in_flight_for_test`].
+#[cfg(any(test, feature = "test-support"))]
+pub struct OverflowInFlight {
+    full: Vec<mpsc::Sender<TappedFrame>>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl OverflowInFlight {
+    /// Block until every receiver that met the full queue has sealed it
+    /// (closed it or been dropped), then hold the publisher's lock for a
+    /// further 25 ms. Panics if no receiver seals within ten seconds.
+    pub fn wait_until_sealed(&self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !self.full.iter().all(mpsc::Sender::is_closed) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a receiver never sealed its queue"
+            );
+            std::thread::yield_now();
+        }
+        // A close that does not wait for the count reads it now. Give it
+        // 25 ms to; one that waits stays blocked, so this never fails a
+        // correct close.
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
 /// A subscription to a [`FrameTap`]. Dropping it unsubscribes.
 pub struct FrameTapReceiver {
     rx: mpsc::Receiver<TappedFrame>,
@@ -356,6 +436,23 @@ impl FrameTapReceiver {
     /// The next frame if one is queued, without waiting.
     pub fn try_recv(&mut self) -> Option<TappedFrame> {
         self.rx.try_recv().ok()
+    }
+
+    /// Unsubscribe, discard queued frames and return the final overflow count.
+    /// This includes a full-queue rejection that a publisher was still counting
+    /// when the receiver closed.
+    pub fn close(mut self) -> u64 {
+        self.rx.close();
+        if let Some(shared) = self.shared.upgrade() {
+            // A publisher may have observed Full just before the queue closed.
+            // Its increment completes under this lock before the final snapshot.
+            shared
+                .sinks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .retain(|sink| !sink.tx.is_closed());
+        }
+        self.dropped()
     }
 
     /// Frames dropped for this receiver because its queue was full, so far:

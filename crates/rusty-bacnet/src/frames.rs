@@ -261,6 +261,8 @@ pub(crate) trait TapStream: Send + 'static {
     fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Item>>;
     /// Frames lost to the full queue so far.
     fn dropped(&self) -> u64;
+    /// Detach and synchronize with an in-flight publication before counting the last drop.
+    fn close(self) -> u64;
 }
 
 impl TapStream for FrameTapReceiver {
@@ -272,6 +274,10 @@ impl TapStream for FrameTapReceiver {
 
     fn dropped(&self) -> u64 {
         FrameTapReceiver::dropped(self)
+    }
+
+    fn close(self) -> u64 {
+        FrameTapReceiver::close(self)
     }
 }
 
@@ -322,7 +328,7 @@ impl<R: TapStream> SourceState<R> {
     fn close(&self) {
         if let Some(receiver) = self.receiver().take() {
             self.final_missed
-                .store(receiver.dropped(), std::sync::atomic::Ordering::Relaxed);
+                .store(receiver.close(), std::sync::atomic::Ordering::Relaxed);
         }
         self.closed.notify_waiters();
     }

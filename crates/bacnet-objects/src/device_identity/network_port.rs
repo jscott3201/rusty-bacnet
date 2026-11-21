@@ -99,7 +99,7 @@ impl NetworkPortEntry {
     }
 
     /// The Object_Name the port's object gets: `port-<instance>`.
-    pub(crate) fn object_name(&self) -> alloc::string::String {
+    pub fn object_name(&self) -> alloc::string::String {
         crate::common::numbered_name("port-", self.instance)
     }
 

@@ -53,6 +53,10 @@ impl TapStream for ArrivalStream {
     fn dropped(&self) -> u64 {
         self.arrivals.missed()
     }
+
+    fn close(self) -> u64 {
+        self.arrivals.close()
+    }
 }
 
 /// Seconds that compare and hash by their bits, so a record is `Eq`.
@@ -91,6 +95,8 @@ pub(crate) struct PyIAmArrival {
     forwarded: bool,
     source_network: Option<u16>,
     source_address: Option<Vec<u8>>,
+    destination_network: Option<u16>,
+    destination_address: Option<Vec<u8>>,
     broadcast: bool,
     device_address: Option<String>,
     missed_before: u64,
@@ -113,11 +119,10 @@ impl PyIAmArrival {
             link_source: style.format(&arrival.link_source),
             original_source: arrival.original_source.map(|origin| origin.to_string()),
             forwarded: arrival.forwarded,
-            source_network: arrival.source_network.as_ref().map(|s| s.network),
-            source_address: arrival
-                .source_network
-                .as_ref()
-                .map(|s| s.mac_address.to_vec()),
+            source_network: arrival.source.as_ref().map(|s| s.network),
+            source_address: arrival.source.as_ref().map(|s| s.mac_address.to_vec()),
+            destination_network: arrival.destination.as_ref().map(|d| d.network),
+            destination_address: arrival.destination.as_ref().map(|d| d.mac_address.to_vec()),
             broadcast: arrival.broadcast,
             device_address: arrival.device_address().map(|a| a.styled(style)),
             missed_before,
@@ -196,6 +201,18 @@ impl PyIAmArrival {
     fn source_address(&self) -> Option<&[u8]> {
         self.source_address.as_deref()
     }
+    /// Destination network in the observed NPDU.
+    #[getter]
+    fn destination_network(&self) -> Option<u16> {
+        self.destination_network
+    }
+
+    /// Destination station octets, empty for a network broadcast.
+    #[getter]
+    fn destination_address(&self) -> Option<&[u8]> {
+        self.destination_address.as_deref()
+    }
+
     /// A link or network broadcast.
     #[getter]
     fn broadcast(&self) -> bool {
@@ -235,7 +252,7 @@ impl PyIAmArrival {
         )
     }
 
-    /// Copy and pickle by value: `_rebuild` with the sixteen fields, in
+    /// Copy and pickle by value: `_rebuild` with the eighteen fields, in
     /// the order the stub lists them.
     fn __reduce__<'py>(
         slf: &Bound<'py, Self>,
@@ -256,6 +273,11 @@ impl PyIAmArrival {
             r.forwarded.into_pyobject(py)?.to_owned().into_any(),
             r.source_network.into_pyobject(py)?,
             r.source_address
+                .as_deref()
+                .map(|octets| pyo3::types::PyBytes::new(py, octets))
+                .into_pyobject(py)?,
+            r.destination_network.into_pyobject(py)?,
+            r.destination_address
                 .as_deref()
                 .map(|octets| pyo3::types::PyBytes::new(py, octets))
                 .into_pyobject(py)?,
@@ -286,6 +308,8 @@ impl PyIAmArrival {
         forwarded: bool,
         source_network: Option<u16>,
         source_address: Option<Vec<u8>>,
+        destination_network: Option<u16>,
+        destination_address: Option<Vec<u8>>,
         broadcast: bool,
         device_address: Option<String>,
         missed_before: u64,
@@ -304,6 +328,8 @@ impl PyIAmArrival {
             forwarded,
             source_network,
             source_address,
+            destination_network,
+            destination_address,
             broadcast,
             device_address,
             missed_before,

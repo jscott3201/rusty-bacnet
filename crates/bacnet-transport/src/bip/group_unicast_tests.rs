@@ -74,3 +74,44 @@ async fn a_started_transport_refuses_a_unicast_to_its_broadcast_mac() {
     assert!(error.to_string().contains("group address"), "{error}");
     transport.stop().await.unwrap();
 }
+
+/// Exercise every local target with a recording socket, including the control
+/// cases in which a real kernel could send a limited broadcast onto a LAN.
+#[tokio::test(start_paused = true)]
+async fn a_wildcard_socket_cannot_limited_broadcast_as_loopback() {
+    let own = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47808);
+    let loopback_broadcast = Ipv4Addr::new(127, 255, 255, 255);
+    let multicast = Ipv4Addr::new(239, 1, 2, 3);
+    for (target, loopback_on_wildcard, allowed) in [
+        (Ipv4Addr::BROADCAST, true, false),
+        (Ipv4Addr::BROADCAST, false, true),
+        (loopback_broadcast, true, true),
+        (multicast, true, true),
+    ] {
+        let destination = SocketAddrV4::new(target, own.port());
+        let link = test_support::test_link(own, destination, Mode::Normal);
+        let sink = SendSink::default();
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let observer =
+            super::send_observer::SendAttemptObserver::new(socket.local_addr().unwrap().port());
+        let node = NodeHandle::new(
+            link,
+            Arc::new(BipSocket::recording(socket, sink.clone())),
+            loopback_on_wildcard,
+            Arc::default(),
+            Arc::default(),
+        )
+        .unwrap();
+        let result = node.send_broadcast(&[1, 0, 0x10, 8], None).await;
+        if allowed {
+            result.unwrap();
+            assert_eq!(observer.attempts(), 1);
+            assert_eq!(sink.take()[0].to, destination);
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("127.255.255.255"), "{error}");
+            assert_eq!(observer.attempts(), 0);
+            assert!(sink.take().is_empty());
+        }
+    }
+}

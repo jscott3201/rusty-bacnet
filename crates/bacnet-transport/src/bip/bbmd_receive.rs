@@ -82,7 +82,7 @@ pub(super) async fn handle(share: ForBbmd<'_>, ctx: &RecvContext) {
 
             match forward.local_broadcast {
                 Some(local_dest) => {
-                    let _ = send_forwarded_npdu(ctx, local_dest, origin, npdu).await;
+                    let _ = rebroadcast_locally(ctx, local_dest, origin, npdu).await;
                 }
                 None if arrival == Arrival::Broadcast => {
                     debug!("Forwarded-NPDU arrived by broadcast; no local rebroadcast");
@@ -142,7 +142,7 @@ async fn distribute_broadcast(npdu: &[u8], sender: SocketAddrV4, ctx: &RecvConte
         false
     } else {
         match forward.local_broadcast {
-            Some(local_dest) => send_forwarded_npdu(ctx, local_dest, forward.origin, npdu).await,
+            Some(local_dest) => rebroadcast_locally(ctx, local_dest, forward.origin, npdu).await,
             None => true,
         }
     };
@@ -233,6 +233,25 @@ fn forwarded_npdu(origin: SocketAddrV4, npdu: &[u8]) -> Option<BytesMut> {
             None
         }
     }
+}
+
+/// Rebroadcast `npdu` from `origin` on this BBMD's subnet, to `dest`, as a
+/// Forwarded-NPDU. A loopback BBMD on the wildcard socket refuses a
+/// rebroadcast to 255.255.255.255, counted and logged through a throttle
+/// (loopback_guard.rs, #2691); like a failed send, it is not sent, so a
+/// foreign device's Distribute-Broadcast-To-Network draws a NAK (Annex
+/// J.4.5). The unicast forwards to peers and foreign devices are separate.
+async fn rebroadcast_locally(
+    ctx: &RecvContext,
+    dest: SocketAddrV4,
+    origin: SocketAddrV4,
+    npdu: &[u8],
+) -> bool {
+    if ctx.node.refuses_local_broadcast(dest) {
+        ctx.node.refuse_local_rebroadcast(dest);
+        return false;
+    }
+    send_forwarded_npdu(ctx, dest, origin, npdu).await
 }
 
 /// Send `npdu` from `origin` to `dest` as a Forwarded-NPDU. A failed send

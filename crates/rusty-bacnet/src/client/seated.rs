@@ -18,7 +18,7 @@ impl BACnetClient {
             inner: Arc::new(state::ClientState::seated()),
             seated: true,
             transport_type: transport.to_string(),
-            interface: String::new(),
+            interface: std::net::Ipv4Addr::UNSPECIFIED,
             port: 0,
             broadcast_address: String::new(),
             share_port_by_address: false,

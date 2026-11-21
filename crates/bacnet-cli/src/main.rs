@@ -524,7 +524,33 @@ fn report(
     if let Some(code) = sc_error_code(error) {
         line.push_str(&format!(" (BACnet/SC error code {code})"));
     }
+    if loopback_broadcast_refused(error) {
+        line.push_str(" (the -b/--broadcast option)");
+    }
     writeln!(out, "{line}")
+}
+
+/// Whether `error` or one of its sources is a broadcast a B/IP transport
+/// on a loopback interface refused (#2691), whose message can't name the
+/// CLI's option.
+fn loopback_broadcast_refused(error: &(dyn std::error::Error + 'static)) -> bool {
+    use bacnet_transport::bip::LoopbackBroadcastRefused as Refused;
+    let mut next = Some(error);
+    while let Some(error) = next {
+        let found = match (
+            error.downcast_ref::<bacnet_types::error::Error>(),
+            error.downcast_ref::<std::io::Error>(),
+        ) {
+            (Some(bacnet), _) => Refused::from_error(bacnet).is_some(),
+            (_, Some(io)) => Refused::from_io_error(io).is_some(),
+            _ => false,
+        };
+        if found {
+            return true;
+        }
+        next = error.source();
+    }
+    false
 }
 
 /// The error code Annex AB.7.5 gives a failed BACnet/SC connection, when

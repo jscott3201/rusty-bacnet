@@ -193,3 +193,22 @@ fn a_fatal_error_reports_with_display_and_its_sources() {
     let held = bacnet_types::error::Error::Transport(std::io::Error::other("denied"));
     assert_eq!(reported(&held), "Error: transport error: denied\n");
 }
+
+/// A broadcast refused on a loopback interface names the CLI's own option,
+/// whether it arrives as the client's error or inside bacnet-ops' (#2691).
+#[test]
+fn a_refused_loopback_broadcast_names_the_broadcast_option() {
+    let refused = || {
+        let io = std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            bacnet_transport::bip::LoopbackBroadcastRefused::default(),
+        );
+        bacnet_types::error::Error::Transport(io)
+    };
+    let hint = "127.255.255.255 (the -b/--broadcast option)\n";
+    assert!(reported(&refused()).ends_with(hint));
+    let ops = bacnet_ops::OpsError::Client(refused());
+    assert!(reported(&ops).ends_with(hint), "{}", reported(&ops));
+    let other = bacnet_types::error::Error::Transport(std::io::Error::other("denied"));
+    assert!(!reported(&other).contains("--broadcast"));
+}

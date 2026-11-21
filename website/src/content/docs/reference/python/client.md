@@ -76,6 +76,11 @@ colon hex such as `"01:02:03:04:05:06"` (SC, or `"00:04:d2"` for a
 VMAC), or an MS/TP station. `"[ip]:port"` raises ValueError: use
 `resolve_vmac`. So does a `bip6:` address on any other transport.
 
+For B/IP, `interface` accepts an IPv4 literal or the exact OS interface
+name (the adapter friendly name on Windows), resolved once, at
+construction, to one usable IPv4 address; `broadcast_address` is not
+derived from it. See "Selecting an interface" in docs/python-api.md.
+
 Properties:
 
 - `write_policy: WritePolicy`: The priorities `Device.write` and `relinquish` may use, as `write_policy=` set them.
@@ -2234,6 +2239,8 @@ Properties:
 - `forwarded: bool`: True when the frame carried an origin other than its sender: a BBMD forwarded it. Never on SC or MS/TP.
 - `source_network: Optional[int]`: SNET, when a router relayed the I-Am from another network.
 - `source_address: Optional[bytes]`: SADR, the device's MAC on `source_network`.
+- `destination_network: Optional[int]`: DNET carried by the received NPDU.
+- `destination_address: Optional[bytes]`: DADR, empty for a network broadcast and absent without a DNET.
 - `broadcast: bool`: A link broadcast or a broadcast on a network. False for an MS/TP I-Am one station unicast to another, which the bus lets this station hear.
 - `device_address: Optional[str]`: The device's address as `BACnetClient.device()` takes it: `link_source` for a device on this link, `"5:0x07"` for one a router relayed. None when those name no one station. The calls that take an `address` don't take `"5:0x07"`: for a routed record, `read_property`, `read_property_multiple`, `read_range`, `read_log_page`, `write_property`, `atomic_read_file` and `atomic_write_file` take `RoutedTarget(rec.source_network, rec.source_address, router=rec.next_hop_router)`.
 - `next_hop_router: Optional[str]`: The router that relayed it, when `source_network` is set: its `link_source`.

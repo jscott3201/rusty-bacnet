@@ -723,15 +723,18 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
         port = address_port(await holder.local_address())
         try:
             endpoint = BipEndpoint(**bip_kwargs(port=port, device_instance=9102))
-            endpoint.add_analog_input(
+            endpoint.add_analog_output(
                 instance=1, name="Retry", units=62, present_value=7.5
             )
+            endpoint.add_analog_input(
+                instance=1, name="Retry input", units=62, present_value=6.5
+            )
             pending = getattr(endpoint, "_pending_registration_count")
-            self.assertEqual(pending(), 1)
+            self.assertEqual(pending(), 2)
             with self.assertRaises(BacnetError):
                 await asyncio.wait_for(endpoint.start(), 10)
-            # Failed start drops nothing: retry after the fix serves the object.
-            self.assertEqual(pending(), 1)
+            # Failed start drops nothing: retry after the fix serves the objects.
+            self.assertEqual(pending(), 2)
             await asyncio.wait_for(holder.close(), 5)
             await asyncio.wait_for(endpoint.start(), 10)
             try:
@@ -742,16 +745,19 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(reader.start(), 10)
                 try:
                     rc = await reader.client()
-                    oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
-                    value = await asyncio.wait_for(
-                        rc.read_property(
-                            f"127.0.0.1:{port}",
-                            oid,
-                            PropertyIdentifier.PRESENT_VALUE,
-                        ),
-                        10,
-                    )
-                    self.assertEqual(value.value, 7.5)
+                    for object_type, expected in (
+                        (ObjectType.ANALOG_OUTPUT, 7.5),
+                        (ObjectType.ANALOG_INPUT, 6.5),
+                    ):
+                        value = await asyncio.wait_for(
+                            rc.read_property(
+                                f"127.0.0.1:{port}",
+                                ObjectIdentifier(object_type, 1),
+                                PropertyIdentifier.PRESENT_VALUE,
+                            ),
+                            10,
+                        )
+                        self.assertEqual(value.value, expected)
                 finally:
                     await asyncio.wait_for(reader.close(), 5)
             finally:
@@ -762,12 +768,12 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_name_raises_value_error_and_preserves_pending(self):
         endpoint = BipEndpoint(**bip_kwargs(port=0, device_instance=9201))
         endpoint.add_analog_input(instance=1, name="Dupe", present_value=1.0)
-        endpoint.add_analog_value(instance=2, name="Dupe")
+        with self.assertRaisesRegex(ValueError, "duplicate object name"):
+            endpoint.add_analog_value(instance=2, name="Dupe")
         pending = getattr(endpoint, "_pending_registration_count")
-        self.assertEqual(pending(), 2)
-        with self.assertRaisesRegex(ValueError, "duplicate"):
-            await asyncio.wait_for(endpoint.start(), 10)
-        self.assertEqual(pending(), 2)
+        self.assertEqual(pending(), 1)
+        await asyncio.wait_for(endpoint.start(), 10)
+        self.assertEqual(pending(), 0)
         await asyncio.wait_for(endpoint.close(), 5)
 
     async def test_cancelled_start_preserves_pending_and_retry_works(self):
