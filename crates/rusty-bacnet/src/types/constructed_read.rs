@@ -86,6 +86,16 @@ pub(crate) fn decode(
     }
 }
 
+/// Whether a whole read of `property` on `object_type` is one of the typed
+/// constructed collections: what its value is when [`decode`] refuses it
+/// decides whether the octets can be kept exactly as received (#2690).
+pub(crate) fn is_collection(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    matches!(
+        property_element(object_type, property),
+        Some((_, ElementShape::Collection))
+    )
+}
+
 /// The tag of a value the generic decoder read.
 const GENERIC_TAG: &str = "application_data";
 

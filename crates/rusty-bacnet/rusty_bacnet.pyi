@@ -4515,11 +4515,13 @@ class Bip6ForeignRegistrationStatus(TypedDict):
 
 class BdtEntry(TypedDict):
     """One entry of a Network Port's BBMD_Broadcast_Distribution_Table, as
-    a read of the property gives it (#2690). ``address`` is the BBMD as
-    ``Bbmd(bdt=)`` and ``read_bdt()`` write it, ``"ip:port"``, or
-    ``"[v6]:port"`` or ``"name:port"``; ``None`` when the entry names no
-    host. ``broadcast_mask`` is dotted text, ``None`` when the entry has
-    none."""
+    a read of the property gives it (#2690). ``address`` is the BBMD in
+    the ``"ip:port"`` text ``read_bdt()`` uses for IPv4, ``"[v6]:port"``
+    for IPv6 and ``"name:port"`` for a host name; ``None`` when the entry
+    names no host. ``broadcast_mask`` is dotted text, ``None`` when the
+    entry has none. The text is for display (a name may itself hold a
+    colon); the value's ``.octets`` are the exact form. Rows aren't
+    accepted as ``Bbmd(bdt=)`` input."""
     address: str | None
     broadcast_mask: str | None
 

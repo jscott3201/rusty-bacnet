@@ -115,9 +115,16 @@ class NetworkPortTableTests(unittest.IsolatedAsyncioTestCase):
                 value = await self.read(prop, octets)
                 self.assertEqual((value.tag, value.octets), ("tagged", octets))
                 self.assertEqual(b"".join(node.octets for node in value.value), octets)
-        # Application values read as any list of them does.
-        value = await self.read(FDT, bytes.fromhex("220002"))
-        self.assertEqual((value.tag, value.value), ("list", [2]))
+        # Application values that aren't entries keep their octets as
+        # received (#2690), so a write-back sends the same octets.
+        junk = bytes.fromhex("220002")
+        for prop in (BDT, FDT):
+            with self.subTest(prop=prop, octets=junk.hex()):
+                value = await self.read(prop, junk)
+                self.assertEqual((value.tag, value.octets), ("application_data", junk))
+                await self.client.write_property(self.peer.address, PORT, prop, value)
+                self.assertEqual(self.written_fields,
+                                 self.read_fields + b"\x3e" + junk + b"\x3f")
         with self.assertRaisesRegex(rb.BacnetError, "(?i)tag"):
             await self.read(BDT, bytes.fromhex("0e0901"))
 
@@ -179,3 +186,29 @@ class LocalBbmdTableTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TypedListRebuildTests(unittest.TestCase):
+    """``_typed_list``, which pickling uses to rebuild a ``bdt`` or ``fdt``."""
+
+    def test_rebuilds_a_table_and_shows_it_as_a_list(self):
+        entry = rb.PropertyValue._typed_element("bdt_entry", BDT4)
+        table = rb.PropertyValue._typed_list("bdt_entry", [entry])
+        self.assertEqual((table.tag, table.value, table.octets), ("bdt", BDT4_ROWS, BDT4))
+        self.assertEqual(repr(table), "PropertyValue.list(<1 bdt_entry elements>)")
+        self.assertEqual(rb.PropertyValue._typed_list("fdt_entry", []).tag, "fdt")
+
+    def test_refuses_unknown_tags_non_tables_and_other_items(self):
+        bdt_entry = rb.PropertyValue._typed_element("bdt_entry", BDT4)
+        fdt_entry = rb.PropertyValue._typed_element("fdt_entry", FDT4)
+        for tag, items in [
+            ("no_such_element", []),
+            ("bdt", [bdt_entry]),            # the collection's tag, not its element's
+            ("destination", []),             # an element with no table tag of its own
+            ("bdt_entry", [fdt_entry]),      # another table's entry
+            ("bdt_entry", [rb.PropertyValue.application_data(BDT4)]),
+            ("bdt_entry", [rb.PropertyValue.unsigned(2)]),
+            ("bdt_entry", [bdt_entry, rb.PropertyValue.null()]),
+        ]:
+            with self.subTest(tag=tag, items=items), self.assertRaises(ValueError):
+                rb.PropertyValue._typed_list(tag, items)

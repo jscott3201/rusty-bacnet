@@ -1026,7 +1026,10 @@ is an error.
   of a list or array is a `list` of the elements, an indexed read one
   element, and a read of a single value that element, each tagged with its
   production. A value that doesn't decode as those elements, to the last
-  octet, falls through to the rules below.
+  octet, falls through to the rules below, except that a whole read of a
+  list or array holding only application-tagged values comes back
+  `application_data` with its octets as served (#2690), so writing it back
+  sends the same octets.
 - **Other context-tagged content** comes back `tagged` (#2618): `.value` is
   the tree of its tags, a list of [`TagNode`](#unknown-and-proprietary-values),
   and `.octets` are the octets as served. Constructed values with no typed
@@ -1143,7 +1146,8 @@ Code that handled `application_data` reads should expect:
   [Typed constructed values](#typed-constructed-values).
 - **Failed typed reads.** A typed constructed property whose octets don't
   decode as its elements (a malformed Recipient_List, say) falls back to
-  `tagged` too.
+  `tagged` too, or to `application_data` when a whole list or array read
+  holds only application-tagged values; either keeps the octets as served.
 - **Values written as `application_data`.** When a property has no typed
   form and its context tags form a readable tree, octets written with
   `PropertyValue.application_data(octets)` read back as `tagged`. Compare
@@ -1270,7 +1274,7 @@ collection's elements back to back), for comparing with a capture or for
 | Trend Log; Averaging, Event Enrollment | Log_DeviceObjectProperty; Object_Property_Reference (one value) | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | existing property writes where writable |
 | any object with intrinsic reporting | Event_Algorithm_Inhibit_Ref (one value) | `"object_property_reference"` | `{"object_identifier", "property_identifier", "property_array_index"}`: a `DeviceObjectPropertyReference` mapping without `device_identifier`; instance 4194303 while unset | existing property writes where writable |
 | Access Point; Lift, Escalator | Access_Event_Credential; Energy_Meter_Ref (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
-| Network Port | BBMD_Broadcast_Distribution_Table | `"bdt_entry"` | a `BdtEntry`: `{"address", "broadcast_mask"}`, `address` the BBMD as `read_bdt()` writes it (`"ip:port"`, `"[v6]:port"` or `"name:port"`; `None` for an entry that names no host), `broadcast_mask` dotted text or `None` | none yet |
+| Network Port | BBMD_Broadcast_Distribution_Table | `"bdt_entry"` | a `BdtEntry`: `{"address", "broadcast_mask"}`, `address` the BBMD as display text (`"ip:port"` as `read_bdt()` gives IPv4, `"[v6]:port"` or `"name:port"`; `None` for an entry that names no host), `broadcast_mask` dotted text or `None` | none yet |
 | Network Port | BBMD_Foreign_Device_Table | `"fdt_entry"` | an `FdtEntry`, as `read_fdt()` gives it: `{"address", "ttl", "seconds_remaining"}`, `address` `"ip:port"` or `"[v6]:port"` | none yet |
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
@@ -1292,14 +1296,17 @@ collection's elements back to back), for comparing with a capture or for
 
 A Network Port's BDT and FDT read this way through ReadProperty,
 ReadPropertyMultiple, COV values and the local `BACnetServer.read_property`
-(#2690); the rows have the shapes `read_bdt()` and `read_fdt()` give, so a
-script can compare a Network Port read with the BVLC reads of the same
-BBMD. The rows are read-only for now: no `PropertyValue` is built from
+(#2690). A BDT row's address is the `"ip:port"` text `read_bdt()` gives
+for IPv4, with `"[v6]:port"` and `"name:port"` for the other host kinds,
+so a script can compare a Network Port read with the BVLC reads of the same
+BBMD; that text is for display (a host name may itself hold a colon), and
+the value's `.octets` are the exact form. The rows are read-only for now:
+they aren't accepted as `Bbmd(bdt=)` input, no `PropertyValue` is built from
 rows, so writing a changed table means encoding its octets yourself and
 passing `PropertyValue.application_data`. Writing back a value as read
 sends its octets unchanged. Octets that aren't the entries, to the last
 octet, or more than 10,000 entries, read as any other value that fails a
-typed decode. FD_BBMD_Address and BACnet_IP_Global_Address have no typed
+typed decode, with their octets as served. FD_BBMD_Address and BACnet_IP_Global_Address have no typed
 form yet and read as `tagged`.
 
 Single reference reads use these forms through local reads, client and endpoint

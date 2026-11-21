@@ -174,10 +174,21 @@ fn values_that_are_not_entries_read_generically() {
         assert_eq!(value.tag_name(), "tagged", "{octets:02x?}");
         assert_eq!(value.element(), None);
     }
-    // Application-tagged octets are no table either.
-    let value = decode_read_value(PORT, FDT, None, &[0x22, 0x00, 0x02]).unwrap();
-    assert_eq!(value.element(), None);
-    assert_eq!(value.tag_name(), "list");
+    // Application-tagged octets are no table either, and stay as received
+    // rather than a re-encoded list (#2690).
+    for property in [BDT, FDT] {
+        let value = decode_read_value(PORT, property, None, &[0x22, 0x00, 0x02]).unwrap();
+        assert_eq!(value.element(), None);
+        assert_eq!(value.tag_name(), "application_data");
+        assert_eq!(
+            value.inner,
+            PropertyValue::ApplicationData(vec![0x22, 0x00, 0x02])
+        );
+    }
+    // An indexed read of one entry is not a whole read: it keeps the
+    // generic rules.
+    let value = decode_read_value(PORT, FDT, Some(1), &[0x22, 0x00, 0x02]).unwrap();
+    assert_eq!(value.tag_name(), "unsigned");
     let value = decode_read_value(ObjectType::ANALOG_INPUT, BDT, None, &entry).unwrap();
     assert_eq!(value.tag_name(), "tagged");
     // Broken framing still raises.

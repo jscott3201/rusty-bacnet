@@ -435,9 +435,11 @@ impl PyPropertyValue {
             (primitives::PropertyValue::ApplicationData(octets), Form::Typed(element)) => {
                 format!("PropertyValue.{}(<{} bytes>)", element.tag(), octets.len())
             }
+            // Every typed collection shows as a list of its elements: a
+            // collection with its own tag (`bdt`, `fdt`) has no constructor
+            // of that name to show.
             (primitives::PropertyValue::List(items), Form::Typed(element)) => format!(
-                "PropertyValue.{}(<{} {} elements>)",
-                element.collection_tag().unwrap_or("list"),
+                "PropertyValue.list(<{} {} elements>)",
                 items.len(),
                 element.tag()
             ),

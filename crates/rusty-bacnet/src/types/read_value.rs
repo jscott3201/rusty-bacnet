@@ -15,7 +15,10 @@
 //!   octets decode as that collection's elements, the value is a typed read
 //!   (#1310): each element keeps its octets, and `.value` gives the shape
 //!   the typed write takes. A Network Port's BDT and FDT (#2690) read this
-//!   way too, as entry mappings. A value that doesn't decode that way goes
+//!   way too, as entry mappings. A whole read of one of these collections
+//!   that doesn't decode that way but holds only application-tagged
+//!   elements is [`PropertyValue::ApplicationData`] with its octets as
+//!   received, so a write-back sends them unchanged (#2690); any other goes
 //!   on to the rules below.
 //! - When any element carries a context tag, the value is a constructed
 //!   production (a timestamp CHOICE, a vendor's structure and so on) the
@@ -68,6 +71,21 @@ pub(crate) fn decode_read_value(
     let mut starts = application_elements(octets)?;
     if let Some(value) = constructed_read::decode(object_type, property, array_index, octets) {
         return Ok(value.read_from(property));
+    }
+    // A typed collection whose elements don't decode, sent as application
+    // values: a plain list of them would re-encode them and so change what a
+    // write-back sends, so keep the octets as received (#2690). Context-tagged
+    // content reads as a tree below, which keeps them too, and an empty value
+    // is the empty list either way.
+    if starts.is_some()
+        && array_index.is_none()
+        && !octets.is_empty()
+        && constructed_read::is_collection(object_type, property)
+    {
+        return Ok(
+            PyPropertyValue::from_rust(PropertyValue::ApplicationData(octets.to_vec()))
+                .read_from(property),
+        );
     }
     if starts.is_none() && property == PropertyIdentifier::PRIORITY_ARRAY {
         // Each BACnetPriorityValue choice is one tagged element, the
