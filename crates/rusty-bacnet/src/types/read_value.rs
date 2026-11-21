@@ -8,18 +8,15 @@
 //! tag headers, lengths and matched opening and closing tags, nested at
 //! most 32 deep. Only broken framing is an error. Then:
 //!
-//! - A whole Network Port BDT or FDT property keeps its original octets.
-//!   If the native table decoder accepts them, the binding projects its
-//!   ordered rows. A well-framed value it rejects keeps its tag tree or
-//!   raw application data.
 //! - When the property is one of the constructed collections the binding
 //!   also writes as typed values (a Recipient_List, a Group's members and
 //!   results, a Command's Action and others; see
 //!   [`bacnet_encoding::constructed::property_element()`]), and the
 //!   octets decode as that collection's elements, the value is a typed read
 //!   (#1310): each element keeps its octets, and `.value` gives the shape
-//!   the typed write takes. A value that doesn't decode that way goes on to
-//!   the rules below.
+//!   the typed write takes. A Network Port's BDT and FDT (#2690) read this
+//!   way too, as entry mappings. A value that doesn't decode that way goes
+//!   on to the rules below.
 //! - When any element carries a context tag, the value is a constructed
 //!   production (a timestamp CHOICE, a vendor's structure and so on) the
 //!   binding has no typed form for. Nothing in the octets says where one
@@ -69,18 +66,6 @@ pub(crate) fn decode_read_value(
     octets: &[u8],
 ) -> Result<PyPropertyValue, Error> {
     let mut starts = application_elements(octets)?;
-    if let Some(table) =
-        super::network_port_value::NetworkPortTable::of(object_type, property, array_index)
-    {
-        let value = match table.read(octets) {
-            Ok(value) => value,
-            Err(_) if starts.is_none() && tag_tree::is_tree(octets) => {
-                PyPropertyValue::tree(octets.to_vec())
-            }
-            Err(_) => PyPropertyValue::from_rust(PropertyValue::ApplicationData(octets.to_vec())),
-        };
-        return Ok(value.read_from(property));
-    }
     if let Some(value) = constructed_read::decode(object_type, property, array_index, octets) {
         return Ok(value.read_from(property));
     }

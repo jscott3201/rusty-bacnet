@@ -1137,16 +1137,10 @@ Code that handled `application_data` reads should expect:
   tag) anywhere in it, or more than 10,000 elements. Accept `"tagged"` and
   `"application_data"`, and read the octets from `.octets`, which both
   give. Broken framing still raises as for any read.
-- A whole Network Port property 414 (BBMD_Broadcast_Distribution_Table)
-  has tag `bdt`. Its `value` is a list in wire order. Each row has an
-  `address_kind` of `"ip"`, `"name"` or `"none"`, an `address` containing
-  the IP text, host name or `None`, a UDP `port`, and a `broadcast_mask` as
-  dotted IPv4 text or `None`. Property 415 (BBMD_Foreign_Device_Table) has
-  tag `fdt`. Its rows have an IP `address`, UDP `port`, `ttl` and
-  `seconds_remaining`. Empty tables keep their tag and return `[]`.
-  Accessing `value` gives fresh dictionaries. Passing the `PropertyValue`
-  to a write retains its original wire bytes. Well-framed values that
-  fail table decoding retain their bytes as `tagged` or `application_data`.
+- **Network Port tables.** A whole read of a Network Port's
+  BBMD_Broadcast_Distribution_Table (414) or BBMD_Foreign_Device_Table
+  (415) is tagged `bdt` or `fdt` (#2690), not `tagged`: see
+  [Typed constructed values](#typed-constructed-values).
 - **Failed typed reads.** A typed constructed property whose octets don't
   decode as its elements (a malformed Recipient_List, say) falls back to
   `tagged` too.
@@ -1176,13 +1170,17 @@ and a read of a single value (Accompaniment, Audit_Notification_Recipient,
 Effective_Period, Last_Command_Time, Value_Source, Scale, Prescale, the shed
 levels, Event_Parameters and the others marked "one value") the element
 itself. An
-empty collection is `PropertyValue.list([])`. Each element keeps the octets it
+empty collection is `PropertyValue.list([])`, except a Network Port's
+tables: a whole BBMD_Broadcast_Distribution_Table or
+BBMD_Foreign_Device_Table read is tagged `"bdt"` or `"fdt"` (#2690), its
+`.value` a list of the entry mappings, `[]` when empty. Each element keeps the octets it
 was read from, so writing the value back (`write_property`,
 `write_property_local`) sends them unchanged. `PropertyValue.list` of
 elements of one collection, from indexed reads, equals the whole read. Two
 values are equal when they carry the same octets and the same element
 production, so a typed read doesn't equal `PropertyValue.application_data` of
-its octets. `.octets` gives those octets as `bytes` (a whole
+its octets, and two encodings of the same entry (a TTL in one octet or
+two) are unequal though their `.value` is the same. `.octets` gives those octets as `bytes` (a whole
 collection's elements back to back), for comparing with a capture or for
 `PropertyValue.application_data`.
 
@@ -1206,6 +1204,8 @@ collection's elements back to back), for comparing with a capture or for
 | Trend Log; Averaging, Event Enrollment | Log_DeviceObjectProperty; Object_Property_Reference (one value) | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | existing property writes where writable |
 | any object with intrinsic reporting | Event_Algorithm_Inhibit_Ref (one value) | `"object_property_reference"` | `{"object_identifier", "property_identifier", "property_array_index"}`: a `DeviceObjectPropertyReference` mapping without `device_identifier`; instance 4194303 while unset | existing property writes where writable |
 | Access Point; Lift, Escalator | Access_Event_Credential; Energy_Meter_Ref (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
+| Network Port | BBMD_Broadcast_Distribution_Table | `"bdt_entry"` | a `BdtEntry`: `{"address", "broadcast_mask"}`, `address` the BBMD as `read_bdt()` writes it (`"ip:port"`, `"[v6]:port"` or `"name:port"`; `None` for an entry that names no host), `broadcast_mask` dotted text or `None` | none yet |
+| Network Port | BBMD_Foreign_Device_Table | `"fdt_entry"` | an `FdtEntry`, as `read_fdt()` gives it: `{"address", "ttl", "seconds_remaining"}`, `address` `"ip:port"` or `"[v6]:port"` | none yet |
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
 | Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
@@ -1223,6 +1223,18 @@ collection's elements back to back), for comparing with a capture or for
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
 | any object serving Tags | Tags | `"name_value"` | `{"name": str, "value": None or PropertyValue}` | the `tags=` keyword of the object builders (see [Object profiles and Value_Source](#object-profiles-and-value_source)); read values can also be written back |
+
+A Network Port's BDT and FDT read this way through ReadProperty,
+ReadPropertyMultiple, COV values and the local `BACnetServer.read_property`
+(#2690); the rows have the shapes `read_bdt()` and `read_fdt()` give, so a
+script can compare a Network Port read with the BVLC reads of the same
+BBMD. The rows are read-only for now: no `PropertyValue` is built from
+rows, so writing a changed table means encoding its octets yourself and
+passing `PropertyValue.application_data`. Writing back a value as read
+sends its octets unchanged. Octets that aren't the entries, to the last
+octet, or more than 10,000 entries, read as any other value that fails a
+typed decode. FD_BBMD_Address and BACnet_IP_Global_Address have no typed
+form yet and read as `tagged`.
 
 Single reference reads use these forms through local reads, client and endpoint
 RP/RPM, and device-aware singular and batch reads. A property-reference mapping

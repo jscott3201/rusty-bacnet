@@ -204,16 +204,22 @@ Data Input's Present\_Value (`"authentication_factor"`:
 `report_access_event_local` and `report_credential_read_local`
 take), and an Event Enrollment's Event\_Parameters
 (`"event_parameter"`: a mapping whose `kind` names the algorithm;
-see docs/python-api.md). Access\_Event\_Time and Last\_Restore\_Time read
-as `"timestamp"`, and Subordinate\_List as a list of
+see docs/python-api.md), and a Network Port's
+BBMD\_Broadcast\_Distribution\_Table (`"bdt_entry"`: a `BdtEntry`)
+and BBMD\_Foreign\_Device\_Table (`"fdt_entry"`: an `FdtEntry`, as
+`read_fdt` gives it). A whole read of those two is tagged `"bdt"`
+or `"fdt"`, not `"list"`, empty ones included (#2690); they read
+only, with no typed write from the rows yet. Access\_Event\_Time and
+Last\_Restore\_Time read as `"timestamp"`, and Subordinate\_List as a list of
 `"device_object_reference"`. Tags elements are `"name_value"`
 mappings with `"name": str` and `"value": None | PropertyValue`. Semantic tags
 have `None`; valued NULL is `PropertyValue.null()`. Date and Time
 are separate primitive values, not a combined pair. Whole Tags reads
 are lists, indexed reads one element, and index zero an unsigned count.
 Each element keeps its octets, so the value
-writes back unchanged. A value that isn't those elements, to the last
-octet, follows the rules below.
+writes back unchanged, and equality compares those octets: two
+encodings of the same entry are unequal. A value that isn't those
+elements, to the last octet, follows the rules below.
 - Other content with a context tag (a Lighting Output's
 Lighting\_Command, a vendor's proprietary property) is `tagged`
 (#2618): `value` is the tree of its tags, a list of `TagNode`, and
@@ -250,8 +256,8 @@ octets it was read from.
 
 Properties:
 
-- `tag: str`: Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double', 'octet\_string', 'character\_string', 'bit\_string', 'enumerated', 'date', 'time', 'object\_identifier', 'list', 'application\_data', 'tagged' (a value read as its tags, `value` a list of `TagNode`), 'bdt' or 'fdt' for a whole Network Port table, or one typed constructed element: 'destination', 'port\_permission', 'read\_access\_specification', 'read\_access\_result', 'action\_list', 'device\_object\_reference', 'authentication\_factor\_format', 'stage\_limit\_value', 'access\_rule', 'device\_object\_property\_reference', 'object\_property\_reference', 'property\_access\_result', 'recipient', 'daily\_schedule', 'special\_event', 'calendar\_entry', 'date\_range', 'timestamp', 'cov\_subscription', 'value\_source', 'scale', 'prescale', 'address\_binding', 'shed\_level', 'authentication\_factor', 'event\_parameter'.
-- `value: Any`: The Python-native value (int, float, str, bytes, bool, dict, tuple, ObjectIdentifier, BitString, list, or None); `application_data` is `bytes` (except a DateTime Value's set Priority\_Array slot, `[date, time]`), `tagged` a list of `TagNode`, `bdt` a list of `NetworkPortBdtEntry`, `fdt` a list of `NetworkPortFdtEntry`, and a typed constructed element the form its typed write takes, or the form docs/python-api.md gives it. A date is `(year, month, day, day_of_week)` with the full year, or 255 for an unspecified year, as in every other date the binding reads. A bit string is a `BitString`, named when the value was read from a property of known bit-string type.
+- `tag: str`: Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double', 'octet\_string', 'character\_string', 'bit\_string', 'enumerated', 'date', 'time', 'object\_identifier', 'list', 'application\_data', 'tagged' (a value read as its tags, `value` a list of `TagNode`), 'bdt' or 'fdt' (a whole Network Port BDT or FDT, `value` a list of `BdtEntry` or `FdtEntry`), or one typed constructed element: 'destination', 'port\_permission', 'read\_access\_specification', 'read\_access\_result', 'action\_list', 'device\_object\_reference', 'authentication\_factor\_format', 'stage\_limit\_value', 'access\_rule', 'device\_object\_property\_reference', 'object\_property\_reference', 'property\_access\_result', 'recipient', 'daily\_schedule', 'special\_event', 'calendar\_entry', 'date\_range', 'timestamp', 'cov\_subscription', 'value\_source', 'scale', 'prescale', 'address\_binding', 'shed\_level', 'authentication\_factor', 'event\_parameter', 'bdt\_entry', 'fdt\_entry'.
+- `value: Any`: The Python-native value (int, float, str, bytes, bool, dict, tuple, ObjectIdentifier, BitString, list, or None); `application_data` is `bytes` (except a DateTime Value's set Priority\_Array slot, `[date, time]`), `tagged` a list of `TagNode`, `bdt` a list of `BdtEntry`, `fdt` a list of `FdtEntry`, and a typed constructed element the form its typed write takes, or the form docs/python-api.md gives it. A date is `(year, month, day, day_of_week)` with the full year, or 255 for an unspecified year, as in every other date the binding reads. A bit string is a `BitString`, named when the value was read from a property of known bit-string type.
 - `name: str | None`: The name of an enumerated value read from a property whose enumeration is known (`"HIGH_LIMIT"` for an Event\_State of 3), else None. `value` stays the number. Values built with the constructors carry no property, so their name is None; copies and pickles of a read value keep it.
 - `octets: bytes`: The value's octets as a write of it carries them: a typed constructed element's are the octets it was read from, a whole typed collection's its elements' back to back, and any other value its application-tagged encoding. Raises ValueError for a value that doesn't encode.
 
@@ -2042,37 +2048,29 @@ Keys:
 - `refused: int`
 - `unanswered: int`
 
-## NetworkPortBdtEntry
+## BdtEntry
 
-`class NetworkPortBdtEntry(TypedDict)`
+`class BdtEntry(TypedDict)`
 
-One BBMD\_Broadcast\_Distribution\_Table property entry.
+One entry of a Network Port's BBMD\_Broadcast\_Distribution\_Table, as
+a read of the property gives it (#2690). `address` is the BBMD as
+`Bbmd(bdt=)` and `read_bdt()` write it, `"ip:port"`, or
+`"[v6]:port"` or `"name:port"`; `None` when the entry names no
+host. `broadcast_mask` is dotted text, `None` when the entry has
+none.
 
 Keys:
 
-- `address_kind: Literal["ip", "name", "none"]`
 - `address: str | None`
-- `port: int`
 - `broadcast_mask: str | None`
-
-## NetworkPortFdtEntry
-
-`class NetworkPortFdtEntry(TypedDict)`
-
-One BBMD\_Foreign\_Device\_Table property entry.
-
-Keys:
-
-- `address: str`
-- `port: int`
-- `ttl: int`
-- `seconds_remaining: int`
 
 ## FdtEntry
 
 `class FdtEntry(TypedDict)`
 
-A Foreign Device Table entry, as `read_fdt()` returns it.
+A Foreign Device Table entry, as `read_fdt()` returns it, and as
+a read of a Network Port's BBMD\_Foreign\_Device\_Table gives each entry
+(`address` then `"[v6]:port"` for an IPv6 registrant).
 `seconds_remaining` is what the BBMD reports, its grace period
 included.
 

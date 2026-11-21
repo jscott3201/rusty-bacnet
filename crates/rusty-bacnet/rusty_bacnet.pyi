@@ -2464,16 +2464,22 @@ class PropertyValue:
       ``report_access_event_local`` and ``report_credential_read_local``
       take), and an Event Enrollment's Event_Parameters
       (``"event_parameter"``: a mapping whose ``kind`` names the algorithm;
-      see docs/python-api.md). Access_Event_Time and Last_Restore_Time read
-      as ``"timestamp"``, and Subordinate_List as a list of
+      see docs/python-api.md), and a Network Port's
+      BBMD_Broadcast_Distribution_Table (``"bdt_entry"``: a ``BdtEntry``)
+      and BBMD_Foreign_Device_Table (``"fdt_entry"``: an ``FdtEntry``, as
+      ``read_fdt`` gives it). A whole read of those two is tagged ``"bdt"``
+      or ``"fdt"``, not ``"list"``, empty ones included (#2690); they read
+      only, with no typed write from the rows yet. Access_Event_Time and
+      Last_Restore_Time read as ``"timestamp"``, and Subordinate_List as a list of
       ``"device_object_reference"``. Tags elements are ``"name_value"``
       mappings with ``"name": str`` and ``"value": None | PropertyValue``. Semantic tags
       have ``None``; valued NULL is ``PropertyValue.null()``. Date and Time
       are separate primitive values, not a combined pair. Whole Tags reads
       are lists, indexed reads one element, and index zero an unsigned count.
       Each element keeps its octets, so the value
-      writes back unchanged. A value that isn't those elements, to the last
-      octet, follows the rules below.
+      writes back unchanged, and equality compares those octets: two
+      encodings of the same entry are unequal. A value that isn't those
+      elements, to the last octet, follows the rules below.
     - Other content with a context tag (a Lighting Output's
       Lighting_Command, a vendor's proprietary property) is ``tagged``
       (#2618): ``value`` is the tree of its tags, a list of ``TagNode``, and
@@ -2575,16 +2581,16 @@ class PropertyValue:
         'octet_string', 'character_string', 'bit_string', 'enumerated',
         'date', 'time', 'object_identifier', 'list', 'application_data',
         'tagged' (a value read as its tags, ``value`` a list of ``TagNode``),
-        'bdt' or 'fdt' for a whole Network Port table,
-        or one typed constructed element: 'destination', 'port_permission',
-        'read_access_specification', 'read_access_result', 'action_list',
+        'bdt' or 'fdt' (a whole Network Port BDT or FDT, ``value`` a list of
+        ``BdtEntry`` or ``FdtEntry``), or one typed constructed element:
+        'destination', 'port_permission', 'read_access_specification', 'read_access_result', 'action_list',
         'device_object_reference', 'authentication_factor_format',
         'stage_limit_value', 'access_rule', 'device_object_property_reference',
         'object_property_reference', 'property_access_result', 'recipient', 'daily_schedule',
         'special_event', 'calendar_entry', 'date_range', 'timestamp',
         'cov_subscription', 'value_source', 'scale', 'prescale',
         'address_binding', 'shed_level', 'authentication_factor',
-        'event_parameter'."""
+        'event_parameter', 'bdt_entry', 'fdt_entry'."""
         ...
 
     @property
@@ -2592,10 +2598,9 @@ class PropertyValue:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
         ObjectIdentifier, BitString, list, or None); ``application_data`` is ``bytes``
         (except a DateTime Value's set Priority_Array slot, ``[date, time]``),
-        ``tagged`` a list of ``TagNode``, ``bdt`` a list of
-        ``NetworkPortBdtEntry``, ``fdt`` a list of ``NetworkPortFdtEntry``,
-        and a typed constructed element the form its typed write takes, or
-        the form docs/python-api.md gives it. A date is ``(year, month, day,
+        ``tagged`` a list of ``TagNode``, ``bdt`` a list of ``BdtEntry``,
+        ``fdt`` a list of ``FdtEntry``, and a typed constructed element the
+        form its typed write takes, or the form docs/python-api.md gives it. A date is ``(year, month, day,
         day_of_week)`` with the full year, or 255 for an unspecified year,
         as in every other date the binding reads. A bit string is a
         ``BitString``, named when the value was read from a property of
@@ -4434,22 +4439,20 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     unanswered: int
 
 
-class NetworkPortBdtEntry(TypedDict):
-    """One BBMD_Broadcast_Distribution_Table property entry."""
-    address_kind: Literal["ip", "name", "none"]
+class BdtEntry(TypedDict):
+    """One entry of a Network Port's BBMD_Broadcast_Distribution_Table, as
+    a read of the property gives it (#2690). ``address`` is the BBMD as
+    ``Bbmd(bdt=)`` and ``read_bdt()`` write it, ``"ip:port"``, or
+    ``"[v6]:port"`` or ``"name:port"``; ``None`` when the entry names no
+    host. ``broadcast_mask`` is dotted text, ``None`` when the entry has
+    none."""
     address: str | None
-    port: int
     broadcast_mask: str | None
 
-class NetworkPortFdtEntry(TypedDict):
-    """One BBMD_Foreign_Device_Table property entry."""
-    address: str
-    port: int
-    ttl: int
-    seconds_remaining: int
-
 class FdtEntry(TypedDict):
-    """A Foreign Device Table entry, as ``read_fdt()`` returns it.
+    """A Foreign Device Table entry, as ``read_fdt()`` returns it, and as
+    a read of a Network Port's BBMD_Foreign_Device_Table gives each entry
+    (``address`` then ``"[v6]:port"`` for an IPv6 registrant).
     ``seconds_remaining`` is what the BBMD reports, its grace period
     included."""
     address: str

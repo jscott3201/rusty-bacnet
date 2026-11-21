@@ -5,15 +5,18 @@
 //! `commands`; a value that doesn't decode as its elements to the last
 //! octet is left to the generic view.
 
+use std::net::{Ipv4Addr, SocketAddr};
+
 use bacnet_encoding::constructed::{
-    ConstructedElement, decode_calendar_entry, decode_daily_schedule, decode_date_range,
-    decode_device_object_property_reference, decode_device_object_reference, decode_name_value,
-    decode_object_property_reference_at, decode_special_event, decode_value_source, split_elements,
+    ConstructedElement, decode_bdt_entry, decode_calendar_entry, decode_daily_schedule,
+    decode_date_range, decode_device_object_property_reference, decode_device_object_reference,
+    decode_fdt_entry, decode_name_value, decode_object_property_reference_at, decode_special_event,
+    decode_value_source, split_elements,
 };
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::constructed::{
-    BACnetCalendarEntry, BACnetDeviceObjectReference, BACnetTimeValue, BACnetValueSource,
-    SpecialEventPeriod,
+    BACnetCalendarEntry, BACnetDeviceObjectReference, BACnetHostAddress, BACnetHostNPort,
+    BACnetTimeValue, BACnetValueSource, SpecialEventPeriod,
 };
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
@@ -135,6 +138,8 @@ pub(super) fn renderer(element: ConstructedElement) -> Option<Render> {
         E::AuthenticationFactorFormat => commands::authentication_factor_format,
         E::AuthenticationPolicy => commands::authentication_policy,
         E::AccessRule => commands::access_rule,
+        E::BdtEntry => bdt_entry,
+        E::FdtEntry => fdt_entry,
         _ => return None,
     })
 }
@@ -174,6 +179,8 @@ pub(super) fn element_name(element: ConstructedElement) -> &'static str {
         E::ShedLevel => "shed-level",
         E::AuthenticationFactor => "authentication-factor",
         E::EventParameter => "event-parameter",
+        E::BdtEntry => "bdt-entry",
+        E::FdtEntry => "fdt-entry",
         _ => "element",
     }
 }
@@ -335,6 +342,51 @@ pub(super) fn on_device(text: String, device: Option<ObjectIdentifier>) -> Strin
         Some(device) if text != "none" => format!("{text} on device {}", device.instance_number()),
         _ => text,
     }
+}
+
+/// A host and port as `read-bdt` and `read-fdt` print an address:
+/// `192.0.2.2:47808`, `[2001:db8::2]:47808` or `hub.example:47808`, and
+/// `none` for the choice that names no host.
+fn host_n_port_text(address: &BACnetHostNPort) -> String {
+    match &address.host {
+        BACnetHostAddress::Ip(ip) => SocketAddr::new(*ip, address.port).to_string(),
+        BACnetHostAddress::Name(name) => format!("{name}:{}", address.port),
+        BACnetHostAddress::None => "none".into(),
+    }
+}
+
+/// One BDT entry: the BBMD's address, then its broadcast mask when it
+/// carries one: `192.0.2.2:47808 mask 255.255.255.0`.
+fn bdt_entry(
+    _: &ValueFormat<'_>,
+    _: usize,
+    octets: &[u8],
+    offset: usize,
+) -> Result<(String, usize), Error> {
+    decode_bdt_entry(octets, offset).map(|(entry, end)| {
+        let mut text = host_n_port_text(&entry.bbmd_address);
+        if let Some(mask) = entry.broadcast_mask {
+            text.push_str(&format!(" mask {}", Ipv4Addr::from(mask)));
+        }
+        (text, end)
+    })
+}
+
+/// One FDT entry: the foreign device, the time to live it registered with
+/// and the seconds left: `192.0.2.3:47808 ttl 60s remaining 50s`.
+fn fdt_entry(
+    _: &ValueFormat<'_>,
+    _: usize,
+    octets: &[u8],
+    offset: usize,
+) -> Result<(String, usize), Error> {
+    decode_fdt_entry(octets, offset).map(|(entry, end)| {
+        let text = format!(
+            "{} ttl {}s remaining {}s",
+            entry.address, entry.time_to_live, entry.remaining_time_to_live
+        );
+        (text, end)
+    })
 }
 
 pub(super) fn object_reference(reference: &BACnetDeviceObjectReference) -> String {

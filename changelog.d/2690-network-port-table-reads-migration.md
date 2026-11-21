@@ -1,4 +1,4 @@
 ---
 section: Migration notes
 ---
-- **Breaking (Python API).** For whole Network Port properties 414 and 415, handle `bdt` and `fdt` in place of `tagged` or an empty `list`. Read entry dictionaries from `.value`, including an empty list for an empty table. Compare wire bytes using `.octets` (#2690).
+- **Network Port tables (Python API, #2690):** reads of properties 414 and 415 on a Network Port give `bdt` or `fdt` in place of `tagged` or an empty `list`. Read the entries from `.value`: `{"address", "broadcast_mask"}` mappings for the BDT and `FdtEntry` mappings for the FDT. Compare wire bytes with `.octets`.

@@ -16,14 +16,14 @@
 pub(super) use bacnet_encoding::constructed::ConstructedElement as Element;
 use bacnet_encoding::constructed::{
     ElementShape, decode_access_rule, decode_action_list, decode_authentication_factor,
-    decode_authentication_factor_format, decode_authentication_policy, decode_calendar_entry,
-    decode_cov_subscription, decode_daily_schedule, decode_date_range, decode_destination,
-    decode_device_object_property_reference, decode_device_object_reference,
-    decode_event_parameter, decode_name_value, decode_object_property_reference_at,
-    decode_port_permission, decode_prescale, decode_property_access_result,
-    decode_read_access_specification, decode_recipient, decode_scale, decode_shed_level,
-    decode_special_event, decode_stage_limit_value, decode_value_source, property_element,
-    split_elements,
+    decode_authentication_factor_format, decode_authentication_policy, decode_bdt_entry,
+    decode_calendar_entry, decode_cov_subscription, decode_daily_schedule, decode_date_range,
+    decode_destination, decode_device_object_property_reference, decode_device_object_reference,
+    decode_event_parameter, decode_fdt_entry, decode_name_value,
+    decode_object_property_reference_at, decode_port_permission, decode_prescale,
+    decode_property_access_result, decode_read_access_specification, decode_recipient,
+    decode_scale, decode_shed_level, decode_special_event, decode_stage_limit_value,
+    decode_value_source, property_element, split_elements,
 };
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_encoding::tags;
@@ -45,7 +45,9 @@ use super::constructed_py::Decoded;
 /// A whole read of a collection is a list of the elements, an indexed read
 /// one element, and a read of a single value that element. An empty value
 /// and index 0 (an array's size) are left to the generic decoder, which
-/// already gives them their shape.
+/// already gives them their shape, except an empty whole read of a
+/// collection with its own tag (see [`TypedElement::collection_tag`]),
+/// which keeps that tag.
 pub(crate) fn decode(
     object_type: ObjectType,
     property: PropertyIdentifier,
@@ -61,7 +63,9 @@ pub(crate) fn decode(
         ))
     };
     match (shape, array_index) {
-        (ElementShape::Collection, None) if !ends.is_empty() => {
+        (ElementShape::Collection, None)
+            if !ends.is_empty() || element.collection_tag().is_some() =>
+        {
             let mut start = 0;
             let elements = ends
                 .into_iter()
@@ -94,6 +98,10 @@ pub(super) trait TypedElement: Sized {
     fn is_one(&self, octets: &[u8]) -> bool;
     /// The `PropertyValue.tag` of one element.
     fn tag(self) -> &'static str;
+    /// The `PropertyValue.tag` of a whole collection of these elements,
+    /// when it has its own (a Network Port's `bdt` and `fdt`, #2690);
+    /// `None` for one tagged `list`.
+    fn collection_tag(self) -> Option<&'static str>;
     /// The Python form of one element's octets.
     fn to_py(self, py: Python<'_>, octets: &[u8]) -> PyResult<Py<PyAny>>;
     /// Where each element of `octets` ends, or `None` when one doesn't
@@ -147,9 +155,21 @@ impl TypedElement for Element {
             Self::ShedLevel => "shed_level",
             Self::AuthenticationFactor => "authentication_factor",
             Self::EventParameter => "event_parameter",
+            Self::BdtEntry => "bdt_entry",
+            Self::FdtEntry => "fdt_entry",
             // An element newer than the binding has no typed form here
             // (`decode_at` refuses it), so no read is ever tagged with it.
             _ => GENERIC_TAG,
+        }
+    }
+
+    /// `bdt` and `fdt` for a Network Port's tables (#2690), which keep that
+    /// tag when empty; `None` for every other collection.
+    fn collection_tag(self) -> Option<&'static str> {
+        match self {
+            Self::BdtEntry => Some("bdt"),
+            Self::FdtEntry => Some("fdt"),
+            _ => None,
         }
     }
 
@@ -251,6 +271,8 @@ impl TypedElement for Element {
                 Decoded::AuthenticationFactor,
             ),
             Self::EventParameter => with(event_parameter(octets, offset), Decoded::EventParameter),
+            Self::BdtEntry => with(decode_bdt_entry(octets, offset), Decoded::BdtEntry),
+            Self::FdtEntry => with(decode_fdt_entry(octets, offset), Decoded::FdtEntry),
             _ => Err(Error::decoding(
                 offset,
                 "the binding has no typed form for this element",
@@ -367,3 +389,7 @@ mod reference_tests;
 #[cfg(test)]
 #[path = "constructed_read_single_tests.rs"]
 mod single_tests;
+
+#[cfg(test)]
+#[path = "constructed_read_network_port_tests.rs"]
+mod network_port_tests;

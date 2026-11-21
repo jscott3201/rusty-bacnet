@@ -7,7 +7,6 @@ mod pickle;
 
 use super::constructed_read::{Element, TypedElement};
 use super::date::{date_from_value, date_value};
-use super::network_port_value::NetworkPortTable;
 use super::timestamp::time_value;
 use super::*;
 
@@ -60,8 +59,6 @@ pub(crate) enum Form {
     Typed(Element),
     /// A value with no typed form read as its tags (#2618; see `tag_tree`).
     Tagged,
-    /// A whole Network Port BDT or FDT, retaining its exact value bytes.
-    NetworkPortTable(NetworkPortTable),
 }
 
 impl Form {
@@ -69,7 +66,6 @@ impl Form {
     fn octets_to_py(self, py: Python<'_>, octets: &[u8]) -> PyResult<Py<PyAny>> {
         match self {
             Self::Typed(element) => element.to_py(py, octets),
-            Self::NetworkPortTable(table) => table.to_py(py, octets),
             Self::Tagged => super::tag_tree::nodes_to_py(py, octets),
             Self::Plain => Ok(PyBytes::new(py, octets).into_any().unbind()),
         }
@@ -357,16 +353,16 @@ impl PyPropertyValue {
 
     /// The BACnet type tag (e.g. "real", "unsigned", "boolean"). One element
     /// of a typed constructed read is named by its production
-    /// ("destination", "port_permission", ...); a whole one is a "list".
-    /// A whole Network Port table is tagged "bdt" or "fdt".
+    /// ("destination", "port_permission", ...); a whole one is a "list",
+    /// except a Network Port's tables, "bdt" and "fdt" (#2690), even empty.
     #[getter]
     fn tag(&self) -> &str {
         match (&self.inner, self.form) {
             (primitives::PropertyValue::ApplicationData(_), Form::Tagged) => TAGGED,
-            (primitives::PropertyValue::ApplicationData(_), Form::NetworkPortTable(table)) => {
-                table.tag()
-            }
             (primitives::PropertyValue::ApplicationData(_), Form::Typed(element)) => element.tag(),
+            (primitives::PropertyValue::List(_), Form::Typed(element)) => {
+                element.collection_tag().unwrap_or("list")
+            }
             (inner, _) => tag(inner),
         }
     }
@@ -379,7 +375,7 @@ impl PyPropertyValue {
         match (&self.inner, self.form) {
             (
                 primitives::PropertyValue::ApplicationData(octets),
-                form @ (Form::Typed(_) | Form::Tagged | Form::NetworkPortTable(_)),
+                form @ (Form::Typed(_) | Form::Tagged),
             ) => form.octets_to_py(py, octets),
             (primitives::PropertyValue::List(items), form @ (Form::Typed(_) | Form::Tagged)) => {
                 let list = pyo3::types::PyList::empty(py);
@@ -425,9 +421,6 @@ impl PyPropertyValue {
 
     fn __repr__(&self) -> String {
         match (&self.inner, self.form) {
-            (primitives::PropertyValue::ApplicationData(octets), Form::NetworkPortTable(table)) => {
-                format!("PropertyValue.{}(<{} bytes>)", table.tag(), octets.len())
-            }
             (primitives::PropertyValue::ApplicationData(octets), Form::Tagged) => {
                 format!("PropertyValue.{TAGGED}(<{} bytes>)", octets.len())
             }
@@ -435,7 +428,8 @@ impl PyPropertyValue {
                 format!("PropertyValue.{}(<{} bytes>)", element.tag(), octets.len())
             }
             (primitives::PropertyValue::List(items), Form::Typed(element)) => format!(
-                "PropertyValue.list(<{} {} elements>)",
+                "PropertyValue.{}(<{} {} elements>)",
+                element.collection_tag().unwrap_or("list"),
                 items.len(),
                 element.tag()
             ),
@@ -446,7 +440,8 @@ impl PyPropertyValue {
     /// Equal when both carry the same value and, for a typed constructed
     /// read, the same element production. Numbers compare as numbers, so
     /// `real(0.0) == real(-0.0)` and a NaN equals nothing; a list compares
-    /// item by item, and a typed element by its octets.
+    /// item by item, and a typed element by its octets, so two encodings of
+    /// one entry (a TTL in one octet or two) are unequal.
     fn __eq__(&self, other: &Self) -> bool {
         self == other
     }
