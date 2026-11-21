@@ -199,8 +199,8 @@ impl PyScEvent {
         }
     }
 
-    /// The attempt number, from 1, of a `"reconnect_attempt"`; for
-    /// `"reconnect_gave_up"`, the attempts made.
+    /// The reconnect round, from 1 and saturating at u32::MAX. On giving up,
+    /// the last round dialled, or zero.
     #[getter]
     fn attempt(&self) -> Option<u32> {
         match &self.0 {
@@ -210,7 +210,7 @@ impl PyScEvent {
         }
     }
 
-    /// The jittered delay, in seconds, a `"reconnect_attempt"` waited.
+    /// The jittered delay in seconds waited at the start of this round.
     #[getter]
     fn backoff(&self) -> Option<f64> {
         match &self.0 {

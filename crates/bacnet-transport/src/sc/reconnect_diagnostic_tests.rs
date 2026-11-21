@@ -22,7 +22,7 @@ fn config(max_retries: u32) -> ScReconnectConfig {
     ScReconnectConfig {
         initial_delay_ms: 1,
         max_delay_ms: 1,
-        max_retries,
+        max_retries: Some(max_retries),
     }
 }
 
@@ -222,46 +222,60 @@ async fn handshake_retry_warnings_share_the_redial_diagnostic_budget() {
     transport.stop().await.unwrap();
 }
 
+/// The outcome of a long episode is logged whatever the diagnostic window
+/// holds: reaching the failover hub after many failed rounds, or giving up.
 #[tokio::test(start_paused = true)]
-async fn failover_transition_and_outcomes_bypass_a_full_diagnostic_window() {
+async fn failover_outcomes_bypass_a_full_diagnostic_window() {
     for succeeds in [false, true] {
         let (capture, _subscriber) = capture();
         let (client, hub) = LoopbackWebSocket::pair();
-        let (failover, failover_hub) = LoopbackWebSocket::pair();
+        let failover_dials = Arc::new(AtomicUsize::new(0));
+        let (hub_tx, mut hub_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut transport = transport(client, 100)
-            .with_failover(failover)
-            .with_connector(|| async { Err(Error::Encoding("primary outage".into())) });
+            .with_connector(|| async { Err(Error::Encoding("primary outage".into())) })
+            .with_failover_connector({
+                let dials = failover_dials.clone();
+                move || {
+                    // When `succeeds`, the failover hub answers in round 50.
+                    let up = succeeds && dials.fetch_add(1, Ordering::SeqCst) == 49;
+                    let hub_tx = hub_tx.clone();
+                    async move {
+                        if !up {
+                            return Err(Error::Encoding("failover outage".into()));
+                        }
+                        let (client, hub) = LoopbackWebSocket::pair();
+                        hub_tx.send(hub).unwrap();
+                        Ok(client)
+                    }
+                }
+            });
         let (started, ()) = tokio::join!(transport.start(), accept(&hub));
         let _rx = started.unwrap();
         drop(hub);
         if succeeds {
+            let failover_hub = hub_rx.recv().await.unwrap();
             accept(&failover_hub).await;
             wait_connected(&transport).await;
-            let outcome = capture.matching("SC connected to failover hub after primary");
+            let outcome = capture.matching("SC reconnected after backoff");
             assert_eq!(outcome.len(), 1);
             assert_eq!(outcome[0].level, tracing::Level::INFO);
-            assert_summary(&outcome[0], 99);
+            assert_eq!(outcome[0].fields["attempt"], "50");
+            // 49 rounds of two failed dials, then the primary's in round 50:
+            // the first is logged, the other 98 are suppressed.
+            assert_summary(&outcome[0], 98);
             assert!(
                 capture
                     .matching("SC reconnection: max retries exhausted")
                     .is_empty()
             );
         } else {
-            drop(failover_hub);
             wait_exhausted(&mut transport).await;
-            let outcome = capture.matching("SC failover connection failed");
-            assert_eq!(outcome.len(), 1);
-            assert_eq!(outcome[0].level, tracing::Level::WARN);
             let terminal = capture.matching("SC reconnection: max retries exhausted");
             assert_eq!(terminal.len(), 1);
-            assert_summary(&terminal[0], 99);
+            assert_eq!(terminal[0].level, tracing::Level::WARN);
+            // 100 rounds of two failed dials, the first logged.
+            assert_summary(&terminal[0], 199);
         }
-        assert_eq!(
-            capture
-                .matching("SC primary reconnection exhausted, attempting failover")
-                .len(),
-            1
-        );
         assert_eq!(capture.matching("SC transport disconnected").len(), 1);
         assert_eq!(capture.matching("SC reconnection redial failed").len(), 1);
         transport.stop().await.unwrap();
@@ -292,6 +306,7 @@ async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
                 primary_connector: &None,
                 failover_connector: &None,
                 failover_ws: &mut failover_ws,
+                primary_ws: &mut None,
                 conn: &conn,
                 active_ws: &active_ws,
                 state_tx: &state_tx,
@@ -315,7 +330,16 @@ async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
                 assert_summary(record, 0);
             }
             assert_eq!(capture.matching("SC transport disconnected").len(), 1);
-            let terminal = capture.matching("SC reconnection: max retries exhausted");
+            assert!(
+                capture
+                    .matching("SC reconnection: max retries exhausted")
+                    .is_empty()
+            );
+            let terminal = capture.matching(if eligible {
+                "SC reconnection: no hub can be retried"
+            } else {
+                "SC reconnection: a hub refused further retries"
+            });
             assert_eq!(terminal.len(), 1);
             assert_summary(&terminal[0], u64::from(already_emitted));
             assert_eq!(throttle.suppressed(), 0);
