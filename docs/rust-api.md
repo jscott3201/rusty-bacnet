@@ -1175,7 +1175,8 @@ keeps the address, not the name, and doesn't follow a DHCP change. It
 doesn't derive the broadcast address from the interface either.
 
 With a loopback interface on the wildcard socket (any start without
-`set_share_port_by_address(true)`), a local broadcast to 255.255.255.255
+`set_share_port_by_address(true)`, except a Linux B/IP-M member with its
+group on its own requested port, which binds its address), a local broadcast to 255.255.255.255
 would leave through whichever interface the host routes it to, usually a
 LAN. So such a send fails with `Error::Transport` carrying
 `LoopbackBroadcastRefused` (find it with `LoopbackBroadcastRefused::from_error`)

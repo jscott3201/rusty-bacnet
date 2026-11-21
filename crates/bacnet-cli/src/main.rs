@@ -522,7 +522,7 @@ fn report(
         line.push_str(&format!(" (BACnet/SC error code {code})"));
     }
     if loopback_broadcast_refused(error) {
-        line.push_str(" (pass -b 127.255.255.255, or --broadcast 127.255.255.255)");
+        line.push_str(" (the -b/--broadcast option)");
     }
     writeln!(out, "{line}")
 }

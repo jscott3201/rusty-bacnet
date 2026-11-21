@@ -9,10 +9,13 @@
 //! node's own. The node refuses that local broadcast leg, counted in
 //! [`SendCounters::loopback_limited_broadcast`](super::SendCounters::loopback_limited_broadcast).
 //!
-//! Only that local leg is refused. A BBMD's
-//! Forwarded-NPDUs to its BDT peers and foreign devices are unicast, and
-//! Annex J.4.5 makes them separate from the local leg (a BBMD with no other
-//! device on its subnet may leave the local leg out), so they still go.
+//! Only that local leg is refused, as a deliberate refusal of a
+//! misconfigured send, not as an omission the standard offers. A BBMD's
+//! Forwarded-NPDUs to its BDT peers and foreign devices are unicast and
+//! still go. For a foreign device's Distribute-Broadcast-To-Network the
+//! BBMD must also broadcast on its own subnet (Annex J.4.5); as that was
+//! not done, it answers with the NAK J.4.5 provides for a forwarding it
+//! could not complete.
 
 use std::fmt;
 use std::io;
@@ -36,6 +39,13 @@ const LOOPBACK_BROADCAST: Ipv4Addr = Ipv4Addr::new(127, 255, 255, 255);
 /// [`BipTransport::new`](super::BipTransport::new). It travels inside
 /// [`Error::Transport`] with [`io::ErrorKind::InvalidInput`]; find it with
 /// [`from_error`](Self::from_error), so a front end can name its own option.
+///
+/// On a BBMD the error comes back after its Forwarded-NPDUs to BDT peers and
+/// foreign devices are queued, so a caller that retries the broadcast sends
+/// those again. A foreign device whose Distribute-Broadcast-To-Network this
+/// BBMD NAKs for the refused local leg may register again sooner: this
+/// stack's own foreign device takes a NAK as a hint to re-register, at most
+/// once per response timeout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LoopbackBroadcastRefused;

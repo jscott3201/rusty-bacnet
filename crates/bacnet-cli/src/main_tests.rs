@@ -205,7 +205,7 @@ fn a_refused_loopback_broadcast_names_the_broadcast_option() {
         );
         bacnet_types::error::Error::Transport(io)
     };
-    let hint = "(pass -b 127.255.255.255, or --broadcast 127.255.255.255)\n";
+    let hint = "127.255.255.255 (the -b/--broadcast option)\n";
     assert!(reported(&refused()).ends_with(hint));
     let ops = bacnet_ops::OpsError::Client(refused());
     assert!(reported(&ops).ends_with(hint), "{}", reported(&ops));

@@ -1555,7 +1555,11 @@ warning for that configuration once; nothing is wrong while the device
 only sends unicast. A BBMD on such an interface still forwards its own
 broadcasts, and those it receives, to its BDT peers and foreign devices;
 only the local rebroadcast is refused, and a foreign device's
-Distribute-Broadcast-To-Network then draws a NAK.
+Distribute-Broadcast-To-Network then draws a NAK. Two effects follow. On a
+BBMD the error comes back after those forwards are queued, so retrying the
+broadcast sends them again. And a foreign device that gets the NAK may
+register again sooner: this stack's own foreign device takes a NAK as a
+hint to re-register, at most once per response timeout.
 
 For discovery on loopback, pass the loopback subnet's broadcast address,
 `broadcast_address="127.255.255.255"` (with the usual 127.0.0.0/8):

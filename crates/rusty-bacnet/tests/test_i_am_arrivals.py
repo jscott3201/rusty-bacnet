@@ -268,7 +268,7 @@ class IAmArrivalTests(Arrivals):
         client = await endpoint.client()
         arrivals = await endpoint.i_am_arrivals()
         frames = await endpoint.frames()
-        with self.assertRaisesRegex(rb.BacnetTransportError, "broadcast_address.*127.255.255.255"):
+        with self.assertRaisesRegex(rb.BacnetTransportError, r"127\.255\.255\.255.*\(the broadcast_address= keyword\)"):
             await client.who_is(scope="local", low=722, high=722)
 
         # The refused broadcast left no frame: the first tapped frame is the
