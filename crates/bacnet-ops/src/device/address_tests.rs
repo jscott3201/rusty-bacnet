@@ -57,7 +57,9 @@ fn only_a_station_is_an_address() {
     }
     assert!(DeviceAddress::new(0, &[]).is_err());
     assert!(DeviceAddress::new(0, &[0xFF]).is_err());
-    assert!(DeviceAddress::new(5, &[0xFF]).is_ok());
+    // A remote 0xFF is that MS/TP network's broadcast: a write there would
+    // reach every station on it.
+    assert!(DeviceAddress::new(5, &[0xFF]).is_err());
     assert!(DeviceAddress::new(1, &[0; 19]).is_err());
     assert!(DeviceAddress::new(1, &[0; 18]).is_ok());
 }

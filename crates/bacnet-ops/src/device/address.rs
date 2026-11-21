@@ -48,8 +48,9 @@ impl DeviceAddress {
     /// Network 65535 (every network), an empty MAC (a broadcast), a MAC
     /// longer than [`BACnetAddress::MAX_MAC_LEN`] octets, a local MAC of a
     /// length the target grammar has no form for (one of 1, 3 or 6
-    /// octets), and the local MS/TP broadcast `0xFF` as a one-octet MAC name no
-    /// one station.
+    /// octets), and the MS/TP broadcast `0xFF` as a one-octet MAC name no
+    /// one station, on this network or a remote one: as a remote DADR it
+    /// reaches every station of an MS/TP network.
     pub fn new(network: u16, mac: &[u8]) -> Result<Self, String> {
         if network == u16::MAX {
             return Err("network 65535 is every network, not a station's".into());
@@ -67,7 +68,7 @@ impl DeviceAddress {
                 mac.len()
             ));
         }
-        if network == 0 && mac == [0xFF] {
+        if mac == [0xFF] {
             return Err("MAC 0xFF is the MS/TP broadcast, not a station".into());
         }
         Ok(Self {
