@@ -135,7 +135,8 @@ enum GaveUp {
     Budget,
     /// No hub is left that can be dialled.
     NoHub,
-    /// A hub's answer (or a failed VMAC reseed) forbids further retries.
+    /// Further retries are forbidden: a hub's answer, a failed VMAC reseed,
+    /// or anything else that cleared the connection's retry eligibility.
     Refused,
 }
 
@@ -387,6 +388,9 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                     .is_some_and(|kept| Arc::ptr_eq(kept, &ws))
                 {
                     *self.primary_ws = None;
+                    // Said once and outside the reconnect throttle: with no
+                    // primary connector this is the last way back.
+                    warn!(%e, "the kept primary SC socket was closed after a failed connect and is not reused; without a primary connector this node cannot return to the primary hub until it is restarted");
                 }
                 absorb_failed_connect_probe(self.conn, &probe_conn).await;
                 if !self.conn.lock().await.connect_retry_allowed {
