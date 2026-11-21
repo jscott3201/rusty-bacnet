@@ -457,8 +457,9 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         started = loop.time()
         with self.assertRaises(rb.BacnetLookupError) as caught:
-            await asyncio.wait_for(self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 10)
-        self.assertGreaterEqual(loop.time() - started, 2.5)  # the Who-Is's wait
+            await asyncio.wait_for(self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 15)
+        # Both waits: the Who-Is addressed to the station, then the one to its network.
+        self.assertGreaterEqual(loop.time() - started, 5.5)
         text = str(caught.exception)
         for words in ("5:0x0B", "a Who-Is addressed to it", "router=", "discover_routers()"):
             self.assertIn(words, text)
@@ -492,7 +493,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         silent = rb.RoutedTarget(5, b"\x0c")
         results = await asyncio.wait_for(asyncio.gather(
             *[self.role.read_property(silent, AI_1, P.PRESENT_VALUE) for _ in range(20)],
-            return_exceptions=True), 10)
+            return_exceptions=True), 15)
         # One lookup: the Who-Is addressed to the station, then one to its network.
         self.assertEqual(len(self.who_is), 2)
         self.assertTrue(all(isinstance(result, rb.BacnetLookupError) for result in results), results)
@@ -508,7 +509,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
                 for _ in range(5)]
         await asyncio.sleep(0.05)
         first.cancel()
-        results = await asyncio.wait_for(asyncio.gather(*rest, return_exceptions=True), 10)
+        results = await asyncio.wait_for(asyncio.gather(*rest, return_exceptions=True), 15)
         self.assertTrue(all(isinstance(result, rb.BacnetLookupError) for result in results), results)
         # The cancelled asker sent one; the call it handed the asking to sends
         # both forms (or the asker sent both first).
@@ -625,7 +626,7 @@ class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(rb.BacnetLookupError):
                 await asyncio.wait_for(
                     role.read_property(rb.RoutedTarget(9, self.far_address), AI_1,
-                                       P.PRESENT_VALUE), 10)
+                                       P.PRESENT_VALUE), 15)
             self.assertEqual((await endpoint.status())["active_leases"], 0)
 
     async def test_routed_reads_and_writes_are_audited_naming_the_station(self):

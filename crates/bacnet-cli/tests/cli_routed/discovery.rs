@@ -155,7 +155,7 @@ async fn default_policy_coalesces_a_reused_routed_cli_source() {
     // are both coalesced: the reused source has its answer already.
     failure(
         &second,
-        "did not answer a Who-Is addressed to it nor one on network 2",
+        "answered neither a Who-Is addressed to it nor one on network 2",
     );
     check(&server, 3, 2, 1);
     assert_eq!(sources.lock().unwrap()[1], first_source);

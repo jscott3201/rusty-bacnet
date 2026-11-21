@@ -12350,7 +12350,10 @@ station's own address answers, as a slave proxy sends for its MS/TP slave
 (Clause 16.10.2). The client remembers a station found the second way and
 asks its network first next time; `Client::unanswered_recently(&address)`
 says whether neither form drew an answer within `bacnet_ops::device::MISS_MEMORY`.
-Nothing goes further, and never to every network. A directed Who-Is accepts
+Nothing goes further, and never to every network. Each of the two Who-Is
+waits the resolve wait, so a silent remote address takes up to twice it
+(6 s with the default `RESOLVE_WAIT`), plus any wait for the Who-Is rate
+limit. A directed Who-Is accepts
 `bacnet_client::client::Station`. A remote station keeps its DNET and DADR
 through an explicit or learned router. With no known next hop it uses a local
 link broadcast carrying that same destination.

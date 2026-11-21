@@ -91,6 +91,10 @@ pub const DEVICE_PROPERTIES: [PropertyIdentifier; 13] = [
 
 /// How long a handle made from an instance no address claims waits for
 /// the device's I-Am, unless [`Client::with_resolve_wait`] says otherwise.
+/// It is the wait per Who-Is: a handle made from a remote address the
+/// discovery table holds no row for may send two, one addressed to the
+/// station and one to its network, so a silent station costs up to twice
+/// this (6 s by default), plus any wait for the Who-Is rate limit.
 pub const RESOLVE_WAIT: Duration = Duration::from_secs(3);
 
 /// The stop flag of the client's readers. Nothing sets it: a call is
@@ -276,7 +280,11 @@ impl<T: TransportPort + 'static> Client<T> {
 
     /// A clone of this client whose handles made from an instance that no
     /// address claims wait `wait` for the device's I-Am after one Who-Is
-    /// ([`RESOLVE_WAIT`] for [`new`](Self::new)'s), and whose following
+    /// ([`RESOLVE_WAIT`] for [`new`](Self::new)'s), whose handles made from
+    /// a remote address with no row wait `wait` after each of up to two
+    /// (addressed to the station, then to its network: up to `2 × wait`
+    /// for a silent station, plus any wait for the Who-Is rate limit), and
+    /// whose following
     /// handles, after a request times out, ask once where the device went
     /// and give the answers that long (see [`QUIET`](crate::device::QUIET)).
     /// `None` sends no Who-Is: such a handle fails at once with

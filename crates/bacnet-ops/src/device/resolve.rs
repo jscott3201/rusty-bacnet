@@ -12,7 +12,6 @@ use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 use tokio::sync::broadcast::error::RecvError;
 
-use super::misses::Miss;
 use super::{Device, DeviceAddress, DeviceRef, Discovered, Duplicate, Pin};
 use crate::client::{Client, Discover, ResolveScope, Scope, lock};
 use crate::error::OpsError;
@@ -120,8 +119,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// made from the address asks again whatever this says.
     pub fn unanswered_recently(&self, address: &DeviceAddress) -> bool {
         let address = self.localized(address.clone());
-        lock(&self.shared.station_misses).get(&address, tokio::time::Instant::now())
-            == Some(Miss::Silent)
+        lock(&self.shared.station_misses)
+            .get(&address, tokio::time::Instant::now())
+            .silent
     }
 
     /// `address` as the discovery table and the gates key it: one on this
@@ -273,7 +273,7 @@ impl<T: TransportPort + 'static> Client<T> {
         };
         let misses = &self.shared.station_misses;
         let known = lock(misses).get(address, tokio::time::Instant::now());
-        if known != Some(Miss::NetworkOnly)
+        if !known.network_form
             && let Some(row) = self
                 .wait_for(&station, range, Duration::ZERO, is_station)
                 .await?
@@ -285,12 +285,15 @@ impl<T: TransportPort + 'static> Client<T> {
         let found = self
             .wait_for(&network, range, Duration::ZERO, is_station)
             .await?;
-        let miss = if found.is_some() {
-            Miss::NetworkOnly
+        let now = tokio::time::Instant::now();
+        if found.is_some() {
+            lock(misses).answered_network_form(address.clone(), now);
         } else {
-            Miss::Silent
-        };
-        lock(misses).remember(address.clone(), miss, tokio::time::Instant::now());
+            // Which form the station answers stays known: one lost I-Am
+            // from a proxied slave must not send it back to the
+            // station-addressed form.
+            lock(misses).went_silent(address.clone(), now);
+        }
         found.ok_or_else(|| unknown(Some(network)))
     }
 

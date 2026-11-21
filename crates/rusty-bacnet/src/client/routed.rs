@@ -84,8 +84,9 @@ impl Routed {
     /// The path to the station on `client`'s link. A named router that is
     /// a broadcast or group address on the local link raises BacnetError:
     /// a routed request goes to its router by unicast. With no router, the
-    /// discovery table's row for the station gives it, after one Who-Is to
-    /// the station when there is no row (`device()`'s rule);
+    /// discovery table's row for the station gives it, after a Who-Is to
+    /// the station when there is no row and, unanswered, one to its network
+    /// (`device()`'s rule, up to two resolve waits);
     /// with none after that, BacnetLookupError, and a call soon after
     /// raises at once instead of asking again (bacnet-ops remembers the
     /// miss). `lookups` keeps one lookup per station in flight.
@@ -133,7 +134,8 @@ impl Routed {
                             Ok(None) | Err(_) => continue,
                         }
                     }
-                    // Asks the station with a directed Who-Is, as device() does.
+                    // Asks as device() does: a Who-Is to the station, then,
+                    // unanswered, one to its network.
                     Turn::Ask(asking) => match client.device(address.clone()).await {
                         Ok(device) => {
                             drop(device);

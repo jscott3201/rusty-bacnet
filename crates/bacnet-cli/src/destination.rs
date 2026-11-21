@@ -240,14 +240,15 @@ async fn find_routed<T: TransportPort + 'static>(
     }
     // Subscribe before asking, so the answer can't slip in between.
     let mut events = client.device_events();
-    let asked = match station {
+    // How many Who-Is went out, each with its own wait, for the message.
+    let (asked, sent) = match station {
         Station::Instance(instance) => {
             let range = DeviceInstanceRange::new(*instance, *instance).map_err(text)?;
             client
                 .who_is(Broadcast::Network(dnet), Some(range))
                 .await
                 .map_err(text)?;
-            format!("a Who-Is on network {dnet}")
+            (format!("a Who-Is on network {dnet}"), 1)
         }
         Station::Mac(mac) => {
             let to = bacnet_client::client::Station::remote(dnet, mac);
@@ -264,15 +265,24 @@ async fn find_routed<T: TransportPort + 'static>(
                 .who_is(Broadcast::Network(dnet), None)
                 .await
                 .map_err(text)?;
-            format!("a Who-Is addressed to it nor one on network {dnet}")
+            (
+                format!("neither a Who-Is addressed to it nor one on network {dnet}"),
+                2,
+            )
         }
     };
     match answer(client, &mut events, dnet, station, wait).await {
         Some(found) => found,
-        None => Err(format!(
+        None if sent == 1 => Err(format!(
             "device {} did not answer {asked} within {} ms",
             station.name(dnet),
             wait.as_millis()
+        )),
+        None => Err(format!(
+            "device {} answered {asked}, waiting {} ms for each ({} ms in all)",
+            station.name(dnet),
+            wait.as_millis(),
+            wait.as_millis() * sent
         )),
     }
 }

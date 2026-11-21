@@ -18,6 +18,7 @@ use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, Segmentation, UnconfirmedServiceChoice};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use super::discover_tests::who_is_frames;
@@ -88,6 +89,11 @@ fn routed_i_am(sadr: u8, instance: u32) -> ReceivedNpdu {
 /// A client at station 1 whose Who-Is to network 5 is answered as `answer`
 /// says, and its sends.
 async fn scripted(answer: Answer) -> (Client<TestTransport>, SendLog) {
+    scripted_by(Arc::new(Mutex::new(answer))).await
+}
+
+/// [`scripted`], with the answer read at each send, so a test can change it.
+async fn scripted_by(answer: Arc<Mutex<Answer>>) -> (Client<TestTransport>, SendLog) {
     let (inbox, rx) = mpsc::channel(16);
     let port = TestTransport::builder()
         .local_mac(&mac(1))
@@ -99,6 +105,7 @@ async fn scripted(answer: Answer) -> (Client<TestTransport>, SendLog) {
                 if request.service_choice == UnconfirmedServiceChoice::WHO_IS);
             if let (Some(to), true) = (asked, is_who_is) {
                 let directed = !to.mac_address.is_empty();
+                let answer = *answer.lock().unwrap();
                 let from = match (answer, directed) {
                     (Answer::Directed, true) | (Answer::NetworkOnly, false) => Some(STATION),
                     (Answer::Other, false) => Some(OTHER),
@@ -134,10 +141,22 @@ fn asked(log: &SendLog) -> Vec<Option<Vec<u8>>> {
 const TARGET: &str = "5:0x0a";
 
 /// A station that answers the Who-Is addressed to it needs no second one.
+/// That Who-Is, with no router known yet, is a link broadcast whose NPDU
+/// names the station: DNET 5, DLEN 1, DADR 0x0A, hop count 255 and no
+/// SNET (Clause 6.5.3: a broadcast DA while the router is unknown).
 #[tokio::test(start_paused = true)]
 async fn a_station_that_answers_is_asked_once() {
     let (client, sent) = scripted(Answer::Directed).await;
     let device = client.device(TARGET).await.unwrap();
+    let [frame] = &who_is_frames(&sent)[..] else {
+        panic!("one Who-Is")
+    };
+    assert!(frame.broadcast);
+    assert_eq!(
+        frame.npdu[..],
+        [0x01, 0x20, 0x00, 0x05, 0x01, STATION, 0xFF, 0x10, 0x08],
+        "the directed Who-Is's NPDU and APDU"
+    );
     assert_eq!(device.instance(), Some(500 + u32::from(STATION)));
     assert_eq!(asked(&sent), [Some(vec![STATION])]);
     assert!(!client.unanswered_recently(&device.address()));
@@ -157,6 +176,33 @@ async fn a_proxied_slave_is_found_on_the_retry_and_asked_on_its_network_next() {
     assert_eq!(again.instance(), Some(500 + u32::from(STATION)));
     assert_eq!(asked(&sent), [None], "the network form first, and alone");
     assert!(!client.unanswered_recently(&again.address()));
+}
+
+/// A proxied slave whose one I-Am is lost stays a network-form station: it
+/// is unanswered for the window, and the lookup after the window asks its
+/// network first and finds it at once (review of #2694).
+#[tokio::test(start_paused = true)]
+async fn a_lost_answer_keeps_a_proxied_slave_on_the_network_form() {
+    let answer = Arc::new(Mutex::new(Answer::NetworkOnly));
+    let (client, sent) = scripted_by(answer.clone()).await;
+    client.device(TARGET).await.unwrap();
+    assert_eq!(asked(&sent), [Some(vec![STATION]), None]);
+    client.low_level().clear_devices().await;
+    *answer.lock().unwrap() = Answer::Silent;
+    client.device(TARGET).await.map(drop).unwrap_err();
+    assert_eq!(asked(&sent), [None], "still the network form, and alone");
+    let station = crate::DeviceAddress::new(5, &[STATION]).unwrap();
+    assert!(client.unanswered_recently(&station));
+    tokio::time::sleep(super::MISS_MEMORY).await;
+    assert!(!client.unanswered_recently(&station));
+    *answer.lock().unwrap() = Answer::NetworkOnly;
+    let again = client.device(TARGET).await.unwrap();
+    assert_eq!(again.instance(), Some(500 + u32::from(STATION)));
+    assert_eq!(
+        asked(&sent),
+        [None],
+        "the network form first after the window"
+    );
 }
 
 /// A silent station is asked exactly twice, then is unknown, said to have

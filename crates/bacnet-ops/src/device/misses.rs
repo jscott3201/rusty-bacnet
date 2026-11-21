@@ -21,65 +21,109 @@ use super::DeviceAddress;
 use crate::Client;
 
 /// How long a station that answered neither Who-Is is remembered as
-/// silent. A station that answered only its network's Who-Is is kept until
-/// the cap of 256 remembered stations pushes it out, or it goes silent.
+/// silent. Which form a station answers is a separate fact: a station that
+/// answered only its network's Who-Is is asked that way first until the cap
+/// of 256 remembered stations pushes it out, whether or not it was silent
+/// since.
 pub const MISS_MEMORY: Duration = Duration::from_secs(30);
 
 /// The most stations remembered at once; past it the oldest goes.
 pub(crate) const MISS_ROWS: usize = 256;
 
 /// What a lookup by address learned about a station that missed the
-/// station-addressed Who-Is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Miss {
+/// station-addressed Who-Is. The two facts are kept apart, so one lost
+/// I-Am from a proxied slave does not send its next lookup back to the
+/// station-addressed form (#2599).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Known {
     /// It answered the Who-Is to its network: ask that form first.
-    NetworkOnly,
-    /// It answered neither form.
-    Silent,
+    pub(crate) network_form: bool,
+    /// It answered neither form within the last [`MISS_MEMORY`].
+    pub(crate) silent: bool,
+}
+
+/// One remembered station.
+#[derive(Debug, Clone, Copy)]
+struct Row {
+    /// It answered the Who-Is to its network.
+    network_form: bool,
+    /// When it last answered neither form, if it did.
+    silent_at: Option<Instant>,
+    /// When the row last changed: the oldest goes first at the cap.
+    at: Instant,
+}
+
+impl Row {
+    /// What the row says at `now`.
+    fn known(&self, now: Instant) -> Known {
+        Known {
+            network_form: self.network_form,
+            silent: self
+                .silent_at
+                .is_some_and(|at| now.saturating_duration_since(at) < MISS_MEMORY),
+        }
+    }
 }
 
 /// The stations, each with what it missed and when.
 #[derive(Debug, Default)]
 pub(crate) struct StationMisses {
-    rows: HashMap<DeviceAddress, (Miss, Instant)>,
+    rows: HashMap<DeviceAddress, Row>,
 }
 
 impl StationMisses {
-    /// What `station` is remembered for at `now`: a silent miss counts for
-    /// [`MISS_MEMORY`].
-    pub(crate) fn get(&self, station: &DeviceAddress, now: Instant) -> Option<Miss> {
+    /// What `station` is remembered for at `now`; nothing for a station not
+    /// kept. A silent miss counts for [`MISS_MEMORY`].
+    pub(crate) fn get(&self, station: &DeviceAddress, now: Instant) -> Known {
         self.rows
             .get(station)
-            .filter(|(miss, at)| live(*miss, *at, now))
-            .map(|(miss, _)| *miss)
+            .map(|row| row.known(now))
+            .unwrap_or_default()
     }
 
-    /// Keep `station` as `miss` at `now`, dropping silent misses past
-    /// [`MISS_MEMORY`] and, at [`MISS_ROWS`], the oldest.
-    pub(crate) fn remember(&mut self, station: DeviceAddress, miss: Miss, now: Instant) {
-        self.rows.retain(|_, (miss, at)| live(*miss, *at, now));
+    /// `station` answered the Who-Is to its network at `now`: ask it that
+    /// way first, and it is no longer silent.
+    pub(crate) fn answered_network_form(&mut self, station: DeviceAddress, now: Instant) {
+        self.keep(station, now, |row| {
+            row.network_form = true;
+            row.silent_at = None;
+        });
+    }
+
+    /// `station` answered neither form at `now`. Which form it answers, if
+    /// known, stays as it was.
+    pub(crate) fn went_silent(&mut self, station: DeviceAddress, now: Instant) {
+        self.keep(station, now, |row| row.silent_at = Some(now));
+    }
+
+    /// Update `station`'s row at `now` with `change`, dropping rows that say
+    /// nothing any more and, at [`MISS_ROWS`], the oldest.
+    fn keep(&mut self, station: DeviceAddress, now: Instant, change: impl FnOnce(&mut Row)) {
+        self.rows
+            .retain(|_, row| row.known(now) != Known::default());
         if self.rows.len() >= MISS_ROWS
             && !self.rows.contains_key(&station)
             && let Some(oldest) = self
                 .rows
                 .iter()
-                .min_by_key(|(_, (_, at))| *at)
+                .min_by_key(|(_, row)| row.at)
                 .map(|(key, _)| key.clone())
         {
             self.rows.remove(&oldest);
         }
-        self.rows.insert(station, (miss, now));
+        let row = self.rows.entry(station).or_insert(Row {
+            network_form: false,
+            silent_at: None,
+            at: now,
+        });
+        change(row);
+        row.at = now;
     }
 
     /// Forget `station`: it answered a Who-Is addressed to it.
     pub(crate) fn forget(&mut self, station: &DeviceAddress) {
         self.rows.remove(station);
     }
-}
-
-/// Whether a row kept at `at` still counts at `now`.
-fn live(miss: Miss, at: Instant, now: Instant) -> bool {
-    miss == Miss::NetworkOnly || now.saturating_duration_since(at) < MISS_MEMORY
 }
 
 #[cfg(test)]
@@ -90,6 +134,15 @@ mod tests {
         DeviceAddress::new(network, mac).unwrap()
     }
 
+    const NETWORK: Known = Known {
+        network_form: true,
+        silent: false,
+    };
+    const SILENT: Known = Known {
+        network_form: false,
+        silent: true,
+    };
+
     /// A silent miss is kept for [`MISS_MEMORY`], a network-only one until
     /// the cap; one forgotten is gone, and at [`MISS_ROWS`] the oldest goes
     /// first, after the expired.
@@ -99,37 +152,60 @@ mod tests {
         let start = Instant::now();
         let silent = station(5, &[0x0a]);
         let proxied = station(5, &[0x0b]);
-        assert_eq!(misses.get(&silent, start), None);
-        misses.remember(silent.clone(), Miss::Silent, start);
-        misses.remember(proxied.clone(), Miss::NetworkOnly, start);
+        assert_eq!(misses.get(&silent, start), Known::default());
+        misses.went_silent(silent.clone(), start);
+        misses.answered_network_form(proxied.clone(), start);
         let almost = start + MISS_MEMORY - Duration::from_millis(1);
-        assert_eq!(misses.get(&silent, almost), Some(Miss::Silent));
-        assert_eq!(misses.get(&silent, start + MISS_MEMORY), None);
+        assert_eq!(misses.get(&silent, almost), SILENT);
+        assert_eq!(misses.get(&silent, start + MISS_MEMORY), Known::default());
         let much_later = start + MISS_MEMORY * 100;
-        assert_eq!(misses.get(&proxied, much_later), Some(Miss::NetworkOnly));
+        assert_eq!(misses.get(&proxied, much_later), NETWORK);
         misses.forget(&proxied);
-        assert_eq!(misses.get(&proxied, start), None);
+        assert_eq!(misses.get(&proxied, start), Known::default());
         misses.forget(&silent);
 
         for n in 0..MISS_ROWS {
             let later = start + Duration::from_millis(n as u64);
             let mac = u16::try_from(n).unwrap().to_be_bytes();
-            misses.remember(station(7, &mac), Miss::NetworkOnly, later);
+            misses.answered_network_form(station(7, &mac), later);
         }
         let newest = start + Duration::from_secs(1);
-        misses.remember(station(7, &[0xff, 0xff, 0xff]), Miss::NetworkOnly, newest);
+        misses.answered_network_form(station(7, &[0xff, 0xff, 0xff]), newest);
         assert_eq!(
             misses.get(&station(7, &[0, 0]), newest),
-            None,
+            Known::default(),
             "the oldest went"
         );
-        assert!(misses.get(&station(7, &[0, 1]), newest).is_some());
+        assert_eq!(misses.get(&station(7, &[0, 1]), newest), NETWORK);
         assert_eq!(misses.rows.len(), MISS_ROWS);
         // Expired silent misses go before any live row.
-        misses.remember(silent.clone(), Miss::Silent, newest);
+        misses.went_silent(silent.clone(), newest);
         let after = newest + MISS_MEMORY + Duration::from_secs(1);
-        misses.remember(station(8, &[1]), Miss::Silent, after);
-        assert_eq!(misses.get(&silent, after), None);
+        misses.went_silent(station(8, &[1]), after);
+        assert_eq!(misses.get(&silent, after), Known::default());
         assert_eq!(misses.rows.len(), MISS_ROWS, "the expired one made room");
+    }
+
+    /// A station known to answer only its network's Who-Is keeps that fact
+    /// through a silent spell, and after it; an answer clears the silence.
+    #[test]
+    fn silence_does_not_erase_the_network_form() {
+        let mut misses = StationMisses::default();
+        let start = Instant::now();
+        let proxied = station(5, &[0x0a]);
+        misses.answered_network_form(proxied.clone(), start);
+        misses.went_silent(proxied.clone(), start);
+        let both = Known {
+            network_form: true,
+            silent: true,
+        };
+        assert_eq!(misses.get(&proxied, start), both);
+        assert_eq!(misses.get(&proxied, start + MISS_MEMORY), NETWORK);
+        // Kept past the window even when other rows are swept.
+        misses.went_silent(station(8, &[1]), start + MISS_MEMORY * 2);
+        assert_eq!(misses.get(&proxied, start + MISS_MEMORY * 2), NETWORK);
+        misses.went_silent(proxied.clone(), start);
+        misses.answered_network_form(proxied.clone(), start);
+        assert_eq!(misses.get(&proxied, start), NETWORK);
     }
 }

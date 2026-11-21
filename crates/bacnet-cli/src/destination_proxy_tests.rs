@@ -135,8 +135,13 @@ async fn another_stations_answer_is_not_taken() {
         .await
         .map(drop)
         .unwrap_err();
+    let each = WAIT.as_millis();
     assert!(
-        error.contains("addressed to it nor one on network 5"),
+        error.contains(&format!(
+            "answered neither a Who-Is addressed to it nor one on network 5, \
+             waiting {each} ms for each ({} ms in all)",
+            each * 2
+        )),
         "{error}"
     );
     assert_eq!(asked(&sent), [Some(vec![STATION]), None]);
