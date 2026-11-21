@@ -390,6 +390,13 @@ impl OverflowInFlight {
             );
             std::thread::yield_now();
         }
+        // A close that does not wait for the count reads it now. Give it
+        // 25 ms to; one that waits stays blocked, so this never fails a
+        // correct close.
+        let grace = std::time::Instant::now() + std::time::Duration::from_millis(25);
+        while std::time::Instant::now() < grace {
+            std::thread::yield_now();
+        }
     }
 }
 
