@@ -35,6 +35,21 @@ class ScReconnectOptionsTests(unittest.TestCase):
                     ScReconnect(**{name: value})
         zero = ScReconnect(initial_delay_ms=1, max_delay_ms=1, max_retries=0)
         self.assertEqual(zero.max_retries, 0)
+        self.assertEqual(repr(zero),
+                         "ScReconnect(initial_delay_ms=1, max_delay_ms=1, max_retries=0)")
+        # None is unlimited recovery, which needs a one-second initial delay.
+        unlimited = ScReconnect(initial_delay_ms=1_000, max_delay_ms=1_000, max_retries=None)
+        self.assertIsNone(unlimited.max_retries)
+        self.assertEqual(
+            repr(unlimited),
+            "ScReconnect(initial_delay_ms=1000, max_delay_ms=1000, max_retries=None)")
+        self.assertIsNone(ScReconnect(max_retries=None).max_retries)
+        for initial in [1, 999]:
+            with self.subTest(initial=initial), \
+                    self.assertRaisesRegex(ValueError, "at least 1000 with unlimited"):
+                ScReconnect(initial_delay_ms=initial, max_retries=None)
+        with self.assertRaises(TypeError):
+            ScReconnect(retry_forever=True)
 
     def test_client_keyword_is_appended_and_sc_only(self):
         parameters = inspect.signature(BACnetClient).parameters

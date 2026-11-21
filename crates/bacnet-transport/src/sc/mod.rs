@@ -72,10 +72,10 @@ mod unknown_function;
 pub use connection::{ScConnection, ScConnectionState};
 #[cfg(feature = "sc-tls")]
 pub use connector::ScHubDialer;
+use connector::WebSocketConnector;
 pub use connector::dial_within;
 #[cfg(feature = "sc-tls")]
 pub(crate) use connector::enter_dial_stage;
-use connector::{WebSocketConnector, dial_failover_ws};
 pub use control_rate::ScControlRateLimit;
 pub use errors::{
     ScCertificateRejection, ScConnectError, ScDialStage, ScTlsAlert, ScTlsFailure,
@@ -597,7 +597,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 primary_attempt = None;
                             }
                         }
-                        _ = primary_restore_interval.tick(), if restore_enabled && active_hub == ScActiveHub::Failover && primary_attempt.is_none() => {
+                        // Restore needs something to try: the primary
+                        // connector, or the kept primary socket.
+                        _ = primary_restore_interval.tick(), if restore_enabled && active_hub == ScActiveHub::Failover && primary_attempt.is_none() && (primary_connector.is_some() || primary_ws.is_some()) => {
                             let c = conn.lock().await;
                             if c.state != ScConnectionState::Connected || !c.connect_retry_allowed {
                                 continue;
@@ -680,6 +682,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     primary_connector: &primary_connector,
                     failover_connector: &failover_connector,
                     failover_ws: &mut failover_ws,
+                    primary_ws: &mut primary_ws,
                     conn: &conn,
                     active_ws: &active_ws,
                     state_tx: &state_tx,

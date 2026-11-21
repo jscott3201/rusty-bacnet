@@ -89,7 +89,7 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
             transport = transport.with_reconnect(ScReconnectConfig {
                 initial_delay_ms,
                 max_delay_ms,
-                max_retries,
+                max_retries: Some(max_retries),
             });
             for _ in 0..2 {
                 let error = transport.start().await.unwrap_err();
@@ -121,7 +121,7 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 1,
             max_delay_ms: 1,
-            max_retries: 0,
+            max_retries: Some(0),
         })
         .with_heartbeat_interval_ms(30_000)
         .with_heartbeat_timeout_ms(60_000);
@@ -166,14 +166,16 @@ async fn hub_accept(hub: &LoopbackWebSocket, vmac: Vmac) {
     hub.send(&buf).await.unwrap();
 }
 
+/// Each round dials the primary, then the failover hub when it has a
+/// connector; `max_retries` rounds are all there is.
 #[tokio::test(start_paused = true)]
-async fn failing_connectors_obey_reconnect_budget_plus_single_failover_allowance() {
+async fn failing_connectors_get_one_dial_each_per_round() {
     for max_retries in [0, 1, 3, 10] {
         for with_failover in [false, true] {
             let config = ScReconnectConfig {
                 initial_delay_ms: 2,
                 max_delay_ms: 7,
-                max_retries,
+                max_retries: Some(max_retries),
             };
             config.validate().unwrap();
             let (primary, primary_hub) = LoopbackWebSocket::pair();
@@ -207,7 +209,7 @@ async fn failing_connectors_obey_reconnect_budget_plus_single_failover_allowance
             drop(primary_hub);
 
             // Join the existing receive task: a transient Disconnected state is
-            // not proof that all retries (or the failover allowance) have ended.
+            // not proof that all rounds have ended.
             tokio::time::timeout(
                 Duration::from_secs(1),
                 transport.recv_task.get_mut().unwrap().as_mut().unwrap(),
@@ -219,8 +221,14 @@ async fn failing_connectors_obey_reconnect_budget_plus_single_failover_allowance
             let primary_count = primary_dials.load(Ordering::SeqCst);
             let failover_count = failover_dials.load(Ordering::SeqCst);
             assert_eq!(primary_count, max_retries as usize);
-            assert_eq!(failover_count, usize::from(with_failover));
-            assert!(primary_count + failover_count <= max_retries as usize + 1);
+            assert_eq!(
+                failover_count,
+                if with_failover {
+                    max_retries as usize
+                } else {
+                    0
+                }
+            );
             assert_eq!(
                 transport.connection().unwrap().lock().await.state,
                 ScConnectionState::Disconnected
@@ -230,40 +238,84 @@ async fn failing_connectors_obey_reconnect_budget_plus_single_failover_allowance
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn zero_retries_skips_active_hub_retry_but_allows_initial_failover_and_restoration() {
-    let (primary, primary_hub) = LoopbackWebSocket::pair();
-    let (failover, failover_hub) = LoopbackWebSocket::pair();
-    let dials = Arc::new(AtomicUsize::new(0));
-    let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
-    let mut transport = ScTransport::new(primary, [0x22; 6])
+/// A transport with zero reconnect rounds, a failover spare and a primary
+/// connector that counts its dials and hands each dial's hub end over.
+fn zero_round_transport(
+    primary: LoopbackWebSocket,
+    failover: LoopbackWebSocket,
+    dials: &Arc<AtomicUsize>,
+    hub_tx: mpsc::UnboundedSender<LoopbackWebSocket>,
+) -> ScTransport<LoopbackWebSocket> {
+    let dials = dials.clone();
+    ScTransport::new(primary, [0x22; 6])
         .with_device_uuid([1; 16])
         .with_failover(failover)
         .with_connect_timeout_ms(500)
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 1_000,
             max_delay_ms: 1_000,
-            max_retries: 0,
+            max_retries: Some(0),
         })
-        .with_connector({
-            let dials = dials.clone();
-            move || {
-                dials.fetch_add(1, Ordering::SeqCst);
-                let (client, hub) = LoopbackWebSocket::pair();
-                hub_tx.send(hub).unwrap();
-                async { Ok(client) }
-            }
-        });
+        .with_connector(move || {
+            dials.fetch_add(1, Ordering::SeqCst);
+            let (client, hub) = LoopbackWebSocket::pair();
+            hub_tx.send(hub).unwrap();
+            async { Ok(client) }
+        })
+}
 
+/// `Some(0)` turns recovery off: losing the primary dials nothing, leaves
+/// the failover spare untouched and ends the transport.
+#[tokio::test(start_paused = true)]
+async fn zero_retries_give_up_at_the_first_loss() {
+    let (primary, primary_hub) = LoopbackWebSocket::pair();
+    let (failover, failover_hub) = LoopbackWebSocket::pair();
+    let dials = Arc::new(AtomicUsize::new(0));
+    let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
+    let mut transport = zero_round_transport(primary, failover, &dials, hub_tx);
     let (started, ()) = tokio::join!(transport.start(), hub_accept(&primary_hub, [0x10; 6]));
     let _rx = started.unwrap();
     wait_for_hub(&transport, [0x10; 6]).await;
-    assert_eq!(dials.load(Ordering::SeqCst), 0);
-    tokio::task::yield_now().await;
-
-    // Losing the active hub skips its retry loop, but still permits failover.
     drop(primary_hub);
-    hub_accept(&failover_hub, [0x20; 6]).await;
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        transport.recv_task.get_mut().unwrap().as_mut().unwrap(),
+    )
+    .await
+    .expect("zero rounds must end the transport")
+    .unwrap();
+    let _ = transport.recv_task.get_mut().unwrap().take();
+    assert_eq!(dials.load(Ordering::SeqCst), 0);
+    assert!(hub_rx.try_recv().is_err());
+    // The spare is dropped with the transport, never sent a Connect-Request.
+    assert!(
+        !matches!(
+            tokio::time::timeout(Duration::from_millis(1), failover_hub.recv()).await,
+            Ok(Ok(_))
+        ),
+        "the spare must stay unused"
+    );
+    assert_eq!(
+        transport.connection().unwrap().lock().await.state,
+        ScConnectionState::Disconnected
+    );
+    transport.stop().await.unwrap();
+}
+
+/// `Some(0)` leaves the start-up failover and primary restoration alone.
+#[tokio::test(start_paused = true)]
+async fn zero_retries_keep_the_initial_failover_and_restoration() {
+    let (primary, primary_hub) = LoopbackWebSocket::pair();
+    let (failover, failover_hub) = LoopbackWebSocket::pair();
+    let dials = Arc::new(AtomicUsize::new(0));
+    let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
+    let mut transport = zero_round_transport(primary, failover, &dials, hub_tx);
+
+    // The primary is gone before start: the start-up dial falls back to the
+    // failover spare.
+    drop(primary_hub);
+    let (started, ()) = tokio::join!(transport.start(), hub_accept(&failover_hub, [0x20; 6]));
+    let _rx = started.unwrap();
     wait_for_hub(&transport, [0x20; 6]).await;
     assert_eq!(dials.load(Ordering::SeqCst), 0);
     assert!(hub_rx.try_recv().is_err());
@@ -351,7 +403,7 @@ async fn check_invalid_accept_failover_and_primary_probe(field: std::ops::Range<
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 1000,
             max_delay_ms: 1000,
-            max_retries: 0,
+            max_retries: Some(0),
         })
         .with_connector(move || {
             let (client, hub) = LoopbackWebSocket::pair();
@@ -490,7 +542,7 @@ async fn check_invalid_accept_reconnect_probe(field: std::ops::Range<usize>) {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 1000,
             max_delay_ms: 1000,
-            max_retries: 2,
+            max_retries: Some(2),
         })
         .with_connector(move || {
             let (client, hub) = LoopbackWebSocket::pair();
