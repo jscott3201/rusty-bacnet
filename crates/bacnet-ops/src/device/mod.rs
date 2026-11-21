@@ -11,8 +11,11 @@
 //!   [`DeviceAddress`]): pinned to it and made at once, sending nothing for
 //!   a local address. One on the client's own network, once the client
 //!   knows that network's number, is the local station. A remote one the
-//!   discovery table holds no router for is asked with a station-directed Who-Is
-//!   first. Its instance, when a call needs it and the table doesn't say,
+//!   discovery table holds no router for is asked with a Who-Is addressed
+//!   to the station first, then, with no answer, one Who-Is to its network,
+//!   where only the station's own address answers (an MS/TP slave behind a
+//!   slave proxy is found only so); a station found that way is asked on
+//!   its network first from then on. Its instance, when a call needs it and the table doesn't say,
 //!   comes from one read of the Device object by the wildcard instance,
 //!   remembered by the client.
 //! - **From an instance** (`1234`, or `2:1234` on one network): one
@@ -80,6 +83,7 @@ pub(crate) use sent;
 
 mod address;
 mod follow;
+mod misses;
 mod reads;
 mod resolve;
 mod route;
@@ -95,6 +99,8 @@ use bacnet_transport::port::TransportPort;
 pub use self::address::DeviceAddress;
 use self::follow::Followed;
 pub(crate) use self::follow::Follows;
+pub use self::misses::MISS_MEMORY;
+pub(crate) use self::misses::StationMisses;
 pub(crate) use self::route::path_to;
 use crate::client::{Client, lock};
 use crate::error::OpsError;
@@ -349,6 +355,9 @@ mod find_tests;
 
 #[cfg(test)]
 mod follow_tests;
+
+#[cfg(test)]
+mod proxy_tests;
 
 #[cfg(test)]
 mod resolve_scope_tests;

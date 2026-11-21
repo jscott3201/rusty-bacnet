@@ -12338,7 +12338,14 @@ handles following it). A clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
 handle stays, and `Device::moved_to` says where its instance is heard now,
-by the I-Am times. A directed Who-Is accepts
+by the I-Am times. A handle made from a remote address the table holds no
+row for sends a Who-Is addressed to the station, then, with no answer within
+the resolve wait, one Who-Is to its network that only an I-Am from the
+station's own address answers, as a slave proxy sends for its MS/TP slave
+(Clause 16.10.2). The client remembers a station found the second way and
+asks its network first next time; `Client::unanswered_recently(&address)`
+says whether neither form drew an answer within `bacnet_ops::device::MISS_MEMORY`.
+Nothing goes further, and never to every network. A directed Who-Is accepts
 `bacnet_client::client::Station`. A remote station keeps its DNET and DADR
 through an explicit or learned router. With no known next hop it uses a local
 link broadcast carrying that same destination.

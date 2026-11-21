@@ -391,9 +391,9 @@ class LearnedFileRouteTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.role.atomic_read_file(
                 silent, FILE_1, "stream", requested_octet_count=8), 10)
         text = str(caught.exception)
-        for words in ("5:0x0B", "station-directed Who-Is", "router=", "discover_routers()"):
+        for words in ("5:0x0B", "a Who-Is addressed to it", "router=", "discover_routers()"):
             self.assertIn(words, text)
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
         # Again, from either file call: at once, with no second Who-Is.
         with self.assertRaisesRegex(rb.BacnetLookupError, "in the last 30 s"):
             await asyncio.wait_for(self.role.atomic_read_file(
@@ -401,7 +401,7 @@ class LearnedFileRouteTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(rb.BacnetLookupError, "in the last 30 s"):
             await asyncio.wait_for(self.role.atomic_write_file(
                 silent, FILE_1, "stream", file_data=b"x"), 1)
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
         self.assertEqual(self.requests, [])
         # Naming the router works at once.
         through = rb.RoutedTarget(5, b"\x0b", router=self.bbmd.address)

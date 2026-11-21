@@ -157,8 +157,10 @@ async fn network_0_and_65535_resolve_scopes_are_local_and_global() {
     }
 }
 
-/// A remote address the table holds no row for asks the station, and a
-/// miss says so: the network named, with no hint to widen anything.
+/// A remote address the table holds no row for asks the station, then its
+/// network once, and a miss says so: the network named, with no hint to
+/// widen anything. With no router known, both go out on the local link
+/// naming network 5; neither is global.
 #[tokio::test(start_paused = true)]
 async fn a_remote_address_miss_says_its_station_was_asked() {
     let bus = Bus::new();
@@ -167,15 +169,18 @@ async fn a_remote_address_miss_says_its_station_was_asked() {
     assert!(
         matches!(
             &error,
-            OpsError::UnknownDevice { target, asked: Some(crate::Scope::Directed(station)) }
-                if target == "5:0x05" && station.address() == (5, &[5][..])
+            OpsError::UnknownDevice { target, asked: Some(crate::Scope::Network(5)) }
+                if target == "5:0x05"
         ),
         "{error:?}"
     );
     assert!(!error.to_string().contains("resolve scope"), "{error}");
-    let (destination, broadcast) = the_who_is(&sent);
-    let destination = destination.unwrap();
-    assert_eq!(destination.network, 5);
-    assert_eq!(&destination.mac_address[..], &[5]);
-    assert!(broadcast);
+    let frames = who_is_frames(&sent);
+    let [directed, network] = frames.as_slice() else {
+        panic!("two Who-Is, not {frames:?}");
+    };
+    let to = directed.decode_npdu().destination.unwrap();
+    assert_eq!((to.network, &to.mac_address[..]), (5, &[5][..]));
+    assert_eq!(network.decode_npdu().destination, remote(5));
+    assert!(directed.broadcast && network.broadcast);
 }

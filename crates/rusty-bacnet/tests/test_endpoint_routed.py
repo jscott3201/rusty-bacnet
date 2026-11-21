@@ -459,9 +459,9 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 10)
         self.assertGreaterEqual(loop.time() - started, 2.5)  # the Who-Is's wait
         text = str(caught.exception)
-        for words in ("5:0x0B", "station-directed Who-Is", "router=", "discover_routers()"):
+        for words in ("5:0x0B", "a Who-Is addressed to it", "router=", "discover_routers()"):
             self.assertIn(words, text)
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
         # Asked again soon: it raises at once, and no second Who-Is goes.
         started = loop.time()
         for name, call in calls(self.role, silent).items():
@@ -469,7 +469,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(call(), 1)
         self.assertLess(loop.time() - started, 1)
         self.assertIn("in the last 30 s", str(again.exception))
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
         self.assertEqual([d for d, _ in self.bbmd.received if d[:2] == b"\x81\x0a"], [])
         # Naming the router works at once.
         through = rb.RoutedTarget(5, b"\x0b", router=self.bbmd.address)
@@ -484,7 +484,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
         self.assertEqual(await asyncio.wait_for(
             self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 1), rb.PropertyValue.unsigned(0))
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
 
 
     async def test_calls_made_together_share_one_who_is(self):
@@ -492,7 +492,8 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         results = await asyncio.wait_for(asyncio.gather(
             *[self.role.read_property(silent, AI_1, P.PRESENT_VALUE) for _ in range(20)],
             return_exceptions=True), 10)
-        self.assertEqual(len(self.who_is), 1)
+        # One lookup: the Who-Is addressed to the station, then one to its network.
+        self.assertEqual(len(self.who_is), 2)
         self.assertTrue(all(isinstance(result, rb.BacnetLookupError) for result in results), results)
         self.assertEqual(len({str(result) for result in results}), 1)
 
@@ -508,7 +509,9 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         first.cancel()
         results = await asyncio.wait_for(asyncio.gather(*rest, return_exceptions=True), 10)
         self.assertTrue(all(isinstance(result, rb.BacnetLookupError) for result in results), results)
-        self.assertIn(len(self.who_is), (1, 2))  # a cancelled asker may hand the asking on
+        # The cancelled asker sent one; the call it handed the asking to sends
+        # both forms (or the asker sent both first).
+        self.assertIn(len(self.who_is), (2, 3))
         await asyncio.gather(first, return_exceptions=True)
 
 

@@ -94,8 +94,8 @@ pub(crate) struct ClientState {
     /// A client on an endpoint's link (#2617), which its endpoint starts
     /// and which can't be started again once stopped.
     seated: bool,
-    /// Routed stations that didn't answer a Who-Is lately (#2617).
-    pub(super) route_misses: super::routed::RecentMisses,
+    /// The lookups in flight for routed stations, one per station (#2617).
+    pub(super) route_misses: super::routed::StationLookups,
     /// Why the last stop failed, until a stop is tried again: an endpoint
     /// asked for a client then says so (#2617).
     stop_failure: std::sync::Mutex<Option<String>>,

@@ -12,8 +12,9 @@ use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 use tokio::sync::broadcast::error::RecvError;
 
+use super::misses::Miss;
 use super::{Device, DeviceAddress, DeviceRef, Discovered, Duplicate, Pin};
-use crate::client::{Client, Discover, ResolveScope, Scope};
+use crate::client::{Client, Discover, ResolveScope, Scope, lock};
 use crate::error::OpsError;
 use crate::target::{Target, VmacLookup, bip6_vmac, check_local_mac, parse_target_on};
 
@@ -93,7 +94,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// A handle pinned to `address`, with the instance the discovery table
     /// holds for it. An address on this client's own network is the local
     /// station at its MAC, which the link must be able to reach. A remote
-    /// address without a row gets a station-directed Who-Is first.
+    /// address without a row is looked for first ([`Self::find_station`]).
     async fn at(&self, address: DeviceAddress) -> Result<Device<T>, OpsError> {
         let address = self.localized(address);
         if address.is_local() {
@@ -110,6 +111,17 @@ impl<T: TransportPort + 'static> Client<T> {
             instance: row.map(|row| row.object_identifier.instance_number()),
             pin: Pin::At(address),
         })
+    }
+
+    /// Whether a lookup by `address` (a handle made from it, or a routed
+    /// request with no router named) found no answer from the station to
+    /// either Who-Is within the last [`MISS_MEMORY`](super::MISS_MEMORY).
+    /// For a caller that fails at once instead of asking again; a handle
+    /// made from the address asks again whatever this says.
+    pub fn unanswered_recently(&self, address: &DeviceAddress) -> bool {
+        let address = self.localized(address.clone());
+        lock(&self.shared.station_misses).get(&address, tokio::time::Instant::now())
+            == Some(Miss::Silent)
     }
 
     /// `address` as the discovery table and the gates key it: one on this
@@ -234,24 +246,52 @@ impl<T: TransportPort + 'static> Client<T> {
         })
     }
 
-    /// The row of the station at the remote `address`, once it answers a
-    /// Who-Is to that station, optionally limited to `range`.
+    /// The row of the station at the remote `address`, once it answers,
+    /// optionally limited to `range`. The first Who-Is is addressed to the
+    /// station (#2599). With no answer in the resolve wait, one Who-Is goes
+    /// to its network, and only an I-Am from the station's own address is
+    /// taken: an MS/TP slave behind a slave proxy is answered for only that
+    /// way (Clause 16.10.2). A station found so is remembered
+    /// ([`StationMisses`](super::StationMisses)), and its next lookup asks
+    /// its network at once. Nothing goes further, and never globally.
     async fn find_station(
         &self,
         address: &DeviceAddress,
         range: Option<DeviceInstanceRange>,
     ) -> Result<DiscoveredDevice, OpsError> {
-        let asked = Scope::Directed(address.clone().into());
-        let found = self
-            .wait_for(&asked, range, Duration::ZERO, |row| {
-                DeviceAddress::of(row)
-                    .is_some_and(|at| asked.covers(&at, self.low_level().network_number()))
-            })
-            .await?;
-        found.ok_or_else(|| OpsError::UnknownDevice {
+        let unknown = |asked| OpsError::UnknownDevice {
             target: address.to_string(),
-            asked: self.resolve_wait().map(|_| asked),
-        })
+            asked,
+        };
+        if self.resolve_wait().is_none() {
+            return Err(unknown(None));
+        }
+        let station = Scope::Directed(address.clone().into());
+        let is_station = |row: &DiscoveredDevice| {
+            DeviceAddress::of(row)
+                .is_some_and(|at| station.covers(&at, self.low_level().network_number()))
+        };
+        let misses = &self.shared.station_misses;
+        let known = lock(misses).get(address, tokio::time::Instant::now());
+        if known != Some(Miss::NetworkOnly)
+            && let Some(row) = self
+                .wait_for(&station, range, Duration::ZERO, is_station)
+                .await?
+        {
+            lock(misses).forget(address);
+            return Ok(row);
+        }
+        let network = Scope::Network(address.network());
+        let found = self
+            .wait_for(&network, range, Duration::ZERO, is_station)
+            .await?;
+        let miss = if found.is_some() {
+            Miss::NetworkOnly
+        } else {
+            Miss::Silent
+        };
+        lock(misses).remember(address.clone(), miss, tokio::time::Instant::now());
+        found.ok_or_else(|| unknown(Some(network)))
     }
 
     /// Send one Who-Is to `asked` for `range`, and wait

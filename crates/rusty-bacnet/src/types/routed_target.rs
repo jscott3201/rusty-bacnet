@@ -25,7 +25,8 @@ use super::*;
 /// given, is the next hop's address on the
 /// local link, in the same forms or as `bytes`, such as a routed
 /// `DiscoveredDevice`'s `mac_address`. Without an explicit next hop the
-/// client reuses its learned route or asks this station with a directed Who-Is to learn one.
+/// client reuses its learned route, or learns one from a Who-Is addressed to
+/// this station, then one to its network if nothing answers.
 /// Invalid addresses raise ValueError, or TypeError for a type that is neither `str`
 /// nor `bytes`; a call in another order fails too, since `network` takes an
 /// `int`.

@@ -9580,13 +9580,16 @@ class RoutedTarget:
     request goes through it. Without one, the client uses the route it
     knows: the router its discovery table names for the station, after
     one Who-Is addressed to that station when it has none, as
-    ``BACnetClient.device()`` does. A station that doesn't answer raises
+    ``BACnetClient.device()`` does, and with no answer one Who-Is to its
+    network that only the station's own address answers (an MS/TP slave
+    behind a slave proxy is found that way, and asked on its network first
+    from then on). A station that answers neither raises
     ``BacnetLookupError``, and for 30 seconds a call to it with no router
     raises at once without asking again, unless an I-Am from it arrives
-    first; calls made together for one station share one Who-Is. To scan
-    stations that never announce themselves, such as MS/TP slaves, pass
-    ``router`` from ``BACnetClient.discover_routers()``: without it each
-    costs one 3-second Who-Is wait. A station on the client's own network,
+    first; calls made together for one station share one lookup. To scan
+    stations that never announce themselves, such as MS/TP slaves with no
+    proxy, pass ``router`` from ``BACnetClient.discover_routers()``: without
+    it each costs two 3-second Who-Is waits. A station on the client's own network,
     once it knows the number, is sent to directly either way. Other values raise ValueError, a type
     other than ``str`` or ``bytes`` TypeError, and so does a call in another
     order, since ``network`` takes an ``int``.

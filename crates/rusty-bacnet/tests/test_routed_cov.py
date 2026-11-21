@@ -276,12 +276,12 @@ class LearnedCovRouteTests(unittest.IsolatedAsyncioTestCase):
         silent = rb.RoutedTarget(5, b"\x0b")
         with self.assertRaises(rb.BacnetLookupError) as caught:
             await asyncio.wait_for(self.role.subscribe_cov(silent, PROCESS, AI_1, False, 60), 10)
-        for words in ("5:0x0B", "station-directed Who-Is", "router=", "discover_routers()"):
+        for words in ("5:0x0B", "a Who-Is addressed to it", "router=", "discover_routers()"):
             self.assertIn(words, str(caught.exception))
         # The cancel is refused at once, with no second Who-Is.
         with self.assertRaisesRegex(rb.BacnetLookupError, "in the last 30 s"):
             await asyncio.wait_for(self.role.unsubscribe_cov(silent, PROCESS, AI_1), 1)
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
         self.assertEqual(self.requests, [])
 
 

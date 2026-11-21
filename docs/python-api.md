@@ -167,7 +167,10 @@ far = await client.device("2:1234")            # instance 1234 on network 2
 
 - **A pinned handle** is made at once. Nothing is sent for a station on the
   client's own network; a routed station the client knows no router for
-  receives a station-directed Who-Is first. It never moves: `await
+  receives a Who-Is addressed to it first, then, with no answer, one Who-Is
+  to its network that only the station's own address answers (how an MS/TP
+  slave behind a slave proxy is found). A station found the second way is
+  asked on its network first from then on. It never moves: `await
   ahu.moved_to()` says where its instance is heard now, once its own
   address has gone quiet.
 - **A following handle** needs the device's address. One address claiming
@@ -7734,10 +7737,10 @@ twelve are `read_property`, `read_property_multiple`, `read_range`,
 `subscribe_cov_property_multiple`; the other typed calls take a local
 address only.
 
-**To scan stations that don't announce themselves (MS/TP slaves), pass
-`router` from `discover_routers()`.** Without it each such station costs one
-Who-Is and its 3-second wait before the call fails; the remembered miss
-below only spares repeat calls.
+**To scan stations that don't announce themselves (MS/TP slaves with no
+slave proxy), pass `router` from `discover_routers()`.** Without it each such
+station costs two Who-Is and their 3-second waits before the call fails; the
+remembered miss below only spares repeat calls.
 `RoutedTarget(network, address, router=None)` takes its arguments in that
 order, positionally or by keyword:
 
@@ -7769,12 +7772,15 @@ async with endpoint:
 With a `router`, each request goes to that router with the station's
 network and MAC as its destination. Without one, the client uses the route
 it knows, as `device()` does: the router its discovery table names for the
-station, after one Who-Is addressed to the station when it has no row.
-Calls made together for one station share that Who-Is and its answer. A
-station that doesn't answer raises `BacnetLookupError`, and for 30 seconds
+station, after one Who-Is addressed to the station when it has no row, and
+with no answer one Who-Is to its network that only the station's own address
+answers. A slave proxy answers that second form for its MS/TP slaves, so such
+a slave is found, and asked on its network first from then on. Calls made
+together for one station share that lookup and its answer. A station that
+answers neither raises `BacnetLookupError`, and for 30 seconds
 a call to it with no router raises at once, without asking again, unless an
-I-Am from it gives the client a row first. **A station that never announces
-itself, such as an MS/TP slave, needs `router`**: `discover_routers()` finds
+I-Am from it gives the client a row first. **A station no I-Am comes for,
+such as an MS/TP slave with no proxy, needs `router`**: `discover_routers()` finds
 the routers on the link. A `router` that is a broadcast or group
 address on the link (the configured broadcast address, 255.255.255.255, a
 multicast group, MS/TP station 255) raises `BacnetError` before anything is
@@ -7822,7 +7828,7 @@ on the endpoint's link. Its calls keep their names and result shapes:
 
 | `EndpointClient` | `BACnetClient` from `endpoint.client()` |
 |---|---|
-| `read_property(address, ...)`, a `str` or a `RoutedTarget` | the same call; a `RoutedTarget` with no `router` now takes the route the client learns, not a broadcast per request. To scan stations that don't announce themselves (MS/TP slaves), pass `router` from `discover_routers()`: without it each costs a 3-second Who-Is wait |
+| `read_property(address, ...)`, a `str` or a `RoutedTarget` | the same call; a `RoutedTarget` with no `router` now takes the route the client learns, not a broadcast per request. To scan stations that don't announce themselves (MS/TP slaves with no proxy), pass `router` from `discover_routers()`: without it each costs two 3-second Who-Is waits |
 | `read_property_multiple` checked its arguments at the call (`ValueError`) | a bad address raises `ValueError`, and an empty list `BacnetError`, when awaited |
 | `read_property_multiple(address, specs)` | the same call, with the standalone profile: selectors and wildcard instances are taken, an empty list raises `BacnetError` when awaited, and the answer comes back as the device gave it, each result naming its object, property and index, for you to compare with what you asked |
 | `read_range(address, ..., validation=...)` | the same call |

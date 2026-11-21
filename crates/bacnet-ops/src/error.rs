@@ -71,9 +71,10 @@ pub enum OpsError {
         /// The device as it was named: an instance (`1234`, `2:1234`) or an
         /// address (`2:0x05`).
         target: String,
-        /// Where the one Who-Is for it went unanswered: the named station
-        /// or network, or for a bare instance the client's
-        /// [`crate::ResolveScope`]; `None` when none was sent. For
+        /// Where the last Who-Is for it went unanswered: the named network,
+        /// for a bare instance the client's [`crate::ResolveScope`], and for
+        /// a remote address its network (asked after a Who-Is addressed to
+        /// the station drew nothing); `None` when none was sent. For
         /// `Some(Scope::Local)`, a bare instance asked on this
         /// network alone (the default), the text says how to reach
         /// further.

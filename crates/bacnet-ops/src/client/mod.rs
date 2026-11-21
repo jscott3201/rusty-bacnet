@@ -185,6 +185,10 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// loses a row at its address, or a device there announces another
     /// instance.
     pub(crate) instances: Mutex<HashMap<DeviceAddress, u32>>,
+    /// The stations on other networks a lookup by address found answering
+    /// only a Who-Is to their network, or nothing
+    /// ([`StationMisses`](crate::device::StationMisses)).
+    pub(crate) station_misses: Mutex<crate::device::StationMisses>,
     /// The discovery table's changes, for the rows it loses and the
     /// instances announced at each address.
     pub(crate) changes: Mutex<broadcast::Receiver<DeviceEvent>>,
@@ -222,6 +226,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 cov: Mutex::new(HashMap::new()),
                 follows: Mutex::new(HashMap::new()),
                 instances: Mutex::new(HashMap::new()),
+                station_misses: Mutex::default(),
                 changes,
                 events: broadcast::channel(64).0,
             }),

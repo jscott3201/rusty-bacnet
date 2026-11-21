@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Broadcast, DeviceEventKind};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEvent, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -252,19 +252,44 @@ async fn find_routed<T: TransportPort + 'static>(
         Station::Mac(mac) => {
             let to = bacnet_client::client::Station::remote(dnet, mac);
             client.who_is_directed(&to, None).await.map_err(text)?;
-            "a station-directed Who-Is".into()
+            if let Some(found) = answer(client, &mut events, dnet, station, wait).await {
+                return found;
+            }
+            // No answer to the Who-Is addressed to the station: one to its
+            // network, for a station a slave proxy answers for (Clause
+            // 16.10.2). Only the station's own address answers it, and
+            // nothing goes further. A one-shot command keeps no memory of
+            // the miss; bacnet-ops' clients do.
+            client
+                .who_is(Broadcast::Network(dnet), None)
+                .await
+                .map_err(text)?;
+            format!("a Who-Is addressed to it nor one on network {dnet}")
         }
     };
+    match answer(client, &mut events, dnet, station, wait).await {
+        Some(found) => found,
+        None => Err(format!(
+            "device {} did not answer {asked} within {} ms",
+            station.name(dnet),
+            wait.as_millis()
+        )),
+    }
+}
+
+/// The destination `station` names, once an answer for it lands within
+/// `wait`; `None` when none did.
+async fn answer<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    events: &mut tokio::sync::broadcast::Receiver<DeviceEvent>,
+    dnet: u16,
+    station: &Station,
+    wait: Duration,
+) -> Option<Result<Destination, String>> {
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {
-            Err(_) => {
-                return Err(format!(
-                    "device {} did not answer {asked} within {} ms",
-                    station.name(dnet),
-                    wait.as_millis()
-                ));
-            }
+            Err(_) => return None,
             Ok(Ok(event)) => {
                 // The queued copy can name a previous instance of the local
                 // station. Match its link identity first and consult the
@@ -281,7 +306,7 @@ async fn find_routed<T: TransportPort + 'static>(
                 if event.kind != DeviceEventKind::Lost && relevant {
                     let (own, cached) = client.localized_device_snapshot();
                     if let Some(found) = station.known(dnet, own, &cached) {
-                        return found;
+                        return Some(found);
                     }
                 }
             }
@@ -289,10 +314,10 @@ async fn find_routed<T: TransportPort + 'static>(
             Ok(Err(RecvError::Lagged(_))) => {
                 let (own, cached) = client.localized_device_snapshot();
                 if let Some(found) = station.known(dnet, own, &cached) {
-                    return found;
+                    return Some(found);
                 }
             }
-            Ok(Err(RecvError::Closed)) => return Err("the client stopped".into()),
+            Ok(Err(RecvError::Closed)) => return Some(Err("the client stopped".into())),
         }
     }
 }
@@ -445,3 +470,7 @@ mod tests;
 #[cfg(test)]
 #[path = "destination_routed_tests.rs"]
 mod routed_tests;
+
+#[cfg(test)]
+#[path = "destination_proxy_tests.rs"]
+mod proxy_tests;
