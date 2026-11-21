@@ -2,10 +2,10 @@
 //! named fields with the password hidden when its decoder takes it, one
 //! hidden leaf for all its parameters when the decoder refuses them.
 
+use crate::decode::frame::summarize_npdu;
+use crate::label::kebab;
 use bacnet_encoding::primitives::{encode_ctx_enumerated, encode_ctx_unsigned};
 use bacnet_encoding::tags::{TagClass, encode_tag};
-use bacnet_ops::decode::frame::summarize_npdu;
-use bacnet_ops::label::kebab;
 use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, ReinitializeDeviceRequest};
 use bacnet_types::enums::{EnableDisable, ReinitializedState};
 use bytes::BytesMut;

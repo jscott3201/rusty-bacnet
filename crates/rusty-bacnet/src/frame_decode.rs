@@ -215,7 +215,7 @@ const DECODED: [(DataLink, Framing); 4] = [
 /// The framing a `Frame.link` token names, exactly as `Frame.link` writes
 /// it. `"other"`, a display name or any other text is refused, with the
 /// tokens accepted.
-fn framing(token: &str) -> PyResult<Framing> {
+pub(crate) fn framing(token: &str) -> PyResult<Framing> {
     DECODED
         .iter()
         .find(|(link, _)| link_token(*link) == token)

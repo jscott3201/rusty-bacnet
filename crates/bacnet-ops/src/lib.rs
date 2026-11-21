@@ -53,7 +53,7 @@
 //!   share it.
 //!
 //! The parts only the `bacnet` tool uses (the write-safety core, command
-//! classes, detailed frame trees and the BBMD survey) are the `bacnet-tool`
+//! classes and the BBMD survey) are the `bacnet-tool`
 //! crate (#2560).
 
 #![cfg_attr(docsrs, feature(doc_cfg))]

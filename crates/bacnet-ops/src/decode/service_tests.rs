@@ -26,8 +26,8 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, StatusFlags};
 use bytes::{Bytes, BytesMut};
 
 use super::super::{Field, decode_apdu_tree, decode_tree};
-use bacnet_ops::decode::frame::Framing;
-use bacnet_ops::decode::testing::bip;
+use crate::decode::frame::Framing;
+use crate::decode::testing::bip;
 
 const REAL_72_5: [u8; 5] = [0x44, 0x42, 0x91, 0x00, 0x00];
 /// Status flags with none set.
