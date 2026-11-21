@@ -384,7 +384,7 @@ macro_rules! endpoint_builders {
                 })
             }
 
-            /// Add a Multi-state Value object before startup.
+            /// Add a Multi-state Value before startup.
             ///
             /// `present_value` is the initial value. With
             /// `present_value_access="commandable"` (the default) it sets
