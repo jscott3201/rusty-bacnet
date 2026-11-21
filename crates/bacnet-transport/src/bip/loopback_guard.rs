@@ -9,7 +9,7 @@
 //! node's own. The node refuses that local broadcast leg, counted in
 //! [`SendCounters::loopback_limited_broadcast`](super::SendCounters::loopback_limited_broadcast).
 //!
-//! Only the leg sent to the B/IP broadcast address is refused. A BBMD's
+//! Only that local leg is refused. A BBMD's
 //! Forwarded-NPDUs to its BDT peers and foreign devices are unicast, and
 //! Annex J.4.5 makes them separate from the local leg (a BBMD with no other
 //! device on its subnet may leave the local leg out), so they still go.
@@ -111,10 +111,11 @@ impl NodeHandle {
     }
 }
 
-/// Warn, once at start, and return `true`, when a node that is neither a
-/// foreign device nor a B/IP-M member broadcasts to 255.255.255.255 from
-/// an explicit loopback interface on the wildcard socket: each local
-/// broadcast it tries will be refused.
+/// Warn, once at start, and return `true`, when a normal node or a BBMD is
+/// set to broadcast to 255.255.255.255 from an explicit loopback interface
+/// on the wildcard socket: each local broadcast it tries will be refused.
+/// A foreign device sends its broadcasts to its BBMD, and a B/IP-M member
+/// to its group, so neither is warned about.
 pub(super) fn warn_at_start(plan: &BindPlan, multicast: bool, foreign: bool) -> bool {
     let refused =
         plan.loopback_on_wildcard() && plan.broadcast.is_broadcast() && !multicast && !foreign;
