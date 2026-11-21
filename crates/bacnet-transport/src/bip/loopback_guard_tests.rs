@@ -1,7 +1,7 @@
 //! A loopback interface on the wildcard socket refuses the local leg to
 //! 255.255.255.255, counted, in every bind mode that has that shape; a
-//! BBMD's unicast legs still go (#2691). Every socket here records instead
-//! of sending, so no test puts a broadcast on the host's network.
+//! BBMD's unicast legs still go (#2691). No test here puts a broadcast on
+//! the host's network: the BBMD tests' sockets record instead of sending.
 
 use super::super::own_broadcast_tests::{NPDU, assert_own_forwarded};
 use super::super::send_sink::SendSink;
@@ -244,4 +244,32 @@ async fn a_loopback_bbmd_naks_a_distribute_whose_local_leg_it_refuses() {
         BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK
     );
     assert_eq!(ctx.node.send_counters().loopback_limited_broadcast, 1);
+}
+
+/// A caller that wraps the refusal in its own error, keeping it as the
+/// source (bacnet-ops names the broadcast's destination), still has it
+/// found, so a front end can name its own option.
+#[test]
+fn the_refusal_is_found_inside_a_wrapping_error() {
+    use std::io;
+    #[derive(Debug)]
+    struct Wrapped(io::Error);
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}, sending to 255.255.255.255:47808", self.0)
+        }
+    }
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+    let refused = io::Error::new(io::ErrorKind::InvalidInput, LoopbackBroadcastRefused);
+    let wrapped = io::Error::new(io::ErrorKind::InvalidInput, Wrapped(refused));
+    assert!(LoopbackBroadcastRefused::from_io_error(&wrapped).is_some());
+    let error = Error::Transport(wrapped);
+    assert!(LoopbackBroadcastRefused::from_error(&error).is_some());
+    let other = Wrapped(io::Error::other("no route"));
+    let other = io::Error::new(io::ErrorKind::InvalidInput, other);
+    assert!(LoopbackBroadcastRefused::from_io_error(&other).is_none());
 }

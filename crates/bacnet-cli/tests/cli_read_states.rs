@@ -249,6 +249,10 @@ async fn run(target: &str, format: &str, args: &[&str]) -> Output {
         "127.0.0.1",
         "--port",
         "0",
+        // The loopback subnet's broadcast keeps start's warning for
+        // 255.255.255.255 on loopback (#2691) out of the compared stderr.
+        "--broadcast",
+        "127.255.255.255",
         "--timeout",
         "300",
         "--format",

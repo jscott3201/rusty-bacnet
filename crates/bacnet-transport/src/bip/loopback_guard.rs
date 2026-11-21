@@ -52,9 +52,26 @@ impl LoopbackBroadcastRefused {
         }
     }
 
-    /// The refusal an I/O error carries, if it is one.
+    /// The refusal an I/O error carries, if it is one: directly, or inside
+    /// an error a caller wrapped it in (bacnet-ops adds the address a
+    /// broadcast went to) and kept as a source.
     pub fn from_io_error(error: &io::Error) -> Option<&Self> {
-        error.get_ref()?.downcast_ref::<Self>()
+        let inner = error.get_ref()?;
+        let mut next: Option<&(dyn std::error::Error + 'static)> = Some(inner);
+        while let Some(error) = next {
+            if let Some(found) = error.downcast_ref::<Self>() {
+                return Some(found);
+            }
+            // An I/O error's own source skips the error it wraps.
+            next = match error
+                .downcast_ref::<io::Error>()
+                .and_then(io::Error::get_ref)
+            {
+                Some(wrapped) => Some(wrapped as &(dyn std::error::Error + 'static)),
+                None => error.source(),
+            };
+        }
+        None
     }
 
     fn error() -> Error {
