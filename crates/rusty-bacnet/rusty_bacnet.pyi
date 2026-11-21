@@ -9854,17 +9854,37 @@ class BipEndpoint:
         provisions its optional row, served only when given. The parameter
         keywords set those parameters as there, with the same checks."""
         ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value: float | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register an Analog Output before start. Its initial value sets Relinquish_Default."""
+        ...
+
+    def add_binary_output(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Binary Output before start. Its initial value sets Relinquish_Default."""
+        ...
+
+    def add_multistate_input(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_values: list[int] | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Input before start, optionally setting its initial state."""
+        ...
+
+    def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Output before start. Its initial state sets Relinquish_Default."""
+        ...
+
+    def add_multistate_value(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_values: list[int] | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Value before start, optionally setting its initial state."""
+        ...
+
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value: float | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source, profile and parameter keywords as on
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_binary_input(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Profile keywords as on ``add_analog_input``, ``polarity``,
         ``alarm_value`` and the delays as on ``BACnetServer.add_binary_input``."""
         ...
-    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_binary_value(self, instance: int, name: str, *, present_value: int | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``,
         ``alarm_value`` and the delays as on ``BACnetServer.add_binary_value``."""
@@ -10066,17 +10086,37 @@ class ScEndpoint:
         provisions its optional row, served only when given. The parameter
         keywords set those parameters as there, with the same checks."""
         ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value: float | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register an Analog Output before start. Its initial value sets Relinquish_Default."""
+        ...
+
+    def add_binary_output(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Binary Output before start. Its initial value sets Relinquish_Default."""
+        ...
+
+    def add_multistate_input(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_values: list[int] | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Input before start, optionally setting its initial state."""
+        ...
+
+    def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Output before start. Its initial state sets Relinquish_Default."""
+        ...
+
+    def add_multistate_value(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_values: list[int] | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Value before start, optionally setting its initial state."""
+        ...
+
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value: float | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source, profile and parameter keywords as on
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_binary_input(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Profile keywords as on ``add_analog_input``, ``polarity``,
         ``alarm_value`` and the delays as on ``BACnetServer.add_binary_input``."""
         ...
-    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_binary_value(self, instance: int, name: str, *, present_value: int | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``,
         ``alarm_value`` and the delays as on ``BACnetServer.add_binary_value``."""
@@ -10262,17 +10302,37 @@ class MstpEndpoint:
         provisions its optional row, served only when given. The parameter
         keywords set those parameters as there, with the same checks."""
         ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value: float | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register an Analog Output before start. Its initial value sets Relinquish_Default."""
+        ...
+
+    def add_binary_output(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Binary Output before start. Its initial value sets Relinquish_Default."""
+        ...
+
+    def add_multistate_input(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_values: list[int] | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Input before start, optionally setting its initial state."""
+        ...
+
+    def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Output before start. Its initial state sets Relinquish_Default."""
+        ...
+
+    def add_multistate_value(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_values: list[int] | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Register a Multi-state Value before start, optionally setting its initial state."""
+        ...
+
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value: float | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source, profile and parameter keywords as on
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_binary_input(self, instance: int, name: str, *, present_value: int | None = None, polarity: Polarity | int = 0, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Profile keywords as on ``add_analog_input``, ``polarity``,
         ``alarm_value`` and the delays as on ``BACnetServer.add_binary_input``."""
         ...
-    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+    def add_binary_value(self, instance: int, name: str, *, present_value: int | None = None, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``,
         ``alarm_value`` and the delays as on ``BACnetServer.add_binary_value``."""

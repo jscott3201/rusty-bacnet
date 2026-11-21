@@ -4229,9 +4229,8 @@ holds is served after a restart over its keyword, and the keyword applies
 again on a start that passes `clear_written_reporting=True`. A changed
 keyword in a later version of the application takes effect at once for
 every parameter no peer has written. Without `storage_path` the keywords
-set the values at every start. The shared endpoints' `add_analog_input`,
-`add_analog_value`, `add_binary_input` and `add_binary_value` take the same
-keywords, with the same checks.
+set the values at every start. The shared endpoints accept the same event parameter keywords on their
+Analog, Binary and Multi-state Input, Output and Value builders.
 
 A `write_property_local` of a parameter after the builder call is still
 kept exactly like a peer's write: it is saved in the file and served again
@@ -7279,12 +7278,23 @@ async with endpoint:
     value = await client.read_property("127.0.0.1:47808", oid, pid)
 ```
 
-The endpoint builders `add_analog_input`, `add_analog_value`,
-`add_binary_input` and `add_binary_value` take the same keyword-only options
-as `BACnetServer`'s (#1867), checked by the same code: `tags`,
-`profile_location` and `profile_name` on all four, and `present_value_access`
-and `value_source_tracking` on the two Value builders (see
-[Object profiles and Value_Source](#object-profiles-and-value_source)).
+All three endpoints provide Analog, Binary and Multi-state Input, Output and
+Value builders. Register points before startup. Each accepts the standalone
+builder's profile and event parameter keywords. The Value builders also
+accept `present_value_access` and `value_source_tracking`. See
+[Object profiles and Value_Source](#object-profiles-and-value_source).
+
+Use `present_value` to supply an initial value. Analog Input accepts its
+existing positional argument. The other eight accept the value by keyword,
+and omitting it keeps the native default. Use a finite number for Analog,
+0 or 1 for Binary, and a state from 1 through `number_of_states` for
+Multi-state. For Output and commandable Value objects the initial value
+sets Relinquish_Default and leaves every priority slot empty. Inputs and
+noncommandable Values take the initial value as a local application update.
+An object name and its type/instance pair must each be unique across the
+Device, its Network Ports and the pending objects. An invalid addition raises
+at the builder call and preserves earlier registrations.
+
 The endpoint's server serves those objects as a standalone server serves
 its own, and a peer writes them as far as the endpoint's `mutation_policy`
 lets it: under the read-only default no peer writes, so there
@@ -7467,12 +7477,9 @@ async with endpoint:
   `apdu_timeout_ms` and `apdu_retries` say, the Device's APDU_Timeout and
   Number_Of_APDU_Retries. The server's other `BACnetServer` keywords keep
   their defaults on an endpoint for now (#1138).
-- **Objects.** An endpoint has builders for Analog Input, Analog Value,
-  Binary Input, Binary Value, Group and Audit Reporter objects only, each
-  before its start; the server's `add_*` calls are refused once it runs, as
-  on a running standalone server. Use a standalone `BACnetServer` for the
-  other object types until the endpoints take the server's builders
-  (#1138).
+- **Objects.** Register Analog, Binary and Multi-state Inputs, Outputs and
+  Values, Groups and Audit Reporters before endpoint startup. Use a standalone
+  `BACnetServer` for its other supported object types (#1138).
 - **Its lifetime is the endpoint's.** Each call returns a new handle on the
   one server. Its `start()` and `stop()` raise `RuntimeError`: the endpoint
   starts it, and the endpoint's `close()` stops it, waiting for the calls in
