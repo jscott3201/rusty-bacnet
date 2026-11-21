@@ -14,8 +14,12 @@
 //!   [`bacnet_encoding::constructed::property_element()`]), and the
 //!   octets decode as that collection's elements, the value is a typed read
 //!   (#1310): each element keeps its octets, and `.value` gives the shape
-//!   the typed write takes. A value that doesn't decode that way goes on to
-//!   the rules below.
+//!   the typed write takes. A Network Port's BDT and FDT (#2690) read this
+//!   way too, as entry mappings; a whole BDT or FDT read that doesn't
+//!   decode that way but holds only application-tagged elements is
+//!   [`PropertyValue::ApplicationData`] with its octets as received, so a
+//!   write-back sends them unchanged. Any other value that doesn't decode
+//!   that way goes on to the rules below.
 //! - When any element carries a context tag, the value is a constructed
 //!   production (a timestamp CHOICE, a vendor's structure and so on) the
 //!   binding has no typed form for. Nothing in the octets says where one
@@ -67,6 +71,21 @@ pub(crate) fn decode_read_value(
     let mut starts = application_elements(octets)?;
     if let Some(value) = constructed_read::decode(object_type, property, array_index, octets) {
         return Ok(value.read_from(property));
+    }
+    // A BDT or FDT whose entries don't decode, sent as application values:
+    // a plain list of them would re-encode them and so change what a
+    // write-back sends, so keep the octets as received (#2690). Context-tagged
+    // content reads as a tree below, which keeps them too, and an empty value
+    // is the empty table.
+    if starts.is_some()
+        && array_index.is_none()
+        && !octets.is_empty()
+        && constructed_read::keeps_octets_when_refused(object_type, property)
+    {
+        return Ok(
+            PyPropertyValue::from_rust(PropertyValue::ApplicationData(octets.to_vec()))
+                .read_from(property),
+        );
     }
     if starts.is_none() && property == PropertyIdentifier::PRIORITY_ARRAY {
         // Each BACnetPriorityValue choice is one tagged element, the
@@ -148,12 +167,24 @@ fn application_elements(octets: &[u8]) -> Result<Option<Vec<usize>>, Error> {
 /// Decode a ReadProperty ACK's value, shaped by the object, property and
 /// array index the ACK names.
 pub(crate) fn decode_read_ack(ack: &ReadPropertyACK) -> Result<PyPropertyValue, Error> {
-    decode_read_value(
-        ack.object_identifier.object_type(),
+    decode_ack_value(
+        ack.object_identifier,
         ack.property_identifier,
         ack.property_array_index,
         &ack.property_value,
     )
+}
+
+/// Decode a successful RP or RPM value with the object, property and array
+/// index its ACK names as its `read_context`.
+pub(super) fn decode_ack_value(
+    object: bacnet_types::primitives::ObjectIdentifier,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    octets: &[u8],
+) -> Result<PyPropertyValue, Error> {
+    let value = decode_read_value(object.object_type(), property, index, octets)?;
+    Ok(value.with_read_context(object, property.to_raw(), index))
 }
 
 #[cfg(test)]

@@ -7,7 +7,8 @@
 //! for an orderly end and none for a peer that stopped answering. The one
 //! socket it keeps is a lost hub's own when recovery will send the next
 //! Connect-Request on it, which it does with reconnect on and no connector
-//! for that hub; that socket gets no close.
+//! for that hub; that socket gets no close until that one Connect-Request
+//! fails.
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -31,7 +32,7 @@ fn reconnect() -> ScReconnectConfig {
     ScReconnectConfig {
         initial_delay_ms: 25,
         max_delay_ms: 25,
-        max_retries: 1,
+        max_retries: Some(1),
     }
 }
 
@@ -74,14 +75,16 @@ async fn stop_is_bounded_against_a_hub_that_stopped_reading() {
 
 /// A heartbeat the hub leaves unanswered ends the connection. The socket
 /// is given up, and closed with no status, unless recovery will send its
-/// next Connect-Request on it.
+/// next Connect-Request on it. That Connect is the socket's only one: left
+/// unanswered, the socket is closed with no status after all, as after any
+/// failed Connect (Annex AB.6.2.2), and not tried again.
 #[tokio::test(start_paused = true)]
 async fn a_heartbeat_timeout_closes_the_socket_unless_recovery_reuses_it() {
     // (reconnect, connector, closes on the lost socket)
     for (with_reconnect, with_connector, expected) in [
         (false, false, vec![None]),
         (true, true, vec![None]),
-        (true, false, vec![]),
+        (true, false, vec![None]),
     ] {
         let (socket, probe) = recorder();
         let mut transport = ScTransport::new(socket, NODE_VMAC)
@@ -90,7 +93,7 @@ async fn a_heartbeat_timeout_closes_the_socket_unless_recovery_reuses_it() {
             .with_test_heartbeat_timing_ms(100, 300);
         if with_reconnect {
             transport = transport.with_reconnect(ScReconnectConfig {
-                max_retries: 2,
+                max_retries: Some(2),
                 ..reconnect()
             });
         }
@@ -110,17 +113,34 @@ async fn a_heartbeat_timeout_closes_the_socket_unless_recovery_reuses_it() {
                 break;
             }
         }
-        if expected.is_empty() {
-            // Kept: each retry's Connect-Request goes out on this socket,
-            // and one that goes unanswered does not close it either.
-            let mut retries = 0;
-            while retries < 2 {
+        let kept = with_reconnect && !with_connector;
+        if kept {
+            // Kept: the first retry's Connect-Request goes out on this
+            // socket, and nothing is closed before it does.
+            loop {
                 let data = tokio::time::timeout(Duration::from_secs(5), probe.hub.recv())
                     .await
                     .expect("no Connect-Request on the kept socket")
                     .unwrap();
                 if decode_sc_message(&data).unwrap().function == ScFunction::ConnectRequest {
-                    retries += 1;
+                    break;
+                }
+            }
+            assert_eq!(probe.closes(), []);
+            // Unanswered, the kept socket is closed and recovery ends in
+            // round 1 although its budget allows a second round.
+            loop {
+                let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                    .await
+                    .expect("recovery must give up")
+                    .unwrap();
+                match event {
+                    ScEvent::ReconnectAttempt { attempt, .. } => assert_eq!(attempt, 1),
+                    ScEvent::ReconnectGaveUp { attempts } => {
+                        assert_eq!(attempts, 1);
+                        break;
+                    }
+                    _ => {}
                 }
             }
         } else {
@@ -413,6 +433,102 @@ async fn a_result_that_ends_the_hub_link_closes_by_what_it_was() {
         }
         eventually("the close", || !probe.closes().is_empty()).await;
         assert_eq!(probe.closes(), [expected], "{wire:02x?}");
+        transport.stop().await.unwrap();
+    }
+}
+
+/// The hub's NAK to the Connect-Request `request`: class COMMUNICATION,
+/// code NODE_DUPLICATE_VMAC.
+fn duplicate_vmac_nak(request: &[u8]) -> Vec<u8> {
+    let code = bacnet_types::enums::ErrorCode::NODE_DUPLICATE_VMAC.to_raw();
+    let mut wire = vec![
+        0x00, 0x00, request[2], request[3], 0x06, 0x01, 0x00, 0x00, 0x07,
+    ];
+    wire.extend_from_slice(&code.to_be_bytes());
+    wire
+}
+
+/// Skip to the next Connect-Request a hub end receives and NAK it as a
+/// duplicate VMAC.
+async fn refuse_next_connect(hub: &crate::sc::LoopbackWebSocket) {
+    loop {
+        let data = tokio::time::timeout(Duration::from_secs(5), hub.recv())
+            .await
+            .expect("no Connect-Request")
+            .unwrap();
+        if decode_sc_message(&data).unwrap().function == ScFunction::ConnectRequest {
+            hub.send(&duplicate_vmac_nak(&data)).await.unwrap();
+            return;
+        }
+    }
+}
+
+/// Wait for the first event `wanted` accepts.
+async fn until_event(
+    events: &mut tokio::sync::broadcast::Receiver<ScEvent>,
+    wanted: impl Fn(&ScEvent) -> bool,
+) -> ScEvent {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the event never came")
+            .unwrap();
+        if wanted(&event) {
+            return event;
+        }
+    }
+}
+
+/// A duplicate-VMAC NAK closes the socket it answers with 1000 (Annex
+/// AB.6.2.2), whether recovery reused the lost socket or dialled it. Without
+/// a connector recovery then gives up; with one the next round dials a
+/// fresh socket and connects with the reseeded VMAC.
+#[tokio::test(start_paused = true)]
+async fn a_duplicate_vmac_nak_closes_the_socket_it_answers() {
+    for with_connector in [false, true] {
+        let (socket, probe) = recorder();
+        let (dialled_tx, mut dialled) = tokio::sync::mpsc::unbounded_channel::<Probe>();
+        let mut transport = ScTransport::new(socket, NODE_VMAC)
+            .with_device_uuid([1; 16])
+            .with_connect_timeout_ms(100)
+            .with_test_heartbeat_timing_ms(100, 300)
+            .with_reconnect(ScReconnectConfig {
+                max_retries: Some(3),
+                ..reconnect()
+            });
+        if with_connector {
+            transport = transport.with_connector(move || {
+                let (socket, probe) = recorder();
+                dialled_tx.send(probe).unwrap();
+                async { Ok(socket) }
+            });
+        }
+        let mut events = transport.connection_events();
+        started(&mut transport, &probe).await;
+        // The hub stops answering heartbeats; the link ends.
+        until_event(&mut events, |e| matches!(e, ScEvent::Disconnected { .. })).await;
+        if with_connector {
+            // The lost socket was given up at once; round 1 dials.
+            assert_eq!(probe.closes(), [None]);
+            let first = dialled.recv().await.unwrap();
+            refuse_next_connect(&first.hub).await;
+            eventually("the refused socket's close", || !first.closes().is_empty()).await;
+            assert_eq!(first.closes(), [Some(1000)]);
+            let second = dialled.recv().await.unwrap();
+            hub_accept(&second.hub, [0x10; 6]).await;
+            until_event(&mut events, |e| matches!(e, ScEvent::Connected { .. })).await;
+            let vmac = transport.connection().unwrap().lock().await.local_vmac;
+            assert_ne!(vmac, NODE_VMAC, "the next socket carries the reseeded VMAC");
+        } else {
+            // Round 1 sends its Connect-Request on the kept socket.
+            refuse_next_connect(&probe.hub).await;
+            let gave_up = until_event(&mut events, |e| {
+                matches!(e, ScEvent::ReconnectGaveUp { .. })
+            })
+            .await;
+            assert_eq!(gave_up, ScEvent::ReconnectGaveUp { attempts: 1 });
+            assert_eq!(probe.closes(), [Some(1000)]);
+        }
         transport.stop().await.unwrap();
     }
 }

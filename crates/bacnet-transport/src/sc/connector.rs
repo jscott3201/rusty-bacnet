@@ -194,8 +194,8 @@ impl ScHubDialer {
     /// the failover hub would never be reached or left.
     ///
     /// The node starts on the failover hub when the primary cannot be
-    /// dialled, and turns to it when the primary refuses the first
-    /// Connect-Request or the reconnect attempts to the primary are used up.
+    /// dialled or refuses the first Connect-Request. After losing a hub, each
+    /// reconnect round tries the primary first and then the failover hub.
     /// While on the failover hub it keeps trying the primary and returns to
     /// it when it can.
     pub fn failover_url(mut self, url: &str) -> Self {

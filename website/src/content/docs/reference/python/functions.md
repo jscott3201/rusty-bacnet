@@ -22,6 +22,36 @@ The name of enumerated `value` as read from `property`
 None when the property's enumeration isn't known from the property alone
 (Present\_Value, vendor properties) or the number has no name in it.
 
+## decode_property_as
+
+```python
+def decode_property_as(
+    octets: bytes,
+    datatype: Literal['null', 'boolean', 'unsigned', 'signed', 'real', 'double', 'octet_string', 'character_string', 'bit_string', 'enumerated', 'date', 'time', 'object_identifier'],
+    shape: Literal["scalar", "array", "list"] = "scalar",
+    *,
+    array_index: int | None = None,
+    array_length: int | None = None,
+    value_names: Mapping[int, str] | None = None,
+) -> PropertyDecodeResult
+```
+
+Decode application-tagged property value octets (a value's
+`.octets`) as the primitive `datatype` (a `PropertyValue.tag`
+name) and `shape` the caller declares, for a vendor property whose
+datatype the stack does not know. A whole array or list is a list at
+every length; `array_index=0` reads an array's count as `unsigned`.
+`value_names` maps integer values to names for `value_names` on the
+result. The result's `status` is `"decoded"`, `"type_mismatch"`
+(the octets' tag or shape differs from the declaration, context-tagged
+or constructed content included), `"unsupported_encoding"` (an
+encoding the value model cannot hold: a character set it does not
+convert, or an integer wider than it keeps, minimal or not; a
+non-minimal integer that fits decodes), `"malformed"` (any other
+broken encoding, reserved application tags 13 to 15 included) or
+`"limit_exceeded"` (the depth or node bound). An invalid declaration
+raises ValueError.
+
 ## decode_log_records
 
 ```python

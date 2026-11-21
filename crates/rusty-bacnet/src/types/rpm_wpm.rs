@@ -55,7 +55,7 @@ pub(crate) fn py_to_rpm_specs(specs: Vec<PyReadAccessSpec>) -> Vec<ReadAccessSpe
 pub(crate) fn rpm_ack_to_py(py: Python<'_>, ack: ReadPropertyMultipleACK) -> PyResult<Py<PyAny>> {
     let outer = PyList::empty(py);
     for result in ack.list_of_read_access_results {
-        outer.append(read_access_result_to_py(py, result)?)?;
+        outer.append(project_read_result(py, result, true)?)?;
     }
     Ok(outer.into_any().unbind())
 }
@@ -66,6 +66,14 @@ pub(crate) fn rpm_ack_to_py(py: Python<'_>, ack: ReadPropertyMultipleACK) -> PyR
 pub(crate) fn read_access_result_to_py(
     py: Python<'_>,
     result: ReadAccessResult,
+) -> PyResult<Bound<'_, PyDict>> {
+    project_read_result(py, result, false)
+}
+
+fn project_read_result(
+    py: Python<'_>,
+    result: ReadAccessResult,
+    from_ack: bool,
 ) -> PyResult<Bound<'_, PyDict>> {
     let obj_dict = PyDict::new(py);
     obj_dict.set_item(
@@ -83,12 +91,24 @@ pub(crate) fn read_access_result_to_py(
         )?;
         elem_dict.set_item("array_index", elem.property_array_index)?;
         if let Some(value_bytes) = &elem.property_value {
-            match decode_read_value(
-                result.object_identifier.object_type(),
-                elem.property_identifier,
-                elem.property_array_index,
-                value_bytes,
-            ) {
+            let property = elem.property_identifier;
+            let index = elem.property_array_index;
+            let decoded = if from_ack {
+                super::read_value::decode_ack_value(
+                    result.object_identifier,
+                    property,
+                    index,
+                    value_bytes,
+                )
+            } else {
+                decode_read_value(
+                    result.object_identifier.object_type(),
+                    property,
+                    index,
+                    value_bytes,
+                )
+            };
+            match decoded {
                 Ok(val) => {
                     elem_dict.set_item("value", val)?;
                 }
