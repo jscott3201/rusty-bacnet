@@ -224,14 +224,8 @@ async fn a_router_and_five_nodes_give_one_answer() {
     // The router's start-up announcement teaches the nodes the number.
     let far = TestTransport::builder().local_mac(&[2]).build();
     let ports = vec![
-        RouterPort {
-            transport: segment.port(ROUTER, false),
-            network_number: NETWORK,
-        },
-        RouterPort {
-            transport: far,
-            network_number: 8,
-        },
+        RouterPort::new(segment.port(ROUTER, false), NETWORK),
+        RouterPort::new(far, 8),
     ];
     let StartedRouter { mut router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await

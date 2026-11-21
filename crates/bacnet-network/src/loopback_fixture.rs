@@ -189,16 +189,7 @@ impl RouterFixture {
         }
         let from_router_a = FromRouter::start(&mut port_a, &mut peer_a).await;
         let from_router_b = FromRouter::start(&mut port_b, &mut peer_b).await;
-        let ports = vec![
-            RouterPort {
-                transport: port_a,
-                network_number: 1000,
-            },
-            RouterPort {
-                transport: port_b,
-                network_number: 2000,
-            },
-        ];
+        let ports = vec![RouterPort::new(port_a, 1000), RouterPort::new(port_b, 2000)];
         let mut options = RouterOptions::new();
         if network_control {
             options = options.network_control_receiver();

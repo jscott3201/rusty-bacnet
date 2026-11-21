@@ -68,14 +68,8 @@ async fn start_site(
     }));
     let (router_end, station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
     let ports = vec![
-        RouterPort {
-            transport: AnyTransport::Bip(Box::new(bip)),
-            network_number: 1,
-        },
-        RouterPort {
-            transport: AnyTransport::Loopback(router_end),
-            network_number: DNET,
-        },
+        RouterPort::new(AnyTransport::Bip(Box::new(bip)), 1),
+        RouterPort::new(AnyTransport::Loopback(router_end), DNET),
     ];
     let StartedRouter { router, .. } = boxed(|| BACnetRouter::start(ports, RouterOptions::new()))
         .await

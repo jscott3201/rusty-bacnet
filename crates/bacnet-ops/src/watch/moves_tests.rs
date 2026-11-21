@@ -301,10 +301,7 @@ async fn one_station_named_two_ways_is_one_point() {
     let (near, two) = (Bus::new(), Bus::new());
     let ports = [(&near, 1), (&two, 2)]
         .into_iter()
-        .map(|(bus, network_number)| RouterPort {
-            transport: bus.port(254),
-            network_number,
-        })
+        .map(|(bus, network_number)| RouterPort::new(bus.port(254), network_number))
         .collect();
     let StartedRouter { mut router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await

@@ -97,9 +97,8 @@ async fn router() -> (BACnetRouter, LoopbackTransport, SocketAddrV6) {
     let bip6 = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(10));
     let (router_end, node) = LoopbackTransport::pair(ROUTER_ON_1.to_vec(), NODE_ON_1.to_vec());
     let bound = Arc::new(OnceLock::new());
-    let port = |inner, network_number| RouterPort {
-        transport: reporting(inner, Arc::clone(&bound)),
-        network_number,
+    let port = |inner, network_number| {
+        RouterPort::new(reporting(inner, Arc::clone(&bound)), network_number)
     };
     let ports = vec![
         port(AnyTransport::Loopback(router_end), 1),

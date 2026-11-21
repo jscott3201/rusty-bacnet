@@ -240,6 +240,18 @@ fn log(event: Event) {
             network,
             "Router refused an NPDU it originated itself; no reject sent"
         ),
+        // Once per network, at the sender's pace: the count is the
+        // operator's signal (`Counters::isolated_refusals`).
+        Event::IsolationRefused {
+            network,
+            port,
+            class,
+        } => debug!(
+            network,
+            port = port.0,
+            ?class,
+            "Router refused a route change from an isolated port"
+        ),
         Event::Purged { network } => debug!(network, "Purged stale route"),
         Event::PendingExpired { network } => {
             debug!(network, "Expired hardened pending challenger")

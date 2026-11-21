@@ -79,10 +79,10 @@ async fn sc_hub_relayed_route_announcements_carry_no_principal() {
             rule(context)
         });
         let started = BACnetRouter::start(
-            vec![RouterPort {
-                transport: node(&f.url, certs.clients[0].clone(), ROUTER).await,
-                network_number: 10,
-            }],
+            vec![RouterPort::new(
+                node(&f.url, certs.clients[0].clone(), ROUTER).await,
+                10,
+            )],
             RouterOptions::new()
                 .control_policy(ControlPolicy::Hardened)
                 .control_authorizer(authorizer),
@@ -122,12 +122,12 @@ async fn a_control_flood_through_the_hub_stops_at_the_node_rate_limit() {
         let certs = Certificates::new();
         f.hub(&certs).await;
         let started = BACnetRouter::start(
-            vec![RouterPort {
-                transport: node(&f.url, certs.clients[0].clone(), ROUTER)
+            vec![RouterPort::new(
+                node(&f.url, certs.clients[0].clone(), ROUTER)
                     .await
                     .with_control_rate_limit(ScControlRateLimit::new(4, 1)),
-                network_number: 10,
-            }],
+                10,
+            )],
             RouterOptions::new(),
         )
         .await

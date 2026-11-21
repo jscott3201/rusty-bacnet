@@ -154,14 +154,8 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
     let (_tx1, _rx1) = mpsc::channel(16);
     let (out1, mut wire1) = mpsc::channel(16);
     let ports = vec![
-        RouterPort {
-            transport: wire_port(1, rx0, out0),
-            network_number: 1000,
-        },
-        RouterPort {
-            transport: wire_port(2, _rx1, out1),
-            network_number: 2000,
-        },
+        RouterPort::new(wire_port(1, rx0, out0), 1000),
+        RouterPort::new(wire_port(2, _rx1, out1), 2000),
     ];
     let StartedRouter {
         mut router,
@@ -252,14 +246,8 @@ async fn stop_cancels_pending_discovery() {
     let (_tx1, _rx1) = mpsc::channel(16);
     let (out1, _wire1) = mpsc::channel(16);
     let ports = vec![
-        RouterPort {
-            transport: wire_port(1, rx0, out0),
-            network_number: 1000,
-        },
-        RouterPort {
-            transport: wire_port(2, _rx1, out1),
-            network_number: 2000,
-        },
+        RouterPort::new(wire_port(1, rx0, out0), 1000),
+        RouterPort::new(wire_port(2, _rx1, out1), 2000),
     ];
     let StartedRouter {
         mut router,

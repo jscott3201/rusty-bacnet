@@ -43,14 +43,8 @@ async fn router_forwards_between_networks() {
     let _rx_b = device_b.start().await.unwrap();
     let _rx_a = device_a.start().await.unwrap();
 
-    let port_a = RouterPort {
-        transport: transport_a,
-        network_number: 1000,
-    };
-    let port_b = RouterPort {
-        transport: transport_b,
-        network_number: 2000,
-    };
+    let port_a = RouterPort::new(transport_a, 1000);
+    let port_b = RouterPort::new(transport_b, 2000);
 
     let StartedRouter {
         mut router,
@@ -95,18 +89,9 @@ async fn router_table_populated_on_start() {
     let transport_c = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
 
     let ports = vec![
-        RouterPort {
-            transport: transport_a,
-            network_number: 100,
-        },
-        RouterPort {
-            transport: transport_b,
-            network_number: 200,
-        },
-        RouterPort {
-            transport: transport_c,
-            network_number: 300,
-        },
+        RouterPort::new(transport_a, 100),
+        RouterPort::new(transport_b, 200),
+        RouterPort::new(transport_c, 300),
     ];
 
     let StartedRouter {
@@ -133,10 +118,7 @@ async fn local_message_delivered_to_application() {
     let mut sender = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _sender_rx = sender.start().await.unwrap();
 
-    let router_port = RouterPort {
-        transport,
-        network_number: 1000,
-    };
+    let router_port = RouterPort::new(transport, 1000);
 
     let StartedRouter {
         mut router,

@@ -41,10 +41,7 @@ async fn native(errors: Vec<Option<Error>>) -> BACnetRouter {
         errors
             .into_iter()
             .enumerate()
-            .map(|(i, error)| RouterPort {
-                network_number: 1 + i as u16 * 4,
-                transport: failing_port(error),
-            })
+            .map(|(i, error)| RouterPort::new(failing_port(error), 1 + i as u16 * 4))
             .collect(),
         RouterOptions::new(),
     )

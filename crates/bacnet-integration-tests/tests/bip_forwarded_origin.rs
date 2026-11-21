@@ -44,14 +44,8 @@ async fn start() -> (
     let (mut router_end, station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
     let unicast_to = router_end.record_unicast_destinations();
     let ports = vec![
-        RouterPort {
-            transport: AnyTransport::Bip(Box::new(bip)),
-            network_number: BIP_NET,
-        },
-        RouterPort {
-            transport: AnyTransport::Loopback(router_end),
-            network_number: OTHER_NET,
-        },
+        RouterPort::new(AnyTransport::Bip(Box::new(bip)), BIP_NET),
+        RouterPort::new(AnyTransport::Loopback(router_end), OTHER_NET),
     ];
     let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await

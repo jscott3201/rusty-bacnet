@@ -48,16 +48,7 @@ async fn r7_response_matches_addressed_endpoint_and_invoke_id() {
     let (b, _, mut wire_b) = port(2);
     let network = NetworkLayer::new(TestTransport::new());
     let mut started = BACnetRouter::start(
-        vec![
-            RouterPort {
-                transport: a,
-                network_number: 1000,
-            },
-            RouterPort {
-                transport: b,
-                network_number: 2000,
-            },
-        ],
+        vec![RouterPort::new(a, 1000), RouterPort::new(b, 2000)],
         RouterOptions::new(),
     )
     .await
@@ -158,16 +149,7 @@ async fn r7_clone_retains_owned_route_and_slice_without_repeating_der_authority(
     let (fallback, _, mut unrelated) = port(99);
     let network = NetworkLayer::new(fallback);
     let mut started = BACnetRouter::start(
-        vec![
-            RouterPort {
-                transport: a,
-                network_number: 1000,
-            },
-            RouterPort {
-                transport: b,
-                network_number: 2000,
-            },
-        ],
+        vec![RouterPort::new(a, 1000), RouterPort::new(b, 2000)],
         RouterOptions::new(),
     )
     .await

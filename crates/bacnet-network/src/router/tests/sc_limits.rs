@@ -47,12 +47,12 @@ async fn start(primary: (u16, u16)) -> Hubs {
         hub_primary
     });
     let ports = vec![
-        RouterPort {
-            transport: ScTransport::new(client_a, [0x01; 6]).with_device_uuid([1; 16]),
-            network_number: 1000,
-        },
-        RouterPort {
-            transport: ScTransport::new(client_primary, [0x02; 6])
+        RouterPort::new(
+            ScTransport::new(client_a, [0x01; 6]).with_device_uuid([1; 16]),
+            1000,
+        ),
+        RouterPort::new(
+            ScTransport::new(client_primary, [0x02; 6])
                 .with_device_uuid([2; 16])
                 .with_reconnect(ScReconnectConfig {
                     initial_delay_ms: 25,
@@ -60,8 +60,8 @@ async fn start(primary: (u16, u16)) -> Hubs {
                     max_retries: Some(1),
                 })
                 .with_failover(client_failover),
-            network_number: 2000,
-        },
+            2000,
+        ),
     ];
     let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await

@@ -48,14 +48,8 @@ async fn start_routed_parts(instance: u32) -> (Routed, BACnetClient<LoopbackTran
         LoopbackTransport::pair(CLIENT_MAC.to_vec(), ROUTER_MAC.to_vec());
     let (router_far, station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
     let ports = vec![
-        RouterPort {
-            transport: AnyTransport::Loopback(router_near),
-            network_number: 1,
-        },
-        RouterPort {
-            transport: AnyTransport::Loopback(router_far),
-            network_number: ROUTED_NETWORK,
-        },
+        RouterPort::new(AnyTransport::Loopback(router_near), 1),
+        RouterPort::new(AnyTransport::Loopback(router_far), ROUTED_NETWORK),
     ];
     let StartedRouter { router, .. } =
         bounded(boxed(|| BACnetRouter::start(ports, RouterOptions::new())))

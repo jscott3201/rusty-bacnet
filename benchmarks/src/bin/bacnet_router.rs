@@ -64,10 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // address, or on Linux one wildcard socket gets every port's
         // unicast and the router can't tell the networks apart.
         transport.set_share_port_by_address(true);
-        router_ports.push(RouterPort {
-            transport,
-            network_number: spec.network,
-        });
+        router_ports.push(RouterPort::new(transport, spec.network));
     }
 
     let networks: Vec<u16> = specs.iter().map(|s| s.network).collect();

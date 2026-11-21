@@ -107,6 +107,9 @@ impl<
     /// - any other network: the link sender, which knows the way back, with
     ///   the origin as the reject's DNET and DADR.
     ///
+    /// An origin on a network of another isolated port than the arrival
+    /// one gets nothing: the reject would cross between them.
+    ///
     /// The reject carries no SNET and starts with a hop count of 255.
     pub(super) fn reject(
         &mut self,
@@ -118,7 +121,7 @@ impl<
     ) {
         if let Some(origin) = self.reject_origin(at, origin, network) {
             self.queue_reject(origin, reason);
-        } else {
+        } else if origin.is_some_and(|address| self.is_own(address)) {
             host.observe(Event::OwnOrigin { network });
         }
     }
@@ -138,7 +141,11 @@ impl<
                 match ports.iter().position(|port| port.network == origin.network) {
                     // At most 255 ports.
                     Some(index) => {
-                        RejectOrigin::new(PortId(index as u8), origin.mac, None, network)
+                        let port = PortId(index as u8);
+                        if super::config::isolated_pair(ports, at.port, port) {
+                            return None;
+                        }
+                        RejectOrigin::new(port, origin.mac, None, network)
                     }
                     None => RejectOrigin::new(at.port, at.source, Some(origin), network),
                 }
@@ -156,7 +163,8 @@ impl<
     /// DNET, or addressed to the router's own address, is for the router.
     /// Any other is routed toward the node its DNET and DADR name, without
     /// a reachability check, and is dropped when the router can't: its
-    /// DNET is 0xFFFF or the arrival network, or the table has no route.
+    /// DNET is 0xFFFF or the arrival network, or the table has no route,
+    /// or its route lies between two isolated ports.
     /// One for a group DADR on its delivery port is dropped and counted as
     /// any network message is. Nothing answers a reject.
     pub(super) fn pass_on_reject<'f>(
@@ -175,6 +183,9 @@ impl<
             network => self.table.lookup(network),
         };
         match route {
+            Some(route) if super::config::isolated_pair(&self.ports, at.port, route.port()) => {
+                self.isolated_drop()
+            }
             // Never as a broadcast (decisions L23 and L24 on #1677).
             Some(route) if self.group_of(&route, npdu) != Group::No => self.group_drop(),
             Some(route) => self.forward(at, npdu, &route, host),

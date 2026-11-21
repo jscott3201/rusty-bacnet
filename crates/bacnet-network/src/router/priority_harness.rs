@@ -85,10 +85,10 @@ pub(super) async fn start_any<A: super::LocalApduReceiver>(
             let (sent, wire) = mpsc::unbounded_channel();
             let limit = Arc::new(AtomicU16::new(1497));
             (
-                RouterPort {
-                    transport: port(index as u8 + 1, incoming, sent, limit.clone()),
-                    network_number: (index as u16 + 1) * 1000,
-                },
+                RouterPort::new(
+                    port(index as u8 + 1, incoming, sent, limit.clone()),
+                    (index as u16 + 1) * 1000,
+                ),
                 Peer {
                     frames,
                     sent: wire,

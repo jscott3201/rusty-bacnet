@@ -95,10 +95,7 @@ struct Site {
 }
 
 fn port(transport: TestTransport, network_number: u16) -> RouterPort<TestTransport> {
-    RouterPort {
-        transport,
-        network_number,
-    }
+    RouterPort::new(transport, network_number)
 }
 
 async fn site() -> Site {

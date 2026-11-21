@@ -31,13 +31,13 @@ async fn capture_npdu(f: &mut Fixture, peer: &mut Peer, npdu: &[u8]) -> Received
 }
 
 fn port(network_number: u16, inbound: mpsc::Receiver<ReceivedNpdu>) -> RouterPort<TestTransport> {
-    RouterPort {
-        transport: TestTransport::builder()
+    RouterPort::new(
+        TestTransport::builder()
             .local_mac(&[0xaa; 6])
             .inbound(inbound)
             .build(),
         network_number,
-    }
+    )
 }
 
 #[tokio::test]

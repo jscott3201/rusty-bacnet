@@ -3,7 +3,8 @@
 //! A router asked to reach a network it has no route to sends a
 //! Who-Is-Router for it before refusing the message (Clause 6.6.3.1).
 //! [`Discovery`] decides when to send one: at most once per network per
-//! cooldown, for up to `D` networks at a time, each forgotten past its age
+//! cooldown (with port isolation, a later request can also search ports the
+//! first request omitted), for up to `D` networks at a time, each forgotten past its age
 //! at the next sweep; the router's
 //! [`Options`](crate::router::Options) set both. Messages that wait for an
 //! answer are refused at once, not buffered, and the hosted router refuses
@@ -16,18 +17,71 @@
 
 use core::fmt;
 
-use crate::{Duration, Instant, swap_apart};
+use crate::{Duration, Instant, PortId, swap_apart};
+
+/// Which ports an isolation-aware search left out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum Gap {
+    /// None: it reached every port it may.
+    None = 0,
+    /// Every isolated port: the search came from one.
+    IsolatedPorts = 1,
+    /// One ordinary port: the one the search came from.
+    OrdinaryPort = 2,
+}
+
+/// The audience omitted by an isolation-aware search. The two nonempty
+/// forms are disjoint unless equal, so their intersection needs no bitset.
+///
+/// Two plain octets with no padding, and the empty value is zero in both,
+/// so storage that holds one stays all zero bits whatever the compiler's
+/// layout of an enum with a payload would be (#2679).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Omitted {
+    pub(crate) gap: Gap,
+    /// The port left out, for [`Gap::OrdinaryPort`]; otherwise 0.
+    pub(crate) port: PortId,
+}
+
+impl Omitted {
+    /// Nothing left out.
+    pub(crate) const NONE: Self = Self {
+        gap: Gap::None,
+        port: PortId(0),
+    };
+    /// Every isolated port left out.
+    pub(crate) const ISOLATED_PORTS: Self = Self {
+        gap: Gap::IsolatedPorts,
+        port: PortId(0),
+    };
+
+    /// The ordinary port `port` left out.
+    pub(crate) const fn ordinary(port: PortId) -> Self {
+        Self {
+            gap: Gap::OrdinaryPort,
+            port,
+        }
+    }
+}
+
+// The empty value is zero in each octet, and there are only those two.
+const _: () = assert!(
+    Gap::None as u8 == 0 && Omitted::NONE.port.0 == 0 && core::mem::size_of::<Omitted>() == 2
+);
 
 /// When a network was last looked for.
 #[derive(Debug, Clone, Copy)]
 struct Entry {
     network: u16,
+    omitted: Omitted,
     solicited: Instant,
 }
 
 /// Unused storage: all zero bits.
 const NO_ENTRY: Entry = Entry {
     network: 0,
+    omitted: Omitted::NONE,
     solicited: Instant::ZERO,
 };
 
@@ -76,22 +130,42 @@ impl<const D: usize> Discovery<D> {
     /// last search for it, or when `D` other networks are being looked for
     /// already.
     pub fn should_solicit(&mut self, network: u16, now: Instant, cooldown: Duration) -> bool {
+        self.search(network, now, cooldown, Omitted::NONE).is_some()
+    }
+
+    /// Record a search, returning which previously omitted ports still need
+    /// it. A fresh search returns `Some(Omitted::NONE)` for the full legal
+    /// audience. During cooldown, a different audience can fill the gap once.
+    pub(crate) fn search(
+        &mut self,
+        network: u16,
+        now: Instant,
+        cooldown: Duration,
+        omitted: Omitted,
+    ) -> Option<Omitted> {
         if self.cancelled || network == 0 || network == 0xFFFF {
-            return false;
+            return None;
         }
         let entry = Entry {
             network,
+            omitted,
             solicited: now,
         };
         match self.find(network) {
             Ok(index) => {
-                let last = self.entries[index].solicited;
-                if now.saturating_duration_since(last) < cooldown {
-                    return false;
+                let last = &mut self.entries[index];
+                if now.saturating_duration_since(last.solicited) < cooldown {
+                    if last.omitted == Omitted::NONE || last.omitted == omitted {
+                        return None;
+                    }
+                    let gap = last.omitted;
+                    last.omitted = Omitted::NONE;
+                    last.solicited = now;
+                    return Some(gap);
                 }
-                self.entries[index] = entry;
+                *last = entry;
             }
-            Err(_) if self.len == D => return false,
+            Err(_) if self.len == D => return None,
             Err(index) => {
                 // Into the free slot at the end, then back to its place one
                 // swap at a time, with no memmove (`swap_apart`).
@@ -102,7 +176,7 @@ impl<const D: usize> Discovery<D> {
                 self.len += 1;
             }
         }
-        true
+        Some(Omitted::NONE)
     }
 
     /// Forget every search more than `max_age` old at `now`, calling

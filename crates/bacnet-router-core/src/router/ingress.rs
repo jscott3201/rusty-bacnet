@@ -6,6 +6,7 @@ use super::config::Options;
 use super::counters::bump;
 use super::host::Host;
 use super::tasks::Task;
+use crate::discovery::Omitted;
 pub(super) use crate::node::is_unconfirmed;
 use crate::node::{admit_npdu, admit_source};
 use crate::npdu::RejectMessageReason;
@@ -128,6 +129,13 @@ pub enum Discard {
     /// router itself, on one of its ports: the router's own, come back
     /// round a loop (#2021). Neither relayed nor delivered.
     OwnSource,
+    /// Its way on lies between two isolated ports
+    /// ([`PortConfig::isolated`](super::PortConfig::isolated), #2684): a
+    /// message for a network behind the other port, a reject on its way to
+    /// one, or a Who-Is-Router for one. A message for one node there draws
+    /// reject reason 1; a broadcast, a reject and a Who-Is-Router draw
+    /// nothing.
+    Isolated,
     /// Only a [`Node`](crate::node::Node) gives this: an NPDU whose DNET
     /// names one network is for a device elsewhere, which a node that
     /// doesn't route drops (Clauses 6.5.2.1, 6.5.2.2 and 6.5.4).
@@ -285,8 +293,9 @@ impl<
         if !destination.mac.is_empty() && self.is_own(destination) {
             return Received::Local(local(at, npdu, false, false));
         }
-        let Some(route) = self.find_route(at, npdu, destination.network, options, host) else {
-            return Received::Handled;
+        let route = match self.find_route(at, npdu, destination.network, options, host) {
+            Ok(route) => route,
+            Err(done) => return done,
         };
         let mut delivered = None;
         if route.port() == at.port && route.is_direct() {
@@ -344,29 +353,90 @@ impl<
         own
     }
 
-    /// The usable route to `dnet`, marked as used; or, when the table has
-    /// none or can't use it now, `None`, with the search and the reject
-    /// that answer the frame queued (Clauses 6.6.3.1, 6.6.3.5, 6.6.3.6).
-    /// Nothing is held back for the search: the sender gets reason 1 at
-    /// once, and its next message takes whatever route the search finds.
-    pub(super) fn find_route(
+    /// Ask only links that this request can reach and that still need the
+    /// search. With isolation off the historical per-DNET cooldown applies.
+    pub(super) fn solicit(
+        &mut self,
+        except: PortId,
+        network: u16,
+        now: Instant,
+        options: &Options,
+    ) {
+        let ports = &self.ports[..self.port_count];
+        let omitted = if !self.has_isolated_pair || except == super::NO_PORT {
+            Omitted::NONE
+        } else if super::config::isolated(ports, except) {
+            if ports.iter().all(|p| p.isolated) {
+                return;
+            }
+            Omitted::ISOLATED_PORTS
+        } else {
+            Omitted::ordinary(except)
+        };
+        if let Some(gap) = self
+            .discovery
+            .search(network, now, options.discovery_cooldown, omitted)
+        {
+            bump(&mut self.counters.solicitations);
+            self.out.push(Task::solicit(except, network, gap));
+        }
+    }
+
+    /// Whether a network's current egress is isolated from the requester.
+    pub(super) fn hidden_from(&self, port: PortId, network: u16) -> bool {
+        self.table
+            .lookup(network)
+            .is_some_and(|route| super::config::isolated_pair(&self.ports, port, route.port()))
+    }
+
+    /// Whether `port` is isolated and has an isolated peer: only then does
+    /// the router refuse what it sends about routes through other ports.
+    pub(super) fn isolated_arrival(&self, port: PortId) -> bool {
+        self.has_isolated_pair && super::config::isolated(&self.ports, port)
+    }
+
+    /// Count and report a route change refused to isolated port `port`.
+    pub(super) fn isolation_refused(
+        &mut self,
+        port: PortId,
+        network: u16,
+        class: super::host::ControlClass,
+        host: &mut impl Host,
+    ) {
+        bump(&mut self.counters.isolated_refusals);
+        host.observe(super::host::Event::IsolationRefused {
+            network,
+            port,
+            class,
+        });
+    }
+
+    /// Count a frame whose way on lies between two isolated ports.
+    pub(super) fn isolated_drop<'f>(&mut self) -> Received<'f> {
+        bump(&mut self.counters.isolated_drops);
+        Received::Discarded(Discard::Isolated)
+    }
+
+    /// A frame from one isolated port for a network whose `route` leaves by
+    /// another: dropped. Its sender is told what the router tells that port
+    /// everywhere else, that it doesn't reach the network: reject reason 1,
+    /// back out of the arrival port (Clauses 6.4.4, 6.6.3.5). No search
+    /// follows, since one would only probe the other isolated ports. A
+    /// broadcast draws no reject: a DLEN 0 one, or one for a group address
+    /// on its delivery port.
+    fn isolated_transit<'f>(
         &mut self,
         at: &Arrival<'_>,
         npdu: &Npdu<'_>,
         dnet: u16,
-        options: &Options,
+        route: &Route,
         host: &mut impl Host,
-    ) -> Option<Route> {
-        let route = self.table.lookup(dnet);
-        let reachability = self.table.effective_reachability(dnet, at.now);
-        let Some(route) = route else {
-            if self
-                .discovery
-                .should_solicit(dnet, at.now, options.discovery_cooldown)
-            {
-                bump(&mut self.counters.solicitations);
-                self.out.push(Task::solicit(at.port, dnet));
-            }
+    ) -> Received<'f> {
+        let one_node = npdu
+            .destination
+            .is_some_and(|destination| !destination.mac.is_empty())
+            && self.group_of(route, npdu) == Group::No;
+        if one_node {
             self.reject(
                 at,
                 npdu.source,
@@ -374,16 +444,49 @@ impl<
                 RejectMessageReason::NOT_DIRECTLY_CONNECTED,
                 host,
             );
-            return None;
+        }
+        self.isolated_drop()
+    }
+
+    /// The usable route to `dnet`, marked as used; or, when the table has
+    /// none or can't use it now, what became of the frame, with the search
+    /// and the reject that answer it queued (Clauses 6.6.3.1, 6.6.3.5,
+    /// 6.6.3.6). Nothing is held back for the search: the sender gets
+    /// reason 1 at once, and its next message takes whatever route the
+    /// search finds. A route between two isolated ports is no route
+    /// (`isolated_transit`).
+    pub(super) fn find_route<'f>(
+        &mut self,
+        at: &Arrival<'_>,
+        npdu: &Npdu<'_>,
+        dnet: u16,
+        options: &Options,
+        host: &mut impl Host,
+    ) -> Result<Route, Received<'f>> {
+        let route = self.table.lookup(dnet);
+        let reachability = self.table.effective_reachability(dnet, at.now);
+        let Some(route) = route else {
+            self.solicit(at.port, dnet, at.now, options);
+            self.reject(
+                at,
+                npdu.source,
+                dnet,
+                RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+                host,
+            );
+            return Err(Received::Handled);
         };
+        if super::config::isolated_pair(&self.ports, at.port, route.port()) {
+            return Err(self.isolated_transit(at, npdu, dnet, &route, host));
+        }
         self.table.touch(dnet, at.now);
         let refusal = match reachability {
             Some(Reachability::Busy) => RejectMessageReason::ROUTER_BUSY,
             Some(Reachability::Unreachable) => RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-            _ => return Some(route),
+            _ => return Ok(route),
         };
         self.reject(at, npdu.source, dnet, refusal, host);
-        None
+        Err(Received::Handled)
     }
 
     /// What `npdu`'s DADR is on its delivery port: read from its port only

@@ -241,6 +241,8 @@ totals!(
     own_source_drops,
     not_next_hop,
     originated,
+    isolated_drops,
+    isolated_refusals,
     }
 );
 

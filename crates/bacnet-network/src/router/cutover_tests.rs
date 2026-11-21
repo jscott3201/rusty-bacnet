@@ -227,9 +227,11 @@ async fn refused(ports: Vec<RouterPort<LoopbackTransport>>) -> Option<Error> {
 fn loopback_ports(macs: &[Vec<u8>]) -> Vec<RouterPort<LoopbackTransport>> {
     macs.iter()
         .enumerate()
-        .map(|(index, mac)| RouterPort {
-            transport: LoopbackTransport::pair(mac.clone(), vec![0xEE]).0,
-            network_number: 100 + index as u16,
+        .map(|(index, mac)| {
+            RouterPort::new(
+                LoopbackTransport::pair(mac.clone(), vec![0xEE]).0,
+                100 + index as u16,
+            )
         })
         .collect()
 }
@@ -269,16 +271,7 @@ async fn start_refuses_a_reserved_network_before_any_transport_starts() {
     for reserved in [0, 0xFFFF] {
         let (first, first_handle) = driven(1, 1497);
         let (second, second_handle) = driven(2, 1497);
-        let ports = vec![
-            RouterPort {
-                transport: first,
-                network_number: 1,
-            },
-            RouterPort {
-                transport: second,
-                network_number: reserved,
-            },
-        ];
+        let ports = vec![RouterPort::new(first, 1), RouterPort::new(second, reserved)];
         let error = BACnetRouter::start(ports, RouterOptions::new())
             .await
             .err()

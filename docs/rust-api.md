@@ -3694,6 +3694,50 @@ described below (`network_control_receiver_with_admission()` for a tracked
 one). The start returns a `StartedRouter` holding the router, the
 local APDU receiver and, when asked for, the network-control receiver.
 
+A port is `RouterPort::new(transport, network_number)`. To let each SC hub
+reach a shared B/IP network while keeping the hubs apart, mark the hub ports
+where they are declared: `RouterPort::new(hub_a, 2).isolated(true)`. No port
+is isolated unless marked, and one isolated port alone changes nothing.
+
+Between two isolated ports the router blocks transit, by direct and learned
+routes and for routed broadcasts, and hides each from the other in what it
+generates and relays: its startup announcements, its answers to
+Who-Is-Router-To-Network and to routing table queries, and the network lists
+of the I-Am-Router-To-Network, Router-Busy and Router-Available messages it
+passes on. What differs on the wire from a plain router:
+
+- A message from an isolated port for one node behind another isolated port
+  draws a reject (Reject-Message-To-Network, reason 1) out of the arrival port,
+  as a network the router doesn't reach does (Clauses 6.4.4 and 6.6.3.5),
+  and starts no search. A broadcast for such a network is dropped without a
+  reject. Both count in `Counters::isolated_drops`.
+- An isolated port cannot capture a shared route. An
+  I-Am-Router-To-Network, a routing table update or a table Ack that arrives
+  on an isolated port doesn't move to that port a network the router reaches
+  through any other port, a directly connected one included, and such an
+  I-Am-Router-To-Network is not relayed (its other networks are learned, and
+  neighbours hear of them at their next Who-Is-Router-To-Network). Each
+  refusal counts in `Counters::isolated_refusals` and is logged. This departs
+  from Clause 6.6.3.3, which follows the newest claim, so a network that
+  really moves behind an isolated port needs its old route removed first (a
+  routing table update from an ordinary port, or the route's expiry) or a
+  router restart. Moves between ordinary ports, and from an isolated port to
+  an ordinary one, are unchanged.
+- With isolation on, a second search for the same network that comes from
+  another ordinary port inside the discovery cooldown is also broadcast on
+  the port the first search came from. A plain router sends one search per
+  cooldown.
+
+Isolation limits transit between isolated ports. It is not an authorization
+boundary: the router's own application reaches every port, and a network
+message that one node addresses to another across a permitted path is
+forwarded with its contents unread. It is not an access control on
+routing-table updates either: a reject or a routing table update from an
+isolated port can still mark, remove or redirect a route through an ordinary
+port; see `next_hop_rejects` and the host's authorization of table updates
+(`control_policy()`, `control_authorizer()`). Other routers on a shared
+network make their own forwarding decisions.
+
 Every port of one router has the same transport type. `RouterPort`'s
 defaults to `AnyTransport` (#2043), so a router that mixes link types takes
 a `Vec<RouterPort>` of `AnyTransport` ports; one whose ports share a

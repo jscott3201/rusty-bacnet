@@ -235,6 +235,7 @@ fn log_discard(reason: Discard, port: u8, source_len: usize) {
         | Discard::Denied
         | Discard::BadMessage
         | Discard::Unroutable => {}
+        Discard::Isolated => debug!(port, "Router dropped a frame between two isolated ports"),
         // A reason a later engine adds.
         _ => debug!(port, ?reason, "Router dropped a frame"),
     }

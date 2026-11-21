@@ -69,7 +69,7 @@ impl BACnetRouter {
                 // Read once the transport has started: MS/TP's grows with the
                 // extended frames routing turned on, and BACnet/SC's comes from
                 // its hub connection.
-                configs.push(Engine::port(
+                let mut config = Engine::port(
                     port.network_number,
                     mac,
                     port.transport.max_npdu(),
@@ -77,7 +77,9 @@ impl BACnetRouter {
                         groups: port.transport.group_destinations(),
                         local_broadcasts: port.transport.local_broadcast_destinations(),
                     },
-                ));
+                );
+                config.isolated = port.isolated;
+                configs.push(config);
                 // Taken after that read; the task that follows it applies the
                 // value it holds first, so a change in between isn't lost.
                 limit_changes.push(port.transport.max_npdu_changes());

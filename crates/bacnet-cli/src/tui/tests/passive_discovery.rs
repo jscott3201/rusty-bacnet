@@ -192,14 +192,8 @@ async fn passive_receives_real_router_startup_after_listener_readiness() {
     let StartedRouter { mut router, .. } = crate::heap::boxed(|| {
         BACnetRouter::start(
             vec![
-                RouterPort {
-                    transport: AnyTransport::Bip(Box::new(bip)),
-                    network_number: 1,
-                },
-                RouterPort {
-                    transport: AnyTransport::Loopback(far),
-                    network_number: 2,
-                },
+                RouterPort::new(AnyTransport::Bip(Box::new(bip)), 1),
+                RouterPort::new(AnyTransport::Loopback(far), 2),
             ],
             RouterOptions::new(),
         )

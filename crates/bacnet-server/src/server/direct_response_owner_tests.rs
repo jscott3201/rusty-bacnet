@@ -104,16 +104,10 @@ async fn direct_response_router_local_delivery_preserves_matching_capability() {
     let mut a = f.peer(ca.tls("a")).await;
     let (tx, incoming) = mpsc::channel(8);
     let (responses, mut generic) = mpsc::unbounded_channel();
-    let port = RouterPort {
-        transport: queued_port(incoming, responses),
-        network_number: 44,
-    };
+    let port = RouterPort::new(queued_port(incoming, responses), 44);
     let (_tx_b, incoming_b) = mpsc::channel(1);
     let (responses_b, mut generic_b) = mpsc::unbounded_channel();
-    let port_b = RouterPort {
-        transport: queued_port(incoming_b, responses_b),
-        network_number: 55,
-    };
+    let port_b = RouterPort::new(queued_port(incoming_b, responses_b), 55);
     let StartedRouter {
         mut router,
         apdus: mut local,

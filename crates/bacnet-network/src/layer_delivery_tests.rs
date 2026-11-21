@@ -243,10 +243,7 @@ async fn router_preserves_link_group_for_ultimate_network_unicast() {
     use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
     let (transport, peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let port = RouterPort {
-        transport,
-        network_number: 200,
-    };
+    let port = RouterPort::new(transport, 200);
     let StartedRouter {
         mut router,
         apdus: mut local,

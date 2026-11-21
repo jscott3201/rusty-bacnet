@@ -292,14 +292,8 @@ async fn the_networks_tab_maps_a_real_router() {
     }));
     let (far, _station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
     let ports = vec![
-        RouterPort {
-            transport: AnyTransport::Bip(Box::new(bip)),
-            network_number: 1,
-        },
-        RouterPort {
-            transport: AnyTransport::Loopback(far),
-            network_number: 2,
-        },
+        RouterPort::new(AnyTransport::Bip(Box::new(bip)), 1),
+        RouterPort::new(AnyTransport::Loopback(far), 2),
     ];
     let StartedRouter { mut router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await

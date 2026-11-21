@@ -429,14 +429,8 @@ async fn main() -> Res<()> {
         router, mut apdus, ..
     } = BACnetRouter::start(
         vec![
-            RouterPort {
-                transport: bbmd(p_r1, &[p_bbmd]),
-                network_number: 1,
-            },
-            RouterPort {
-                transport: bbmd(p_r2, &[]),
-                network_number: 2,
-            },
+            RouterPort::new(bbmd(p_r1, &[p_bbmd]), 1),
+            RouterPort::new(bbmd(p_r2, &[]), 2),
         ],
         RouterOptions::new(),
     )

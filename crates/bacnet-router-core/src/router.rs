@@ -68,6 +68,9 @@ mod reject;
 mod reply;
 mod tasks;
 
+/// A fan-out excluding this index reaches every port.
+const NO_PORT: PortId = PortId(u8::MAX);
+
 use core::borrow::BorrowMut;
 use core::fmt;
 
@@ -132,6 +135,7 @@ pub struct Storage<
     /// Each port's congestion state (#1697).
     flows: [Flow; P],
     port_count: usize,
+    has_isolated_pair: bool,
     table: Table<R, H>,
     discovery: Discovery<D>,
     scratch: [u8; N],
@@ -167,6 +171,7 @@ impl<
             ports: [const { PortConfig::ZERO }; P],
             flows: [Flow::CLEAR; P],
             port_count: 0,
+            has_isolated_pair: false,
             table: Table::new(),
             discovery: Discovery::new(),
             scratch: [0; N],
@@ -210,7 +215,7 @@ impl<
             .field("ports", &&self.ports[..self.port_count])
             .field("table", &self.table)
             .field("discovery", &self.discovery)
-            .field("pending", &self.out.pending(self.port_count))
+            .field("pending", &self.out.pending(&self.ports[..self.port_count]))
             .field("counters", &self.counters)
             .field("next_sweep", &self.next_sweep)
             .field("latest", &self.latest)
@@ -375,6 +380,7 @@ where
         // Release custom rules from ports a prior router used in this storage.
         store.ports[ports.len()..].fill_with(|| PortConfig::ZERO);
         store.port_count = ports.len();
+        store.has_isolated_pair = ports.iter().filter(|p| p.isolated).nth(1).is_some();
         store.flows = [Flow::CLEAR; P];
         for (index, port) in ports.iter().enumerate() {
             if !store.table.add_direct(port.network, PortId(index as u8)) {
@@ -401,8 +407,8 @@ where
     }
 
     /// Queue the startup announcements, port by port: a Network-Number-Is
-    /// with the port's number, then an I-Am-Router listing every other
-    /// port's network (none on a one-port router). They carry no ingress
+    /// with the port's number, then an I-Am-Router listing reachable peer
+    /// ports' networks when any are visible there. They carry no ingress
     /// data.
     pub fn start(&mut self) {
         let store = self.store();

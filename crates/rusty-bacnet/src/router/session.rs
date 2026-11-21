@@ -76,10 +76,7 @@ impl Session for NativeSession {
         let ports = self
             .configs
             .iter()
-            .map(|config| RouterPort {
-                transport: config.transport(),
-                network_number: config.network_number,
-            })
+            .map(|config| RouterPort::new(config.transport(), config.network_number))
             .collect();
         let started = BACnetRouter::start(ports, RouterOptions::new()).await?;
         // The network-control receiver stays internal: none was asked for.

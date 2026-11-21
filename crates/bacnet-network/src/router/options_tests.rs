@@ -33,16 +33,7 @@ async fn ports() -> (
     let (port_b, mut peer_b) = LoopbackTransport::pair(vec![0x02], vec![0x0B]);
     let from_router_a = peer_a.start().await.unwrap();
     let from_router_b = peer_b.start().await.unwrap();
-    let ports = vec![
-        RouterPort {
-            transport: port_a,
-            network_number: 1000,
-        },
-        RouterPort {
-            transport: port_b,
-            network_number: 2000,
-        },
-    ];
+    let ports = vec![RouterPort::new(port_a, 1000), RouterPort::new(port_b, 2000)];
     (ports, [(peer_a, from_router_a), (peer_b, from_router_b)])
 }
 
