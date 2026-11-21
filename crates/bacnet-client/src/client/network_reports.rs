@@ -35,8 +35,8 @@ pub struct DiscoveredRouter {
 /// parsed. Never waits.
 ///
 /// While a routing-table query waits on a router (`queried`), an
-/// Initialize-Routing-Table-Ack with no data from that router's own MAC, not
-/// routed, is published as an empty table: this client never sends the
+/// Initialize-Routing-Table-Ack with no data from its expected link peer
+/// and original source station is published as an empty table: this client never sends the
 /// update form, so such an ack can only be that router's older-style answer
 /// to the query. From any other source, or outside a query, it is no
 /// report.
@@ -44,7 +44,7 @@ pub(super) fn publish(
     tx: &broadcast::Sender<ReceivedNetworkReport>,
     control: &ReceivedNetworkControl,
     number: Option<NumberControl>,
-    queried: &std::sync::Mutex<Option<MacAddr>>,
+    queried: &std::sync::Mutex<Option<super::routing_table::QueryTarget>>,
 ) {
     if tx.receiver_count() == 0 {
         return;
@@ -53,12 +53,13 @@ pub(super) fn publish(
         let empty_ack = control.npdu.message_type
             == Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
             && control.npdu.payload.is_empty()
-            && control.npdu.source.is_none()
             && queried
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .as_ref()
-                == Some(&control.source_mac);
+                .is_some_and(|target| {
+                    target.answers(&control.source_mac, control.npdu.source.as_ref())
+                });
         empty_ack.then(|| ReceivedNetworkReport {
             source_mac: control.source_mac.clone(),
             source_network: control.npdu.source.clone(),
@@ -211,7 +212,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         network: Option<u16>,
         wait: Duration,
     ) -> Result<Vec<DiscoveredRouter>, Error> {
-        self.collect_routers(None, network, wait).await
+        let (routers, _) = self.collect_routers(None, network, wait, false).await?;
+        Ok(routers)
     }
 
     /// Ask the one router at `router`, its MAC on the local network, as
@@ -233,34 +235,43 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         network: Option<u16>,
         wait: Duration,
     ) -> Result<Vec<DiscoveredRouter>, Error> {
-        self.collect_routers(Some(router), network, wait).await
+        let (routers, _) = self
+            .collect_routers(Some(router), network, wait, true)
+            .await?;
+        Ok(routers)
     }
 
-    async fn collect_routers(
+    /// Ask `router` (or broadcast, with `None`) and collect the
+    /// I-Am-Router-To-Network reports heard for `wait`, with the number of
+    /// reports lost to a lagging receiver. A directed ask keeps only
+    /// `router`'s own reports; `local_only` keeps only reports no other
+    /// router passed on.
+    pub(super) async fn collect_routers(
         &self,
         router: Option<&[u8]>,
         network: Option<u16>,
         wait: Duration,
-    ) -> Result<Vec<DiscoveredRouter>, Error> {
+        local_only: bool,
+    ) -> Result<(Vec<DiscoveredRouter>, u64), Error> {
         // Subscribe first, so no answer can arrive before the receiver.
         let mut rx = self.network_reports();
         self.send_who_is_router(router, network).await?;
         let deadline = tokio::time::Instant::now() + wait;
         let mut routers: Vec<DiscoveredRouter> = Vec::new();
-        collect_until(&mut rx, deadline, "I-Am-Router-To-Network", |received| {
+        let lost = collect_until(&mut rx, deadline, "I-Am-Router-To-Network", |received| {
             let NetworkReport::IAmRouterToNetwork(listed) = received.report else {
                 return;
             };
-            if router.is_some_and(|peer| {
-                received.source_mac.as_slice() != peer || received.source_network.is_some()
-            }) || network.is_some_and(|wanted| !listed.contains(&wanted))
+            if (local_only && received.source_network.is_some())
+                || router.is_some_and(|peer| received.source_mac.as_slice() != peer)
+                || network.is_some_and(|wanted| !listed.contains(&wanted))
             {
                 return;
             }
             record(&mut routers, received.source_mac, listed);
         })
         .await;
-        Ok(routers)
+        Ok((routers, lost))
     }
 }
 

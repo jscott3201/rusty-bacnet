@@ -40,7 +40,11 @@ impl<
             return self.bad_message();
         };
         if entries.count() == 0 {
-            self.out.push(Task::table_ack(at.port, at.source_mac));
+            let source = npdu.destination.filter(|&address| self.is_own(address));
+            let Ok(reply) = super::ReplyPlan::new(at.port, at.source, source, npdu.source) else {
+                return self.bad_message();
+            };
+            self.out.push(Task::table_ack(reply));
             return Received::Handled;
         }
         if !self.authorize(

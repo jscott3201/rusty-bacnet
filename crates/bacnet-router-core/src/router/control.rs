@@ -62,6 +62,14 @@ impl<
             if self.group_of(&route, npdu) != Group::No {
                 return self.group_drop();
             }
+            // A table read can name this router at another port. Apply
+            // the same reachability and group checks as a forwarded query.
+            if kind == NetworkMessageType::INITIALIZE_ROUTING_TABLE
+                && npdu.payload == [0]
+                && self.is_own(destination)
+            {
+                return self.initialize_routing_table(at, npdu, options, host);
+            }
             return self.forward(at, npdu, &route, host);
         }
         match kind {

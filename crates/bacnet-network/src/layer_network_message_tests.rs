@@ -203,7 +203,7 @@ async fn the_query_is_a_zero_count_and_expects_a_reply() {
     let mut rx = b.start().await.unwrap();
     let mut layer = NetworkLayer::new(a);
     let _apdus = layer.start().await.unwrap();
-    layer.send_routing_table_query(&[2]).await.unwrap();
+    layer.send_routing_table_query(&[2], None).await.unwrap();
     let frame = tokio::time::timeout(Duration::from_millis(200), rx.recv())
         .await
         .unwrap()
@@ -223,7 +223,7 @@ async fn a_broadcast_query_is_refused() {
     let _apdus = layer.start().await.unwrap();
     for destination in [&[0xFF][..], &[]] {
         let error = layer
-            .send_routing_table_query(destination)
+            .send_routing_table_query(destination, None)
             .await
             .unwrap_err()
             .to_string();
@@ -317,7 +317,7 @@ async fn a_directed_router_query_never_falls_back_to_broadcast() {
             "{invalid:?}: {refused:?}"
         );
         // The routing-table query takes the same check.
-        assert!(layer.send_routing_table_query(invalid).await.is_err());
+        assert!(layer.send_routing_table_query(invalid, None).await.is_err());
     }
     assert!(log.is_empty());
     // This TestTransport counts only its exact broadcast and group MACs as
@@ -389,11 +389,14 @@ async fn an_ethernet_group_mac_is_no_router_station() {
             .await
             .is_err()
     );
-    assert!(layer.send_routing_table_query(&group).await.is_err());
+    assert!(layer.send_routing_table_query(&group, None).await.is_err());
     assert!(log.is_empty());
     let station = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
     assert!(layer.is_local_unicast_station(&station).await.unwrap());
-    layer.send_routing_table_query(&station).await.unwrap();
+    layer
+        .send_routing_table_query(&station, None)
+        .await
+        .unwrap();
     assert_eq!(log.unicasts().len(), 1);
     layer.stop().await.unwrap();
 }

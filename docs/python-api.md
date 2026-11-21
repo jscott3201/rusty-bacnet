@@ -2631,12 +2631,12 @@ endpoint); with no BBMD, an empty list is the expected result.
 
 #### `routing_table(router, *, wait=3.0, quiet=0.5, total=10.0, max_entries=4096) -> RoutingTable`
 
-Read the routing table of the router at `router`, a station on the client's
-own link, without changing it (#2612). The call sends one
+Read the routing table of a local or routed station (#2612). The call sends one
 Initialize-Routing-Table with a port count of zero, which only asks; no
-argument can turn it into an update. `router` is the router's address on the
-local link: `bytes` as given (a `DiscoveredRouter`'s `mac`) or a string in
-the binding's address forms. An empty, broadcast or group address raises
+argument can turn it into an update. For a local router, pass its MAC as
+`bytes` (a `DiscoveredRouter`'s `mac`) or use one of the binding's address
+strings. For a remote router, pass a `RoutedTarget`. An empty, broadcast or
+group address raises
 `ValueError`.
 
 The result is a frozen `RoutingTable`: `entries` (frozen `RoutingTableEntry`
@@ -2665,15 +2665,26 @@ number can appear twice.
 - A router that answers with a Reject-Message-To-Network before any
   acknowledgement raises `BacnetNetworkRejectError`, with the router's
   `reason` octet and `network`. Rejects with reasons 1, 2 and 4 concern a
-  DNET, which this local message has none of, and are ignored.
+  DNET and are ignored for a local query.
 - A client stopped mid-call raises `RuntimeError`.
 
 Each bound is 0 to 3600 seconds, and `wait` may not exceed `total`
 (`ValueError` otherwise). An acknowledgement from the router's own address
-is taken whether it arrives as a unicast or a broadcast. Only a router on
-the client's own link can be asked: the query is a local message, so a
-router behind another router is out of reach. One query runs at a time per
-client (network messages carry no invoke ID), so a second call waits for
+is taken whether it arrives as a unicast or a broadcast.
+
+For a remote router, pass `RoutedTarget(network, address, router=next_hop)`.
+When the next hop is omitted, the client uses a cached path for that station,
+or spends up to `wait` additional seconds discovering a single local router
+that advertises the network. Zero or multiple candidates, or lost discovery
+reports, raise `BacnetError`. Supply an explicit next hop to skip discovery.
+The destination router does not need to advertise a Device object. Acks must
+arrive through the selected hop with the destination router's source network
+and address. Equipment that responds only on its own link may time out.
+A reject from the selected hop for the requested DNET before the first ack
+ends the query. A concurrent routed request to that DNET through the same
+hop can produce an indistinguishable reject because there is no invoke ID.
+
+One query runs at a time per client (network messages carry no invoke ID), so a second call waits for
 the first. Like `discover_routers()`, it holds the started client for the
 whole wait.
 

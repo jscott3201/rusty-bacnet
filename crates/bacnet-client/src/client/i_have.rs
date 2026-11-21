@@ -86,20 +86,22 @@ pub(super) fn deliver(
 }
 
 /// Receive from `rx` until `deadline`, handing each item to `each`. A lag
-/// is logged with the count lost, and collection goes on.
+/// is logged and collection goes on. Return the number of reports lost.
 pub(super) async fn collect_until<T: Clone>(
     rx: &mut broadcast::Receiver<T>,
     deadline: tokio::time::Instant,
     what: &'static str,
     mut each: impl FnMut(T),
-) {
+) -> u64 {
+    let mut lost = 0u64;
     loop {
         match tokio::time::timeout_at(deadline, rx.recv()).await {
             Ok(Ok(item)) => each(item),
             Ok(Err(RecvError::Lagged(missed))) => {
+                lost = lost.saturating_add(missed);
                 warn!(missed, what, "collector fell behind; replies were lost");
             }
-            Ok(Err(RecvError::Closed)) | Err(_) => return,
+            Ok(Err(RecvError::Closed)) | Err(_) => return lost,
         }
     }
 }
