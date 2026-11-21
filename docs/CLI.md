@@ -88,6 +88,15 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `--no-tui` | | With no command, print the usage instead of opening the terminal UI; see [Plain `bacnet`](#plain-bacnet) |
 | `--yes` | | Confirm communication control and reinitialize without typing the target; needed when stdin is not a terminal |
 
+**Loopback:** with `-i 127.0.0.1` and the default `-b 255.255.255.255`, a
+local broadcast (`discover` without `--bbmd`, a Who-Has, a bare instance
+resolved locally) fails before anything is sent: the socket is bound to
+`0.0.0.0`, so the host would route the broadcast onto the LAN (#2691).
+Unicast commands are unaffected. Pass `-b 127.255.255.255` to discover on
+loopback on Linux; see the
+[Python guide](python-api.md#loopback-interfaces-and-broadcasts) for macOS
+and Windows.
+
 Output auto-detects: tables in TTY, JSON when piped. Log lines (warnings, and
 more with `-v`) go to stderr in every mode, so stdout carries only the
 command's output and a warning can't corrupt its JSON.

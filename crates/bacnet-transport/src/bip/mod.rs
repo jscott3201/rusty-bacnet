@@ -4,6 +4,8 @@
 //! incoming BVLL frames and extracts NPDU bytes + source MAC for the
 //! network layer. Optionally acts as a BBMD or foreign device.
 
+pub use crate::local_addresses::named::resolve_interface_ipv4;
+
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::Duration;
@@ -101,6 +103,8 @@ use rate_limit::ManagementRateLimiter;
 pub use receive_counters::ReceiveCounters;
 use receive_counters::ReceiveDrops;
 pub use send_counters::SendCounters;
+mod loopback_guard;
+pub use loopback_guard::LoopbackBroadcastRefused;
 use send_counters::SendRefusals;
 #[cfg(test)]
 use test_support::{Delivery, admitted_delivery, handle_bvll_message};
@@ -556,6 +560,7 @@ impl TransportPort for BipTransport {
         let plan = self.bind_plan_for_start().await;
         let listener_interface = plan.local.and_then(|local| local.index);
         let bound = socket::bind(plan).map_err(Error::Transport)?;
+        loopback_guard::warn_at_start(&plan, multicast.is_some(), foreign_config.is_some());
         let lease = self
             .network_port_lease
             .get_mut()
@@ -673,6 +678,7 @@ impl TransportPort for BipTransport {
             NodeHandle::new(
                 link,
                 Arc::clone(&socket),
+                plan.loopback_on_wildcard(),
                 Arc::clone(&self.client_record),
                 Arc::clone(&self.send_refusals),
             )

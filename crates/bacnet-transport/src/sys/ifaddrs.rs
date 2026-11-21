@@ -31,6 +31,30 @@
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+/// The current index of an exact OS interface name, including interfaces
+/// without an IP address.
+pub(crate) fn interface_index(name: &str) -> io::Result<Option<u32>> {
+    // Linux's interface-index ioctl treats a colon suffix as an IPv4 address
+    // label and can return the base device's index even for an unknown label.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if name.contains(':') {
+        return Ok(None);
+    }
+    let name = std::ffi::CString::new(name)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    // SAFETY: the CString remains live and NUL-terminated throughout the call.
+    let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    if index != 0 {
+        return Ok(Some(index));
+    }
+    let error = io::Error::last_os_error();
+    if matches!(error.raw_os_error(), Some(libc::ENXIO | libc::ENODEV)) {
+        Ok(None)
+    } else {
+        Err(error)
+    }
+}
+
 /// The address of one `getifaddrs` entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Address {
@@ -50,7 +74,6 @@ pub(crate) enum Address {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Flags {
     /// `IFF_UP`.
-    #[cfg_attr(not(any(feature = "ipv6", test)), allow(dead_code))]
     pub(crate) up: bool,
     /// `IFF_BROADCAST`.
     pub(crate) broadcast: bool,

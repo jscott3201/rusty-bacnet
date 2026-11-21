@@ -263,6 +263,46 @@ class IAmArrivalTests(Arrivals):
         self.assertTrue(record.forwarded)
         self.assertEqual(arrivals.own_echoes, 2)
 
+    async def test_loopback_refuses_limited_broadcast_and_still_sees_a_duplicate(self):
+        endpoint = await self.endpoint(722)
+        client = await endpoint.client()
+        arrivals = await endpoint.i_am_arrivals()
+        frames = await endpoint.frames()
+        with self.assertRaisesRegex(rb.BacnetTransportError, r"127\.255\.255\.255.*\(the broadcast_address= keyword\)"):
+            await client.who_is(scope="local", low=722, high=722)
+
+        # The refused broadcast left no frame: the first tapped frame is the
+        # directed request below. A native peer on a different port
+        # genuinely owns the same Device instance.
+        second = await self.endpoint(722)
+        peer = await second.local_address()
+        await client.who_is(scope=peer, low=722, high=722)
+        sent = await self.next(frames)
+        self.assertEqual((sent.direction, sent.peer, rb.decode_frame(sent.octets, sent.link).service),
+                         ("outbound", peer, "who-is"))
+        seen = await self.next(arrivals)
+        self.assertEqual((seen.object_identifier.instance, seen.link_sender), (722, peer))
+        self.assertEqual(arrivals.own_echoes, 0)
+        await frames.aclose()
+        await arrivals.aclose()
+
+    async def test_explicit_loopback_broadcast_remains_available(self):
+        endpoint = await self.endpoint(723, broadcast_address="127.255.255.255")
+        client = await endpoint.client()
+        frames = await endpoint.frames()
+        await client.who_is(scope="local", low=723, high=723)
+        # Startup's What-Is-Network-Number may precede the requested broadcast.
+        _, port = self.to(await endpoint.local_address())
+        async with asyncio.timeout(10):
+            async for frame in frames:
+                if frame.direction == "outbound":
+                    self.assertEqual(frame.peer, f"127.255.255.255:{port}")
+                    if rb.decode_frame(frame.octets, frame.link).service == "who-is":
+                        break
+            else:
+                self.fail("frame stream ended before the outbound Who-Is")
+        await frames.aclose()
+
     async def test_an_endpoint_sees_arrivals_on_the_socket_its_roles_share(self):
         endpoint = await self.endpoint(730)
         other = await self.endpoint(731)

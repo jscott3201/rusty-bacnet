@@ -14,9 +14,9 @@ use windows_sys::Win32::{
     Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_NO_DATA, NO_ERROR},
     NetworkManagement::{
         IpHelper::{
-            GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_FRIENDLY_NAME,
-            GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses, IF_TYPE_SOFTWARE_LOOPBACK,
-            IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_NO_MULTICAST,
+            GAA_FLAG_INCLUDE_ALL_INTERFACES, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+            GAA_FLAG_SKIP_FRIENDLY_NAME, GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses,
+            IF_TYPE_SOFTWARE_LOOPBACK, IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_NO_MULTICAST,
         },
         Ndis::IfOperStatusUp,
     },
@@ -55,9 +55,35 @@ pub(crate) struct UnicastAddress {
     pub(crate) prefix_length: u8,
 }
 
+/// An adapter header is retained even when it has no unicast addresses.
+pub(crate) struct Adapter {
+    pub(crate) name: Option<String>,
+    pub(crate) addresses: Vec<UnicastAddress>,
+}
+
+/// Request the friendly names used by Windows' network configuration UI.
+pub(crate) fn named_adapters() -> io::Result<Vec<Adapter>> {
+    adapters(windows_sys::Win32::Networking::WinSock::AF_UNSPEC, true)
+}
+
 /// Every unicast address of `family` (`AF_INET`, `AF_INET6` or `AF_UNSPEC`)
 /// on every adapter, whatever its state. `ERROR_NO_DATA` is an empty list.
 pub(crate) fn unicast_addresses(family: ADDRESS_FAMILY) -> io::Result<Vec<UnicastAddress>> {
+    Ok(adapters(family, false)?
+        .into_iter()
+        .flat_map(|adapter| adapter.addresses)
+        .collect())
+}
+
+fn adapters(family: ADDRESS_FAMILY, names: bool) -> io::Result<Vec<Adapter>> {
+    let flags = GAA_FLAG_SKIP_ANYCAST
+        | GAA_FLAG_SKIP_MULTICAST
+        | GAA_FLAG_SKIP_DNS_SERVER
+        | if names {
+            GAA_FLAG_INCLUDE_ALL_INTERFACES
+        } else {
+            GAA_FLAG_SKIP_FRIENDLY_NAME
+        };
     let mut bytes = INITIAL_BUFFER_BYTES;
     for _ in 0..ATTEMPTS {
         if bytes > MAX_BUFFER_BYTES {
@@ -77,16 +103,7 @@ pub(crate) fn unicast_addresses(family: ADDRESS_FAMILY) -> io::Result<Vec<Unicas
         // live `u32` the call may overwrite with the size it needs. The
         // reserved pointer must be null.
         let status = unsafe {
-            GetAdaptersAddresses(
-                u32::from(family),
-                GAA_FLAG_SKIP_ANYCAST
-                    | GAA_FLAG_SKIP_MULTICAST
-                    | GAA_FLAG_SKIP_DNS_SERVER
-                    | GAA_FLAG_SKIP_FRIENDLY_NAME,
-                std::ptr::null(),
-                head,
-                &mut bytes,
-            )
+            GetAdaptersAddresses(u32::from(family), flags, std::ptr::null(), head, &mut bytes)
         };
         match status {
             ERROR_BUFFER_OVERFLOW => continue,
@@ -97,22 +114,28 @@ pub(crate) fn unicast_addresses(family: ADDRESS_FAMILY) -> io::Result<Vec<Unicas
         // SAFETY: the call succeeded, so `head` starts the adapter list it
         // wrote into `buffer`, which stays allocated and untouched until the
         // walk returns. The buffer is ours: nothing in it is freed separately.
-        return Ok(unsafe { copy_addresses(head) });
+        return unsafe {
+            copy_adapters(head, records * size_of::<IP_ADAPTER_ADDRESSES_LH>(), names)
+        };
     }
     Err(io::Error::other(
         "the adapter inventory kept changing during discovery",
     ))
 }
 
-/// Copy every unicast address out of the adapter list that starts at `head`.
+/// Copy adapter headers and their unicast addresses from the caller-owned buffer.
 ///
 /// # Safety
 ///
 /// `head` is null or the first record of a list that a successful
 /// `GetAdaptersAddresses` call wrote, and the buffer holding that list stays
 /// alive and unmodified for the whole call.
-unsafe fn copy_addresses(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<UnicastAddress> {
-    let mut addresses = Vec::new();
+unsafe fn copy_adapters(
+    head: *const IP_ADAPTER_ADDRESSES_LH,
+    capacity: usize,
+    names: bool,
+) -> io::Result<Vec<Adapter>> {
+    let mut adapters = Vec::new();
     let mut adapter_ptr = head;
     while !adapter_ptr.is_null() {
         // SAFETY: a non-null record pointer is the head or a `Next` link of
@@ -121,6 +144,14 @@ unsafe fn copy_addresses(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<UnicastAdd
         // SAFETY: both members of this union are plain `u32` views of the
         // same flags word, so either one is initialized.
         let flags = unsafe { adapter.Anonymous2.Flags };
+        let name = if names && !adapter.FriendlyName.is_null() {
+            // SAFETY: a successful call returns a NUL-terminated UTF-16 name
+            // in the result allocation. Check its extent before reading it.
+            Some(unsafe { copy_name(head.cast(), capacity, adapter.FriendlyName)? })
+        } else {
+            None
+        };
+        let mut addresses = Vec::new();
         let mut unicast_ptr = adapter.FirstUnicastAddress.cast_const();
         while !unicast_ptr.is_null() {
             // SAFETY: a non-null unicast pointer is the adapter's first entry
@@ -141,9 +172,40 @@ unsafe fn copy_addresses(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<UnicastAdd
             }
             unicast_ptr = unicast.Next.cast_const();
         }
+        adapters.push(Adapter { name, addresses });
         adapter_ptr = adapter.Next.cast_const();
     }
-    addresses
+    Ok(adapters)
+}
+
+/// Copy a name without reading beyond the allocation or its terminator. A
+/// name that isn't valid UTF-16 is copied lossily, so it matches no name a
+/// caller gives, rather than failing the whole listing.
+///
+/// # Safety
+///
+/// `base` points to the live OS result allocation of `capacity` bytes.
+/// The reported name's UTF-16 units through its NUL are initialized.
+unsafe fn copy_name(base: *const u8, capacity: usize, name: *const u16) -> io::Result<String> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid Windows adapter friendly name",
+        )
+    };
+    let offset = name.addr().checked_sub(base.addr()).ok_or_else(invalid)?;
+    let available = capacity.checked_sub(offset).ok_or_else(invalid)?;
+    let mut units = Vec::new();
+    for index in 0..available / size_of::<u16>() {
+        // SAFETY: offset + index * 2 is within the live result allocation,
+        // with two readable bytes; stop at the first initialized terminator.
+        let unit = unsafe { base.add(offset + index * 2).cast::<u16>().read_unaligned() };
+        if unit == 0 {
+            return Ok(String::from_utf16_lossy(&units));
+        }
+        units.push(unit);
+    }
+    Err(invalid())
 }
 
 /// The IP address in an IPv4 or IPv6 socket address; `None` for a null
@@ -193,6 +255,39 @@ mod tests {
         SOCKET_ADDRESS {
             lpSockaddr: bytes.as_mut_ptr().cast(),
             iSockaddrLength: i32::try_from(bytes.len()).unwrap(),
+        }
+    }
+
+    /// A friendly name is copied up to its NUL, never past the buffer: a
+    /// pointer outside it or a name the buffer ends inside is refused, and
+    /// a name that isn't valid UTF-16 is copied lossily, not refused.
+    #[test]
+    fn copies_a_friendly_name_only_within_its_buffer() {
+        let units: [u16; 8] = [0x41, 0x42, 0, 0x43, 0xD800, 0, 0x44, 0x45];
+        let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_ne_bytes()).collect();
+        let base = bytes.as_ptr();
+        let at = |unit: usize| base.wrapping_add(unit * 2).cast::<u16>();
+        let copy = |name: *const u16, capacity: usize| {
+            // SAFETY: `base` is `bytes`, live and initialized for the whole
+            // test, and `capacity` is at most its length.
+            unsafe { copy_name(base, capacity, name) }
+        };
+        let whole = bytes.len();
+        assert_eq!(copy(at(0), whole).unwrap(), "AB");
+        assert_eq!(copy(at(3), whole).unwrap(), "C\u{FFFD}");
+        let refused = [
+            copy(at(6), whole),                       // no NUL before the buffer ends
+            copy(at(0), 4),                           // the capacity ends before the NUL
+            copy(at(8), whole),                       // at the buffer's end
+            copy(at(9), whole),                       // past it
+            copy(base.wrapping_sub(2).cast(), whole), // before it
+        ];
+        for (index, result) in refused.into_iter().enumerate() {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "case {index}"
+            );
         }
     }
 
