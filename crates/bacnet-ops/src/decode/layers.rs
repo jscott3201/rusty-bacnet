@@ -59,7 +59,6 @@ pub fn decode_npdu_layer(npdu: Bytes) -> Result<DecodedNpdu, String> {
 
     let source_network = npdu_result.source.as_ref().map(|a| a.network);
     let source_address = npdu_result.source.as_ref().map(|a| a.mac_address.clone());
-    let dest_network = npdu_result.destination.as_ref().map(|a| a.network);
 
     let apdu = if !npdu_result.is_network_message() && !npdu_result.payload.is_empty() {
         Some(decode_apdu_layer(&npdu_result)?)
@@ -67,20 +66,25 @@ pub fn decode_npdu_layer(npdu: Bytes) -> Result<DecodedNpdu, String> {
         None
     };
 
+    let is_network_message = npdu_result.is_network_message();
+    let network_message_type = npdu_result.message_type.map(|kind| kind.to_raw());
+    let broadcast = npdu_result
+        .destination
+        .as_ref()
+        .is_some_and(|d| d.mac_address.is_empty());
+    let (dest_network, dest_address) = match npdu_result.destination {
+        Some(destination) => (Some(destination.network), Some(destination.mac_address)),
+        None => (None, None),
+    };
+
     Ok(DecodedNpdu {
-        is_network_message: npdu_result.is_network_message(),
+        is_network_message,
         source_network,
         source_address,
         dest_network,
-        dest_address: npdu_result
-            .destination
-            .as_ref()
-            .map(|address| address.mac_address.clone()),
-        network_message_type: npdu_result.message_type.map(|kind| kind.to_raw()),
-        broadcast: npdu_result
-            .destination
-            .as_ref()
-            .is_some_and(|d| d.mac_address.is_empty()),
+        dest_address,
+        network_message_type,
+        broadcast,
         apdu,
     })
 }

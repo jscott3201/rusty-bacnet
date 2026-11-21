@@ -198,17 +198,9 @@ fn records_compare_hash_and_rebuild_by_their_fields() {
                 .unwrap(),
             [19]
         );
-        let previous = rebuild.call1(fields.get_slice(0, 16)).unwrap();
-        assert!(previous.getattr("destination_network").unwrap().is_none());
-        assert!(previous.getattr("destination_address").unwrap().is_none());
-        assert_eq!(
-            previous
-                .getattr("source_address")
-                .unwrap()
-                .extract::<Vec<u8>>()
-                .unwrap(),
-            [7]
-        );
+        // A tuple from an earlier wheel (sixteen fields) no longer loads.
+        let previous = rebuild.call1(fields.get_slice(0, 16)).unwrap_err();
+        assert!(previous.is_instance_of::<pyo3::exceptions::PyTypeError>(py));
         let other = record(DataLink::Bip, udp(ROUTER), &wire);
         assert!(!one.eq(Py::new(py, other).unwrap()).unwrap());
     });
@@ -262,6 +254,30 @@ async fn a_record_lost_on_its_way_carries_into_the_next_gap() {
     assert_eq!(next.missed_before, 3);
     hook.settled();
     assert_eq!(iterator.subscription.missed(), 3);
+}
+
+/// A frame the tap rejected while the owner closed counts in the final
+/// `missed` of an arrival iterator too.
+#[test]
+fn an_overflow_in_flight_at_close_counts_in_the_final_missed() {
+    let tap = FrameTap::new();
+    let owner = FrameSubscriptions::default();
+    let iterator = subscribe(&owner, tap.subscribe_with_capacity(1), None, Clock::fixed());
+    let frame = bip(&npdu(&i_am(1), None), None);
+    inbound(&tap, &frame);
+    std::thread::scope(|scope| {
+        tap.record_with_overflow_in_flight_for_test(
+            TapDirection::Inbound,
+            DataLink::Bip,
+            udp(DEVICE),
+            &frame,
+            |in_flight| {
+                scope.spawn(|| owner.close());
+                in_flight.wait_until_sealed();
+            },
+        );
+    });
+    assert_eq!(iterator.subscription.missed(), 1);
 }
 
 /// The owner's close ends its arrival iterators as it ends its frame

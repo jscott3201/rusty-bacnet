@@ -147,10 +147,48 @@ fn close_includes_an_overflow_in_progress_and_detaches_the_receiver() {
     drop(sinks);
 
     assert_eq!(closing.join().unwrap(), 1);
+    // The sink is gone now, not at the next frame.
+    assert_eq!(tap.lock_sinks().len(), 1);
     assert_eq!(tap.counters().subscribers, 1);
     tap.record(TapDirection::Inbound, DataLink::Sc, peer, &[2]);
     assert_eq!(&witness.try_recv().unwrap().bytes[..], [2]);
     assert_eq!(tap.counters().dropped, 1);
+}
+
+/// `close` returns the count and takes the sink out of the list at once.
+#[test]
+fn close_removes_the_sink_and_returns_the_count() {
+    let tap = FrameTap::new();
+    let slow = tap.subscribe_with_capacity(1);
+    let _witness = tap.subscribe();
+    for octet in 0..3u8 {
+        tap.record(TapDirection::Inbound, DataLink::Sc, peer, &[octet]);
+    }
+    assert_eq!(tap.lock_sinks().len(), 2);
+    assert_eq!(slow.close(), 2);
+    assert_eq!(tap.lock_sinks().len(), 1);
+    assert_eq!(tap.counters().subscribers, 1);
+}
+
+/// The staging hook counts a rejection only after the closure ran, and a
+/// receiver that closes meanwhile waits for it.
+#[test]
+fn a_close_during_a_staged_overflow_waits_for_the_count() {
+    let tap = FrameTap::new();
+    let slow = tap.subscribe_with_capacity(1);
+    tap.record(TapDirection::Inbound, DataLink::Sc, peer, &[0]);
+    let mut closing = None;
+    tap.record_with_overflow_in_flight_for_test(
+        TapDirection::Inbound,
+        DataLink::Sc,
+        peer(),
+        &[1],
+        |in_flight| {
+            closing = Some(std::thread::spawn(move || slow.close()));
+            in_flight.wait_until_sealed();
+        },
+    );
+    assert_eq!(closing.unwrap().join().unwrap(), 1);
 }
 
 #[tokio::test]

@@ -119,11 +119,8 @@ impl PyIAmArrival {
             link_source: style.format(&arrival.link_source),
             original_source: arrival.original_source.map(|origin| origin.to_string()),
             forwarded: arrival.forwarded,
-            source_network: arrival.source_network.as_ref().map(|s| s.network),
-            source_address: arrival
-                .source_network
-                .as_ref()
-                .map(|s| s.mac_address.to_vec()),
+            source_network: arrival.source.as_ref().map(|s| s.network),
+            source_address: arrival.source.as_ref().map(|s| s.mac_address.to_vec()),
             destination_network: arrival.destination.as_ref().map(|d| d.network),
             destination_address: arrival.destination.as_ref().map(|d| d.mac_address.to_vec()),
             broadcast: arrival.broadcast,
@@ -255,7 +252,8 @@ impl PyIAmArrival {
         )
     }
 
-    /// Copy and pickle by value. Append fields so earlier pickles can be read.
+    /// Copy and pickle by value: `_rebuild` with the eighteen fields, in
+    /// the order the stub lists them.
     fn __reduce__<'py>(
         slf: &Bound<'py, Self>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
@@ -278,14 +276,14 @@ impl PyIAmArrival {
                 .as_deref()
                 .map(|octets| pyo3::types::PyBytes::new(py, octets))
                 .into_pyobject(py)?,
-            r.broadcast.into_pyobject(py)?.to_owned().into_any(),
-            r.device_address.clone().into_pyobject(py)?,
-            r.missed_before.into_pyobject(py)?.into_any(),
             r.destination_network.into_pyobject(py)?,
             r.destination_address
                 .as_deref()
                 .map(|octets| pyo3::types::PyBytes::new(py, octets))
                 .into_pyobject(py)?,
+            r.broadcast.into_pyobject(py)?.to_owned().into_any(),
+            r.device_address.clone().into_pyobject(py)?,
+            r.missed_before.into_pyobject(py)?.into_any(),
         ];
         Ok((
             slf.get_type().getattr("_rebuild")?,
@@ -296,7 +294,6 @@ impl PyIAmArrival {
     /// A record from a pickle's fields, as [`Self::__reduce__`] lists
     /// them. Nothing is checked or decoded.
     #[staticmethod]
-    #[pyo3(signature = (monotonic, timestamp, link, object_identifier, max_apdu_length, segmentation_supported, vendor_id, link_sender, link_source, original_source, forwarded, source_network, source_address, broadcast, device_address, missed_before, destination_network=None, destination_address=None))]
     fn _rebuild(
         monotonic: f64,
         timestamp: f64,
@@ -311,11 +308,11 @@ impl PyIAmArrival {
         forwarded: bool,
         source_network: Option<u16>,
         source_address: Option<Vec<u8>>,
+        destination_network: Option<u16>,
+        destination_address: Option<Vec<u8>>,
         broadcast: bool,
         device_address: Option<String>,
         missed_before: u64,
-        destination_network: Option<u16>,
-        destination_address: Option<Vec<u8>>,
     ) -> Self {
         Self {
             monotonic: Seconds(monotonic),

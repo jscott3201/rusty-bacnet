@@ -72,7 +72,7 @@ fn a_direct_bip_i_am_is_from_its_sender() {
         (record.forwarded, record.original_source, record.broadcast),
         (false, None, true)
     );
-    assert_eq!(record.source_network, None);
+    assert_eq!(record.source, None);
     assert_eq!(
         record.device_address(),
         Some(DeviceAddress::local(&mac_of(DEVICE)).unwrap())
@@ -111,7 +111,7 @@ fn a_forwarded_bip_i_am_names_the_device_and_the_bbmd_apart() {
 fn a_routed_i_am_names_the_device_by_network_and_the_router_as_next_hop() {
     let wire = bip(&routed_npdu(&i_am(77), false, Some((5, &[7]))), true);
     let record = arrival(DataLink::Bip, TapPeer::Udp(ROUTER), &wire);
-    let routed = record.source_network.clone().expect("SNET and SADR");
+    let routed = record.source.clone().expect("SNET and SADR");
     assert_eq!((routed.network, &routed.mac_address[..]), (5, &[7][..]));
     assert_eq!(record.link_source, mac_of(ROUTER));
     assert_eq!(record.next_hop_router(), Some(&mac_of(ROUTER)[..]));
@@ -465,6 +465,25 @@ fn a_global_broadcast_sent_by_unicast_is_a_broadcast() {
     );
     assert!(!local.broadcast);
     assert!(local.destination.is_none());
+}
+
+/// A BBMD-forwarded I-Am keeps the destination its NPDU carries: the
+/// network and the station octets, beside the source network.
+#[test]
+fn a_forwarded_i_am_keeps_the_destination_it_carries() {
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu};
+    let routed = routed_npdu(&i_am(77), false, Some((5, &[7])));
+    let mut addressed = decode_npdu(bytes::Bytes::from(routed)).unwrap();
+    addressed.destination = Some(NpduAddress {
+        network: 9,
+        mac_address: MacAddr::from_slice(&[19, 20]),
+    });
+    let mut data = BytesMut::new();
+    encode_npdu(&mut data, &addressed).unwrap();
+    let record = arrival(DataLink::Bip, TapPeer::Udp(BBMD), &forwarded(ROUTER, &data));
+    assert!(record.forwarded);
+    assert_eq!(record.destination, addressed.destination);
+    assert_eq!(record.source, addressed.source);
 }
 
 struct Woken(std::sync::atomic::AtomicBool);

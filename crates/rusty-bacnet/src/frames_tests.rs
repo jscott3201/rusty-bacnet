@@ -249,6 +249,33 @@ async fn a_frame_lost_on_its_way_carries_into_the_next_gap() {
     assert_eq!(iterator.subscription.missed(), 3);
 }
 
+/// A frame the tap rejected while the owner closed counts in the final
+/// `missed`: the close waits for the publisher's count.
+#[test]
+fn an_overflow_in_flight_at_close_counts_in_the_final_missed() {
+    let tap = bacnet_transport::tap::FrameTap::new();
+    let owner = FrameSubscriptions::default();
+    let iterator = owner.subscribe(
+        tap.subscribe_with_capacity(1),
+        "local".into(),
+        Clock::fixed(),
+    );
+    tap_record(&tap, TapDirection::Inbound, &[0]);
+    std::thread::scope(|scope| {
+        tap.record_with_overflow_in_flight_for_test(
+            TapDirection::Inbound,
+            DataLink::Bip,
+            TapPeer::Udp(SocketAddr::from(([192, 0, 2, 9], 47808))),
+            &[1],
+            |in_flight| {
+                scope.spawn(|| owner.close());
+                in_flight.wait_until_sealed();
+            },
+        );
+    });
+    assert_eq!(iterator.subscription.missed(), 1);
+}
+
 /// `Frame.monotonic` converts the capture instant by its exact offset from
 /// the clock pair, earlier instants included, and never reads backwards.
 #[test]

@@ -27,7 +27,7 @@
 //! [`link_source`](IAmArrival::link_source) is what the stack takes as the
 //! frame's source MAC. When a router relayed the I-Am from another network,
 //! the NPDU names the device by SNET and SADR (Clause 6.2.2), in
-//! [`source_network`](IAmArrival::source_network), and `link_source` is the
+//! [`source`](IAmArrival::source), and `link_source` is the
 //! router, which put them there (Clause 6.5.4): the next hop back, which a
 //! node may learn as that network's router from such an I-Am (Clause 6.5.3).
 //!
@@ -123,7 +123,7 @@ pub struct IAmArrival {
     pub link_sender: TapPeer,
     /// The frame's source MAC as the stack takes it: the origin a
     /// forwarded frame carries, else the link sender; on B/IPv6 and
-    /// BACnet/SC a VMAC. The router, when [`Self::source_network`] is set.
+    /// BACnet/SC a VMAC. The router, when [`Self::source`] is set.
     pub link_source: MacAddr,
     /// The originating node's IP address and UDP port a BBMD wrote into a
     /// B/IP or B/IPv6 Forwarded-NPDU.
@@ -133,7 +133,7 @@ pub struct IAmArrival {
     pub forwarded: bool,
     /// SNET and SADR: the device's network and its MAC there, when a router
     /// relayed the I-Am.
-    pub source_network: Option<NpduAddress>,
+    pub source: Option<NpduAddress>,
     /// The NPDU destination, preserving an empty DADR for a network broadcast.
     pub destination: Option<NpduAddress>,
     /// A link broadcast, or a broadcast on a network.
@@ -217,7 +217,7 @@ impl IAmArrival {
             (Some(origin), TapPeer::Udp(sender)) => !same_socket(origin, sender),
             _ => false,
         };
-        let source_network =
+        let source =
             decoded
                 .source_network
                 .zip(decoded.source_address)
@@ -234,7 +234,7 @@ impl IAmArrival {
             link_source,
             original_source: link.origin,
             forwarded,
-            source_network,
+            source,
             destination: decoded.dest_network.zip(decoded.dest_address).map(
                 |(network, mac_address)| NpduAddress {
                     network,
@@ -251,7 +251,7 @@ impl IAmArrival {
     /// `None` when those name no one station (an empty or broadcast MAC, a
     /// local MAC of a length no link here uses).
     pub fn device_address(&self) -> Option<DeviceAddress> {
-        match &self.source_network {
+        match &self.source {
             Some(routed) => DeviceAddress::new(routed.network, &routed.mac_address).ok(),
             None => DeviceAddress::local(&self.link_source).ok(),
         }
@@ -260,9 +260,7 @@ impl IAmArrival {
     /// The router that relayed the I-Am, on this link: [`Self::link_source`]
     /// when the NPDU names a source network.
     pub fn next_hop_router(&self) -> Option<&[u8]> {
-        self.source_network
-            .as_ref()
-            .map(|_| self.link_source.as_slice())
+        self.source.as_ref().map(|_| self.link_source.as_slice())
     }
 
     /// The BBMD that forwarded the I-Am: [`Self::link_sender`] when

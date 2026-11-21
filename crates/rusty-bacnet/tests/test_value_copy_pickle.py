@@ -136,13 +136,13 @@ def samples() -> dict[type, list[Any]]:
             IAmArrival._rebuild(  # type: ignore[attr-defined]
                 0.0, 0.0, "bip", ObjectIdentifier(ObjectType.DEVICE, 0), 50,
                 Segmentation.NO_SEGMENTATION, 0, "127.0.0.1:47808", "127.0.0.1:47808",
-                None, False, None, None, False, "127.0.0.1:47808", 0,
+                None, False, None, None, None, None, False, "127.0.0.1:47808", 0,
             ),
             IAmArrival._rebuild(  # type: ignore[attr-defined]
                 1.5e9, -0.5, "ipv6", ObjectIdentifier(ObjectType.from_raw(1023), 4194303),
                 2**32 - 1, Segmentation.from_raw(255), 65535, "[2001:db8::1]:65535",
                 "bip6:0xFFFFFF", "[2001:db8::3]:47808", True, 65534, bytes(range(18)),
-                True, "65534:0x000102030405060708090A0B0C0D0E0F1011", 2**64 - 1,
+                65535, bytes(range(18)), True, "65534:0x000102030405060708090A0B0C0D0E0F1011", 2**64 - 1,
             ),
         ],
         Multicast: [
