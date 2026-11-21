@@ -323,3 +323,19 @@ fn an_mstp_data_check_shows_its_status_and_span_never_its_value() {
         assert!(!header.iter().any(|(label, _)| label.starts_with("Data")));
     }
 }
+
+/// A frame with no data (a Token: Length zero, so no data and no data CRC
+/// follow the header) has its six header leaves and nothing else, and every
+/// span stays inside its eight octets.
+#[test]
+fn an_mstp_frame_without_data_has_header_leaves_only() {
+    let token = mstp(FrameType::TOKEN, 2, 1, &[]);
+    assert_eq!(token.len(), 8);
+    let fields = decode_tree(Framing::Mstp, &token);
+    assert_eq!(fields.len(), 1, "{:#?}", flat(&fields));
+    assert_eq!(fields[0].range, 0..8);
+    let header = mstp_header(&fields);
+    assert_eq!(header.len(), 6, "{header:#?}");
+    assert!(!header.iter().any(|(label, _)| label.starts_with("Data")));
+    assert!(flat(&fields).iter().all(|(_, range)| range.end <= 8));
+}
