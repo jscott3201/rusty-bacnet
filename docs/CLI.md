@@ -443,7 +443,8 @@ for a hand-written file) and kept from then on, so the device UUID stays the
 same across restarts. An SC profile reconnects with backoff after it loses its
 hub, primary-only profiles included, so a long session survives a hub restart:
 by default the first retry comes after 10 s, the delay doubles up to 10 min,
-and 10 attempts are made before a failover hub, if one is set, is tried.
+and 10 rounds are made, each trying the primary and then a failover hub, if
+one is set. `reconnect_max_retries = 0` gives up at the first loss.
 `reconnect = false` turns this off (a lost hub then stays down) and is refused
 with a failover URL, since the failover hub is reached by reconnecting. The
 backoff (`reconnect_initial_delay_ms`, `reconnect_max_delay_ms`,

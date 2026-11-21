@@ -54,7 +54,7 @@ fn reconnect() -> ScReconnectConfig {
     ScReconnectConfig {
         initial_delay_ms: 10,
         max_delay_ms: 10,
-        max_retries: 1,
+        max_retries: Some(1),
     }
 }
 
@@ -404,7 +404,7 @@ async fn node_tls_generic_failover_connector_cannot_bypass_typed_policy() {
             let transport = ScTransport::new(ws, [2; 6])
                 .with_device_uuid(CLIENT_UUID)
                 .with_reconnect(ScReconnectConfig {
-                    max_retries: 0,
+                    max_retries: Some(1),
                     ..reconnect()
                 })
                 .with_failover_connector(move || {

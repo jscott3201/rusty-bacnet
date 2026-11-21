@@ -263,7 +263,7 @@ async fn sc_reconnect_redials_fresh_websocket_after_socket_teardown() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 10,
             max_delay_ms: 10,
-            max_retries: 3,
+            max_retries: Some(3),
         });
 
     let primary_task = tokio::spawn(async move {
@@ -381,7 +381,7 @@ async fn sc_primary_restore_connector_redials_primary_socket() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 25,
             max_delay_ms: 25,
-            max_retries: 1,
+            max_retries: Some(1),
         })
         .with_failover(failover_client);
 
@@ -475,7 +475,7 @@ async fn sc_reconnect_connector_timeout_counts_as_failed_attempt() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 10,
             max_delay_ms: 10,
-            max_retries: 1,
+            max_retries: Some(1),
         });
 
     let primary_task = tokio::spawn(async move {
@@ -540,7 +540,7 @@ async fn sc_primary_restore_connector_timeout_leaves_failover_send_path_active()
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 10,
             max_delay_ms: 10,
-            max_retries: 1,
+            max_retries: Some(1),
         })
         .with_failover(failover_client);
 
@@ -623,7 +623,7 @@ async fn sc_failover_reconnect_exhaustion_does_not_redial_failover_again() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 10,
             max_delay_ms: 10,
-            max_retries: 1,
+            max_retries: Some(1),
         });
 
     let failover_task = tokio::spawn(async move {
@@ -686,7 +686,7 @@ async fn sc_primary_restore_publishes_before_hung_failover_disconnect_send() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 10,
             max_delay_ms: 10,
-            max_retries: 1,
+            max_retries: Some(1),
         })
         .with_failover(failover_client);
 
@@ -757,7 +757,7 @@ async fn sc_drop_aborts_hung_primary_restore_failover_disconnect() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 10,
             max_delay_ms: 10,
-            max_retries: 1,
+            max_retries: Some(1),
         })
         .with_failover(failover_client);
 

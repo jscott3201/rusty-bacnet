@@ -6,8 +6,9 @@ use pyo3::prelude::*;
 
 /// Reconnect settings for a Python SC client.
 ///
-/// Delay validation uses the Rust policy. Zero retries permits the initial
-/// connection and disables retries after a connection loss.
+/// The native transport policy validates them: delays, and the one-second
+/// floor of unlimited recovery (`max_retries=None`). Each round tries the
+/// primary hub, then the failover hub; `max_retries=0` turns recovery off.
 #[pyclass(
     name = "ScReconnect",
     module = "rusty_bacnet",
@@ -23,8 +24,11 @@ pub(crate) struct PyScReconnect {
 impl PyScReconnect {
     /// Create validated reconnect settings; all arguments are keyword-only.
     #[new]
-    #[pyo3(signature = (*, initial_delay_ms=10_000, max_delay_ms=600_000, max_retries=10))]
-    fn new(initial_delay_ms: u64, max_delay_ms: u64, max_retries: u32) -> PyResult<Self> {
+    #[pyo3(
+        signature = (*, initial_delay_ms=10_000, max_delay_ms=600_000, max_retries=Some(10)),
+        text_signature = "(*, initial_delay_ms=10000, max_delay_ms=600000, max_retries=10)"
+    )]
+    fn new(initial_delay_ms: u64, max_delay_ms: u64, max_retries: Option<u32>) -> PyResult<Self> {
         let config = ScReconnectConfig {
             initial_delay_ms,
             max_delay_ms,
@@ -48,16 +52,20 @@ impl PyScReconnect {
         self.config.max_delay_ms
     }
 
-    /// The maximum retry attempts after an active connection is lost.
+    /// The reconnect rounds after a lost connection; `None` for unlimited.
     #[getter]
-    fn max_retries(&self) -> u32 {
+    fn max_retries(&self) -> Option<u32> {
         self.config.max_retries
     }
 
     fn __repr__(&self) -> String {
+        let max_retries = self
+            .config
+            .max_retries
+            .map_or_else(|| "None".to_owned(), |rounds| rounds.to_string());
         format!(
-            "ScReconnect(initial_delay_ms={}, max_delay_ms={}, max_retries={})",
-            self.config.initial_delay_ms, self.config.max_delay_ms, self.config.max_retries
+            "ScReconnect(initial_delay_ms={}, max_delay_ms={}, max_retries={max_retries})",
+            self.config.initial_delay_ms, self.config.max_delay_ms
         )
     }
 }

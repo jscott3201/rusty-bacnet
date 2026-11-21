@@ -129,6 +129,42 @@ struct Attempt<'a, W> {
     dialled: &'a mut u32,
 }
 
+/// Why a recovery episode ended without a connection.
+enum GaveUp {
+    /// `max_retries` rounds were made.
+    Budget,
+    /// No hub is left that can be dialled.
+    NoHub,
+    /// Further retries are forbidden: a hub's answer, a failed VMAC reseed,
+    /// or anything else that cleared the connection's retry eligibility.
+    Refused,
+}
+
+/// The round counter of one recovery episode.
+struct Rounds {
+    /// `None` for unlimited recovery.
+    max: Option<u32>,
+    /// Rounds started so far; also the number of the latest one.
+    done: u32,
+}
+
+impl Rounds {
+    fn new(max: Option<u32>) -> Self {
+        Self { max, done: 0 }
+    }
+
+    /// Start the next round and return its number, from 1, or `None` once a
+    /// bounded budget is used up. Unlimited recovery outlives any count: its
+    /// round number stays at `u32::MAX` rather than wrapping or stopping.
+    fn next(&mut self) -> Option<u32> {
+        if self.max.is_some_and(|max| self.done >= max) {
+            return None;
+        }
+        self.done = self.done.saturating_add(1);
+        Some(self.done)
+    }
+}
+
 pub(super) struct Recovery<'a, W: WebSocketPort> {
     pub config: &'a ScReconnectConfig,
     /// Transport-task owned: retries and reconnect episodes share one log window.
@@ -136,6 +172,9 @@ pub(super) struct Recovery<'a, W: WebSocketPort> {
     pub primary_connector: &'a Option<WebSocketConnector<W>>,
     pub failover_connector: &'a Option<WebSocketConnector<W>>,
     pub failover_ws: &'a mut Option<Arc<W>>,
+    /// The kept primary socket a restore probe reuses when there is no
+    /// primary connector. Cleared when recovery closes it.
+    pub primary_ws: &'a mut Option<Arc<W>>,
     pub conn: &'a Arc<Mutex<ScConnection>>,
     pub active_ws: &'a super::HubSlot<W>,
     pub state_tx: &'a watch::Sender<ScConnectionState>,
@@ -145,6 +184,12 @@ pub(super) struct Recovery<'a, W: WebSocketPort> {
 }
 
 impl<W: WebSocketPort> Recovery<'_, W> {
+    /// Recover after losing `active_hub`, in rounds (see [`ScReconnectConfig`]):
+    /// each waits its jittered backoff, then tries the primary and, when that
+    /// fails, the failover hub. The primary goes first whichever hub was lost,
+    /// and the failover hub gets its turn from the first round on (Annex
+    /// AB.5.2). Returns the new socket and its hub, or `None` once recovery
+    /// gives up.
     pub(super) async fn reconnect(
         &mut self,
         current_ws: &Arc<W>,
@@ -156,25 +201,31 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         let mut backoff = initial_backoff;
         let max_backoff = Duration::from_millis(self.config.max_delay_ms);
         let mut attempts = 0;
-        // Losing the failover hub sends each attempt to the primary first,
-        // then back to the failover hub, so the connector keeps working toward
-        // the primary (Annex AB.5.2). Losing the primary retries the primary.
-        let mut targets = match active_hub {
-            ScActiveHub::Primary => vec![ScActiveHub::Primary],
-            ScActiveHub::Failover => vec![ScActiveHub::Primary, ScActiveHub::Failover],
-        };
-        'attempts: for attempt in 1..=self.config.max_retries {
+        let mut targets = vec![ScActiveHub::Primary, ScActiveHub::Failover];
+        let mut rounds = Rounds::new(self.config.max_retries);
+        let ended = 'rounds: loop {
+            // A hub other than the lost one is dialled only through its
+            // connector or, for the failover hub, its unused preconfigured
+            // socket; once neither is left it drops out of the episode. The
+            // lost hub stays until its own attempt finds it can't be dialled.
+            targets.retain(|hub| *hub == active_hub || self.can_dial(*hub));
+            if targets.is_empty() {
+                break GaveUp::NoHub;
+            }
+            let Some(round) = rounds.next() else {
+                break GaveUp::Budget;
+            };
             let delay = jittered_backoff(backoff, initial_backoff, max_backoff);
             tokio::time::sleep(delay).await;
             if !self.conn.lock().await.connect_retry_allowed {
                 if let Some(suppressed) = self.retry_diagnostic() {
                     warn!(
-                        attempt,
+                        attempt = round,
                         suppressed,
                         "SC reconnection skipped without retry eligibility (suppressed {suppressed} reconnect diagnostics)"
                     );
                 }
-                break;
+                break GaveUp::Refused;
             }
             for target in targets.clone() {
                 let lost = target == active_hub;
@@ -182,7 +233,7 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                     target,
                     reuse: (lost && current_reusable).then_some(current_ws),
                     lost,
-                    attempt,
+                    attempt: round,
                     delay,
                     backoff,
                     dialled: &mut attempts,
@@ -193,60 +244,30 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                     // The lost hub can't be dialled again; any other target
                     // (the primary, after losing the failover) still can.
                     Step::Dead => targets.retain(|t| *t != target),
-                    Step::Stop => break 'attempts,
+                    Step::Stop => break 'rounds GaveUp::Refused,
                 }
-            }
-            if targets.is_empty() {
-                break;
             }
             backoff = (backoff * 2).min(max_backoff);
-        }
-        // Preserve the existing order: only primary exhaustion tries failover.
-        // An untouched preconfigured failover is consumed once, never poisoned
-        // merely because a different (primary) socket was retired.
-        if active_hub == ScActiveHub::Primary
-            && self.conn.lock().await.connect_retry_allowed
-            && let Some(failover) = dial_failover_ws(
-                self.failover_connector,
-                self.failover_ws,
-                self.connect_timeout_ms,
-            )
-            .await
-        {
-            warn!("SC primary reconnection exhausted, attempting failover hub");
-            self.observer.failover_engaged();
-            {
-                let mut c = self.conn.lock().await;
-                c.reset_for_connect_retry();
-                self.state_tx.send_replace(c.state);
-            }
-            let probe_conn = connect_probe_from(self.conn).await;
-            match perform_handshake(&*failover, &probe_conn, None, self.connect_timeout_ms).await {
-                Ok(()) => {
-                    self.publish(&failover, &probe_conn, ScActiveHub::Failover)
-                        .await;
-                    let suppressed = self.diagnostic_throttle.take_suppressed();
-                    info!(
-                        suppressed,
-                        "SC connected to failover hub after primary reconnect exhaustion (suppressed {suppressed} reconnect diagnostics)"
-                    );
-                    return Some((failover, ScActiveHub::Failover));
-                }
-                Err(e) => {
-                    self.observer.connect_failed(ScActiveHub::Failover, &e);
-                    handshake::close_failed_connect(&*failover, &e).await;
-                    absorb_failed_connect_probe(self.conn, &probe_conn).await;
-                    // The terminal exhaustion notice below reports suppression.
-                    warn!(%e, "SC failover connection failed");
-                }
-            }
-        }
+        };
+        let round = rounds.done;
         let suppressed = self.diagnostic_throttle.take_suppressed();
-        warn!(
-            max_retries = self.config.max_retries,
-            suppressed,
-            "SC reconnection: max retries exhausted, giving up (suppressed {suppressed} reconnect diagnostics)"
-        );
+        match ended {
+            GaveUp::Budget => warn!(
+                max_retries = round,
+                suppressed,
+                "SC reconnection: max retries exhausted, giving up (suppressed {suppressed} reconnect diagnostics)"
+            ),
+            GaveUp::NoHub => warn!(
+                attempt = round,
+                suppressed,
+                "SC reconnection: no hub can be retried, giving up (suppressed {suppressed} reconnect diagnostics)"
+            ),
+            GaveUp::Refused => warn!(
+                attempt = round,
+                suppressed,
+                "SC reconnection: a hub refused further retries, giving up (suppressed {suppressed} reconnect diagnostics)"
+            ),
+        }
         {
             let mut c = self.conn.lock().await;
             c.state = ScConnectionState::Disconnected;
@@ -256,7 +277,18 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         None
     }
 
-    /// One dial and handshake to one hub within a reconnect attempt.
+    /// Whether `hub` has a fresh socket to offer: its connector, or for the
+    /// failover hub an unused preconfigured socket.
+    fn can_dial(&self, hub: ScActiveHub) -> bool {
+        match hub {
+            ScActiveHub::Primary => self.primary_connector.is_some(),
+            ScActiveHub::Failover => {
+                self.failover_connector.is_some() || self.failover_ws.is_some()
+            }
+        }
+    }
+
+    /// One dial and handshake to one hub within a reconnect round.
     async fn try_hub(&mut self, at: Attempt<'_, W>) -> Step<W> {
         let Attempt {
             target,
@@ -271,7 +303,10 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             ScActiveHub::Primary => self.primary_connector,
             ScActiveHub::Failover => self.failover_connector,
         };
-        if connector.is_none() && reuse.is_none() {
+        // The preconfigured failover socket is the fallback when the failover
+        // connector is missing or its dial fails. It is used once.
+        let spare_available = target == ScActiveHub::Failover && self.failover_ws.is_some();
+        if connector.is_none() && reuse.is_none() && !spare_available {
             // Without a connector only the lost hub's own socket can be
             // reused. Another hub without one is simply skipped.
             if lost {
@@ -292,9 +327,7 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             c.reset_for_connect_retry();
             self.state_tx.send_replace(c.state);
         }
-        // A fresh socket that fails is given up; a reused one is tried again.
-        let mut fresh = true;
-        let ws = match dial_reconnect_ws(
+        let dialled_ws = match dial_reconnect_ws(
             target,
             self.primary_connector,
             self.failover_connector,
@@ -302,19 +335,36 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         )
         .await
         {
-            Ok(Some(ws)) => ws,
-            Ok(None) => {
-                fresh = false;
-                reuse.expect("checked above").clone()
-            }
+            Ok(ws) => ws,
             Err(e) => {
+                // Reported even when the spare is tried next: each failed
+                // socket gets its own `ConnectFailed` (see `ScEvent`).
                 self.observer.connect_failed(target, &e);
                 if let Some(suppressed) = self.retry_diagnostic() {
                     warn!(%e, attempt, suppressed, "SC reconnection redial failed (suppressed {suppressed} reconnect diagnostics)");
                 }
-                return Step::Failed;
+                if !spare_available {
+                    return Step::Failed;
+                }
+                None
             }
         };
+        let fresh_ws = dialled_ws.or_else(|| {
+            if spare_available {
+                self.failover_ws.take()
+            } else {
+                None
+            }
+        });
+        // A reused socket gets one Connect: a failed one is closed like a
+        // fresh one (Annex AB.6.2.2), so the lost hub then drops out.
+        let (ws, fresh) = match fresh_ws {
+            Some(ws) => (ws, true),
+            None => (reuse.expect("checked above").clone(), false),
+        };
+        if target == ScActiveHub::Failover && !lost {
+            self.observer.failover_engaged();
+        }
         let probe_conn = connect_probe_from(self.conn).await;
         match perform_handshake(&*ws, &probe_conn, None, self.connect_timeout_ms).await {
             Ok(()) => {
@@ -329,8 +379,18 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             }
             Err(e) => {
                 self.observer.connect_failed(target, &e);
-                if fresh {
-                    handshake::close_failed_connect(&*ws, &e).await;
+                handshake::close_failed_connect(&*ws, &e).await;
+                // A closed kept primary is no longer one a restore probe
+                // can reuse.
+                if self
+                    .primary_ws
+                    .as_ref()
+                    .is_some_and(|kept| Arc::ptr_eq(kept, &ws))
+                {
+                    *self.primary_ws = None;
+                    // Said once and outside the reconnect throttle: with no
+                    // primary connector this is the last way back.
+                    warn!(%e, "the kept primary SC socket was closed after a failed connect and is not reused; without a primary connector this node cannot return to the primary hub until it is restarted");
                 }
                 absorb_failed_connect_probe(self.conn, &probe_conn).await;
                 if !self.conn.lock().await.connect_retry_allowed {
@@ -338,6 +398,12 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                         warn!(%e, attempt, suppressed, "SC reconnection failed without retry eligibility (suppressed {suppressed} reconnect diagnostics)");
                     }
                     return Step::Stop;
+                }
+                if !fresh {
+                    if let Some(suppressed) = self.retry_diagnostic() {
+                        warn!(%e, attempt, suppressed, "SC reconnection failed on the retired socket, which is not retried (suppressed {suppressed} reconnect diagnostics)");
+                    }
+                    return Step::Dead;
                 }
                 if let Some(suppressed) = self.retry_diagnostic() {
                     warn!(%e, attempt, suppressed, "SC reconnection failed, retrying in {:?} (suppressed {suppressed} reconnect diagnostics)", backoff);
@@ -380,6 +446,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rounds_stop_at_the_budget_and_unlimited_ones_saturate() {
+        let mut none = Rounds::new(Some(0));
+        assert_eq!(none.next(), None);
+        assert_eq!(none.done, 0);
+
+        let mut two = Rounds::new(Some(2));
+        assert_eq!(
+            [two.next(), two.next(), two.next()],
+            [Some(1), Some(2), None]
+        );
+
+        let mut full = Rounds::new(Some(u32::MAX));
+        full.done = u32::MAX - 1;
+        assert_eq!([full.next(), full.next()], [Some(u32::MAX), None]);
+
+        // Unlimited recovery past u32::MAX rounds keeps going on the last number.
+        let mut unlimited = Rounds::new(None);
+        assert_eq!(unlimited.next(), Some(1));
+        unlimited.done = u32::MAX - 1;
+        for _ in 0..3 {
+            assert_eq!(unlimited.next(), Some(u32::MAX));
+        }
+    }
+
+    #[test]
     fn reconnect_jitter_default_samples_stay_in_each_capped_window() {
         let config = ScReconnectConfig::default();
         let initial = Duration::from_millis(config.initial_delay_ms);
@@ -415,13 +506,13 @@ mod tests {
             let config = ScReconnectConfig {
                 initial_delay_ms,
                 max_delay_ms,
-                max_retries: 10,
+                max_retries: Some(10),
             };
             config.validate().unwrap();
             let initial = Duration::from_millis(initial_delay_ms);
             let maximum = Duration::from_millis(max_delay_ms);
             let mut backoff = initial;
-            for _ in 0..config.max_retries {
+            for _ in 0..10 {
                 for _ in 0..256 {
                     // Duration calculations only: never sleep on large values.
                     let sleep = jittered_backoff(backoff, initial, maximum);

@@ -4469,19 +4469,24 @@ class ScReconnect:
 
     Delays must be nonzero, initial <= maximum, and maximum <= 86,400,000 ms.
     Invalid settings raise ValueError; unsigned integer overflow raises
-    OverflowError. Zero retries allows the initial connection and disables
-    active-hub retries after loss. Validation is not deployment qualification.
+    OverflowError. Validation is not deployment qualification.
+
+    After a lost connection each round waits its backoff, then tries the
+    primary hub and, when that fails, the failover hub. max_retries bounds
+    the rounds; 0 turns recovery off (the initial connection and primary
+    restoration still run). None keeps going while a hub can be dialled and
+    needs initial_delay_ms >= 1000, else ValueError.
     """
     def __init__(
         self, *, initial_delay_ms: int = 10000,
-        max_delay_ms: int = 600000, max_retries: int = 10,
+        max_delay_ms: int = 600000, max_retries: int | None = 10,
     ) -> None: ...
     @property
     def initial_delay_ms(self) -> int: ...
     @property
     def max_delay_ms(self) -> int: ...
     @property
-    def max_retries(self) -> int: ...
+    def max_retries(self) -> int | None: ...
 
 
 class ScCertificateMetadata:
@@ -4663,9 +4668,14 @@ class ScEvent:
     """One SC hub-connector event (#1829), frozen. Fields that don't apply
     to the event's kind are None.
 
-    A failover reads ``disconnected``, then ``reconnect_attempt`` and
-    ``connect_failed`` for each failed primary attempt, then
-    ``failover_engaged`` and ``connected`` on the failover hub. A primary
+    Recovery runs in rounds that try the primary, then the failover hub.
+    Losing the primary reads ``disconnected``, then per round
+    ``reconnect_attempt`` and ``connect_failed`` for the primary, and
+    ``reconnect_attempt``, ``failover_engaged`` and ``connected`` (or
+    ``connect_failed``) for the failover hub. Both attempts of a round share
+    its number and its one backoff. ``failover_engaged`` comes once the
+    failover dial succeeds, before its handshake, and can repeat once per
+    round. A primary
     restore reads ``primary_restored``, then ``connected`` on the primary;
     each failed restore probe, at most one per restore interval, reads
     ``primary_restore_failed`` (#1828).
@@ -4736,12 +4746,12 @@ class ScEvent:
         ...
     @property
     def attempt(self) -> int | None:
-        """A ``reconnect_attempt``'s number, from 1; the attempts made, for
-        ``reconnect_gave_up``."""
+        """The reconnect round, starting at 1 and saturating at 2**32 - 1.
+        For ``reconnect_gave_up``, the last round dialled, or zero."""
         ...
     @property
     def backoff(self) -> float | None:
-        """Seconds a ``reconnect_attempt`` waited first."""
+        """Seconds waited before the round containing this ``reconnect_attempt``."""
         ...
 
 class ScLinkStatus:
