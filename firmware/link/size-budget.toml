@@ -881,18 +881,19 @@
 # ram, before (the branch it sits on, 6e260eef6) and after:
 #
 #   thumbv7m router     41996 / 1428 / 0 / 15632   44448 / 15632
-#                       44344 / 1428 / 0 / 15640   46796 / 15640
+#                       44484 / 1428 / 0 / 15640   46936 / 15640
 #   thumbv6m router     45204 / 1436 / 0 / 15632   46832 / 15632
-#                       47780 / 1436 / 0 / 15640   49408 / 15640
+#                       47968 / 1436 / 0 / 15640   49596 / 15640
 #   riscv32imc router   48652 / 1956 / 0 / 15632   50630 / 15632
-#                       51424 / 1972 / 0 / 15640   53418 / 15640
+#                       51612 / 1972 / 0 / 15640   53606 / 15640
 #   thumbv7em router    41884 / 1428 / 0 / 15632   44336 / 15632
-#                       44236 / 1428 / 0 / 15640   46688 / 15640
+#                       44376 / 1428 / 0 / 15640   46828 / 15640
 #
-# .text is 2,348 / 2,576 / 2,772 / 2,352 octets larger. The contributed
+# .text is 2,488 / 2,764 / 2,960 / 2,492 octets larger. The contributed
 # feature alone was 1,852 / 2,140 / 2,428 / 1,852 of that (measured on
 # dfe7a4289), which already put riscv32imc over; the rest is the reject,
-# the two counts and the refusals. .bss is 8 octets larger, the two new
+# the two counts and the refusals, 140 to 188 of it for settling a
+# refusal over a whole I-Am-Router before any of it is learned. .bss is 8 octets larger, the two new
 # u32 counts in the router's storage; the .bss and ram budgets stay at
 # 17,376. The other images are unchanged.
 
@@ -963,11 +964,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7m-none-eabi.router]
-text = 49680
+text = 49824
 rodata = 1600
 data = 64
 bss = 17376
-flash = 52416
+flash = 52576
 ram = 17376
 fmt_functions = 0
 div64_functions = 0
@@ -1095,11 +1096,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv6m-none-eabi.router]
-text = 53520
+text = 53728
 rodata = 1616
 data = 64
 bss = 17376
-flash = 55344
+flash = 55552
 ram = 17376
 fmt_functions = 0
 div64_functions = 0
@@ -1183,11 +1184,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [riscv32imc-unknown-none-elf.router]
-text = 57600
+text = 57808
 rodata = 2208
 data = 64
 bss = 17376
-flash = 59840
+flash = 60048
 ram = 17376
 fmt_functions = 0
 div64_functions = 0
@@ -1271,11 +1272,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7em-none-eabihf.router]
-text = 49552
+text = 49712
 rodata = 1600
 data = 64
 bss = 17376
-flash = 52304
+flash = 52448
 ram = 17376
 fmt_functions = 0
 div64_functions = 0

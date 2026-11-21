@@ -259,7 +259,7 @@ fn allowed_route_claims_still_apply_and_relay() {
         sent.iter().map(|sent| sent.port).collect::<Vec<_>>(),
         [0, 1, 2]
     );
-    // From an isolated port to an ordinary one.
+    // From an ordinary port, taking a network off an isolated one.
     let (_, sent) = deliver(&mut router, &mut host, 0, R9, &i_am(&[9]), at(4));
     assert_eq!(route(&router, 9), (0, R9.to_vec()));
     assert_eq!(

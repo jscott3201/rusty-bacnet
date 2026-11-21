@@ -359,16 +359,30 @@ impl<
             return Received::Discarded(Discard::Denied);
         }
         let kind = NetworkMessageType::I_AM_ROUTER_TO_NETWORK;
-        if self.repeated_relay(at, npdu, kind, options) {
+        // Settled over the whole list before anything is learned, so the
+        // route cap ending the learning early can't hide a refused claim.
+        // A message that won't be passed on isn't remembered as passed on
+        // either: the same list from the network's real router, within the
+        // duplicate time to live, must still be taken and relayed.
+        let withheld = list.iter().any(|network| self.claim_refused(at, network));
+        if !withheld && self.repeated_relay(at, npdu, kind, options) {
             return Received::Discarded(Discard::Duplicate);
         }
         let mut claimed = Claimed::new();
-        for network in list.iter() {
+        let mut networks = list.iter();
+        for network in networks.by_ref() {
             if !self.claim(at, network, &mut claimed, ControlClass::IAm, options, host) {
                 break;
             }
         }
-        if claimed.refused {
+        if withheld {
+            // Past the route cap nothing is learned, but a refusal there
+            // is still counted and reported.
+            for network in networks {
+                if self.claim_refused(at, network) {
+                    self.isolation_refused(at.port, network, ControlClass::IAm, host);
+                }
+            }
             return Received::Handled;
         }
         self.rebroadcast(at, npdu, kind, host)
@@ -387,7 +401,7 @@ impl<
     ///
     /// A claim from an isolated port (one with an isolated peer) for a
     /// network the table reaches through any other port, directly or not,
-    /// is refused, counted and reported, and `claimed` remembers it
+    /// is refused, counted and reported
     /// (#2684; decision of 2026-11-20). Clause 6.6.3.3 would replace the
     /// route with the newest claimant's; here that would let one isolated
     /// port take a network away from every other port. A network that
@@ -409,8 +423,7 @@ impl<
             host.observe(Event::RouteCap { class });
             return false;
         }
-        if route.is_some_and(|route| route.port() != at.port) && self.isolated_arrival(at.port) {
-            claimed.refused = true;
+        if self.claim_refused(at, network) {
             self.isolation_refused(at.port, network, class, host);
             return true;
         }
@@ -435,6 +448,17 @@ impl<
             });
         }
         true
+    }
+
+    /// Whether isolation refuses a claim of `network` by the sender of
+    /// `at`: the arrival port is isolated, with an isolated peer, and the
+    /// table reaches the network through another port.
+    pub(super) fn claim_refused(&self, at: &Arrival<'_>, network: u16) -> bool {
+        self.isolated_arrival(at.port)
+            && self
+                .table
+                .lookup(network)
+                .is_some_and(|route| route.port() != at.port)
     }
 
     /// I-Could-Be-Router (Clause 6.4.3): stored as a learned route only
@@ -652,8 +676,6 @@ impl<
 pub(super) struct Claimed<const R: usize> {
     networks: [u16; R],
     len: usize,
-    /// Whether isolation refused a claim of the message.
-    pub(super) refused: bool,
 }
 
 impl<const R: usize> Claimed<R> {
@@ -662,7 +684,6 @@ impl<const R: usize> Claimed<R> {
         Self {
             networks: [0; R],
             len: 0,
-            refused: false,
         }
     }
 

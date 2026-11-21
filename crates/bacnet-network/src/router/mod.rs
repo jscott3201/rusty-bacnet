@@ -160,7 +160,6 @@ enum SendRequest {
 /// router that mixes link types; `RouterPort<BipTransport>` and the like
 /// name one of a router whose ports share a concrete transport.
 ///
-///
 /// Build one with [`RouterPort::new`], then set what differs from the
 /// defaults, as in `RouterPort::new(transport, 2).isolated(true)`. It is
 /// `#[non_exhaustive]`, so a new per-port setting isn't a breaking change.

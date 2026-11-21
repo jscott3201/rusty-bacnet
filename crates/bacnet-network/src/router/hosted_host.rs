@@ -240,11 +240,13 @@ fn log(event: Event) {
             network,
             "Router refused an NPDU it originated itself; no reject sent"
         ),
+        // Once per network, at the sender's pace: the count is the
+        // operator's signal (`Counters::isolated_refusals`).
         Event::IsolationRefused {
             network,
             port,
             class,
-        } => warn!(
+        } => debug!(
             network,
             port = port.0,
             ?class,

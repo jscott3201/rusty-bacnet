@@ -91,9 +91,13 @@ pub struct Counters {
     /// isolated port out isn't counted.
     pub isolated_drops: u32,
     /// Route changes refused because they came from an isolated port
-    /// (#2684): each network of an I-Am-Router, a routing table update or
-    /// Ack, or a reject, whose route goes through another port, and each
-    /// update entry that names another isolated port.
+    /// (#2684): each network of an I-Am-Router or of a routing table update
+    /// or Ack whose route goes through another port, each update entry
+    /// that names another isolated port, and a reject's mark on a route
+    /// through another isolated port (one on a route through an ordinary
+    /// port is applied). A reject that is also on its way to a node behind
+    /// the other isolated port counts here and in `isolated_drops`: one
+    /// for the mark refused, one for the frame not passed on.
     pub isolated_refusals: u32,
 }
 
