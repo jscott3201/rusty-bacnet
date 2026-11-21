@@ -321,8 +321,7 @@ async fn a_clean_stop_with_reconnect_on_neither_warns_nor_redials() {
             .with_reconnect(crate::sc::ScReconnectConfig {
                 initial_delay_ms: 1,
                 max_delay_ms: 1,
-                max_retries: 3,
-                retry_forever: false,
+                max_retries: Some(3),
             })
             .with_connector(move || {
                 redial_count.fetch_add(1, Ordering::SeqCst);

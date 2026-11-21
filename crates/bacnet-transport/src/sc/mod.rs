@@ -72,10 +72,10 @@ mod unknown_function;
 pub use connection::{ScConnection, ScConnectionState};
 #[cfg(feature = "sc-tls")]
 pub use connector::ScHubDialer;
+use connector::WebSocketConnector;
 pub use connector::dial_within;
 #[cfg(feature = "sc-tls")]
 pub(crate) use connector::enter_dial_stage;
-use connector::{WebSocketConnector, dial_failover_ws};
 pub use control_rate::ScControlRateLimit;
 pub use errors::{
     ScCertificateRejection, ScConnectError, ScDialStage, ScTlsAlert, ScTlsFailure,

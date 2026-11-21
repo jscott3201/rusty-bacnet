@@ -1929,19 +1929,22 @@ client = BACnetClient(
 )
 ```
 
-All `ScReconnect` arguments are keyword-only. The example uses the default finite policy.
+All three `ScReconnect` arguments are keyword-only and have the defaults shown.
 The initial delay is the minimum reconnect sleep; exponential backoff and jitter
 stay within the configured minimum and maximum. Delays must be positive,
 `initial_delay_ms <= max_delay_ms`, and the maximum must not exceed 86,400,000 ms.
 Invalid settings raise `ValueError`; negative or overflowing unsigned integers
 raise `OverflowError`. These checks do not qualify deployment timing.
 
-With `retry_forever=True`, each backoff round tries the primary followed by
-an available failover. The rounds continue while a hub can still be retried,
-regardless of `max_retries`. Stopping the owner cancels recovery.
-
-With the default `retry_forever=False`, `max_retries=0` permits the initial connection and disables active-hub
-retries after loss. Passing a `ScReconnect` object to a non-SC client raises `ValueError`.
+Recovery after a lost connection runs in rounds: each waits its backoff once,
+then tries the primary hub and, when that fails, the failover hub
+(`sc_failover_hub`), so the failover hub gets its turn in the first round.
+`max_retries` bounds the rounds. `max_retries=None` keeps going while a hub
+can still be dialled, and needs `initial_delay_ms` of at least 1,000
+(`ValueError` otherwise). `max_retries=0` turns recovery off: the first loss
+ends the connection, while the initial connection and primary restoration
+still run. A hub that forbids further retries ends recovery, and stopping the
+owner cancels it. Passing a `ScReconnect` object to a non-SC client raises `ValueError`.
 Retries reuse the loaded TLS trust and operational identity, VMAC, UUID and
 heartbeat settings; credential files are loaded at entry, not reread on each
 retry. A new connection must complete TLS and SC admission before service
@@ -1984,12 +1987,13 @@ already behind it. `kind` is `connected`, `disconnected`, `connect_failed`,
 `reconnect_attempt`, `failover_engaged`, `primary_restored`,
 `primary_restore_failed` or `reconnect_gave_up`; `hub` (`primary` or
 `failover`), `hub_vmac`, `cause`, `attempt` and `backoff` (seconds) are set
-where they apply and None elsewhere. In finite recovery, losing the primary reads
-`disconnected`, a `reconnect_attempt` and `connect_failed` per failed primary
-attempt, then `failover_engaged` and `connected` on the failover hub.
-Unlimited recovery reports attempts on the primary and available failover in
-that order. Both carry the same round number and backoff. Round numbers start
-at one and saturate at 2**32 − 1. While on
+where they apply and None elsewhere. Losing the primary reads
+`disconnected`, then per round a `reconnect_attempt` and `connect_failed` for
+the primary, followed by a `reconnect_attempt`, `failover_engaged` and
+`connected` (or `connect_failed`) for the failover hub. Both attempts of a
+round carry its number and backoff; round numbers start at one and saturate
+at 2**32 − 1. `failover_engaged` comes once the failover dial succeeds,
+before its handshake, and can repeat once per round. While on
 the failover hub, each restore probe of the primary that fails reads one
 `primary_restore_failed` (`hub` is `primary`), at most one per restore
 interval (#1828).

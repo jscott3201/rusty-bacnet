@@ -1775,9 +1775,10 @@ answering the hub's Disconnect-Request, after a BVLC-Result NAK that ends the
 connection, and after a Connect-Request NAK. A hub that leaves a heartbeat or
 the Connect-Request unanswered, or answers it with a malformed or unexpected
 reply or sends a malformed BVLC-Result, gets a close with no status, the
-peer's fault. The one socket that gets no close is a lost hub's own when
-recovery will send its next Connect-Request on it, as it does with reconnect
-on and no connector for that hub. `abort()` and dropping the transport cannot
+peer's fault. The one socket that gets no close at once is a lost hub's own
+when recovery will send its next Connect-Request on it, as it does with
+reconnect on and no connector for that hub; if that Connect fails, the
+socket is closed as above. `abort()` and dropping the transport cannot
 wait, so they send nothing.
 `WebSocketPort::close(status)` is the hook: `TlsWebSocket` writes the frame,
 and the default, for an in-memory port such as `LoopbackWebSocket`, sends
@@ -1794,9 +1795,23 @@ the connection, so poll it as often as a UI redraws.
 
 `with_initial_hub(ScActiveHub::Failover)` starts the transport on the
 failover hub when the WebSocket given to `new` reaches it; with a primary
-connector and reconnect configuration the primary is restored later. Losing
-the failover hub makes each reconnect attempt dial the primary first, then
-the failover hub.
+connector and reconnect configuration the primary is restored later.
+
+Recovery after losing either hub runs in rounds (`ScReconnectConfig`). Each
+round waits its jittered backoff once, then dials the primary and, when that
+fails, the failover hub, so the failover hub gets its turn in round 1
+(Annex AB.5.2); both `ReconnectAttempt` events carry the round's number and
+backoff. `max_retries: Some(n)` bounds the rounds and `None` keeps going while
+a hub can still be dialled, with the round number saturating at `u32::MAX`.
+`Some(0)` turns recovery off: the first loss ends the transport, while the
+start-up dial and primary restoration still run. Unlimited recovery needs
+`initial_delay_ms` of at least 1,000; `validate()`, `start()` and the
+builders refuse less. A response that forbids further retries and `stop()`
+end recovery in either mode, and so does a raw transport with nothing left to
+dial: a lost socket recovery reuses gets one Connect-Request, and is closed
+and dropped when that fails. When a failover connector's dial fails and an
+unused preconfigured failover socket is left, the attempt goes on with that
+socket, so one `ReconnectAttempt` may read two `ConnectFailed` events.
 
 `with_advertised_uris` configures known direct-connection URIs; it does not enable
 accepting connections. Address-Resolution requests receive an ACK (with a

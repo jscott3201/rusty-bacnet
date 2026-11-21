@@ -415,8 +415,7 @@ async fn sc_kill_reconnect_preserves_vmac_uuid_vs_transient() {
         .reconnect(ScReconnectConfig {
             initial_delay_ms: 100,
             max_delay_ms: 1_000,
-            max_retries: 3,
-            retry_forever: false,
+            max_retries: Some(3),
         })
         .build_hub_session(ws2)
         .unwrap();

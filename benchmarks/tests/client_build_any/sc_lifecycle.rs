@@ -158,8 +158,7 @@ async fn erased_sc_preserves_heartbeat_retry_spacing_and_stop_cancels_pending_tl
                 .reconnect(ScReconnectConfig {
                     initial_delay_ms: 120,
                     max_delay_ms: 120,
-                    max_retries: 10,
-                    retry_forever: false,
+                    max_retries: Some(10),
                 })
                 .build_any(),
         ),

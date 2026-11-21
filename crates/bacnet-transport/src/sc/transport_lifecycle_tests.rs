@@ -702,8 +702,7 @@ async fn test_reconnect_exhaustion_uses_failover_and_send_path() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 25,
             max_delay_ms: 25,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .with_failover(failover_client);
 
@@ -767,8 +766,7 @@ async fn test_failover_restores_primary_and_send_path() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 25,
             max_delay_ms: 25,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .with_failover(failover_client);
 
@@ -827,7 +825,7 @@ fn reconnect_config_default() {
     let config = ScReconnectConfig::default();
     assert_eq!(config.initial_delay_ms, 10_000);
     assert_eq!(config.max_delay_ms, 600_000);
-    assert_eq!(config.max_retries, 10);
+    assert_eq!(config.max_retries, Some(10));
 }
 
 #[test]
@@ -835,8 +833,7 @@ fn reconnect_exponential_backoff_sequence() {
     let config = ScReconnectConfig {
         initial_delay_ms: 100,
         max_delay_ms: 1000,
-        max_retries: 5,
-        retry_forever: false,
+        max_retries: Some(5),
     };
     let mut delay = config.initial_delay_ms;
     let delays: Vec<u64> = (0..5)

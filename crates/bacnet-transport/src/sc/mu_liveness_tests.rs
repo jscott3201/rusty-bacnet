@@ -93,8 +93,7 @@ async fn mu_liveness_rejected_traffic_keeps_original_idle_timeout_and_reconnects
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 100,
             max_delay_ms: 100,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .with_connector(move || {
             let (client, hub) = LoopbackWebSocket::pair();

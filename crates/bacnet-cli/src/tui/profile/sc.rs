@@ -56,8 +56,8 @@ pub(crate) struct Sc {
     /// The longest reconnect delay.
     #[serde(default = "default_max_delay_ms")]
     pub(crate) reconnect_max_delay_ms: u64,
-    /// Reconnect attempts to the hub in use before turning to the failover
-    /// hub, if any.
+    /// Reconnect rounds after a lost connection. Each round tries the primary
+    /// hub, then the failover hub if any; zero turns recovery off.
     #[serde(default = "default_max_retries")]
     pub(crate) reconnect_max_retries: u32,
 }
@@ -79,7 +79,9 @@ fn default_max_delay_ms() -> u64 {
 }
 
 fn default_max_retries() -> u32 {
-    ScReconnectConfig::default().max_retries
+    // The library default is bounded; a profile cannot ask for unlimited
+    // rounds, so `None` could only map to the largest count.
+    ScReconnectConfig::default().max_retries.unwrap_or(u32::MAX)
 }
 
 /// The SC client's default connect timeout.
@@ -148,8 +150,7 @@ impl Sc {
         ScReconnectConfig {
             initial_delay_ms: self.reconnect_initial_delay_ms,
             max_delay_ms: self.reconnect_max_delay_ms,
-            max_retries: self.reconnect_max_retries,
-            retry_forever: false,
+            max_retries: Some(self.reconnect_max_retries),
         }
     }
 

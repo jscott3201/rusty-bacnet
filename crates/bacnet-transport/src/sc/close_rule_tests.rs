@@ -31,8 +31,7 @@ fn reconnect() -> ScReconnectConfig {
     ScReconnectConfig {
         initial_delay_ms: 25,
         max_delay_ms: 25,
-        max_retries: 1,
-        retry_forever: false,
+        max_retries: Some(1),
     }
 }
 
@@ -75,14 +74,16 @@ async fn stop_is_bounded_against_a_hub_that_stopped_reading() {
 
 /// A heartbeat the hub leaves unanswered ends the connection. The socket
 /// is given up, and closed with no status, unless recovery will send its
-/// next Connect-Request on it.
+/// next Connect-Request on it. That Connect is the socket's only one: left
+/// unanswered, the socket is closed with no status after all, as after any
+/// failed Connect (Annex AB.6.2.2), and not tried again.
 #[tokio::test(start_paused = true)]
 async fn a_heartbeat_timeout_closes_the_socket_unless_recovery_reuses_it() {
     // (reconnect, connector, closes on the lost socket)
     for (with_reconnect, with_connector, expected) in [
         (false, false, vec![None]),
         (true, true, vec![None]),
-        (true, false, vec![]),
+        (true, false, vec![None]),
     ] {
         let (socket, probe) = recorder();
         let mut transport = ScTransport::new(socket, NODE_VMAC)
@@ -91,7 +92,7 @@ async fn a_heartbeat_timeout_closes_the_socket_unless_recovery_reuses_it() {
             .with_test_heartbeat_timing_ms(100, 300);
         if with_reconnect {
             transport = transport.with_reconnect(ScReconnectConfig {
-                max_retries: 2,
+                max_retries: Some(2),
                 ..reconnect()
             });
         }
@@ -111,17 +112,34 @@ async fn a_heartbeat_timeout_closes_the_socket_unless_recovery_reuses_it() {
                 break;
             }
         }
-        if expected.is_empty() {
-            // Kept: each retry's Connect-Request goes out on this socket,
-            // and one that goes unanswered does not close it either.
-            let mut retries = 0;
-            while retries < 2 {
+        let kept = with_reconnect && !with_connector;
+        if kept {
+            // Kept: the first retry's Connect-Request goes out on this
+            // socket, and nothing is closed before it does.
+            loop {
                 let data = tokio::time::timeout(Duration::from_secs(5), probe.hub.recv())
                     .await
                     .expect("no Connect-Request on the kept socket")
                     .unwrap();
                 if decode_sc_message(&data).unwrap().function == ScFunction::ConnectRequest {
-                    retries += 1;
+                    break;
+                }
+            }
+            assert_eq!(probe.closes(), []);
+            // Unanswered, the kept socket is closed and recovery ends in
+            // round 1 although its budget allows a second round.
+            loop {
+                let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                    .await
+                    .expect("recovery must give up")
+                    .unwrap();
+                match event {
+                    ScEvent::ReconnectAttempt { attempt, .. } => assert_eq!(attempt, 1),
+                    ScEvent::ReconnectGaveUp { attempts } => {
+                        assert_eq!(attempts, 1);
+                        break;
+                    }
+                    _ => {}
                 }
             }
         } else {

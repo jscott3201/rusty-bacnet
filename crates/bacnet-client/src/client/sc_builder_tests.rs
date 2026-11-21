@@ -128,8 +128,7 @@ async fn sc_client_builder_rejects_invalid_reconnect_before_tls_lookup() {
                 .reconnect(ScReconnectConfig {
                     initial_delay_ms,
                     max_delay_ms,
-                    max_retries,
-                    retry_forever: false,
+                    max_retries: Some(max_retries),
                 })
                 .build()
                 .await
@@ -151,14 +150,12 @@ async fn sc_client_builder_valid_reconnect_preserves_missing_tls_error() {
         Some(ScReconnectConfig {
             initial_delay_ms: 1,
             max_delay_ms: 1,
-            max_retries: 0,
-            retry_forever: false,
+            max_retries: Some(0),
         }),
         Some(ScReconnectConfig {
             initial_delay_ms: 1,
             max_delay_ms: 2,
-            max_retries: u32::MAX,
-            retry_forever: false,
+            max_retries: Some(u32::MAX),
         }),
     ] {
         let mut builder = BACnetClient::sc_builder()
@@ -208,8 +205,7 @@ async fn sc_client_test_builder_reconnect_preflight_drops_input_without_io() {
             .reconnect(ScReconnectConfig {
                 initial_delay_ms,
                 max_delay_ms,
-                max_retries: 0,
-                retry_forever: false,
+                max_retries: Some(0),
             })
             .build_with_websocket_for_test(RejectIoWebSocket {
                 calls: calls.clone(),

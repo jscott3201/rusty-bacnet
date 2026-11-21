@@ -21,8 +21,7 @@ async fn each_failed_restore_probe_is_one_event_per_interval() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: INTERVAL.as_millis() as u64,
             max_delay_ms: INTERVAL.as_millis() as u64,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .with_connector(connector(primary_up.clone(), primary_tx))
         .with_failover_connector(connector(Arc::new(AtomicBool::new(true)), failover_tx));
@@ -41,6 +40,14 @@ async fn each_failed_restore_probe_is_one_event_per_interval() {
     let ScEvent::ConnectFailed { cause: refused, .. } = next(&mut events).await else {
         panic!("the primary refuses the reconnect");
     };
+    assert!(matches!(
+        next(&mut events).await,
+        ScEvent::ReconnectAttempt {
+            hub: ScActiveHub::Failover,
+            attempt: 1,
+            ..
+        }
+    ));
     assert_eq!(next(&mut events).await, ScEvent::FailoverEngaged);
     let failover_hub = failover_dials.recv().await.unwrap();
     hub_accept(&failover_hub, FAILOVER).await;

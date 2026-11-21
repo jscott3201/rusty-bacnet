@@ -57,8 +57,7 @@ async fn start(primary: (u16, u16)) -> Hubs {
                 .with_reconnect(ScReconnectConfig {
                     initial_delay_ms: 25,
                     max_delay_ms: 25,
-                    max_retries: 1,
-                    retry_forever: false,
+                    max_retries: Some(1),
                 })
                 .with_failover(client_failover),
             network_number: 2000,

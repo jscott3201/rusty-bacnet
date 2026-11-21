@@ -85,8 +85,7 @@ async fn sc_server_egress_1474_then_failover_keeps_device_and_iam_1476() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 25,
             max_delay_ms: 25,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .with_failover(backup);
     let mut states = transport.connection_state_changes();

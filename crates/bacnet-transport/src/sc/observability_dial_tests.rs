@@ -11,8 +11,7 @@ async fn a_stalled_redial_reports_the_step_it_reached() {
     let reconnect = ScReconnectConfig {
         initial_delay_ms: 25,
         max_delay_ms: 25,
-        max_retries: 1,
-        retry_forever: false,
+        max_retries: Some(1),
     };
     let stalls = || -> Dial {
         Box::pin(async {

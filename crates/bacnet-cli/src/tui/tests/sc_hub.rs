@@ -300,8 +300,7 @@ async fn stopping_the_primary_fails_over_and_its_return_restores_it_in_order() {
         .reconnect(ScReconnectConfig {
             initial_delay_ms: 100,
             max_delay_ms: 100,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .tls_config(site.node_config(&client_leaf(&site)))
         .vmac([0x02, 0, 0, 0, 0, 0x68])

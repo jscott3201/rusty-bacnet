@@ -338,8 +338,7 @@ async fn failover_and_primary_restore_are_events_in_order() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 25,
             max_delay_ms: 25,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .with_connector(connector(primary_up.clone(), primary_tx))
         .with_failover_connector(connector(Arc::new(AtomicBool::new(true)), failover_tx));
@@ -383,6 +382,15 @@ async fn failover_and_primary_restore_are_events_in_order() {
             cause: ScDisconnectCause::Other(ref text),
         } if text.contains("fixture hub is down")
     ));
+    // The same round goes on to the failover hub at once.
+    assert_eq!(
+        next(&mut events).await,
+        ScEvent::ReconnectAttempt {
+            hub: ScActiveHub::Failover,
+            attempt: 1,
+            backoff: Duration::from_millis(25),
+        }
+    );
     assert_eq!(next(&mut events).await, ScEvent::FailoverEngaged);
     let failover_hub = failover_dials.recv().await.unwrap();
     hub_accept(&failover_hub, FAILOVER).await;
@@ -525,8 +533,7 @@ async fn giving_up_reports_the_attempts_made() {
     let reconnect = ScReconnectConfig {
         initial_delay_ms: 25,
         max_delay_ms: 25,
-        max_retries: 2,
-        retry_forever: false,
+        max_retries: Some(2),
     };
     let (transport, _rx, hub, mut events) =
         started(reconnect, connector(Arc::new(AtomicBool::new(false)), tx)).await;
@@ -562,8 +569,7 @@ async fn a_stop_during_backoff_ends_the_stream_without_a_terminal_event() {
     let reconnect = ScReconnectConfig {
         initial_delay_ms: 60_000,
         max_delay_ms: 60_000,
-        max_retries: 3,
-        retry_forever: false,
+        max_retries: Some(3),
     };
     let (transport, _rx, hub, mut events) =
         started(reconnect, connector(Arc::new(AtomicBool::new(true)), tx)).await;
@@ -593,8 +599,7 @@ async fn losing_the_failover_hub_tries_the_primary_first() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 25,
             max_delay_ms: 25,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .with_connector(connector(primary_up.clone(), primary_tx))
         .with_failover_connector(connector(Arc::new(AtomicBool::new(true)), failover_tx));

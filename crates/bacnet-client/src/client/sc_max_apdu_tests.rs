@@ -314,8 +314,7 @@ async fn client_max_apdu_length_reflects_sc_failover_transport_limit() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 25,
             max_delay_ms: 25,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .with_failover(failover_client);
 

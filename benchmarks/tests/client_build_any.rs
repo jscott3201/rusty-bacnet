@@ -38,8 +38,7 @@ fn invalid_sc(builder: ScClientBuilder, case: usize) -> (ScClientBuilder, &'stat
             builder.reconnect(ScReconnectConfig {
                 initial_delay_ms: 0,
                 max_delay_ms: 1,
-                max_retries: 1,
-                retry_forever: false,
+                max_retries: Some(1),
             }),
             "reconnect",
         ),
@@ -47,8 +46,7 @@ fn invalid_sc(builder: ScClientBuilder, case: usize) -> (ScClientBuilder, &'stat
             builder.reconnect(ScReconnectConfig {
                 initial_delay_ms: 2,
                 max_delay_ms: 1,
-                max_retries: 0,
-                retry_forever: false,
+                max_retries: Some(0),
             }),
             "reconnect",
         ),

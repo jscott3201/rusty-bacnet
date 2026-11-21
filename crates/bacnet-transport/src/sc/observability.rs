@@ -184,12 +184,19 @@ impl ScDisconnectCause {
 
 /// A hub-connector event, in the order the connector acts.
 ///
-/// - After primary loss, finite recovery reads `Disconnected`, then `ReconnectAttempt` and
-///   `ConnectFailed` for each failed primary attempt, then `FailoverEngaged`
-///   and `Connected` on the failover hub.
-/// - Unlimited recovery and recovery after failover loss try the primary then
-///   the available failover. Both `ReconnectAttempt` events carry the same
-///   round number and backoff. The round number saturates at `u32::MAX`.
+/// - Recovery after losing a hub runs in rounds; each round tries the
+///   primary first, then the failover hub when one is configured. Losing the
+///   primary while both hubs are down reads `Disconnected`, then per round
+///   `ReconnectAttempt` and `ConnectFailed` for the primary, followed by
+///   `ReconnectAttempt`, `FailoverEngaged` and `ConnectFailed` for the
+///   failover hub (a failover dial that fails ends before `FailoverEngaged`).
+///   When the failover hub accepts, `Connected` takes the place of its
+///   `ConnectFailed`. Both `ReconnectAttempt` events of a round carry its
+///   number and its one backoff; the number saturates at `u32::MAX`.
+/// - Each `ConnectFailed` is one socket that failed. When the failover
+///   connector's dial fails and an unused preconfigured failover socket is
+///   left, the same attempt goes on with that socket, so one
+///   `ReconnectAttempt` can read two `ConnectFailed` events.
 /// - A primary restore reads `PrimaryRestored`, then `Connected` on the
 ///   primary. The replaced failover connection gets no `Disconnected`.
 /// - While on the failover hub, each restore probe of the primary that
@@ -235,8 +242,11 @@ pub enum ScEvent {
         /// The jittered delay waited once at the start of this round.
         backoff: Duration,
     },
-    /// The primary hub could not be reached; the connector turns to the
-    /// failover hub (Annex AB.5.2).
+    /// The connector holds a socket to the failover hub and is about to send
+    /// it a Connect-Request, because the primary could not be reached (Annex
+    /// AB.5.2): at start-up, or in a reconnect round after the primary's
+    /// attempt failed. It comes before the handshake, so `ConnectFailed` may
+    /// follow, and a long outage can report it once per round.
     FailoverEngaged,
     /// The primary hub is back and has taken over from the failover hub.
     PrimaryRestored,
@@ -250,9 +260,8 @@ pub enum ScEvent {
     /// Reconnection stopped; the transport stays disconnected.
     #[non_exhaustive]
     ReconnectGaveUp {
-        /// Attempts made in this episode, the highest `attempt` number
-        /// reported. The final failover dial under finite recovery
-        /// is not counted.
+        /// The last round in this episode that dialled a hub, the highest
+        /// `attempt` number reported; zero when none did.
         attempts: u32,
     },
 }

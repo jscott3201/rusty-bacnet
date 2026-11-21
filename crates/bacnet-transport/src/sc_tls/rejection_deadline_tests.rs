@@ -117,7 +117,7 @@ async fn exercise(wire: Vec<u8>) {
         .with_device_uuid([1; 16])
         // Public production timing, no clock replacement or private override.
         .with_heartbeat_interval_ms(3000).with_heartbeat_timeout_ms(3400)
-        .with_reconnect(ScReconnectConfig { initial_delay_ms: 20, max_delay_ms: 20, max_retries: 1, retry_forever: false });
+        .with_reconnect(ScReconnectConfig { initial_delay_ms: 20, max_delay_ms: 20, max_retries: Some(1) });
     let accept = async {
         let request = peer.next().await.unwrap().unwrap().into_data();
         assert_eq!(&request[..4], &[6, 0, 0, 1]);

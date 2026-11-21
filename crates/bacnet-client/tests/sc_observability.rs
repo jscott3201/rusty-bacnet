@@ -119,8 +119,7 @@ async fn stopping_and_restarting_the_primary_hub_reads_as_ordered_events() {
         .reconnect(ScReconnectConfig {
             initial_delay_ms: 100,
             max_delay_ms: 100,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .tls_config(pki.node.clone())
         .vmac([0x02, 0, 0, 0, 0, 0x22])
@@ -252,8 +251,7 @@ async fn an_unreachable_primary_builds_on_the_failover_hub_and_restores_later() 
         .reconnect(ScReconnectConfig {
             initial_delay_ms: 100,
             max_delay_ms: 100,
-            max_retries: 1,
-            retry_forever: false,
+            max_retries: Some(1),
         })
         .tls_config(pki.node.clone())
         .vmac([0x02, 0, 0, 0, 0, 0x23])

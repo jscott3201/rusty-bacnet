@@ -84,19 +84,20 @@ class ScConnectionEventTests(ClientScFixture):
         return hub
 
     async def test_losing_the_primary_engages_then_connects_the_failover_hub(self):
-        await self.check_primary_loss(False)
+        await self.check_primary_loss(ScReconnect(initial_delay_ms=50, max_delay_ms=50,
+                                                  max_retries=1))
 
     async def test_unlimited_recovery_tries_failover_in_the_first_round(self):
-        await self.check_primary_loss(True)
+        # Unlimited recovery's floor: one round of one second.
+        await self.check_primary_loss(ScReconnect(initial_delay_ms=1_000, max_delay_ms=1_000,
+                                                  max_retries=None))
 
-    async def check_primary_loss(self, forever):
+    async def check_primary_loss(self, reconnect):
         primary, primary_server = await self.serving_hub()
         failover = await self.failover_hub()
         client = self.client(
             await primary.url(), sc_failover_hub=await failover.url(),
-            sc_connect_timeout_ms=3_000,
-            reconnect=ScReconnect(initial_delay_ms=50, max_delay_ms=50,
-                                  max_retries=2**32 - 1 if forever else 1, retry_forever=forever))
+            sc_connect_timeout_ms=3_000, reconnect=reconnect)
         await asyncio.wait_for(client.__aenter__(), 10)
         await self.read_value(client)
         status = await client.connection_status()
@@ -135,8 +136,11 @@ class ScConnectionEventTests(ClientScFixture):
         self.assertIn("failover_engaged", kinds, seen)
         self.assertEqual(kinds[-2:], ["failover_engaged", "connected"], seen)
         attempts = [event for event in seen if event.kind == "reconnect_attempt"]
-        expected = [("primary", 1), ("failover", 1)] if forever else [("primary", 1)]
-        self.assertEqual([(event.hub, event.attempt) for event in attempts], expected)
+        # Bounded and unlimited alike: round 1 tries the primary, then the
+        # failover hub, which serves.
+        self.assertEqual([(event.hub, event.attempt) for event in attempts],
+                         [("primary", 1), ("failover", 1)])
+        self.assertEqual(attempts[0].backoff, attempts[1].backoff)
         self.assertGreaterEqual(attempts[0].backoff, 0.0)
         failed = [event for event in seen if event.kind == "connect_failed"]
         self.assertTrue(failed and all(event.hub == "primary" for event in failed), seen)

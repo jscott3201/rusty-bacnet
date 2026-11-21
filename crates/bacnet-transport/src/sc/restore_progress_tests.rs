@@ -56,8 +56,7 @@ impl Fixture {
             .with_reconnect(ScReconnectConfig {
                 initial_delay_ms: 10,
                 max_delay_ms: 10,
-                max_retries: 1,
-                retry_forever: false,
+                max_retries: Some(1),
             })
             .with_connector(move || {
                 let candidates = candidates_tx.clone();

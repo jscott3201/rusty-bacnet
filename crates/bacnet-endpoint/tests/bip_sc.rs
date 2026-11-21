@@ -127,8 +127,7 @@ fn sc_builder_validates_heartbeat_and_reconnect() {
         bacnet_transport::sc::ScReconnectConfig {
             initial_delay_ms: 0,
             max_delay_ms: 1,
-            max_retries: 3,
-            retry_forever: false,
+            max_retries: Some(3),
         },
     );
     assert!(bad_reconnect.validate_only().is_err());

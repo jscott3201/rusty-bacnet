@@ -386,7 +386,7 @@ fn sc_reconnect_and_connect_timeout_reach_the_transport_settings() {
             policy.max_delay_ms,
             policy.max_retries
         ),
-        (500, 4_000, 3)
+        (500, 4_000, Some(3))
     );
     assert_eq!(args.sc_connect_timeout_ms, Some(2_500));
     p.sc_mut().reconnect = false;
