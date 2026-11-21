@@ -351,7 +351,7 @@ impl super::BipTransport {
         plan
     }
 
-    fn bind_plan(&self) -> BindPlan {
+    pub(super) fn bind_plan(&self) -> BindPlan {
         BindPlan {
             interface: self.interface,
             port: self.port,

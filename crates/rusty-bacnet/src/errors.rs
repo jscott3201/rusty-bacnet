@@ -270,7 +270,11 @@ pub(crate) fn routing_table_err(err: bacnet_client::client::RoutingTableError) -
 /// error's message. Falls back to a plain `BacnetError` when Python is
 /// finalizing.
 fn transport_error(io: std::io::Error) -> PyErr {
-    let message = io.to_string();
+    let mut message = io.to_string();
+    // The transport's message can't name the Python keyword (#2691).
+    if bacnet_transport::bip::LoopbackBroadcastRefused::from_io_error(&io).is_some() {
+        message.push_str(r#" (pass broadcast_address="127.255.255.255")"#);
+    }
     crate::py_async::attach(|py| {
         let errno = os_error(&io)
             .and_then(std::io::Error::raw_os_error)

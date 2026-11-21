@@ -153,8 +153,10 @@ impl super::BipTransport {
         let link = test_link(own, broadcast, mode);
         let record = Arc::clone(&self.client_record);
         let refusals = Arc::clone(&self.send_refusals);
-        let node =
-            Arc::new(NodeHandle::new(link, Arc::clone(&socket), false, record, refusals).unwrap());
+        // A loopback interface on the wildcard socket is guarded, as at start.
+        let guarded = self.bind_plan().loopback_on_wildcard();
+        let node = NodeHandle::new(link, Arc::clone(&socket), guarded, record, refusals);
+        let node = Arc::new(node.unwrap());
         // As start does: a new socket's first try finds no readiness yet,
         // and its send waits for the relay (#2617).
         tokio::spawn(Arc::clone(&node).relay_writable(socket));

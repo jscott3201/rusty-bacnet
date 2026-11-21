@@ -1518,17 +1518,6 @@ socket that sets `SO_REUSEADDR` bind a specific address on the port, and
 get the unicast sent there. On Linux a B/IP multicast member with its group
 on its own port binds its `interface` address instead of `0.0.0.0`.
 
-For loopback discovery, set `interface="127.0.0.1"` and
-`broadcast_address="127.255.255.255"` on a host with the usual loopback /8.
-When an explicit loopback interface uses a wildcard send socket, a local B/IP
-broadcast to `255.255.255.255` raises `BacnetTransportError` before the send.
-The OS could otherwise transmit it on a LAN and return the endpoint's own
-I-Am with the LAN source address. Unicast and foreign-device traffic to a BBMD
-can use this endpoint. With an explicit non-loopback interface and a wildcard
-socket, the OS still chooses the route and source for a limited broadcast.
-Use that interface's subnet broadcast for discovery. In per-address mode the
-primary socket binds the configured source address.
-
 The keyword-only `share_wildcard_port=True` keeps the old sharing, for a
 setup that runs two stacks on one port of one host. Broadcasts then reach
 both, but each unicast reaches only one of them (on Linux the one that
@@ -1550,6 +1539,42 @@ that a normal stack and a foreign device on one port, which used to both
 start in either order, now need the keyword on whichever starts later. See
 [Claiming the port (B/IPv6)](rust-api.md#claiming-the-port-bipv6). On any
 other transport the keyword raises `ValueError`.
+
+### Loopback interfaces and broadcasts
+
+`interface="127.0.0.1"` sets the device's own address, but the socket is
+still bound to `0.0.0.0` unless `share_port_by_address=True` binds the
+address itself. A datagram to `255.255.255.255` then leaves through
+whichever interface the host's routes pick, usually the LAN, and the
+device can hear its own I-Am from its LAN address. So with a loopback
+`interface` and the default `broadcast_address="255.255.255.255"`, each
+local broadcast (a `who_is(scope="local")`, a local Who-Has, a bare
+instance resolved locally) raises `BacnetTransportError` before anything is
+sent, and the message names `broadcast_address` (#2691). `start()` logs a
+warning for that configuration once; nothing is wrong while the device
+only sends unicast. A BBMD on such an interface still forwards its own
+broadcasts, and those it receives, to its BDT peers and foreign devices;
+only the local rebroadcast is refused, and a foreign device's
+Distribute-Broadcast-To-Network then draws a NAK.
+
+For discovery on loopback, pass the loopback subnet's broadcast address,
+`broadcast_address="127.255.255.255"` (with the usual 127.0.0.0/8):
+
+- **Linux:** a broadcast to it reaches the other B/IP sockets on loopback
+  at that port. The Python suite runs this way on Linux CI.
+- **macOS:** `lo0` is not broadcast-capable. A probe on one macOS host
+  found the datagram delivered to no socket, so local discovery finds
+  nothing, though nothing leaves the host either. The repository's tests
+  on macOS pass `broadcast_address="127.0.0.1"` instead, which reaches one
+  socket bound to that port.
+- **Windows:** not verified.
+
+An explicit interface that is not loopback has a related exposure: with
+`255.255.255.255` the host still routes the broadcast by its default
+route, so if `interface` is not the default-route address the broadcast
+can leave through another interface, and its echo comes back from an
+address that is not the device's own. Pass that interface's subnet
+broadcast address; #2691 tracks deriving it.
 
 ### Sharing a port by address
 

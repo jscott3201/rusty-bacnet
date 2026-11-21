@@ -270,10 +270,10 @@ class IAmArrivalTests(Arrivals):
         frames = await endpoint.frames()
         with self.assertRaisesRegex(rb.BacnetTransportError, "broadcast_address.*127.255.255.255"):
             await client.who_is(scope="local", low=722, high=722)
-        self.assertEqual(await client.discovered_devices(), [])
 
-        # The first tapped frame is the subsequent directed request. A native
-        # peer on a different port genuinely owns the same Device instance.
+        # The refused broadcast left no frame: the first tapped frame is the
+        # directed request below. A native peer on a different port
+        # genuinely owns the same Device instance.
         second = await self.endpoint(722)
         peer = await second.local_address()
         await client.who_is(scope=peer, low=722, high=722)

@@ -1,4 +1,4 @@
 ---
-section: Fixed
+section: Changed
 ---
-- **B/IP discovery.** An explicit loopback interface on a wildcard socket refuses local limited broadcasts before they can reach a LAN and make the device discover itself. Configure the loopback subnet's broadcast address to discover on loopback (#2691).
+- **Wire:** A B/IP device on a loopback `interface` whose socket is bound to `0.0.0.0` no longer broadcasts to 255.255.255.255, which the host routed onto the LAN: the send fails, counted, and a BBMD still forwards to its peers and foreign devices. Part of #2691.
