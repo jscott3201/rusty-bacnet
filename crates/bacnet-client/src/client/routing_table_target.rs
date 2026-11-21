@@ -71,7 +71,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     station: None,
                 });
             }
-            Ok(Station::Remote { .. }) => unreachable!("a fixed route has a next hop"),
+            // A fixed route always names its next hop; were it ever not to,
+            // no hop is known.
+            Ok(Station::Remote { .. }) => {
+                return Err(RoutingTableError::RouteUnresolved {
+                    network,
+                    candidates: 0,
+                });
+            }
             Err(Error::UnknownDevice { .. }) => {
                 let (routers, lost) = self
                     .collect_routers(None, Some(network), wait, true)

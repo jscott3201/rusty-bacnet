@@ -214,7 +214,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// a broadcast, group or empty one among them, is refused with
     /// [`Error::Transport`] of kind
     /// [`InvalidInput`](std::io::ErrorKind::InvalidInput) before anything
-    /// is sent.
+    /// is sent, as is a `destination` on a reserved network or with an
+    /// empty or oversized address.
     pub async fn send_routing_table_query(
         &self,
         router_mac: &[u8],
@@ -230,8 +231,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                 || address.mac_address.is_empty()
                 || address.mac_address.len() > bacnet_npdu::MAX_MAC_LEN
         }) {
-            return Err(Error::Encoding(
-                "a routed table query needs one valid destination station".into(),
+            return Err(not_one_station(
+                "a routed table query needs one valid destination station",
             ));
         }
         let npdu = Npdu {
@@ -246,10 +247,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.transport.send_unicast(&buf, router_mac).await
     }
 
-    /// Whether `mac` can be a router's own address for
-    /// [`Self::send_routing_table_query`]: not empty, and not one of the
-    /// link's local broadcast destinations.
-    pub fn is_routing_table_target(&self, mac: &[u8]) -> bool {
+    /// Whether `mac` is neither empty nor one of the link's local broadcast
+    /// destinations: the first test of
+    /// [`Self::is_local_unicast_station`].
+    fn is_routing_table_target(&self, mac: &[u8]) -> bool {
         !mac.is_empty() && !self.local_broadcasts.contains(mac)
     }
 

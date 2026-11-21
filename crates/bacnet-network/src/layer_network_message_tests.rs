@@ -236,6 +236,48 @@ async fn a_broadcast_query_is_refused() {
     );
 }
 
+/// A routed query goes to the next hop by unicast and names the router as
+/// DNET and DADR with hop count 255 and no SNET (Clause 6.5.3); a
+/// destination no reply could come from is refused as an argument, with
+/// nothing sent.
+#[tokio::test]
+async fn a_routed_query_names_its_router_and_refuses_a_bad_destination() {
+    let (a, mut b) = LoopbackTransport::pair(vec![1], vec![2]);
+    let mut rx = b.start().await.unwrap();
+    let mut layer = NetworkLayer::new(a);
+    let _apdus = layer.start().await.unwrap();
+    let router = NpduAddress {
+        network: 9,
+        mac_address: MacAddr::from_slice(&[3]),
+    };
+    layer
+        .send_routing_table_query(&[2], Some(&router))
+        .await
+        .unwrap();
+    let frame = tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .unwrap()
+        .expect("the query reaches the next hop");
+    assert_eq!(&frame.npdu[..], [1, 0xA4, 0, 9, 1, 3, 0xFF, 0x06, 0]);
+    for (network, mac) in [(0, &[3][..]), (0xFFFF, &[3]), (9, &[]), (9, &[7; 19])] {
+        let bad = NpduAddress {
+            network,
+            mac_address: MacAddr::from_slice(mac),
+        };
+        let refused = layer.send_routing_table_query(&[2], Some(&bad)).await;
+        assert!(
+            matches!(&refused, Err(Error::Transport(error))
+                if error.kind() == std::io::ErrorKind::InvalidInput),
+            "{network} {mac:?}: {refused:?}"
+        );
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 fn an_ack_to_a_query_lists_its_entries_and_an_update_ack_is_no_report() {
     // Two entries: network 2 on port 1 with no info, network 3000 on port
