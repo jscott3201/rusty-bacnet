@@ -24,9 +24,9 @@ use super::*;
 /// refuses a router that is a broadcast on the local link. `router`, when
 /// given, is the next hop's address on the
 /// local link, in the same forms or as `bytes`, such as a routed
-/// `DiscoveredDevice`'s `mac_address`; without one, a read goes as one
-/// broadcast on the local link that names the destination network. Anything
-/// else raises ValueError, or TypeError for a type that is neither `str`
+/// `DiscoveredDevice`'s `mac_address`. Without an explicit next hop the
+/// client reuses its learned route or sends a Who-Is to that network to learn one.
+/// Invalid addresses raise ValueError, or TypeError for a type that is neither `str`
 /// nor `bytes`; a call in another order fails too, since `network` takes an
 /// `int`.
 ///

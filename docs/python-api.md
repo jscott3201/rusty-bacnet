@@ -2419,7 +2419,9 @@ Return format: `list[dict]` where each dict has:
 
 #### `write_property_multiple(address, specs)`
 
-Write multiple properties to multiple objects in one request. Both direct and
+Write multiple properties to multiple objects in one request. Pass a local address string
+or a `RoutedTarget`. An explicit router sets the next hop, and a target without one
+uses the client's route lookup. Both direct and
 device-directed WPM validate the entire input synchronously before creating an
 operation or starting discovery. Empty request/property lists, ALL/REQUIRED/OPTIONAL
 targets, and priorities 0 or 17–255 raise `ValueError`; integers outside the native
@@ -7799,12 +7801,12 @@ endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
 
 ### Routed targets
 
-Twelve calls of `BACnetClient` take, where they take `address`, either
+Thirteen calls of `BACnetClient` take, where they take `address`, either
 a `str`, which always names a station on the client's own link and is never
 read as `net:mac`, or a `RoutedTarget` naming one behind a router (#2612,
 #2617, #2613, #2588), on a standalone client and an endpoint's alike. The
-twelve are `read_property`, `read_property_multiple`, `read_range`,
-`read_log_page`, `write_property`, `atomic_read_file`,
+thirteen are `read_property`, `read_property_multiple`, `read_range`,
+`read_log_page`, `write_property`, `write_property_multiple`, `atomic_read_file`,
 `atomic_write_file`, `subscribe_cov`, `unsubscribe_cov`,
 `subscribe_cov_property`, `unsubscribe_cov_property` and
 `subscribe_cov_property_multiple`; the other typed calls take a local

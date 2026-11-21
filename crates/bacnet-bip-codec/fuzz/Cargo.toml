@@ -17,7 +17,7 @@ members = []
 arbitrary = { version = "1", features = ["derive"] }
 bacnet-bip-codec = { path = "..", features = ["bytes", "heapless"] }
 bytes = "1"
-heapless = "0.9"
+heapless = "0.9.4"
 libfuzzer-sys = "0.4"
 
 [[bin]]

@@ -51,6 +51,25 @@ class RoutingTableTests(unittest.IsolatedAsyncioTestCase):
         [router] = await self.client.discover_routers(wait=1.5)
         self.assertEqual(router.networks, [5, 7])
 
+    async def test_seated_client_reads_the_same_table_on_its_endpoint_socket(self):
+        async with rb.BipEndpoint(2612, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.0.0.1") as endpoint:
+            address = await endpoint.local_address()
+            frames = await endpoint.frames()
+            client = await endpoint.client()
+            table = await client.routing_table(self.ports[0].mac)
+            reference = await self.client.routing_table(self.ports[0].mac)
+            self.assertEqual([(e.network, e.port_id) for e in table.entries],
+                             [(e.network, e.port_id) for e in reference.entries])
+            async with asyncio.timeout(5):
+                async for frame in frames:
+                    if frame.direction == "outbound" and frame.octets[4:8] == bytes([1, 0x84, 6, 0]):
+                        self.assertEqual(frame.local_address, address)
+                        break
+                else:
+                    self.fail("the endpoint's socket did not send the routing-table query")
+            await frames.aclose()
+
     async def test_the_router_may_be_given_as_text(self):
         table = await self.client.routing_table(self.ports[0].address)
         self.assertEqual(sorted(e.network for e in table.entries), [1, 5, 7])
