@@ -4,6 +4,8 @@
 //! incoming BVLL frames and extracts NPDU bytes + source MAC for the
 //! network layer. Optionally acts as a BBMD or foreign device.
 
+pub use crate::local_addresses::named::resolve_interface_ipv4;
+
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::Duration;

@@ -76,6 +76,9 @@ colon hex such as `"01:02:03:04:05:06"` (SC, or `"00:04:d2"` for a
 VMAC), or an MS/TP station. `"[ip]:port"` raises ValueError: use
 `resolve_vmac`. So does a `bip6:` address on any other transport.
 
+For B/IP, `interface` accepts an IPv4 literal or the exact OS interface
+name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+
 Properties:
 
 - `write_policy: WritePolicy`: The priorities `Device.write` and `relinquish` may use, as `write_policy=` set them.

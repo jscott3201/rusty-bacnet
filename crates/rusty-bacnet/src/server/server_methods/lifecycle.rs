@@ -108,7 +108,7 @@ impl BACnetServer {
         let device_instance = self.device_instance;
         let audit_recipient = recipient_input.take();
         let transport_type = self.transport_type.clone();
-        let interface_str = self.interface.clone();
+        let interface = self.interface;
         let port = self.port;
         let broadcast_str = self.broadcast_address.clone();
         let share_port_by_address = self.share_port_by_address;
@@ -166,9 +166,6 @@ impl BACnetServer {
             // Prepare non-SC transports locally before constructing our Device.
             let prepared_transport: Option<AppTransport> = match transport_type.as_str() {
                 "bip" => {
-                    let interface: Ipv4Addr = interface_str
-                        .parse()
-                        .map_err(|e| PyRuntimeError::new_err(format!("invalid interface: {e}")))?;
                     let broadcast: Ipv4Addr = broadcast_str
                         .parse()
                         .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;

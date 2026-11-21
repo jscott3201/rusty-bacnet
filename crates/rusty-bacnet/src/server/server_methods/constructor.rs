@@ -79,6 +79,7 @@ impl BACnetServer {
         router=None
     ))]
     fn new(
+        py: Python<'_>,
         device_instance: u32,
         device_name: &str,
         interface: &str,
@@ -178,6 +179,11 @@ impl BACnetServer {
             bip: bip_mode,
             bip6_foreign,
         } = crate::bip_options::ip_modes(transport, bbmd, foreign_device)?;
+        let interface = if transport == "bip" {
+            crate::bip_options::interface_ipv4(py, interface)?
+        } else {
+            std::net::Ipv4Addr::UNSPECIFIED
+        };
         let multicast = crate::bip_options::bip_multicast(
             transport,
             interface,
@@ -256,7 +262,7 @@ impl BACnetServer {
             apdu_segment_timeout_ms,
             device_name: device_name.to_string(),
             transport_type: transport.to_string(),
-            interface: interface.to_string(),
+            interface,
             port,
             broadcast_address: broadcast_address.to_string(),
             share_port_by_address,

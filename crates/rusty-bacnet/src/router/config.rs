@@ -46,6 +46,7 @@ impl PyBipRouterPort {
     #[new]
     #[pyo3(signature = (network_number, *, interface="0.0.0.0", port=47808, broadcast_address="255.255.255.255", bbmd=None, foreign_device=None))]
     fn new(
+        py: Python<'_>,
         network_number: u16,
         interface: &str,
         port: u16,
@@ -60,7 +61,7 @@ impl PyBipRouterPort {
         }
         Ok(Self(PortConfig {
             network_number,
-            interface: parse_ip(interface, "interface")?,
+            interface: crate::bip_options::interface_ipv4(py, interface)?,
             port,
             broadcast: parse_ip(broadcast_address, "broadcast_address")?,
             mode: bip_mode("bip", bbmd, foreign_device)?,

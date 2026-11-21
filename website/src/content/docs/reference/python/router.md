@@ -119,6 +119,9 @@ Bbmd's default refusal of foreign-device registrations is unchanged.
 Invalid IPv4 addresses raise ValueError; out-of-range integers raise
 OverflowError. Construction opens no socket.
 
+For B/IP, `interface` accepts an IPv4 literal or the exact OS interface
+name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+
 Properties:
 
 - `network_number: int`

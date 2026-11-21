@@ -56,6 +56,9 @@ server.add_analog_input(1, "Temperature", units=62)
 await server.start()
 ```
 
+For B/IP, `interface` accepts an IPv4 literal or the exact OS interface
+name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+
 ### BACnetServer.__init__
 
 ```python

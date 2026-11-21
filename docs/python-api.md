@@ -7087,7 +7087,7 @@ raise `ValueError`. `BACnetServer`, `ScEndpoint` and `MstpEndpoint` have no
 `frames()` yet; [`decode_frame`](#decoded-frame-summaries-and-trap-transcripts)
 gives a frame's decoded summary, parse failure and forwarding/router
 provenance. Observation opens no socket and changes no port sharing (see
-[Interfaces are addresses](#interfaces-are-addresses)).
+[Selecting an interface](#selecting-an-interface)).
 
 ### Decoded frame summaries and trap transcripts
 
@@ -8234,12 +8234,18 @@ asyncio.run(main())
 
 ## Transport Configuration Examples
 
-### Interfaces are addresses
+### Selecting an interface
 
-`interface` for B/IP is an IPv4 address, not an OS interface name.
-`ipv6_interface` is an IPv6 address, also not an OS interface name; `None` and
-`"::"` use the automatic selection described under
-[BACnet/IPv6](#bacnetipv6). How a port is shared on Linux, macOS and Windows is
+For B/IP, pass an IPv4 literal to `interface`, or the OS interface name
+such as `en0` or `eth0`. On Windows use the adapter's exact friendly name.
+The constructor resolves a name to one assigned unicast IPv4 address on an
+interface that is up. If it has multiple addresses, the exception lists
+them so you can pass the intended literal. `"0.0.0.0"` retains wildcard
+selection. Supply a broadcast IPv4 address separately in `broadcast_address`.
+
+The selected address feeds the existing socket bind policy. For B/IPv6,
+`ipv6_interface` accepts an IPv6 address. `None` and `"::"` use automatic
+selection as described under [BACnet/IPv6](#bacnetipv6). Port sharing is
 set by `share_port_by_address` and `share_wildcard_port` (see
 [Claiming the port](#claiming-the-port) and
 [Sharing a port by address](#sharing-a-port-by-address)); observing frames

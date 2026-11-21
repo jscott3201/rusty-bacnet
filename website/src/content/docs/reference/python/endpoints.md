@@ -42,6 +42,9 @@ endpoint until `time_sync_policy` turns it on, whatever the
 no object may have it, so it, or anything larger, raises ValueError at
 construction (#2171).
 
+For B/IP, `interface` accepts an IPv4 literal or the exact OS interface
+name (the adapter friendly name on Windows), resolved to one usable IPv4 address.
+
 Properties:
 
 - `device_instance: int`

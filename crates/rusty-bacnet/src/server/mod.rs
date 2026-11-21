@@ -109,7 +109,7 @@ pub struct BACnetServer {
     device_name: String,
     transport_type: String,
     // BIP config
-    interface: String,
+    interface: std::net::Ipv4Addr,
     port: u16,
     broadcast_address: String,
     /// See `BipTransport::set_share_port_by_address` (#1538).
