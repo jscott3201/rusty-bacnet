@@ -145,10 +145,12 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// When the BACnet/SC connection drops, the transport will attempt to reconnect
     /// using exponential backoff as configured. Configure [`Self::with_connector`]
     /// for true transport-level recovery from a dead WebSocket/TCP/TLS connection;
-    /// otherwise reconnect attempts can only reuse the current WebSocket object,
-    /// except after a rejection NAK exhausts its heartbeat budget. That socket
-    /// cannot be reused: recovery needs a fresh connector or unused failover
-    /// socket under the existing retry policy, or remains disconnected.
+    /// otherwise recovery can only send one Connect-Request on the current
+    /// WebSocket object. If that fails, the socket is closed (Annex AB.6.2.2)
+    /// and not tried again. After a rejection NAK exhausts its heartbeat
+    /// budget, the socket is not reused at all. Either way recovery goes on
+    /// only through a connector or an unused failover socket, and otherwise
+    /// gives up, also with unlimited retries.
     /// The local VMAC is preserved across reconnections.
     ///
     /// [`TransportPort::start`](crate::port::TransportPort::start) validates this configuration before any transport

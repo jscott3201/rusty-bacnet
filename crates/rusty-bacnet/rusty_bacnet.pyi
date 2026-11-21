@@ -11,7 +11,7 @@ import enum
 import ipaddress
 import os
 import pathlib
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, Awaitable, Literal, NotRequired, Optional, TypedDict, Union
 
 UNSPECIFIED: Literal[255]
@@ -2402,6 +2402,73 @@ def enum_name(property: PropertyIdentifier, value: int) -> str | None:
     ...
 
 
+class PropertyReadContext:
+    """The object, property and array index the ACK of a ReadProperty or
+    ReadPropertyMultiple named, which can differ from the request (a
+    wildcard Device instance names the device's own). It holds no octets:
+    decode a value's ``.octets``. A primitive's ``.octets`` are a
+    re-encoding, so the device's character set and any non-minimal integer
+    form are not kept. A value class: equal when all three fields are,
+    hashable, and it copies and pickles on its own."""
+
+    @property
+    def object_id(self) -> ObjectIdentifier: ...
+    @property
+    def property_id(self) -> int: ...
+    @property
+    def array_index(self) -> int | None: ...
+
+
+class PropertyDecodeResult:
+    """What ``decode_property_as`` made of some octets: ``value`` (with
+    ``value_names`` when names were given) when ``status`` is ``"decoded"``,
+    otherwise a ``diagnostic``. ``raw`` is the input, kept in every case.
+    A value class: equal when every field is, hashable, and it copies and
+    pickles."""
+
+    @property
+    def status(self) -> Literal["decoded", "type_mismatch", "unsupported_encoding", "malformed", "limit_exceeded"]: ...
+    @property
+    def value(self) -> PropertyValue | None: ...
+    @property
+    def raw(self) -> bytes: ...
+    @property
+    def diagnostic(self) -> str | None: ...
+    @property
+    def value_names(self) -> tuple[str | None, ...] | None: ...
+
+
+def decode_property_as(
+    octets: bytes,
+    datatype: Literal[
+        "null", "boolean", "unsigned", "signed", "real", "double",
+        "octet_string", "character_string", "bit_string", "enumerated",
+        "date", "time", "object_identifier",
+    ],
+    shape: Literal["scalar", "array", "list"] = "scalar",
+    *,
+    array_index: int | None = None,
+    array_length: int | None = None,
+    value_names: Mapping[int, str] | None = None,
+) -> PropertyDecodeResult:
+    """Decode application-tagged property value octets (a value's
+    ``.octets``) as the primitive ``datatype`` (a ``PropertyValue.tag``
+    name) and ``shape`` the caller declares, for a vendor property whose
+    datatype the stack does not know. A whole array or list is a list at
+    every length; ``array_index=0`` reads an array's count as ``unsigned``.
+    ``value_names`` maps integer values to names for ``value_names`` on the
+    result. The result's ``status`` is ``"decoded"``, ``"type_mismatch"``
+    (the octets' tag or shape differs from the declaration, context-tagged
+    or constructed content included), ``"unsupported_encoding"`` (an
+    encoding the value model cannot hold: a character set it does not
+    convert, or an integer wider than it keeps, minimal or not; a
+    non-minimal integer that fits decodes), ``"malformed"`` (any other
+    broken encoding, reserved application tags 13 to 15 included) or
+    ``"limit_exceeded"`` (the depth or node bound). An invalid declaration
+    raises ValueError."""
+    ...
+
+
 class PropertyValue:
     """A decoded BACnet property value with tag and Python-native value.
 
@@ -2464,16 +2531,22 @@ class PropertyValue:
       ``report_access_event_local`` and ``report_credential_read_local``
       take), and an Event Enrollment's Event_Parameters
       (``"event_parameter"``: a mapping whose ``kind`` names the algorithm;
-      see docs/python-api.md). Access_Event_Time and Last_Restore_Time read
-      as ``"timestamp"``, and Subordinate_List as a list of
+      see docs/python-api.md), and a Network Port's
+      BBMD_Broadcast_Distribution_Table (``"bdt_entry"``: a ``BdtEntry``)
+      and BBMD_Foreign_Device_Table (``"fdt_entry"``: an ``FdtEntry``, as
+      ``read_fdt`` gives it). A whole read of those two is tagged ``"bdt"``
+      or ``"fdt"``, not ``"list"``, empty ones included (#2690); they read
+      only, with no typed write from the rows yet. Access_Event_Time and
+      Last_Restore_Time read as ``"timestamp"``, and Subordinate_List as a list of
       ``"device_object_reference"``. Tags elements are ``"name_value"``
       mappings with ``"name": str`` and ``"value": None | PropertyValue``. Semantic tags
       have ``None``; valued NULL is ``PropertyValue.null()``. Date and Time
       are separate primitive values, not a combined pair. Whole Tags reads
       are lists, indexed reads one element, and index zero an unsigned count.
       Each element keeps its octets, so the value
-      writes back unchanged. A value that isn't those elements, to the last
-      octet, follows the rules below.
+      writes back unchanged, and equality compares those octets: two
+      encodings of the same entry are unequal. A value that isn't those
+      elements, to the last octet, follows the rules below.
     - Other content with a context tag (a Lighting Output's
       Lighting_Command, a vendor's proprietary property) is ``tagged``
       (#2618): ``value`` is the tree of its tags, a list of ``TagNode``, and
@@ -2575,15 +2648,16 @@ class PropertyValue:
         'octet_string', 'character_string', 'bit_string', 'enumerated',
         'date', 'time', 'object_identifier', 'list', 'application_data',
         'tagged' (a value read as its tags, ``value`` a list of ``TagNode``),
-        or one typed constructed element: 'destination', 'port_permission',
-        'read_access_specification', 'read_access_result', 'action_list',
+        'bdt' or 'fdt' (a whole Network Port BDT or FDT, ``value`` a list of
+        ``BdtEntry`` or ``FdtEntry``), or one typed constructed element:
+        'destination', 'port_permission', 'read_access_specification', 'read_access_result', 'action_list',
         'device_object_reference', 'authentication_factor_format',
         'stage_limit_value', 'access_rule', 'device_object_property_reference',
         'object_property_reference', 'property_access_result', 'recipient', 'daily_schedule',
         'special_event', 'calendar_entry', 'date_range', 'timestamp',
         'cov_subscription', 'value_source', 'scale', 'prescale',
         'address_binding', 'shed_level', 'authentication_factor',
-        'event_parameter'."""
+        'event_parameter', 'bdt_entry', 'fdt_entry'."""
         ...
 
     @property
@@ -2591,9 +2665,9 @@ class PropertyValue:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
         ObjectIdentifier, BitString, list, or None); ``application_data`` is ``bytes``
         (except a DateTime Value's set Priority_Array slot, ``[date, time]``),
-        ``tagged`` a list of ``TagNode``,
-        and a typed constructed element the form its typed write takes, or
-        the form docs/python-api.md gives it. A date is ``(year, month, day,
+        ``tagged`` a list of ``TagNode``, ``bdt`` a list of ``BdtEntry``,
+        ``fdt`` a list of ``FdtEntry``, and a typed constructed element the
+        form its typed write takes, or the form docs/python-api.md gives it. A date is ``(year, month, day,
         day_of_week)`` with the full year, or 255 for an unspecified year,
         as in every other date the binding reads. A bit string is a
         ``BitString``, named when the value was read from a property of
@@ -2610,12 +2684,25 @@ class PropertyValue:
         ...
 
     @property
+    def read_context(self) -> PropertyReadContext | None:
+        """The object, property and array index the ACK named, for a value
+        a network ``read_property`` or ``read_property_multiple`` returned;
+        None for any other value (local reads, COV values, Group members,
+        values you build). It takes no part in equality, hashing or
+        ``repr``; copies and pickles keep it."""
+        ...
+
+    @property
     def octets(self) -> bytes:
-        """The value's octets as a write of it carries them: a typed
-        constructed element's are the octets it was read from, a whole typed
-        collection's its elements' back to back, and any other value its
-        application-tagged encoding. Raises ValueError for a value that
-        doesn't encode."""
+        """The value's octets as a write of it carries them. For a read
+        value, a ``tagged`` or ``application_data`` value and a typed
+        constructed element hold the octets exactly as received, and a whole
+        typed collection its elements' back to back. A primitive (or a list
+        of them) is re-encoded from its decoded value in the shortest form,
+        so it decodes to the same value but can differ from what the device
+        sent (an integer with leading zero octets, a character string in
+        UCS-2 or ISO 8859-1 comes back as UTF-8). Raises ValueError for a
+        value that doesn't encode."""
         ...
 
     def __repr__(self) -> str: ...
@@ -4432,8 +4519,22 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     unanswered: int
 
 
+class BdtEntry(TypedDict):
+    """One entry of a Network Port's BBMD_Broadcast_Distribution_Table, as
+    a read of the property gives it (#2690). ``address`` is the BBMD in
+    the ``"ip:port"`` text ``read_bdt()`` uses for IPv4, ``"[v6]:port"``
+    for IPv6 and ``"name:port"`` for a host name; ``None`` when the entry
+    names no host. ``broadcast_mask`` is dotted text, ``None`` when the
+    entry has none. The text is for display (a name may itself hold a
+    colon); the value's ``.octets`` are the exact form. Rows aren't
+    accepted as ``Bbmd(bdt=)`` input."""
+    address: str | None
+    broadcast_mask: str | None
+
 class FdtEntry(TypedDict):
-    """A Foreign Device Table entry, as ``read_fdt()`` returns it.
+    """A Foreign Device Table entry, as ``read_fdt()`` returns it, and as
+    a read of a Network Port's BBMD_Foreign_Device_Table gives each entry
+    (``address`` then ``"[v6]:port"`` for an IPv6 registrant).
     ``seconds_remaining`` is what the BBMD reports, its grace period
     included."""
     address: str
@@ -4469,19 +4570,24 @@ class ScReconnect:
 
     Delays must be nonzero, initial <= maximum, and maximum <= 86,400,000 ms.
     Invalid settings raise ValueError; unsigned integer overflow raises
-    OverflowError. Zero retries allows the initial connection and disables
-    active-hub retries after loss. Validation is not deployment qualification.
+    OverflowError. Validation is not deployment qualification.
+
+    After a lost connection each round waits its backoff, then tries the
+    primary hub and, when that fails, the failover hub. max_retries bounds
+    the rounds; 0 turns recovery off (the initial connection and primary
+    restoration still run). None keeps going while a hub can be dialled and
+    needs initial_delay_ms >= 1000, else ValueError.
     """
     def __init__(
         self, *, initial_delay_ms: int = 10000,
-        max_delay_ms: int = 600000, max_retries: int = 10,
+        max_delay_ms: int = 600000, max_retries: int | None = 10,
     ) -> None: ...
     @property
     def initial_delay_ms(self) -> int: ...
     @property
     def max_delay_ms(self) -> int: ...
     @property
-    def max_retries(self) -> int: ...
+    def max_retries(self) -> int | None: ...
 
 
 class ScCertificateMetadata:
@@ -4663,9 +4769,14 @@ class ScEvent:
     """One SC hub-connector event (#1829), frozen. Fields that don't apply
     to the event's kind are None.
 
-    A failover reads ``disconnected``, then ``reconnect_attempt`` and
-    ``connect_failed`` for each failed primary attempt, then
-    ``failover_engaged`` and ``connected`` on the failover hub. A primary
+    Recovery runs in rounds that try the primary, then the failover hub.
+    Losing the primary reads ``disconnected``, then per round
+    ``reconnect_attempt`` and ``connect_failed`` for the primary, and
+    ``reconnect_attempt``, ``failover_engaged`` and ``connected`` (or
+    ``connect_failed``) for the failover hub. Both attempts of a round share
+    its number and its one backoff. ``failover_engaged`` comes once the
+    failover dial succeeds, before its handshake, and can repeat once per
+    round. A primary
     restore reads ``primary_restored``, then ``connected`` on the primary;
     each failed restore probe, at most one per restore interval, reads
     ``primary_restore_failed`` (#1828).
@@ -4736,12 +4847,12 @@ class ScEvent:
         ...
     @property
     def attempt(self) -> int | None:
-        """A ``reconnect_attempt``'s number, from 1; the attempts made, for
-        ``reconnect_gave_up``."""
+        """The reconnect round, starting at 1 and saturating at 2**32 - 1.
+        For ``reconnect_gave_up``, the last round dialled, or zero."""
         ...
     @property
     def backoff(self) -> float | None:
-        """Seconds a ``reconnect_attempt`` waited first."""
+        """Seconds waited before the round containing this ``reconnect_attempt``."""
         ...
 
 class ScLinkStatus:
@@ -5816,7 +5927,8 @@ class BACnetClient:
         BacnetTimeoutError, whose text for a routed query says so.
         A reject for the requested DNET that comes through the next hop
         before the first ack ends a routed query, whether the hop sent it or
-        relayed it from a router further on. A simultaneous request through that path can
+        relayed it from a router further on (reason 4, message too long, is
+        ignored: the query is too short to draw it). A simultaneous request through that path can
         produce the same reject because network messages have no invoke ID.
         One query runs at a time per client; a second call waits for
         the first. It holds the started client for the whole wait, so

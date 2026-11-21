@@ -111,27 +111,49 @@ fn a_query_naming_the_router_at_another_port_is_answered_from_that_address() {
     );
     assert_eq!(outcome, Outcome::Handled);
     assert_routed_answer(&sent, REQUESTER, Some(named));
-    // Named at the arrival port itself, the router answers as itself
-    // there: a node on network 2 needs no SNET to reach it.
+    // Named at the arrival port itself, the answer carries no SNET, as the
+    // answer to a query that names no address does: the relay that carries
+    // it on adds the arrival network and the router's MAC there itself.
+    let own = addr(2, OWN_1);
     let (_, sent) = deliver(
         &mut router,
         &mut Recorder::default(),
         1,
         R7,
-        &query(REQUESTER, Some(addr(2, OWN_1))),
+        &query(REQUESTER, Some(own)),
         at(2),
     );
-    assert!(!sent.is_empty());
-    for ack in &sent {
-        assert_eq!(ack.parsed().destination, Some(REQUESTER));
+    assert_routed_answer(&sent, REQUESTER, None);
+}
+
+/// A node on the arrival network that names the router by that network's
+/// number and its MAC there (no SNET in the query) gets what a query with
+/// no DNET gets: no DNET and no SNET. Naming the router's address on its
+/// other port, it gets that address as SNET and SADR.
+#[test]
+fn a_local_query_naming_the_arrival_port_is_answered_without_addresses() {
+    let mut router = router();
+    for (named, source) in [
+        (addr(2, OWN_1), None),
+        (addr(1, OWN_0), Some(addr(1, OWN_0))),
+    ] {
+        let frame = bytes(&Npdu {
+            destination: Some(named),
+            ..Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0])
+        });
+        let (outcome, sent) = deliver(&mut router, &mut Recorder::default(), 1, R7, &frame, at(1));
+        assert_eq!(outcome, Outcome::Handled);
+        let [ack] = &sent[..] else { panic!("{sent:?}") };
+        assert_eq!((ack.port, ack.to.as_deref()), (1, Some(R7)));
+        assert_eq!(rows(ack), [1, 2]);
+        let npdu = ack.parsed();
+        assert_eq!((npdu.destination, npdu.source), (None, source));
     }
 }
 
-/// A long answer is split so that each Ack fits the arrival port's unicast
-/// limit, here 128 octets, and still fits 501 octets once a relay adds an
-/// SNET of the longest MAC. Every row comes once, ascending.
-#[test]
-fn routed_chunks_fit_the_arrival_ports_limit() {
+/// A router whose port 1 carries 128 octets, holding 62 routes: its two
+/// ports and networks 100 to 159 through R7.
+fn router_with_a_128_octet_port() -> fixture::TestRouter {
     let small = PortConfig::new(
         2,
         Mac::from_slice(OWN_1).unwrap(),
@@ -140,6 +162,15 @@ fn routed_chunks_fit_the_arrival_ports_limit() {
     );
     let mut router = router_with(&[port_on(1, OWN_0), small], Options::HOSTED);
     learn(&mut router, 100..160);
+    router
+}
+
+/// A long answer is split so that each Ack fits the arrival port's unicast
+/// limit, here 128 octets, and still fits 501 octets once a relay adds an
+/// SNET of the longest MAC. Every row comes once, ascending.
+#[test]
+fn routed_chunks_fit_the_arrival_ports_limit() {
+    let mut router = router_with_a_128_octet_port();
     let (_, sent) = deliver(
         &mut router,
         &mut Recorder::default(),
@@ -148,7 +179,10 @@ fn routed_chunks_fit_the_arrival_ports_limit() {
         &query(REQUESTER, None),
         at(1),
     );
-    assert!(sent.len() > 2, "{} Acks", sent.len());
+    // An 8-octet header and the count octet leave 119 of the 128 octets:
+    // 29 four-octet rows.
+    let counts: Vec<usize> = sent.iter().map(|ack| rows(ack).len()).collect();
+    assert_eq!(counts, [29, 29, 4]);
     assert_routed_answer(&sent, REQUESTER, None);
     for ack in &sent {
         assert!(ack.npdu.len() <= 128, "{} octets", ack.npdu.len());
@@ -161,6 +195,41 @@ fn routed_chunks_fit_the_arrival_ports_limit() {
     let all: Vec<u16> = sent.iter().flat_map(rows).collect();
     assert_eq!(all.len(), 62);
     assert!(all.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+/// A long answer to a query that named the router's address on another
+/// port carries that address as SNET and SADR on every Ack, and each Ack
+/// is sized with it: the 6-octet SADR and its three header octets take
+/// the room of two rows from the 128-octet port, and no room is kept back
+/// for a relay's SNET, since a relay leaves an SNET that is there alone
+/// (Clause 6.5.4). Named at the arrival port, the Acks carry no SNET and are
+/// sized as for a query that names none.
+#[test]
+fn a_named_answer_in_chunks_carries_its_source_on_every_ack() {
+    for (named, source, expected) in [
+        (addr(1, OWN_0), Some(addr(1, OWN_0)), [27, 27, 8]),
+        (addr(2, OWN_1), None, [29, 29, 4]),
+    ] {
+        let mut router = router_with_a_128_octet_port();
+        let (_, sent) = deliver(
+            &mut router,
+            &mut Recorder::default(),
+            1,
+            R7,
+            &query(REQUESTER, Some(named)),
+            at(1),
+        );
+        let counts: Vec<usize> = sent.iter().map(|ack| rows(ack).len()).collect();
+        assert_eq!(counts, expected, "{named:?}");
+        assert_routed_answer(&sent, REQUESTER, source);
+        // The full Acks are as long as the port allows less a part row.
+        let lengths: Vec<usize> = sent.iter().map(|ack| ack.npdu.len()).collect();
+        let full = if source.is_some() { 126 } else { 125 };
+        assert_eq!(lengths[..2], [full, full], "{named:?}");
+        let all: Vec<u16> = sent.iter().flat_map(rows).collect();
+        assert_eq!(all.len(), 62);
+        assert!(all.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 }
 
 /// Two requesters behind the same relay each get the whole table, each to

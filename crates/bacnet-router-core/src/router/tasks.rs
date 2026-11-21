@@ -148,7 +148,8 @@ impl Task {
 
     /// The whole table, in Acks to `to` on `port`: to `origin` beyond it
     /// when the query came from another network, and from the router's
-    /// address on port `named` when the query named that address.
+    /// address on port `named` when the query named that address on a port
+    /// other than `port`.
     pub(super) fn table_ack(
         port: PortId,
         to: &[u8],
@@ -158,7 +159,10 @@ impl Task {
         Self {
             to: mac(to),
             // At most 255 ports, so index 254 plus one fits.
-            named: named.map_or(0, |port| port.0.saturating_add(1)),
+            named: named.map_or(0, |port| {
+                debug_assert!(port.0 < u8::MAX, "Router::new caps ports at 255");
+                port.0.saturating_add(1)
+            }),
             ..Self::of(TaskKind::TableAck, port)
         }
         .with_origin(origin)

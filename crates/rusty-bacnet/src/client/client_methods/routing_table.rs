@@ -99,7 +99,8 @@ impl BACnetClient {
     /// Local queries ignore DNET reject reasons 1, 2 and 4. A reject that
     /// comes through the selected next hop naming the queried DNET before
     /// the first ack ends a routed query, whether the hop sent it or relayed
-    /// it from a router further on. A concurrent request on that path can produce
+    /// it from a router further on (reason 4, message too long, is ignored:
+    /// the query is too short to draw it). A concurrent request on that path can produce
     /// the same reject because these messages have no invoke ID. The
     /// bounds are 0 to 3600 seconds, and `wait` may not exceed `total`
     /// (`ValueError` otherwise). A client stopped mid-call raises

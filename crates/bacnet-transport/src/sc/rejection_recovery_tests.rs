@@ -21,7 +21,7 @@ fn config(retries: u32) -> ScReconnectConfig {
     ScReconnectConfig {
         initial_delay_ms: 40,
         max_delay_ms: 40,
-        max_retries: retries,
+        max_retries: Some(retries),
     }
 }
 
@@ -326,7 +326,7 @@ async fn rejection_deadline_active_failover_expiry_does_not_reuse_or_change_reco
             .with_reconnect(ScReconnectConfig {
                 initial_delay_ms: 500,
                 max_delay_ms: 500,
-                max_retries: 1,
+                max_retries: Some(1),
             });
     let (rx, ()) = tokio::join!(
         transport.start(),

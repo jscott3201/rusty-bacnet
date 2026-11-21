@@ -27,11 +27,13 @@ impl QueryTarget {
         // rejects it, and each router between relays that reject back
         // toward this client (Clause 6.6.3.5): it comes through the
         // selected hop, without an SNET from the hop itself and with the
-        // rejecting router's network from one further on.
+        // rejecting router's network from one further on. Reason 4 is
+        // never this query's: the query is nine octets, shorter than any
+        // link's limit, so it answers a larger request to the same network.
         if let Some(station) = &self.station
             && reject.network == station.network
         {
-            return true;
+            return reject.reason != RejectMessageReason::MESSAGE_TOO_LONG;
         }
         // A rejection by the destination itself must have its full identity.
         self.answers(hop, source)

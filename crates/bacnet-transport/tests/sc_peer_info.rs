@@ -251,7 +251,7 @@ async fn same_socket_sc_retry_retains_the_physical_connection_id() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 100,
             max_delay_ms: 100,
-            max_retries: 1,
+            max_retries: Some(1),
         });
     let _rx = transport.start().await.unwrap();
     let old = transport.hub_peer_info().await.unwrap();
@@ -317,7 +317,7 @@ async fn active_snapshot_follows_failover_failed_candidate_and_primary_restorati
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 80,
             max_delay_ms: 80,
-            max_retries: 1,
+            max_retries: Some(1),
         })
         .with_connector(move || {
             let url = dial_target.lock().unwrap().clone();

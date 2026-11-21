@@ -26,7 +26,8 @@ impl<
     /// Port ID; the table doesn't change, and the host isn't asked. The
     /// Acks go back out of the arrival port to the link sender, toward the
     /// query's SNET and SADR when it has them, from the router's address
-    /// the query named when it named one; each fits the arrival port's
+    /// the query named when that is on another port (named at the arrival
+    /// port, the answer has no SNET, as for no DNET); each fits the arrival port's
     /// limit and 501 octets after a relay adds its SNET (at most 124
     /// entries). Any other count is an update, applied in order: Port ID
     /// 0 removes a learned route, any other installs one through that port
@@ -54,7 +55,12 @@ impl<
             return self.bad_message();
         };
         if entries.count() == 0 {
-            let named = npdu.destination.and_then(|address| self.own_port(address));
+            // Named at the arrival port, the router answers as a query
+            // with no DNET is answered: a relay adds that SNET itself.
+            let named = npdu
+                .destination
+                .and_then(|address| self.own_port(address))
+                .filter(|port| *port != at.port);
             // The requester's SNET and SADR become the answer's DNET and
             // DADR: refuse any that no reply could carry.
             let source = npdu.destination.filter(|_| named.is_some());

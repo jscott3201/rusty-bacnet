@@ -186,7 +186,7 @@ async fn sc_max_apdu_length_updates_after_failover_handshake() {
         .with_reconnect(ScReconnectConfig {
             initial_delay_ms: 25,
             max_delay_ms: 25,
-            max_retries: 1,
+            max_retries: Some(1),
         })
         .with_failover(failover_client);
 
@@ -233,7 +233,7 @@ async fn sc_publishes_its_npdu_limit_when_a_failover_changes_it() {
             .with_reconnect(ScReconnectConfig {
                 initial_delay_ms: 25,
                 max_delay_ms: 25,
-                max_retries: 1,
+                max_retries: Some(1),
             })
             .with_failover(failover_client);
         let changes = transport.max_npdu_changes().expect("SC follows its hub");

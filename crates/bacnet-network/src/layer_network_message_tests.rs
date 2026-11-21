@@ -214,7 +214,7 @@ async fn the_query_is_a_zero_count_and_expects_a_reply() {
 
 /// A query goes to one router: a broadcast or empty destination is refused
 /// with nothing sent.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_broadcast_query_is_refused() {
     let (mut a, mut b) = LoopbackTransport::pair(vec![1], vec![2]);
     a.set_broadcast_mac(vec![0xFF]);
@@ -240,7 +240,7 @@ async fn a_broadcast_query_is_refused() {
 /// DNET and DADR with hop count 255 and no SNET (Clause 6.5.3); a
 /// destination no reply could come from is refused as an argument, with
 /// nothing sent.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_routed_query_names_its_router_and_refuses_a_bad_destination() {
     let (a, mut b) = LoopbackTransport::pair(vec![1], vec![2]);
     let mut rx = b.start().await.unwrap();
