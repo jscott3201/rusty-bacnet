@@ -377,8 +377,9 @@ def add_binary_input(
 
 Register a Binary Input before start.
 
-`present_value` sets Present\_Value directly, after Polarity is
-applied. Left as `None`, the object keeps its unset physical-input
+`present_value` is the logical value (already after Polarity): it
+sets Present\_Value, and the object derives its physical input state
+from it. Left as `None`, the object keeps its unset physical-input
 state.
 
 Profile keywords as on `add_analog_input`, `polarity`,
@@ -908,8 +909,9 @@ def add_binary_input(
 
 Register a Binary Input before start.
 
-`present_value` sets Present\_Value directly, after Polarity is
-applied. Left as `None`, the object keeps its unset physical-input
+`present_value` is the logical value (already after Polarity): it
+sets Present\_Value, and the object derives its physical input state
+from it. Left as `None`, the object keeps its unset physical-input
 state.
 
 Profile keywords as on `add_analog_input`, `polarity`,
@@ -1411,8 +1413,9 @@ def add_binary_input(
 
 Register a Binary Input before start.
 
-`present_value` sets Present\_Value directly, after Polarity is
-applied. Left as `None`, the object keeps its unset physical-input
+`present_value` is the logical value (already after Polarity): it
+sets Present\_Value, and the object derives its physical input state
+from it. Left as `None`, the object keeps its unset physical-input
 state.
 
 Profile keywords as on `add_analog_input`, `polarity`,
