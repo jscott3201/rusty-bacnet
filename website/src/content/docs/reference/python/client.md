@@ -387,13 +387,14 @@ are rejected; this standalone profile still permits property selectors.
 ```python
 def write_property_multiple(
     self,
-    address: str,
+    address: str | RoutedTarget,
     specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, PropertyValue, Optional[int], Optional[int]]]]],
 ) -> Awaitable[None]
 ```
 
 Write multiple properties on a remote device (WritePropertyMultiple).
 
+Pass a local address string or a routed station, with an explicit or learned next hop.
 `specs` is `[(object_id, [(property_id, value, priority, array_index), ...]), ...]`.
 Empty request/property lists, ALL/REQUIRED/OPTIONAL targets and u8
 priorities outside 1..16 raise ValueError synchronously for the whole
