@@ -5767,7 +5767,9 @@ class BACnetClient:
         ``wait`` seconds must identify a single local next hop for its network.
         Zero or multiple next hops, or a discovery overrun, raise BacnetError.
         Replies must carry the remote station's source network and address and
-        arrive through the selected hop. A local-only reply may cause a timeout.
+        arrive through the selected hop. An older router that answers a table
+        query only on its own link never answers this client: the call raises
+        BacnetTimeoutError, whose text for a routed query says so.
         A reject for the requested DNET that comes through the next hop
         before the first ack ends a routed query, whether the hop sent it or
         relayed it from a router further on. A simultaneous request through that path can

@@ -85,9 +85,15 @@ pub enum RoutingTableError {
     /// looks the same as one that is not there, so this does not say
     /// which. On B/IP, a router that answers from another address or port
     /// than the one queried shows up here too. It is not an empty table.
+    ///
+    /// For a routed query, an older router may answer a table query only
+    /// on its own link: it then answers the next hop, never this client,
+    /// so the call ends here as well. Nothing else tells the two apart.
     NoAnswer {
         /// How long the call waited.
         waited: Duration,
+        /// The queried router's network, for a routed query.
+        routed: Option<u16>,
     },
     /// The queried station rejected the network message before the first
     /// acknowledgement, or its selected next hop rejected forwarding to
@@ -124,10 +130,23 @@ pub enum RoutingTableError {
 impl core::fmt::Display for RoutingTableError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NoAnswer { waited } => write!(
+            Self::NoAnswer {
+                waited,
+                routed: None,
+            } => write!(
                 f,
                 "the router sent no routing table within {waited:?}: it did not \
                  answer the query from the expected address"
+            ),
+            Self::NoAnswer {
+                waited,
+                routed: Some(network),
+            } => write!(
+                f,
+                "the router on network {network} sent no routing table back through \
+                 the next hop within {waited:?}: it may be absent, or an older router \
+                 that answers a table query only on its own link; query the next hop, \
+                 or ask from a node on network {network}"
             ),
             Self::Rejected(reject) => write!(
                 f,
@@ -370,6 +389,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     if table.acks == 0 {
                         return Err(RoutingTableError::NoAnswer {
                             waited: deadline.saturating_duration_since(start),
+                            routed: target.station.as_ref().map(|station| station.network),
                         });
                     }
                     // The quiet interval is the normal end; the total is a

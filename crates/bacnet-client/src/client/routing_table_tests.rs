@@ -193,8 +193,9 @@ async fn silence_is_no_answer_after_the_first_answer_wait() {
     };
     let (result, _) = query(wait, |_inbound| async {}).await;
     match result {
-        Err(RoutingTableError::NoAnswer { waited }) => {
-            assert_eq!(waited, Duration::from_secs(2));
+        Err(error @ RoutingTableError::NoAnswer { waited, routed }) => {
+            assert_eq!((waited, routed), (Duration::from_secs(2), None));
+            assert!(!error.to_string().contains("own link"), "{error}");
         }
         other => panic!("{other:?}"),
     }

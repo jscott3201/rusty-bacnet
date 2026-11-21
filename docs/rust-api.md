@@ -10657,7 +10657,7 @@ match client.routing_table(&router_mac, RoutingTableWait::default()).await {
         }
         if truncated { eprintln!("a bound cut the answer short"); }
     }
-    Err(RoutingTableError::NoAnswer { waited }) => eprintln!("silent for {waited:?}"),
+    Err(RoutingTableError::NoAnswer { waited, .. }) => eprintln!("silent for {waited:?}"),
     Err(RoutingTableError::Rejected(reject)) => eprintln!("refused: {}", reject.reason),
     Err(other) => return Err(other.into()),
 }
@@ -10672,11 +10672,16 @@ client uses a cached route or spends one additional first-answer window
 discovering a local next hop. Zero or multiple candidates yield
 `RoutingTableError::RouteUnresolved`. Lost discovery reports yield
 `RoutingTableError::DiscoveryIncomplete`. Neither outcome sends a table query.
-Routed acks must match the selected hop and original station. A matching hop's
-reject naming the target DNET before the first ack ends the query, though a
-concurrent request through the same hop to that DNET can produce the same reject.
-`NetworkReport::RoutingTable` reports each ack. An empty ack is a successful
-empty table. Silence after the table query was sent yields `NoAnswer`.
+Routed acks must match the selected hop and original station. A reject naming
+the target DNET that comes through the selected hop before the first ack ends
+the query, whether the hop sent it or relayed it from a router further on,
+though a concurrent request through the same hop to that DNET can produce the
+same reject. `NetworkReport::RoutingTable` reports each ack. An empty ack is a
+successful empty table. Silence after the table query was sent yields
+`NoAnswer`; for a routed query its `routed` field holds the network, and its
+text says that an older router may answer a table query only on its own link,
+where only the next hop hears it, so query the next hop or ask from a node on
+that network.
 A client runs one query at a time. A `first_answer` greater than `total`
 returns `InvalidArgument`.
 

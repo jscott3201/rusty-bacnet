@@ -283,3 +283,109 @@ async fn routing_table_refuses_an_apparently_unique_hop_after_losing_reports() {
     );
     client.stop().await.unwrap();
 }
+
+/// The next hop's own table, answered on its link with no SNET, is never
+/// taken as the remote router's: the call ends with no answer, and its text
+/// says an older router may answer only on its own link.
+#[tokio::test(start_paused = true)]
+async fn a_first_hop_answer_is_never_the_remote_table() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let station = Station::routed(&ROUTER, 9, &[3]);
+    let (result, ()) = tokio::join!(
+        client.routing_table(&station, RoutingTableWait::default()),
+        async {
+            outbound.recv().await.unwrap();
+            control(
+                &inbound,
+                &ROUTER,
+                Msg::INITIALIZE_ROUTING_TABLE_ACK,
+                &[1, 0, 9, 1, 0],
+                None,
+            )
+            .await;
+        }
+    );
+    let error = result.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RoutingTableError::NoAnswer {
+                routed: Some(9),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let text = error.to_string();
+    assert!(text.contains("only on its own link"), "{text}");
+    assert!(text.contains("network 9"), "{text}");
+    client.stop().await.unwrap();
+}
+
+/// An Ack that arrives after its query gave up is not counted by a later
+/// query that has not been sent yet: the later one counts only what follows
+/// its own question.
+#[tokio::test(start_paused = true)]
+async fn a_late_ack_between_queries_is_not_counted() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let station = Station::routed(&ROUTER, 9, &[3]);
+    let wait = RoutingTableWait::default();
+    let (first, ()) = tokio::join!(client.routing_table(&station, wait), async {
+        outbound.recv().await.unwrap();
+    });
+    assert!(matches!(first, Err(RoutingTableError::NoAnswer { .. })));
+    // The first query's answer, late.
+    control(
+        &inbound,
+        &ROUTER,
+        Msg::INITIALIZE_ROUTING_TABLE_ACK,
+        &[1, 0, 50, 1, 0],
+        Some(address(9, 3)),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let (second, ()) = tokio::join!(client.routing_table(&station, wait), async {
+        outbound.recv().await.unwrap();
+        control(
+            &inbound,
+            &ROUTER,
+            Msg::INITIALIZE_ROUTING_TABLE_ACK,
+            &[1, 0, 60, 1, 0],
+            Some(address(9, 3)),
+        )
+        .await;
+    });
+    let table = second.unwrap();
+    assert_eq!((table.acks, table.entries), (1, vec![entry(60, 1)]));
+    client.stop().await.unwrap();
+}
+
+/// A routed query dropped while it waits releases the one-at-a-time gate
+/// and its outstanding entry: the next query goes out and is answered.
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_routed_query_releases_the_gate() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let station = Station::routed(&ROUTER, 9, &[3]);
+    let wait = RoutingTableWait::default();
+    let cancelled = tokio::time::timeout(
+        Duration::from_millis(100),
+        client.routing_table(&station, wait),
+    )
+    .await;
+    assert!(cancelled.is_err(), "dropped while waiting");
+    outbound.recv().await.expect("the dropped query was sent");
+    let (table, ()) = tokio::join!(client.routing_table(&station, wait), async {
+        outbound.recv().await.expect("the next query is sent");
+        control(
+            &inbound,
+            &ROUTER,
+            Msg::INITIALIZE_ROUTING_TABLE_ACK,
+            &[1, 0, 70, 1, 0],
+            Some(address(9, 3)),
+        )
+        .await;
+    });
+    assert_eq!(table.unwrap().entries, vec![entry(70, 1)]);
+    assert!(client.routing_query.outstanding.lock().unwrap().is_none());
+    client.stop().await.unwrap();
+}

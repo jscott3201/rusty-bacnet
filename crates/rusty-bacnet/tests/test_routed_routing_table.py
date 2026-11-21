@@ -17,6 +17,19 @@ class RoutedRoutingTableTests(unittest.IsolatedAsyncioTestCase):
                 await client.routing_table(rb.RoutedTarget(9, b"\x03"), wait=0)
             self.assertIs(type(caught.exception), rb.BacnetError)
 
+    async def test_a_silent_routed_router_says_it_may_answer_only_on_its_link(self):
+        hop = RawPeer(lambda data, source: None)
+        self.addCleanup(hop.close)
+        target = rb.RoutedTarget(9, b"\x03", router=mac(hop.address))
+        async with rb.BipEndpoint(2612, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.255.255.255") as endpoint:
+            client = await endpoint.client()
+            with self.assertRaises(rb.BacnetTimeoutError) as caught:
+                await asyncio.wait_for(client.routing_table(target, wait=0.2, total=1), 10)
+            text = str(caught.exception)
+            for words in ("network 9", "only on its own link", "next hop"):
+                self.assertIn(words, text)
+
     async def test_endpoint_correlates_routed_acks_and_reuses_a_cancelled_query(self):
         arrivals = asyncio.Queue()
         loop = asyncio.get_running_loop()
