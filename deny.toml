@@ -5,7 +5,10 @@ no-default-features = false
 exclude = ["bacnet-benchmarks"]
 
 [advisories]
-ignore = []
+# See docs/ci.md for the release gate and both temporary maintenance exceptions.
+ignore = [
+    { id = "RUSTSEC-2026-0543", allow = ["rmcp@3.9.0", "schemars@1.2.2"], expiry = "2026-12-19", reason = "Released MCP SDK versions require chrono pending https://github.com/modelcontextprotocol/rust-sdk/pull/1474" },
+]
 
 [licenses]
 version = 2
