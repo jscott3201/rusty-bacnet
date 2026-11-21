@@ -95,7 +95,7 @@ async fn the_session_stopping_first_fails_open_requests_and_stops_the_link_under
                 .is_err()
         );
         assert!(client.who_is(Broadcast::Network(7), None).await.is_err());
-        assert!(client.who_is_router_to_network(None, None).await.is_err());
+        assert!(client.who_is_router_to_network(None).await.is_err());
         assert!(client.what_is_network_number(None).await.is_err());
         // Nor does the link itself, reached through the client.
         let transport = client.transport();

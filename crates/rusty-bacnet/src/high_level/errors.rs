@@ -23,7 +23,7 @@
 use bacnet_ops::error::PagingFault;
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::target::AddressStyle;
-use bacnet_ops::{OpsError, ResolveScope, WriteDenied, Written};
+use bacnet_ops::{OpsError, Scope, WriteDenied, Written};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -96,7 +96,7 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
         OpsError::UnknownDevice { target, asked } => lookup_error(
             match asked {
                 // Ops' own text names the Rust call that widens the scope.
-                Some(ResolveScope::Local) => format!(
+                Some(Scope::Local) => format!(
                     "device {target} did not answer a Who-Is on this network, the only one \
                      asked: name its network in the target ('5:{target}' for network 5), or \
                      give BACnetClient resolve_scope='global' or a network number"

@@ -12,6 +12,36 @@ use bacnet_bip_core::node::Groups;
 
 use super::BipTransport;
 
+/// Whether `mac` names one B/IP station by unicast: a six-octet IPv4
+/// address and nonzero UDP port that is not 0.0.0.0, a multicast group, the
+/// limited broadcast, or the subnet broadcast of a local interface whose
+/// subnet holds it (at any UDP port). It says nothing about what the station
+/// is. For an off-link peer the subnet mask is unknown, so its address is
+/// taken as one station. The interface lookup asks the operating system and
+/// sends nothing; with overlapping local subnets, the first interface whose
+/// subnet holds the address decides. This transport's own configured broadcast is
+/// [`TransportPort::is_group_destination`](crate::port::TransportPort::is_group_destination)'s
+/// to refuse.
+pub async fn is_unicast_station(mac: &[u8]) -> std::io::Result<bool> {
+    let Ok(address) = address_from_slice(mac) else {
+        return Ok(false);
+    };
+    let ip = *address.ip();
+    if address.port() == 0 || ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast() {
+        return Ok(false);
+    }
+    // A subnet with a broadcast has at least two host bits, all ones in
+    // the broadcast address. Other addresses need no interface lookup.
+    if ip.to_bits() & 3 != 3 {
+        return Ok(true);
+    }
+    tokio::task::spawn_blocking(move || {
+        let interface = crate::local_addresses::interface_of(ip)?;
+        Ok(interface.and_then(|local| local.subnet_broadcast(ip)) != Some(ip))
+    })
+    .await?
+}
+
 /// A B/IP link's group destinations, as [`TransportPort::is_group_destination`](crate::port::TransportPort::is_group_destination)
 /// reads them (#1479): this link's broadcast MAC, the limited broadcast
 /// 255.255.255.255 or the configured broadcast IP at any UDP port, and any

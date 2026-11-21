@@ -203,7 +203,7 @@ async fn the_query_is_a_zero_count_and_expects_a_reply() {
     let mut rx = b.start().await.unwrap();
     let mut layer = NetworkLayer::new(a);
     let _apdus = layer.start().await.unwrap();
-    layer.send_routing_table_query(&[2]).await.unwrap();
+    layer.send_routing_table_query(&[2], None).await.unwrap();
     let frame = tokio::time::timeout(Duration::from_millis(200), rx.recv())
         .await
         .unwrap()
@@ -214,7 +214,7 @@ async fn the_query_is_a_zero_count_and_expects_a_reply() {
 
 /// A query goes to one router: a broadcast or empty destination is refused
 /// with nothing sent.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_broadcast_query_is_refused() {
     let (mut a, mut b) = LoopbackTransport::pair(vec![1], vec![2]);
     a.set_broadcast_mac(vec![0xFF]);
@@ -223,11 +223,53 @@ async fn a_broadcast_query_is_refused() {
     let _apdus = layer.start().await.unwrap();
     for destination in [&[0xFF][..], &[]] {
         let error = layer
-            .send_routing_table_query(destination)
+            .send_routing_table_query(destination, None)
             .await
             .unwrap_err()
             .to_string();
         assert!(error.contains("one router's own address"), "{error}");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .is_err()
+    );
+}
+
+/// A routed query goes to the next hop by unicast and names the router as
+/// DNET and DADR with hop count 255 and no SNET (Clause 6.5.3); a
+/// destination no reply could come from is refused as an argument, with
+/// nothing sent.
+#[tokio::test(start_paused = true)]
+async fn a_routed_query_names_its_router_and_refuses_a_bad_destination() {
+    let (a, mut b) = LoopbackTransport::pair(vec![1], vec![2]);
+    let mut rx = b.start().await.unwrap();
+    let mut layer = NetworkLayer::new(a);
+    let _apdus = layer.start().await.unwrap();
+    let router = NpduAddress {
+        network: 9,
+        mac_address: MacAddr::from_slice(&[3]),
+    };
+    layer
+        .send_routing_table_query(&[2], Some(&router))
+        .await
+        .unwrap();
+    let frame = tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .unwrap()
+        .expect("the query reaches the next hop");
+    assert_eq!(&frame.npdu[..], [1, 0xA4, 0, 9, 1, 3, 0xFF, 0x06, 0]);
+    for (network, mac) in [(0, &[3][..]), (0xFFFF, &[3]), (9, &[]), (9, &[7; 19])] {
+        let bad = NpduAddress {
+            network,
+            mac_address: MacAddr::from_slice(mac),
+        };
+        let refused = layer.send_routing_table_query(&[2], Some(&bad)).await;
+        assert!(
+            matches!(&refused, Err(Error::Transport(error))
+                if error.kind() == std::io::ErrorKind::InvalidInput),
+            "{network} {mac:?}: {refused:?}"
+        );
     }
     assert!(
         tokio::time::timeout(Duration::from_millis(100), rx.recv())
@@ -273,4 +315,130 @@ fn an_ack_to_a_query_lists_its_entries_and_an_update_ack_is_no_report() {
     ] {
         assert_eq!(report(bytes, false), None, "{bytes:?}");
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_directed_router_query_never_falls_back_to_broadcast() {
+    use bacnet_transport::test_transport::{SendMode, TestTransport};
+    use bacnet_types::data_link::DataLink;
+
+    let broadcast = [127, 0, 0, 1, 0xba, 0xc0];
+    let group = [239, 0, 0, 1, 0xba, 0xc0];
+    let transport = TestTransport::builder()
+        .data_link(DataLink::Bip)
+        .broadcast_mac(&broadcast)
+        .group_mac(&group)
+        .unicast(SendMode::Record)
+        .broadcast(SendMode::Record)
+        .build();
+    let log = transport.sent();
+    let mut layer = NetworkLayer::new(transport);
+    let _apdus = layer.start().await.unwrap();
+    for invalid in [
+        &broadcast[..],
+        &group,
+        &[],
+        // The loopback /8's subnet broadcast can reach multiple sockets at
+        // another port, independently of the configured logical broadcast.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        &[127, 255, 255, 255, 0xba, 0xc1],
+        &[1, 2],
+        &[0, 0, 0, 0, 0xba, 0xc0],
+        &[192, 0, 2, 1, 0, 0],
+    ] {
+        let refused = layer
+            .send_network_message(
+                NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
+                &[],
+                Some(invalid),
+            )
+            .await;
+        assert!(
+            matches!(&refused, Err(Error::Transport(error))
+                if error.kind() == std::io::ErrorKind::InvalidInput),
+            "{invalid:?}: {refused:?}"
+        );
+        // The routing-table query takes the same check.
+        assert!(layer.send_routing_table_query(invalid, None).await.is_err());
+    }
+    assert!(log.is_empty());
+    // This TestTransport counts only its exact broadcast and group MACs as
+    // group destinations, so the same IP at another port is one station
+    // here. A real BipTransport refuses its configured broadcast IP at any
+    // port, unless that IP is a loopback or its own interface address (as
+    // loopback tests set up), which counts only at its own port
+    // (`bip::groups`).
+    let target = [127, 0, 0, 1, 0xba, 0xc1];
+    layer
+        .send_network_message(
+            NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
+            &[0, 7],
+            Some(&target),
+        )
+        .await
+        .unwrap();
+    assert_eq!(log.unicasts().len(), 1);
+    assert!(log.broadcasts().is_empty());
+    layer.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_router_address_uses_the_station_grammar_of_its_link() {
+    use bacnet_types::data_link::DataLink::*;
+    assert!(station_form(Some(Mstp), &[0]).await.unwrap());
+    assert!(!station_form(Some(Mstp), &[255]).await.unwrap());
+    assert!(station_form(Some(Bip6), &[0, 0, 0]).await.unwrap());
+    assert!(!station_form(Some(Bip6), &[1, 2]).await.unwrap());
+    let mac = [2, 1, 2, 3, 0, 0];
+    assert!(station_form(Some(Sc), &mac).await.unwrap());
+    assert!(station_form(Some(Ethernet), &mac).await.unwrap());
+    assert!(!station_form(Some(Bip), &mac).await.unwrap());
+    assert!(!station_form(Some(Sc), &[0; 6]).await.unwrap());
+}
+
+/// An Ethernet group MAC (the I/G bit set) has a station's form, so only
+/// the transport's group rule refuses it. The hook stands in for the
+/// Linux-only Ethernet transport's `is_group_mac`.
+#[tokio::test(start_paused = true)]
+async fn an_ethernet_group_mac_is_no_router_station() {
+    use bacnet_transport::test_transport::{SendMode, TestTransport};
+    use bacnet_types::data_link::DataLink;
+
+    let transport = TestTransport::builder()
+        .data_link(DataLink::Ethernet)
+        .broadcast_mac(&[0xFF; 6])
+        .on_is_group_destination(|mac| mac.len() == 6 && mac[0] & 1 == 1)
+        .unicast(SendMode::Record)
+        .broadcast(SendMode::Record)
+        .build();
+    let log = transport.sent();
+    let mut layer = NetworkLayer::new(transport);
+    let _apdus = layer.start().await.unwrap();
+    let group = [0x01, 0x80, 0xC2, 0x00, 0x00, 0x0E];
+    assert!(
+        station_form(Some(DataLink::Ethernet), &group)
+            .await
+            .unwrap()
+    );
+    assert!(!layer.is_local_unicast_station(&group).await.unwrap());
+    assert!(
+        layer
+            .send_network_message(
+                NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
+                &[],
+                Some(&group)
+            )
+            .await
+            .is_err()
+    );
+    assert!(layer.send_routing_table_query(&group, None).await.is_err());
+    assert!(log.is_empty());
+    let station = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+    assert!(layer.is_local_unicast_station(&station).await.unwrap());
+    layer
+        .send_routing_table_query(&station, None)
+        .await
+        .unwrap();
+    assert_eq!(log.unicasts().len(), 1);
+    layer.stop().await.unwrap();
 }

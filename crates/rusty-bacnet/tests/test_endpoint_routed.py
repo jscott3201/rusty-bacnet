@@ -234,6 +234,33 @@ class RoutedWireTests(unittest.IsolatedAsyncioTestCase):
         self.role = await self.endpoint.client()
         self.target = rb.RoutedTarget(5, self.STATION, router=self.router.address)
 
+    async def test_directed_discovery_filters_replies_without_losing_other_arrivals(self):
+        stations = [(6, self.STATION), (5, b"\x0b"), (5, self.STATION)]
+
+        def replies(datagram, source):
+            if datagram[:2] == b"\x81\x0a":
+                request = request_of(datagram)
+                self.requests.append(request)
+                return [i_am(network, address, FAR) for network, address in stations]
+            return ()
+
+        self.router.handler = replies
+        async with asyncio.timeout(10):
+            arrivals = await self.role.i_am_arrivals()
+            # The router answers at once on loopback: a short window is enough.
+            found = await self.role.discover(scope=self.target, low=FAR, high=FAR, wait=0.5)
+            [row] = found
+            self.assertEqual((row.network, bytes(row.entry.source_address), row.instance,
+                              row.duplicate), (5, self.STATION, FAR, True))
+            observed = [await anext(arrivals) for _ in stations]
+            self.assertCountEqual([(r.source_network, bytes(r.source_address)) for r in observed],
+                                  stations)
+            known = await self.role.discovered_devices()
+            self.assertCountEqual([(r.source_network, bytes(r.source_address)) for r in known
+                                   if r.object_identifier.instance == FAR], stations)
+            [query] = self.requests
+            self.assertEqual((query["dnet"], query["dadr"]), (5, self.STATION))
+
     def assert_routed(self, requests, service):
         self.assertTrue(requests)
         for request in requests:
@@ -371,7 +398,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
     """A RoutedTarget with no router: the client uses the route it learns.
     The endpoint is a foreign device of a raw BBMD that is also the router,
     so its broadcasts reach the BBMD as Distribute-Broadcast-To-Network,
-    where they can be read: the first call asks network 5 with one Who-Is,
+    where they can be read: the first call asks the station with one Who-Is,
     the station's I-Am relayed by the router gives the route, and every
     request then goes to that router by unicast, naming the station."""
 
@@ -412,7 +439,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         value = await asyncio.wait_for(self.role.read_property(target, AI_1, P.PRESENT_VALUE), 10)
         self.assertEqual(value, rb.PropertyValue.unsigned(0))
         [who_is] = self.who_is
-        self.assertEqual(who_is["dadr"], b"")  # every device on network 5
+        self.assertEqual(who_is["dadr"], self.STATION)
         for name, call in calls(self.role, target).items():
             with self.subTest(method=name):
                 await asyncio.wait_for(call(), 5)
@@ -436,12 +463,13 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         started = loop.time()
         with self.assertRaises(rb.BacnetLookupError) as caught:
-            await asyncio.wait_for(self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 10)
-        self.assertGreaterEqual(loop.time() - started, 2.5)  # the Who-Is's wait
+            await asyncio.wait_for(self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 15)
+        # Both waits: the Who-Is addressed to the station, then the one to its network.
+        self.assertGreaterEqual(loop.time() - started, 5.5)
         text = str(caught.exception)
-        for words in ("5:0x0B", "Who-Is on network 5", "router=", "discover_routers()"):
+        for words in ("5:0x0B", "a Who-Is addressed to it", "router=", "discover_routers()"):
             self.assertIn(words, text)
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
         # Asked again soon: it raises at once, and no second Who-Is goes.
         started = loop.time()
         for name, call in calls(self.role, silent).items():
@@ -449,7 +477,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(call(), 1)
         self.assertLess(loop.time() - started, 1)
         self.assertIn("in the last 30 s", str(again.exception))
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
         self.assertEqual([d for d, _ in self.bbmd.received if d[:2] == b"\x81\x0a"], [])
         # Naming the router works at once.
         through = rb.RoutedTarget(5, b"\x0b", router=self.bbmd.address)
@@ -464,15 +492,16 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
         self.assertEqual(await asyncio.wait_for(
             self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 1), rb.PropertyValue.unsigned(0))
-        self.assertEqual(len(self.who_is), 1)
+        self.assertEqual(len(self.who_is), 2)
 
 
     async def test_calls_made_together_share_one_who_is(self):
         silent = rb.RoutedTarget(5, b"\x0c")
         results = await asyncio.wait_for(asyncio.gather(
             *[self.role.read_property(silent, AI_1, P.PRESENT_VALUE) for _ in range(20)],
-            return_exceptions=True), 10)
-        self.assertEqual(len(self.who_is), 1)
+            return_exceptions=True), 15)
+        # One lookup: the Who-Is addressed to the station, then one to its network.
+        self.assertEqual(len(self.who_is), 2)
         self.assertTrue(all(isinstance(result, rb.BacnetLookupError) for result in results), results)
         self.assertEqual(len({str(result) for result in results}), 1)
 
@@ -486,9 +515,11 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
                 for _ in range(5)]
         await asyncio.sleep(0.05)
         first.cancel()
-        results = await asyncio.wait_for(asyncio.gather(*rest, return_exceptions=True), 10)
+        results = await asyncio.wait_for(asyncio.gather(*rest, return_exceptions=True), 15)
         self.assertTrue(all(isinstance(result, rb.BacnetLookupError) for result in results), results)
-        self.assertIn(len(self.who_is), (1, 2))  # a cancelled asker may hand the asking on
+        # The cancelled asker sent one; the call it handed the asking to sends
+        # both forms (or the asker sent both first).
+        self.assertIn(len(self.who_is), (2, 3))
         await asyncio.gather(first, return_exceptions=True)
 
 
@@ -601,7 +632,7 @@ class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(rb.BacnetLookupError):
                 await asyncio.wait_for(
                     role.read_property(rb.RoutedTarget(9, self.far_address), AI_1,
-                                       P.PRESENT_VALUE), 10)
+                                       P.PRESENT_VALUE), 15)
             self.assertEqual((await endpoint.status())["active_leases"], 0)
 
     async def test_routed_reads_and_writes_are_audited_naming_the_station(self):

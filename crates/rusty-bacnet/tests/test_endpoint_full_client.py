@@ -295,6 +295,32 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(stop, 5)
         self.assertIsNot(await self.endpoint.client(), client)
 
+    async def test_cancelled_station_discovery_releases_the_shared_client(self):
+        client = await self.endpoint.client()
+        loop = asyncio.get_running_loop()
+        received = asyncio.Queue()
+
+        def observe(datagram, source):
+            if datagram[:2] == b"\x81\x0a":
+                loop.call_soon_threadsafe(received.put_nowait, (datagram, source))
+            return ()
+
+        peer = RawPeer(observe)
+        self.addCleanup(peer.close)
+        target = rb.RoutedTarget(5, b"\x07", router=peer.address)
+        async with asyncio.timeout(10):
+            pending = asyncio.ensure_future(client.discover(scope=target, wait=60))
+            datagram, source = await received.get()
+            self.assertEqual(datagram[4:], bytes.fromhex("01 20 00 05 01 07 ff 10 08"))
+            self.assertEqual("%s:%d" % source, self.local)
+            self.assertFalse(pending.done())
+            pending.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await pending
+            await client.who_is(scope=target)
+            self.assertEqual(await received.get(), (datagram, source))
+            await client.stop()
+
     async def test_cancelling_a_call_in_flight_leaves_the_client_usable(self):
         client = await self.endpoint.client()
         peer = silent_peer(self)

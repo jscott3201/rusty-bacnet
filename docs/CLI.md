@@ -166,9 +166,10 @@ When using a device instance number, the device must have been previously found 
 `enrollment-summary`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`,
 `create-object`, `delete-object` and `ack-alarm` (`ack`) take
 `DNET:instance` and `DNET:0xMAC`. When the device isn't in the discovery table
-yet, the CLI sends a Who-Is to that network and waits up to three seconds for
-the device to answer, then sends the request through the router that answered
-for it. `read-range --all` keeps every metadata read and range request routed
+yet, `DNET:instance` sends a Who-Is for that instance on the named network.
+`DNET:0xMAC` directs its Who-Is to the named station. The CLI waits up to
+three seconds for a reply, then sends the service request through the router
+that relayed it. `read-range --all` keeps every metadata read and range request routed
 to that device while paging its log. `file-read` routes every stream or record
 window; `file-write` retains stream access and requires `--allow-write`.
 `control` and `reinit` retain their write and confirmation guards. `time-sync`
@@ -2201,6 +2202,7 @@ concurrent-writer no-clobber guarantee.
 ```bash
 bacnet whois-router                       # routers and the networks they reach
 bacnet whois-router --dnet 2 --wait 5     # only the router to network 2
+bacnet whois-router --router 192.0.2.1:47808   # ask one router alone
 ```
 
 `whois-router` broadcasts a Who-Is-Router-To-Network and lists each router
@@ -2211,6 +2213,14 @@ named. With `--json` it prints an array, empty when no router answered:
 ```json
 [{ "router": "192.168.1.1:47808", "networks": [2, 3] }]
 ```
+
+With `--router ADDRESS` the question goes to that one router on the local
+network, and only its own answers are listed; an empty, broadcast or group
+address is refused with nothing sent. A router asked about a network it
+does not know may ask further before it answers. The router answers with a
+local broadcast, not to the asker alone, so a B/IP router on another IP
+subnet takes the question but its answer arrives only through a BBMD
+(`--foreign-bbmd`). Without one, an empty list is the expected result.
 
 A device on one of those networks is then a routed target, such as
 `bacnet read 2:1234 ai:1 pv` for device 1234 on network 2.

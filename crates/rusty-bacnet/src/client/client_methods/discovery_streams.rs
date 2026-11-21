@@ -71,27 +71,63 @@ impl BACnetClient {
     }
 
     /// Broadcast a Who-Is-Router-To-Network for `network` (or every
-    /// network) and collect the routers that answer for `wait` seconds: one
-    /// `DiscoveredRouter` per router MAC, in the order first heard. For a
-    /// `network`, only the routers that list it. No answer is an empty
-    /// list. `network` 0 and 65535 raise `BacnetError`. It holds the
-    /// started client for the whole wait, so `stop()` (or leaving
-    /// `async with`) waits up to `wait` seconds for it.
-    #[pyo3(signature = (network=None, *, wait=3.0))]
+    /// network), or with `router` (its address text or MAC bytes on the
+    /// local link) ask that one router and keep only its own answers.
+    /// Collect for `wait` seconds after the send (an IPv6 socket address
+    /// may first need VMAC resolution): one `DiscoveredRouter` per router
+    /// MAC, in the order first heard. For a `network`, only the routers
+    /// that list it. No answer is an empty list. The asked router answers
+    /// with a local broadcast, so a B/IP router on another IP subnet is
+    /// heard only when a BBMD forwards its answer here, as a peer or by
+    /// foreign-device registration. A `router` that names no one station
+    /// raises `ValueError`, as `routing_table` does, with nothing sent;
+    /// `network` 0 and 65535 raise `BacnetError`. It holds the started
+    /// client through address resolution, the send and collection.
+    /// `stop()` waits for the call to finish or be cancelled.
+    #[pyo3(signature = (network=None, *, router=None, wait=3.0))]
     fn discover_routers<'py>(
         &self,
         py: Python<'py>,
         network: Option<u16>,
+        router: Option<&Bound<'_, PyAny>>,
         wait: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let wait = discover_wait(wait)?;
+        if let Some(network @ (0 | u16::MAX)) = network {
+            return Err(crate::errors::BacnetError::new_err(format!(
+                "network {network} is not a network number a router can reach; use 1..=65534"
+            )));
+        }
+        let router = router
+            .map(super::routing_table::RouterArg::read)
+            .transpose()?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let routers = started(&inner)
-                .await?
-                .discover_routers(network, wait)
-                .await
-                .map_err(to_py_err)?;
+            let client = started(&inner).await?;
+            let routers = match router {
+                Some(router) => {
+                    let mac = router
+                        .on(&client, "router needs a router's address on the local link")
+                        .await?;
+                    // An address that names no one station is an argument
+                    // error with nothing sent, as `routing_table` raises it.
+                    client
+                        .discover_routers_directed(&mac, network, wait)
+                        .await
+                        .map_err(|error| match error {
+                            bacnet_types::error::Error::Transport(io)
+                                if io.kind() == std::io::ErrorKind::InvalidInput =>
+                            {
+                                PyValueError::new_err(io.to_string())
+                            }
+                            other => to_py_err(other),
+                        })?
+                }
+                None => client
+                    .discover_routers(network, wait)
+                    .await
+                    .map_err(to_py_err)?,
+            };
             Ok(routers
                 .into_iter()
                 .map(PyDiscoveredRouter)

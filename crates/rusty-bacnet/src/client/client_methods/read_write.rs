@@ -110,10 +110,12 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Send a WhoIs broadcast to discover devices: on this network alone
+    /// Send one Who-Is to discover devices: on this network alone
     /// unless `scope` names every network (`"global"`), one remote
     /// network by its number (#2560), or one station by its address, which
-    /// is asked by unicast (#2561).
+    /// is asked by unicast (#2561). A `RoutedTarget` directs the Who-Is to
+    /// its network and MAC through an explicit or learned router, or by
+    /// local link broadcast when the next hop is unknown.
     ///
     /// Give both limits or neither, each from 0 to 4194303; one alone,
     /// `low` above `high`, or a limit past 4194303 raises

@@ -1,5 +1,5 @@
 //! The read-only routing-table query (#2612): ask one router on the local
-//! link for its table and collect the acknowledgements.
+//! link or behind a selected next hop for its table and collect the acknowledgements.
 //!
 //! The query is an Initialize-Routing-Table with a port count of zero, which
 //! asks a router to return its table and change nothing (Clauses 6.4.7 and
@@ -11,10 +11,6 @@
 //! acks until a quiet interval, inside a total bound and an entry bound,
 //! and says whether it stopped at a bound.
 //!
-//! Only a router on the client's own link can be asked: the message is a
-//! local network message with no DNET. A router reached through another
-//! router is not covered.
-
 use super::*;
 use bacnet_network::layer::{NetworkReport, RoutingTableEntry};
 use bacnet_npdu::{RejectMessageReason, RejectMessageToNetwork};
@@ -89,24 +85,46 @@ pub enum RoutingTableError {
     /// looks the same as one that is not there, so this does not say
     /// which. On B/IP, a router that answers from another address or port
     /// than the one queried shows up here too. It is not an empty table.
+    ///
+    /// For a routed query, an older router may answer a table query only
+    /// on its own link: it then answers the next hop, never this client,
+    /// so the call ends here as well. Nothing else tells the two apart.
+    /// A far router that rejects the query as an unknown message (reason
+    /// 3) can end here too: its reject arrives with its near-side network
+    /// as SNET and names a network of its own choosing (Clause 6.4.4).
     NoAnswer {
         /// How long the call waited.
         waited: Duration,
+        /// The queried router's network, for a routed query.
+        routed: Option<u16>,
     },
-    /// The router answered with a Reject-Message-To-Network before any
-    /// acknowledgement (Clause 6.4.4), with a reason that can answer a
-    /// local message: other error, unknown message type, an addressing
-    /// error or an unknown reason value. Rejects for a DNET (reasons 1, 2 and 4) belong to routed
-    /// requests and are ignored.
+    /// The queried station rejected the network message before the first
+    /// acknowledgement, or its selected next hop rejected forwarding to
+    /// the requested DNET.
     Rejected(RejectMessageToNetwork),
     /// The call's arguments were refused and nothing was sent: no entries
     /// kept, a first-answer wait longer than the total, or a router
-    /// address that is empty or a broadcast.
+    /// address that names no one station.
     InvalidArgument(String),
     /// The client's dispatch task ended while the call waited (the client
     /// stopped, its link closed or a seat's node stopped). That is not
     /// silence from the router.
     ClientStopped,
+    /// No unique local next hop advertised the requested router's network.
+    RouteUnresolved {
+        /// The destination network.
+        network: u16,
+        /// The number of distinct local peers that advertised it.
+        candidates: usize,
+    },
+    /// Reports were lost during router discovery, so the client could not
+    /// establish that a single next hop advertised the destination.
+    DiscoveryIncomplete {
+        /// The destination network.
+        network: u16,
+        /// Network reports lost before the collector read them.
+        lost: u64,
+    },
     /// The query was not sent: the link failed or the client's node had
     /// stopped.
     Send(Error),
@@ -115,10 +133,23 @@ pub enum RoutingTableError {
 impl core::fmt::Display for RoutingTableError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NoAnswer { waited } => write!(
+            Self::NoAnswer {
+                waited,
+                routed: None,
+            } => write!(
                 f,
                 "the router sent no routing table within {waited:?}: it did not \
-                 answer the query, or is not on this link"
+                 answer the query from the expected address"
+            ),
+            Self::NoAnswer {
+                waited,
+                routed: Some(network),
+            } => write!(
+                f,
+                "the router on network {network} sent no routing table back through \
+                 the next hop within {waited:?}: it may be absent, or an older router \
+                 that answers a table query only on its own link; query the next hop, \
+                 or ask from a node on network {network}"
             ),
             Self::Rejected(reject) => write!(
                 f,
@@ -127,6 +158,17 @@ impl core::fmt::Display for RoutingTableError {
             ),
             Self::InvalidArgument(why) => write!(f, "routing-table query refused: {why}"),
             Self::ClientStopped => f.write_str("the client stopped during the routing-table query"),
+            Self::DiscoveryIncomplete { network, lost } => write!(
+                f,
+                "lost {lost} reports discovering routers for network {network}. Specify an explicit next hop"
+            ),
+            Self::RouteUnresolved {
+                network,
+                candidates,
+            } => write!(
+                f,
+                "found {candidates} local routers to network {network}. Specify an explicit next hop"
+            ),
             Self::Send(error) => write!(f, "routing-table query not sent: {error}"),
         }
     }
@@ -150,11 +192,10 @@ impl From<Error> for RoutingTableError {
 /// What [`BACnetClient::routing_table`] shares with the dispatch task.
 #[derive(Debug)]
 pub(super) struct RoutingQueries {
-    /// The router a query waits on, while one does: the dispatch task then
-    /// reads a data-less Initialize-Routing-Table-Ack from exactly that
-    /// MAC, not routed, as an empty table. Locked only for an ack with no
-    /// data, never per APDU.
-    pub(super) outstanding: std::sync::Mutex<Option<MacAddr>>,
+    /// The expected peer and station. The dispatch task can treat a
+    /// data-less Initialize-Routing-Table-Ack from this source as an empty
+    /// table. Locked only for an ack with no data, never per APDU.
+    pub(super) outstanding: std::sync::Mutex<Option<QueryTarget>>,
     /// Ends (its sender is dropped) when the dispatch task does, however it
     /// ends: stop, abort, a closed link or a seat's node stopping. A call
     /// waits on it, so it returns `ClientStopped` at once. It is never
@@ -181,7 +222,7 @@ impl RoutingQueries {
 
 /// Clears the "query outstanding" router when the call ends, however it
 /// ends.
-struct Outstanding<'a>(&'a std::sync::Mutex<Option<MacAddr>>);
+struct Outstanding<'a>(&'a std::sync::Mutex<Option<QueryTarget>>);
 
 impl Drop for Outstanding<'_> {
     fn drop(&mut self) {
@@ -193,8 +234,7 @@ impl Drop for Outstanding<'_> {
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Read the routing table of the router at `router`, a station on this
-    /// client's own link, without changing it.
+    /// Read the routing table of a local or routed router station.
     ///
     /// Sends an Initialize-Routing-Table with a port count of zero
     /// (Clauses 6.4.7 and 6.6.3.8) and collects the
@@ -223,22 +263,34 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// - a Reject-Message-To-Network from `router` with a reason that can
     ///   answer a local message (0, 3, 6 or an unknown value) came before
     ///   any ack: [`RoutingTableError::Rejected`]. Rejects for a DNET
-    ///   (reasons 1, 2 and 4) are ignored, as is any reject after the
-    ///   first ack.
+    ///   (reasons 1, 2 and 4) are ignored for a local query, as is any
+    ///   reject after the first ack.
     /// - [`RoutingTableError::InvalidArgument`] for `wait.max_entries` 0,
     ///   `wait.first_answer` longer than `wait.total`, or a `router` that
-    ///   is empty or a broadcast; nothing is sent.
+    ///   names no one station (empty, a broadcast or group address, or
+    ///   malformed for the link); nothing is sent.
     /// - [`RoutingTableError::ClientStopped`] when the client stops
     ///   mid-call.
     ///
-    /// Only a router on the local link can be asked: the query carries no
-    /// DNET, so a router behind another router is out of reach, and acks
-    /// that arrive routed (with a source network) are not taken. An ack is
-    /// taken when it comes from `router`'s MAC, whether it arrives as a
-    /// unicast or a broadcast.
+    /// A routed station can name its next hop, or use the station's cached
+    /// route. Without either, a Who-Is-Router-To-Network asks for local
+    /// routers advertising the DNET. This takes one additional first-answer
+    /// interval and requires exactly one peer, or returns
+    /// [`RoutingTableError::RouteUnresolved`]. No Device I-Am is required.
+    /// A routed ack must arrive from the selected peer with the original
+    /// router's SNET/SADR. A device which only answers locally may time out.
+    /// A reject that comes through that peer naming the requested DNET
+    /// ends a routed query before its first ack with
+    /// [`RoutingTableError::Rejected`], whether the peer sent it (no SNET)
+    /// or relayed it from a router further on (that router's SNET), since
+    /// a router relays a reject back toward the requester (Clause 6.6.3.5).
+    /// Reason 4 (message too long) is ignored: the query is too short to
+    /// draw it, so it answers a larger request to that network.
     ///
     /// Nothing pairs an answer with its question, so a late ack of an
-    /// earlier query can be counted by the next query to the same router:
+    /// earlier query can be counted by the next query to the same router,
+    /// and a reject from the selected hop naming the same DNET may also
+    /// concern a concurrent routed request. For repeated table queries,
     /// leave a gap between repeated queries. Entries are reported as
     /// received, not deduplicated, so a network number can appear twice.
     ///
@@ -252,7 +304,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// (`InvalidArgument` otherwise).
     pub async fn routing_table(
         &self,
-        router: &[u8],
+        router: &(impl ToStation + ?Sized),
         wait: RoutingTableWait,
     ) -> Result<RoutingTable, RoutingTableError> {
         if wait.max_entries == 0 {
@@ -266,11 +318,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 wait.first_answer, wait.total
             )));
         }
-        if !self.network.is_routing_table_target(router) {
-            return Err(RoutingTableError::InvalidArgument(
-                "the router must be one station's own address, not empty or a broadcast".into(),
-            ));
-        }
         // Held for the whole call, across its awaits: it guards no data.
         let _one_at_a_time = self.routing_query.gate.lock().await;
         // The call's clock starts here, once it has the gate. Every instant
@@ -279,23 +326,39 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let start = tokio::time::Instant::now();
         let overflow =
             || RoutingTableError::InvalidArgument("a wait is too long for the clock".into());
-        let end = start.checked_add(wait.total).ok_or_else(overflow)?;
-        let first_deadline = start.checked_add(wait.first_answer).ok_or_else(overflow)?;
+        start.checked_add(wait.total).ok_or_else(overflow)?;
         start.checked_add(wait.quiet).ok_or_else(overflow)?;
         let mut ended = self.routing_query.ended.clone();
         if ended.has_changed().is_err() {
             return Err(RoutingTableError::ClientStopped);
         }
-        // Subscribe first, so no answer can arrive before the receiver.
-        let mut rx = self.network_reports();
         self.link_open()?;
+        let target = tokio::select! {
+            result = self.table_query_target(router.station(), wait.first_answer) => result?,
+            _ = ended.changed() => return Err(RoutingTableError::ClientStopped),
+        };
+        // Route resolution has its own first-answer window. The collection
+        // clocks start here, after a next hop has been selected.
+        let start = tokio::time::Instant::now();
+        let end = start.checked_add(wait.total).ok_or_else(overflow)?;
+        let first_deadline = start.checked_add(wait.first_answer).ok_or_else(overflow)?;
+        let mut rx = self.network_reports();
         *self
             .routing_query
             .outstanding
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(MacAddr::from_slice(router));
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(target.clone());
         let _outstanding = Outstanding(&self.routing_query.outstanding);
-        self.network.send_routing_table_query(router).await?;
+        self.network
+            .send_routing_table_query(&target.hop, target.station.as_ref())
+            .await
+            .map_err(|error| match error {
+                Error::Encoding(message) => RoutingTableError::InvalidArgument(message),
+                Error::Transport(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+                    RoutingTableError::InvalidArgument(e.to_string())
+                }
+                other => RoutingTableError::Send(other),
+            })?;
         let mut last_ack = start;
         let mut table = RoutingTable {
             entries: Vec::new(),
@@ -331,6 +394,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     if table.acks == 0 {
                         return Err(RoutingTableError::NoAnswer {
                             waited: deadline.saturating_duration_since(start),
+                            routed: target.station.as_ref().map(|station| station.network),
                         });
                     }
                     // The quiet interval is the normal end; the total is a
@@ -339,11 +403,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     break;
                 }
             };
-            if received.source_mac.as_slice() != router || received.source_network.is_some() {
-                continue;
-            }
             match received.report {
-                NetworkReport::RoutingTable(entries) => {
+                NetworkReport::RoutingTable(entries)
+                    if target.answers(&received.source_mac, received.source_network.as_ref()) =>
+                {
                     table.acks += 1;
                     last_ack = tokio::time::Instant::now();
                     let room = wait.max_entries - table.entries.len();
@@ -359,12 +422,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // query.
                 NetworkReport::RejectMessageToNetwork(reject)
                     if table.acks == 0
-                        && ![
-                            RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-                            RejectMessageReason::ROUTER_BUSY,
-                            RejectMessageReason::MESSAGE_TOO_LONG,
-                        ]
-                        .contains(&reject.reason) =>
+                        && target.rejects(
+                            &received.source_mac,
+                            received.source_network.as_ref(),
+                            &reject,
+                        ) =>
                 {
                     return Err(RoutingTableError::Rejected(reject));
                 }
@@ -374,6 +436,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         Ok(table)
     }
 }
+
+#[path = "routing_table_target.rs"]
+mod target;
+pub(super) use target::QueryTarget;
 
 #[cfg(test)]
 #[path = "routing_table_tests.rs"]

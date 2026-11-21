@@ -5593,7 +5593,7 @@ class BACnetClient:
           ``"mstp:5"``, ``"bip6:0x0004D2"``, an SC VMAC as six hex octets,
           a routed station as ``"2:0x05"`` (network 2, MAC 05), or a
           ``(network, mac)`` pair such as a lookup error's candidate. A
-          routed station the client knows no router for asks its network
+          routed station with no learned router is asked directly
           first;
         - an instance, ``1234`` (an int or text) or ``"2:1234"`` on network
           2, gives a handle that follows the instance: the one address
@@ -5737,9 +5737,9 @@ class BACnetClient:
         *,
         low: Optional[int] = None,
         high: Optional[int] = None,
-        scope: Literal["local", "global"] | int | str = "local",
+        scope: Literal["local", "global"] | int | str | RoutedTarget = "local",
     ) -> Awaitable[None]:
-        """Broadcast a Who-Is request. Responses are collected asynchronously;
+        """Send a Who-Is request. Responses are collected asynchronously;
         use ``discovered_devices()`` to retrieve them.
 
         ``scope`` says where the broadcast goes (#2560): ``"local"``, the
@@ -5748,7 +5748,10 @@ class BACnetClient:
         device answers; a number from 1 to 65534 is that remote network,
         through its router; and any other text is one station's address in
         the forms ``device()`` takes (``"192.168.1.10"``, ``"mstp:5"``),
-        asked by unicast (#2561, where ``who_is_directed`` was). Another
+        asked by unicast (#2561). A ``RoutedTarget`` selects one station by
+        its network and MAC. Its explicit or learned next hop receives the
+        request by unicast. When the next hop is unknown, the local link
+        carries the station-addressed request by broadcast. Another
         number, or text that names a device instance or a routed target,
         raises ``ValueError``, and another type ``TypeError``, before
         anything is sent; a station the client's link can't reach raises
@@ -5765,7 +5768,7 @@ class BACnetClient:
     def discover(
         self,
         *,
-        scope: Literal["local", "global"] | int | str = "local",
+        scope: Literal["local", "global"] | int | str | RoutedTarget = "local",
         low: Optional[int] = None,
         high: Optional[int] = None,
         wait: float = 3.0,
@@ -5779,7 +5782,8 @@ class BACnetClient:
 
         The Who-Is goes where ``scope`` says, as for ``who_is()``: this
         network alone unless it names every network (``"global"``), one
-        remote network by its number, or one station by its address.
+        remote network by its number, or one station by its local address
+        or ``RoutedTarget``. A directed result matches that station's address.
 
         Give ``low`` and ``high`` together or not at all, each from 0 to
         4194303, to ask only those instances: one alone, ``low`` above
@@ -5863,30 +5867,45 @@ class BACnetClient:
         ...
 
     def discover_routers(
-        self, network: Optional[int] = None, *, wait: float = 3.0,
+        self, network: Optional[int] = None, *, router: str | bytes | None = None,
+        wait: float = 3.0,
     ) -> Awaitable[list[DiscoveredRouter]]:
         """Broadcast a Who-Is-Router-To-Network for ``network`` (or every
         network) and collect the routers that answer for ``wait`` seconds, one
         per router MAC in the order first heard; for a ``network``, only the
-        routers listing it. An empty list when none answer. ``network`` 0 or
-        65535 raises BacnetError (#1850). ``wait`` is 0 to 3600 seconds
-        (``ValueError`` otherwise). It holds the started client for the
-        whole wait, so ``stop()`` waits up to ``wait`` seconds for it."""
+        routers listing it. An empty list when none answer.
+
+        With ``router``, the router's address on the local link (``bytes``
+        such as a ``DiscoveredRouter``'s ``mac``, or address text as for
+        ``routing_table``), the question goes to that router alone and only
+        its own answers count. A router asked about a network it does not
+        know may ask further before it answers. An IPv6 socket address can
+        need VMAC resolution before the wait. The router answers with a
+        local broadcast, so a B/IP router on another IP subnet is heard only
+        when a BBMD forwards its answer here, as a peer or by foreign-device
+        registration: with no BBMD, an empty list is the expected result. A
+        ``router`` that names no one
+        station (empty, a broadcast or group address) raises ValueError, as
+        ``routing_table`` does, and sends nothing.
+
+        ``network`` 0 or 65535 raises BacnetError (#1850). ``wait`` is 0 to
+        3600 seconds (``ValueError`` otherwise). It holds the started client
+        through resolution, sending and collection. ``stop()`` waits for the
+        call to finish or be cancelled."""
         ...
 
     def routing_table(
-        self, router: str | bytes, *, wait: float = 3.0, quiet: float = 0.5,
+        self, router: str | bytes | RoutedTarget, *, wait: float = 3.0, quiet: float = 0.5,
         total: float = 10.0, max_entries: int = 4096,
     ) -> Awaitable[RoutingTable]:
-        """Read the routing table of the router at ``router``, a station on
-        this client's own link, without changing it (#2612). The call sends
+        """Read the routing table of a local or routed station (#2612). The call sends
         one Initialize-Routing-Table with a port count of zero, which only
         asks; no argument can make it an update.
 
-        ``router`` is the router's address on the local link: ``bytes`` as
-        given, such as a ``DiscoveredRouter``'s ``mac``, or a string in the
+        For a local router, pass its MAC as ``bytes`` or a string in the
         binding's address forms (``"ip:port"``, ``"bip6:N"``, hex octets, an
-        MS/TP station). An empty or broadcast address raises ValueError.
+        MS/TP station). For a remote router, pass a RoutedTarget. An empty,
+        broadcast or group link address raises ValueError.
 
         A long table comes as several acknowledgements with nothing to mark
         the last, so the call returns once ``quiet`` seconds pass after the
@@ -5908,11 +5927,23 @@ class BACnetClient:
         one that answers from another address or port), and neither is an
         empty table. A Reject-Message-To-Network from the router before any
         acknowledgement raises BacnetNetworkRejectError; rejects with
-        reasons 1, 2 and 4 concern a DNET and are ignored. Each bound is 0 to
+        reasons 1, 2 and 4 are ignored for local queries. Each bound is 0 to
         3600 seconds and ``wait`` may not exceed ``total`` (ValueError
-        otherwise). A client stopped mid-call raises RuntimeError. Only a
-        router on the local link can be asked; one behind another router
-        cannot. One query runs at a time per client; a second call waits for
+        otherwise). A client stopped mid-call raises RuntimeError. A
+        RoutedTarget selects the remote router, using its explicit or cached
+        next hop. Without either, one router-discovery window of up to
+        ``wait`` seconds must identify a single local next hop for its network.
+        Zero or multiple next hops, or a discovery overrun, raise BacnetError.
+        Replies must carry the remote station's source network and address and
+        arrive through the selected hop. An older router that answers a table
+        query only on its own link never answers this client: the call raises
+        BacnetTimeoutError, whose text for a routed query says so.
+        A reject for the requested DNET that comes through the next hop
+        before the first ack ends a routed query, whether the hop sent it or
+        relayed it from a router further on (reason 4, message too long, is
+        ignored: the query is too short to draw it). A simultaneous request through that path can
+        produce the same reject because network messages have no invoke ID.
+        One query runs at a time per client; a second call waits for
         the first. It holds the started client for the whole wait, so
         ``stop()`` waits for it."""
         ...
@@ -9731,14 +9762,17 @@ class RoutedTarget:
     ``mac_address``, or ``BACnetClient.discover_routers()``' ``mac``; each
     request goes through it. Without one, the client uses the route it
     knows: the router its discovery table names for the station, after
-    one Who-Is to the station's network when it has none, as
-    ``BACnetClient.device()`` does. A station that doesn't answer raises
+    one Who-Is addressed to that station when it has none, as
+    ``BACnetClient.device()`` does, and with no answer one Who-Is to its
+    network that only the station's own address answers (an MS/TP slave
+    behind a slave proxy is found that way, and asked on its network first
+    from then on). A station that answers neither raises
     ``BacnetLookupError``, and for 30 seconds a call to it with no router
     raises at once without asking again, unless an I-Am from it arrives
-    first; calls made together for one station share one Who-Is. To scan
-    stations that never announce themselves, such as MS/TP slaves, pass
-    ``router`` from ``BACnetClient.discover_routers()``: without it each
-    costs one 3-second Who-Is wait. A station on the client's own network,
+    first; calls made together for one station share one lookup. To scan
+    stations that never announce themselves, such as MS/TP slaves with no
+    proxy, pass ``router`` from ``BACnetClient.discover_routers()``: without
+    it each costs two 3-second Who-Is waits. A station on the client's own network,
     once it knows the number, is sent to directly either way. Other values raise ValueError, a type
     other than ``str`` or ``bytes`` TypeError, and so does a call in another
     order, since ``network`` takes an ``int``.

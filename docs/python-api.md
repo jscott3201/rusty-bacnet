@@ -167,7 +167,10 @@ far = await client.device("2:1234")            # instance 1234 on network 2
 
 - **A pinned handle** is made at once. Nothing is sent for a station on the
   client's own network; a routed station the client knows no router for
-  asks its network with one Who-Is first. It never moves: `await
+  receives a Who-Is addressed to it first, then, with no answer, one Who-Is
+  to its network that only the station's own address answers (how an MS/TP
+  slave behind a slave proxy is found). A station found the second way is
+  asked on its network first from then on. It never moves: `await
   ahu.moved_to()` says where its instance is heard now, once its own
   address has gone quiet.
 - **A following handle** needs the device's address. One address claiming
@@ -543,6 +546,7 @@ for found in await client.discover():                    # this network
     print(found.address, found.instance)
 far = await client.discover(scope=5, low=1000, high=1999, wait=5.0)
 one = await client.discover(scope="192.168.1.10")        # one station, by unicast
+station = await client.discover(scope=RoutedTarget(5, b"\x07", router="192.0.2.1:47808"))
 ahu = await client.device(far[0])
 ```
 
@@ -2658,7 +2662,7 @@ async for notif in notifications:
 
 #### `who_is(*, low=None, high=None, scope="local")`
 
-Broadcast a WhoIs request. By default it goes to this network alone: a
+Send a Who-Is request. By default it goes to this network alone: a
 local broadcast, which reaches the whole BACnet network (across BBMDs, and
 to foreign devices) but which no router passes on (#2560). `scope="global"`
 sends it to every network, and a network number from 1 to 65534 to that
@@ -2671,7 +2675,12 @@ and another type `TypeError`, before anything is sent; a station the
 client's link can't reach raises `ValueError` on await. A client on a
 router's application (`transport="router"`) has no network of its own, so
 its Who-Is names a network, or every one: a local or directed one raises
-`ValueError` saying so. The Who-Has calls take the same scopes.
+`ValueError` saying so. A `RoutedTarget` in `who_is` or `discover` selects one station by its
+network and MAC. The explicit or learned next hop receives a unicast.
+With no learned next hop the client broadcasts on the local link while
+keeping the remote station's DNET and DADR. Discovery collects answers from
+that address during the wait. Who-Has accepts the broadcast scopes and a
+local station address.
 
 ```python
 await client.who_is()                    # all devices on this network
@@ -2745,7 +2754,7 @@ replies = await client.who_has_replies("Zone Temperature", scope="global")
 Follow every I-Have the client receives from now on, an answer to its own
 Who-Has or not, as an async iterator of `IHave`.
 
-#### `discover_routers(network=None, *, wait=3.0) -> list[DiscoveredRouter]`
+#### `discover_routers(network=None, *, router=None, wait=3.0) -> list[DiscoveredRouter]`
 
 Broadcast a Who-Is-Router-To-Network for `network`, or every network, and
 collect the routers that answer for `wait` seconds: one frozen
@@ -2754,14 +2763,30 @@ collect the routers that answer for `wait` seconds: one frozen
 it are kept. No answer is an empty list; `network` 0 or 65535 raises
 `BacnetError`.
 
+With `router`, the question goes to that one router and only its own
+answers count: its address on the local link, as text such as
+`router="192.0.2.1:47808"` or as MAC bytes (a `DiscoveredRouter`'s `mac`).
+A router asked about a network it does not know may ask further before it
+answers. An IPv6 socket address may need VMAC resolution before the
+collection window. The router must be one station: an empty, broadcast or
+group address raises `ValueError` with nothing sent, as `routing_table`
+does, and on B/IP
+the host's own subnet masks catch a subnet broadcast at any UDP port.
+
+The asked router answers with a local broadcast, not to the asker alone.
+A B/IP router on another IP subnet therefore takes the question, but its
+answer reaches the client only when a BBMD forwards it here, as a peer or
+by foreign-device registration (`foreign_device=` on the client or
+endpoint); with no BBMD, an empty list is the expected result.
+
 #### `routing_table(router, *, wait=3.0, quiet=0.5, total=10.0, max_entries=4096) -> RoutingTable`
 
-Read the routing table of the router at `router`, a station on the client's
-own link, without changing it (#2612). The call sends one
+Read the routing table of a local or routed station (#2612). The call sends one
 Initialize-Routing-Table with a port count of zero, which only asks; no
-argument can turn it into an update. `router` is the router's address on the
-local link: `bytes` as given (a `DiscoveredRouter`'s `mac`) or a string in
-the binding's address forms. An empty or broadcast address raises
+argument can turn it into an update. For a local router, pass its MAC as
+`bytes` (a `DiscoveredRouter`'s `mac`) or use one of the binding's address
+strings. For a remote router, pass a `RoutedTarget`. An empty, broadcast or
+group address raises
 `ValueError`.
 
 The result is a frozen `RoutingTable`: `entries` (frozen `RoutingTableEntry`
@@ -2790,15 +2815,29 @@ number can appear twice.
 - A router that answers with a Reject-Message-To-Network before any
   acknowledgement raises `BacnetNetworkRejectError`, with the router's
   `reason` octet and `network`. Rejects with reasons 1, 2 and 4 concern a
-  DNET, which this local message has none of, and are ignored.
+  DNET and are ignored for a local query.
 - A client stopped mid-call raises `RuntimeError`.
 
 Each bound is 0 to 3600 seconds, and `wait` may not exceed `total`
 (`ValueError` otherwise). An acknowledgement from the router's own address
-is taken whether it arrives as a unicast or a broadcast. Only a router on
-the client's own link can be asked: the query is a local message, so a
-router behind another router is out of reach. One query runs at a time per
-client (network messages carry no invoke ID), so a second call waits for
+is taken whether it arrives as a unicast or a broadcast.
+
+For a remote router, pass `RoutedTarget(network, address, router=next_hop)`.
+When the next hop is omitted, the client uses a cached path for that station,
+or spends up to `wait` additional seconds discovering a single local router
+that advertises the network. Zero or multiple candidates, or lost discovery
+reports, raise `BacnetError`. Supply an explicit next hop to skip discovery.
+The destination router does not need to advertise a Device object. Acks must
+arrive through the selected hop with the destination router's source network
+and address. An older router that answers a table query only on its own link never
+answers this client: the call raises `BacnetTimeoutError`, whose text for a
+routed query says so (query the next hop, or ask from a node on that network).
+A reject for the requested DNET that comes through the selected hop before
+the first ack ends the query, whether the hop sent it or relayed it from a
+router further on (reason 4, message too long, is ignored: the query is too short to draw it). A concurrent routed request to that DNET through the same
+hop can produce an indistinguishable reject because there is no invoke ID.
+
+One query runs at a time per client (network messages carry no invoke ID), so a second call waits for
 the first. Like `discover_routers()`, it holds the started client for the
 whole wait.
 
@@ -2884,8 +2923,8 @@ first on the next call, reads complete one at a time, and each iterator
 belongs to one event loop. Iteration ends once the client stops.
 
 `who_has_replies()` and `discover_routers()` hold the started client for
-their whole `wait`, so `stop()`, or leaving `async with`, waits for them
-to finish.
+address resolution, sending and their collection window. Stopping the client
+waits for an active call to finish or be cancelled.
 
 #### `discovered_devices() -> list[DiscoveredDevice]`
 
@@ -7896,10 +7935,10 @@ thirteen are `read_property`, `read_property_multiple`, `read_range`,
 `subscribe_cov_property_multiple`; the other typed calls take a local
 address only.
 
-**To scan stations that don't announce themselves (MS/TP slaves), pass
-`router` from `discover_routers()`.** Without it each such station costs one
-Who-Is and its 3-second wait before the call fails; the remembered miss
-below only spares repeat calls.
+**To scan stations that don't announce themselves (MS/TP slaves with no
+slave proxy), pass `router` from `discover_routers()`.** Without it each such
+station costs two Who-Is and their 3-second waits before the call fails; the
+remembered miss below only spares repeat calls.
 `RoutedTarget(network, address, router=None)` takes its arguments in that
 order, positionally or by keyword:
 
@@ -7931,12 +7970,15 @@ async with endpoint:
 With a `router`, each request goes to that router with the station's
 network and MAC as its destination. Without one, the client uses the route
 it knows, as `device()` does: the router its discovery table names for the
-station, after one Who-Is to the station's network when it has no row.
-Calls made together for one station share that Who-Is and its answer. A
-station that doesn't answer raises `BacnetLookupError`, and for 30 seconds
+station, after one Who-Is addressed to the station when it has no row, and
+with no answer one Who-Is to its network that only the station's own address
+answers. A slave proxy answers that second form for its MS/TP slaves, so such
+a slave is found, and asked on its network first from then on. Calls made
+together for one station share that lookup and its answer. A station that
+answers neither raises `BacnetLookupError`, and for 30 seconds
 a call to it with no router raises at once, without asking again, unless an
-I-Am from it gives the client a row first. **A station that never announces
-itself, such as an MS/TP slave, needs `router`**: `discover_routers()` finds
+I-Am from it gives the client a row first. **A station no I-Am comes for,
+such as an MS/TP slave with no proxy, needs `router`**: `discover_routers()` finds
 the routers on the link. A `router` that is a broadcast or group
 address on the link (the configured broadcast address, 255.255.255.255, a
 multicast group, MS/TP station 255) raises `BacnetError` before anything is
@@ -7984,7 +8026,7 @@ on the endpoint's link. Its calls keep their names and result shapes:
 
 | `EndpointClient` | `BACnetClient` from `endpoint.client()` |
 |---|---|
-| `read_property(address, ...)`, a `str` or a `RoutedTarget` | the same call; a `RoutedTarget` with no `router` now takes the route the client learns, not a broadcast per request. To scan stations that don't announce themselves (MS/TP slaves), pass `router` from `discover_routers()`: without it each costs a 3-second Who-Is wait |
+| `read_property(address, ...)`, a `str` or a `RoutedTarget` | the same call; a `RoutedTarget` with no `router` now takes the route the client learns, not a broadcast per request. To scan stations that don't announce themselves (MS/TP slaves with no proxy), pass `router` from `discover_routers()`: without it each costs two 3-second Who-Is waits |
 | `read_property_multiple` checked its arguments at the call (`ValueError`) | a bad address raises `ValueError`, and an empty list `BacnetError`, when awaited |
 | `read_property_multiple(address, specs)` | the same call, with the standalone profile: selectors and wildcard instances are taken, an empty list raises `BacnetError` when awaited, and the answer comes back as the device gave it, each result naming its object, property and index, for you to compare with what you asked |
 | `read_range(address, ..., validation=...)` | the same call |

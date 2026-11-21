@@ -102,7 +102,7 @@ async fn an_explicit_scope_reaches_the_wire_as_named() {
     client.find(quick(Scope::Global)).await.unwrap();
     assert_eq!(the_who_has(&sent), (remote(0xFFFF), true));
     let found = client
-        .find(quick(Scope::Directed(at(2))).wait(Duration::from_millis(500)))
+        .find(quick(Scope::Directed(at(2).into())).wait(Duration::from_millis(500)))
         .await
         .unwrap();
     assert_eq!(found, [at_two("A")]);
@@ -112,6 +112,34 @@ async fn an_explicit_scope_reaches_the_wire_as_named() {
     assert_eq!(frames[0].mac.as_slice(), mac(2));
     assert_eq!(frames[0].decode_npdu().destination, None);
     stop(vec![lab]).await;
+}
+
+/// A directed Who-Has keeps the local station admitted before waiting for
+/// its rate slot, even when a later Network-Number-Is names a new number.
+#[tokio::test(start_paused = true)]
+async fn an_admitted_directed_who_has_keeps_its_local_mac_after_a_number_change() {
+    let bus = Bus::new();
+    let (client, sent) = client_on(bus.numbered_port(1)).await;
+    let low = client.low_level();
+    bus.number_is(254, 5);
+    settle().await;
+    assert_eq!(low.network_number(), Some(5));
+    let scope = Scope::Directed(bacnet_client::client::Station::remote(5, &mac(2)));
+    let admitted = crate::client::find::station(low, &scope).unwrap();
+    bus.number_is(254, 6);
+    settle().await;
+    assert_eq!(low.network_number(), Some(6));
+    scope
+        .send_who_has(low, admitted, &WhoHasObject::Name("A".into()), None)
+        .await
+        .unwrap();
+    let frames = who_has_frames(&sent);
+    let [frame] = frames.as_slice() else {
+        panic!("one Who-Has: {frames:?}")
+    };
+    assert!(!frame.broadcast);
+    assert_eq!(frame.mac.as_slice(), mac(2));
+    assert!(frame.decode_npdu().destination.is_none());
 }
 
 /// A scope or range that can't be sent is refused before anything goes,
@@ -138,7 +166,7 @@ async fn a_refused_scope_or_range_sends_nothing() {
             "Find::within(Scope::Global)",
         ),
         (
-            find().within(Scope::Directed(routed)),
+            find().within(Scope::Directed(routed.into())),
             "address",
             "a directed Who-Has goes to one station on this network: \
              Find::within(Scope::Network(2))",
@@ -244,7 +272,7 @@ async fn a_directed_search_lists_only_its_station() {
     let found = found_within(
         &client,
         &bus,
-        Scope::Directed(at(2)),
+        Scope::Directed(at(2).into()),
         &[(3, None), (2, None)],
     )
     .await;

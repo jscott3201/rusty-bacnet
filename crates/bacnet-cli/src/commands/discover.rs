@@ -42,7 +42,7 @@ pub async fn scope<T: TransportPort + 'static>(
                 target::address_mac(client.transport(), target, target::TARGET_NOT_AN_ADDRESS)
                     .await
                     .map_err(crate::destination::with_link_flag)?;
-            Scope::Directed(DeviceAddress::local(&mac)?)
+            Scope::Directed(DeviceAddress::local(&mac)?.into())
         }
         (None, Some(network)) => Scope::Network(network),
         (None, None) if global => Scope::Global,
@@ -368,7 +368,7 @@ mod tests {
         }];
         assert_eq!(miss_note(&Scope::Local, &[]), Some(LOCAL_MISS));
         assert!(LOCAL_MISS.contains("--dnet") && LOCAL_MISS.contains("--global"));
-        let station = Scope::Directed(DeviceAddress::local(&BIP_LOCAL_MAC).unwrap());
+        let station = Scope::Directed(DeviceAddress::local(&BIP_LOCAL_MAC).unwrap().into());
         for scope in [Scope::Network(5), Scope::Global, station] {
             assert_eq!(miss_note(&scope, &[]), None, "{scope:?}");
         }

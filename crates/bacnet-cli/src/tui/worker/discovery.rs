@@ -96,7 +96,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                 let sent = match &command {
                     DiscoveryCommand::WhoHas { name, scope } => send_who_has(client, name, scope).await,
                     DiscoveryCommand::WhoIsRouter => client
-                        .who_is_router_to_network(None, None)
+                        .who_is_router_to_network(None)
                         .await
                         .map_err(|error| error.to_string()),
                 };

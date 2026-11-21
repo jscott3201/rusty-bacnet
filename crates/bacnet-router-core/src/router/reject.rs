@@ -82,9 +82,16 @@ impl<
     /// Whether `address` is this router: a port's network with the
     /// router's MAC on that port.
     pub(super) fn is_own(&self, address: Address<'_>) -> bool {
+        self.own_port(address).is_some()
+    }
+
+    /// The port at which `address` is this router, if it is.
+    pub(super) fn own_port(&self, address: Address<'_>) -> Option<PortId> {
         self.ports[..self.port_count]
             .iter()
-            .any(|port| port.network == address.network && port.mac == *address.mac)
+            .position(|port| port.network == address.network && port.mac == *address.mac)
+            // At most 255 ports.
+            .map(|index| PortId(index as u8))
     }
 
     /// Queue the reject naming `network` with `reason` that answers the

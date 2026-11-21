@@ -29,19 +29,34 @@ impl RouterInfo {
     }
 }
 
-/// Broadcast a Who-Is-Router-To-Network, for `dnet` or every network, and
+/// Send a Who-Is-Router-To-Network, to `router` or by local broadcast, and
 /// print the routers that answer within `wait_secs`: a JSON array of
 /// `{router, networks}`, empty when none answered.
 pub async fn whois_router_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     dnet: Option<u16>,
+    router: Option<&str>,
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let router = match router {
+        Some(address) => Some(
+            bacnet_ops::target::address_mac(
+                client.transport(),
+                address,
+                "--router needs a router's address on the local network",
+            )
+            .await
+            .map_err(crate::destination::with_link_flag)?,
+        ),
+        None => None,
+    };
     output::print_waiting(wait_secs);
-    let routers = client
-        .discover_routers(dnet, std::time::Duration::from_secs(wait_secs))
-        .await?;
+    let wait = std::time::Duration::from_secs(wait_secs);
+    let routers = match &router {
+        Some(router) => client.discover_routers_directed(router, dnet, wait).await?,
+        None => client.discover_routers(dnet, wait).await?,
+    };
     let style = AddressStyle::of(client.transport());
     let routers: Vec<RouterInfo> = routers.iter().map(|r| RouterInfo::of(r, style)).collect();
     match format {

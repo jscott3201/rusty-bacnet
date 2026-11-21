@@ -68,6 +68,7 @@ pub use foreign_device::{ForeignBbmd, ForeignDeviceConfig};
 pub use mode::{BbmdOptions, BipMode};
 mod fanout;
 mod groups;
+pub use groups::is_unicast_station;
 pub(crate) mod listener_error;
 mod multicast;
 pub use multicast::BipMulticast;

@@ -151,9 +151,15 @@ async fn default_policy_coalesces_a_reused_routed_cli_source() {
     let first_source = sources.lock().unwrap()[0].clone();
     let reused_port = source_port(&first_source);
     let second = query(port, reused_port).await;
-    failure(&second, "did not answer a Who-Is on network 2");
-    check(&server, 2, 1, 1);
+    // The station-addressed Who-Is and the one to network 2 that follows it
+    // are both coalesced: the reused source has its answer already.
+    failure(
+        &second,
+        "answered neither a Who-Is addressed to it nor one on network 2",
+    );
+    check(&server, 3, 2, 1);
     assert_eq!(sources.lock().unwrap()[1], first_source);
+    assert_eq!(sources.lock().unwrap()[2], first_source);
     assert_eq!(tokio::time::Instant::now(), start);
 
     // Reserving the old source excludes it from the next port-0 choice. The
@@ -165,8 +171,8 @@ async fn default_policy_coalesces_a_reused_routed_cli_source() {
         "{}",
         String::from_utf8_lossy(&distinct.stderr)
     );
-    check(&server, 3, 1, 2);
-    let distinct_source = sources.lock().unwrap()[2].clone();
+    check(&server, 4, 2, 2);
+    let distinct_source = sources.lock().unwrap()[3].clone();
     assert_ne!(distinct_source, first_source);
     assert_eq!(tokio::time::Instant::now(), start);
     drop(held);
@@ -178,9 +184,9 @@ async fn default_policy_coalesces_a_reused_routed_cli_source() {
         "{}",
         String::from_utf8_lossy(&boundary.stderr)
     );
-    check(&server, 4, 1, 3);
-    assert_eq!(sources.lock().unwrap().len(), 4);
-    assert_eq!(sources.lock().unwrap()[3], first_source);
+    check(&server, 5, 2, 3);
+    assert_eq!(sources.lock().unwrap().len(), 5);
+    assert_eq!(sources.lock().unwrap()[4], first_source);
     assert_eq!(
         tokio::time::Instant::now(),
         start + Duration::from_millis(200)

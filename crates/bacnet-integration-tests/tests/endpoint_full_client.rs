@@ -69,7 +69,7 @@ async fn the_high_level_client_discovers_and_reads_over_a_nodes_full_client() {
     let address = found[0].address.clone();
     tokio::time::sleep(Duration::from_secs(30)).await;
     let directed = client
-        .discover(Discover::directed(address.clone()).wait(wait))
+        .discover(Discover::directed(address.clone().into()).wait(wait))
         .await
         .unwrap();
     assert_eq!(directed.len(), 1);

@@ -77,7 +77,7 @@ pub mod watch;
 pub mod write;
 
 pub use arrival::{IAmArrival, IAmArrivals};
-pub use client::{Client, Discover, Find, ResolveScope, Scope};
+pub use client::{Client, Discover, Find, ResolveScope, RouterDiscovery, Scope};
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};
@@ -87,6 +87,15 @@ pub use watch::{CovSupport, Update, Watch};
 pub use write::{
     IntoWriteValue, Priority, PriorityView, WriteDenied, WritePolicy, WritePreview, Written,
 };
+
+/// One station, as a [`Scope::Directed`] Who-Is or Who-Has names it: on the
+/// local link ([`Station::local`]), on another network by its address alone
+/// ([`Station::remote`], through the router the client knows for it, or a
+/// local broadcast naming that network while it knows none), or through a
+/// named router ([`Station::routed`]). A [`DeviceAddress`] converts with
+/// `.into()`. The low-level client's type, re-exported so an application
+/// needs no direct `bacnet-client` dependency to name one.
+pub use bacnet_client::client::Station;
 
 /// The BACnet/SC TLS configuration [`Client::sc`] takes, and the error its
 /// constructors return with the types its variants name, so an application

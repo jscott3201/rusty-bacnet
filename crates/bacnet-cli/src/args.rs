@@ -659,8 +659,14 @@ pub(crate) enum Command {
     /// List the routers on the local network and the networks they reach
     /// (Who-Is-Router-To-Network).
     WhoisRouter {
-        /// Ask only for the router to this network number.
-        #[arg(long)]
+        /// Ask only the router at this address on the local network and list
+        /// its own answers. It answers with a local broadcast, so a B/IP
+        /// router on another IP subnet is heard only through a BBMD (see
+        /// --foreign-bbmd); without one, no routers is the expected result.
+        #[arg(long, value_name = "ADDRESS")]
+        router: Option<String>,
+        /// Ask only for the router to this network number (1 to 65534).
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=65534))]
         dnet: Option<u16>,
         /// Seconds to wait for responses.
         #[arg(long, default_value_t = 3)]

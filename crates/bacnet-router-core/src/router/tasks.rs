@@ -25,7 +25,9 @@ pub(super) enum TaskKind {
     /// An Initialize-Routing-Table-Ack with no data, to `to` on `port`.
     UpdateAck,
     /// The next Initialize-Routing-Table-Ack of a table answer, to `to` on
-    /// `port`, from network `cursor` on.
+    /// `port`, from network `cursor` on, with `origin` as its DNET and DADR
+    /// when `origin_network` isn't 0, and the router's address on port
+    /// `named - 1` as its SNET and SADR when `named` isn't 0.
     TableAck,
     /// A Network-Number-Is answering on `port`.
     NumberIs,
@@ -34,6 +36,12 @@ pub(super) enum TaskKind {
 }
 
 /// A queued output: all zero bits when empty.
+///
+/// It stays as small as it was before routed table answers (#2699): a
+/// routed answer's source is always one of the router's own port
+/// addresses, so the task keeps that port's index and the writer rebuilds
+/// the address from the port's configuration. In every router's storage,
+/// firmware included, that saves an 18-octet MAC per queued task.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Task {
     pub(super) kind: TaskKind,
@@ -43,7 +51,15 @@ pub(super) struct Task {
     to: Mac,
     origin_network: u16,
     origin: Mac,
+    /// The port, plus one, whose address a routed query named; 0 for none.
+    named: u8,
     pub(super) cursor: u32,
+}
+
+/// `octets` as a [`Mac`]: a parsed or configured address is never over the
+/// bound.
+fn mac(octets: &[u8]) -> Mac {
+    Mac::from_slice(octets).unwrap_or(Mac::EMPTY)
 }
 
 impl Task {
@@ -55,6 +71,7 @@ impl Task {
         to: Mac::EMPTY,
         origin_network: 0,
         origin: Mac::EMPTY,
+        named: 0,
         cursor: 0,
     };
 
@@ -63,6 +80,23 @@ impl Task {
         task.kind = kind;
         task.port = port;
         task
+    }
+
+    /// `origin` as the task's destination fields: network 0 for none.
+    fn with_origin(mut self, origin: Option<Address<'_>>) -> Self {
+        if let Some(origin) = origin {
+            self.origin_network = origin.network;
+            self.origin = mac(origin.mac);
+        }
+        self
+    }
+
+    /// The destination a reject or table answer carries, if any.
+    fn origin(&self) -> Option<Address<'_>> {
+        (self.origin_network != 0).then(|| Address {
+            network: self.origin_network,
+            mac: self.origin.as_slice(),
+        })
     }
 
     /// A Who-Is-Router for `network` on every port but `except`.
@@ -82,16 +116,13 @@ impl Task {
         network: u16,
         reason: RejectMessageReason,
     ) -> Self {
-        // A parsed address is never over the bound.
-        let mac = |octets: &[u8]| Mac::from_slice(octets).unwrap_or(Mac::EMPTY);
         Self {
             network,
             reason,
             to: mac(to),
-            origin_network: origin.map_or(0, |origin| origin.network),
-            origin: origin.map_or(Mac::EMPTY, |origin| mac(origin.mac)),
             ..Self::of(TaskKind::Reject, port)
         }
+        .with_origin(origin)
     }
 
     /// An I-Am-Router on `port` for `network`, or for every network beyond
@@ -111,12 +142,26 @@ impl Task {
         }
     }
 
-    /// The whole table, in Acks to `to` on `port`.
-    pub(super) fn table_ack(port: PortId, to: Mac) -> Self {
+    /// The whole table, in Acks to `to` on `port`: to `origin` beyond it
+    /// when the query came from another network, and from the router's
+    /// address on port `named` when the query named that address on a port
+    /// other than `port`.
+    pub(super) fn table_ack(
+        port: PortId,
+        to: &[u8],
+        origin: Option<Address<'_>>,
+        named: Option<PortId>,
+    ) -> Self {
         Self {
-            to,
+            to: mac(to),
+            // At most 255 ports, so index 254 plus one fits.
+            named: named.map_or(0, |port| {
+                debug_assert!(port.0 < u8::MAX, "Router::new caps ports at 255");
+                port.0.saturating_add(1)
+            }),
             ..Self::of(TaskKind::TableAck, port)
         }
+        .with_origin(origin)
     }
 
     /// A Network-Number-Is on `port`.
@@ -130,11 +175,6 @@ impl Task {
     }
 }
 
-/// Entries per Ack of a table answer: as many as fit an NPDU of 501
-/// octets, the most a standard MS/TP frame carries (Clause 9.3), so every
-/// link can take the answer. That is 124.
-const ACK_ENTRIES: usize = (501 - 3 - 1) / RoutingEntries::ENTRY_LEN;
-
 /// Write a network message of type `kind` with no addresses into `scratch`:
 /// the three-octet header, then the data `data` writes behind it.
 fn write_message(
@@ -142,12 +182,16 @@ fn write_message(
     kind: NetworkMessageType,
     data: impl FnOnce(&mut [u8]) -> Option<usize>,
 ) -> Option<usize> {
-    let header = Npdu::message(kind, &[]);
-    let at = header.encoded_len();
-    let (head, rest) = scratch.split_at_mut_checked(at)?;
-    let len = data(rest)?;
-    header.encode_into(head).ok()?;
-    Some(at + len)
+    write_with_header(scratch, Npdu::message(kind, &[]), data)
+}
+
+fn write_with_header(
+    scratch: &mut [u8],
+    header: Npdu<'_>,
+    data: impl FnOnce(&mut [u8]) -> Option<usize>,
+) -> Option<usize> {
+    let at = header.encode_into(scratch).ok()?;
+    Some(at + data(&mut scratch[at..])?)
 }
 
 /// The routes from network `from` on that have a wire Port ID, ascending,
@@ -213,12 +257,7 @@ impl<
                 }
                 .to_bytes();
                 let mut npdu = Npdu::message(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, &data);
-                if task.origin_network != 0 {
-                    npdu.destination = Some(Address {
-                        network: task.origin_network,
-                        mac: task.origin.as_slice(),
-                    });
-                }
+                npdu.destination = task.origin();
                 let len = npdu.encode_into(&mut self.scratch).ok();
                 let target = Target::Unicast(task.port, task.to.as_slice());
                 Some((len, Kind::Reject(task.reason), Cause::Ingress, target))
@@ -259,26 +298,60 @@ impl<
                 Some((len, kind, Cause::Ingress, target))
             }
             TaskKind::TableAck => {
-                let entries = wire_entries(&self.table, task.cursor).take(ACK_ENTRIES);
-                let last = entries.clone().last().map(|(network, _)| network);
-                // The first Ack goes even for an empty table, with a count
-                // of 0; later ones only while routes remain.
-                if task.cursor != 0 && last.is_none() {
+                let message = NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK;
+                let named = task
+                    .named
+                    .checked_sub(1)
+                    .and_then(|index| self.ports[..self.port_count].get(usize::from(index)));
+                let header = Npdu {
+                    source: named.map(|port| Address {
+                        network: port.network,
+                        mac: port.mac.as_slice(),
+                    }),
+                    destination: task.origin(),
+                    ..Npdu::message(message, &[])
+                };
+                let port = task.port;
+                let link_limit = self.ports[usize::from(port.0)].max_npdu.get(false);
+                let budget = link_limit.min(self.scratch.len()).min(501);
+                // A relay may retain the destination and add its ingress source.
+                // Reserve that header on the 501-octet path even on a larger link.
+                let relayed = if header.destination.is_some() && header.source.is_none() {
+                    Npdu {
+                        source: Some(Address {
+                            network: 1,
+                            mac: &[0; crate::MAX_MAC_LEN],
+                        }),
+                        ..header
+                    }
+                    .encoded_len()
+                } else {
+                    header.encoded_len()
+                };
+                let room = budget
+                    .saturating_sub(header.encoded_len() + 1)
+                    .min(501usize.saturating_sub(relayed + 1));
+                let per_ack = room / RoutingEntries::ENTRY_LEN;
+                let entries = wire_entries(&self.table, task.cursor);
+                let mut remaining = entries.clone();
+                let last = remaining.by_ref().take(per_ack).last();
+                let more = remaining.next().is_some();
+                let len = if more && last.is_none() {
                     None
                 } else {
-                    let message = NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK;
-                    let len = write_message(&mut self.scratch, message, |data| {
-                        RoutingEntries::write(entries, data).ok()
-                    });
-                    // A write that fails ends the answer, as an encode
-                    // failure does in the hosted router.
-                    next = last
-                        .filter(|_| len.is_some())
-                        .map(|network| u32::from(network) + 1);
-                    let kind = Kind::Answer(message);
-                    let target = Target::Unicast(task.port, task.to.as_slice());
-                    Some((len, kind, Cause::Ingress, target))
+                    write_with_header(&mut self.scratch[..budget], header, |data| {
+                        RoutingEntries::write(entries.take(per_ack), data).ok()
+                    })
+                };
+                if more && len.is_some() {
+                    next = last.map(|(network, _)| u32::from(network) + 1);
                 }
+                Some((
+                    len,
+                    Kind::Answer(message),
+                    Cause::Ingress,
+                    Target::Unicast(port, task.to.as_slice()),
+                ))
             }
             TaskKind::NumberIs => {
                 let len = self.write_number_is(task.port);
@@ -304,7 +377,9 @@ impl<
                 Some(len) => {
                     let mut current =
                         Current::new(len, kind, cause, NetworkPriority::Normal, target);
-                    current.table_ack = task.kind == TaskKind::TableAck;
+                    // Only this exact task remains at the queue front until
+                    // the next poll or refusal. A completed answer has no continuation.
+                    current.table_ack = task.kind == TaskKind::TableAck && next.is_some();
                     self.out.current = current;
                 }
                 None => bump(&mut self.counters.write_failures),
@@ -358,4 +433,21 @@ impl<
         }
         None
     }
+}
+
+#[cfg(test)]
+#[path = "table_reply_tests.rs"]
+mod table_reply_tests;
+
+/// A queued task is as small as before routed table answers: 52 octets,
+/// where a task holding a whole reply plan (three MACs) took 76. Every
+/// router's storage holds four (#2699).
+#[cfg(test)]
+#[test]
+fn a_task_keeps_one_mac_per_address_it_cannot_rebuild() {
+    assert!(
+        core::mem::size_of::<Task>() <= 52,
+        "{}",
+        core::mem::size_of::<Task>()
+    );
 }

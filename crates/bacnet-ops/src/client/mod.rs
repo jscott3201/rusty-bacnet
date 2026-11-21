@@ -54,7 +54,7 @@ pub use self::connect::MstpConnect;
 pub use self::connect::ScConnect;
 pub use self::connect::{Bip6Connect, BipConnect};
 pub(crate) use self::discover::Ask;
-pub use self::discover::{DISCOVER_WAIT, Discover, ResolveScope, Scope};
+pub use self::discover::{DISCOVER_WAIT, Discover, ResolveScope, RouterDiscovery, Scope};
 pub use self::find::{FIND_WAIT, Find, FoundObject};
 pub use self::log::Naming;
 pub(crate) use self::log::PagedLog;
@@ -91,6 +91,10 @@ pub const DEVICE_PROPERTIES: [PropertyIdentifier; 13] = [
 
 /// How long a handle made from an instance no address claims waits for
 /// the device's I-Am, unless [`Client::with_resolve_wait`] says otherwise.
+/// It is the wait per Who-Is: a handle made from a remote address the
+/// discovery table holds no row for may send two, one addressed to the
+/// station and one to its network, so a silent station costs up to twice
+/// this (6 s by default), plus any wait for the Who-Is rate limit.
 pub const RESOLVE_WAIT: Duration = Duration::from_secs(3);
 
 /// The stop flag of the client's readers. Nothing sets it: a call is
@@ -185,6 +189,10 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// loses a row at its address, or a device there announces another
     /// instance.
     pub(crate) instances: Mutex<HashMap<DeviceAddress, u32>>,
+    /// The stations on other networks a lookup by address found answering
+    /// only a Who-Is to their network, or nothing
+    /// ([`StationMisses`](crate::device::StationMisses)).
+    pub(crate) station_misses: Mutex<crate::device::StationMisses>,
     /// The discovery table's changes, for the rows it loses and the
     /// instances announced at each address.
     pub(crate) changes: Mutex<broadcast::Receiver<DeviceEvent>>,
@@ -222,6 +230,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 cov: Mutex::new(HashMap::new()),
                 follows: Mutex::new(HashMap::new()),
                 instances: Mutex::new(HashMap::new()),
+                station_misses: Mutex::default(),
                 changes,
                 events: broadcast::channel(64).0,
             }),
@@ -271,7 +280,11 @@ impl<T: TransportPort + 'static> Client<T> {
 
     /// A clone of this client whose handles made from an instance that no
     /// address claims wait `wait` for the device's I-Am after one Who-Is
-    /// ([`RESOLVE_WAIT`] for [`new`](Self::new)'s), and whose following
+    /// ([`RESOLVE_WAIT`] for [`new`](Self::new)'s), whose handles made from
+    /// a remote address with no row wait `wait` after each of up to two
+    /// (addressed to the station, then to its network: up to `2 × wait`
+    /// for a silent station, plus any wait for the Who-Is rate limit), and
+    /// whose following
     /// handles, after a request times out, ask once where the device went
     /// and give the answers that long (see [`QUIET`](crate::device::QUIET)).
     /// `None` sends no Who-Is: such a handle fails at once with

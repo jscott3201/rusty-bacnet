@@ -273,3 +273,43 @@ fn ack_entries_are_learned_through_the_arrival_port() {
     assert_eq!(outcome, Outcome::Handled);
     assert_eq!(host.asked.len(), 1, "a data-less Ack asks nothing");
 }
+
+#[test]
+fn routed_table_chunks_fit_after_the_first_relay_adds_its_source() {
+    use bacnet_router_core::npdu::Npdu;
+    use fixture::{addr, bytes};
+    let mut router = router();
+    for network in 100..354 {
+        router
+            .table_mut()
+            .add_learned(network, PortId(1), Mac::from_slice(R7).unwrap(), at(0));
+    }
+    let requester = addr(81, &[1]);
+    let query = bytes(&Npdu {
+        source: Some(requester),
+        ..Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0])
+    });
+    let (_, sent) = deliver(
+        &mut router,
+        &mut Recorder::default(),
+        0,
+        NODE_A,
+        &query,
+        at(1),
+    );
+    let mut rows = Vec::new();
+    assert!(sent.len() > 1);
+    for ack in &sent {
+        assert_eq!(ack.to.as_deref(), Some(NODE_A));
+        let npdu = ack.parsed();
+        assert_eq!(npdu.destination, Some(requester));
+        rows.extend(ack_entries(ack));
+        let forwarded = Npdu {
+            source: Some(addr(1, &[42; bacnet_router_core::npdu::MAX_MAC_LEN])),
+            ..npdu
+        };
+        assert!(bytes(&forwarded).len() <= 501);
+    }
+    assert_eq!(rows.len(), 256);
+    assert!(rows.windows(2).all(|w| w[0].0 < w[1].0));
+}

@@ -4,7 +4,7 @@
 //! A local address is used as written. A device instance goes to the
 //! address that claims it in the client's discovery table, and a device
 //! behind a router (`dnet:instance`, `dnet:0xMAC`) to its station there,
-//! asking its network with a Who-Is when the table doesn't hold it yet.
+//! asking for the named instance or station with a Who-Is when the table doesn't hold it yet.
 //! Every service then goes to that address through the client's address
 //! entry points: to a local station at its MAC, and to a routed one
 //! through the router its row names, with its network and MAC in the NPDU
@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Broadcast, DeviceEventKind};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEvent, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -67,7 +67,7 @@ pub fn with_link_flag(reason: String) -> String {
 
 /// Resolve `text` to a [`Destination`]. An address names its station, and
 /// nothing is sent to resolve a local one or a routed one the discovery
-/// table holds. A routed target asks its network with a Who-Is when the
+/// table holds. A routed target asks for its instance or station when the
 /// table doesn't hold it yet, and waits up to `wait` for the answer.
 pub async fn resolve<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
@@ -157,18 +157,52 @@ enum Station {
 }
 
 impl Station {
-    /// True when `device` is this station on network `dnet`, which is the
-    /// local network (0) when it is this client's own.
-    fn matches(&self, dnet: u16, device: &DiscoveredDevice) -> bool {
-        DeviceAddress::of(device).is_some_and(|at| {
-            at.network() == dnet
-                && match self {
-                    Self::Instance(instance) => {
-                        device.object_identifier.instance_number() == *instance
-                    }
-                    Self::Mac(mac) => at.mac() == mac.as_slice(),
-                }
+    /// Match a received or cached row with one snapshot of the local number.
+    fn destination(
+        &self,
+        dnet: u16,
+        own: Option<u16>,
+        device: &DiscoveredDevice,
+    ) -> Option<Destination> {
+        let address = DeviceAddress::of(device)?.localized(own);
+        let network = if Some(dnet) == own { 0 } else { dnet };
+        let instance = device.object_identifier.instance_number();
+        let selected = match self {
+            Self::Instance(wanted) => *wanted == instance,
+            Self::Mac(wanted) => wanted.as_slice() == address.mac(),
+        };
+        (selected && address.network() == network).then_some(Destination {
+            address,
+            instance: Some(instance),
         })
+    }
+
+    /// Resolve against the client's canonical one-row-per-station snapshot.
+    fn known(
+        &self,
+        dnet: u16,
+        own: Option<u16>,
+        devices: &[DiscoveredDevice],
+    ) -> Option<Result<Destination, String>> {
+        let found: Vec<_> = devices
+            .iter()
+            .filter_map(|row| self.destination(dnet, own, row))
+            .collect();
+        match found.as_slice() {
+            [] => None,
+            [station] => Some(Ok(station.clone())),
+            several => {
+                let at: Vec<_> = several
+                    .iter()
+                    .map(|station| station.address.to_string())
+                    .collect();
+                Some(Err(format!(
+                    "device {} is claimed by {}; name one by its address",
+                    self.name(dnet),
+                    at.join(" and ")
+                )))
+            }
+        }
     }
 
     fn name(&self, dnet: u16) -> String {
@@ -185,7 +219,7 @@ impl Station {
 
 /// The device `station` names on network `dnet`: its address, from the
 /// discovery table or, failing that, from its answer to a Who-Is sent to
-/// that network (to its one instance when the target names it). A routed
+/// that instance on its network or directly to the named MAC. A routed
 /// MAC the table holds needs nothing sent, and nor does one on this
 /// client's own network, once it knows the number: that is the local
 /// station. `dnet:instance` claimed twice on that network is ambiguous.
@@ -195,75 +229,105 @@ async fn find_routed<T: TransportPort + 'static>(
     station: &Station,
     wait: Duration,
 ) -> Result<Destination, String> {
-    let own = client.network_number() == Some(dnet);
-    let scope = if own { 0 } else { dnet };
-    if let (true, Station::Mac(mac)) = (own, station) {
-        let mut found = Destination::local(mac)?;
-        found.instance = client
-            .get_device_at(0, mac)
-            .await
-            .map(|row| row.object_identifier.instance_number());
-        return Ok(found);
-    }
-    let known = |devices: Vec<DiscoveredDevice>| {
-        let found: Vec<DiscoveredDevice> = devices
-            .into_iter()
-            .filter(|device| station.matches(scope, device))
-            .collect();
-        match found.as_slice() {
-            [] => None,
-            [device] => Some(Destination::of(device)),
-            several => {
-                let at: Vec<String> = several
-                    .iter()
-                    .filter_map(DeviceAddress::of)
-                    .map(|at| at.to_string())
-                    .collect();
-                Some(Err(format!(
-                    "device {} is claimed by {}; name one by its address",
-                    station.name(dnet),
-                    at.join(" and ")
-                )))
-            }
-        }
-    };
-    if let Some(found) = known(client.discovered_devices().await) {
+    let (own, cached) = client.localized_device_snapshot();
+    if let Some(found) = station.known(dnet, own, &cached) {
         return found;
+    }
+    if let Station::Mac(mac) = station
+        && own == Some(dnet)
+    {
+        return Destination::local(mac);
     }
     // Subscribe before asking, so the answer can't slip in between.
     let mut events = client.device_events();
-    let range = match station {
+    // How many Who-Is went out, each with its own wait, for the message.
+    let (asked, sent) = match station {
         Station::Instance(instance) => {
-            Some(DeviceInstanceRange::new(*instance, *instance).map_err(text)?)
+            let range = DeviceInstanceRange::new(*instance, *instance).map_err(text)?;
+            client
+                .who_is(Broadcast::Network(dnet), Some(range))
+                .await
+                .map_err(text)?;
+            (format!("a Who-Is on network {dnet}"), 1)
         }
-        Station::Mac(_) => None,
+        Station::Mac(mac) => {
+            let to = bacnet_client::client::Station::remote(dnet, mac);
+            client.who_is_directed(&to, None).await.map_err(text)?;
+            if let Some(found) = answer(client, &mut events, dnet, station, wait).await {
+                return found;
+            }
+            // No answer to the Who-Is addressed to the station: one to its
+            // network, for a station a slave proxy answers for (Clause
+            // 16.10.2). Only the station's own address answers it, and
+            // nothing goes further. A one-shot command keeps no memory of
+            // the miss; bacnet-ops' clients do.
+            client
+                .who_is(Broadcast::Network(dnet), None)
+                .await
+                .map_err(text)?;
+            (
+                format!("neither a Who-Is addressed to it nor one on network {dnet}"),
+                2,
+            )
+        }
     };
-    client
-        .who_is(Broadcast::Network(dnet), range)
-        .await
-        .map_err(text)?;
+    match answer(client, &mut events, dnet, station, wait).await {
+        Some(found) => found,
+        None if sent == 1 => Err(format!(
+            "device {} did not answer {asked} within {} ms",
+            station.name(dnet),
+            wait.as_millis()
+        )),
+        None => Err(format!(
+            "device {} answered {asked}, waiting {} ms for each ({} ms in all)",
+            station.name(dnet),
+            wait.as_millis(),
+            wait.as_millis() * sent
+        )),
+    }
+}
+
+/// The destination `station` names, once an answer for it lands within
+/// `wait`; `None` when none did.
+async fn answer<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    events: &mut tokio::sync::broadcast::Receiver<DeviceEvent>,
+    dnet: u16,
+    station: &Station,
+    wait: Duration,
+) -> Option<Result<Destination, String>> {
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {
-            Err(_) => {
-                return Err(format!(
-                    "device {} did not answer a Who-Is on network {dnet} within {} ms",
-                    station.name(dnet),
-                    wait.as_millis()
-                ));
-            }
+            Err(_) => return None,
             Ok(Ok(event)) => {
-                if event.kind != DeviceEventKind::Lost && station.matches(scope, &event.device) {
-                    return Destination::of(&event.device);
+                // The queued copy can name a previous instance of the local
+                // station. Match its link identity first and consult the
+                // current snapshot for its network, instance and route.
+                let relevant = match station {
+                    Station::Mac(mac) => {
+                        DeviceAddress::of(&event.device).is_some_and(|at| at.mac() == mac)
+                    }
+                    Station::Instance(instance) => {
+                        event.device.object_identifier.instance_number() == *instance
+                            || event.device.source_network == Some(dnet)
+                    }
+                };
+                if event.kind != DeviceEventKind::Lost && relevant {
+                    let (own, cached) = client.localized_device_snapshot();
+                    if let Some(found) = station.known(dnet, own, &cached) {
+                        return Some(found);
+                    }
                 }
             }
             // Missed events may include the answer; the table holds it.
             Ok(Err(RecvError::Lagged(_))) => {
-                if let Some(found) = known(client.discovered_devices().await) {
-                    return found;
+                let (own, cached) = client.localized_device_snapshot();
+                if let Some(found) = station.known(dnet, own, &cached) {
+                    return Some(found);
                 }
             }
-            Ok(Err(RecvError::Closed)) => return Err("the client stopped".into()),
+            Ok(Err(RecvError::Closed)) => return Some(Err("the client stopped".into())),
         }
     }
 }
@@ -416,3 +480,7 @@ mod tests;
 #[cfg(test)]
 #[path = "destination_routed_tests.rs"]
 mod routed_tests;
+
+#[cfg(test)]
+#[path = "destination_proxy_tests.rs"]
+mod proxy_tests;

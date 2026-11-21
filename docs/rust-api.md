@@ -10672,7 +10672,14 @@ let mut i_haves = client.i_have_events();                // every I-Have, asked 
 
 // Who-Is-Router-To-Network, then the routers heard and the networks they reach.
 let routers: Vec<DiscoveredRouter> = client.discover_routers(None, Duration::from_secs(3)).await?;
-client.who_is_router_to_network(Some(2), None).await?;   // just send it
+// The same question to one router alone, by its MAC on the local network.
+// It answers with a local broadcast (Clause 6.6.3.3): a B/IP router on
+// another IP subnet is heard only when a BBMD forwards its answer here, as
+// a peer or by foreign-device registration; with no BBMD, expect no routers.
+let one: Vec<DiscoveredRouter> = client
+    .discover_routers_directed(&routers[0].mac, Some(2), Duration::from_secs(3))
+    .await?;
+client.who_is_router_to_network(Some(2)).await?;          // just send it
 client.what_is_network_number(None).await?;
 
 // I-Am-Router-To-Network, Network-Number-Is and Reject-Message-To-Network.
@@ -10703,20 +10710,33 @@ match client.routing_table(&router_mac, RoutingTableWait::default()).await {
         }
         if truncated { eprintln!("a bound cut the answer short"); }
     }
-    Err(RoutingTableError::NoAnswer { waited }) => eprintln!("silent for {waited:?}"),
+    Err(RoutingTableError::NoAnswer { waited, .. }) => eprintln!("silent for {waited:?}"),
     Err(RoutingTableError::Rejected(reject)) => eprintln!("refused: {}", reject.reason),
     Err(other) => return Err(other.into()),
 }
 ```
 
-The data is fixed inside the network layer
-(`NetworkLayer::send_routing_table_query` takes only the router's address),
-so the update form of Initialize-Routing-Table cannot be sent.
-`NetworkReport::RoutingTable(Vec<RoutingTableEntry>)` carries one ack's
-entries to `network_reports()` subscribers. No answer is `NoAnswer`, never
-an empty table; an empty table is `Ok` with no entries. `first_answer` may
-not exceed `total` (`InvalidArgument`), and a client runs one such query at
-a time. Only a router on the local link can be asked.
+The network layer fixes the payload to a zero port count.
+`NetworkLayer::send_routing_table_query(next_hop, destination)` takes the
+local peer's MAC and an optional `NpduAddress`. Pass `None` for a local query.
+`BACnetClient::routing_table` accepts a `ToStation`, including a local MAC
+or `Station::routed(next_hop, network, address)`. With `Station::remote`, the
+client uses a cached route or spends one additional first-answer window
+discovering a local next hop. Zero or multiple candidates yield
+`RoutingTableError::RouteUnresolved`. Lost discovery reports yield
+`RoutingTableError::DiscoveryIncomplete`. Neither outcome sends a table query.
+Routed acks must match the selected hop and original station. A reject naming
+the target DNET that comes through the selected hop before the first ack ends
+the query, whether the hop sent it or relayed it from a router further on,
+though a concurrent request through the same hop to that DNET can produce the
+same reject. `NetworkReport::RoutingTable` reports each ack. An empty ack is a
+successful empty table. Silence after the table query was sent yields
+`NoAnswer`; for a routed query its `routed` field holds the network, and its
+text says that an older router may answer a table query only on its own link,
+where only the next hop hears it, so query the next hop or ask from a node on
+that network.
+A client runs one query at a time. A `first_answer` greater than `total`
+returns `InvalidArgument`.
 
 ### Device Management
 
@@ -12321,7 +12341,7 @@ covers (an I-Am heard from elsewhere during the wait is no answer) that answered
 within its wait (3 s unless `.wait(..)` says otherwise). With no scope named
 (`Discover::default()`) the Who-Is is a local broadcast, which no router
 passes on; `Discover::network(n)`, `Discover::global()` and
-`Discover::directed(address)` are the explicit choices (#2560), and
+`Discover::directed(station)` are the explicit choices (#2560), and
 `bacnet_ops::raw::who_is(&low_level, &scope, range)` sends the same Who-Is
 on a low-level client, with no rate cap. `client.find(Find::name("Zone Temp"))`
 (or `Find::object(id)`) sends one Who-Has under the same rate cap and returns
@@ -12334,7 +12354,11 @@ stops)
 asks fewer devices). Its Who-Has is a local broadcast too unless
 `.within(scope)` names another `Scope` (#2596): every device that hears a
 Who-Has searches its objects, so an empty list from the default says only
-that nothing on this network has it. `bacnet_ops::raw::who_has(&low_level,
+that nothing on this network has it. A directed Who-Has goes to one station
+on this network only: the station is admitted as local when the request is
+checked, before its rate slot, and should the client learn a new network
+number in between, the Who-Has still goes to that local MAC.
+`bacnet_ops::raw::who_has(&low_level,
 &scope, &object, range)` sends one on a low-level client and
 `raw::who_has_replies(.., wait)` also collects the `ReceivedIHave`s, with no
 rate cap. `BACnetClient::who_has` and `who_has_replies` take a `Broadcast`
@@ -12343,6 +12367,14 @@ scope, and `who_has_replies` keeps the answers from that scope
 keeps one answer per device, object and source address, at most
 `MAX_I_HAVE_REPLIES`; `bacnet_client::client::collect_answers` is that
 collector, for a caller that sends its own Who-Has.
+`client.discover_routers(RouterDiscovery::local())` broadcasts one
+Who-Is-Router-To-Network under this network's rate cap and returns the
+routers that answered with the networks they reach; `.network(n)` asks
+about one network, `.wait(..)` and `.deadline(at)` bound the collection,
+and `RouterDiscovery::directed(&router_mac)` asks one router alone,
+keeping only its own answers (#2689). That router answers with a local
+broadcast, so a B/IP router on another IP subnet is heard only when a BBMD
+forwards its answer here, as a peer or by foreign-device registration.
 `client.device(target).await?` gives a `Device` handle: from an address
 (`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there (an
 address on the client's own network, once `BACnetClient::network_number`
@@ -12376,7 +12408,25 @@ handles following it). A clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
 handle stays, and `Device::moved_to` says where its instance is heard now,
-by the I-Am times.
+by the I-Am times. `bacnet_ops::Station` re-exports the low-level
+`Station` that `Scope::Directed` and `Discover::directed` take. A handle made from a remote address the table holds no
+row for sends a Who-Is addressed to the station, then, with no answer within
+the resolve wait, one Who-Is to its network that only an I-Am from the
+station's own address answers, as a slave proxy sends for its MS/TP slave
+(Clause 16.10.2). The client remembers a station found the second way and
+asks its network first next time; `Client::unanswered_recently(&address)`
+says whether neither form drew an answer within `bacnet_ops::device::MISS_MEMORY`.
+Nothing goes further, and never to every network. Each of the two Who-Is
+waits the resolve wait, so a silent remote address takes up to twice it
+(6 s with the default `RESOLVE_WAIT`), plus any wait for the Who-Is rate
+limit. A directed Who-Is accepts
+`bacnet_client::client::Station`. A remote station keeps its DNET and DADR
+through an explicit or learned router. With no known next hop it uses a local
+link broadcast carrying that same destination.
+`BACnetClient::localized_device_snapshot()` returns the number used to
+localize the snapshot together with its rows in address order. When a relayed
+copy and local row identify one station, the local row wins unless it is an
+`add_device` placeholder and the relayed row has known capabilities.
 
 `bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
 `bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,

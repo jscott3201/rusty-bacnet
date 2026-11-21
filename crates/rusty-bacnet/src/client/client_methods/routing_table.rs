@@ -1,7 +1,7 @@
 //! The read-only routing-table query (#2612): `routing_table(router)`.
 //!
 //! One Initialize-Routing-Table with a port count of zero goes to a router
-//! on the client's own link, and the acknowledgements are collected into a
+//! locally or through a next hop, and the acknowledgements are collected into a
 //! frozen `RoutingTable`. The binding has no way to send the update form:
 //! the Rust call takes no payload.
 
@@ -32,6 +32,10 @@ pub(super) enum RouterArg {
 
 impl RouterArg {
     pub(super) fn read(router: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Self::read_with_types(router, "str or bytes")
+    }
+
+    fn read_with_types(router: &Bound<'_, PyAny>, accepted: &str) -> PyResult<Self> {
         if let Ok(text) = router.cast::<PyString>() {
             return Ok(Self::Text(text.to_cow()?.into_owned()));
         }
@@ -39,7 +43,7 @@ impl RouterArg {
             return Ok(Self::Mac(octets.as_bytes().to_vec()));
         }
         Err(PyTypeError::new_err(format!(
-            "router must be str or bytes, not {}",
+            "router must be {accepted}, not {}",
             router.get_type().name()?
         )))
     }
@@ -58,18 +62,22 @@ impl RouterArg {
     }
 }
 
+enum QueryRouter {
+    Local(RouterArg),
+    Station(client::Station),
+}
+
 #[pymethods]
 impl BACnetClient {
-    /// Read the routing table of the router at `router`, a station on this
-    /// client's own link, without changing it, and return a frozen
+    /// Read the routing table of a local or routed station and return a frozen
     /// `RoutingTable`: its `entries`, how many acknowledgements carried
     /// them (`acks`), and whether a bound cut the answer short
     /// (`truncated`).
     ///
-    /// `router` is the router's address on the local link: `bytes` as
-    /// given, such as a `DiscoveredRouter`'s `mac`, or a string in the
+    /// For a local router, pass its address as `bytes`, such as a `DiscoveredRouter`'s `mac`, or a string in the
     /// binding's address forms (`"ip:port"`, `"bip6:N"`, hex octets, an
-    /// MS/TP station). An empty or broadcast address raises `ValueError`.
+    /// MS/TP station). For a remote router, use a `RoutedTarget`. An empty,
+    /// broadcast or group link address raises `ValueError`.
     ///
     /// A long table comes as several acknowledgements with nothing to mark
     /// the last, so the call returns once `quiet` seconds pass after the
@@ -87,14 +95,26 @@ impl BACnetClient {
     /// one that is absent (on B/IP, so does one that answers from another
     /// address or port), and neither is an empty table. A router that
     /// refuses with a Reject-Message-To-Network before any acknowledgement
-    /// raises `BacnetNetworkRejectError` with its `reason` and `network`;
-    /// rejects with reasons 1, 2 and 4 concern a DNET and are ignored. The
+    /// raises `BacnetNetworkRejectError` with its `reason` and `network`.
+    /// Local queries ignore DNET reject reasons 1, 2 and 4. A reject that
+    /// comes through the selected next hop naming the queried DNET before
+    /// the first ack ends a routed query, whether the hop sent it or relayed
+    /// it from a router further on (reason 4, message too long, is ignored:
+    /// the query is too short to draw it). A concurrent request on that path can produce
+    /// the same reject because these messages have no invoke ID. The
     /// bounds are 0 to 3600 seconds, and `wait` may not exceed `total`
     /// (`ValueError` otherwise). A client stopped mid-call raises
-    /// `RuntimeError`. A router behind another router can't be asked: the
-    /// query is a local message. One query runs at a time per client; a
-    /// second call waits for the first. The call holds the started client
-    /// for the whole wait, so `stop()` waits for it.
+    /// `RuntimeError`. A `RoutedTarget` selects the remote router. Supply
+    /// its next hop explicitly, or use the station's cached path. Without
+    /// either, router discovery spends up to `wait` additional seconds looking
+    /// for a single local next hop advertising the network. Zero or multiple
+    /// candidates, or reports lost during discovery, raise `BacnetError`.
+    /// The router need not advertise a Device. A routed answer must arrive through that hop and carry the queried
+    /// source network and address. An older router that answers a table query
+    /// only on its own link never answers this client: the call raises
+    /// `BacnetTimeoutError`, whose text for a routed query says so.
+    /// One query runs at a time. The call holds the started client through
+    /// resolution, sending and collection, so `stop()` waits for it.
     #[pyo3(signature = (router, *, wait=3.0, quiet=0.5, total=10.0, max_entries=4096))]
     fn routing_table<'py>(
         &self,
@@ -105,7 +125,13 @@ impl BACnetClient {
         total: f64,
         max_entries: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let router = RouterArg::read(&router)?;
+        let router = match router.cast::<crate::types::PyRoutedTarget>() {
+            Ok(target) => QueryRouter::Station(target.get().station()),
+            Err(_) => QueryRouter::Local(RouterArg::read_with_types(
+                &router,
+                "str, bytes, or RoutedTarget",
+            )?),
+        };
         let bounds = client::RoutingTableWait {
             first_answer: seconds(wait, "wait")?,
             quiet: seconds(quiet, "quiet")?,
@@ -123,11 +149,16 @@ impl BACnetClient {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = started(&inner).await?;
-            let mac = router
-                .on(&c, "a routing-table query goes to a router's address")
-                .await?;
+            let station = match router {
+                QueryRouter::Station(station) => station,
+                QueryRouter::Local(argument) => client::Station::local(
+                    &argument
+                        .on(&c, "a routing-table query goes to a router's address")
+                        .await?,
+                ),
+            };
             let table = c
-                .routing_table(&mac, bounds)
+                .routing_table(&station, bounds)
                 .await
                 .map_err(routing_table_err)?;
             Ok(PyRoutingTable(table))
