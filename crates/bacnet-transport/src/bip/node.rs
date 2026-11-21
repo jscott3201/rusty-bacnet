@@ -295,6 +295,8 @@ pub(super) struct NodeHandle {
     /// the node lock, after the node's own copy changed: lock order is the
     /// node lock, then this.
     link: RwLock<Linked>,
+    /// An explicit loopback interface whose primary send socket bound INADDR_ANY.
+    pub(super) loopback_on_wildcard: bool,
     clock: HostClock,
     record: Arc<ClientRecord>,
     /// Where the sends the link refuses are counted.
@@ -329,6 +331,7 @@ impl NodeHandle {
     pub(super) fn new(
         link: Link,
         socket: Arc<BipSocket>,
+        loopback_on_wildcard: bool,
         record: Arc<ClientRecord>,
         refusals: Arc<SendRefusals>,
     ) -> Result<Self, Error> {
@@ -339,6 +342,7 @@ impl NodeHandle {
                 link,
                 socket: Some(socket),
             }),
+            loopback_on_wildcard,
             clock,
             record,
             refusals,

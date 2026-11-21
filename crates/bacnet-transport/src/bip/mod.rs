@@ -673,6 +673,7 @@ impl TransportPort for BipTransport {
             NodeHandle::new(
                 link,
                 Arc::clone(&socket),
+                plan.interface.is_loopback() && !plan.per_address(),
                 Arc::clone(&self.client_record),
                 Arc::clone(&self.send_refusals),
             )

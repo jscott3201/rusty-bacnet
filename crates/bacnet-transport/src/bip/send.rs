@@ -116,6 +116,23 @@ impl NodeHandle {
         // Only a waiting foreign device has none, and its node never sends.
         let (outgoing, forward_own) =
             decided.ok_or_else(|| self.refuse_send(SendRefusal::NoBbmd))?;
+        // A wildcard socket lets the OS select the egress interface for a
+        // limited broadcast. With an explicit loopback identity this can send
+        // the packet onto a LAN and deliver its echo from a different address.
+        // Refuse the local frame before a BBMD schedules its fanout, too.
+        if self.loopback_on_wildcard
+            && outgoing.to.ip().is_broadcast()
+            && matches!(outgoing.message, codec::Bvll::OriginalBroadcastNpdu(_))
+        {
+            return self.with_sending(|_, _| {
+                Err(Error::Transport(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "an explicit loopback interface on a wildcard socket cannot send to \
+                     255.255.255.255. Set broadcast_address to the loopback subnet's \
+                     broadcast address (for example, 127.255.255.255)",
+                )))
+            });
+        }
         let mut buf = BytesMut::with_capacity(4 + npdu.len());
         encode_bvll(&mut buf, &outgoing.message)?;
 
