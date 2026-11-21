@@ -1158,6 +1158,38 @@ only to the interface address (or, for `0.0.0.0`, to one of the host's
 addresses, below). Sends leave from it, so the OS picks their source address
 by route.
 
+The interface is an `Ipv4Addr`. To take an OS interface name as well, as the
+Python bindings do, resolve it first with
+`bacnet_transport::bip::resolve_interface_ipv4(&str) -> io::Result<Ipv4Addr>`.
+A literal, `0.0.0.0` included, is returned as is without asking the OS.
+A name (the netdev name on Unix, the adapter's exact, case-sensitive
+friendly name on Windows) must have one usable IPv4 address on an interface
+that is up; a link-local address (169.254.0.0/16) is used only when the
+interface has nothing else. An unknown name fails with `NotFound`, a name
+without a usable address with `AddrNotAvailable`, several candidates with
+`InvalidInput` listing them, and text that looks like a mistyped address
+(`"10.0.0.300"`, `"127.0.0.1/8"`, `"::1"`) and names no interface with
+`InvalidInput` too. It lists the host's interfaces, which blocks, so call it from a
+blocking thread in async code. The name is resolved once: the transport
+keeps the address, not the name, and doesn't follow a DHCP change. It
+doesn't derive the broadcast address from the interface either.
+
+With a loopback interface on the wildcard socket (any start without
+`set_share_port_by_address(true)`, except a Linux B/IP-M member with its
+group on its own requested port, which binds its address), a local broadcast to 255.255.255.255
+would leave through whichever interface the host routes it to, usually a
+LAN. So such a send fails with `Error::Transport` carrying
+`LoopbackBroadcastRefused` (find it with `LoopbackBroadcastRefused::from_error`)
+and counts in `send_counters().loopback_limited_broadcast`; `start()` warns
+once for that configuration (#2691). Pass the loopback subnet's broadcast
+address, `Ipv4Addr::new(127, 255, 255, 255)`, as the third argument of
+`BipTransport::new` instead (Linux delivers it to the other loopback
+sockets; see the Python guide's
+[loopback section](python-api.md#loopback-interfaces-and-broadcasts) for
+other systems). A BBMD on such an interface still forwards its own
+broadcasts and those it receives to its BDT peers and foreign devices; only
+the local rebroadcast is refused, counted the same way.
+
 #### Claiming the port
 
 The wildcard socket claims its port, whether requested or picked by the OS
@@ -9454,6 +9486,12 @@ BACnet/SC handshake; a client's builders start the transport. After `stop()`
 a receiver keeps waiting, since the transport may start again; `recv()`
 returns `None` once the transport is dropped and the queue is empty.
 
+`FrameTapReceiver::close()` unsubscribes, discards the queued frames and
+returns the final overflow count. It waits for a publisher that met the full
+queue at that moment, so the count includes that frame; reading `dropped()`
+just before a drop can miss it. `IAmArrivals::close()` does the same for an
+arrival subscription.
+
 The management, FDT and fanout counters count what this transport does as a
 BBMD (ACKs sent, registrations admitted, broadcasts forwarded). They stay at
 zero unless the client runs as one, from `bip_builder().mode(BipMode::Bbmd(..))`
@@ -12944,9 +12982,11 @@ the stack takes: a Forwarded-NPDU's origin, Annex J.2.5, else the UDP source;
 the source VMAC on B/IPv6, the original source's when forwarded, Annex U.2.9;
 the originating VMAC on SC, Annex AB.5.3; the station on MS/TP),
 `original_source`, `forwarded` (an origin other than the link sender),
-`source_network` (SNET and SADR, Clause 6.2.2; `link_source` is then the
+`source` (SNET and SADR, Clause 6.2.2; `link_source` is then the
 router, Clause 6.5.4, which a node may take as that network's router, Clause
-6.5.3), `broadcast` (link or network) and `missed_before`. `device_address()`,
+6.5.3), `destination` (DNET and DADR as the NPDU carried them, an empty DADR
+for a network broadcast, `None` without a DNET), `broadcast` (link or
+network) and `missed_before`. `device_address()`,
 `next_hop_router()` and `forwarding_bbmd()` say it as a scanner asks it.
 `IAmArrival::from_frame` reads one `TappedFrame`.
 
@@ -12969,7 +13009,7 @@ transport copies every frame once; the decode runs in the reading task.
 To carry what the records need, `decode_npdu_layer`'s `DecodedApdu` now holds
 the I-Am's decoded parameters (`i_am: Option<Result<IAmRequest, String>>`, in
 place of `device: Option<u32>`; take the instance from
-`i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`), and
+`i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`) and the DADR (`dest_address`), and
 `decode::frame::Link` the typed origin (`origin`) and the source MAC the frame
 names (`source_mac`).
 

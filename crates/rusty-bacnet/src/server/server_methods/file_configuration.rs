@@ -181,7 +181,7 @@ mod tests {
     fn test_server() -> BACnetServer {
         let mut server = BACnetServer::unconfigured(crate::server::ServerHost::own(), 1);
         server.device_name = "Test Device".into();
-        server.interface = "0.0.0.0".into();
+        server.interface = std::net::Ipv4Addr::UNSPECIFIED;
         server.broadcast_address = "255.255.255.255".into();
         server
     }

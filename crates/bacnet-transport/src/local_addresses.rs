@@ -9,6 +9,8 @@
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 
+pub(crate) mod named;
+
 with_getifaddrs! {
     mod getifaddrs;
     pub(crate) use getifaddrs::interface_of;

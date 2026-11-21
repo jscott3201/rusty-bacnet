@@ -47,6 +47,7 @@ impl BACnetClient {
         resolve_scope=None
     ))]
     fn new(
+        py: Python<'_>,
         interface: &str,
         port: u16,
         broadcast_address: &str,
@@ -116,6 +117,11 @@ impl BACnetClient {
             bip: bip_mode,
             bip6_foreign,
         } = crate::bip_options::ip_modes(transport, bbmd, foreign_device)?;
+        let interface = if transport == "bip" {
+            crate::bip_options::interface_ipv4(py, interface)?
+        } else {
+            std::net::Ipv4Addr::UNSPECIFIED
+        };
         let multicast = crate::bip_options::bip_multicast(
             transport,
             interface,
@@ -147,7 +153,7 @@ impl BACnetClient {
             inner: Arc::new(state::ClientState::default()),
             seated: false,
             transport_type: transport.to_string(),
-            interface: interface.to_string(),
+            interface,
             port,
             broadcast_address: broadcast_address.to_string(),
             share_port_by_address,
@@ -206,7 +212,7 @@ impl BACnetClient {
             });
         }
         let transport_type = slf.borrow().transport_type.clone();
-        let interface_str = slf.borrow().interface.clone();
+        let interface = slf.borrow().interface;
         let port = slf.borrow().port;
         let broadcast_str = slf.borrow().broadcast_address.clone();
         let share_port_by_address = slf.borrow().share_port_by_address;
@@ -239,9 +245,6 @@ impl BACnetClient {
             let mut slot = state::starting(&inner).await?;
             let c = match transport_type.as_str() {
                 "bip" => {
-                    let interface: Ipv4Addr = interface_str
-                        .parse()
-                        .map_err(|e| PyRuntimeError::new_err(format!("invalid interface: {e}")))?;
                     let broadcast: Ipv4Addr = broadcast_str
                         .parse()
                         .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;

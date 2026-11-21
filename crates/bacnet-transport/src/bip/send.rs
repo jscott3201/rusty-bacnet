@@ -62,7 +62,10 @@ impl NodeHandle {
     /// its BBMD as Distribute-Broadcast-To-Network (Annex J.2.10); otherwise
     /// it goes out as an Original-Broadcast-NPDU to the subnet's broadcast
     /// address (Annex J.4.1), and a BBMD first hands it to `forwarder` for
-    /// its BDT peers and foreign devices (Annex J.4.5).
+    /// its BDT peers and foreign devices (Annex J.4.5). On a loopback
+    /// interface with a wildcard socket, a local broadcast to
+    /// 255.255.255.255 fails with [`LoopbackBroadcastRefused`](super::LoopbackBroadcastRefused),
+    /// after a BBMD's fanout is queued.
     pub(super) async fn send_broadcast(
         &self,
         npdu: &[u8],
@@ -129,7 +132,15 @@ impl NodeHandle {
             forwarder.forward(npdu);
         }
 
+        // On a loopback interface with a wildcard socket, the local leg to
+        // 255.255.255.255 is refused, counted, after the fanout above: a
+        // BBMD's unicast forwards are a separate leg (loopback_guard.rs). A
+        // foreign device's broadcast goes to its BBMD's own address, and a
+        // B/IP-M node's to its group, so neither is refused.
         let to = outgoing.to;
+        if self.refuses_local_broadcast(to) {
+            return self.with_sending(|_, _| Err(self.refuse_local_broadcast()));
+        }
         self.send_now(|_| Ok((OutgoingDatagram::whole(&buf), to)))
             .await
     }

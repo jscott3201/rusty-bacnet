@@ -63,7 +63,8 @@ impl Device {
         let target = Arc::clone(transport.foreign_device.as_ref().unwrap());
         let mode = Mode::Foreign(config.engine(config.interval().unwrap()));
         let link = test_support::test_link(OWN, BROADCAST, mode);
-        let node = Arc::new(NodeHandle::new(link, socket, Arc::default(), Arc::default()).unwrap());
+        let node =
+            Arc::new(NodeHandle::new(link, socket, false, Arc::default(), Arc::default()).unwrap());
         target.attach(&node, &config).unwrap();
         let driver = tokio::spawn(Arc::clone(&node).drive());
         Self {
@@ -87,7 +88,7 @@ impl Device {
         let mode = Mode::Foreign(config.engine(config.interval().unwrap()));
         let link = test_support::test_link(OWN, BROADCAST, mode);
         self.node =
-            Arc::new(NodeHandle::new(link, socket, Arc::default(), Arc::default()).unwrap());
+            Arc::new(NodeHandle::new(link, socket, false, Arc::default(), Arc::default()).unwrap());
         self.target.attach(&self.node, &config).unwrap();
         self.driver = tokio::spawn(Arc::clone(&self.node).drive());
     }

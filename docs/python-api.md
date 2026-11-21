@@ -1641,6 +1641,46 @@ start in either order, now need the keyword on whichever starts later. See
 [Claiming the port (B/IPv6)](rust-api.md#claiming-the-port-bipv6). On any
 other transport the keyword raises `ValueError`.
 
+### Loopback interfaces and broadcasts
+
+`interface="127.0.0.1"` sets the device's own address, but the socket is
+still bound to `0.0.0.0` unless `share_port_by_address=True` binds the
+address itself. A datagram to `255.255.255.255` then leaves through
+whichever interface the host's routes pick, usually the LAN, and the
+device can hear its own I-Am from its LAN address. So with a loopback
+`interface` and the default `broadcast_address="255.255.255.255"`, each
+local broadcast (a `who_is(scope="local")`, a local Who-Has, a bare
+instance resolved locally) raises `BacnetTransportError` before anything is
+sent, and the message names `broadcast_address` (#2691). `start()` logs a
+warning for that configuration once; nothing is wrong while the device
+only sends unicast. A BBMD on such an interface still forwards its own
+broadcasts, and those it receives, to its BDT peers and foreign devices;
+only the local rebroadcast is refused, and a foreign device's
+Distribute-Broadcast-To-Network then draws a NAK. Two effects follow. On a
+BBMD the error comes back after those forwards are queued, so retrying the
+broadcast sends them again. And a foreign device that gets the NAK may
+register again sooner: this stack's own foreign device takes a NAK as a
+hint to re-register, at most once per response timeout.
+
+For discovery on loopback, pass the loopback subnet's broadcast address,
+`broadcast_address="127.255.255.255"` (with the usual 127.0.0.0/8):
+
+- **Linux:** a broadcast to it reaches the other B/IP sockets on loopback
+  at that port. The Python suite runs this way on Linux CI.
+- **macOS:** `lo0` is not broadcast-capable. A probe on one macOS host
+  found the datagram delivered to no socket, so local discovery finds
+  nothing, though nothing leaves the host either. The repository's tests
+  on macOS pass `broadcast_address="127.0.0.1"` instead, which reaches one
+  socket bound to that port.
+- **Windows:** not verified.
+
+An explicit interface that is not loopback has a related exposure: with
+`255.255.255.255` the host still routes the broadcast by its default
+route, so if `interface` is not the default-route address the broadcast
+can leave through another interface, and its echo comes back from an
+address that is not the device's own. Pass that interface's subnet
+broadcast address; #2691 tracks deriving it.
+
 ### Sharing a port by address
 
 By default a B/IP client, server or `BipEndpoint` binds `0.0.0.0` on its port,
@@ -4376,9 +4416,8 @@ holds is served after a restart over its keyword, and the keyword applies
 again on a start that passes `clear_written_reporting=True`. A changed
 keyword in a later version of the application takes effect at once for
 every parameter no peer has written. Without `storage_path` the keywords
-set the values at every start. The shared endpoints' `add_analog_input`,
-`add_analog_value`, `add_binary_input` and `add_binary_value` take the same
-keywords, with the same checks.
+set the values at every start. The shared endpoints accept the same event parameter keywords on their
+Analog, Binary and Multi-state Input, Output and Value builders.
 
 A `write_property_local` of a parameter after the builder call is still
 kept exactly like a peer's write: it is saved in the file and served again
@@ -7223,7 +7262,7 @@ raise `ValueError`. `BACnetServer`, `ScEndpoint` and `MstpEndpoint` have no
 `frames()` yet; [`decode_frame`](#decoded-frame-summaries-and-trap-transcripts)
 gives a frame's decoded summary, parse failure and forwarding/router
 provenance. Observation opens no socket and changes no port sharing (see
-[Interfaces are addresses](#interfaces-are-addresses)).
+[Selecting an interface](#selecting-an-interface)).
 
 ### Decoded frame summaries and trap transcripts
 
@@ -7366,6 +7405,9 @@ in the scanner's terms:
 
 - `device_address`: the device as `device()` takes it, `link_source` for one
   on this link, `"5:0x07"` for one behind a router;
+- `destination_network` and `destination_address`: DNET and DADR carried by
+  the observed NPDU. Both are `None` without a destination. A broadcast on
+  a numbered network or on every network has an empty address (`b""`).
 - `next_hop_router`: `link_source` when routed, else None;
 - `forwarding_bbmd`: `link_sender` when `forwarded`, else None.
 
@@ -7445,12 +7487,24 @@ async with endpoint:
     value = await client.read_property("127.0.0.1:47808", oid, pid)
 ```
 
-The endpoint builders `add_analog_input`, `add_analog_value`,
-`add_binary_input` and `add_binary_value` take the same keyword-only options
-as `BACnetServer`'s (#1867), checked by the same code: `tags`,
-`profile_location` and `profile_name` on all four, and `present_value_access`
-and `value_source_tracking` on the two Value builders (see
-[Object profiles and Value_Source](#object-profiles-and-value_source)).
+All three endpoints provide Analog, Binary and Multi-state Input, Output and
+Value builders. Register points before startup. Each accepts the standalone
+builder's profile and event parameter keywords. The Value builders also
+accept `present_value_access` and `value_source_tracking`. See
+[Object profiles and Value_Source](#object-profiles-and-value_source).
+
+Use `present_value` to supply an initial value. Analog Input accepts its
+existing positional argument. The other eight accept the value by keyword,
+and omitting it keeps the native default. Use a finite number for Analog,
+0 or 1 for Binary, and a state from 1 through `number_of_states` for
+Multi-state. For Output and commandable Value objects the initial value
+sets Relinquish_Default and leaves every priority slot empty. Inputs and
+noncommandable Values take the initial value as a local application update.
+A Binary Input given no value keeps its unset physical-input state.
+An object name and its type/instance pair must each be unique across the
+Device, its Network Ports and the pending objects. An invalid addition raises
+at the builder call and preserves earlier registrations.
+
 The endpoint's server serves those objects as a standalone server serves
 its own, and a peer writes them as far as the endpoint's `mutation_policy`
 lets it: under the read-only default no peer writes, so there
@@ -7633,12 +7687,9 @@ async with endpoint:
   `apdu_timeout_ms` and `apdu_retries` say, the Device's APDU_Timeout and
   Number_Of_APDU_Retries. The server's other `BACnetServer` keywords keep
   their defaults on an endpoint for now (#1138).
-- **Objects.** An endpoint has builders for Analog Input, Analog Value,
-  Binary Input, Binary Value, Group and Audit Reporter objects only, each
-  before its start; the server's `add_*` calls are refused once it runs, as
-  on a running standalone server. Use a standalone `BACnetServer` for the
-  other object types until the endpoints take the server's builders
-  (#1138).
+- **Objects.** Register Analog, Binary and Multi-state Inputs, Outputs and
+  Values, Groups and Audit Reporters before endpoint startup. Use a standalone
+  `BACnetServer` for its other supported object types (#1138).
 - **Its lifetime is the endpoint's.** Each call returns a new handle on the
   one server. Its `start()` and `stop()` raise `RuntimeError`: the endpoint
   starts it, and the endpoint's `close()` stops it, waiting for the calls in
@@ -8395,12 +8446,48 @@ asyncio.run(main())
 
 ## Transport Configuration Examples
 
-### Interfaces are addresses
+### Selecting an interface
 
-`interface` for B/IP is an IPv4 address, not an OS interface name.
-`ipv6_interface` is an IPv6 address, also not an OS interface name; `None` and
-`"::"` use the automatic selection described under
-[BACnet/IPv6](#bacnetipv6). How a port is shared on Linux, macOS and Windows is
+For B/IP, pass an IPv4 literal to `interface`, or the OS interface name
+such as `en0` or `eth0`. On Windows use the adapter's friendly name
+(`Ethernet 2`), matched exactly and case-sensitively. The constructor
+resolves a name to one assigned unicast IPv4 address on an interface that
+is up:
+
+- A link-local address (169.254.0.0/16) beside a routable one is skipped,
+  so an autoconfigured alias doesn't make the name ambiguous; an interface
+  with only one link-local address uses it.
+- With several usable addresses the `ValueError` lists them, so you can
+  pass the intended literal.
+- An unknown name, or an interface that is down or has no IPv4 address yet,
+  raises `ValueError` at construction. So does text that looks like a
+  mistyped address (`"10.0.0.300"`, `"127.0.0.1/8"`, `"::1"`).
+- The name is resolved once, at construction. The client, server or
+  endpoint keeps the address, so a later change (a new DHCP lease, say) is
+  not followed: construct it again.
+- Point-to-point interfaces (VPN tunnels, PPP) are not excluded.
+
+`"0.0.0.0"` keeps wildcard selection. The name selects an address, not the
+socket's device: the bind policy stays as below. `broadcast_address` is not
+derived from the named interface's netmask; it stays `255.255.255.255`
+unless you give it. Pass the interface's subnet broadcast for discovery,
+and with `lo` or `lo0` the loopback subnet's (see
+[Loopback interfaces and broadcasts](#loopback-interfaces-and-broadcasts),
+#2691).
+
+What each interface option across the stack takes today:
+
+| Option | Takes |
+|--------|-------|
+| Python `interface` (`BACnetClient`, `BACnetServer`, `BipEndpoint`, `BipRouterPort`) | An IPv4 literal or an OS interface name |
+| Python `ipv6_interface` | An IPv6 address only |
+| CLI, TUI and MCP `-i`/`--interface`, and a TUI profile's `interface` | An IPv4 literal only |
+| CLI `capture --device`, TUI `--capture-device` (pcap) | An OS device name |
+| Rust `BipTransport::new` | An `Ipv4Addr`; resolve a name with `bacnet_transport::bip::resolve_interface_ipv4` |
+| Rust `EthernetTransport::new` (Linux) | An OS interface name |
+
+For B/IPv6, `None` and `"::"` use automatic selection as described under
+[BACnet/IPv6](#bacnetipv6). Port sharing is
 set by `share_port_by_address` and `share_wildcard_port` (see
 [Claiming the port](#claiming-the-port) and
 [Sharing a port by address](#sharing-a-port-by-address)); observing frames

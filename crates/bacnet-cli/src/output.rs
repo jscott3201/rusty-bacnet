@@ -270,11 +270,16 @@ pub fn print_waiting(secs: u64) {
 /// warning, an SC connection close or a lapsed registration can't corrupt a
 /// JSON result (#2667). Colour only when stderr is a terminal, as `bacnet
 /// mcp`'s.
+///
+/// Without `-v`, the B/IP start warning for a loopback interface with the
+/// limited broadcast address stays quiet: a one-shot unicast command is fine
+/// that way, and a broadcast it then tries fails with an error naming
+/// `-b/--broadcast` (#2691).
 pub fn setup_tracing(verbosity: u8) {
     use std::io::IsTerminal;
     use tracing_subscriber::EnvFilter;
     let filter = match verbosity {
-        0 => "warn",
+        0 => "warn,bacnet_transport::bip::loopback_guard=error",
         1 => "info",
         2 => "debug",
         _ => "trace",

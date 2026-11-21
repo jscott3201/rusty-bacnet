@@ -295,10 +295,14 @@ pub(super) struct NodeHandle {
     /// the node lock, after the node's own copy changed: lock order is the
     /// node lock, then this.
     link: RwLock<Linked>,
+    /// The interface is a loopback address and the socket every send leaves
+    /// from is bound to the wildcard address: the node refuses a local
+    /// broadcast to 255.255.255.255 (loopback_guard.rs, #2691).
+    pub(super) loopback_on_wildcard: bool,
     clock: HostClock,
     record: Arc<ClientRecord>,
     /// Where the sends the link refuses are counted.
-    refusals: Arc<SendRefusals>,
+    pub(super) refusals: Arc<SendRefusals>,
     state: Mutex<NodeState>,
     /// Tells the driver that the node changed.
     wake: Notify,
@@ -329,6 +333,7 @@ impl NodeHandle {
     pub(super) fn new(
         link: Link,
         socket: Arc<BipSocket>,
+        loopback_on_wildcard: bool,
         record: Arc<ClientRecord>,
         refusals: Arc<SendRefusals>,
     ) -> Result<Self, Error> {
@@ -339,6 +344,7 @@ impl NodeHandle {
                 link,
                 socket: Some(socket),
             }),
+            loopback_on_wildcard,
             clock,
             record,
             refusals,

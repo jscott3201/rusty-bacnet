@@ -202,12 +202,23 @@ class EndpointStubParityTests(unittest.TestCase):
         builders = {
             "add_analog_input": (["instance", "name", "units", "present_value"],
                                  profile_keywords + analog),
+            "add_analog_output": (["instance", "name", "units"],
+                                  ["present_value"] + profile_keywords + analog),
             "add_analog_value": (["instance", "name", "units"],
-                                 value_keywords + profile_keywords + analog),
+                                 ["present_value"] + value_keywords + profile_keywords + analog),
             "add_binary_input": (["instance", "name"],
-                                 ["polarity"] + profile_keywords + binary),
+                                 ["present_value", "polarity"] + profile_keywords + binary),
+            "add_binary_output": (["instance", "name"],
+                                  ["present_value", "polarity"] + profile_keywords + delays),
             "add_binary_value": (["instance", "name"],
-                                 value_keywords + profile_keywords + binary),
+                                 ["present_value"] + value_keywords + profile_keywords + binary),
+            "add_multistate_input": (["instance", "name", "number_of_states"],
+                                     ["present_value"] + profile_keywords + ["alarm_values"] + delays),
+            "add_multistate_output": (["instance", "name", "number_of_states"],
+                                      ["present_value"] + profile_keywords + delays),
+            "add_multistate_value": (["instance", "name", "number_of_states"],
+                                     ["present_value"] + value_keywords[:2] + profile_keywords
+                                     + ["alarm_values"] + delays),
         }
         positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
         keyword = inspect.Parameter.KEYWORD_ONLY

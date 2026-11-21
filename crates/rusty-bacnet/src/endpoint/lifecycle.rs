@@ -79,13 +79,16 @@ impl<S, P> Lifecycle<S, P> {
         }
     }
 
-    pub(crate) fn push(&self, object: P) -> Result<(), ()> {
+    /// Admit a registration under the same lock that seals the pending set.
+    pub(crate) fn with_open_registrations<T>(
+        &self,
+        register: impl FnOnce(&mut Vec<P>) -> T,
+    ) -> Option<T> {
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         if pending.sealed {
-            return Err(());
+            return None;
         }
-        pending.objects.push(object);
-        Ok(())
+        Some(register(&mut pending.objects))
     }
 
     /// End an owner's observations at close admission, while the session
