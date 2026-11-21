@@ -1026,10 +1026,7 @@ is an error.
   of a list or array is a `list` of the elements, an indexed read one
   element, and a read of a single value that element, each tagged with its
   production. A value that doesn't decode as those elements, to the last
-  octet, falls through to the rules below, except that a whole read of a
-  list or array holding only application-tagged values comes back
-  `application_data` with its octets as served (#2690), so writing it back
-  sends the same octets.
+  octet, falls through to the rules below.
 - **Other context-tagged content** comes back `tagged` (#2618): `.value` is
   the tree of its tags, a list of [`TagNode`](#unknown-and-proprietary-values),
   and `.octets` are the octets as served. Constructed values with no typed
@@ -1146,8 +1143,7 @@ Code that handled `application_data` reads should expect:
   [Typed constructed values](#typed-constructed-values).
 - **Failed typed reads.** A typed constructed property whose octets don't
   decode as its elements (a malformed Recipient_List, say) falls back to
-  `tagged` too, or to `application_data` when a whole list or array read
-  holds only application-tagged values; either keeps the octets as served.
+  `tagged` too.
 - **Values written as `application_data`.** When a property has no typed
   form and its context tags form a readable tree, octets written with
   `PropertyValue.application_data(octets)` read back as `tagged`. Compare
@@ -1305,8 +1301,9 @@ they aren't accepted as `Bbmd(bdt=)` input, no `PropertyValue` is built from
 rows, so writing a changed table means encoding its octets yourself and
 passing `PropertyValue.application_data`. Writing back a value as read
 sends its octets unchanged. Octets that aren't the entries, to the last
-octet, or more than 10,000 entries, read as any other value that fails a
-typed decode, with their octets as served. FD_BBMD_Address and BACnet_IP_Global_Address have no typed
+octet, or more than 10,000 entries, read as `tagged` or `application_data`
+holding the octets as served; application-tagged values that aren't
+entries don't become a plain list, as they would for other typed lists. FD_BBMD_Address and BACnet_IP_Global_Address have no typed
 form yet and read as `tagged`.
 
 Single reference reads use these forms through local reads, client and endpoint

@@ -86,13 +86,19 @@ pub(crate) fn decode(
     }
 }
 
-/// Whether a whole read of `property` on `object_type` is one of the typed
-/// constructed collections: what its value is when [`decode`] refuses it
-/// decides whether the octets can be kept exactly as received (#2690).
-pub(crate) fn is_collection(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+/// Whether a whole read of `property` on `object_type` is a typed table with
+/// a tag of its own (a Network Port's BDT or FDT, #2690). When [`decode`]
+/// refuses one, its application-tagged octets are kept as received: a plain
+/// list would re-encode them, and nothing reads such a table as values.
+/// Other collections keep the generic list, which shows a non-conforming
+/// device's values (Stages with an Unsigned limit, for one).
+pub(crate) fn keeps_octets_when_refused(
+    object_type: ObjectType,
+    property: PropertyIdentifier,
+) -> bool {
     matches!(
         property_element(object_type, property),
-        Some((_, ElementShape::Collection))
+        Some((element, ElementShape::Collection)) if element.collection_tag().is_some()
     )
 }
 
