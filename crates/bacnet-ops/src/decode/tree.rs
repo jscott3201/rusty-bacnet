@@ -21,7 +21,7 @@ use bytes::Bytes;
 
 use crate::octets::hex_upper;
 
-use crate::decode::frame::{Framing, Link, Npdu, kebab, link_details};
+use crate::decode::frame::{Framing, Link, MstpExtent, Npdu, kebab, link_details};
 use bacnet_transport::bip6::Bvlc6Function;
 use bacnet_transport::bvll::BvlcFunction;
 use bacnet_transport::sc_frame::ScFunction;
@@ -80,7 +80,7 @@ impl Field {
 
 /// Decode `frame` into its fields, link layer first.
 pub fn decode_tree(framing: Framing, frame: &[u8]) -> Vec<Field> {
-    let (link, consumed) = link_details(framing, frame);
+    let (link, extent) = link_details(framing, frame);
     let npdu_start = match &link.npdu {
         Some(Npdu::At(range)) => range.start,
         Some(Npdu::Encoded { wire, .. }) => wire.start,
@@ -90,7 +90,7 @@ pub fn decode_tree(framing: Framing, frame: &[u8]) -> Vec<Field> {
         Framing::Bip => bvll(frame, npdu_start, &link),
         Framing::Bip6 => bvll6(frame, npdu_start, &link),
         Framing::Sc => sc(frame, npdu_start, &link),
-        Framing::Mstp => mstp(frame, &link, consumed),
+        Framing::Mstp => mstp(frame, &link, extent),
     }];
     match link.npdu {
         Some(Npdu::At(range)) => fields.extend(npdu(&frame[range.clone()], range.start)),
@@ -298,7 +298,7 @@ fn sc(frame: &[u8], npdu_start: usize, link: &Link) -> Field {
     header(format!("BVLC-SC: {}", link.name), 0..npdu_start, kids, link)
 }
 
-fn mstp(frame: &[u8], link: &Link, consumed: Option<usize>) -> Field {
+fn mstp(frame: &[u8], link: &Link, extent: Option<MstpExtent>) -> Field {
     let mut kids = Vec::new();
     if frame.len() >= 8 {
         let length = usize::from(u16::from_be_bytes([frame[5], frame[6]]));
@@ -311,25 +311,28 @@ fn mstp(frame: &[u8], link: &Link, consumed: Option<usize>) -> Field {
         kids.push(Field::leaf(format!("Source: {}", frame[4]), 4..5));
         kids.push(Field::leaf(format!("Length: {length}"), 5..7));
         kids.push(Field::leaf(format!("Header CRC: {:02X}", frame[7]), 7..8));
-        // The checksum depends on the payload, including a hidden password.
-        // Show the result of validation and its source span, never its value.
-        if let Some(consumed) = consumed.filter(|_| length > 0) {
+        // The data check's value depends on the data, a hidden password
+        // included, so the field says only whether the check passed; its
+        // span leads to the received octets. A frame whose data failed keeps
+        // its Data and CRC fields, with nothing decoded beneath them.
+        if let Some(extent) = extent.filter(|_| length > 0) {
             let (crc, width) = if (32..128).contains(&frame[2]) {
                 ("Encoded CRC-32K", 5)
             } else {
                 ("Data CRC", 2)
             };
-            let end = consumed - width;
+            let status = if extent.data_valid {
+                "valid"
+            } else {
+                "mismatch"
+            };
+            let end = extent.end - width;
             kids.push(Field::leaf(format!("Data: {} octets", end - 8), 8..end));
-            kids.push(Field::leaf(format!("{crc}: valid"), end..consumed));
+            kids.push(Field::leaf(format!("{crc}: {status}"), end..extent.end));
         }
     }
-    header(
-        format!("MS/TP: {}", link.name),
-        0..consumed.unwrap_or(frame.len()),
-        kids,
-        link,
-    )
+    let end = extent.map_or(frame.len(), |extent| extent.end);
+    header(format!("MS/TP: {}", link.name), 0..end, kids, link)
 }
 
 /// The NPCI and what follows it: a network message, or the APDU.

@@ -1,4 +1,7 @@
 ---
 section: Added
 ---
-- Python’s `decode_frame_tree(octets, link)` returns immutable `FieldNode` trees with named service fields, source spans and partial diagnostics. The shared decoder reports MS/TP data CRC validity without displaying payload-derived checksum values (#2633).
+- **Python API:** `decode_frame_tree(octets, link)` decodes a frame offline
+  into frozen `FieldNode` trees: named service fields, each with its span in
+  the input, and partial fields with diagnostics for malformed input
+  (#2633).

@@ -143,7 +143,18 @@ def decode_frame_tree(
 
 Decode ordered link, network and application fields offline. Malformed
 input yields partial fields and diagnostics. A COBS-encoded MS/TP field
-points to the encoded NPDU span. The input octets remain unredacted.
+points to the encoded NPDU span.
+
+link takes the Frame.link tokens, as decode\_frame does. Input longer than
+the link's largest frame raises ValueError: 65,535 octets on "bip",
+"ipv6" and "sc", 2,053 on "mstp".
+
+The password of a DeviceCommunicationControl or ReinitializeDevice
+request is hidden from the labels only. Its node's span still points at
+the password's octets in `octets` and in `Frame.octets`, so mask
+those octets before you log or share a frame. The password's length
+shows through that span and the frame's length fields. An MS/TP frame's
+data CRC field says `valid` or `mismatch`, never its value.
 
 ## decode_frame
 

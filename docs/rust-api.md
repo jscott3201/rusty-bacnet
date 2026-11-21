@@ -12328,9 +12328,10 @@ by the I-Am times.
 `bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
 `bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,
 previews, the ledger and the audit log, #2068), the command classes
-(`class`), frames decoded into field trees with no traffic
-(`decode::tree`), and B/IP BBMD table reads through a `Client` and the
-checks over them (`bbmd`). An application on `bacnet-ops` doesn't need it.
+(`class`), and B/IP BBMD table reads through a `Client` and the checks
+over them (`bbmd`). An application on `bacnet-ops` doesn't need it; frames
+decoded into field trees with no traffic stay in `bacnet_ops::decode::tree`
+(#2633).
 
 ### Engine becomes Client
 
@@ -12921,16 +12922,13 @@ behind. Add a `bacnet-tool` dependency and change the paths:
 | `engine.read_bdt(bbmd)`, `engine.read_fdt(bbmd)` | `bacnet_tool::bbmd::read_bdt(&client, bbmd)`, `bacnet_tool::bbmd::read_fdt(&client, bbmd)` |
 | `bacnet_ops::destination` | private to `bacnet-cli`, its only user |
 
-Detailed frame trees also moved to the tool crate in #2560. Since #2633,
-use `bacnet_ops::decode::tree` for `Field`, `decode_tree`,
-`decode_npdu_tree` and `decode_apdu_tree`.
-
 `bacnet-ops` itself gains three public items the moved code reads:
 `client::rpm_rows`, `format::timestamp_text` and `format::alarms::cell`.
-The rest of `bacnet_ops::decode` stays where it was: the frame summaries
-(`decode::frame`), the network and application layer reader
-(`decode_npdu_layer`) and the test frame builders (`decode::testing`,
-feature `test-support`).
+`bacnet_ops::decode` stays where it was: the frame summaries
+(`decode::frame`), the field trees (`decode::tree`: `Field`, `decode_tree`,
+`decode_npdu_tree`, `decode_apdu_tree`, which the Python bindings use too,
+#2633), the network and application layer reader (`decode_npdu_layer`) and
+the test frame builders (`decode::testing`, feature `test-support`).
 
 `bacnet-mcp` (#2066, experimental) is a Model Context Protocol server over
 that client, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).

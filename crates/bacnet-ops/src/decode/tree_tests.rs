@@ -257,3 +257,69 @@ fn hidden_passwords_do_not_change_mstp_tree_labels_or_spans() {
         assert!(!broken.iter().any(|(label, _)| label.ends_with(": valid")));
     }
 }
+
+/// The labels and ranges directly under the MS/TP header node.
+fn mstp_header(fields: &[Field]) -> Vec<(String, Range<usize>)> {
+    fields[0]
+        .children
+        .iter()
+        .map(|field| (field.label.clone(), field.range.clone()))
+        .collect()
+}
+
+/// An MS/TP frame whose header is good and whose octets are all there keeps
+/// its Data and CRC fields when its data check fails: the CRC field says
+/// `mismatch`, never the CRC's value, and nothing is decoded from the data.
+/// A truncated frame has neither field, and a second frame after the first
+/// never widens a span.
+#[test]
+fn an_mstp_data_check_shows_its_status_and_span_never_its_value() {
+    let data = npdu(&i_am(5), false);
+    for (frame_type, width, crc) in [
+        (FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, 2, "Data CRC"),
+        (
+            FrameType::BACNET_EXTENDED_DATA_NOT_EXPECTING_REPLY,
+            5,
+            "Encoded CRC-32K",
+        ),
+    ] {
+        let good = mstp(frame_type, 255, 5, &data);
+        let end = good.len();
+        let data_label = format!("Data: {} octets", end - width - 8);
+        let fields = decode_tree(Framing::Mstp, &good);
+        assert_eq!(fields[0].range, 0..end);
+        let header = mstp_header(&fields);
+        assert_eq!(header[6], (data_label.clone(), 8..end - width));
+        assert_eq!(header[7], (format!("{crc}: valid"), end - width..end));
+        assert_eq!(fields.len(), 3, "{:#?}", flat(&fields));
+
+        let mut bad = good.clone();
+        bad[end - 2] ^= 0x40;
+        let fields = decode_tree(Framing::Mstp, &bad);
+        let header = mstp_header(&fields);
+        assert_eq!(header[5].0, format!("Header CRC: {:02X}", bad[7]));
+        assert_eq!(header[6], (data_label.clone(), 8..end - width));
+        assert_eq!(header[7], (format!("{crc}: mismatch"), end - width..end));
+        assert_eq!(header[8].0, "malformed: data CRC mismatch");
+        assert_eq!(header.len(), 9, "{header:#?}");
+        assert_eq!(fields.len(), 1, "nothing decoded: {:#?}", flat(&fields));
+        // The tree is the same whatever CRC octets arrived.
+        let mut other = bad.clone();
+        other[end - 1] ^= 0x01;
+        assert_eq!(decode_tree(Framing::Mstp, &other), fields);
+
+        // A second frame after a bad first one: every span stops at the
+        // first frame's end.
+        let joined = [bad.as_slice(), good.as_slice()].concat();
+        let after = decode_tree(Framing::Mstp, &joined);
+        assert_eq!(after, fields);
+        assert!(flat(&after).iter().all(|(_, range)| range.end <= end));
+
+        // Truncated by one octet: header leaves and the fault, no Data.
+        let fields = decode_tree(Framing::Mstp, &good[..end - 1]);
+        let header = mstp_header(&fields);
+        assert_eq!(header.len(), 7, "{header:#?}");
+        assert!(header[6].0.starts_with("malformed: truncated"));
+        assert!(!header.iter().any(|(label, _)| label.starts_with("Data")));
+    }
+}

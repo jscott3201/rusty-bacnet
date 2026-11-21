@@ -2116,6 +2116,10 @@ Properties:
 
 One immutable decoded field, with its source span.
 
+Two nodes are equal, and hash alike, when their labels, spans,
+device-text flags and children all are. `copy` and `pickle` rebuild
+a node from those; nothing is decoded again.
+
 Properties:
 
 - `label: str`

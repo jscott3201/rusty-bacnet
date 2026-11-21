@@ -13,7 +13,9 @@ use crate::octets::hex_sep;
 use crate::target::routed_station;
 use bacnet_transport::bip6::{Bvll6, decode_bvll6, format_vmac_text};
 use bacnet_transport::bvll::{self, BvlcFunction, BvlcResultCode, Bvll};
-use bacnet_transport::mstp::codec::{FrameType, decode_frame, decode_frame_in_place};
+use bacnet_transport::mstp::codec::{
+    FrameError, FrameType, MAX_COBS_FRAME_LENGTH, decode_frame, decode_frame_in_place,
+};
 use bacnet_transport::sc_frame::{
     ScBvlcResult, ScFunction, decode_sc_bvlc_result, decode_sc_message, is_broadcast_vmac,
 };
@@ -57,6 +59,22 @@ impl Framing {
             Self::Bip6 => "BIP6",
             Self::Sc => "SC",
             Self::Mstp => "MSTP",
+        }
+    }
+
+    /// The most octets one frame of this link can hold, so a caller can
+    /// refuse longer input before decoding it.
+    ///
+    /// B/IP and B/IPv6: the largest message the BVLL's 16-bit Length field
+    /// can state. BACnet/SC: the stack has no fixed message limit (each
+    /// node advertises its own in the Advertisement's two-octet Maximum
+    /// BVLC Length, Annex AB), so the same 16-bit bound. MS/TP: the longest frame whose header passes, a COBS-encoded
+    /// one of the largest Length.
+    #[must_use]
+    pub const fn max_frame_length(self) -> usize {
+        match self {
+            Self::Bip | Self::Bip6 | Self::Sc => bvll::MAX_BVLL_LENGTH,
+            Self::Mstp => MAX_COBS_FRAME_LENGTH,
         }
     }
 }
@@ -180,9 +198,20 @@ pub fn link(framing: Framing, frame: &[u8]) -> Link {
     link_details(framing, frame).0
 }
 
-/// The link and, on a validated MS/TP frame, its extent in the input.
-pub(super) fn link_details(framing: Framing, frame: &[u8]) -> (Link, Option<usize>) {
-    let mut consumed = None;
+/// Where an MS/TP frame ends in its input, and whether its data passed
+/// the data CRC (or, on a COBS-encoded frame, the encoded CRC-32K) check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct MstpExtent {
+    /// The offset just past the frame's last octet.
+    pub(super) end: usize,
+    /// The data's check passed.
+    pub(super) data_valid: bool,
+}
+
+/// The link and, for an MS/TP frame whose header is good and whose octets
+/// are all there by its Length, the frame's extent in the input.
+pub(super) fn link_details(framing: Framing, frame: &[u8]) -> (Link, Option<MstpExtent>) {
+    let mut extent = None;
     let mut link = Link {
         name: String::new(),
         broadcast: false,
@@ -199,7 +228,7 @@ pub(super) fn link_details(framing: Framing, frame: &[u8]) -> (Link, Option<usiz
         Framing::Bip => bip(frame, &mut link),
         Framing::Bip6 => bip6(frame, &mut link),
         Framing::Sc => sc(frame, &mut link),
-        Framing::Mstp => mstp(frame, &mut link).map(|end| consumed = Some(end)),
+        Framing::Mstp => mstp(frame, &mut link, &mut extent),
     };
     if let Err(error) = refused {
         if link.name.is_empty() {
@@ -208,7 +237,7 @@ pub(super) fn link_details(framing: Framing, frame: &[u8]) -> (Link, Option<usiz
         link.problem = Some(format!("malformed: {error}"));
         link.malformed = true;
     }
-    (link, consumed)
+    (link, extent)
 }
 
 fn bip(frame: &[u8], link: &mut Link) -> Result<(), String> {
@@ -307,7 +336,7 @@ fn sc(frame: &[u8], link: &mut Link) -> Result<(), String> {
     Ok(())
 }
 
-fn mstp(frame: &[u8], link: &mut Link) -> Result<usize, String> {
+fn mstp(frame: &[u8], link: &mut Link, extent: &mut Option<MstpExtent>) -> Result<(), String> {
     if frame.len() >= 5 {
         let frame_type = FrameType::from_raw(frame[2]);
         link.name = frame_type
@@ -326,23 +355,45 @@ fn mstp(frame: &[u8], link: &mut Link) -> Result<usize, String> {
             | FrameType::BACNET_EXTENDED_DATA_EXPECTING_REPLY
             | FrameType::BACNET_EXTENDED_DATA_NOT_EXPECTING_REPLY
     );
+    // The codec reports a bad data check only once the header has passed
+    // and every octet its Length counts is there, so the frame's extent is
+    // known then too: Clause 9.3 gives both kinds 8 header octets, then
+    // Length plus 2 (the data CRC, or the 2 a COBS Length leaves out).
+    let bad_data = |error: FrameError, extent: &mut Option<MstpExtent>| {
+        if let FrameError::DataCrcMismatch { length } = error {
+            *extent = Some(MstpExtent {
+                end: 8 + length + 2,
+                data_valid: false,
+            });
+        }
+        error.to_string()
+    };
     if frame_type.is_cobs() {
         let mut copy = frame.to_vec();
-        let (decoded, consumed) = decode_frame_in_place(&mut copy).map_err(|e| e.to_string())?;
+        let (decoded, consumed) =
+            decode_frame_in_place(&mut copy).map_err(|e| bad_data(e, extent))?;
+        *extent = Some(MstpExtent {
+            end: consumed,
+            data_valid: true,
+        });
         if carries_npdu {
             link.npdu = Some(Npdu::Encoded {
                 wire: 8..consumed - 5,
                 data: decoded.data.to_vec(),
             });
         }
-        return Ok(consumed);
+        return Ok(());
     }
-    let (decoded, consumed) = decode_frame(frame).map_err(|e| e.to_string())?;
+    let (decoded, consumed) = decode_frame(frame).map_err(|e| bad_data(e, extent))?;
+    *extent = Some(MstpExtent {
+        end: consumed,
+        data_valid: true,
+    });
     if carries_npdu && !decoded.data.is_empty() {
         let start = offset_in(frame, decoded.data);
         link.npdu = Some(Npdu::At(start..start + decoded.data.len()));
     }
-    Ok(consumed)
+    Ok(())
 }
 
 /// Summarise a frame for the capture list. Decodes the headers only; the
