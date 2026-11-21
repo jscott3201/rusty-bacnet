@@ -7,7 +7,7 @@
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, Broadcast, DeviceEvent, DiscoveredRouter};
+use bacnet_client::client::{BACnetClient, Broadcast, DeviceEvent, DiscoveredRouter, Station};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -42,9 +42,9 @@ pub enum Scope {
     Network(u16),
     /// A global broadcast, which every router passes on: every network.
     Global,
-    /// One station on this network, by unicast. An address on this client's
-    /// own network, once it knows the number, is the local station.
-    Directed(DeviceAddress),
+    /// One local or remote station. A Who-Is carries its address even
+    /// when the next hop is unknown. Who-Has accepts a local station.
+    Directed(Station),
 }
 
 /// Where a handle made from a bare device instance (`1234`) asks for its
@@ -131,9 +131,13 @@ impl Ask {
 impl Scope {
     /// The network this request goes out on, for its rate slot: a global
     /// one reaches every network and takes the global slot alone.
-    pub(crate) fn network(&self) -> Option<u16> {
+    pub(crate) fn network(&self, own: Option<u16>) -> Option<u16> {
         match self {
-            Self::Local | Self::Directed(_) => Some(0),
+            Self::Local => Some(0),
+            Self::Directed(station) => {
+                let (network, _) = station.address();
+                Some(if Some(network) == own { 0 } else { network })
+            }
             Self::Network(network) => Some(*network),
             Self::Global => None,
         }
@@ -145,13 +149,13 @@ impl Scope {
     /// # Errors
     ///
     /// [`OpsError::Parse`] for a network outside 1 to 65534, and for a
-    /// directed address on another network, saying which scope to use
-    /// instead.
+    /// an invalid station address, or a directed Who-Has outside the local
+    /// network.
     pub(crate) fn station<T: TransportPort + 'static>(
         &self,
         client: &BACnetClient<T>,
         ask: Ask,
-    ) -> Result<Option<Vec<u8>>, OpsError> {
+    ) -> Result<Option<&Station>, OpsError> {
         let refused =
             |network: u16, reason: String| OpsError::parse("network", &network.to_string(), reason);
         match self {
@@ -170,18 +174,25 @@ impl Scope {
                     ask.naming(&Self::Global)
                 ),
             )),
-            Self::Directed(address) => {
-                let local = address.clone().localized(client.network_number());
-                if local.is_local() {
-                    return Ok(Some(local.mac().to_vec()));
+            Self::Directed(station) => {
+                let (network, mac) = station.address();
+                let address = DeviceAddress::new(network, mac).map_err(|reason| {
+                    OpsError::parse("address", &format!("{station:?}"), reason)
+                })?;
+                if ask == Ask::WhoIs
+                    || address
+                        .clone()
+                        .localized(client.network_number())
+                        .is_local()
+                {
+                    return Ok(Some(station));
                 }
-                let network = local.network();
                 Err(OpsError::parse(
                     "address",
                     &address.to_string(),
                     format!(
                         "{address} is on network {network}, and a directed {} goes to one \
-                         station on this network: {} asks that network's devices",
+                     station on this network: {} asks that network's devices",
                         ask.service(),
                         ask.naming(&Self::Network(network)),
                     ),
@@ -205,7 +216,11 @@ impl Scope {
             Self::Local => Broadcast::Local.answered_from(network, own),
             Self::Network(n) => Broadcast::Network(*n).answered_from(network, own),
             Self::Global => Broadcast::Global.answered_from(network, own),
-            Self::Directed(station) => address == station.clone().localized(own),
+            Self::Directed(station) => {
+                let (network, mac) = station.address();
+                address.mac() == mac
+                    && address.network() == if Some(network) == own { 0 } else { network }
+            }
         }
     }
 
@@ -213,7 +228,7 @@ impl Scope {
     pub(crate) async fn send<T: TransportPort + 'static>(
         &self,
         client: &BACnetClient<T>,
-        station: Option<&[u8]>,
+        station: Option<&Station>,
         range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
         match (self, station) {
@@ -222,7 +237,7 @@ impl Scope {
                 .await
                 .map_err(|error| to_local_broadcast(client, error)),
             (Self::Network(network), _) => client.who_is(Broadcast::Network(*network), range).await,
-            (Self::Directed(_), Some(mac)) => client.who_is_directed(mac, range).await,
+            (Self::Directed(_), Some(station)) => client.who_is_directed(station, range).await,
             (Self::Directed(_), None) => unreachable!("a directed Who-Is has its station"),
             (Self::Global, _) => client.who_is(Broadcast::Global, range).await,
         }
@@ -328,18 +343,19 @@ impl Discover {
         Self::from(Scope::Global)
     }
 
-    /// The station at `address` on this network, by unicast. From text in
+    /// One local or remote `station`, optionally through a named router. From text in
     /// the target grammar, [`Client::station_mac`] finds the MAC:
     ///
     /// ```no_run
-    /// use bacnet_ops::{Client, DeviceAddress, Discover};
+    /// use bacnet_ops::{Client, Discover};
+    /// use bacnet_client::client::Station;
     /// # async fn example(client: Client) -> Result<(), Box<dyn std::error::Error>> {
-    /// let station = DeviceAddress::local(&client.station_mac("192.168.1.20").await?)?;
+    /// let station = Station::local(&client.station_mac("192.168.1.20").await?);
     /// let found = client.discover(Discover::directed(station)).await?;
     /// # let _ = found; Ok(()) }
     /// ```
-    pub fn directed(address: DeviceAddress) -> Self {
-        Self::from(Scope::Directed(address))
+    pub fn directed(station: Station) -> Self {
+        Self::from(Scope::Directed(station))
     }
 
     /// Ask only the devices whose instance is in `instances` (every device
@@ -485,10 +501,10 @@ impl<T: TransportPort + 'static> Client<T> {
         let station = scope.station(self.low_level(), Ask::WhoIs)?;
         // The network the Who-Is goes out on takes its slot, so a slow one
         // is paced; a global one takes the global slot alone.
-        self.limits().slot(scope.network()).await;
-        let sent = scope
-            .send(self.low_level(), station.as_deref(), range)
+        self.limits()
+            .slot(scope.network(self.low_level().network_number()))
             .await;
+        let sent = scope.send(self.low_level(), station, range).await;
         // An unconfirmed send that fails never left: the caller isn't
         // charged for it.
         if sent.is_err() {

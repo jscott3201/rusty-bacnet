@@ -36,6 +36,34 @@ fn instance_of(device: Option<&DiscoveredDevice>) -> Option<u32> {
 }
 
 #[test]
+fn localized_snapshot_chooses_the_same_station_as_the_fold_without_mutating_rows() {
+    for placeholder in [false, true] {
+        let mut table = DeviceTable::new();
+        let mac = [5];
+        let local = local_at(100, &mac);
+        if placeholder {
+            table.upsert_placeholder(local);
+        } else {
+            table.upsert(local);
+        }
+        table.upsert(make_routed_device(200, 5, &mac));
+        let rows = table.localized_rows(Some(5));
+        let [row] = rows.as_slice() else {
+            panic!("one local station: {rows:?}")
+        };
+        let winner = if placeholder { 200 } else { 100 };
+        assert!(row.is_local());
+        assert_eq!(row.mac_address.as_slice(), &mac);
+        assert_eq!(row.object_identifier.instance_number(), winner);
+        assert_eq!(instance_of(table.get(0, &mac)), Some(100));
+        assert_eq!(instance_of(table.get(5, &mac)), Some(200));
+        assert_eq!(table.localized_rows(None).len(), 2);
+        table.localize(5);
+        assert_eq!(instance_of(table.get(0, &mac)), Some(winner));
+    }
+}
+
+#[test]
 fn upsert_and_find() {
     let mut table = DeviceTable::new();
     table.upsert(make_device(1234));

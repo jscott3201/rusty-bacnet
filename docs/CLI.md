@@ -157,9 +157,10 @@ When using a device instance number, the device must have been previously found 
 `enrollment-summary`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`,
 `create-object`, `delete-object` and `ack-alarm` (`ack`) take
 `DNET:instance` and `DNET:0xMAC`. When the device isn't in the discovery table
-yet, the CLI sends a Who-Is to that network and waits up to three seconds for
-the device to answer, then sends the request through the router that answered
-for it. `read-range --all` keeps every metadata read and range request routed
+yet, `DNET:instance` sends a Who-Is for that instance on the named network.
+`DNET:0xMAC` directs its Who-Is to the named station. The CLI waits up to
+three seconds for a reply, then sends the service request through the router
+that relayed it. `read-range --all` keeps every metadata read and range request routed
 to that device while paging its log. `file-read` routes every stream or record
 window; `file-write` retains stream access and requires `--allow-write`.
 `control` and `reinit` retain their write and confirmation guards. `time-sync`

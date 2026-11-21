@@ -48,7 +48,7 @@ impl DeviceAddress {
     /// Network 65535 (every network), an empty MAC (a broadcast), a MAC
     /// longer than [`BACnetAddress::MAX_MAC_LEN`] octets, a local MAC of a
     /// length the target grammar has no form for (one of 1, 3 or 6
-    /// octets), and the MS/TP broadcast `0xFF` as a one-octet MAC name no
+    /// octets), and the local MS/TP broadcast `0xFF` as a one-octet MAC name no
     /// one station.
     pub fn new(network: u16, mac: &[u8]) -> Result<Self, String> {
         if network == u16::MAX {
@@ -67,7 +67,7 @@ impl DeviceAddress {
                 mac.len()
             ));
         }
-        if mac == [0xFF] {
+        if network == 0 && mac == [0xFF] {
             return Err("MAC 0xFF is the MS/TP broadcast, not a station".into());
         }
         Ok(Self {
@@ -203,6 +203,12 @@ impl FromStr for DeviceAddress {
                 "'{text}' is a B/IPv6 address: name the node by its VMAC (bip6:0x...)"
             )),
         }
+    }
+}
+
+impl From<DeviceAddress> for bacnet_client::client::Station {
+    fn from(address: DeviceAddress) -> Self {
+        Self::from(BACnetAddress::from(address))
     }
 }
 

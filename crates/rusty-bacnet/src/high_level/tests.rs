@@ -280,7 +280,7 @@ fn lookup_errors_are_one_tree() {
         let unknown = [
             ops_err_bip(OpsError::UnknownDevice {
                 target: "2:1234".into(),
-                asked: Some(bacnet_ops::ResolveScope::Network(2)),
+                asked: Some(bacnet_ops::Scope::Network(2)),
             }),
             crate::errors::to_py_err(Error::UnknownDevice {
                 device: "2:1234".into(),
@@ -309,7 +309,7 @@ fn lookup_errors_are_one_tree() {
         assert!(by_address.value(py).getattr("instance").unwrap().is_none());
         let asked = ops_err_bip(OpsError::UnknownDevice {
             target: "1234".into(),
-            asked: Some(bacnet_ops::ResolveScope::Local),
+            asked: Some(bacnet_ops::Scope::Local),
         });
         assert!(asked.to_string().contains("this network"), "{asked}");
 

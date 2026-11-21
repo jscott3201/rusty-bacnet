@@ -232,6 +232,32 @@ class RoutedWireTests(unittest.IsolatedAsyncioTestCase):
         self.role = await self.endpoint.client()
         self.target = rb.RoutedTarget(5, self.STATION, router=self.router.address)
 
+    async def test_directed_discovery_filters_replies_without_losing_other_arrivals(self):
+        stations = [(6, self.STATION), (5, b"\x0b"), (5, self.STATION)]
+
+        def replies(datagram, source):
+            if datagram[:2] == b"\x81\x0a":
+                request = request_of(datagram)
+                self.requests.append(request)
+                return [i_am(network, address, FAR) for network, address in stations]
+            return ()
+
+        self.router.handler = replies
+        async with asyncio.timeout(10):
+            arrivals = await self.role.i_am_arrivals()
+            found = await self.role.discover(scope=self.target, low=FAR, high=FAR)
+            [row] = found
+            self.assertEqual((row.network, bytes(row.entry.source_address), row.instance,
+                              row.duplicate), (5, self.STATION, FAR, True))
+            observed = [await anext(arrivals) for _ in stations]
+            self.assertCountEqual([(r.source_network, bytes(r.source_address)) for r in observed],
+                                  stations)
+            known = await self.role.discovered_devices()
+            self.assertCountEqual([(r.source_network, bytes(r.source_address)) for r in known
+                                   if r.object_identifier.instance == FAR], stations)
+            [query] = self.requests
+            self.assertEqual((query["dnet"], query["dadr"]), (5, self.STATION))
+
     def assert_routed(self, requests, service):
         self.assertTrue(requests)
         for request in requests:
@@ -365,7 +391,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
     """A RoutedTarget with no router: the client uses the route it learns.
     The endpoint is a foreign device of a raw BBMD that is also the router,
     so its broadcasts reach the BBMD as Distribute-Broadcast-To-Network,
-    where they can be read: the first call asks network 5 with one Who-Is,
+    where they can be read: the first call asks the station with one Who-Is,
     the station's I-Am relayed by the router gives the route, and every
     request then goes to that router by unicast, naming the station."""
 
@@ -406,7 +432,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
         value = await asyncio.wait_for(self.role.read_property(target, AI_1, P.PRESENT_VALUE), 10)
         self.assertEqual(value, rb.PropertyValue.unsigned(0))
         [who_is] = self.who_is
-        self.assertEqual(who_is["dadr"], b"")  # every device on network 5
+        self.assertEqual(who_is["dadr"], self.STATION)
         for name, call in calls(self.role, target).items():
             with self.subTest(method=name):
                 await asyncio.wait_for(call(), 5)
@@ -433,7 +459,7 @@ class LearnedRouteWireTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.role.read_property(silent, AI_1, P.PRESENT_VALUE), 10)
         self.assertGreaterEqual(loop.time() - started, 2.5)  # the Who-Is's wait
         text = str(caught.exception)
-        for words in ("5:0x0B", "Who-Is on network 5", "router=", "discover_routers()"):
+        for words in ("5:0x0B", "station-directed Who-Is", "router=", "discover_routers()"):
             self.assertIn(words, text)
         self.assertEqual(len(self.who_is), 1)
         # Asked again soon: it raises at once, and no second Who-Is goes.

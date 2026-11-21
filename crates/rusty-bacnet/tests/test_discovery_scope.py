@@ -19,7 +19,7 @@ from pathlib import Path
 import rusty_bacnet
 from bvll_peer import RawPeer, bvll
 from rusty_bacnet import (BACnetClient, BACnetRouter, BipRouterPort, ForeignDevice,
-                          ObjectIdentifier, ObjectType)
+                          ObjectIdentifier, ObjectType, RoutedTarget)
 from test_bip_modes import accepted_registration
 
 # A Who-Is with no range: Unconfirmed-Request PDU, service choice 8.
@@ -82,6 +82,32 @@ class ForeignClient(unittest.IsolatedAsyncioTestCase):
 
 
 class DiscoveryScopeTests(ForeignClient):
+    async def test_remote_station_without_a_route_keeps_dadr_on_link_broadcast(self):
+        target = RoutedTarget(5, b"\x07")
+        destination = bytes.fromhex("01 20 00 05 01 07 ff")
+        frames = await self.broadcast_npdus(lambda: self.client.who_is(scope=target), count=2)
+        self.assertEqual(frames, [ASK, destination + WHO_IS])
+        frames = await self.broadcast_npdus(
+            lambda: self.client.discover(scope=target, low=4, high=6, wait=0))
+        self.assertEqual(frames, [destination + WHO_IS + bytes.fromhex("09 04 19 06")])
+
+    async def test_remote_station_through_a_named_router_uses_original_unicast(self):
+        loop = asyncio.get_running_loop()
+        received = loop.create_future()
+
+        def observe(data, source):
+            if data[:2] == bytes.fromhex("81 0a"):
+                loop.call_soon_threadsafe(received.set_result, data)
+            return ()
+
+        router = RawPeer(observe)
+        self.addCleanup(router.close)
+        target = RoutedTarget(5, b"\x07", router=router.address)
+        frames = await self.broadcast_npdus(lambda: self.client.who_is(scope=target))
+        self.assertEqual(frames, [ASK])
+        data = await asyncio.wait_for(received, 3)
+        self.assertEqual(data[4:], bytes.fromhex("01 20 00 05 01 07 ff") + WHO_IS)
+
     async def test_no_scope_is_a_local_broadcast(self):
         client = self.client
         for name, call, sent in (("who_is", client.who_is, [ASK, LOCAL]),
@@ -147,7 +173,7 @@ class WhoHasScopeTests(ForeignClient):
         calls = (("who_has_by_id", lambda scope: client.who_has_by_id(AV1, scope=scope)),
                  ("who_has_by_name", lambda scope: client.who_has_by_name("AV-1", scope=scope)),
                  ("who_has_replies", lambda scope: client.who_has_replies("AV-1", scope=scope)))
-        for scope, error in (("everywhere", ValueError), (0, ValueError), (65535, ValueError),
+        for scope, error in ((RoutedTarget(5, b"\x07"), TypeError), ("everywhere", ValueError), (0, ValueError), (65535, ValueError),
                              (True, TypeError), (1.5, TypeError)):
             for name, call in calls:
                 with self.subTest(call=name, scope=scope):

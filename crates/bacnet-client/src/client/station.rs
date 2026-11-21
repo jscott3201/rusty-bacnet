@@ -10,8 +10,8 @@
 //! router (Clause 6.2.2): the one the caller names, or else the one the
 //! discovery table's row at its address names. The table is the client's
 //! only record of a route, so a remote address with no named router and no
-//! row fails before anything is sent. Every form goes out through the same
-//! request path as every other call, so the row at the address, when there
+//! row fails before sending, except for a Who-Is directed to that station.
+//! Every form goes out through the same request path as every other call, so the row at the address, when there
 //! is one, sizes the request and its answer keeps the row alive.
 
 use std::future::Future;
@@ -55,6 +55,15 @@ pub enum Station {
 }
 
 impl Station {
+    /// The address that identifies the station, independent of its next hop:
+    /// network zero for a local station, or its network number and MAC there.
+    pub fn address(&self) -> (u16, &[u8]) {
+        match self {
+            Self::Local { mac } => (0, mac),
+            Self::Remote { network, mac } | Self::Routed { network, mac, .. } => (*network, mac),
+        }
+    }
+
     /// The station at `mac` on this link.
     pub fn local(mac: &[u8]) -> Self {
         Self::Local {
@@ -495,7 +504,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: UnconfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<(), Error> {
-        match self.route_to(network, mac)? {
+        let route = match self.route_to(network, mac) {
+            Ok(route) => route,
+            Err(Error::UnknownDevice { .. })
+                if service_choice == UnconfirmedServiceChoice::WHO_IS =>
+            {
+                return self
+                    .unconfirmed_request_routed(None, network, mac, service_choice, service_data)
+                    .await;
+            }
+            Err(error) => return Err(error),
+        };
+        match route {
             Route::Local if network != 0 => {
                 self.unconfirmed_own_network(network, mac, service_choice, service_data)
                     .await
@@ -505,8 +525,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await
             }
             Route::Via(router) => {
-                self.unconfirmed_request_routed(&router, network, mac, service_choice, service_data)
-                    .await
+                self.unconfirmed_request_routed(
+                    Some(&router),
+                    network,
+                    mac,
+                    service_choice,
+                    service_data,
+                )
+                .await
             }
         }
     }
@@ -528,7 +554,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 .unconfirmed_own_network(network, mac, service_choice, service_data)
                 .await;
         }
-        self.unconfirmed_request_routed(router, network, mac, service_choice, service_data)
+        self.unconfirmed_request_routed(Some(router), network, mac, service_choice, service_data)
             .await
     }
 
@@ -551,11 +577,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// An unconfirmed request through the router at `router` to the station
-    /// at `mac` on `network`.
-    pub(super) async fn unconfirmed_request_routed(
+    /// Send to one remote station. A Who-Is for a station with no known
+    /// next hop uses the link broadcast, keeping its DNET and DADR.
+    async fn unconfirmed_request_routed(
         &self,
-        router: &[u8],
+        router: Option<&[u8]>,
         network: u16,
         mac: &[u8],
         service_choice: UnconfirmedServiceChoice,
@@ -568,10 +594,28 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &apdu)?;
+        if service_choice == UnconfirmedServiceChoice::WHO_IS
+            && let Some(router) = router
+            && !self.network.is_local_unicast_station(router).await?
+        {
+            return Err(Error::Encoding(
+                "a directed Who-Is needs a unicast router on this link".into(),
+            ));
+        }
         self.ask_before(service_choice).await?;
-        self.network
-            .send_apdu_routed(&buf, network, mac, router, false, NetworkPriority::Normal)
-            .await
+        let priority = NetworkPriority::Normal;
+        match router {
+            Some(router) => {
+                self.network
+                    .send_apdu_routed(&buf, network, mac, router, false, priority)
+                    .await
+            }
+            None => {
+                self.network
+                    .send_apdu_routed_via_local_broadcast(&buf, network, mac, false, priority)
+                    .await
+            }
+        }
     }
 
     /// The checks every address takes before any request state: a MAC that

@@ -1,6 +1,7 @@
 //! Making handles: from a target, an address, an instance or a discovery
 //! result, and discovery by address.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use bacnet_client::client::DeviceEventKind;
@@ -92,7 +93,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// A handle pinned to `address`, with the instance the discovery table
     /// holds for it. An address on this client's own network is the local
     /// station at its MAC, which the link must be able to reach. A remote
-    /// address without a row asks its network first.
+    /// address without a row gets a station-directed Who-Is first.
     async fn at(&self, address: DeviceAddress) -> Result<Device<T>, OpsError> {
         let address = self.localized(address);
         if address.is_local() {
@@ -213,7 +214,7 @@ impl<T: TransportPort + 'static> Client<T> {
         let sent_to = network.map_or(self.resolve_scope(), ResolveScope::on);
         let asked = named.map_or(sent_to, ResolveScope::Network);
         let found = self
-            .wait_for(sent_to, Some(range), SETTLE, |row| {
+            .wait_for(&sent_to.into(), Some(range), SETTLE, |row| {
                 row.object_identifier.instance_number() == instance
                     && network.is_none_or(|n| {
                         DeviceAddress::of(row)
@@ -226,7 +227,7 @@ impl<T: TransportPort + 'static> Client<T> {
             match OpsError::from(unknown(instance, named)) {
                 OpsError::UnknownDevice { target, .. } => OpsError::UnknownDevice {
                     target,
-                    asked: sent.then_some(asked),
+                    asked: sent.then(|| asked.into()),
                 },
                 other => other,
             }
@@ -234,16 +235,17 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// The row of the station at the remote `address`, once it answers a
-    /// Who-Is to its network (for `range`, or every device).
+    /// Who-Is to that station, optionally limited to `range`.
     async fn find_station(
         &self,
         address: &DeviceAddress,
         range: Option<DeviceInstanceRange>,
     ) -> Result<DiscoveredDevice, OpsError> {
-        let asked = ResolveScope::on(address.network());
+        let asked = Scope::Directed(address.clone().into());
         let found = self
-            .wait_for(asked, range, Duration::ZERO, |row| {
-                DeviceAddress::of(row).as_ref() == Some(address)
+            .wait_for(&asked, range, Duration::ZERO, |row| {
+                DeviceAddress::of(row)
+                    .is_some_and(|at| asked.covers(&at, self.low_level().network_number()))
             })
             .await?;
         found.ok_or_else(|| OpsError::UnknownDevice {
@@ -260,7 +262,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// every answer reads the table after.
     async fn wait_for(
         &self,
-        asked: ResolveScope,
+        asked: &Scope,
         range: Option<DeviceInstanceRange>,
         settle: Duration,
         wanted: impl Fn(&DiscoveredDevice) -> bool,
@@ -270,7 +272,7 @@ impl<T: TransportPort + 'static> Client<T> {
         };
         // Subscribed before asking, so the answer can't slip in between.
         let mut events = self.device_events();
-        self.who_is(&Scope::from(asked), range).await?;
+        self.who_is(asked, range).await?;
         let mut deadline = tokio::time::Instant::now() + wait;
         let mut first: Option<DiscoveredDevice> = None;
         loop {
@@ -334,58 +336,31 @@ impl<T: TransportPort + 'static> Client<T> {
         let range = request.instances()?;
         let mut events = self.device_events();
         self.who_is(request.scope(), range).await?;
-        let in_range = |row: &DiscoveredDevice| {
-            range.is_none_or(|r| r.contains(row.object_identifier.instance_number()))
-        };
-        // An I-Am from outside the scope asked, heard during the wait, is
-        // no answer to this Who-Is. The network number is read as each
-        // comes: it may be learned during the wait.
-        let scope = request.scope().clone();
-        let asked = |row: &DiscoveredDevice| {
+        let answered = |row: &DiscoveredDevice| {
+            let instance = row.object_identifier.instance_number();
+            let address = DeviceAddress::of(row)?;
             let own = self.low_level().network_number();
-            in_range(row) && DeviceAddress::of(row).is_some_and(|a| scope.covers(&a, own))
+            (range.is_none_or(|r| r.contains(instance)) && request.scope().covers(&address, own))
+                .then_some((address, instance))
         };
-        let mut heard = std::collections::BTreeSet::new();
+        let mut heard = BTreeSet::new();
         let deadline = tokio::time::Instant::now() + request.wait;
         loop {
             match tokio::time::timeout_at(deadline, events.recv()).await {
                 Err(_) | Ok(Err(RecvError::Closed)) => break,
-                Ok(Ok(event)) if event.kind != DeviceEventKind::Lost && asked(&event.device) => {
-                    heard.extend(DeviceAddress::of(&event.device));
+                Ok(Ok(event)) if event.kind != DeviceEventKind::Lost => {
+                    heard.extend(answered(&event.device));
                 }
                 Ok(Ok(_)) => {}
                 // Missed answers are in the table: every row in range counts.
                 Ok(Err(RecvError::Lagged(_))) => {
                     let table = self.low_level().discovered_devices().await;
-                    heard.extend(
-                        table
-                            .iter()
-                            .filter(|r| asked(r))
-                            .filter_map(DeviceAddress::of),
-                    );
+                    heard.extend(table.iter().filter_map(answered));
                 }
             }
         }
-        let table = self.low_level().discovered_devices().await;
-        let claimed = |instance| {
-            table
-                .iter()
-                .filter(|row| row.object_identifier.instance_number() == instance)
-                .count()
-        };
-        Ok(table
-            .iter()
-            .filter_map(|row| {
-                let address = DeviceAddress::of(row).filter(|a| heard.contains(a))?;
-                let instance = row.object_identifier.instance_number();
-                Some(Discovered {
-                    address,
-                    instance,
-                    duplicate: claimed(instance) > 1,
-                    entry: row.clone(),
-                })
-            })
-            .collect())
+        let (own, table) = self.low_level().localized_device_snapshot();
+        Ok(discovery_results(table, heard, own))
     }
 
     /// Every instance two or more addresses claim in the discovery table,
@@ -410,6 +385,41 @@ impl<T: TransportPort + 'static> Client<T> {
             })
             .collect()
     }
+}
+
+/// Join this call's answers to the final table with one local-number snapshot.
+pub(super) fn discovery_results(
+    table: Vec<DiscoveredDevice>,
+    heard: BTreeSet<(DeviceAddress, u32)>,
+    own: Option<u16>,
+) -> Vec<Discovered> {
+    let heard: BTreeSet<_> = heard
+        .into_iter()
+        .map(|(address, instance)| (address.localized(own), instance))
+        .collect();
+    let mut claims = BTreeMap::new();
+    let stations: Vec<_> = table
+        .into_iter()
+        .filter_map(|entry| {
+            let address = DeviceAddress::of(&entry)?;
+            let instance = entry.object_identifier.instance_number();
+            *claims.entry(instance).or_insert(0usize) += 1;
+            Some((address, instance, entry))
+        })
+        .collect();
+    stations
+        .into_iter()
+        .filter_map(|(address, instance, entry)| {
+            heard
+                .contains(&(address.clone(), instance))
+                .then(|| Discovered {
+                    address,
+                    instance,
+                    duplicate: claims[&instance] > 1,
+                    entry,
+                })
+        })
+        .collect()
 }
 
 /// The local station at `mac`.

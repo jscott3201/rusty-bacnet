@@ -116,6 +116,53 @@ async fn site() -> (BACnetClient<TestTransport>, SendLog) {
     (client, sent)
 }
 
+/// A queued routed I-Am and its local table row designate one station
+/// after the client's own network number becomes known.
+#[tokio::test(start_paused = true)]
+async fn a_queued_routed_answer_and_its_local_alias_match_the_canonical_destination() {
+    let (mut client, _) = site().await;
+    let mut queued = client.get_device_at(DNET, &[STATION]).await.unwrap();
+    let mut local = queued.clone();
+    local.mac_address = queued.source_address.clone().unwrap();
+    local.source_network = None;
+    local.source_address = None;
+    let expected = Destination {
+        address: DeviceAddress::local(&[STATION]).unwrap(),
+        instance: Some(INSTANCE),
+    };
+    for target in [Station::Instance(INSTANCE), Station::Mac(vec![STATION])] {
+        assert_eq!(
+            target.destination(DNET, Some(DNET), &queued),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            target.known(DNET, Some(DNET), std::slice::from_ref(&local)),
+            Some(Ok(expected.clone()))
+        );
+    }
+    queued.object_identifier = ObjectIdentifier::new(ObjectType::DEVICE, INSTANCE + 1).unwrap();
+    let stale = Station::Instance(INSTANCE + 1);
+    assert!(stale.destination(DNET, Some(DNET), &queued).is_some());
+    assert!(
+        stale
+            .known(DNET, Some(DNET), std::slice::from_ref(&local))
+            .is_none()
+    );
+    assert_eq!(
+        Station::Mac(vec![STATION]).known(DNET, Some(DNET), std::slice::from_ref(&local)),
+        Some(Ok(expected))
+    );
+    let mut different = local.clone();
+    different.mac_address = bacnet_types::MacAddr::from_slice(&[STATION + 1]);
+    assert!(
+        Station::Instance(INSTANCE)
+            .known(DNET, Some(DNET), &[local, different])
+            .unwrap()
+            .is_err()
+    );
+    client.stop().await.unwrap();
+}
+
 /// The device's Error, as every call to the station should end.
 fn refused<V: std::fmt::Debug>(result: Result<V, Error>) -> bool {
     matches!(

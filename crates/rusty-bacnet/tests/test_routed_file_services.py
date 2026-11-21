@@ -391,7 +391,7 @@ class LearnedFileRouteTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.role.atomic_read_file(
                 silent, FILE_1, "stream", requested_octet_count=8), 10)
         text = str(caught.exception)
-        for words in ("5:0x0B", "Who-Is on network 5", "router=", "discover_routers()"):
+        for words in ("5:0x0B", "station-directed Who-Is", "router=", "discover_routers()"):
             self.assertIn(words, text)
         self.assertEqual(len(self.who_is), 1)
         # Again, from either file call: at once, with no second Who-Is.

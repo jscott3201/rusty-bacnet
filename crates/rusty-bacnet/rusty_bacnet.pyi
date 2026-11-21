@@ -5426,7 +5426,7 @@ class BACnetClient:
           ``"mstp:5"``, ``"bip6:0x0004D2"``, an SC VMAC as six hex octets,
           a routed station as ``"2:0x05"`` (network 2, MAC 05), or a
           ``(network, mac)`` pair such as a lookup error's candidate. A
-          routed station the client knows no router for asks its network
+          routed station with no learned router is asked directly
           first;
         - an instance, ``1234`` (an int or text) or ``"2:1234"`` on network
           2, gives a handle that follows the instance: the one address
@@ -5569,9 +5569,9 @@ class BACnetClient:
         *,
         low: Optional[int] = None,
         high: Optional[int] = None,
-        scope: Literal["local", "global"] | int | str = "local",
+        scope: Literal["local", "global"] | int | str | RoutedTarget = "local",
     ) -> Awaitable[None]:
-        """Broadcast a Who-Is request. Responses are collected asynchronously;
+        """Send a Who-Is request. Responses are collected asynchronously;
         use ``discovered_devices()`` to retrieve them.
 
         ``scope`` says where the broadcast goes (#2560): ``"local"``, the
@@ -5580,7 +5580,10 @@ class BACnetClient:
         device answers; a number from 1 to 65534 is that remote network,
         through its router; and any other text is one station's address in
         the forms ``device()`` takes (``"192.168.1.10"``, ``"mstp:5"``),
-        asked by unicast (#2561, where ``who_is_directed`` was). Another
+        asked by unicast (#2561). A ``RoutedTarget`` selects one station by
+        its network and MAC. Its explicit or learned next hop receives the
+        request by unicast. When the next hop is unknown, the local link
+        carries the station-addressed request by broadcast. Another
         number, or text that names a device instance or a routed target,
         raises ``ValueError``, and another type ``TypeError``, before
         anything is sent; a station the client's link can't reach raises
@@ -5597,7 +5600,7 @@ class BACnetClient:
     def discover(
         self,
         *,
-        scope: Literal["local", "global"] | int | str = "local",
+        scope: Literal["local", "global"] | int | str | RoutedTarget = "local",
         low: Optional[int] = None,
         high: Optional[int] = None,
         wait: float = 3.0,
@@ -5611,7 +5614,8 @@ class BACnetClient:
 
         The Who-Is goes where ``scope`` says, as for ``who_is()``: this
         network alone unless it names every network (``"global"``), one
-        remote network by its number, or one station by its address.
+        remote network by its number, or one station by its local address
+        or ``RoutedTarget``. A directed result matches that station's address.
 
         Give ``low`` and ``high`` together or not at all, each from 0 to
         4194303, to ask only those instances: one alone, ``low`` above
@@ -9575,7 +9579,7 @@ class RoutedTarget:
     ``mac_address``, or ``BACnetClient.discover_routers()``' ``mac``; each
     request goes through it. Without one, the client uses the route it
     knows: the router its discovery table names for the station, after
-    one Who-Is to the station's network when it has none, as
+    one Who-Is addressed to that station when it has none, as
     ``BACnetClient.device()`` does. A station that doesn't answer raises
     ``BacnetLookupError``, and for 30 seconds a call to it with no router
     raises at once without asking again, unless an I-Am from it arrives
