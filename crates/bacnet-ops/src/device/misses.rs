@@ -22,7 +22,7 @@ use crate::Client;
 
 /// How long a station that answered neither Who-Is is remembered as
 /// silent. A station that answered only its network's Who-Is is kept until
-/// [`MISS_ROWS`] pushes it out, or it goes silent.
+/// the cap of 256 remembered stations pushes it out, or it goes silent.
 pub const MISS_MEMORY: Duration = Duration::from_secs(30);
 
 /// The most stations remembered at once; past it the oldest goes.
