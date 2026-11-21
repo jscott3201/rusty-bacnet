@@ -49,20 +49,6 @@ pub struct ReplyPlan {
 }
 
 impl ReplyPlan {
-    /// Return through a captured peer with already bounded addresses.
-    pub(super) const fn return_to(
-        port: PortId,
-        peer: Mac,
-        destination: Option<(u16, Mac)>,
-    ) -> Self {
-        Self {
-            port,
-            peer,
-            source: None,
-            destination,
-        }
-    }
-
     /// Validate and own one response's explicit addresses. Source network 0 or
     /// 65535, an empty source, and oversized addresses are refused. A response
     /// destination must also name one node on a non-reserved network.

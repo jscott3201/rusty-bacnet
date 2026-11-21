@@ -27,8 +27,12 @@ fn a_refused_routed_table_chunk_can_only_end_its_requesters_continuation() {
                 network: 80 + u16::from(requester),
                 mac: &[requester],
             };
-            let reply = ReplyPlan::new(PortId(0), hop.as_slice(), None, Some(destination)).unwrap();
-            engine.store().out.push(Task::table_ack(reply));
+            engine.store().out.push(Task::table_ack(
+                PortId(0),
+                hop.as_slice(),
+                Some(destination),
+                None,
+            ));
         }
         let mut second_rows = 0;
         let mut index = 0;
