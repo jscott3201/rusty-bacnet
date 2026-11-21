@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-description = "The bacnet tool's own layer over bacnet-ops: write safety, command classes, frame decoding and the BBMD survey"
+description = "The bacnet tool's own layer over bacnet-ops: write safety, command classes and the BBMD survey"
 keywords = ["bacnet", "building-automation", "hvac"]
 categories = ["network-programming"]
 
@@ -23,7 +23,6 @@ bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-services = { workspace = true, features = ["std"] }
 bacnet-transport = { workspace = true, features = ["ipv6"] }
 bacnet-client = { workspace = true, features = ["ipv6"] }
-bacnet-npdu.workspace = true
 bytes = { workspace = true, features = ["std"] }
 futures-util.workspace = true
 serde = { workspace = true, features = ["derive", "std"] }
@@ -37,10 +36,8 @@ tracing.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
-bacnet-ops = { workspace = true, features = ["test-support"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-transport = { workspace = true, features = ["test-support"] }
-proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = "3"
 

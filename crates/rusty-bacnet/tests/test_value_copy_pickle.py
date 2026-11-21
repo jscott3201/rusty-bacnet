@@ -25,6 +25,7 @@ from rusty_bacnet import (
     BACnetServer,
     BACnetTimeStamp,
     BitString,
+    FieldNode,
     FrameSummary,
     IAmArrival,
     Multicast,
@@ -38,6 +39,7 @@ from rusty_bacnet import (
     Value,
     WritePolicy,
     decode_frame,
+    decode_frame_tree,
 )
 
 P = PropertyIdentifier
@@ -139,6 +141,15 @@ def samples() -> dict[type, list[Any]]:
             decode_frame(b"\x81", "bip"),
             decode_frame(bytes.fromhex("8202000b00010201001008"), "ipv6"),
             decode_frame(bytes.fromhex("55ff000201000073"), "mstp"),
+        ],
+        # Copied by its fields, children included (#2633): each root of a
+        # decoded request, a leaf deep in it, and a node with device text.
+        FieldNode: [
+            *decode_frame_tree(bytes.fromhex("810a001101000005010c0c02000312194b"), "bip"),
+            decode_frame_tree(bytes.fromhex("810a001101000005010c0c02000312194b"),
+                              "bip")[2].children[-1].children[0],
+            FieldNode._rebuild(  # type: ignore[attr-defined]
+                'Character string: "Fan"', (0, 5), (), True),
         ],
         # Copied by its fields (#2612): a direct I-Am at the low edges, and
         # a routed, forwarded one with every field at its high edge.

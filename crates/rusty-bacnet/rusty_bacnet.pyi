@@ -5013,6 +5013,49 @@ class FrameSummary:
     @property
     def device(self) -> int | None: ...
 
+class FieldNode:
+    """One immutable decoded field, with its source span.
+
+    Two nodes are equal, and hash alike, when their labels, spans,
+    device-text flags and children all are. ``copy`` and ``pickle`` rebuild
+    a node from those; nothing is decoded again.
+    """
+    @property
+    def label(self) -> str: ...
+    @property
+    def span(self) -> tuple[int, int]:
+        """Start and exclusive end offsets in the supplied frame."""
+        ...
+    @property
+    def children(self) -> tuple[FieldNode, ...]: ...
+    @property
+    def device_text(self) -> bool:
+        """Whether the label quotes a character string supplied by the device."""
+        ...
+    def __repr__(self) -> str:
+        """A short description, not code: ``<FieldNode 'Invoke ID: 7' 8..9,
+        0 children>``. A long label is cut short; no octets are shown."""
+        ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+def decode_frame_tree(octets: bytes, link: Literal["bip", "ipv6", "sc", "mstp"]) -> tuple[FieldNode, ...]:
+    """Decode ordered link, network and application fields offline. Malformed
+    input yields partial fields and diagnostics. A COBS-encoded MS/TP field
+    points to the encoded NPDU span.
+
+    link takes the Frame.link tokens, as decode_frame does. Input longer than
+    the link's largest frame raises ValueError: 65,535 octets on "bip",
+    "ipv6" and "sc", 2,053 on "mstp".
+
+    The password of a DeviceCommunicationControl or ReinitializeDevice
+    request is hidden from the labels only. Its node's span still points at
+    the password's octets in ``octets`` and in ``Frame.octets``, so mask
+    those octets before you log or share a frame. The password's length
+    shows through that span and the frame's length fields. An MS/TP frame's
+    data CRC field says ``valid`` or ``mismatch``, never its value."""
+    ...
+
 def decode_frame(octets: bytes, link: Literal["bip", "ipv6", "sc", "mstp"]) -> FrameSummary:
     """Decode link/NPDU/APDU headers with Rust, without sending traffic.
 

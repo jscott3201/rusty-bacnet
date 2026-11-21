@@ -162,6 +162,30 @@ Read selected files once and inspect them without network I/O; OSError retains e
 None time samples the clock once. A later connection may read changed files.
 Same interpretation and input limits as inspect\_sc\_pem; no chmod or startup gate.
 
+## decode_frame_tree
+
+```python
+def decode_frame_tree(
+    octets: bytes,
+    link: Literal["bip", "ipv6", "sc", "mstp"],
+) -> tuple[FieldNode, ...]
+```
+
+Decode ordered link, network and application fields offline. Malformed
+input yields partial fields and diagnostics. A COBS-encoded MS/TP field
+points to the encoded NPDU span.
+
+link takes the Frame.link tokens, as decode\_frame does. Input longer than
+the link's largest frame raises ValueError: 65,535 octets on "bip",
+"ipv6" and "sc", 2,053 on "mstp".
+
+The password of a DeviceCommunicationControl or ReinitializeDevice
+request is hidden from the labels only. Its node's span still points at
+the password's octets in `octets` and in `Frame.octets`, so mask
+those octets before you log or share a frame. The password's length
+shows through that span and the frame's length fields. An MS/TP frame's
+data CRC field says `valid` or `mismatch`, never its value.
+
 ## decode_frame
 
 ```python
