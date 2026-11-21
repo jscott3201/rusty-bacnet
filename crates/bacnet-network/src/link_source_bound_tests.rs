@@ -113,16 +113,7 @@ async fn non_router_drops_and_counts_a_frame_from_an_over_long_source_mac() {
 async fn router_drops_and_counts_a_frame_from_an_over_long_source_mac() {
     let (port_a, mut link_a) = injector(0x01);
     let (port_b, mut link_b) = injector(0x02);
-    let ports = vec![
-        RouterPort {
-            transport: port_a,
-            network_number: 1000,
-        },
-        RouterPort {
-            transport: port_b,
-            network_number: 2000,
-        },
-    ];
+    let ports = vec![RouterPort::new(port_a, 1000), RouterPort::new(port_b, 2000)];
     let StartedRouter {
         mut router,
         apdus: mut local,

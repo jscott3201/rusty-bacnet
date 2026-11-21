@@ -82,4 +82,14 @@ pub struct Counters {
     /// Requests the router's own application sent through the engine
     /// ([`BACnetRouter::originate`](super::BACnetRouter::originate), #1699).
     pub originated: u64,
+    /// Frames dropped because their way on lies between two isolated ports
+    /// ([`RouterPort::isolated`](super::RouterPort::isolated), #2684): a
+    /// message for a network behind the other port, a reject on its way to
+    /// one, or a Who-Is-Router for one.
+    pub isolated_drops: u64,
+    /// Route changes refused because they came from an isolated port
+    /// (#2684): each network of an I-Am-Router, a routing table update or
+    /// Ack, or a reject, whose route goes through another port, and each
+    /// update entry that names another isolated port.
+    pub isolated_refusals: u64,
 }

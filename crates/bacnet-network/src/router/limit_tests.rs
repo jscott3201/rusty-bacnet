@@ -43,16 +43,7 @@ fn to_peer(apdu: usize) -> Vec<u8> {
 /// A router on two driven ports, networks 1000 and 2000.
 async fn start(ports: [TestTransport; 2]) -> BACnetRouter {
     let [first, second] = ports;
-    let ports = vec![
-        RouterPort {
-            transport: first,
-            network_number: 1000,
-        },
-        RouterPort {
-            transport: second,
-            network_number: 2000,
-        },
-    ];
+    let ports = vec![RouterPort::new(first, 1000), RouterPort::new(second, 2000)];
     let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await
         .unwrap();
@@ -167,16 +158,7 @@ async fn an_application_port_keeps_its_declaration_when_a_path_shrinks() {
     let (changes_tx, changes) = watch::channel(NpduLimits::STANDARD);
     let (first, mut node) = driven(1, 1497);
     let (second, _peer) = driven_publishing(2, 1497, changes);
-    let ports = vec![
-        RouterPort {
-            transport: first,
-            network_number: 1000,
-        },
-        RouterPort {
-            transport: second,
-            network_number: 2000,
-        },
-    ];
+    let ports = vec![RouterPort::new(first, 1000), RouterPort::new(second, 2000)];
     let started = BACnetRouter::start(ports, RouterOptions::new())
         .await
         .unwrap();

@@ -33,10 +33,7 @@ impl Routed {
         let (near, two, three) = (Bus::new(), Bus::new(), Bus::new());
         let ports = [(&near, 1), (&two, 2), (&three, 3)]
             .into_iter()
-            .map(|(bus, network_number)| RouterPort {
-                transport: bus.port(254),
-                network_number,
-            })
+            .map(|(bus, network_number)| RouterPort::new(bus.port(254), network_number))
             .collect();
         let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
             .await

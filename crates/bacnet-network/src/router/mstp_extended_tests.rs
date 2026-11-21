@@ -37,14 +37,8 @@ async fn a_routers_mstp_ports_take_extended_frames() {
     let (router_serial_1, peer_serial_1) = LoopbackSerial::pair();
     let (router_serial_2, _peer_serial_2) = LoopbackSerial::pair();
     let ports = vec![
-        RouterPort {
-            transport: MstpTransport::new(router_serial_1, standard(0)),
-            network_number: 1,
-        },
-        RouterPort {
-            transport: MstpTransport::new(router_serial_2, standard(0)),
-            network_number: 2,
-        },
+        RouterPort::new(MstpTransport::new(router_serial_1, standard(0)), 1),
+        RouterPort::new(MstpTransport::new(router_serial_2, standard(0)), 2),
     ];
     let StartedRouter {
         mut router,
@@ -106,20 +100,20 @@ async fn a_routers_mstp_port_sends_extended_frames() {
         .map(|_| Arc::new([AtomicU16::new(0), AtomicU16::new(0)]))
         .collect();
     let ports = vec![
-        RouterPort {
-            transport: watched(
+        RouterPort::new(
+            watched(
                 MstpTransport::new(router_serial_1, standard(0)),
                 limits[0].clone(),
             ),
-            network_number: 1,
-        },
-        RouterPort {
-            transport: watched(
+            1,
+        ),
+        RouterPort::new(
+            watched(
                 MstpTransport::new(router_serial_2, standard(0)),
                 limits[1].clone(),
             ),
-            network_number: 2,
-        },
+            2,
+        ),
     ];
     let StartedRouter { mut router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await
@@ -195,9 +189,11 @@ async fn two_links(prepare: [bool; 2]) -> (BACnetRouter, [Peer; 2]) {
     let (router_2, peer_2) = LoopbackSerial::pair();
     let ports = [(router_1, 1, prepare[0]), (router_2, 2, prepare[1])]
         .into_iter()
-        .map(|(serial, network_number, prepare)| RouterPort {
-            transport: routed(MstpTransport::new(serial, standard(0)), prepare),
-            network_number,
+        .map(|(serial, network_number, prepare)| {
+            RouterPort::new(
+                routed(MstpTransport::new(serial, standard(0)), prepare),
+                network_number,
+            )
         })
         .collect();
     let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())

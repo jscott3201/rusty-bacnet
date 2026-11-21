@@ -240,6 +240,16 @@ fn log(event: Event) {
             network,
             "Router refused an NPDU it originated itself; no reject sent"
         ),
+        Event::IsolationRefused {
+            network,
+            port,
+            class,
+        } => warn!(
+            network,
+            port = port.0,
+            ?class,
+            "Router refused a route change from an isolated port"
+        ),
         Event::Purged { network } => debug!(network, "Purged stale route"),
         Event::PendingExpired { network } => {
             debug!(network, "Expired hardened pending challenger")

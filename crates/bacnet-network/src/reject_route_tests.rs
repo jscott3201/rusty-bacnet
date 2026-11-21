@@ -395,10 +395,7 @@ async fn chained_routers_carry_a_reject_back_to_the_originating_device() {
     let (r2_b, mut far) = LoopbackTransport::pair(vec![0x04], vec![0x0C]);
     let mut to_device = FromRouter::start(&mut r1_a, &mut device).await;
     let _to_far = far.start().await.unwrap();
-    let port = |transport, network_number| RouterPort {
-        transport,
-        network_number,
-    };
+    let port = |transport, network_number| RouterPort::new(transport, network_number);
     let StartedRouter {
         router: mut r1,
         apdus: _r1_local,

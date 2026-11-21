@@ -140,13 +140,11 @@ async fn start(path: Path, baud: u32) -> (Running, Target) {
                 let (port_1, port_2) = (free_port(), free_port());
                 let ports = [(port_1, CLIENT_NET), (port_2, SERVER_NET)]
                     .into_iter()
-                    .map(|(port, network_number)| RouterPort {
-                        transport: BipTransport::new(
-                            Ipv4Addr::LOCALHOST,
-                            port,
-                            Ipv4Addr::LOCALHOST,
-                        ),
-                        network_number,
+                    .map(|(port, network_number)| {
+                        RouterPort::new(
+                            BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST),
+                            network_number,
+                        )
                     })
                     .collect();
                 if let Some(router) = start_router(ports).await {
@@ -163,14 +161,11 @@ async fn start(path: Path, baud: u32) -> (Running, Target) {
                 let port_1 = free_port();
                 let bip = BipTransport::new(Ipv4Addr::LOCALHOST, port_1, Ipv4Addr::LOCALHOST);
                 let ports = vec![
-                    RouterPort {
-                        transport: AnyTransport::Bip(Box::new(bip)),
-                        network_number: CLIENT_NET,
-                    },
-                    RouterPort {
-                        transport: MstpTransport::new(router_end, station(0, baud, true)).into(),
-                        network_number: SERVER_NET,
-                    },
+                    RouterPort::new(AnyTransport::Bip(Box::new(bip)), CLIENT_NET),
+                    RouterPort::new(
+                        MstpTransport::new(router_end, station(0, baud, true)).into(),
+                        SERVER_NET,
+                    ),
                 ];
                 let Some(router) = start_router(ports).await else {
                     continue;

@@ -184,10 +184,7 @@ pub(super) fn port_at(pending_send: bool, mac: &[u8]) -> (RouterPort<TestTranspo
         })
         .build();
     (
-        RouterPort {
-            network_number: 1,
-            transport,
-        },
+        RouterPort::new(transport, 1),
         Probe {
             starts,
             start_entered,

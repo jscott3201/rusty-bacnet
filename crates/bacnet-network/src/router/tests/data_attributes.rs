@@ -134,6 +134,14 @@ async fn forward_broadcast_preserves_data_attributes_on_each_output_port() {
 async fn two_sc_ports(
     options: RouterOptions,
 ) -> (StartedRouter, LoopbackWebSocket, LoopbackWebSocket) {
+    two_sc_ports_isolated(options, false).await
+}
+
+/// Two SC ports, on networks 1000 and 2000, both isolated or neither.
+async fn two_sc_ports_isolated(
+    options: RouterOptions,
+    isolated: bool,
+) -> (StartedRouter, LoopbackWebSocket, LoopbackWebSocket) {
     let (ws_client_a, ws_hub_a) = LoopbackWebSocket::pair();
     let (ws_client_b, ws_hub_b) = LoopbackWebSocket::pair();
     let hub_a_vmac: Vmac = [0xA0; 6];
@@ -148,17 +156,16 @@ async fn two_sc_ports(
         ws_hub_b
     });
 
-    let port_a = RouterPort {
-        transport: ScTransport::new(ws_client_a, [0x01; 6]).with_device_uuid([1; 16]),
-        network_number: 1000,
-    };
-    let port_b = RouterPort {
-        transport: ScTransport::new(ws_client_b, [0x02; 6]).with_device_uuid([1; 16]),
-        network_number: 2000,
-    };
-    let started = BACnetRouter::start(vec![port_a, port_b], options)
-        .await
-        .unwrap();
+    let port_a = RouterPort::new(
+        ScTransport::new(ws_client_a, [0x01; 6]).with_device_uuid([1; 16]),
+        1000,
+    );
+    let port_b = RouterPort::new(
+        ScTransport::new(ws_client_b, [0x02; 6]).with_device_uuid([1; 16]),
+        2000,
+    );
+    let ports = vec![port_a.isolated(isolated), port_b.isolated(isolated)];
+    let started = BACnetRouter::start(ports, options).await.unwrap();
     (started, accept_a.await.unwrap(), accept_b.await.unwrap())
 }
 
@@ -239,7 +246,6 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
 
 #[tokio::test(start_paused = true)]
 async fn isolated_sc_links_only_deliver_the_local_application_marker() {
-    let options = RouterOptions::new().isolated_ports([0, 1]);
     let (
         StartedRouter {
             mut router,
@@ -248,7 +254,7 @@ async fn isolated_sc_links_only_deliver_the_local_application_marker() {
         },
         a,
         b,
-    ) = two_sc_ports(options).await;
+    ) = two_sc_ports_isolated(RouterOptions::new(), true).await;
     let peer = [0x22; 6];
     let blocked = apdu_to(2000, &peer, 255);
     let local = Npdu {
@@ -275,6 +281,22 @@ async fn isolated_sc_links_only_deliver_the_local_application_marker() {
         a.send(&frame).await.unwrap();
     }
     assert_eq!(apdus.recv().await.unwrap().apdu.as_ref(), [0x10, 0x05]);
+    // The blocked sender is told the router doesn't reach network 2000:
+    // reject reason 1, back on its own hub, and the drop is counted.
+    loop {
+        let message = decode_sc_message(&a.recv().await.unwrap()).unwrap();
+        let npdu = decode_npdu(message.payload).unwrap();
+        if npdu.message_type == Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK) {
+            assert_eq!(message.destination_vmac, Some([0xA0; 6]));
+            assert_eq!(npdu.payload.as_ref(), [1, 0x07, 0xD0]);
+            break;
+        }
+    }
+    let counters = router.counters();
+    assert_eq!(
+        (counters.isolated_drops, counters.isolated_refusals),
+        (1, 0)
+    );
     // The router's own marker joins the same output queue after any transit.
     router
         .originate(&bacnet_router_core::router::Request::new(

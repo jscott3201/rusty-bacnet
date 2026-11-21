@@ -95,16 +95,7 @@ async fn site_with(client_max_apdu: u16) -> Site {
     let (near, to_client, _) = link(near);
     let (far, to_station, station_limits) = link(far);
     let started = BACnetRouter::start(
-        vec![
-            RouterPort {
-                transport: near,
-                network_number: 1,
-            },
-            RouterPort {
-                transport: far,
-                network_number: 2,
-            },
-        ],
+        vec![RouterPort::new(near, 1), RouterPort::new(far, 2)],
         RouterOptions::new().track_admission(),
     )
     .await

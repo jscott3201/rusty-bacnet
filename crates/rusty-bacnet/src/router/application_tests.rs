@@ -13,14 +13,8 @@ async fn started() -> (StartedRouter, Vec<LoopbackTransport>) {
     let (two, far_two) = LoopbackTransport::pair(vec![0x12, 0x02], vec![0x22]);
     let started = BACnetRouter::start(
         vec![
-            RouterPort {
-                transport: bacnet_transport::any::AnyTransport::Loopback(one),
-                network_number: 1,
-            },
-            RouterPort {
-                transport: bacnet_transport::any::AnyTransport::Loopback(two),
-                network_number: 2,
-            },
+            RouterPort::new(bacnet_transport::any::AnyTransport::Loopback(one), 1),
+            RouterPort::new(bacnet_transport::any::AnyTransport::Loopback(two), 2),
         ],
         RouterOptions::new(),
     )

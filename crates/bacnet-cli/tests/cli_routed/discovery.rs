@@ -49,14 +49,8 @@ async fn observed_site(
     let StartedRouter { router, .. } = boxed(|| {
         BACnetRouter::start(
             vec![
-                RouterPort {
-                    transport: AnyTransport::Bip(Box::new(bip)),
-                    network_number: 1,
-                },
-                RouterPort {
-                    transport: AnyTransport::Loopback(router_end),
-                    network_number: DNET,
-                },
+                RouterPort::new(AnyTransport::Bip(Box::new(bip)), 1),
+                RouterPort::new(AnyTransport::Loopback(router_end), DNET),
             ],
             RouterOptions::new(),
         )

@@ -211,14 +211,8 @@ async fn routed_site() -> (
     let (client_end, router_near) = LoopbackTransport::pair(vec![0x0A], vec![ROUTER_MAC]);
     let (router_far, station) = LoopbackTransport::pair(vec![0x02], vec![STATION]);
     let ports = vec![
-        RouterPort {
-            transport: AnyTransport::Loopback(router_near),
-            network_number: 1,
-        },
-        RouterPort {
-            transport: AnyTransport::Loopback(router_far),
-            network_number: REMOTE,
-        },
+        RouterPort::new(AnyTransport::Loopback(router_near), 1),
+        RouterPort::new(AnyTransport::Loopback(router_far), REMOTE),
     ];
     let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await
@@ -364,9 +358,8 @@ async fn the_routing_table_of_a_three_port_router_is_read() {
     let (client_end, near) = LoopbackTransport::pair(vec![0x0A], vec![ROUTER_MAC]);
     let (far_a, _station_a) = LoopbackTransport::pair(vec![0x02], vec![0x05]);
     let (far_b, _station_b) = LoopbackTransport::pair(vec![0x03], vec![0x06]);
-    let port = |transport, network_number| RouterPort {
-        transport: AnyTransport::Loopback(transport),
-        network_number,
+    let port = |transport, network_number| {
+        RouterPort::new(AnyTransport::Loopback(transport), network_number)
     };
     let StartedRouter { mut router, .. } = BACnetRouter::start(
         vec![port(near, 1), port(far_a, 2), port(far_b, 3)],
@@ -433,9 +426,8 @@ async fn the_routing_table_of_a_three_port_router_is_read() {
 /// network 3 holds the far router's other port.
 #[tokio::test(start_paused = true)]
 async fn routing_table_reaches_a_second_router_by_either_of_its_ports() {
-    let port = |transport, network_number| RouterPort {
-        transport: AnyTransport::Loopback(transport),
-        network_number,
+    let port = |transport, network_number| {
+        RouterPort::new(AnyTransport::Loopback(transport), network_number)
     };
     let (node, first) = LoopbackTransport::pair(vec![10], vec![11]);
     let (middle_first, middle_second) = LoopbackTransport::pair(vec![21], vec![22]);

@@ -77,14 +77,8 @@ async fn mstp_six_byte_bip_group_destinations_reach_the_bip_port_only_as_broadca
     ));
     let sent = bip.sent();
     let ports = vec![
-        RouterPort {
-            transport: mstp_port(router_serial, station(0)),
-            network_number: MSTP_NET,
-        },
-        RouterPort {
-            transport: bip,
-            network_number: BIP_NET,
-        },
+        RouterPort::new(mstp_port(router_serial, station(0)), MSTP_NET),
+        RouterPort::new(bip, BIP_NET),
     ];
     let StartedRouter { mut router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await

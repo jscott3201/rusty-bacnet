@@ -39,10 +39,7 @@ fn router_port(network_number: u16) -> RouterPort<BipTransport> {
         alone_on_subnet: true,
         ..BbmdOptions::default()
     }));
-    RouterPort {
-        transport,
-        network_number,
-    }
+    RouterPort::new(transport, network_number)
 }
 
 /// Register as a foreign device with the router port whose MAC is `bbmd`.

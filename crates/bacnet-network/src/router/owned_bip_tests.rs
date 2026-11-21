@@ -34,10 +34,7 @@ async fn rebind_after_stop(bbmd: bool) {
     let (bound, address) = oneshot::channel();
     let transport = observed(inner, bound);
     let handle = transport.handle();
-    let port = RouterPort {
-        network_number: 1,
-        transport,
-    };
+    let port = RouterPort::new(transport, 1);
     let mut started = BACnetRouter::start(vec![port], RouterOptions::new())
         .await
         .unwrap();

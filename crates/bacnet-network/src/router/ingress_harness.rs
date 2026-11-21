@@ -68,10 +68,7 @@ pub(super) fn fixture(count: usize) -> (Vec<RouterPort<TestTransport>>, Vec<Peer
             let (tx, rx) = mpsc::channel(1024);
             let (outgoing, wire) = mpsc::channel(32);
             (
-                RouterPort {
-                    transport: wire_port(port as u8 + 1, rx, outgoing),
-                    network_number: network(port),
-                },
+                RouterPort::new(wire_port(port as u8 + 1, rx, outgoing), network(port)),
                 Peer { tx, wire },
             )
         })

@@ -160,8 +160,14 @@ enum SendRequest {
 /// router that mixes link types; `RouterPort<BipTransport>` and the like
 /// name one of a router whose ports share a concrete transport.
 ///
+///
+/// Build one with [`RouterPort::new`], then set what differs from the
+/// defaults, as in `RouterPort::new(transport, 2).isolated(true)`. It is
+/// `#[non_exhaustive]`, so a new per-port setting isn't a breaking change.
+///
 /// [`AnyTransport`]: bacnet_transport::any::AnyTransport
 /// [`BipTransport`]: bacnet_transport::bip::BipTransport
+#[non_exhaustive]
 pub struct RouterPort<T: TransportPort = bacnet_transport::any::AnyTransport> {
     /// The transport for this port.
     pub transport: T,
@@ -170,6 +176,70 @@ pub struct RouterPort<T: TransportPort = bacnet_transport::any::AnyTransport> {
     /// the global broadcast DNET, which can't be the SNET the router puts
     /// in what it relays from the port (Clause 6.2.2.1).
     pub network_number: u16,
+    /// Whether the port is isolated from the router's other isolated
+    /// ports: see [`RouterPort::isolated`]. `false` unless set.
+    pub isolated: bool,
+}
+
+impl<T: TransportPort> RouterPort<T> {
+    /// A port on `network_number` over `transport`, not isolated.
+    pub fn new(transport: T, network_number: u16) -> Self {
+        Self {
+            transport,
+            network_number,
+            isolated: false,
+        }
+    }
+
+    /// Mark the port as isolated, or not. The router carries nothing
+    /// between two isolated ports and hides each from the other: no
+    /// transit, by a direct or a learned route; no routed broadcast; and no
+    /// mention of one's networks in what it announces, answers or relays to
+    /// the other. An isolated port and an ordinary one reach each other as
+    /// usual, and the router's own application uses every port. One
+    /// isolated port alone changes nothing: it has no peer to be kept from.
+    ///
+    /// What a node on an isolated port sees, where a plain router differs:
+    ///
+    /// - A message for one node on a network behind another isolated port
+    ///   draws a reject (Reject-Message-To-Network, reason 1) out of the
+    ///   arrival port, as one for a network this router doesn't reach does
+    ///   (Clauses 6.6.3.5 and 6.4.4), and starts no search. A broadcast for
+    ///   such a network is dropped without one.
+    /// - It can't take over a route the router already has through another
+    ///   port. An I-Am-Router-To-Network or a routing table update or Ack
+    ///   from it that names such a network, or a directly connected one,
+    ///   leaves that route alone, and an I-Am-Router-To-Network refused
+    ///   that way isn't passed on: its other networks are learned, and
+    ///   neighbours hear of them at their next Who-Is-Router-To-Network.
+    ///   Clause 6.6.3.3 would follow the newest
+    ///   claim; with isolation, moving a network behind an isolated port
+    ///   takes removing its old route first (a routing table update from an
+    ///   ordinary port, or the route's expiry), or a restart.
+    ///
+    /// Each is counted: [`Counters::isolated_drops`] and
+    /// [`Counters::isolated_refusals`].
+    ///
+    /// Isolation limits transit between isolated ports; it is not a trust
+    /// level for the port. The router's own application can still send to
+    /// and hear from every port, and a network message that one node
+    /// addresses to another across a permitted path is passed on with its
+    /// contents unread. Isolation is not an access control on routing-table
+    /// updates: a reject or a table update from an isolated port can still
+    /// mark, remove or redirect a route through an ordinary port. See
+    /// [`RouterOptions::next_hop_rejects`] and the host's authorization of
+    /// table updates ([`RouterOptions::control_policy`],
+    /// [`RouterOptions::control_authorizer`]). Other routers on a shared
+    /// network decide for themselves.
+    ///
+    /// Searches differ in one way: a second search for the same network
+    /// from another ordinary port, inside the cooldown, is also sent on the
+    /// port the first one came from, which a plain router would leave out.
+    #[must_use]
+    pub fn isolated(mut self, isolated: bool) -> Self {
+        self.isolated = isolated;
+        self
+    }
 }
 
 /// An owned address snapshot captured after a router port starts.
@@ -313,7 +383,6 @@ impl BACnetRouter {
             gate,
             control_tx,
             options.engine_options(),
-            &options.isolated_ports,
         )
         .await?;
         Ok(StartedRouter {

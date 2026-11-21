@@ -39,16 +39,7 @@ async fn router_route_budget_is_the_port_cap_less_the_reply_header() {
     let (a, frames) = port(1);
     let (b, _frames_b) = port(2);
     let mut started = BACnetRouter::start(
-        vec![
-            RouterPort {
-                transport: a,
-                network_number: 1000,
-            },
-            RouterPort {
-                transport: b,
-                network_number: 2000,
-            },
-        ],
+        vec![RouterPort::new(a, 1000), RouterPort::new(b, 2000)],
         RouterOptions::new(),
     )
     .await

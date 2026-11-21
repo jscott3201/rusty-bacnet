@@ -17,11 +17,12 @@ The page describes **v{release}**.
 
 ## Give each port a network number
 
-`BACnetRouter::start(ports, options)` takes a list of `RouterPort { transport, network_number }` and starts every transport:
+`BACnetRouter::start(ports, options)` takes a list of `RouterPort::new(transport, network_number)` ports and starts every transport:
 
 - A network number is 1 to 65534, and each port needs a different one. Every router on a network must use the same number for it.
 - All ports share one transport type. `RouterPort`'s transport type defaults to `AnyTransport`, so a router that mixes link types wraps each transport in `AnyTransport` and writes `RouterPort` alone.
 - `RouterOptions::new()` is the plain router. The options below turn on more.
+- `RouterPort::new(transport, network_number).isolated(true)` marks a port as isolated. The router carries nothing between two isolated ports and hides each from the other, while both still reach the ordinary ports: several BACnet/SC hubs can share one B/IP network without reaching each other. It limits transit only; it is not an access control on routing-table updates. The rustdoc of `RouterPort::isolated` says what differs on the wire.
 
 `start` returns a `StartedRouter` with the router and a receiver, `apdus`, for messages addressed to the router itself, which an application on the router may answer. `router.table()` borrows the routing table: read or change what you need, then drop it before the next `.await`. `router.counters()` reports what the router dropped or refused, and `router.ports()` lists each port's network number and actual MAC.
 

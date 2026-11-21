@@ -9,17 +9,11 @@ impl BACnetRouter {
         control: Arc<control_policy::ControlGate>,
         network_control: Option<AdmissionSender<ReceivedNetworkControl>>,
         engine_options: bacnet_router_core::router::Options,
-        isolated_ports: &[usize],
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
         if ports.is_empty() || ports.len() > PORTS {
             return Err(Error::Encoding(format!(
                 "A router needs 1 to {PORTS} ports, not {}",
                 ports.len()
-            )));
-        }
-        if let Some(index) = isolated_ports.iter().find(|&&index| index >= ports.len()) {
-            return Err(Error::Encoding(format!(
-                "Unknown isolated router port index {index}"
             )));
         }
         // Refuse reserved and duplicate network numbers
@@ -84,7 +78,7 @@ impl BACnetRouter {
                         local_broadcasts: port.transport.local_broadcast_destinations(),
                     },
                 );
-                config.isolated = isolated_ports.contains(&index);
+                config.isolated = port.isolated;
                 configs.push(config);
                 // Taken after that read; the task that follows it applies the
                 // value it holds first, so a change in between isn't lost.

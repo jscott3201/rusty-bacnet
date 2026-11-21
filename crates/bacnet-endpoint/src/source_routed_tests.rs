@@ -185,14 +185,8 @@ impl Site {
         let unicasts = near.record_unicast_destinations();
         let (router_far, station) = LoopbackTransport::pair(ROUTER_FAR.to_vec(), STATION.to_vec());
         let ports = vec![
-            RouterPort {
-                transport: router_near,
-                network_number: 1,
-            },
-            RouterPort {
-                transport: router_far,
-                network_number: REMOTE,
-            },
+            RouterPort::new(router_near, 1),
+            RouterPort::new(router_far, REMOTE),
         ];
         let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
             .await

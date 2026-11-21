@@ -52,10 +52,7 @@ impl Routed {
                     })
                 })
                 .build();
-            ports.push(RouterPort {
-                transport,
-                network_number: number,
-            });
+            ports.push(RouterPort::new(transport, number));
         }
         let started = BACnetRouter::start(ports, RouterOptions::new())
             .await
