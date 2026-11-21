@@ -53,6 +53,10 @@ impl TapStream for ArrivalStream {
     fn dropped(&self) -> u64 {
         self.arrivals.missed()
     }
+
+    fn close(self) -> u64 {
+        self.arrivals.close()
+    }
 }
 
 /// Seconds that compare and hash by their bits, so a record is `Eq`.
@@ -91,6 +95,8 @@ pub(crate) struct PyIAmArrival {
     forwarded: bool,
     source_network: Option<u16>,
     source_address: Option<Vec<u8>>,
+    destination_network: Option<u16>,
+    destination_address: Option<Vec<u8>>,
     broadcast: bool,
     device_address: Option<String>,
     missed_before: u64,
@@ -118,6 +124,8 @@ impl PyIAmArrival {
                 .source_network
                 .as_ref()
                 .map(|s| s.mac_address.to_vec()),
+            destination_network: arrival.destination.as_ref().map(|d| d.network),
+            destination_address: arrival.destination.as_ref().map(|d| d.mac_address.to_vec()),
             broadcast: arrival.broadcast,
             device_address: arrival.device_address().map(|a| a.styled(style)),
             missed_before,
@@ -196,6 +204,18 @@ impl PyIAmArrival {
     fn source_address(&self) -> Option<&[u8]> {
         self.source_address.as_deref()
     }
+    /// Destination network in the observed NPDU.
+    #[getter]
+    fn destination_network(&self) -> Option<u16> {
+        self.destination_network
+    }
+
+    /// Destination station octets, empty for a network broadcast.
+    #[getter]
+    fn destination_address(&self) -> Option<&[u8]> {
+        self.destination_address.as_deref()
+    }
+
     /// A link or network broadcast.
     #[getter]
     fn broadcast(&self) -> bool {
@@ -235,8 +255,7 @@ impl PyIAmArrival {
         )
     }
 
-    /// Copy and pickle by value: `_rebuild` with the sixteen fields, in
-    /// the order the stub lists them.
+    /// Copy and pickle by value. Append fields so earlier pickles can be read.
     fn __reduce__<'py>(
         slf: &Bound<'py, Self>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
@@ -262,6 +281,11 @@ impl PyIAmArrival {
             r.broadcast.into_pyobject(py)?.to_owned().into_any(),
             r.device_address.clone().into_pyobject(py)?,
             r.missed_before.into_pyobject(py)?.into_any(),
+            r.destination_network.into_pyobject(py)?,
+            r.destination_address
+                .as_deref()
+                .map(|octets| pyo3::types::PyBytes::new(py, octets))
+                .into_pyobject(py)?,
         ];
         Ok((
             slf.get_type().getattr("_rebuild")?,
@@ -272,6 +296,7 @@ impl PyIAmArrival {
     /// A record from a pickle's fields, as [`Self::__reduce__`] lists
     /// them. Nothing is checked or decoded.
     #[staticmethod]
+    #[pyo3(signature = (monotonic, timestamp, link, object_identifier, max_apdu_length, segmentation_supported, vendor_id, link_sender, link_source, original_source, forwarded, source_network, source_address, broadcast, device_address, missed_before, destination_network=None, destination_address=None))]
     fn _rebuild(
         monotonic: f64,
         timestamp: f64,
@@ -289,6 +314,8 @@ impl PyIAmArrival {
         broadcast: bool,
         device_address: Option<String>,
         missed_before: u64,
+        destination_network: Option<u16>,
+        destination_address: Option<Vec<u8>>,
     ) -> Self {
         Self {
             monotonic: Seconds(monotonic),
@@ -304,6 +331,8 @@ impl PyIAmArrival {
             forwarded,
             source_network,
             source_address,
+            destination_network,
+            destination_address,
             broadcast,
             device_address,
             missed_before,

@@ -159,7 +159,9 @@ fn each_link_writes_the_forms_frames_and_the_calls_use() {
 /// pickles them, with the module importable).
 #[test]
 fn records_compare_hash_and_rebuild_by_their_fields() {
-    let wire = bip(&npdu(&i_am(7), Some((5, 7))), Some(ROUTER));
+    // DNET 9, station 19; SNET 5, station 7.
+    let header = [1, 0x28, 0, 9, 1, 19, 0, 5, 1, 7, 255];
+    let wire = bip(&[&header[..], &i_am(7)].concat(), Some(ROUTER));
     let one = record(DataLink::Bip, udp(BBMD), &wire);
     Python::initialize();
     Python::attach(|py| {
@@ -175,7 +177,38 @@ fn records_compare_hash_and_rebuild_by_their_fields() {
             );
         }
         let reduced = one.call_method0("__reduce__").unwrap();
-        assert_eq!(reduced.get_item(1).unwrap().len().unwrap(), 16);
+        let rebuild = reduced.get_item(0).unwrap();
+        let fields = reduced.get_item(1).unwrap().cast_into::<PyTuple>().unwrap();
+        assert_eq!(fields.len(), 18);
+        let restored = rebuild.call1(&fields).unwrap();
+        assert!(restored.eq(&one).unwrap());
+        assert_eq!(
+            restored
+                .getattr("destination_network")
+                .unwrap()
+                .extract::<u16>()
+                .unwrap(),
+            9
+        );
+        assert_eq!(
+            restored
+                .getattr("destination_address")
+                .unwrap()
+                .extract::<Vec<u8>>()
+                .unwrap(),
+            [19]
+        );
+        let previous = rebuild.call1(fields.get_slice(0, 16)).unwrap();
+        assert!(previous.getattr("destination_network").unwrap().is_none());
+        assert!(previous.getattr("destination_address").unwrap().is_none());
+        assert_eq!(
+            previous
+                .getattr("source_address")
+                .unwrap()
+                .extract::<Vec<u8>>()
+                .unwrap(),
+            [7]
+        );
         let other = record(DataLink::Bip, udp(ROUTER), &wire);
         assert!(!one.eq(Py::new(py, other).unwrap()).unwrap());
     });

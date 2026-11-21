@@ -20,6 +20,8 @@ pub struct DecodedNpdu {
     pub source_address: Option<MacAddr>,
     /// DNET, for a routed or globally broadcast NPDU.
     pub dest_network: Option<u16>,
+    /// DADR as received, empty for a network broadcast and absent without DNET.
+    pub dest_address: Option<MacAddr>,
     /// The network-layer message type, for a network message.
     pub network_message_type: Option<u8>,
     /// A DNET with an empty DADR: a broadcast on that network, or a global one.
@@ -70,6 +72,10 @@ pub fn decode_npdu_layer(npdu: Bytes) -> Result<DecodedNpdu, String> {
         source_network,
         source_address,
         dest_network,
+        dest_address: npdu_result
+            .destination
+            .as_ref()
+            .map(|address| address.mac_address.clone()),
         network_message_type: npdu_result.message_type.map(|kind| kind.to_raw()),
         broadcast: npdu_result
             .destination

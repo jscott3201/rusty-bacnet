@@ -5032,6 +5032,14 @@ class IAmArrival:
         """SADR, the device's MAC on ``source_network``."""
         ...
     @property
+    def destination_network(self) -> int | None:
+        """DNET carried by the received NPDU."""
+        ...
+    @property
+    def destination_address(self) -> bytes | None:
+        """DADR, empty for a network broadcast and absent without a DNET."""
+        ...
+    @property
     def broadcast(self) -> bool:
         """A link broadcast or a broadcast on a network. False for an MS/TP
         I-Am one station unicast to another, which the bus lets this
