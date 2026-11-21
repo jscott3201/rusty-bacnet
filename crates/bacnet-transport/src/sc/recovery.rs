@@ -129,6 +129,16 @@ struct Attempt<'a, W> {
     dialled: &'a mut u32,
 }
 
+/// Why a recovery episode ended without a connection.
+enum GaveUp {
+    /// `max_retries` rounds were made.
+    Budget,
+    /// No hub is left that can be dialled.
+    NoHub,
+    /// A hub's answer (or a failed VMAC reseed) forbids further retries.
+    Refused,
+}
+
 /// The round counter of one recovery episode.
 struct Rounds {
     /// `None` for unlimited recovery.
@@ -161,6 +171,9 @@ pub(super) struct Recovery<'a, W: WebSocketPort> {
     pub primary_connector: &'a Option<WebSocketConnector<W>>,
     pub failover_connector: &'a Option<WebSocketConnector<W>>,
     pub failover_ws: &'a mut Option<Arc<W>>,
+    /// The kept primary socket a restore probe reuses when there is no
+    /// primary connector. Cleared when recovery closes it.
+    pub primary_ws: &'a mut Option<Arc<W>>,
     pub conn: &'a Arc<Mutex<ScConnection>>,
     pub active_ws: &'a super::HubSlot<W>,
     pub state_tx: &'a watch::Sender<ScConnectionState>,
@@ -189,17 +202,17 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         let mut attempts = 0;
         let mut targets = vec![ScActiveHub::Primary, ScActiveHub::Failover];
         let mut rounds = Rounds::new(self.config.max_retries);
-        let budget_used = 'rounds: loop {
+        let ended = 'rounds: loop {
             // A hub other than the lost one is dialled only through its
             // connector or, for the failover hub, its unused preconfigured
             // socket; once neither is left it drops out of the episode. The
             // lost hub stays until its own attempt finds it can't be dialled.
             targets.retain(|hub| *hub == active_hub || self.can_dial(*hub));
             if targets.is_empty() {
-                break false;
+                break GaveUp::NoHub;
             }
             let Some(round) = rounds.next() else {
-                break true;
+                break GaveUp::Budget;
             };
             let delay = jittered_backoff(backoff, initial_backoff, max_backoff);
             tokio::time::sleep(delay).await;
@@ -211,7 +224,7 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                         "SC reconnection skipped without retry eligibility (suppressed {suppressed} reconnect diagnostics)"
                     );
                 }
-                break false;
+                break GaveUp::Refused;
             }
             for target in targets.clone() {
                 let lost = target == active_hub;
@@ -230,25 +243,29 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                     // The lost hub can't be dialled again; any other target
                     // (the primary, after losing the failover) still can.
                     Step::Dead => targets.retain(|t| *t != target),
-                    Step::Stop => break 'rounds false,
+                    Step::Stop => break 'rounds GaveUp::Refused,
                 }
             }
             backoff = (backoff * 2).min(max_backoff);
         };
         let round = rounds.done;
         let suppressed = self.diagnostic_throttle.take_suppressed();
-        if budget_used {
-            warn!(
+        match ended {
+            GaveUp::Budget => warn!(
                 max_retries = round,
                 suppressed,
                 "SC reconnection: max retries exhausted, giving up (suppressed {suppressed} reconnect diagnostics)"
-            );
-        } else {
-            warn!(
+            ),
+            GaveUp::NoHub => warn!(
                 attempt = round,
                 suppressed,
                 "SC reconnection: no hub can be retried, giving up (suppressed {suppressed} reconnect diagnostics)"
-            );
+            ),
+            GaveUp::Refused => warn!(
+                attempt = round,
+                suppressed,
+                "SC reconnection: a hub refused further retries, giving up (suppressed {suppressed} reconnect diagnostics)"
+            ),
         }
         {
             let mut c = self.conn.lock().await;
@@ -362,6 +379,15 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             Err(e) => {
                 self.observer.connect_failed(target, &e);
                 handshake::close_failed_connect(&*ws, &e).await;
+                // A closed kept primary is no longer one a restore probe
+                // can reuse.
+                if self
+                    .primary_ws
+                    .as_ref()
+                    .is_some_and(|kept| Arc::ptr_eq(kept, &ws))
+                {
+                    *self.primary_ws = None;
+                }
                 absorb_failed_connect_probe(self.conn, &probe_conn).await;
                 if !self.conn.lock().await.connect_retry_allowed {
                     if let Some(suppressed) = self.retry_diagnostic() {

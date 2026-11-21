@@ -1,9 +1,10 @@
 ---
 section: Migration notes
 ---
-- **SC reconnect (Rust and Python API):** Wrap `ScReconnectConfig.max_retries`
-  in `Some(..)`; Python's `max_retries` takes an int or None. A count of 0 now
-  turns recovery off where it allowed one failover dial: use 1 to keep that
-  turn. With defaults the failover hub is dialled about 10 s after a loss, not
-  about 50 min. A raw transport with no connector sends one Connect-Request on
-  a lost socket, not one per round.
+- **SC reconnect (Rust, Python, TUI/CLI profiles):** Wrap
+  `ScReconnectConfig.max_retries` in `Some(..)`. A count of 0 (Python
+  `max_retries=0`, profile `reconnect_max_retries = 0`) now means no
+  recovery, where it allowed one failover dial: use 1 to keep that turn. A
+  raw `ScTransport` with no connector sends one Connect-Request on a lost
+  socket and closes it when that fails, a duplicate-VMAC NAK included, so
+  add a connector to keep recovering.

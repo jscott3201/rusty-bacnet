@@ -61,6 +61,7 @@ async fn episode(
         primary_connector: &primary,
         failover_connector: &failover,
         failover_ws: &mut spare,
+        primary_ws: &mut None,
         conn: &conn,
         active_ws: &active_ws,
         state_tx: &state_tx,
@@ -540,6 +541,47 @@ async fn a_failed_reused_socket_is_not_retried() {
         assert!(is_failed(&seen.events[1], ScActiveHub::Primary));
         assert_eq!(seen.events[2], ScEvent::ReconnectGaveUp { attempts: 1 });
     }
+}
+
+/// With no primary connector the lost primary is kept for one Connect. When
+/// that fails it is closed and the failover hub serves; the closed socket is
+/// not offered to primary restore, so no restore probe runs and no
+/// `PrimaryRestoreFailed` repeats. (A kept primary that is still good is
+/// restored: `primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe`.)
+#[tokio::test(start_paused = true)]
+async fn a_closed_kept_primary_is_not_probed_for_restore() {
+    use ScActiveHub::{Failover, Primary};
+    let (client, hub) = LoopbackWebSocket::pair();
+    let (failover_tx, mut failover_hubs) = mpsc::unbounded_channel();
+    let mut transport = ScTransport::new(client, [1; 6])
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(100)
+        .with_reconnect(policy(Some(3)))
+        .with_failover_connector(connector(Arc::new(AtomicBool::new(true)), failover_tx));
+    let mut events = transport.connection_events();
+    let (rx, ()) = tokio::join!(transport.start(), hub_accept(&hub, PRIMARY));
+    let _rx = rx.unwrap();
+    assert_eq!(next(&mut events).await, connected(Primary, PRIMARY));
+    // The hub ends the link and closes; the kept socket's Connect fails.
+    hub_closes(hub, &mut events).await;
+    attempt(&mut events, Primary, 1).await;
+    failed(&mut events, Primary).await;
+    attempt(&mut events, Failover, 1).await;
+    assert_eq!(next(&mut events).await, ScEvent::FailoverEngaged);
+    let failover_hub = failover_hubs.recv().await.unwrap();
+    hub_accept(&failover_hub, FAILOVER).await;
+    assert_eq!(next(&mut events).await, connected(Failover, FAILOVER));
+    // Ten restore intervals: nothing to probe, so nothing happens.
+    tokio::time::sleep(10 * ROUND).await;
+    assert_eq!(
+        events.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty)
+    );
+    assert_eq!(
+        transport.connection_status().active_hub,
+        Some(ScActiveHub::Failover)
+    );
+    transport.stop().await.unwrap();
 }
 
 /// A reused socket whose hub answers reconnects on that same socket.

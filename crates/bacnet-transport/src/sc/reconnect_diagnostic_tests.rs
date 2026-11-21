@@ -306,6 +306,7 @@ async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
                 primary_connector: &None,
                 failover_connector: &None,
                 failover_ws: &mut failover_ws,
+                primary_ws: &mut None,
                 conn: &conn,
                 active_ws: &active_ws,
                 state_tx: &state_tx,
@@ -334,7 +335,11 @@ async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
                     .matching("SC reconnection: max retries exhausted")
                     .is_empty()
             );
-            let terminal = capture.matching("SC reconnection: no hub can be retried");
+            let terminal = capture.matching(if eligible {
+                "SC reconnection: no hub can be retried"
+            } else {
+                "SC reconnection: a hub refused further retries"
+            });
             assert_eq!(terminal.len(), 1);
             assert_summary(&terminal[0], u64::from(already_emitted));
             assert_eq!(throttle.suppressed(), 0);
