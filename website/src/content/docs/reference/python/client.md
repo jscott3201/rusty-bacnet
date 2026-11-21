@@ -720,7 +720,8 @@ query only on its own link never answers this client: the call raises
 BacnetTimeoutError, whose text for a routed query says so.
 A reject for the requested DNET that comes through the next hop
 before the first ack ends a routed query, whether the hop sent it or
-relayed it from a router further on. A simultaneous request through that path can
+relayed it from a router further on (reason 4, message too long, is
+ignored: the query is too short to draw it). A simultaneous request through that path can
 produce the same reject because network messages have no invoke ID.
 One query runs at a time per client; a second call waits for
 the first. It holds the started client for the whole wait, so

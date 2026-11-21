@@ -157,6 +157,44 @@ async fn a_reject_relayed_from_a_router_further_on_ends_the_query() {
     client.stop().await.unwrap();
 }
 
+/// A reject with reason 4 (message too long) that comes through the
+/// selected hop and names the queried network is not this query's, whoever
+/// its SNET names: the query is nine octets, so the reject answers a larger
+/// request to the same network. The query goes on and reads its table.
+#[tokio::test(start_paused = true)]
+async fn a_too_long_reject_for_the_queried_network_does_not_end_the_query() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let station = Station::routed(&ROUTER, 9, &[3]);
+    let (result, ()) = tokio::join!(
+        client.routing_table(&station, RoutingTableWait::default()),
+        async {
+            outbound.recv().await.unwrap();
+            for source in [None, Some(address(8, 3)), Some(address(9, 3))] {
+                control(
+                    &inbound,
+                    &ROUTER,
+                    Msg::REJECT_MESSAGE_TO_NETWORK,
+                    &[RejectMessageReason::MESSAGE_TOO_LONG.to_raw(), 0, 9],
+                    source,
+                )
+                .await;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            control(
+                &inbound,
+                &ROUTER,
+                Msg::INITIALIZE_ROUTING_TABLE_ACK,
+                &[1, 0, 42, 1, 0],
+                Some(address(9, 3)),
+            )
+            .await;
+        }
+    );
+    let table = result.expect("reason 4 is not about the query");
+    assert_eq!((table.acks, table.entries), (1, vec![entry(42, 1)]));
+    client.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn routing_table_discovers_only_local_hops_and_refuses_no_or_ambiguous_routes() {
     let (mut client, inbound, mut outbound) = started().await;

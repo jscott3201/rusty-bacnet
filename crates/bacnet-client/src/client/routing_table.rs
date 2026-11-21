@@ -89,6 +89,9 @@ pub enum RoutingTableError {
     /// For a routed query, an older router may answer a table query only
     /// on its own link: it then answers the next hop, never this client,
     /// so the call ends here as well. Nothing else tells the two apart.
+    /// A far router that rejects the query as an unknown message (reason
+    /// 3) can end here too: its reject arrives with its near-side network
+    /// as SNET and names a network of its own choosing (Clause 6.4.4).
     NoAnswer {
         /// How long the call waited.
         waited: Duration,
@@ -281,6 +284,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// [`RoutingTableError::Rejected`], whether the peer sent it (no SNET)
     /// or relayed it from a router further on (that router's SNET), since
     /// a router relays a reject back toward the requester (Clause 6.6.3.5).
+    /// Reason 4 (message too long) is ignored: the query is too short to
+    /// draw it, so it answers a larger request to that network.
     ///
     /// Nothing pairs an answer with its question, so a late ack of an
     /// earlier query can be counted by the next query to the same router,

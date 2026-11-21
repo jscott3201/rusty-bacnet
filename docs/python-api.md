@@ -2686,7 +2686,7 @@ answers this client: the call raises `BacnetTimeoutError`, whose text for a
 routed query says so (query the next hop, or ask from a node on that network).
 A reject for the requested DNET that comes through the selected hop before
 the first ack ends the query, whether the hop sent it or relayed it from a
-router further on. A concurrent routed request to that DNET through the same
+router further on (reason 4, message too long, is ignored: the query is too short to draw it). A concurrent routed request to that DNET through the same
 hop can produce an indistinguishable reject because there is no invoke ID.
 
 One query runs at a time per client (network messages carry no invoke ID), so a second call waits for
