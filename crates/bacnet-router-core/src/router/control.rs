@@ -55,8 +55,9 @@ impl<
             destination.network != GLOBAL_NETWORK && destination.network != at.network
         });
         if let Some(destination) = elsewhere.filter(|_| !always_here) {
-            let Some(route) = self.find_route(at, npdu, destination.network, options, host) else {
-                return Received::Handled;
+            let route = match self.find_route(at, npdu, destination.network, options, host) {
+                Ok(route) => route,
+                Err(done) => return done,
             };
             // Never as a broadcast its sender didn't ask for (L23).
             if self.group_of(&route, npdu) != Group::No {
@@ -64,6 +65,10 @@ impl<
             }
             // A table read can name this router at another port. Apply
             // the same reachability and group checks as a forwarded query.
+            // So one from an isolated port that names the router's address
+            // on another isolated port was rejected above, by the route
+            // lookup, though an APDU for that address is delivered (the
+            // own-address check for an APDU comes before any route).
             if kind == NetworkMessageType::INITIALIZE_ROUTING_TABLE
                 && npdu.payload == [0]
                 && self.is_own(destination)
@@ -216,14 +221,16 @@ impl<
             Ok(WhoIsRouter::Network(network)) => network,
         };
         match self.table.lookup(network) {
-            Some(route)
-                if route.port() != at.port
-                    && !super::config::isolated_pair(&self.ports, at.port, route.port()) =>
-            {
+            Some(route) if route.port() == at.port => return Received::Handled,
+            // Behind another isolated port: not answered, and not searched
+            // for either, as the table has it.
+            Some(route) if super::config::isolated_pair(&self.ports, at.port, route.port()) => {
+                return self.isolated_drop();
+            }
+            Some(_) => {
                 self.out.push(Task::i_am_answer(at.port, Some(network)));
                 return Received::Handled;
             }
-            Some(_) => return Received::Handled,
             None => {}
         }
         let kind = NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK;
@@ -327,6 +334,14 @@ impl<
     /// I-Am-Router (Clauses 6.6.3.2, 6.6.3.3): a non-empty list, each
     /// network learned through the arrival port and its sender in order,
     /// then the message passed on to every other port.
+    ///
+    /// One from an isolated port that claims a network the table reaches
+    /// through another port is not passed on at all (#2684). The relay
+    /// would tell the routers on that other port that the network is now
+    /// behind this router, while this router still sends there for it: a
+    /// neighbour that moved its route would loop. The message's other
+    /// networks are learned here all the same; neighbours learn them from
+    /// their next Who-Is-Router.
     fn i_am_router<'f>(
         &mut self,
         at: &Arrival<'f>,
@@ -353,6 +368,9 @@ impl<
                 break;
             }
         }
+        if claimed.refused {
+            return Received::Handled;
+        }
         self.rebroadcast(at, npdu, kind, host)
     }
 
@@ -366,6 +384,16 @@ impl<
     /// finds the route there (hardened convergence held the first) is
     /// skipped, so one message never corroborates itself
     /// (control_messages.rs:253-261).
+    ///
+    /// A claim from an isolated port (one with an isolated peer) for a
+    /// network the table reaches through any other port, directly or not,
+    /// is refused, counted and reported, and `claimed` remembers it
+    /// (#2684; decision of 2026-11-20). Clause 6.6.3.3 would replace the
+    /// route with the newest claimant's; here that would let one isolated
+    /// port take a network away from every other port. A network that
+    /// really moves behind an isolated port needs its old route removed
+    /// first, or a restart. Claims from an ordinary port, a refresh through
+    /// the same port, and a new network are as before.
     pub(super) fn claim(
         &mut self,
         at: &Arrival<'_>,
@@ -381,9 +409,9 @@ impl<
             host.observe(Event::RouteCap { class });
             return false;
         }
-        if route
-            .is_some_and(|route| super::config::isolated_pair(&self.ports, at.port, route.port()))
-        {
+        if route.is_some_and(|route| route.port() != at.port) && self.isolated_arrival(at.port) {
+            claimed.refused = true;
+            self.isolation_refused(at.port, network, class, host);
             return true;
         }
         let moving = route.is_some_and(|route| !route.is_direct() && route.port() != at.port);
@@ -490,6 +518,7 @@ impl<
                         .is_served_via_peer(reject.network, at.port, at.source)
             });
         if self.hidden_from(at.port, reject.network) {
+            self.isolation_refused(at.port, reject.network, ControlClass::Reject, host);
             return self.pass_on_reject(at, npdu, host);
         }
         let effect = if off_path {
@@ -623,6 +652,8 @@ impl<
 pub(super) struct Claimed<const R: usize> {
     networks: [u16; R],
     len: usize,
+    /// Whether isolation refused a claim of the message.
+    pub(super) refused: bool,
 }
 
 impl<const R: usize> Claimed<R> {
@@ -631,6 +662,7 @@ impl<const R: usize> Claimed<R> {
         Self {
             networks: [0; R],
             len: 0,
+            refused: false,
         }
     }
 

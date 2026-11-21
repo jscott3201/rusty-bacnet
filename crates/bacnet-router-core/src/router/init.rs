@@ -33,6 +33,16 @@ impl<
     /// and the sender, and the sender gets an Ack with no data. Reserved
     /// networks and unknown Port IDs are skipped, direct routes are never
     /// touched, and the route cap ends the update for new networks.
+    ///
+    /// From an isolated port (one with an isolated peer), an entry is
+    /// refused, counted and reported when its network's route goes through
+    /// another isolated port, when it names another isolated port, or when
+    /// it would bring to the arrival port a network the table reaches
+    /// through any other port (#2684; decision of 2026-11-20, a departure
+    /// from Clause 6.6.3.8's plain replacement). It may still remove a
+    /// route through an ordinary port or point one at another ordinary
+    /// port: isolation is no access control on table updates, which
+    /// [`Host::authorize`] decides.
     pub(super) fn initialize_routing_table<'f>(
         &mut self,
         at: &Arrival<'f>,
@@ -66,7 +76,11 @@ impl<
         }
         for entry in entries.iter() {
             let network = entry.network;
-            if network == 0 || network == GLOBAL_NETWORK || self.hidden_from(at.port, network) {
+            if network == 0 || network == GLOBAL_NETWORK {
+                continue;
+            }
+            if self.hidden_from(at.port, network) {
+                self.isolation_refused(at.port, network, ControlClass::InitMgmt, host);
                 continue;
             }
             if entry.port_id == 0 {
@@ -82,7 +96,14 @@ impl<
                 });
                 continue;
             };
-            if super::config::isolated_pair(&self.ports, at.port, port) {
+            let captures = port == at.port
+                && self.isolated_arrival(port)
+                && self
+                    .table
+                    .lookup(network)
+                    .is_some_and(|route| route.port() != port);
+            if captures || super::config::isolated_pair(&self.ports, at.port, port) {
+                self.isolation_refused(at.port, network, ControlClass::InitMgmt, host);
                 continue;
             }
             if self.table.len() >= options.cap(R) && self.table.lookup(network).is_none() {

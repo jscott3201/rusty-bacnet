@@ -84,6 +84,17 @@ pub struct Counters {
     /// Requests the router's own application sent through the engine
     /// ([`Router::originate`](super::Router::originate), #1699).
     pub originated: u32,
+    /// Frames dropped because their way on lies between two isolated ports
+    /// ([`PortConfig::isolated`](super::PortConfig::isolated), #2684): a
+    /// message for a network behind the other port, a reject on its way to
+    /// one, or a Who-Is-Router for one. A fan-out that merely leaves an
+    /// isolated port out isn't counted.
+    pub isolated_drops: u32,
+    /// Route changes refused because they came from an isolated port
+    /// (#2684): each network of an I-Am-Router, a routing table update or
+    /// Ack, or a reject, whose route goes through another port, and each
+    /// update entry that names another isolated port.
+    pub isolated_refusals: u32,
 }
 
 impl Counters {
@@ -121,6 +132,8 @@ impl Counters {
         own_source_drops: 0,
         not_next_hop: 0,
         originated: 0,
+        isolated_drops: 0,
+        isolated_refusals: 0,
     };
 }
 

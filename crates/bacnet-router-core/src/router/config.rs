@@ -45,6 +45,40 @@ pub struct PortConfig<G = Groups> {
     /// Isolate this port from other ports marked isolated on the same router.
     /// Transit traffic and route advertisements can still cross between this
     /// port and any ordinary port. Defaults to false.
+    ///
+    /// Between two isolated ports the router carries nothing and says
+    /// nothing of one to the other (#2684). One isolated port alone has no
+    /// peer, and changes nothing. Where the wire differs from a plain
+    /// router's:
+    ///
+    /// - A message from an isolated port for one node on a network behind
+    ///   another draws reject reason 1 out of the arrival port, as a
+    ///   network this router doesn't reach does (Clauses 6.4.4, 6.6.3.5),
+    ///   with no search; a broadcast for one is dropped
+    ///   ([`Discard::Isolated`](super::Discard::Isolated),
+    ///   [`Counters::isolated_drops`](super::Counters::isolated_drops)).
+    /// - An I-Am-Router, a routing table update or a table Ack from an
+    ///   isolated port doesn't move to that port a network the table
+    ///   reaches through any other port, a directly connected one
+    ///   included, and such an I-Am-Router isn't passed on; the message's
+    ///   other networks are learned, and neighbours hear of them at their
+    ///   next Who-Is-Router
+    ///   ([`Event::IsolationRefused`](super::Event::IsolationRefused),
+    ///   [`Counters::isolated_refusals`](super::Counters::isolated_refusals)).
+    ///   Clause 6.6.3.3 would follow the newest claim. So a network that
+    ///   really moves behind an isolated port needs its old route removed
+    ///   first (an update from an ordinary port, or the route's expiry),
+    ///   or a restart.
+    ///
+    /// It limits transit between isolated ports. It is not a trust level
+    /// for a port, and not an access control on routing-table updates: a
+    /// reject or a table update from an isolated port can still mark,
+    /// remove or redirect a route through an ordinary port. See
+    /// [`Options::next_hop_rejects`] and [`Host::authorize`](super::Host::authorize)
+    /// for those. Nor does it limit what the router's own application
+    /// sends ([`Router::originate`](super::Router::originate)), or the
+    /// contents of a network message one node addresses to another across
+    /// a permitted path.
     pub isolated: bool,
     /// The link's destination classifier, supplied by its configuration.
     pub groups: G,

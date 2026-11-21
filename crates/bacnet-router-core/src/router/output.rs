@@ -327,6 +327,10 @@ impl Current {
     }
 }
 
+/// Where the data of a network message with no addresses starts: after its
+/// version, control and message type octets (Clause 6.2).
+const BARE_HEADER: usize = 3;
+
 /// The tasks a queue holds at most: twice what one call queues.
 const QUEUE: usize = 4;
 
@@ -465,8 +469,8 @@ impl<
                     | NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK
             )
         );
-        // A bare list has a three-octet header. The common list contains
-        // networks outside the isolated set, preserving order and duplicates.
+        // The common list contains networks outside the isolated set,
+        // preserving order and duplicates.
         let hidden_bytes = if listed && self.has_isolated_pair && !isolated(ports, except) {
             npdu.payload
                 .as_chunks::<2>()
@@ -521,8 +525,8 @@ impl<
         if self.out.current.recipients != Recipients::Ordinary {
             return false;
         }
-        let mut write = 3;
-        for read in (3..self.out.current.len).step_by(2) {
+        let mut write = BARE_HEADER;
+        for read in (BARE_HEADER..self.out.current.len).step_by(2) {
             let network = u16::from_be_bytes([self.scratch[read], self.scratch[read + 1]]);
             if !self.isolated_network(network) {
                 self.scratch[write..write + 2].copy_from_slice(&network.to_be_bytes());
@@ -533,7 +537,7 @@ impl<
         current.recipients = Recipients::Isolated;
         current.len = write;
         current.next = 0;
-        current.active = write > 3;
+        current.active = write > BARE_HEADER;
         current.active
     }
 

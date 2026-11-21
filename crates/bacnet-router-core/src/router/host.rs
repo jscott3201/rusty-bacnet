@@ -259,6 +259,18 @@ pub enum Event {
         /// The network the reject named; `None` for a fan-out.
         rejected: Option<u16>,
     },
+    /// A message from an isolated port would have changed the route to a
+    /// network that goes through another port, or named another isolated
+    /// port, and was refused that change
+    /// ([`PortConfig::isolated`](super::PortConfig::isolated), #2684).
+    IsolationRefused {
+        /// The network.
+        network: u16,
+        /// The isolated port the message arrived on.
+        port: PortId,
+        /// The class of the message.
+        class: ControlClass,
+    },
     /// A refused NPDU named this router as its origin, so no reject went.
     OwnOrigin {
         /// The network the reject would have named.
