@@ -1,4 +1,4 @@
 ---
 section: Added
 ---
-- Read a remote router's routing table with `routing_table(RoutedTarget(...))`. The client selects an explicit, cached or uniquely advertised next hop. Native routers address every chunk to the original requester (#2612).
+- **Python API:** `routing_table` reads a router on another network through `RoutedTarget(network, address, router=None)`, by an explicit, cached or single advertised next hop; Rust's `BACnetClient::routing_table` takes any `ToStation` (#2612).
