@@ -2112,6 +2112,21 @@ Properties:
 - `parse_error: str | None`
 - `device: int | None`
 
+## FieldNode
+
+One immutable decoded field, with its source span.
+
+Two nodes are equal, and hash alike, when their labels, spans,
+device-text flags and children all are. `copy` and `pickle` rebuild
+a node from those; nothing is decoded again.
+
+Properties:
+
+- `label: str`
+- `span: tuple[int, int]`: Start and exclusive end offsets in the supplied frame.
+- `children: tuple[FieldNode, ...]`
+- `device_text: bool`: Whether the label quotes a character string supplied by the device.
+
 ## FrameIterator
 
 Bounded raw-frame subscription. A full queue drops new arrivals.

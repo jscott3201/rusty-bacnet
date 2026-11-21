@@ -1,7 +1,7 @@
 use bacnet_transport::mstp::codec::FrameType;
 
 use super::{Field, Framing, Range, decode_tree};
-use bacnet_ops::decode::testing::*;
+use crate::decode::testing::*;
 
 /// Every field's label, depth first, with its range.
 fn flat(fields: &[Field]) -> Vec<(String, Range<usize>)> {
@@ -165,7 +165,7 @@ fn a_character_string_is_marked_and_bare_layers_decode() {
     let apdu_octets = &data[2..];
     let tree = super::decode_apdu_tree(apdu_octets);
     assert_eq!(tree.range, 0..apdu_octets.len());
-    let summary = bacnet_ops::decode::frame::summarize_npdu(&data);
+    let summary = crate::decode::frame::summarize_npdu(&data);
     assert_eq!(summary.pdu.as_deref(), Some("Unconfirmed-Request"));
 }
 
@@ -213,4 +213,129 @@ fn an_unassigned_or_withdrawn_function_is_labelled_so() {
             "{framing:?}: {labels:#?}"
         );
     }
+}
+
+#[test]
+fn hidden_passwords_do_not_change_mstp_tree_labels_or_spans() {
+    // A confirmed DCC request with Enable, followed by a one-character password.
+    let make = |frame_type, letter| {
+        let data = [1, 4, 0, 5, 1, 17, 0x19, 0, 0x2a, 0, letter];
+        mstp(frame_type, 7, 3, &data)
+    };
+    for (frame_type, width, label) in [
+        (FrameType::BACNET_DATA_EXPECTING_REPLY, 2, "Data CRC: valid"),
+        (
+            FrameType::BACNET_EXTENDED_DATA_EXPECTING_REPLY,
+            5,
+            "Encoded CRC-32K: valid",
+        ),
+    ] {
+        let one = make(frame_type, b'A');
+        let two = make(frame_type, b'B');
+        let end = one.len();
+        let crc = end - width..end;
+        assert_ne!(one[crc.clone()], two[crc.clone()]);
+        let fields = decode_tree(Framing::Mstp, &one);
+        assert_eq!(fields, decode_tree(Framing::Mstp, &two));
+        let hidden = find(&fields, "Password: (hidden)");
+        assert_eq!(find(&fields, label), crc);
+        if width == 5 {
+            assert_eq!(hidden, 8..end - width);
+        }
+        // A second frame or unrelated bytes beyond the first frame's CRC
+        // cannot extend the field ranges or appear in any label.
+        let joined = [one.as_slice(), two.as_slice()].concat();
+        assert_eq!(fields, decode_tree(Framing::Mstp, &joined));
+        let mut corrupt = one.clone();
+        corrupt[end - 1] ^= 1;
+        let broken = flat(&decode_tree(Framing::Mstp, &corrupt));
+        assert!(
+            broken
+                .iter()
+                .any(|(label, _)| label.contains("data CRC mismatch"))
+        );
+        assert!(!broken.iter().any(|(label, _)| label.ends_with(": valid")));
+    }
+}
+
+/// The labels and ranges directly under the MS/TP header node.
+fn mstp_header(fields: &[Field]) -> Vec<(String, Range<usize>)> {
+    fields[0]
+        .children
+        .iter()
+        .map(|field| (field.label.clone(), field.range.clone()))
+        .collect()
+}
+
+/// An MS/TP frame whose header is good and whose octets are all there keeps
+/// its Data and CRC fields when its data check fails: the CRC field says
+/// `mismatch`, never the CRC's value, and nothing is decoded from the data.
+/// A truncated frame has neither field, and a second frame after the first
+/// never widens a span.
+#[test]
+fn an_mstp_data_check_shows_its_status_and_span_never_its_value() {
+    let data = npdu(&i_am(5), false);
+    for (frame_type, width, crc) in [
+        (FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, 2, "Data CRC"),
+        (
+            FrameType::BACNET_EXTENDED_DATA_NOT_EXPECTING_REPLY,
+            5,
+            "Encoded CRC-32K",
+        ),
+    ] {
+        let good = mstp(frame_type, 255, 5, &data);
+        let end = good.len();
+        let data_label = format!("Data: {} octets", end - width - 8);
+        let fields = decode_tree(Framing::Mstp, &good);
+        assert_eq!(fields[0].range, 0..end);
+        let header = mstp_header(&fields);
+        assert_eq!(header[6], (data_label.clone(), 8..end - width));
+        assert_eq!(header[7], (format!("{crc}: valid"), end - width..end));
+        assert_eq!(fields.len(), 3, "{:#?}", flat(&fields));
+
+        let mut bad = good.clone();
+        bad[end - 2] ^= 0x40;
+        let fields = decode_tree(Framing::Mstp, &bad);
+        let header = mstp_header(&fields);
+        assert_eq!(header[5].0, format!("Header CRC: {:02X}", bad[7]));
+        assert_eq!(header[6], (data_label.clone(), 8..end - width));
+        assert_eq!(header[7], (format!("{crc}: mismatch"), end - width..end));
+        assert_eq!(header[8].0, "malformed: data CRC mismatch");
+        assert_eq!(header.len(), 9, "{header:#?}");
+        assert_eq!(fields.len(), 1, "nothing decoded: {:#?}", flat(&fields));
+        // The tree is the same whatever CRC octets arrived.
+        let mut other = bad.clone();
+        other[end - 1] ^= 0x01;
+        assert_eq!(decode_tree(Framing::Mstp, &other), fields);
+
+        // A second frame after a bad first one: every span stops at the
+        // first frame's end.
+        let joined = [bad.as_slice(), good.as_slice()].concat();
+        let after = decode_tree(Framing::Mstp, &joined);
+        assert_eq!(after, fields);
+        assert!(flat(&after).iter().all(|(_, range)| range.end <= end));
+
+        // Truncated by one octet: header leaves and the fault, no Data.
+        let fields = decode_tree(Framing::Mstp, &good[..end - 1]);
+        let header = mstp_header(&fields);
+        assert_eq!(header.len(), 7, "{header:#?}");
+        assert!(header[6].0.starts_with("malformed: truncated"));
+        assert!(!header.iter().any(|(label, _)| label.starts_with("Data")));
+    }
+}
+
+/// A frame with no data (a Token: Length zero, so no data and no data CRC
+/// follow the header) has its six header leaves and nothing else, and every
+/// span stays inside its eight octets.
+#[test]
+fn an_mstp_frame_without_data_has_header_leaves_only() {
+    let token = mstp(FrameType::TOKEN, 2, 1, &[]);
+    assert_eq!(token.len(), 8);
+    let fields = decode_tree(Framing::Mstp, &token);
+    assert_eq!(fields.len(), 1, "{:#?}", flat(&fields));
+    assert_eq!(fields[0].range, 0..8);
+    let header = mstp_header(&fields);
+    assert_eq!(header.len(), 6, "{header:#?}");
+    assert!(!header.iter().any(|(label, _)| label.starts_with("Data")));
+    assert!(flat(&fields).iter().all(|(_, range)| range.end <= 8));
 }

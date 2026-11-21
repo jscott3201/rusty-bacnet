@@ -123,8 +123,8 @@ unconfirmed-private-transfer parameters @2..6
 /// nowhere in the frame: the fault reads the same in both.
 #[test]
 fn a_fault_reads_the_same_in_any_frame() {
-    use bacnet_ops::decode::frame::Framing;
-    use bacnet_ops::decode::testing::{bip, mstp};
+    use crate::decode::frame::Framing;
+    use crate::decode::testing::{bip, mstp};
     use bacnet_transport::mstp::codec::FrameType;
 
     // A ReadProperty-ACK whose REAL value lost two octets, after an octet

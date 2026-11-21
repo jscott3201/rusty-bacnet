@@ -7079,6 +7079,28 @@ provenance. Observation opens no socket and changes no port sharing (see
 
 ### Decoded frame summaries and trap transcripts
 
+Use `decode_frame_tree(frame.octets, frame.link)` for detailed offline
+decoding. It returns an ordered tuple of immutable `FieldNode` records.
+Each node has a display `label`, a half-open `span` into the input, a
+tuple of `children`, and a `device_text` flag for labels that quote text
+from the device. A malformed frame carries the fields and diagnostics the
+decoder could recover. Decoded fields within a COBS-encoded MS/TP NPDU
+point to its encoded span. Nodes compare and hash by value, children
+included, print as a short `<FieldNode 'label' start..end, n children>`,
+and copy and pickle. Input longer than the link's largest frame raises
+`ValueError`: 65,535 octets on `bip`, `ipv6` and `sc` (the 16-bit length
+limit), 2,053 on `mstp`.
+
+Redaction covers the labels only. The password parameter of a
+DeviceCommunicationControl or ReinitializeDevice request shows as
+`Password: (hidden)`, and a request the decoder refuses shows no
+parameters at all. The hidden node's `span` still points at the password's
+octets in the input and in `Frame.octets`, so mask those octets before
+you log or share a frame. The password's length is visible through that
+span and through the frame's length fields. An MS/TP frame's data CRC
+field reads `valid` or `mismatch` with its span, never the CRC's value; a
+frame whose CRC fails keeps its `Data` field, with nothing decoded from it.
+
 `decode_frame(octets, link)` decodes link, NPDU and APDU headers through
 the stack's Rust decoder. It sends no traffic and returns a frozen
 `FrameSummary`, including for malformed input. `link` has no default; pass
