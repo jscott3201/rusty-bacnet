@@ -2680,8 +2680,9 @@ reports, raise `BacnetError`. Supply an explicit next hop to skip discovery.
 The destination router does not need to advertise a Device object. Acks must
 arrive through the selected hop with the destination router's source network
 and address. Equipment that responds only on its own link may time out.
-A reject from the selected hop for the requested DNET before the first ack
-ends the query. A concurrent routed request to that DNET through the same
+A reject for the requested DNET that comes through the selected hop before
+the first ack ends the query, whether the hop sent it or relayed it from a
+router further on. A concurrent routed request to that DNET through the same
 hop can produce an indistinguishable reject because there is no invoke ID.
 
 One query runs at a time per client (network messages carry no invoke ID), so a second call waits for

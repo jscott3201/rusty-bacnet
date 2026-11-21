@@ -23,11 +23,15 @@ impl QueryTarget {
         if *hop != self.hop {
             return false;
         }
-        // The selected next hop can reject forwarding to this DNET.
-        if source.is_none()
-            && let Some(station) = &self.station
+        // Any router on the path that cannot reach the queried network
+        // rejects it, and each router between relays that reject back
+        // toward this client (Clause 6.6.3.5): it comes through the
+        // selected hop, without an SNET from the hop itself and with the
+        // rejecting router's network from one further on.
+        if let Some(station) = &self.station
+            && reject.network == station.network
         {
-            return reject.network == station.network;
+            return true;
         }
         // A rejection by the destination itself must have its full identity.
         self.answers(hop, source)

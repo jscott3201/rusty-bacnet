@@ -96,9 +96,10 @@ impl BACnetClient {
     /// address or port), and neither is an empty table. A router that
     /// refuses with a Reject-Message-To-Network before any acknowledgement
     /// raises `BacnetNetworkRejectError` with its `reason` and `network`.
-    /// Local queries ignore DNET reject reasons 1, 2 and 4. A reject from
-    /// the selected next hop naming the queried DNET before the first ack
-    /// ends a routed query. A concurrent request on that path can produce
+    /// Local queries ignore DNET reject reasons 1, 2 and 4. A reject that
+    /// comes through the selected next hop naming the queried DNET before
+    /// the first ack ends a routed query, whether the hop sent it or relayed
+    /// it from a router further on. A concurrent request on that path can produce
     /// the same reject because these messages have no invoke ID. The
     /// bounds are 0 to 3600 seconds, and `wait` may not exceed `total`
     /// (`ValueError` otherwise). A client stopped mid-call raises

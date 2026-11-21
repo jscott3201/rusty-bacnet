@@ -56,9 +56,20 @@ async fn a_routed_table_accepts_only_the_exact_hop_and_source_including_empty_ac
                     None,
                 )
                 .await;
+                // A reject for another network, or one for the queried
+                // network that comes through another link peer, is not
+                // this query's.
                 control(
                     &inbound,
                     &ROUTER,
+                    Msg::REJECT_MESSAGE_TO_NETWORK,
+                    &[1, 0, 8],
+                    Some(address(8, 3)),
+                )
+                .await;
+                control(
+                    &inbound,
+                    &[4],
                     Msg::REJECT_MESSAGE_TO_NETWORK,
                     &[1, 0, 9],
                     Some(address(8, 3)),
@@ -106,6 +117,43 @@ async fn a_routed_table_accepts_only_the_exact_hop_and_source_including_empty_ac
             ..
         }))
     ));
+    client.stop().await.unwrap();
+}
+
+/// On a path of more than one hop, a router further on that cannot reach
+/// the queried network rejects it, and the selected hop relays that reject
+/// with the rejecting router's network as SNET (Clause 6.6.3.5). It ends
+/// the query at once, before any Ack.
+#[tokio::test(start_paused = true)]
+async fn a_reject_relayed_from_a_router_further_on_ends_the_query() {
+    let (mut client, inbound, mut outbound) = started().await;
+    let station = Station::routed(&ROUTER, 9, &[3]);
+    let start = tokio::time::Instant::now();
+    let (result, ()) = tokio::join!(
+        client.routing_table(&station, RoutingTableWait::default()),
+        async {
+            outbound.recv().await.unwrap();
+            control(
+                &inbound,
+                &ROUTER,
+                Msg::REJECT_MESSAGE_TO_NETWORK,
+                &[1, 0, 9],
+                Some(address(8, 3)),
+            )
+            .await;
+        }
+    );
+    assert!(
+        matches!(
+            result,
+            Err(RoutingTableError::Rejected(RejectMessageToNetwork {
+                reason: RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+                network: 9,
+            }))
+        ),
+        "{result:?}"
+    );
+    assert!(start.elapsed() < RoutingTableWait::default().first_answer);
     client.stop().await.unwrap();
 }
 

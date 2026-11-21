@@ -257,8 +257,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// [`RoutingTableError::RouteUnresolved`]. No Device I-Am is required.
     /// A routed ack must arrive from the selected peer with the original
     /// router's SNET/SADR. A device which only answers locally may time out.
-    /// A reject from that peer without SNET, naming the requested DNET,
-    /// can end a routed query before its first ack.
+    /// A reject that comes through that peer naming the requested DNET
+    /// ends a routed query before its first ack with
+    /// [`RoutingTableError::Rejected`], whether the peer sent it (no SNET)
+    /// or relayed it from a router further on (that router's SNET), since
+    /// a router relays a reject back toward the requester (Clause 6.6.3.5).
     ///
     /// Nothing pairs an answer with its question, so a late ack of an
     /// earlier query can be counted by the next query to the same router,
