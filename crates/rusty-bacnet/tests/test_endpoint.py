@@ -726,12 +726,15 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
             endpoint.add_analog_output(
                 instance=1, name="Retry", units=62, present_value=7.5
             )
+            endpoint.add_analog_input(
+                instance=1, name="Retry input", units=62, present_value=6.5
+            )
             pending = getattr(endpoint, "_pending_registration_count")
-            self.assertEqual(pending(), 1)
+            self.assertEqual(pending(), 2)
             with self.assertRaises(BacnetError):
                 await asyncio.wait_for(endpoint.start(), 10)
-            # Failed start drops nothing: retry after the fix serves the object.
-            self.assertEqual(pending(), 1)
+            # Failed start drops nothing: retry after the fix serves the objects.
+            self.assertEqual(pending(), 2)
             await asyncio.wait_for(holder.close(), 5)
             await asyncio.wait_for(endpoint.start(), 10)
             try:
@@ -742,16 +745,19 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(reader.start(), 10)
                 try:
                     rc = await reader.client()
-                    oid = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
-                    value = await asyncio.wait_for(
-                        rc.read_property(
-                            f"127.0.0.1:{port}",
-                            oid,
-                            PropertyIdentifier.PRESENT_VALUE,
-                        ),
-                        10,
-                    )
-                    self.assertEqual(value.value, 7.5)
+                    for object_type, expected in (
+                        (ObjectType.ANALOG_OUTPUT, 7.5),
+                        (ObjectType.ANALOG_INPUT, 6.5),
+                    ):
+                        value = await asyncio.wait_for(
+                            rc.read_property(
+                                f"127.0.0.1:{port}",
+                                ObjectIdentifier(object_type, 1),
+                                PropertyIdentifier.PRESENT_VALUE,
+                            ),
+                            10,
+                        )
+                        self.assertEqual(value.value, expected)
                 finally:
                     await asyncio.wait_for(reader.close(), 5)
             finally:

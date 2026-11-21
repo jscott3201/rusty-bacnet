@@ -42,6 +42,9 @@ macro_rules! endpoint_builders {
         impl $endpoint {
             /// Add an Analog Input object (before start).
             ///
+            /// `present_value` (a finite number, default 0.0) sets
+            /// Present_Value directly.
+            ///
             /// `tags`, `profile_location` and `profile_name` provision the
             /// optional Tags, Profile_Location and Profile_Name rows, as on
             /// `BACnetServer.add_analog_input`; each is served only when
@@ -84,6 +87,14 @@ macro_rules! endpoint_builders {
             }
 
             /// Add an Analog Value object (before start).
+            ///
+            /// `present_value` is the initial value. With
+            /// `present_value_access="commandable"` (the default) it sets
+            /// Relinquish_Default and the priority array starts empty, so
+            /// Present_Value reads as that value until something is
+            /// commanded; with "writable" or "read_only" it sets
+            /// Present_Value directly. `None` keeps the object type's
+            /// default.
             ///
             /// `present_value_access`, `value_source_tracking`, the Audit
             /// keywords, the profile keywords and the parameter keywords are
@@ -138,9 +149,14 @@ macro_rules! endpoint_builders {
                 self.push_pending(pending)
             }
 
-            /// Add a Binary Input object (before start). Profile keywords as
-            /// on `add_analog_input`, `polarity`, `alarm_value` and the
-            /// delays as on `BACnetServer.add_binary_input`.
+            /// Add a Binary Input object (before start).
+            ///
+            /// `present_value` sets Present_Value directly, after Polarity is
+            /// applied. Left as `None`, the object keeps its unset
+            /// physical-input state.
+            ///
+            /// Profile keywords as on `add_analog_input`, `polarity`,
+            /// `alarm_value` and the delays as on `BACnetServer.add_binary_input`.
             #[pyo3(signature = (
                         instance, name, *, present_value=None, polarity=0, tags=None, profile_location=None, profile_name=None,
                         alarm_value=None, time_delay=None, time_delay_normal=None
@@ -172,9 +188,19 @@ macro_rules! endpoint_builders {
                 self.push_pending(pending)
             }
 
-            /// Add a Binary Value object (before start). Access, Value_Source,
-            /// Audit and profile keywords as on `add_analog_value`,
-            /// `alarm_value` and the delays as on `BACnetServer.add_binary_value`.
+            /// Add a Binary Value object (before start).
+            ///
+            /// `present_value` is the initial value. With
+            /// `present_value_access="commandable"` (the default) it sets
+            /// Relinquish_Default and the priority array starts empty, so
+            /// Present_Value reads as that value until something is
+            /// commanded; with "writable" or "read_only" it sets
+            /// Present_Value directly. `None` keeps the object type's
+            /// default.
+            ///
+            /// Access, Value_Source, Audit and profile keywords as on
+            /// `add_analog_value`, `alarm_value` and the delays as on
+            /// `BACnetServer.add_binary_value`.
             #[pyo3(signature = (
                         instance, name, *, present_value=None,
                         present_value_access="commandable", value_source_tracking=false,
@@ -219,7 +245,12 @@ macro_rules! endpoint_builders {
                 self.push_pending(pending)
             }
 
-            /// Add an Analog Output object before startup. An initial value uses the relinquish default.
+            /// Add an Analog Output object before startup.
+            ///
+            /// `present_value` sets Relinquish_Default. The priority array
+            /// starts empty, so Present_Value reads as that value until
+            /// something is commanded. `None` keeps the object type's
+            /// default.
             #[pyo3(signature = (
                 instance, name, units=62, *, present_value=None, tags=None, profile_location=None, profile_name=None,
                 high_limit=None, low_limit=None, deadband=None, limit_enable=None,
@@ -252,7 +283,12 @@ macro_rules! endpoint_builders {
                 })
             }
 
-            /// Add a Binary Output object before startup. An initial value uses the relinquish default.
+            /// Add a Binary Output object before startup.
+            ///
+            /// `present_value` sets Relinquish_Default. The priority array
+            /// starts empty, so Present_Value reads as that value until
+            /// something is commanded. `None` keeps the object type's
+            /// default.
             #[pyo3(signature = (
                 instance, name, *, present_value=None, polarity=0, tags=None, profile_location=None, profile_name=None,
                 time_delay=None, time_delay_normal=None
@@ -280,7 +316,10 @@ macro_rules! endpoint_builders {
                 })
             }
 
-            /// Add a Multi-state input object before startup. An initial value uses local input.
+            /// Add a Multi-state Input object before startup.
+            ///
+            /// `present_value` sets Present_Value directly. `None` keeps the
+            /// object type's default.
             #[pyo3(signature = (
                 instance, name, number_of_states, *, present_value=None,
                 tags=None, profile_location=None, profile_name=None,
@@ -310,7 +349,12 @@ macro_rules! endpoint_builders {
                 })
             }
 
-            /// Add a Multi-state output object before startup. An initial value uses the relinquish default.
+            /// Add a Multi-state Output object before startup.
+            ///
+            /// `present_value` sets Relinquish_Default. The priority array
+            /// starts empty, so Present_Value reads as that value until
+            /// something is commanded. `None` keeps the object type's
+            /// default.
             #[pyo3(signature = (
                 instance, name, number_of_states, *, present_value=None,
                 tags=None, profile_location=None, profile_name=None,
@@ -339,7 +383,15 @@ macro_rules! endpoint_builders {
                 })
             }
 
-            /// Add a Multi-state value object before startup. An initial value uses the configured access mode.
+            /// Add a Multi-state Value before startup.
+            ///
+            /// `present_value` is the initial value. With
+            /// `present_value_access="commandable"` (the default) it sets
+            /// Relinquish_Default and the priority array starts empty, so
+            /// Present_Value reads as that value until something is
+            /// commanded; with "writable" or "read_only" it sets
+            /// Present_Value directly. `None` keeps the object type's
+            /// default.
             #[pyo3(signature = (
                 instance, name, number_of_states, *, present_value=None,
                 present_value_access="commandable", value_source_tracking=false,

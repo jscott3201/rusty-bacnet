@@ -7291,6 +7291,7 @@ and omitting it keeps the native default. Use a finite number for Analog,
 Multi-state. For Output and commandable Value objects the initial value
 sets Relinquish_Default and leaves every priority slot empty. Inputs and
 noncommandable Values take the initial value as a local application update.
+A Binary Input given no value keeps its unset physical-input state.
 An object name and its type/instance pair must each be unique across the
 Device, its Network Ports and the pending objects. An invalid addition raises
 at the builder call and preserves earlier registrations.

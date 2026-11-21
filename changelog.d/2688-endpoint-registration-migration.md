@@ -1,4 +1,4 @@
 ---
 section: Migration notes
 ---
-- **Breaking (Python API).** Handle duplicate endpoint object names or identifiers at the `add_*` call. Earlier registrations remain available for startup. Supply a finite initial Analog Input value and use instances 0 through 4194302 (#2688).
+- **Python API (#2688).** Handle `ValueError` from endpoint `add_*` calls instead of from `start()`; earlier registrations stay in place for startup. Give Analog Input a finite value and use instances 0 through 4194302.

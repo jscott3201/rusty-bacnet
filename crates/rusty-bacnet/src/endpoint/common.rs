@@ -287,7 +287,6 @@ pub(crate) enum PendingObject {
     },
 }
 
-#[path = "pending_build.rs"]
 mod pending_build;
 
 /// Validate the fresh object before admission, then check the entire identity
