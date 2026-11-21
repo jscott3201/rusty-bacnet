@@ -1,4 +1,4 @@
 ---
 section: Added
 ---
-- Python property reads expose the returned object, property, index and original value bytes. Decode those bytes offline with `decode_property_as` using a caller-selected primitive, collection shape and optional integer names. Every decode result retains its input (#2618).
+- **Python API:** `PropertyValue.read_context` names the object, property and array index a ReadProperty or ReadPropertyMultiple ACK returned, and `decode_property_as(value.octets, datatype, shape)` decodes a vendor property as a declared primitive and shape (#2618).

@@ -1,56 +1,52 @@
-//! Provenance of a successful ReadProperty or ReadPropertyMultiple value.
+//! Where a successful ReadProperty or ReadPropertyMultiple value came from.
+//!
+//! The context names the object, property and array index the ACK names,
+//! which can differ from the request (a wildcard Device instance, for one).
+//! It holds no copy of the value's octets: `decode_property_as` takes the
+//! value's `.octets`.
 
 use super::{PyObjectIdentifier, PyPropertyValue};
 use bacnet_types::primitives::ObjectIdentifier;
-use bytes::Bytes;
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
 
-/// The object, property, optional array index and exact value octets returned in the ACK.
+/// The object, property and optional array index the ACK names.
 #[pyclass(
     name = "PropertyReadContext",
     module = "rusty_bacnet",
     frozen,
     skip_from_py_object
 )]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct PyPropertyReadContext {
     object: ObjectIdentifier,
     #[pyo3(get)]
     pub(super) property_id: u32,
     #[pyo3(get)]
     pub(super) array_index: Option<u32>,
-    octets: Bytes,
 }
 
 #[pymethods]
 impl PyPropertyReadContext {
-    /// Object identifier returned by the responder.
+    /// The object identifier the ACK names.
     #[getter]
     pub(super) fn object_id(&self) -> PyObjectIdentifier {
         PyObjectIdentifier::from_rust(self.object)
     }
-
-    /// Exact value octets before the ordinary read decoder interpreted them.
-    #[getter]
-    pub(super) fn raw<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.octets)
-    }
 }
 
 impl PyPropertyValue {
+    /// This value as read by an RP or RPM whose ACK names `object`,
+    /// `property_id` and `array_index`.
     pub(super) fn with_read_context(
         mut self,
         object: ObjectIdentifier,
         property_id: u32,
         array_index: Option<u32>,
-        raw: &[u8],
     ) -> Self {
         self.context = Some(PyPropertyReadContext {
             object,
             property_id,
             array_index,
-            octets: Bytes::copy_from_slice(raw),
         });
         self
     }
@@ -58,21 +54,22 @@ impl PyPropertyValue {
 
 #[pymethods]
 impl PyPropertyValue {
-    /// The returned address and original octets of a successful network property read.
+    /// The object, property and array index the ACK of a network
+    /// ReadProperty or ReadPropertyMultiple named; None for any other value.
     #[getter]
     fn read_context(&self) -> Option<PyPropertyReadContext> {
-        self.context.clone()
+        self.context
     }
 
-    /// Restore ACK provenance after the existing reducer rebuilds the value and its form.
+    /// What `__reduce__` rebuilds a read value with, so a copy keeps its
+    /// context.
     #[staticmethod]
     fn _with_read_context(
         value: Self,
         object_id: PyObjectIdentifier,
         property_id: u32,
         array_index: Option<u32>,
-        raw: &[u8],
     ) -> Self {
-        value.with_read_context(object_id.to_rust(), property_id, array_index, raw)
+        value.with_read_context(object_id.to_rust(), property_id, array_index)
     }
 }

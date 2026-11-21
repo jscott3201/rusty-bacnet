@@ -39,13 +39,16 @@ use super::*;
 pub struct PyPropertyValue {
     /// The value as it travels: what a write of this value encodes.
     pub(crate) inner: primitives::PropertyValue,
-    /// Provenance of an actual network read, independent of the value and its write encoding.
+    /// The object, property and array index the ACK of a network RP or RPM
+    /// named (#2618). Not part of the value: it takes no part in equality,
+    /// hashing, `repr` or what a write encodes, but copies and pickles keep it.
     pub(super) context: Option<PyPropertyReadContext>,
     /// How `tag` and `value` read `inner`'s application data.
     pub(crate) form: Form,
     /// The property a read took the value from (#2080), which names its
     /// enumerated value (`name`) and its bit string's bits (`value`). Not part
-    /// of the value: it doesn't take part in equality, hashing or pickling.
+    /// of the value: it takes no part in equality or hashing, but copies and
+    /// pickles keep it (through `_read_from`).
     pub(crate) property: Option<bacnet_types::enums::PropertyIdentifier>,
 }
 
@@ -410,10 +413,12 @@ impl PyPropertyValue {
     }
 
     /// The value's octets as a WriteProperty of it carries them (#1499): a
-    /// typed constructed element's are the octets it was read from, a whole
-    /// typed collection's its elements' back to back, and a primitive's its
-    /// application-tagged encoding. A value that doesn't encode raises
-    /// ValueError.
+    /// typed constructed element's, a `tagged` value's and an
+    /// `application_data` value's are the octets as read, a whole typed
+    /// collection's its elements' back to back, and a primitive's its
+    /// shortest application-tagged encoding, re-encoded from the decoded
+    /// value (so not always the octets a device sent, #2618). A value that
+    /// doesn't encode raises ValueError.
     #[getter]
     fn octets<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         let mut encoded = BytesMut::new();

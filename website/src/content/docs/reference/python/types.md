@@ -142,18 +142,22 @@ past the end.
 
 ## PropertyReadContext
 
-Address and exact property value octets returned in a successful RP or RPM ACK.
+The object, property and array index the ACK of a ReadProperty or
+ReadPropertyMultiple named, which can differ from the request (a
+wildcard Device instance names the device's own). It holds no octets:
+decode a value's `.octets`.
 
 Properties:
 
 - `object_id: ObjectIdentifier`
 - `property_id: int`
 - `array_index: int | None`
-- `raw: bytes`
 
 ## PropertyDecodeResult
 
-Outcome of interpreting property octets under a caller-supplied declaration.
+What `decode_property_as` made of some octets: `value` (with
+`value_names` when names were given) when `status` is `"decoded"`,
+otherwise a `diagnostic`. `raw` is the input, kept in every case.
 
 Properties:
 
@@ -282,8 +286,8 @@ Properties:
 - `tag: str`: Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double', 'octet\_string', 'character\_string', 'bit\_string', 'enumerated', 'date', 'time', 'object\_identifier', 'list', 'application\_data', 'tagged' (a value read as its tags, `value` a list of `TagNode`), 'bdt' or 'fdt' (a whole Network Port BDT or FDT, `value` a list of `BdtEntry` or `FdtEntry`), or one typed constructed element: 'destination', 'port\_permission', 'read\_access\_specification', 'read\_access\_result', 'action\_list', 'device\_object\_reference', 'authentication\_factor\_format', 'stage\_limit\_value', 'access\_rule', 'device\_object\_property\_reference', 'object\_property\_reference', 'property\_access\_result', 'recipient', 'daily\_schedule', 'special\_event', 'calendar\_entry', 'date\_range', 'timestamp', 'cov\_subscription', 'value\_source', 'scale', 'prescale', 'address\_binding', 'shed\_level', 'authentication\_factor', 'event\_parameter', 'bdt\_entry', 'fdt\_entry'.
 - `value: Any`: The Python-native value (int, float, str, bytes, bool, dict, tuple, ObjectIdentifier, BitString, list, or None); `application_data` is `bytes` (except a DateTime Value's set Priority\_Array slot, `[date, time]`), `tagged` a list of `TagNode`, `bdt` a list of `BdtEntry`, `fdt` a list of `FdtEntry`, and a typed constructed element the form its typed write takes, or the form docs/python-api.md gives it. A date is `(year, month, day, day_of_week)` with the full year, or 255 for an unspecified year, as in every other date the binding reads. A bit string is a `BitString`, named when the value was read from a property of known bit-string type.
 - `name: str | None`: The name of an enumerated value read from a property whose enumeration is known (`"HIGH_LIMIT"` for an Event\_State of 3), else None. `value` stays the number. Values built with the constructors carry no property, so their name is None; copies and pickles of a read value keep it.
-- `read_context: PropertyReadContext | None`: Returned object, numeric property, optional index and exact wire bytes for an RP or RPM value.
-- `octets: bytes`: The value's octets as a write of it carries them: a typed constructed element's are the octets it was read from, a whole typed collection's its elements' back to back, and any other value its application-tagged encoding. Raises ValueError for a value that doesn't encode.
+- `read_context: PropertyReadContext | None`: The object, property and array index the ACK named, for a value a network `read_property` or `read_property_multiple` returned; None for any other value (local reads, COV values, Group members, values you build). It takes no part in equality, hashing or `repr`; copies and pickles keep it.
+- `octets: bytes`: The value's octets as a write of it carries them. For a read value, a `tagged` or `application_data` value and a typed constructed element hold the octets exactly as received, and a whole typed collection its elements' back to back. A primitive (or a list of them) is re-encoded from its decoded value in the shortest form, so it decodes to the same value but can differ from what the device sent (an integer with leading zero octets, a character string in UCS-2 or ISO 8859-1 comes back as UTF-8). Raises ValueError for a value that doesn't encode.
 
 ### PropertyValue.null
 

@@ -18,7 +18,8 @@ impl PyPropertyValue {
     /// rebuilds through `_read_from` with the value and that property, so the
     /// copy keeps its names. A collection with its own tag (a Network Port's
     /// `bdt` or `fdt`, #2690) rebuilds through `_typed_list`, so an empty one
-    /// keeps its tag.
+    /// keeps its tag. A value read over the network rebuilds through
+    /// `_with_read_context` first, so the copy keeps its `read_context`.
     fn __reduce__<'py>(
         slf: &Bound<'py, Self>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
@@ -32,7 +33,6 @@ impl PyPropertyValue {
                 context.object_id(),
                 context.property_id,
                 context.array_index,
-                context.raw(py),
             )
                 .into_pyobject(py)?;
             return Ok((slf.get_type().getattr("_with_read_context")?, arguments));

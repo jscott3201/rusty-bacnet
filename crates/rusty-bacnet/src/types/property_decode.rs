@@ -1,4 +1,8 @@
-//! Offline interpretation of property octets under a declaration supplied by the caller.
+//! Offline decoding of property value octets as a datatype and shape the
+//! caller declares (#2618), for a vendor property whose datatype the stack
+//! does not know. The caller picks the declaration (by the station's vendor
+//! identifier, the object type and the property number); nothing here infers
+//! one.
 
 use super::PyPropertyValue;
 use bacnet_encoding::primitives::decode_application_value;
@@ -26,25 +30,27 @@ struct PyPropertyDecodeResult {
     value_names: Option<Py<PyTuple>>,
 }
 
-/// The external primitive token and its native application tag must agree exactly.
+/// The datatype a declaration names, by the `PropertyValue.tag` name of the
+/// value it decodes to, and that datatype's application tag (Clause 20.2.1.4).
 fn primitive(token: &str) -> PyResult<(Datatype, u8)> {
     Ok(match token {
-        "Null" => (Datatype::Null, app_tag::NULL),
-        "Boolean" => (Datatype::Boolean, app_tag::BOOLEAN),
-        "Unsigned" => (Datatype::Unsigned, app_tag::UNSIGNED),
-        "Integer" => (Datatype::Integer, app_tag::SIGNED),
-        "Real" => (Datatype::Real, app_tag::REAL),
-        "Double" => (Datatype::Double, app_tag::DOUBLE),
-        "OctetString" => (Datatype::OctetString, app_tag::OCTET_STRING),
-        "CharacterString" => (Datatype::CharacterString, app_tag::CHARACTER_STRING),
-        "BitString" => (Datatype::BitString, app_tag::BIT_STRING),
-        "Enumerated" => (Datatype::Enumerated, app_tag::ENUMERATED),
-        "Date" => (Datatype::Date, app_tag::DATE),
-        "Time" => (Datatype::Time, app_tag::TIME),
-        "ObjectIdentifier" => (Datatype::ObjectIdentifier, app_tag::OBJECT_IDENTIFIER),
+        "null" => (Datatype::Null, app_tag::NULL),
+        "boolean" => (Datatype::Boolean, app_tag::BOOLEAN),
+        "unsigned" => (Datatype::Unsigned, app_tag::UNSIGNED),
+        "signed" => (Datatype::Integer, app_tag::SIGNED),
+        "real" => (Datatype::Real, app_tag::REAL),
+        "double" => (Datatype::Double, app_tag::DOUBLE),
+        "octet_string" => (Datatype::OctetString, app_tag::OCTET_STRING),
+        "character_string" => (Datatype::CharacterString, app_tag::CHARACTER_STRING),
+        "bit_string" => (Datatype::BitString, app_tag::BIT_STRING),
+        "enumerated" => (Datatype::Enumerated, app_tag::ENUMERATED),
+        "date" => (Datatype::Date, app_tag::DATE),
+        "time" => (Datatype::Time, app_tag::TIME),
+        "object_identifier" => (Datatype::ObjectIdentifier, app_tag::OBJECT_IDENTIFIER),
         _ => {
             return Err(PyValueError::new_err(format!(
-                "unknown primitive {token:?}"
+                "unknown datatype {token:?}: expected a primitive PropertyValue tag such as \
+                 \"unsigned\" or \"octet_string\""
             )));
         }
     })
@@ -77,7 +83,7 @@ impl Declaration {
                 datatype,
                 length
                     .extract::<u16>()
-                    .map_err(|_| PyValueError::new_err("array_length must be in 0..65535"))?,
+                    .map_err(|_| PyValueError::new_err("array_length must be 0 to 65535"))?,
             ),
             _ => return Err(PyValueError::new_err(format!("unknown shape {shape:?}"))),
         };
@@ -118,7 +124,24 @@ impl Refusal {
     }
 }
 
-/// Finish the bounded framing and payload check before allocating owned values.
+/// Whether an application element the decoder refused is an integer with
+/// more contents octets than the model's integer holds: Clauses 20.2.4,
+/// 20.2.5 and 20.2.11 set no upper length, but `PropertyValue` keeps an
+/// Unsigned in 64 bits and a Signed or Enumerated in 32.
+fn wider_than_model(tag: u8, contents: usize) -> bool {
+    match tag {
+        app_tag::UNSIGNED => contents > 8,
+        app_tag::SIGNED | app_tag::ENUMERATED => contents > 4,
+        _ => false,
+    }
+}
+
+/// Walk the framing and check each element before allocating owned values.
+///
+/// A broken encoding is `malformed` wherever it is. Otherwise a shape or tag
+/// that differs from the declaration (context-tagged or constructed content
+/// under a primitive included) is `type_mismatch`, and only then is a valid
+/// encoding the model cannot hold `unsupported_encoding`.
 fn decode(raw: &[u8], decl: &Declaration) -> Result<PropertyValue, Refusal> {
     let mut starts = Vec::new();
     let mut nodes = 0;
@@ -141,34 +164,49 @@ fn decode(raw: &[u8], decl: &Declaration) -> Result<PropertyValue, Refusal> {
         if nodes > MAX_TAG_TREE_NODES {
             return Err(Refusal::new("limit_exceeded", TagTreeFault::TooManyNodes));
         }
-        if item.tag.class == TagClass::Context || item.tag.number > app_tag::OBJECT_IDENTIFIER {
-            unsupported
-                .get_or_insert_with(|| format!("context or reserved tag at octet {}", item.offset));
+        if item.tag.class == TagClass::Context {
+            wrong_tag.get_or_insert_with(|| {
+                format!(
+                    "expected application tag {}, found context tag {} at octet {}",
+                    decl.expected_tag, item.tag.number, item.offset
+                )
+            });
             continue;
         }
+        if item.tag.number > app_tag::OBJECT_IDENTIFIER {
+            return Err(Refusal::new(
+                "malformed",
+                format!(
+                    "reserved application tag {} at octet {}",
+                    item.tag.number, item.offset
+                ),
+            ));
+        }
         if let Some(Err(error)) = item.application_value() {
-            if item.tag.number == app_tag::ENUMERATED && error.kind == DecodingKind::OutOfRange {
+            if error.kind == DecodingKind::Unsupported
+                || wider_than_model(item.tag.number, item.contents.len())
+            {
                 unsupported.get_or_insert_with(|| error.to_string());
-                continue;
+            } else {
+                return Err(Refusal::new("malformed", error));
             }
-            return Err(Refusal::new("malformed", error));
         }
         if item.tag.number != decl.expected_tag {
-            wrong_tag.get_or_insert((item.offset, item.tag.number));
+            wrong_tag.get_or_insert_with(|| {
+                format!(
+                    "expected application tag {}, found {} at octet {}",
+                    decl.expected_tag, item.tag.number, item.offset
+                )
+            });
         }
-        starts.push(item.offset);
+        // Only top-level elements are values; anything nested is inside
+        // context-tagged content, already a mismatch.
+        if item.depth == 0 {
+            starts.push(item.offset);
+        }
     }
-    if let Some(detail) = unsupported {
-        return Err(Refusal::new("unsupported_encoding", detail));
-    }
-    if let Some((at, tag)) = wrong_tag {
-        return Err(Refusal::new(
-            "type_mismatch",
-            format!(
-                "expected application tag {}, found {tag} at octet {at}",
-                decl.expected_tag
-            ),
-        ));
+    if let Some(detail) = wrong_tag {
+        return Err(Refusal::new("type_mismatch", detail));
     }
     let whole = decl.whole_collection();
     if !whole && starts.len() != 1 {
@@ -189,10 +227,24 @@ fn decode(raw: &[u8], decl: &Declaration) -> Result<PropertyValue, Refusal> {
             format!("array count or index does not fit declared length {n}"),
         ));
     }
+    if let Some(detail) = unsupported {
+        return Err(Refusal::new("unsupported_encoding", detail));
+    }
+    // The borrowed view accepted every element; what the owned decoder
+    // still refuses is a character set the model does not convert.
     let read = |at| {
         decode_application_value(raw, at)
             .map(|(value, _)| value)
-            .map_err(|error| Refusal::new("unsupported_encoding", error))
+            .map_err(|error| {
+                let status = match error.decode_fault() {
+                    Some((_, DecodingKind::Unsupported)) => "unsupported_encoding",
+                    _ => "malformed",
+                };
+                Refusal::new(status, error)
+            })
+    };
+    let Some(&first) = starts.first() else {
+        return Ok(PropertyValue::List(Vec::new()));
     };
     if whole {
         return starts
@@ -201,7 +253,7 @@ fn decode(raw: &[u8], decl: &Declaration) -> Result<PropertyValue, Refusal> {
             .collect::<Result<Vec<_>, _>>()
             .map(PropertyValue::List);
     }
-    let value = read(starts[0])?;
+    let value = read(first)?;
     if let (Some(0), Some(n), PropertyValue::Unsigned(count)) = (decl.index, fixed, &value)
         && *count != u64::from(n)
     {
@@ -237,11 +289,16 @@ fn names(
     };
     let mut labels = Vec::with_capacity(values.len());
     for value in values {
+        // Every element carries the declared integer tag; anything else
+        // would have no name rather than a panic.
         let key = match value {
             PropertyValue::Unsigned(n) => i128::from(*n),
             PropertyValue::Signed(n) => i128::from(*n),
             PropertyValue::Enumerated(n) => i128::from(*n),
-            _ => unreachable!("validated integer application tag"),
+            _ => {
+                labels.push(None);
+                continue;
+            }
         };
         labels.push(match mapping.get_item(key) {
             Ok(label) => Some(label.extract::<String>()?),
@@ -252,18 +309,20 @@ fn names(
     Ok(Some(PyTuple::new(py, labels)?.unbind()))
 }
 
-/// Decode property value octets using the supplied primitive and shape. Each result keeps the input.
+/// Decode application-tagged property value octets (a value's `.octets`)
+/// as the `datatype` and `shape` a caller declares. Each result keeps the
+/// input.
 #[pyfunction]
-#[pyo3(signature = (octets, primitive, *, shape="scalar", array_index=None, array_length=None, value_names=None))]
+#[pyo3(signature = (octets, datatype, shape="scalar", *, array_index=None, array_length=None, value_names=None))]
 fn decode_property_as(
     octets: &Bound<'_, PyBytes>,
-    primitive: &str,
+    datatype: &str,
     shape: &str,
     array_index: Option<&Bound<'_, PyInt>>,
     array_length: Option<&Bound<'_, PyInt>>,
     value_names: Option<&Bound<'_, PyMapping>>,
 ) -> PyResult<PyPropertyDecodeResult> {
-    let decl = Declaration::parse(primitive, shape, array_index, array_length)?;
+    let decl = Declaration::parse(datatype, shape, array_index, array_length)?;
     let raw = octets.clone().unbind();
     Ok(match decode(octets.as_bytes(), &decl) {
         Ok(value) => PyPropertyDecodeResult {

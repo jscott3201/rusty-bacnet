@@ -157,15 +157,16 @@ pub(crate) fn decode_read_ack(ack: &ReadPropertyACK) -> Result<PyPropertyValue, 
     )
 }
 
-/// Decode a successful RP or RPM value and retain the fields returned by its ACK.
+/// Decode a successful RP or RPM value with the object, property and array
+/// index its ACK names as its `read_context`.
 pub(super) fn decode_ack_value(
     object: bacnet_types::primitives::ObjectIdentifier,
     property: PropertyIdentifier,
     index: Option<u32>,
-    raw: &[u8],
+    octets: &[u8],
 ) -> Result<PyPropertyValue, Error> {
-    let value = decode_read_value(object.object_type(), property, index, raw)?;
-    Ok(value.with_read_context(object, property.to_raw(), index, raw))
+    let value = decode_read_value(object.object_type(), property, index, octets)?;
+    Ok(value.with_read_context(object, property.to_raw(), index))
 }
 
 #[cfg(test)]

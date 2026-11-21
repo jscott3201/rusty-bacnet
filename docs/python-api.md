@@ -1152,61 +1152,75 @@ Code that handled `application_data` reads should expect:
 
 #### Interpreting vendor property values
 
-A successful `read_property` or `read_property_multiple` value carries a frozen
-`read_context` with the ACK's `object_id`, numeric `property_id`, optional
-`array_index` and exact property-value bytes in `raw`. Copying or pickling the
-value retains this context. Its equality, hash and write encoding remain those
-of the ordinary `PropertyValue`. For example, an Unsigned 2 received as
-`22 00 02` has those three context bytes and writes back as `21 02` via
-`.octets`. Constructed values created locally, local server reads, COV values
-and the children of a Group's embedded read results have no read context.
+A value returned by a network `read_property` or `read_property_multiple`
+carries a `read_context`: the `object_id`, numeric `property_id` and
+`array_index` the ACK named, which can differ from the request (a wildcard
+Device instance names the device's own). Copies and pickles keep it; it
+takes no part in equality, hashing or `repr`. Local server reads, COV
+values, a Group's member results and values you build have none.
 
-Select the vendor from the responding station's I-Am or its Device
-Vendor_Identifier. The same property number can describe different datatypes
-across vendors and object types. This example uses a separately installed
-`ace-bacnet-devices` catalogue and a value read from a TAC MicroNet Device.
-Load the definition once for that station.
+The stack doesn't know a proprietary property's datatype. Choose a
+declaration by the station's vendor identifier (from its I-Am, or a read of
+the Device object's Vendor_Identifier), the object type and the property
+number: the same proprietary property number can mean different datatypes
+at different vendors, and on different object types at one vendor (Clause
+23.3). Keep those declarations in your own table or a third-party registry,
+and decode the value's `.octets` with `decode_property_as`:
 
 ```python
-from ace_bacnet_devices import vendors
 from rusty_bacnet import ObjectType, decode_property_as
 
-definition = vendors.load("tac-micronet")
+# (vendor identifier, object type, property number) -> (datatype, shape)
+DECLS = {
+    (555, ObjectType.DEVICE, 1330): ("unsigned", "scalar"),
+    (555, ObjectType.DEVICE, 1331): ("unsigned", "array"),
+    (777, ObjectType.DEVICE, 1331): ("unsigned", "scalar"),
+}
+
 ctx = value.read_context
-if definition.vendor_id == station_vendor_id and ctx.object_id.object_type == ObjectType.DEVICE:
-    prop = next((p for ext in definition.object_extensions if ext.object_type == "device"
-                 for p in ext.properties if p.identifier == ctx.property_id), None)
-    if prop is not None:
-        spec = prop.datatype
-        names = {v.value: v.name for v in spec.values} if spec.semantics == "enumeration" else None
-        result = decode_property_as(ctx.raw, spec.primitive.value, shape=spec.shape.value,
-                                    array_index=ctx.array_index, array_length=spec.array_length,
-                                    value_names=names)
+decl = DECLS.get((vendor_id, ctx.object_id.object_type, ctx.property_id))
+if decl is not None:
+    datatype, shape = decl
+    index = {"array_index": ctx.array_index} if shape == "array" else {}
+    result = decode_property_as(value.octets, datatype, shape, **index)
+    if result.status == "decoded":
+        print(result.value.value)
 ```
 
-For a proprietary object type, select the matching numeric `identifier` in
-`definition.object_types` and search its `properties`. Without a declaration,
-keep the ordinary value and its context. TAC vendor 11, Device property 1330
-declares Unsigned with name `foreignDevice` for 2. Carrier vendor 16 declares
-Device property 4151 as an array of Unsigned, while OEMCtrl vendor 446 declares
-it as a scalar. Honeywell vendor 17 declares property 760 differently on
-Analog Input, Binary Input and Multi-state Input. These examples use catalogue
-metadata. The test octets are synthetic.
+The datatype is the `tag` name of the primitive value it decodes to:
+`null`, `boolean`, `unsigned`, `signed`, `real`, `double`, `octet_string`,
+`character_string`, `bit_string`, `enumerated`, `date`, `time` or
+`object_identifier`. The shape is `scalar`, `array` or `list`. A whole
+array or list is a list at every length, zero and one included. With
+`array_index`, a positive index gives one element and index zero the
+array's count as `unsigned`; `array_length` declares a fixed-length array.
+`value_names`, a mapping from integers to names, gives the result's
+`value_names`: a tuple aligned with the decoded elements, `None` where a
+number has no name, and empty for a count. The value keeps its numbers.
 
-`decode_property_as` accepts Null, Boolean, Unsigned, Integer (signed), Real,
-Double, OctetString, CharacterString, BitString, Enumerated, Date, Time and
-ObjectIdentifier. A whole array or list always gives a list, including zero or
-one item. A positive array index gives one element and index zero gives an
-Unsigned count. Supply `array_length` for fixed arrays. Optional integer names
-are a tuple aligned with the decoded elements, with `None` for missing names
-and an empty tuple for a count. Names leave numeric values intact.
+The result's `status` is one of:
 
-A result has `status="decoded"` and a value on success. A wrong tag or count
-gives `type_mismatch`; an unknown or context encoding gives
-`unsupported_encoding`; invalid framing or primitive payload gives
-`malformed`; exceeding the tag reader's depth or node budget gives
-`limit_exceeded`. All four keep `raw` and supply a diagnostic with no decoded
-value. Invalid declarations raise `ValueError`.
+- `decoded`: `value` holds the decoded value.
+- `type_mismatch`: the octets' tag or shape differs from the declaration,
+  context-tagged or constructed content under a primitive included.
+- `unsupported_encoding`: a valid encoding the value model can't hold, such
+  as a character set the binding doesn't convert or an integer wider than
+  it keeps (an Unsigned past 8 octets, a Signed or Enumerated past 4).
+- `malformed`: any other broken encoding, reserved application tags 13 to
+  15 included.
+- `limit_exceeded`: past the tag reader's depth or node bound.
+
+Every result keeps its input as `raw` and, unless decoded, a `diagnostic`.
+An invalid declaration raises `ValueError`.
+
+What `.octets` holds depends on the value. A `tagged` or `application_data`
+value and a typed constructed element hold the octets exactly as received;
+a vendor value the binding can't decode as a primitive (a Signed past 4
+octets, a UCS-4 string, any context-tagged content) reads as one of those.
+A primitive, or a list of primitives, is re-encoded from its decoded value
+in the shortest form: it decodes to the same value, but can differ from what
+the device sent (an Unsigned with leading zero octets, a string sent in
+UCS-2 or ISO 8859-1, which comes back as UTF-8).
 
 #### Typed constructed values
 

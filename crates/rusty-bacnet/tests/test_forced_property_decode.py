@@ -1,4 +1,8 @@
-"""Synthetic property octets for declarations in ace-bacnet-devices (591a219b)."""
+"""decode_property_as and read_context (#2618), on synthetic octets.
+
+The vendor cases are made up: "vendor A" and "vendor B" stand for two
+stations that give one proprietary property number different datatypes.
+"""
 
 import copy
 import pickle
@@ -11,100 +15,120 @@ from bvll_peer import RawPeer, bvll
 
 
 class ForcedPropertyDecodeTests(unittest.TestCase):
-    def decoded(self, wire, primitive, **kwargs):
+    def decoded(self, wire, datatype, *shape, **kwargs):
         raw = bytes.fromhex(wire)
-        result = rb.decode_property_as(raw, primitive, **kwargs)
+        result = rb.decode_property_as(raw, datatype, *shape, **kwargs)
         self.assertEqual((result.status, result.raw, result.diagnostic), ("decoded", raw, None))
         self.assertIsNone(result.value.read_context)
         return result
 
-    def refused(self, raw, primitive, status, **kwargs):
-        result = rb.decode_property_as(raw, primitive, **kwargs)
+    def refused(self, raw, datatype, status, *shape, **kwargs):
+        result = rb.decode_property_as(raw, datatype, *shape, **kwargs)
         self.assertEqual((result.status, result.raw, result.value, result.value_names),
                          (status, raw, None, None))
         self.assertTrue(result.diagnostic)
 
-    def test_catalogue_declarations_are_scoped_by_vendor_and_object_type(self):
-        # TAC 11, Device property 1330 is Unsigned with enumeration semantics.
-        names = UserDict({2: "foreignDevice"})
-        tac = self.decoded("220002", "Unsigned", value_names=names)
-        self.assertEqual((tac.value.tag, tac.value.value, tac.value_names),
-                         ("unsigned", 2, ("foreignDevice",)))
-        self.assertIsNone(tac.value.name)
-        self.refused(b"\x91\x02", "Unsigned", "type_mismatch", value_names=names)
-        self.assertEqual(self.decoded("2102", "Unsigned").value_names, None)
-        # Device property 4151 is Array<Unsigned> at Carrier (16) and scalar at OEMCtrl (446).
-        carrier = self.decoded("2102", "Unsigned", shape="array")
-        oem = self.decoded("2102", "Unsigned")
-        self.assertEqual((carrier.value.tag, carrier.value.value, oem.value.value), ("list", [2], 2))
-        # Honeywell (17), property 760 on AI, BI and MSI respectively.
-        for primitive, wire, value in [("Real", "4440200000", 2.5),
-                                       ("Enumerated", "9101", 1), ("Unsigned", "2102", 2)]:
-            self.assertEqual(self.decoded(wire, primitive).value.value, value)
+    def test_declarations_are_scoped_by_vendor_and_object_type(self):
+        # Vendor A declares Device property 1330 as unsigned with named values.
+        names = UserDict({2: "second"})
+        vendor_a = self.decoded("220002", "unsigned", value_names=names)
+        self.assertEqual((vendor_a.value.tag, vendor_a.value.value, vendor_a.value_names),
+                         ("unsigned", 2, ("second",)))
+        self.assertIsNone(vendor_a.value.name)
+        self.refused(b"\x91\x02", "unsigned", "type_mismatch", value_names=names)
+        self.assertEqual(self.decoded("2102", "unsigned").value_names, None)
+        # One property number: an array of unsigned at vendor A, a scalar at vendor B.
+        array = self.decoded("2102", "unsigned", "array")
+        scalar = self.decoded("2102", "unsigned")
+        self.assertEqual((array.value.tag, array.value.value, scalar.value.value), ("list", [2], 2))
+        # One vendor's property number with another datatype per object type.
+        for datatype, wire, value in [("real", "4440200000", 2.5),
+                                      ("enumerated", "9101", 1), ("unsigned", "2102", 2)]:
+            self.assertEqual(self.decoded(wire, datatype).value.value, value)
         with self.assertRaises(AttributeError):
-            tac.status = "malformed"
+            vendor_a.status = "malformed"
 
-    def test_primitive_tokens(self):
-        for primitive, wire, tag in [
-            ("Null", "00", "null"), ("Boolean", "11", "boolean"),
-            ("Unsigned", "2102", "unsigned"), ("Integer", "31ff", "signed"),
-            ("Real", "4400000000", "real"), ("Double", "55080000000000000000", "double"),
-            ("OctetString", "6102", "octet_string"), ("CharacterString", "720041", "character_string"),
-            ("BitString", "820780", "bit_string"), ("Enumerated", "9102", "enumerated"),
-            ("Date", "a47b010102", "date"), ("Time", "b400000000", "time"),
-            ("ObjectIdentifier", "c402000001", "object_identifier"),
+    def test_datatype_tokens_are_property_value_tags(self):
+        for wire, tag in [
+            ("00", "null"), ("11", "boolean"), ("2102", "unsigned"), ("31ff", "signed"),
+            ("4400000000", "real"), ("55080000000000000000", "double"), ("6102", "octet_string"),
+            ("720041", "character_string"), ("820780", "bit_string"), ("9102", "enumerated"),
+            ("a47b010102", "date"), ("b400000000", "time"), ("c402000001", "object_identifier"),
         ]:
-            with self.subTest(primitive=primitive):
-                self.assertEqual(self.decoded(wire, primitive).value.tag, tag)
-        signed = self.decoded("31ff", "Integer", value_names={-1: "minusOne"})
+            with self.subTest(tag=tag):
+                value = self.decoded(wire, tag).value
+                self.assertEqual((value.tag, value.octets), (tag, bytes.fromhex(wire)))
+        signed = self.decoded("31ff", "signed", value_names={-1: "minusOne"})
         self.assertEqual((signed.value.value, signed.value_names), (-1, ("minusOne",)))
 
     def test_index_count_fixed_and_variable_collections(self):
         for shape in ("list", "array"):
             for wire, expected in [("", []), ("2102", [2]), ("21022103", [2, 3])]:
-                result = self.decoded(wire, "Unsigned", shape=shape, value_names={2: "two"})
+                result = self.decoded(wire, "unsigned", shape=shape, value_names={2: "two"})
                 self.assertEqual((result.value.tag, result.value.value), ("list", expected))
                 self.assertEqual(result.value_names, tuple("two" if v == 2 else None for v in expected))
-        count = self.decoded("2508ffffffffffffffff", "Real", shape="array", array_index=0,
+        count = self.decoded("2508ffffffffffffffff", "real", shape="array", array_index=0,
                              value_names={})
         self.assertEqual((count.value.value, count.value_names), (2**64 - 1, ()))
-        self.assertEqual(self.decoded("229c40", "Real", shape="array", array_length=40000,
+        self.assertEqual(self.decoded("229c40", "real", shape="array", array_length=40000,
                                      array_index=0).value.value, 40000)
-        self.assertEqual(self.decoded("2102", "Unsigned", shape="array", array_length=40000,
+        self.assertEqual(self.decoded("2102", "unsigned", shape="array", array_length=40000,
                                      array_index=40000).value.value, 2)
-        self.assertEqual(self.decoded("", "Unsigned", shape="array", array_length=0).value.value, [])
+        self.assertEqual(self.decoded("", "unsigned", shape="array", array_length=0).value.value, [])
         for wire, options in [("2102", {"array_length": 2}), ("2102", {"array_length": 0, "array_index": 1}),
                               ("2102", {"array_length": 1, "array_index": 0}),
                               ("3102", {"array_index": 0}), ("21022103", {"array_index": 1})]:
-            self.refused(bytes.fromhex(wire), "Unsigned", "type_mismatch", shape="array", **options)
+            self.refused(bytes.fromhex(wire), "unsigned", "type_mismatch", shape="array", **options)
 
     def test_declaration_errors(self):
-        for primitive, options in [("Signed", {}), ("unsigned", {}), ("Unsigned", {"shape": "tuple"}),
-                                   ("Unsigned", {"array_index": 1}), ("Unsigned", {"shape": "list", "array_index": 0}),
-                                   ("Unsigned", {"array_length": 1}),
-                                   ("Unsigned", {"shape": "array", "array_length": 2**100}),
-                                   ("Unsigned", {"shape": "array", "array_length": -1}),
-                                   ("Unsigned", {"shape": "array", "array_index": -1})]:
+        for primitive, options in [("Signed", {}), ("Unsigned", {}), ("Integer", {}), ("integer", {}),
+                                   ("list", {}), ("application_data", {}), ("tagged", {}),
+                                   ("unsigned", {"shape": "tuple"}),
+                                   ("unsigned", {"array_index": 1}), ("unsigned", {"shape": "list", "array_index": 0}),
+                                   ("unsigned", {"array_length": 1}),
+                                   ("unsigned", {"shape": "array", "array_length": 2**100}),
+                                   ("unsigned", {"shape": "array", "array_length": -1}),
+                                   ("unsigned", {"shape": "array", "array_length": 65536}),
+                                   ("unsigned", {"shape": "array", "array_index": -1})]:
             with self.subTest(options=options), self.assertRaises(ValueError):
                 rb.decode_property_as(b"", primitive, **options)
+        with self.assertRaisesRegex(ValueError, "0 to 65535"):
+            rb.decode_property_as(b"", "unsigned", "array", array_length=65536)
+        self.assertEqual(self.decoded("2102", "unsigned", "array", array_length=65535,
+                                      array_index=65535).value.value, 2)
 
     def test_complete_framing_payload_and_limits(self):
-        for wire, primitive, status in [
-            ("", "Unsigned", "type_mismatch"), ("21029102", "Unsigned", "type_mismatch"),
-            ("0902", "Unsigned", "unsupported_encoding"), ("d0", "Unsigned", "unsupported_encoding"),
-            ("0e21020f", "Unsigned", "unsupported_encoding"),
-            ("95050100000000", "Enumerated", "unsupported_encoding"),
-            ("73010000", "CharacterString", "unsupported_encoding"),
-            ("7102", "CharacterString", "unsupported_encoding"),
-            ("7101", "CharacterString", "malformed"), ("720300", "CharacterString", "malformed"),
-            ("910222", "Unsigned", "malformed"), ("09020e", "Unsigned", "malformed"),
-            ("d04400", "Unsigned", "malformed"), ("4100", "Real", "malformed"),
+        for wire, datatype, status, *shape in [
+            # The octets' tag, class or count differs from the declaration.
+            ("", "unsigned", "type_mismatch"), ("21029102", "unsigned", "type_mismatch"),
+            ("0902", "unsigned", "type_mismatch"), ("0e21020f", "unsigned", "type_mismatch"),
+            ("0e21020f", "unsigned", "type_mismatch", "list"),
+            # A 5-octet Signed under another declaration is a mismatch first.
+            ("35050100000000", "unsigned", "type_mismatch"),
+            # Valid encodings the model can't hold (Clauses 20.2.4, 20.2.5,
+            # 20.2.9 and 20.2.11 set no upper integer length).
+            ("35050100000000", "signed", "unsupported_encoding"),
+            ("2509010000000000000000", "unsigned", "unsupported_encoding"),
+            ("95050100000000", "enumerated", "unsupported_encoding"),
+            ("73010000", "character_string", "unsupported_encoding"),
+            ("7102", "character_string", "unsupported_encoding"),
+            ("75050300000041", "character_string", "unsupported_encoding", "list"),
+            # Anything else that isn't well formed, reserved tags 13 to 15 included.
+            ("d0", "unsigned", "malformed"), ("e100", "unsigned", "malformed"),
+            # The long length form for a 1-octet length is broken framing.
+            ("350100000000", "signed", "malformed"), ("73030000", "character_string", "malformed"),
+            ("d0", "unsigned", "malformed", "array"), ("0902d0", "unsigned", "malformed"),
+            ("30", "signed", "malformed"), ("20", "unsigned", "malformed"),
+            ("7101", "character_string", "malformed"), ("720300", "character_string", "malformed"),
+            ("7106", "character_string", "malformed"),
+            ("910222", "unsigned", "malformed"), ("09020e", "unsigned", "malformed"),
+            ("d04400", "unsigned", "malformed"), ("4100", "real", "malformed"),
         ]:
-            with self.subTest(wire=wire, primitive=primitive):
-                self.refused(bytes.fromhex(wire), primitive, status)
-        self.refused(b"\x0e" * 33 + b"\x0f" * 33, "Null", "limit_exceeded")
-        self.refused(b"\x00" * 10001, "Null", "limit_exceeded", shape="array")
-        self.assertEqual(len(rb.decode_property_as(b"\x00" * 10000, "Null", shape="list").value.value), 10000)
+            with self.subTest(wire=wire, datatype=datatype):
+                self.refused(bytes.fromhex(wire), datatype, status, *shape)
+        self.refused(b"\x0e" * 33 + b"\x0f" * 33, "null", "limit_exceeded")
+        self.refused(b"\x00" * 10001, "null", "limit_exceeded", shape="array")
+        self.assertEqual(len(rb.decode_property_as(b"\x00" * 10000, "null", "list").value.value), 10000)
 
 
 class ReturnedPropertyContextTests(unittest.IsolatedAsyncioTestCase):
@@ -153,11 +177,31 @@ class ReturnedPropertyContextTests(unittest.IsolatedAsyncioTestCase):
         for value in [rp, rows[0]["value"]]:
             for rebuilt in [value, copy.copy(value), copy.deepcopy(value), pickle.loads(pickle.dumps(value))]:
                 ctx = rebuilt.read_context
-                self.assertEqual((ctx.object_id, ctx.property_id, ctx.array_index, ctx.raw),
-                                 (self.oid, 1330, 1, self.raw))
+                self.assertEqual((ctx.object_id, ctx.property_id, ctx.array_index),
+                                 (self.oid, 1330, 1))
+                self.assertFalse(hasattr(ctx, "raw"))
+                # A primitive's octets are its shortest encoding, not the
+                # leading-zero form received; both decode to the same value.
                 self.assertEqual((rebuilt, hash(rebuilt), repr(rebuilt), rebuilt.octets),
                                  (ordinary, hash(ordinary), repr(ordinary), b"\x21\x02"))
+                decoded = rb.decode_property_as(rebuilt.octets, "unsigned", "array",
+                                                array_index=ctx.array_index)
+                self.assertEqual((decoded.status, decoded.value.value), ("decoded", 2))
                 with self.assertRaises(AttributeError):
-                    ctx.raw = b""
+                    ctx.property_id = 1
             await self.client.write_property(self.peer.address, self.oid, self.prop, value, array_index=1)
             self.assertEqual(self.written, bytes.fromhex("0c020000071a053229013e21023f"))
+
+    async def test_values_the_model_cannot_hold_keep_the_octets_received(self):
+        # A 5-octet Signed and a UCS-4 string read as application_data, and
+        # context-tagged content reads as tagged: .octets are what was sent.
+        for raw, datatype, status in [("35050100000000", "signed", "unsupported_encoding"),
+                                      ("75050300000041", "character_string", "unsupported_encoding"),
+                                      ("0902", "unsigned", "type_mismatch")]:
+            with self.subTest(raw=raw):
+                self.raw = bytes.fromhex(raw)
+                value = await self.client.read_property(self.peer.address, self.oid, self.prop, 1)
+                self.assertIn(value.tag, ("application_data", "tagged"))
+                self.assertEqual((value.octets, value.read_context.object_id), (self.raw, self.oid))
+                result = rb.decode_property_as(value.octets, datatype, "array", array_index=1)
+                self.assertEqual((result.status, result.raw), (status, self.raw))
