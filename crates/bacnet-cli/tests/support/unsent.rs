@@ -8,7 +8,9 @@
 //! names the sender instead. The command is run with `--port` set to
 //! [`Unsent::source_port`], so everything it sends leaves from that port, and
 //! only a datagram from there counts as the command's. Datagrams from any
-//! other source are somebody else's and are counted, not failed on.
+//! other source are somebody else's and are set aside. No outcome here, in
+//! the helper or in its own tests, depends on how many datagrams in total
+//! reach the socket.
 //!
 //! The source port is a free one the helper picked and let go. A refused
 //! command never binds it (the refusal precedes any transport), so nothing
@@ -49,29 +51,47 @@ impl Unsent {
         self.source
     }
 
-    /// Wait until `count` datagrams have arrived and hold them for the check.
-    /// A command that has exited has already sent everything it will, so the
-    /// guard tests need no wait; a test that sends from its own sockets and
-    /// then reads at once can race the loopback, and uses this as its barrier.
-    pub fn wait_for(&self, count: usize) {
+    /// Wait until `count` datagrams from `sender`'s port have arrived,
+    /// holding every datagram read on the way for the check. A command that
+    /// has exited has already sent everything it will, so the guard tests
+    /// need no wait; a test that sends from its own sockets and then reads at
+    /// once can race the loopback, and uses this as its barrier. It waits for
+    /// a named sender, so a foreign datagram never satisfies it.
+    pub fn wait_for_from(&self, sender: u16, count: usize) {
         self.socket.set_nonblocking(false).unwrap();
         self.socket
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let mut buffer = [0u8; 1500];
-        for _ in 0..count {
-            let (length, from) = self.socket.recv_from(&mut buffer).expect("a datagram");
-            self.held
-                .borrow_mut()
-                .push((from, buffer[..length].to_vec()));
-        }
+        let mut arrived = self
+            .held
+            .borrow()
+            .iter()
+            .filter(|(from, _)| from.port() == sender)
+            .count();
+        let result = loop {
+            if arrived >= count {
+                break Ok(());
+            }
+            match self.socket.recv_from(&mut buffer) {
+                Ok((length, from)) => {
+                    arrived += usize::from(from.port() == sender);
+                    self.held
+                        .borrow_mut()
+                        .push((from, buffer[..length].to_vec()));
+                }
+                Err(error) => break Err(error),
+            }
+        };
+        // Restored before any failure, so the socket is never left blocking.
         self.socket.set_nonblocking(true).unwrap();
+        result.expect("the datagram from the named sender");
     }
 
     /// Nothing from the command has arrived. The command has exited, so
-    /// anything it sent over loopback is already queued here. Returns how many
-    /// datagrams from other sources were set aside.
-    pub fn assert_nothing_sent(&self, what: &str) -> usize {
+    /// anything it sent over loopback is already queued here. Datagrams from
+    /// other sources are set aside.
+    pub fn assert_nothing_sent(&self, what: &str) {
         let own = SocketAddr::from((Ipv4Addr::LOCALHOST, self.source));
         let mut seen: Vec<_> = self.held.take();
         let mut buffer = [0u8; 1500];
@@ -88,6 +108,5 @@ impl Unsent {
                 bytes.len()
             );
         }
-        seen.len()
     }
 }

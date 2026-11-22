@@ -27,18 +27,18 @@ fn from_the_command(peer: &Unsent) -> UdpSocket {
 #[test]
 fn an_unrelated_datagram_does_not_fail_the_check() {
     let peer = Unsent::new();
-    let _other = stray(&peer);
-    peer.wait_for(1);
-    assert_eq!(peer.assert_nothing_sent("stray"), 1);
-    // Drained: a second look finds the socket empty.
-    assert_eq!(peer.assert_nothing_sent("drained"), 0);
+    let other = stray(&peer);
+    peer.wait_for_from(other.local_addr().unwrap().port(), 1);
+    peer.assert_nothing_sent("stray");
+    // Set aside, not held: a second look passes too.
+    peer.assert_nothing_sent("again");
 }
 
 #[test]
 fn a_datagram_from_the_commands_port_fails_the_check() {
     let peer = Unsent::new();
     let _own = from_the_command(&peer);
-    peer.wait_for(1);
+    peer.wait_for_from(peer.source_port(), 1);
     let failed = catch_unwind(AssertUnwindSafe(|| peer.assert_nothing_sent("own")));
     assert!(failed.is_err(), "the command's datagram went unnoticed");
 }
@@ -46,9 +46,10 @@ fn a_datagram_from_the_commands_port_fails_the_check() {
 #[test]
 fn a_stray_ahead_of_the_commands_datagram_does_not_hide_it() {
     let peer = Unsent::new();
-    let _other = stray(&peer);
+    let other = stray(&peer);
     let _own = from_the_command(&peer);
-    peer.wait_for(2);
+    peer.wait_for_from(other.local_addr().unwrap().port(), 1);
+    peer.wait_for_from(peer.source_port(), 1);
     let failed = catch_unwind(AssertUnwindSafe(|| peer.assert_nothing_sent("both")));
     assert!(failed.is_err(), "a stray hid the command's datagram");
 }
