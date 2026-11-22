@@ -326,6 +326,45 @@ async fn bip6_stop_with_another_holder_alive_fails_later_sends_and_frees_the_por
     assert_eq!(other.local_mac(), [0; 3]);
 }
 
+/// An abort through a shared reference, with another holder alive
+/// (#2617): every later send fails with the stopped error at once, the
+/// socket closes as the runtime drops the aborted tasks, and a start is
+/// refused until a stop has joined them.
+#[tokio::test]
+async fn bip6_abort_with_another_holder_alive_fails_later_sends_and_lets_go_of_the_socket() {
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(1));
+    let mut rx = transport.start().await.unwrap();
+    let socket = std::sync::Arc::downgrade(&transport.socket.get().unwrap());
+    let transport = std::sync::Arc::new(transport);
+    let other = std::sync::Arc::clone(&transport);
+    other.abort();
+    for sent in [
+        transport.send_broadcast(&[0x01, 0x00]).await,
+        transport
+            .send_unicast(&[0x01, 0x00], &[0x00, 0x00, 0x02])
+            .await,
+    ] {
+        assert!(
+            matches!(&sent, Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected
+                && io.to_string().contains("transport stopped")),
+            "{sent:?}"
+        );
+    }
+    let ended = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await;
+    assert!(ended.expect("the receiver ends").is_none());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while socket.strong_count() > 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the socket closed");
+    drop(other);
+    let mut transport = std::sync::Arc::into_inner(transport).unwrap();
+    assert!(transport.start().await.is_err(), "a start waits for a stop");
+    transport.stop().await.unwrap();
+}
+
 /// A send waiting on a resolution when the transport stops fails at the
 /// stop, not seconds later; one after the stop fails at once and starts no
 /// resolution; and a restart begins with none left over (#2617).

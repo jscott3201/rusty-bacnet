@@ -346,7 +346,7 @@ async fn mstp_queue_and_admission_bounds_release() {
 
 async fn cancel_impl(mode: MstpExecutionMode, frames: Frames) {
     let h = Harness::new(mode, SessionRole::Both, frames).await;
-    let client = h.session.cloned_client_handle().expect("client role");
+    let client = h.session.client().expect("the session's client");
     let pending = tokio::spawn(async move {
         client
             .read_property(
@@ -394,7 +394,7 @@ async fn mstp_cancel_releases_lease_extended_dedicated() {
 
 async fn stop_outstanding_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = Harness::new(mode, SessionRole::Both, frames).await;
-    let client = h.session.cloned_client_handle().expect("client role");
+    let client = h.session.client().expect("the session's client");
     let pending = tokio::spawn(async move {
         client
             .read_property(

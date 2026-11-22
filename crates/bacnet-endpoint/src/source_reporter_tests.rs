@@ -160,7 +160,6 @@ async fn success(role: SessionRole) {
     assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
     session.start().await.unwrap();
     assert!(session.is_running());
-    assert!(session.client().is_some());
     assert_eq!(session.server().is_some(), role == SessionRole::Both);
     let db = session.database.as_ref().unwrap();
     let weak = Arc::downgrade(db);
@@ -262,7 +261,7 @@ async fn rejected(
             Lifecycle::Ready as u8
         );
         assert!(!session.is_running());
-        assert!(session.requester.is_none() && session.server.is_none());
+        assert!(session.client().is_err() && session.server.is_none());
         assert!(session.dispatch_task.is_none() && session.egress.is_none());
         assert_eq!(observed.starts.load(Ordering::SeqCst), 0);
         assert_eq!(observed.sends.load(Ordering::SeqCst), 0);

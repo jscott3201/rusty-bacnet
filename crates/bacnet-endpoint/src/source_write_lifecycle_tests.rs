@@ -1,54 +1,55 @@
 use super::*;
+/// 64 audited writes admitted while the database is held: each holds a
+/// slot and waits for the database, with no invoke ID and nothing sent,
+/// and a 65th waits for a slot. A stop then seals admission at once, waits
+/// for the database itself, and ends every one of them unsent.
 #[tokio::test(start_paused = true)]
 async fn source_write_whole_operation_capacity_bounds_prelease_waiters_and_stop() {
     let (peer, mut requests) = network().await;
     let (sink, _records) = network().await;
     let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
+    let client = client_of(&session);
+    let source = Arc::clone(session.source_audit.as_ref().unwrap());
     let database = Arc::clone(session.database.as_ref().unwrap());
     let guard = database.write().await;
     let mut tasks = Vec::new();
     for _ in 0..64 {
         tasks.push(start_write(
-            &session,
+            &client,
             peer.local_mac(),
             PropertyIdentifier::PRESENT_VALUE,
             None,
         ));
     }
     eventually(WAIT, "every source operation is in use", async || {
-        session
-            .source_audit
-            .as_ref()
-            .unwrap()
-            .available_operations()
-            == 0
+        source.available_operations() == 0
     })
     .await;
     assert_eq!(session.coordinator.active_count().unwrap(), 0);
-    assert!(
-        start_write(
-            &session,
-            peer.local_mac(),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
-        )
-        .await
-        .unwrap()
-        .is_err()
+    // One more waits for a slot, in its caller's task (#2617).
+    let waiter = start_write(
+        &client,
+        peer.local_mac(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
     );
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!waiter.is_finished());
+    tasks.push(waiter);
     // Seal while admitted caller futures wait on the DB: no task/lease/egress yet.
-    let token = session.shared.token.clone();
+    let coordinator = Arc::clone(&session.coordinator);
     let stop = session.stop();
     tokio::pin!(stop);
     assert!(timeout(Duration::from_millis(10), &mut stop).await.is_err());
-    assert!(!token.is_open());
+    assert!(source.sealed());
     drop(guard);
     stop.await.unwrap();
     for task in tasks {
         assert!(timeout(WAIT, task).await.unwrap().unwrap().is_err());
     }
     assert!(requests.try_recv().is_err());
+    assert_eq!(coordinator.active_count().unwrap(), 0);
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
@@ -59,10 +60,11 @@ async fn source_write_audit_capacity_deadline_health_and_later_recovery() {
     let (sink, mut records) = network().await;
     let mut session = session(write_database(true), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
+    let client = client_of(&session);
     let mut first_notification = None;
     for _ in 0..64 {
         let read = start_write(
-            &session,
+            &client,
             peer.local_mac(),
             PropertyIdentifier::PRESENT_VALUE,
             None,
@@ -79,7 +81,7 @@ async fn source_write_audit_capacity_deadline_health_and_later_recovery() {
     }
     assert_eq!(session.coordinator.active_count().unwrap(), 64);
     let read = start_write(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -130,7 +132,7 @@ async fn source_write_audit_capacity_deadline_health_and_later_recovery() {
     .unwrap();
     assert!(records.try_recv().is_err());
     let read = start_write(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -167,11 +169,11 @@ async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() 
         let mut session = session(write_database(true), SessionRole::Both, &sink);
         session.client_config.apdu_timeout_ms = 60_000;
         session.start().await.unwrap();
-        let client = session.cloned_client_handle().unwrap();
+        let client = client_of(&session);
         let weak_db = Arc::downgrade(session.database.as_ref().unwrap());
         let coordinator = Arc::clone(&session.coordinator);
         let pending = start_write(
-            &session,
+            &client,
             peer.local_mac(),
             PropertyIdentifier::PRESENT_VALUE,
             None,
@@ -188,18 +190,16 @@ async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() 
             client
                 .write_property(
                     peer.local_mac(),
-                    WritePropertyRequest {
-                        object_identifier: target(),
-                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                        property_array_index: None,
-                        property_value: vec![0],
-                        priority: None,
-                    },
-                    Commandability::Commandable,
+                    target(),
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    vec![0],
+                    None,
                 )
                 .await
                 .is_err()
         );
+        drop(client);
         eventually(
             WAIT,
             "invoke IDs are free and the database is dropped",
@@ -212,6 +212,8 @@ async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() 
     sink.stop().await.unwrap();
 }
 
+/// A write is recorded by the recipient and the Reporter's selection as
+/// they stood when it was admitted, whatever changes before its answer.
 #[tokio::test(start_paused = true)]
 async fn source_write_captures_recipient_and_policy_before_peer_completion() {
     let (peer, mut requests) = network().await;
@@ -219,11 +221,14 @@ async fn source_write_captures_recipient_and_policy_before_peer_completion() {
     let (new, mut new_records) = network().await;
     let mut session = session(write_database(false), SessionRole::ClientOnly, &old);
     session.start().await.unwrap();
-    let pending = start_write(
-        &session,
+    let client = client_of(&session);
+    let pending = write_value(
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
+        vec![0],
+        Some(8),
     );
     let envelope = receive(&mut requests).await;
     let (invoke, wp) = write_request(&envelope);
@@ -262,9 +267,9 @@ async fn source_write_captures_recipient_and_policy_before_peer_completion() {
     let (record, _) = notification(&receive(&mut old_records).await, false);
     assert_eq!(record.operation, AuditOperation::WRITE);
     assert_eq!(record.invoke_id, Some(invoke));
-    assert_eq!(record.target_priority, Some(16));
+    assert_eq!(record.target_priority, Some(8));
     let pending = start_write(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,

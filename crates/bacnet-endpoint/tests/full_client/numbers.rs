@@ -96,7 +96,7 @@ async fn assert_one_answer(lab: &Lab) {
 async fn a_client_started_before_the_number_is_known_asks_once_and_takes_the_owners_number() {
     for _ in 0..20 {
         let lab = lab_with(SessionRole::Both, true).await;
-        let client = lab.session.full_client().unwrap();
+        let client = lab.session.client().unwrap();
         assert_eq!(client.network_number(), None);
         // Nothing asks before the first need. The first Who-Is asks once,
         // and the session's owner asks nothing of its own.
@@ -152,7 +152,7 @@ async fn a_client_started_after_the_number_is_known_asks_nothing() {
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert_one_answer(&lab).await;
 
-        let client = lab.session.full_client().unwrap();
+        let client = lab.session.client().unwrap();
         assert_eq!(client.network_number(), Some(NETWORK));
         client.who_is(Broadcast::Global, None).await.unwrap();
         // A relayed device from this network is local from its first I-Am.
@@ -171,7 +171,7 @@ async fn a_client_started_after_the_number_is_known_asks_nothing() {
 #[tokio::test(start_paused = true)]
 async fn on_a_link_with_no_number_controls_nothing_is_asked_or_answered() {
     let lab = lab_with(SessionRole::Both, false).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     client.who_is(Broadcast::Global, None).await.unwrap();
     ask_the_number(&lab);
     announce_the_number(&lab);

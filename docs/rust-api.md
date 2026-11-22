@@ -978,6 +978,20 @@ a stop, as before; MS/TP, BACnet/SC, the loopback and a router's application
 port do not. A custom transport keeps what its stop takes behind a lock that
 only start and stop use, and fails every later send.
 
+`TransportPort::abort` takes `&self` too, and so does the new
+`NetworkLayer::abort` (#2617): the owner of a link ends it from a `Drop`
+while others still hold it, as a dropped `EndpointSession` does under a
+live `client()`. An abort never waits and needs no runtime: the background
+tasks are aborted, not joined, so their sockets close as the runtime drops
+them; the transport lets go of what it holds itself; every later send fails
+with the same `NotConnected` error as after a stop; and nothing graceful
+goes out (no BACnet/SC Disconnect-Request). The aborted tasks stay with
+the transport: a stop after an abort joins them, and until that stop a
+start is refused; after it, B/IP, B/IPv6 and Ethernet start again as after
+any stop, and MS/TP, BACnet/SC and the loopback do not. Dropping a
+`NetworkLayer` aborts it. A custom transport's abort does what its stop
+does at once, through the same locks, and leaves its tasks for the stop.
+
 ### Throttled peer warnings
 
 A warning that a peer can set off once per frame or connection (a frame that
@@ -9817,8 +9831,7 @@ typed call or `confirmed_request` to a remote `Station` or address, a
 station from `resolve_device`, the routed COV subscriptions) refuses
 any of them with `Error::Encoding` before the path is reserved or a
 transaction registered. Both configuration methods use the same DNET check,
-`add_routed_device` refuses such a peer, and the endpoint requester refuses
-such a routed destination. Unconfirmed sends keep remote and global broadcasts,
+and `add_routed_device` refuses such a peer. Unconfirmed sends keep remote and global broadcasts,
 for example `broadcast_network_unconfirmed`.
 
 A routed destination whose DNET is the client's own network number, once the
@@ -13817,7 +13830,7 @@ together, and a request queue full of I-Ams about 50 KB.
 
 Older and slower peers: a dropped request or answer costs its requester one
 APDU timeout, and a requester with a long timeout or no retries pays it in
-full. The endpoint's own client roles default to `apdu_timeout_ms: 6000` and
+full. The endpoint's client defaults to `apdu_timeout_ms: 6000` and
 `apdu_retries: 3` (#2617), so a dropped answer costs that call a timeout
 before its retry. Where bursts are expected, raise `queue_capacity`, and
 `apdu_retries` on the requesting side.
@@ -13825,13 +13838,16 @@ Standalone `BACnetClient` and `BACnetServer` don't use this classifier.
 
 ### Full client on an endpoint
 
-`EndpointSession::full_client()` returns a full `BACnetClient` on the
-session's one transport, beside its server role and its narrow client role
-(#2617). It has every call a client with its own transport has: discovery in
-every scope, segmented reads, files, COV, router discovery, and the link's own
-calls and frame tap through `transport()`. It shares the session's pool of
-invoke IDs, and `bacnet_ops::Client::over` takes it as it is.
-`full_client_with(options)` sets the client's startup options.
+`EndpointSession::client()` returns a full `BACnetClient` on the session's
+one transport, beside its server role (#2617). It is the session's only
+client: the narrow client role of 0.15.0 is
+[gone](#the-narrow-client-role-is-gone). It has every call a client with its
+own transport has: discovery in every scope, segmented reads, files, COV,
+router discovery, and the link's own calls and frame tap through
+`transport()`. It shares the session's pool of invoke IDs, and
+`bacnet_ops::Client::over` takes it as it is. `client_with(options)` sets the
+client's startup options. A running session of any role gives one, and a
+session not running refuses.
 
 ```rust
 use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
@@ -13839,13 +13855,15 @@ use bacnet_endpoint::{EndpointSession, SessionConfig, SessionRole};
 let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?
     .device(identity);
 session.start().await?;
-let client = session.full_client()?;
+let client = session.client()?;
 client.who_is(Broadcast::Global, None).await?;
 session.stop().await?; // the client may still be alive
 assert!(client.who_is(Broadcast::Global, None).await.is_err());
 ```
 
-- One full client at a time; another is refused until the first is dropped.
+- One client at a time; another is refused until the first is dropped. It
+  is owned, not borrowed from the session: share it by reference or in an
+  `Arc`.
 - With a source Audit Reporter, the client's reads and writes are audited
   ([below](#source-audit-of-the-full-client)).
 - Beside a server role the client answers only the COV notifications of its
@@ -13864,7 +13882,10 @@ assert!(client.who_is(Broadcast::Global, None).await.is_err());
   open requests and stops the link. From then on the client sends nothing:
   requests and unconfirmed sends fail at once, and a call made directly on
   `client.transport()`, such as a BVLC query, fails with the transport's
-  stopped error. Dropping the client afterwards changes nothing.
+  stopped error. Dropping the client afterwards changes nothing. Dropping
+  the session without a stop ends the client the same way and aborts the
+  link, though the client still holds it: nothing graceful is sent, and the
+  link's sockets close as the runtime drops its aborted tasks.
 - The full client's type is the session's: `BACnetClient<T>` for an
   `EndpointSession<T>`. An owner that keeps its clients over one enum of
   links builds the session over that enum with
@@ -13897,9 +13918,9 @@ Table 19-5 maps to READ and WRITE go through that Reporter (#2617):
 ReadProperty, ReadPropertyMultiple, ReadRange, AtomicReadFile, AuditLogQuery,
 WriteProperty, WritePropertyMultiple, AtomicWriteFile, AddListElement and
 RemoveListElement, whichever call sends them: typed, raw, routed or through
-`bacnet_ops`. Each is admitted as the narrow requester's operations are (the
-Reporter's Audit_Level, Auditable_Operations and Audit_Priority_Filter, the
-Device's recipient, one station direct or behind a router) and then belongs
+`bacnet_ops`. Each is admitted by the Reporter's Audit_Level,
+Auditable_Operations and Audit_Priority_Filter and the Device's recipient,
+for one station direct or behind a router, and then belongs
 to the session: a caller that goes away loses neither the request nor its
 records, since the client retries with the same invoke ID and the records
 carry the real answer. At most 64 are held at once; past them a request
@@ -13920,8 +13941,10 @@ in the caller's task.
   Audit_Priority_Filter applies and the record names the priority. One sent
   without a priority is not filtered by priority and names none. There is no
   commandability argument.
-- Records carry the narrow requester's fields for the same operations, but
-  for these differences:
+- A write's record carries its value when that is at most 32 octets, and
+  no value past that.
+- Against the narrow requester of 0.15.0, which recorded the same fields for
+  the same operations, records differ in these ways:
   - a write without a priority names none and isn't filtered by priority,
     where the narrow requester's commandable write named 16 and was filtered
     at 16;
@@ -13939,7 +13962,9 @@ in the caller's task.
     answer reports, and so is an answer that decodes but doesn't follow the
     request reference by reference (the narrow requester failed it).
 - A raw request of an audited service that doesn't decode is refused before
-  it is sent: what it names can't be reported. Not audited yet on an audited
+  it is sent: what it names can't be reported. A write whose value isn't
+  whole application data is one; an unaudited write sends its value as
+  given, as a standalone client does. Not audited yet on an audited
   session: WriteGroup, subscriptions, object and device management, alarm
   acknowledgment and life safety.
 - What is recorded when something else ends the operation: one cut off by
@@ -13965,7 +13990,7 @@ in the caller's task.
 ### Full server on an endpoint
 
 A session with a server role (`ServerOnly`, `Both`) builds a full
-`BACnetServer` at start on its one transport, beside its client roles
+`BACnetServer` at start on its one transport, beside its client
 (#2617). `EndpointSession::with_server(builder)`, before `start()`, gives it
 the builder; without one it builds the read-only server of
 `bacnet_endpoint::session::read_only_server()` (below). It is the server a
@@ -13989,7 +14014,7 @@ let mut session = EndpointSession::new(transport, SessionRole::Both, SessionConf
 session.start().await?;
 let server = session.server().expect("built at start");
 server.set_present_value_local(&point, value).await?;
-let client = session.full_client()?;
+let client = session.client()?;
 // ... the node answers Who-Is, reads, COV and the rest, and asks others ...
 drop(client);
 session.stop().await?; // stops the server, then the link
@@ -14096,8 +14121,8 @@ session.stop().await?; // stops the server, then the link
 - DeviceCommunicationControl binds the whole node (Clause 16.1). While the
   server holds a DISABLE_INITIATION it accepted, nothing on the node
   initiates but I-Am answers to Who-Is and audit notifications, and nothing
-  is sent: the full client's requests and unconfirmed sends, the narrow
-  client's requests and the session's `broadcast_i_am()` fail with
+  is sent: the client's requests and unconfirmed sends and the session's
+  `broadcast_i_am()` fail with
   `Error::InitiationDisabled { sent: false }`, and the server's own
   `broadcast_i_am()` with a SERVICES / COMMUNICATION_DISABLED
   `Error::Remote`, as on a standalone server. A client request already
@@ -14209,108 +14234,66 @@ server answers subscriptions (its builder's `cov_policy` bounds them), and
 its calls of those names make the application's own changes. A client-only
 session has no server database to change.
 
-### Direct endpoint WriteProperty and source WRITE reporting
+### The narrow client role is gone
 
-`ClientRoleHandle::write_property` accepts a direct B/IP IPv4 unicast MAC, a
-`bacnet_services::write_property::WritePropertyRequest` (object, property, optional
-index, complete encoded property value, optional wire priority), and the required
-`bacnet_endpoint::roles::Commandability::{Commandable, Noncommandable}`.
-This assertion is required with or without a source Reporter; neither object type,
-property identifier, local object state nor the supplied priority establishes it.
-The method refuses other endpoint transports and invalid/group destinations before
-traffic. There is no routed WP method in this subset.
+Through 0.15.0 `EndpointSession::client()` borrowed a narrow requester,
+`ClientRoleHandle`: unsegmented ReadProperty, ReadPropertyMultiple of 1 to 64
+concrete references, ReadRange and a WriteProperty to a direct B/IP peer.
+`client()` now returns the full client
+([above](#full-client-on-an-endpoint)), and the narrow requester is removed
+(#2617):
 
-The shared requester validates zero or more complete TLVs, priority 1–16 when
-supplied, and the complete unsegmented APDU size before reserving an Invoke ID.
-Empty lists and encoded NULL are distinct valid representations. The wire priority
-and bytes remain unchanged. A matching SimpleACK returns `Ok(())`; Error, Reject,
-Abort and timeout retain the established error mapping. A wrong-service Error or ACK, or a wrong
-ACK shape, cannot complete the write. Error correlation also protects notification
-leases in the shared coordinator.
+| Removed (0.15.0) | Use instead |
+|---|---|
+| `client()` returning `Option<&ClientRoleHandle>`, `cloned_client_handle()`, the `bacnet_endpoint::roles` module | `client()`, which returns `Result<BACnetClient<T>, Error>`: one owned client at a time, refused before start and after stop on any role. Keep it and share it by reference or in an `Arc`; don't ask for one per call |
+| `full_client()`, `full_client_with(options)` (never released) | `client()`, `client_with(options)` |
+| `read_property`, `read_property_multiple`, `read_range`, `read_range_with`, `read_log_page` taking a MAC | the client's calls of the same names, whose destination is any `ToStation`: a MAC slice or array, a `MacAddr`, a `BACnetAddress` or a `Station` |
+| the `_with_destination` forms with `EndpointApduDestination::Routed { router_mac, destination_network, destination_mac }` | the same call with `Station::routed(&router_mac, network, &mac)`, or `Station::remote(network, &mac)` to use the router the station's row in the discovery table names |
+| `EndpointApduDestination::RoutedViaLocalBroadcast`, the `data_attributes` argument | not on the session's client yet: a confirmed routed request by one local broadcast, and data attributes on its sends, are added before the next release (#2723). Until then the client sends a confirmed request through the router the call or the discovery table names, and sets no data attributes |
+| the `bacnet_endpoint::EndpointApduDestination` re-export | `bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination`, where the type lives |
+| `write_property(mac, WritePropertyRequest, Commandability)`, `roles::Commandability` | `write_property(to, object, property, index, value, priority)`, on every link and through routers. A write sent with a priority is audited as a command at that priority; one without names none |
+| `LeaseHolder::EndpointRequester`, `OutboundTransactionCoordinator::mark_endpoint_requester`, `EndpointEgress::admit_owned_apdu` (hidden) | `LeaseHolder::Client` |
+| `SegmentationError::EndpointAckTooLong` and `EndpointRequestTooLong` | nothing: the client segments a long request and reassembles a segmented answer |
 
-The same session source Audit owner captures live Reporter policy, recipient,
-source Device, timestamp, identity and Invoke ID once. Commandable omitted priority
-is effective 16 for filtering and reporting, including NULL. Noncommandable writes
-ignore priority for Audit, even when it was supplied on the wire. The source
-Reporter controls level/operation/priority filtering; remote policy is not consulted.
-Eligible attempted writes generate at most one WRITE record across retries, with
-complete 0–32-byte `Target_Value` and no value field for larger payloads. The source
-never invents remote `Current_Value`, target timestamp, or execution evidence.
+What a caller sees differently:
 
-Before source admission, cancellation releases caller-owned work. Eligible admitted
-writes retain terminal observation after caller cancellation. Nonreported writes
-remain caller-owned: cancellation retracts queued requester sends and drops any
-in-progress transport future. A transport attempt may already have reached the
-peer, so cancellation never proves the write was not executed. Ordinary detached
-egress sends retain their existing semantics. The existing 64-operation budget, notification budget,
-recipient generation fences, three-second delivery deadline and stop/drop behavior
-are shared with reads. Notification failure cannot replace the caller's write result.
-Source WP is a bounded extension under #345/#852; WPM, routed writes, standalone
-source ownership and other transports remain outside this profile.
+- The client's own wait running out is
+  `Error::Remote(RemoteError::Abort { reason: AbortReason::TSM_TIMEOUT })`,
+  where the narrow requester returned `Error::Timeout`. Its source Audit
+  record is still COMMUNICATION / TIMEOUT.
+- A long request is segmented and a segmented answer reassembled, where the
+  narrow requester refused the first and failed the second. The 1 to 64
+  reference bound on ReadPropertyMultiple, and the refusal of ALL, REQUIRED,
+  OPTIONAL and wildcard objects, are gone.
+- A ReadPropertyMultiple answer that decodes but doesn't follow the request
+  reference by reference is returned as it is; compare it with the request
+  where that matters.
+- The 65th audited request at once waits for a slot, where the narrow
+  requester refused it.
+- An unaudited `write_property` sends its value as given, as a standalone
+  client does, where the narrow requester refused a value that isn't whole
+  application data. A source-audited write still refuses such a value before
+  it is sent, since its record could not report what it names.
+- Not yet as the narrow requester had it, each with its own issue: a
+  Complex-ACK naming WriteProperty ends a write as success, where the narrow
+  requester ignored it (#2721); a request waiting for its turn at a
+  destination (`min_request_interval_ms`) isn't ended by the session's stop,
+  but when its turn comes and its send fails (#2720); and a routed request
+  whose router is the link's broadcast or a group address is sent, where the
+  narrow requester refused it before sending (#2722).
 
 ### Bounded endpoint source READ reporting
 
-Standalone direct/routed and endpoint ReadProperty share ACK object/property/index
-validation (Clause 15.5). Device/Network Port instance 4194303 requests accept only
-same-type concrete peer-reported identifiers; other mismatches return decoding
-errors. This client contract does not implement the bundled server's Network
-Port ingress-port alias mapping (#785).
+The session's source Audit reports its client's requests
+([Source Audit of the full client](#source-audit-of-the-full-client)). This
+section covers the recipient, the bindings and what a record holds.
 
-Endpoint ReadPropertyMultiple accepts 1–64 explicit property occurrences across
-nonempty object specifications, with concrete object identifiers. ALL, REQUIRED,
-OPTIONAL and wildcard object instances are excluded from this endpoint profile;
-standalone RPM retains its broader profile. Array index zero is valid. Shared
-RPM request encoding is fallible and validates both lists before appending bytes.
-
-RPM ACK correlation checks all object/property counts, order and identifiers
-before returning success or projecting any record. A successful value must echo
-the requested index. An inline error may omit a requested index or repeat it,
-but cannot substitute another index; an unindexed request requires no index.
-The Audit attempt retains the requested index. Indistinguishable duplicate
-omitted-index errors cannot reveal a peer's ordering violation. Request and raw
-ACK bytes must fit the configured unsegmented max APDU. The server's separate
-known-scalar error-index response issue remains tracked in #789.
-
-One RPM operation retains one requester lease, source-operation slot, timestamp,
-invoke ID, owned worker and recipient/configuration snapshot across retries and
-caller cancellation. Each eligible occurrence produces a separate value-free
-READ record, including duplicates. AUDIT_CONFIG excludes Present_Value per
-occurrence; returned values remain caller-only. Inline errors retain their
-class/code. Whole Error/Abort/Reject, timeout, malformed, mismatched or segmented
-outcomes are locally represented by the final operation failure on every eligible
-attempted reference; they do not imply remote per-property execution. Notification
-admission is independent and bounded through the existing delivery and resource
-failure-summary owners; no batch reserves 64 notification permits across request I/O.
-Known synchronous egress QueueFull also counts as local resource loss; Closed or
-shutdown and already-attempted transport/ACK failures do not. A full-queue summary
-returns its count to the same bounded generation-fenced coalescer and waits for
-capacity. It never counts itself or retries an ordinary record; stop owns that wait.
-
-After a complete validated RPM ACK, one distinct concrete Device object with at
-least one successful property establishes Target_Device for all records in that
-operation. Error-only Device results establish none; conflicting successful
-Device IDs retain Address attribution without rejecting the otherwise valid ACK.
-This is operation-local knowledge, with no discovery cache.
-
-The initiating role supports `read_property`, `read_range`, `read_property_multiple`,
-`read_log_page` and direct B/IP `write_property`, plus explicit
-endpoint destinations: `read_property_with_destination`,
-`read_property_multiple_with_destination`, `read_range_with_destination` and
-`read_log_page_with_destination` take an `EndpointApduDestination`, such as
-`Routed { destination_network, destination_mac, router_mac }` for a station
-behind a router, or `RoutedViaLocalBroadcast { destination_network,
-destination_mac }` to reach it by one local broadcast when its router isn't
-known (#2612). A `Routed` destination whose `router_mac` is a broadcast or
-group address on the link is refused before a transaction is registered. ReadRange returns a correlated `ReadRangeAck` with raw
-item bytes; empty and multiple-item ACKs each produce one value-free source READ
-record. `read_range_with` and `read_range_with_destination` take a
-`ReadRangeRequest` and a `ReadRangeValidation`: a lenient read keeps
-a page that breaks a rule and is audited as a success. Request encoding validates before output/transaction admission: ALL,
-REQUIRED, OPTIONAL, array index zero, zero/non-INTEGER16 counts, and nonconcrete
-ByTime components are rejected. Zero position/sequence references are valid and
-may match no items. Rust and Python support all-items, position, sequence and ByTime.
-Endpoint requests/responses are unsegmented; a received segmented response is a
-failed attempted read and is reported using the caller's terminal result.
+A client's ReadProperty, direct or routed, on a session or standalone, checks
+the ACK's object, property and index against the request (Clause 15.5).
+Device/Network Port instance 4194303 requests accept only same-type concrete
+peer-reported identifiers; other mismatches return decoding errors. This
+client contract does not implement the bundled server's Network Port
+ingress-port alias mapping (#785).
 
 On direct B/IP IPv4, provision the typed recipient on the built-in Device and
 select `EndpointSession::with_source_audit_reporter`. Device recipient choices
@@ -14324,10 +14307,14 @@ CONFIGURATION_ERROR and resolves once the number names it (#1461); see
 [Device Audit recipient](device-audit-recipient.md). The local database must have a
 concrete built-in local Device (the lowest when it holds several; see
 [Databases with several Devices](#databases-with-several-devices)) and the
-selected Audit Reporter. Configure the Reporter's READ bit
-and audit level before startup; both `ClientOnly` and `Both` sessions support
-confirmed and unconfirmed notifications. `Both` additionally requires an explicit
-Device write authorizer. Startup itself emits nothing.
+selected Audit Reporter. Configure the Reporter's Auditable_Operations and
+audit level before startup; both `ClientOnly` and `Both` sessions support
+confirmed and unconfirmed notifications. On `Both`, the session's server
+decides by its policy whether a peer may change the Reporter or the Device's
+recipient: the read-only server a session runs without a builder refuses
+every write, and a `with_server` builder's policy decides. No separate
+authorizer is needed. A `ServerOnly` session refuses a source Reporter.
+Startup itself emits nothing.
 
 Other links work the same way (#2357): B/IPv6, BACnet/SC, MS/TP and any other
 transport take Device bindings to a MAC on their own link, in its format, with
@@ -14365,8 +14352,8 @@ toward AUDITING_FAILURE and sets COMMUNICATION_FAILURE as a direct one does.
 Once the session's number is the binding's network, the binding is a direct
 one by the link's rule, and a record queued or in flight then goes, and is
 answered, as a direct one. An audited client operation routed to a station
-on another network (DNET 1 to 65534, a DADR of 1 to 18 octets, which the
-requester already requires) is audited too, and its record names the station
+on another network (DNET 1 to 65534, a DADR of 1 to 18 octets) is audited
+too, and its record names the station
 by that network and MAC.
 
 ```rust
@@ -14395,7 +14382,7 @@ let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROA
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47808),
     ).build_session()?.with_source_audit_reporter(source);
 session.start().await?;
-// Use session.client().unwrap().read_property(...) or read_range(...) for a direct IPv4 target.
+// let client = session.client()?; then client.read_property(...), read_range(...) and the rest.
 // Trusted runtime writes use the same Device owner; None relinquishes unchanged.
 session.write_audit_recipient(None).await?;
 session.stop().await?;
@@ -14412,8 +14399,9 @@ changing READ results or consuming an audit sequence. Source policy and the
 Device recipient route are sampled before each admitted READ; a later change
 does not rewrite an in-flight request's record or destination. The local
 `AUDIT_CONFIG` classification excludes `Present_Value` and includes other
-properties. Priority filters do not filter READ. Requests selected for source
-reporting reject routed, broadcast, or non-IPv4 destinations before traffic.
+properties. Priority filters do not filter READ. A request selected for source
+reporting goes to one station, direct or behind a router; a broadcast or group
+destination is refused before traffic.
 
 A record contains the local source Device, one request-time timestamp, the actual
 ReadProperty, ReadRange or ReadPropertyMultiple invoke ID shared across retries, and the requested
@@ -14469,7 +14457,7 @@ rejection, closed admission, transport/ACK failures and summary failures do not
 contribute. Failed summaries never recursively produce another summary.
 
 One owned worker waits passively for actual semaphore or shared coordinator
-capacity; requester-only releases also wake it. Further losses coalesce into
+capacity; a client request's release also wakes it. Further losses coalesce into
 sequential batches, without queuing or replaying ordinary records. Each batch
 belongs to one immutable Reporter instance, configuration generation, delivery
 mode and destination. Changes discard incompatible pending counts, including

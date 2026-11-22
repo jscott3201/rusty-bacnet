@@ -40,7 +40,7 @@ fn requests(log: &SendLog, service: ConfirmedServiceChoice) -> Vec<u8> {
 #[tokio::test(start_paused = true)]
 async fn a_client_request_and_a_server_notification_share_one_invoke_id_pool() {
     let lab = lab(SessionRole::Both).await;
-    let client = Arc::new(lab.session.full_client().unwrap());
+    let client = Arc::new(lab.session.client().unwrap());
     let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
     // Another device subscribes to the node's AI-1 with confirmed
     // notifications, which the node's server role sends and that device
@@ -124,69 +124,13 @@ async fn a_client_request_and_a_server_notification_share_one_invoke_id_pool() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_narrow_requester_and_the_full_client_work_at_once() {
-    let lab = lab(SessionRole::Both).await;
-    let client = Arc::new(lab.session.full_client().unwrap());
-    let narrow = lab.session.cloned_client_handle().unwrap();
-    let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
-    let coordinator = lab.session.coordinator();
-
-    for round in 0..20usize {
-        lab.wire.hold(&node);
-        let (reader, to) = (Arc::clone(&client), peer.clone());
-        let full = tokio::spawn(async move {
-            reader
-                .read_property(&to, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
-                .await
-        });
-        let (reader, to) = (narrow.clone(), peer.clone());
-        let small = tokio::spawn(async move {
-            reader
-                .read_property(&to, ai1(), PropertyIdentifier::OBJECT_NAME, None)
-                .await
-        });
-        eventually(WAIT, "both answers on their way", async || {
-            lab.wire.held(&node) == 2
-        })
-        .await;
-        // Two leases on the one coordinator, told apart by who holds them.
-        let ids = requests(&lab.node_sent, ConfirmedServiceChoice::READ_PROPERTY);
-        let ids = &ids[2 * round..];
-        assert_eq!(ids.len(), 2);
-        let mut holders: Vec<_> = ids
-            .iter()
-            .map(|id| coordinator.holder_of(&CanonicalPeer::direct(&peer), *id))
-            .collect();
-        holders.sort_by_key(|holder| *holder == Some(LeaseHolder::Client));
-        assert_eq!(
-            holders,
-            [
-                Some(LeaseHolder::EndpointRequester),
-                Some(LeaseHolder::Client)
-            ]
-        );
-
-        lab.wire.release(&node);
-        let value = full.await.unwrap().unwrap();
-        let name = small.await.unwrap().unwrap();
-        assert_eq!(value.property_identifier, PropertyIdentifier::PRESENT_VALUE);
-        assert_eq!(name.property_identifier, PropertyIdentifier::OBJECT_NAME);
-    }
-    assert_eq!(lab.session.active_leases(), 0);
-    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
-
-    drop(client);
-    stop(lab).await;
-}
-
-#[tokio::test(start_paused = true)]
 async fn a_peer_request_with_the_clients_outstanding_invoke_id_reaches_the_server() {
     // The client's lease is a (peer, invoke ID) pair in one direction; a
     // Confirmed-Request from that peer under the same number is the peer's
     // own transaction, so the server answers it and the client's lease is
     // left alone for the answer that is still to come.
     let lab = lab(SessionRole::Both).await;
-    let client = Arc::new(lab.session.full_client().unwrap());
+    let client = Arc::new(lab.session.client().unwrap());
     let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
     let coordinator = lab.session.coordinator();
 
@@ -253,7 +197,7 @@ async fn a_peer_request_with_the_clients_outstanding_invoke_id_reaches_the_serve
 #[tokio::test(start_paused = true)]
 async fn a_confirmed_cov_notification_reaches_the_full_clients_subscription() {
     let lab = lab(SessionRole::Both).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let peer = Wire::mac(PEER);
     let mut notifications = client.cov_notifications();
 
@@ -336,7 +280,7 @@ async fn a_confirmed_cov_multiple_notification_reaches_the_full_client() {
     // ConfirmedCOVNotificationMultiple as it does a ConfirmedCOVNotification
     // (#2654): the client acknowledges it, and the server role sees none.
     let lab = lab(SessionRole::Both).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let peer = Wire::mac(PEER);
     let mut notifications = client.cov_notifications();
 
@@ -470,7 +414,7 @@ async fn beside_a_server_role_the_node_answers_as_it_does_with_no_full_client() 
     // With one, the octets are the same: the client adds no reject and no
     // acknowledgment of its own.
     let lab = lab(SessionRole::Both).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let mut events = client.event_notifications();
     assert_eq!(ask_the_node(&lab).await, expected);
     // The client still heard the event notification the server role had to
@@ -489,7 +433,7 @@ async fn with_no_server_role_the_full_client_answers_as_a_standalone_client_does
     // With no full client a client-only session answers nothing.
     assert_eq!(ask_the_node(&lab).await, []);
 
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let mut events = client.event_notifications();
     let answers = ask_the_node(&lab).await;
     let [

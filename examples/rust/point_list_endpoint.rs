@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Each endpoint reads the other's point by name, through the socket it
     // also serves on.
     for (reader, peer, object) in [(&ahu, &plant, temp), (&plant, &ahu, pump)] {
-        let client = reader.client().ok_or("a client role")?;
+        let client = reader.client()?;
         let ack = client
             .read_property(
                 &mac_of(peer)?,

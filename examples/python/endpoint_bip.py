@@ -80,7 +80,7 @@ async def main() -> None:
 
             print(await first.status())
 
-    print("Done (both endpoints closed; role handles now fail closed).")
+    print("Done (both endpoints closed; the client and server handles now fail closed).")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
-//! A full `BACnetClient` on the session's link (#2617).
+//! The session's client: a `BACnetClient` on the session's link (#2617).
 use super::*;
 use bacnet_client::client::{BACnetClient, ClientOptions};
 use bacnet_endpoint_core::seat::{CLIENT_SEAT_QUEUE, ClientSeat, ClientSeatCounters, SeatRoles};
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
-    /// A seat for a full client on this session's link: its network layer
+    /// A seat for a client on this session's link: its network layer
     /// and invoke-ID coordinator, shared, and queues for what is the
     /// client's to receive.
     fn client_seat(&self) -> Result<ClientSeat<T>, Error> {
@@ -22,9 +22,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             )
     }
 
-    /// A full [`BACnetClient`] on this session's link, beside its server
-    /// role and its narrow [`client`](Self::client) role: one transport, one
-    /// address, one pool of invoke IDs.
+    /// The session's client: a [`BACnetClient`] on this session's link,
+    /// beside its server role, with one transport, one address and one pool
+    /// of invoke IDs.
     ///
     /// It is the client a transport of its own gives, with every call that
     /// one has: discovery, segmented reads, files, COV, router discovery,
@@ -33,8 +33,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// session was made with. `bacnet_ops::Client::over` takes it as it is.
     /// See [`BACnetClient::start_on_seat`] for what a seat changes.
     ///
-    /// The session must be running. One full client at a time: another is
-    /// refused until the first is dropped.
+    /// The session must be running. One client at a time: another is
+    /// refused until the first is dropped. The client is the caller's to
+    /// keep, share behind an `Arc`, or move into a task.
     ///
     /// **Source Audit.** With a source Audit Reporter
     /// ([`with_source_audit_reporter`](Self::with_source_audit_reporter)),
@@ -51,19 +52,18 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// one without a priority is not filtered by priority. An audited
     /// request goes to one station, direct or behind a router, and a raw
     /// request of an audited service that doesn't decode is refused before
-    /// it is sent. Not audited yet: WriteGroup, subscriptions, object and
+    /// it is sent, a write whose value isn't whole application data among
+    /// them. An unaudited write sends its value as given, as a standalone
+    /// client does. Not audited yet: WriteGroup, subscriptions, object and
     /// device management, alarm acknowledgment and life safety. An
     /// operation cut off by a stop, of the session or of the client, is not
     /// recorded.
     ///
     /// **Who answers what.** Beside a server role the client answers only
-    /// the COV notifications of its own subscriptions. Today's narrow
-    /// server role doesn't execute ConfirmedEventNotification, so the node
-    /// answers one with a Reject (unrecognized service) while the client
-    /// still publishes it to its `event_notifications()`; a notifier that
-    /// needs the acknowledgment gets it from a full server
-    /// ([`with_server`](Self::with_server)). A session with no server role
-    /// leaves the client to answer as a standalone one does, acknowledgment
+    /// the COV notifications of its own subscriptions; the server answers
+    /// a ConfirmedEventNotification, and the client still publishes it to
+    /// its `event_notifications()`. A session with no server role leaves
+    /// the client to answer as a standalone one does, acknowledgment
     /// included.
     ///
     /// **One device.** A DeviceCommunicationControl DISABLE_INITIATION a
@@ -72,7 +72,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`Error::InitiationDisabled`]
     /// until the control ends (see [`with_server`](Self::with_server)). An
     /// operator's own tool may start its client outside the node's control
-    /// with [`full_client_with`](Self::full_client_with) and
+    /// with [`client_with`](Self::client_with) and
     /// [`ClientOptions::with_node_dcc_override`], an override of Clause 16.1
     /// the session warns about. A segmented answer no request of the node's
     /// holds comes to this client, which aborts it as an idle client does
@@ -90,14 +90,21 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// neither its COV notifications nor its answers.
     ///
     /// **Stopping.** One [`stop`](Self::stop) stops the session, whether
-    /// the client is still alive or not (#2617): it closes the session's
-    /// roles, ends the client's tasks, fails its open requests and stops
-    /// the link. From then on the client sends nothing: each request and
-    /// each Who-Is or other unconfirmed send fails at once, as its seat has
+    /// the client is still alive or not (#2617): it ends the client's
+    /// tasks, fails its open requests and stops the link. From then on the
+    /// client sends nothing: each request and each Who-Is or other
+    /// unconfirmed send fails at once, as its seat has
     /// closed, and what goes through its `transport()` itself, such as a B/IP
     /// BVLC call, fails with the transport's stopped error. Dropping the
     /// client after that changes nothing, and the client's own
     /// [`BACnetClient::stop`] is not needed.
+    ///
+    /// Dropping the session without a stop ends the client the same way
+    /// and aborts the link ([`TransportPort::abort`]), even while the client
+    /// still holds it: nothing graceful is sent (no BACnet/SC disconnect,
+    /// for one) and nothing is waited for. The link's sockets close as the
+    /// runtime drops its aborted tasks, so a B/IP port binds again shortly
+    /// after the drop.
     ///
     /// ```no_run
     /// use bacnet_client::client::Broadcast;
@@ -110,7 +117,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// let mut session =
     ///     EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
     /// session.start().await?;
-    /// let client = session.full_client()?;
+    /// let client = session.client()?;
     /// client.who_is(Broadcast::Global, None).await?;
     /// session.stop().await?;
     /// // The client is still alive; its calls now fail.
@@ -118,17 +125,21 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn full_client(&self) -> Result<BACnetClient<T>, Error> {
-        self.full_client_with(ClientOptions::default())
+    pub fn client(&self) -> Result<BACnetClient<T>, Error> {
+        self.client_with(ClientOptions::default())
     }
 
-    /// [`Self::full_client`], with the client's startup `options`: its
+    /// [`Self::client`], with the client's startup `options`: its
     /// notification channel capacities, how it answers a confirmed COV
     /// notification, and whether its operator starts it outside the node's
     /// DeviceCommunicationControl ([`ClientOptions::with_node_dcc_override`]).
-    pub fn full_client_with(&self, options: ClientOptions) -> Result<BACnetClient<T>, Error> {
+    pub fn client_with(&self, options: ClientOptions) -> Result<BACnetClient<T>, Error> {
+        let mut config = self.client_config.clone();
+        // The session keeps the Device's raw ceiling; a request states the
+        // largest standard length at or below it.
+        config.max_apdu_length =
+            bacnet_encoding::apdu::max_apdu_header_at_or_below(u32::from(config.max_apdu_length))?;
         let seat = self.client_seat()?;
-        let config = self.client_config.clone();
         match &self.source_audit {
             Some(source) => {
                 let auditor = crate::source_audit::SeatAuditor(Arc::downgrade(source));
@@ -138,7 +149,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
     }
 
-    /// What ingress handed to the full client's seat, and what it dropped
+    /// What ingress handed to the client's seat, and what it dropped
     /// because the client had left its queue full.
     pub fn client_seat_counters(&self) -> ClientSeatCounters {
         self.ingress

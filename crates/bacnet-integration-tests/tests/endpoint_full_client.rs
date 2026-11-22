@@ -1,4 +1,4 @@
-//! `bacnet_ops::Client` over an endpoint session's full client (#2617): the
+//! `bacnet_ops::Client` over an endpoint session's client (#2617): the
 //! high-level client runs unchanged on a node that also serves a device,
 //! through the node's one transport.
 #![allow(dead_code)]
@@ -34,7 +34,7 @@ fn device(instance: u32, value: f32) -> (DeviceIdentity, bacnet_objects::databas
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_high_level_client_discovers_and_reads_over_a_nodes_full_client() {
+async fn the_high_level_client_discovers_and_reads_over_a_nodes_client() {
     let wire = Wire::new();
     let (identity, database) = device(PEER_DEVICE, 21.5);
     let mut peer = BACnetServer::generic_builder()
@@ -54,7 +54,7 @@ async fn the_high_level_client_discovers_and_reads_over_a_nodes_full_client() {
             .with_database(database);
     session.start().await.unwrap();
 
-    let client = Client::over(session.full_client().unwrap());
+    let client = Client::over(session.client().unwrap());
     // Discovery in each scope the link can answer: this network, every
     // network, and the one station.
     let wait = Duration::from_millis(500);

@@ -79,12 +79,8 @@ async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
         )
         .unwrap();
     timeout(WAIT, entered.notified()).await.unwrap();
-    let client = session.cloned_client_handle().unwrap();
-    let caller = tokio::spawn(async move {
-        client
-            .read_property(&peer_mac, target(), PropertyIdentifier::PRESENT_VALUE, None)
-            .await
-    });
+    let client = client_of(&session);
+    let caller = start_read(&client, &peer_mac, PropertyIdentifier::PRESENT_VALUE, None);
     eventually(WAIT, "the request holds its lease", async || {
         session.active_leases() == 1
     })

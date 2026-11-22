@@ -22,10 +22,8 @@ async fn reliability(endpoint: &Endpoint) -> Reliability {
     Reliability::from_raw(value)
 }
 
-fn direct() -> EndpointApduDestination {
-    EndpointApduDestination::Direct {
-        destination_mac: mac(PEER),
-    }
+fn direct() -> Station {
+    direct_read()
 }
 
 /// Complete a direct read that has no recipient to report to. Nothing else

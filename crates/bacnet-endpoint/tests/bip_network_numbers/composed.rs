@@ -19,7 +19,7 @@ async fn endpoint_number_bbmd_both_roles_progress_stop_and_drop() {
             let responder_peer = udp().await;
             let requester_peer = udp().await;
             assert!(endpoint.server().is_some());
-            let client = endpoint.cloned_client_handle().unwrap();
+            let client = endpoint.client().unwrap();
             let group = SocketAddrV4::new(BROADCAST, local.port());
             send(&query_peer, group, &frame(0x0b, &number(77, 1))).await;
             send(&query_peer, local, &frame(0x0a, QUERY)).await;
@@ -45,7 +45,9 @@ async fn endpoint_number_bbmd_both_roles_progress_stop_and_drop() {
             assert_eq!(wire.1, local);
             assert_eq!(wire.0[1], 0x0a);
             let npdu = &wire.0[4..];
-            assert_eq!(&npdu[..3], &[1, 4, 0]);
+            // The session's client is the full client, which accepts a
+            // segmented answer: the request's first octet carries that flag.
+            assert_eq!(&npdu[..3], &[1, 4, 2]);
             assert_eq!(npdu[5], 12);
             assert_eq!(&npdu[6..], &[0x0c, 0, 0, 0, 1, 0x19, 85]);
             let outbound_id = npdu[4];

@@ -232,7 +232,7 @@ async fn bip_one_socket_bidirectional_and_device_inspection() {
 
     // Outbound: endpoint role initiates confirmed ReadProperty to peer.
     // Peer answers with present-value 22.0; wire asserts identity max-APDU.
-    let client = endpoint.cloned_client_handle().unwrap();
+    let client = endpoint.client().unwrap();
     let peer_mac_c = peer_mac.clone();
     let out = tokio::spawn(async move {
         client

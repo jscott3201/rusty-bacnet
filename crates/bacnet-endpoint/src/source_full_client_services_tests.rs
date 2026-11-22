@@ -2,7 +2,6 @@
 //! and WRITE service of Table 19-5 this release audits, the records each
 //! makes, and the writes' priorities.
 use super::*;
-use crate::roles::Commandability;
 use bacnet_services::audit::{AuditLogQueryAck, AuditLogQueryRequest};
 use bacnet_services::file::{
     AtomicReadFileAck, FileAccessMethod, FileReadAckMethod, FileWriteAccessMethod,
@@ -11,7 +10,6 @@ use bacnet_services::read_range::ReadRangeRequest;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeValidation};
 use bacnet_services::rpm::{ReadAccessResult, ReadPropertyMultipleACK, ReadResultElement};
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleError};
-use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAuditLogQueryParameters, BACnetObjectPropertyReference,
     BACnetPropertyValue, PropertyReference, ReadAccessSpecification,
@@ -156,71 +154,79 @@ fn rpm_answer(specs: &[ReadAccessSpecification]) -> ReadPropertyMultipleACK {
     }
 }
 
-/// One ReadPropertyMultiple, a record per reference, matching the narrow
-/// requester's: each result's Result, the Device the answer names.
+/// One ReadPropertyMultiple, a record per reference in the request's
+/// order: each result's Result, and the Device the answer names.
 #[tokio::test(start_paused = true)]
-async fn a_full_client_rpm_records_each_reference_as_the_narrow_requester_does() {
+async fn an_rpm_records_each_reference_with_its_result() {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
-    let mut both = Vec::new();
-    for narrow in [true, false] {
-        let mac = peer.local_mac().to_vec();
-        let read = if narrow {
-            let handle = session.cloned_client_handle().unwrap();
-            tokio::spawn(async move { handle.read_property_multiple(&mac, rpm_specs()).await })
-        } else {
-            spawn_call(&client, move |client| async move {
-                client.read_property_multiple(&mac[..], rpm_specs()).await
-            })
-        };
-        let (from, invoke, service) = next_request(&mut requests).await;
-        assert_eq!(service, ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE);
-        let mut ack = BytesMut::new();
-        rpm_answer(&rpm_specs()).encode(&mut ack).unwrap();
-        send(&peer, &from, complex(invoke, service, ack)).await;
-        assert!(read.await.unwrap().is_ok());
-        let found = next_records(&mut records, 3).await;
-        assert!(found.iter().all(|r| r.invoke_id == Some(invoke)));
-        both.push(found);
-    }
-    let full = both.pop().unwrap();
-    let narrow = both.pop().unwrap();
+    let client = client_of(&session);
+    let mac = peer.local_mac().to_vec();
+    let read = spawn_call(&client, move |client| async move {
+        client.read_property_multiple(&mac[..], rpm_specs()).await
+    });
+    let (from, invoke, service) = next_request(&mut requests).await;
+    assert_eq!(service, ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE);
+    let mut ack = BytesMut::new();
+    rpm_answer(&rpm_specs()).encode(&mut ack).unwrap();
+    send(&peer, &from, complex(invoke, service, ack)).await;
+    assert!(read.await.unwrap().is_ok());
+    let found = next_records(&mut records, 3).await;
+    let device = oid(ObjectType::DEVICE, 10);
     assert_eq!(
-        full.iter().cloned().map(fields).collect::<Vec<_>>(),
-        narrow.iter().cloned().map(fields).collect::<Vec<_>>()
+        found.iter().map(what).collect::<Vec<_>>(),
+        [
+            reference(device, PropertyIdentifier::OBJECT_NAME, None),
+            reference(device, PropertyIdentifier::OBJECT_LIST, Some(2)),
+            reference(target(), PropertyIdentifier::PRESENT_VALUE, None),
+        ]
     );
     assert_eq!(
-        full.iter().map(|r| r.result).collect::<Vec<_>>(),
+        found.iter().map(|r| r.result).collect::<Vec<_>>(),
         [
             None,
             Some((ErrorClass::PROPERTY, ErrorCode::INVALID_ARRAY_INDEX)),
             None
         ]
     );
-    // The successful results name Device 10 alone.
-    assert_eq!(
-        full[0].target_device,
-        BACnetRecipient::Device(oid(ObjectType::DEVICE, 10))
-    );
+    for record in &found {
+        assert_eq!(record.operation, AuditOperation::READ);
+        assert_eq!(record.invoke_id, Some(invoke));
+        assert_eq!(
+            record.source_device,
+            BACnetRecipient::Device(oid(ObjectType::DEVICE, 123))
+        );
+        // One operation: one timestamp for its three records.
+        assert_eq!(
+            record.source_timestamp,
+            Some(BACnetTimeStamp::SequenceNumber(0))
+        );
+        // The successful results name Device 10 alone.
+        assert_eq!(record.target_device, BACnetRecipient::Device(device));
+        assert!(
+            record.target_priority.is_none()
+                && record.target_value.is_none()
+                && record.current_value.is_none()
+                && record.target_timestamp.is_none()
+        );
+    }
     drop(client);
     session.stop().await.unwrap();
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
 
-/// The narrow requester refuses ALL and the wildcard Device; the full
-/// client sends them, and its records follow the answer: one per value,
-/// on the Device the answer names.
+/// A read of ALL on the wildcard Device goes as it is, and its records
+/// follow the answer: one per value, on the Device the answer names.
 #[tokio::test(start_paused = true)]
-async fn a_full_client_rpm_of_all_records_each_value_the_answer_reports() {
+async fn an_rpm_of_all_records_each_value_the_answer_reports() {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let wildcard = oid(ObjectType::DEVICE, ObjectIdentifier::WILDCARD_INSTANCE);
     let device = oid(ObjectType::DEVICE, 10);
     let mac = peer.local_mac().to_vec();
@@ -309,7 +315,7 @@ async fn a_full_client_read_range_is_recorded_by_whether_it_was_answered() {
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let request = ReadRangeRequest {
         object_identifier: target(),
         property_identifier: PropertyIdentifier::LOG_BUFFER,
@@ -360,7 +366,7 @@ async fn a_full_client_file_read_and_log_query_name_no_property() {
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let file = oid(ObjectType::FILE, 3);
     let log = oid(ObjectType::AUDIT_LOG, 1);
     let mac = peer.local_mac().to_vec();
@@ -430,11 +436,11 @@ async fn a_full_client_file_read_and_log_query_name_no_property() {
     sink.stop().await.unwrap();
 }
 
-/// A WriteProperty with a priority is a command at that priority: its
-/// record matches the narrow requester's commandable write. One without
-/// is no command, as the narrow requester's noncommandable write is.
+/// A WriteProperty with a priority is a command at that priority, which
+/// its record names; one without is no command and names none. Each
+/// record carries the value written and the station written to.
 #[tokio::test(start_paused = true)]
-async fn a_full_client_write_records_its_priority_as_a_commandable_write_does() {
+async fn a_write_records_its_priority_and_value() {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
     let mut session = session(
@@ -443,58 +449,52 @@ async fn a_full_client_write_records_its_priority_as_a_commandable_write_does() 
         &sink,
     );
     session.start().await.unwrap();
-    let client = full_client(&session);
-    for (priority, commandability) in [
-        (Some(8), Commandability::Commandable),
-        (None, Commandability::Noncommandable),
-    ] {
-        let mut pair = Vec::new();
-        for narrow in [true, false] {
-            let request = WritePropertyRequest {
-                object_identifier: target(),
-                property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                property_array_index: None,
-                property_value: vec![0x44, 0x42, 0x28, 0, 0],
-                priority,
-            };
-            let mac = peer.local_mac().to_vec();
-            let write = if narrow {
-                let handle = session.cloned_client_handle().unwrap();
-                tokio::spawn(
-                    async move { handle.write_property(&mac, request, commandability).await },
+    let client = client_of(&session);
+    for (sequence, priority) in [Some(8), None].into_iter().enumerate() {
+        let mac = peer.local_mac().to_vec();
+        let write = spawn_call(&client, move |client| async move {
+            client
+                .write_property(
+                    &mac[..],
+                    target(),
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    vec![0x44, 0x42, 0x28, 0, 0],
+                    priority,
                 )
-            } else {
-                spawn_call(&client, move |client| async move {
-                    let WritePropertyRequest {
-                        object_identifier,
-                        property_identifier,
-                        property_array_index,
-                        property_value,
-                        priority,
-                    } = request;
-                    client
-                        .write_property(
-                            &mac[..],
-                            object_identifier,
-                            property_identifier,
-                            property_array_index,
-                            property_value,
-                            priority,
-                        )
-                        .await
-                })
-            };
-            let (from, invoke, service) = next_request(&mut requests).await;
-            send(&peer, &from, simple(invoke, service)).await;
-            assert!(write.await.unwrap().is_ok());
-            pair.extend(next_records(&mut records, 1).await);
-        }
-        let full = pair.pop().unwrap();
-        let narrow = pair.pop().unwrap();
-        assert_eq!(full.operation, AuditOperation::WRITE);
-        assert_eq!(full.target_priority, priority);
-        assert_eq!(full.target_value, Some(vec![0x44, 0x42, 0x28, 0, 0]));
-        assert_eq!(fields(full), fields(narrow), "{priority:?}");
+                .await
+        });
+        let (from, invoke, service) = next_request(&mut requests).await;
+        assert_eq!(service, ConfirmedServiceChoice::WRITE_PROPERTY);
+        send(&peer, &from, simple(invoke, service)).await;
+        assert!(write.await.unwrap().is_ok());
+        let [record] = <[_; 1]>::try_from(next_records(&mut records, 1).await).unwrap();
+        assert_eq!(record.operation, AuditOperation::WRITE);
+        assert_eq!(record.invoke_id, Some(invoke));
+        assert_eq!(
+            record.source_timestamp,
+            Some(BACnetTimeStamp::SequenceNumber(sequence as u16)),
+        );
+        assert_eq!(
+            record.source_device,
+            BACnetRecipient::Device(oid(ObjectType::DEVICE, 123))
+        );
+        let BACnetRecipient::Address(station) = &record.target_device else {
+            panic!(
+                "a write's answer names no Device: {:?}",
+                record.target_device
+            )
+        };
+        assert_eq!(station.network_number, 0);
+        assert_eq!(station.mac_address.as_slice(), peer.local_mac());
+        assert_eq!(
+            what(&record),
+            reference(target(), PropertyIdentifier::PRESENT_VALUE, None)
+        );
+        assert_eq!(record.target_priority, priority, "{priority:?}");
+        assert_eq!(record.target_value, Some(vec![0x44, 0x42, 0x28, 0, 0]));
+        assert_eq!(record.result, None);
+        assert!(record.current_value.is_none() && record.target_timestamp.is_none());
     }
     drop(client);
     session.stop().await.unwrap();
@@ -514,7 +514,7 @@ async fn a_full_client_write_is_filtered_by_its_priority_alone() {
     filter.set(8, false).unwrap();
     let mut session = session(database_for(filter), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let long = [vec![0x75, 33, 0], vec![b'x'; 32]].concat();
     for (priority, value, recorded) in [
         (Some(8), vec![0x21, 1], false),
@@ -569,7 +569,7 @@ async fn a_full_client_wpm_records_each_write_up_to_the_one_refused() {
         &sink,
     );
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let other = oid(ObjectType::ANALOG_VALUE, 8);
     let value = |property_identifier, priority, value: u8| BACnetPropertyValue {
         property_identifier,
@@ -663,7 +663,7 @@ async fn a_full_client_file_and_list_writes_are_write_records() {
         &sink,
     );
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let file = oid(ObjectType::FILE, 3);
     let mac = peer.local_mac().to_vec();
     let write = spawn_call(&client, move |client| async move {

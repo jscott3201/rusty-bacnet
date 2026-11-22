@@ -105,7 +105,7 @@ fn paced(went: Duration) -> bool {
 #[tokio::test(start_paused = true)]
 async fn a_refused_segmented_audit_frees_its_turn_and_path() {
     let mut site = paced_site().await;
-    let full: Client = Arc::new(site.session.full_client().unwrap());
+    let full: Client = Arc::new(site.session.client().unwrap());
     let seat = site
         .session
         .ingress
@@ -162,7 +162,7 @@ async fn a_refused_segmented_audit_frees_its_turn_and_path() {
 #[tokio::test(start_paused = true)]
 async fn the_turn_travels_with_a_segmented_audited_write() {
     let mut site = paced_site().await;
-    let full: Client = Arc::new(site.session.full_client().unwrap());
+    let full: Client = Arc::new(site.session.client().unwrap());
     let first = write(&full);
     let segment = site.receive().await;
     first.abort();

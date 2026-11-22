@@ -29,14 +29,13 @@ fn oid(t: ObjectType, i: u32) -> ObjectIdentifier {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Client-only endpoint: no database, no server handle.
+    // Client-only endpoint: no database, no server.
     let mut endpoint = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(SessionRole::ClientOnly)
         .queue_capacity(16)
         .client_timers(2_000, 0)
         .build_session()?;
     endpoint.start().await?;
-    assert!(endpoint.client().is_some());
     assert!(endpoint.server().is_none());
 
     // Controlled peer: real B/IP socket + network layer.
@@ -46,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let peer_mac = MacAddr::from_slice(peer_net.local_mac());
 
     // Endpoint initiates; peer answers with present-value 22.0.
-    let client = endpoint.cloned_client_handle().unwrap();
+    let client = endpoint.client().unwrap();
     let peer_mac_c = peer_mac.clone();
     let pending = tokio::spawn(async move {
         client
@@ -95,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(ack.object_identifier, oid(ObjectType::ANALOG_INPUT, 1));
     println!("client-only read OK: {:?}", ack.object_identifier);
 
-    // Owner shutdown with the cloned handle alive, then use-after-stop fails closed.
+    // One stop ends the session and its client.
     endpoint.stop().await?;
     peer_net.stop().await?;
     println!("done.");

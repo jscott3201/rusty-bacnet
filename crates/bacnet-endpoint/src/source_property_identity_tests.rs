@@ -4,24 +4,24 @@ use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::error::RemoteError;
 
 fn start_object(
-    session: &EndpointSession<TestTransport>,
+    client: &Client,
     mac: &[u8],
     object: ObjectIdentifier,
 ) -> tokio::task::JoinHandle<Result<ReadPropertyACK, Error>> {
-    let client = session.cloned_client_handle().unwrap();
+    let client = Arc::clone(client);
     let mac = mac.to_vec();
     tokio::spawn(async move {
         client
-            .read_property(&mac, object, PropertyIdentifier::OBJECT_NAME, None)
+            .read_property(&mac[..], object, PropertyIdentifier::OBJECT_NAME, None)
             .await
     })
 }
 fn start_alias(
-    session: &EndpointSession<TestTransport>,
+    client: &Client,
     mac: &[u8],
     kind: ObjectType,
 ) -> tokio::task::JoinHandle<Result<ReadPropertyACK, Error>> {
-    start_object(session, mac, oid(kind, ObjectIdentifier::WILDCARD_INSTANCE))
+    start_object(client, mac, oid(kind, ObjectIdentifier::WILDCARD_INSTANCE))
 }
 async fn released(session: &EndpointSession<TestTransport>) {
     eventually(
@@ -56,6 +56,7 @@ async fn source_read_alias_success_records_peer_concrete_object_both_roles_modes
         for confirmed in [false, true] {
             let mut session = session(database(confirmed), role, &sink);
             session.start().await.unwrap();
+            let client = client_of(&session);
             for (sequence, (kind, instance, concrete)) in [
                 (ObjectType::DEVICE, ObjectIdentifier::WILDCARD_INSTANCE, 10),
                 (ObjectType::DEVICE, 22, 22),
@@ -68,7 +69,7 @@ async fn source_read_alias_success_records_peer_concrete_object_both_roles_modes
             .into_iter()
             .enumerate()
             {
-                let read = start_object(&session, peer.local_mac(), oid(kind, instance));
+                let read = start_object(&client, peer.local_mac(), oid(kind, instance));
                 let envelope = receive(&mut requests).await;
                 let (invoke, mut rp) = read_request(&envelope);
                 assert_eq!(rp.object_identifier, oid(kind, instance));
@@ -123,10 +124,11 @@ async fn source_read_alias_failure_keeps_requested_identity_without_trusting_bad
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
+    let client = client_of(&session);
     let mut sequence = 0;
     for kind in [ObjectType::DEVICE, ObjectType::NETWORK_PORT] {
         for failure in 0..7 {
-            let read = start_alias(&session, peer.local_mac(), kind);
+            let read = start_alias(&client, peer.local_mac(), kind);
             let envelope = receive(&mut requests).await;
             let (invoke, mut rp) = read_request(&envelope);
             let requested = rp.object_identifier;
@@ -163,7 +165,14 @@ async fn source_read_alias_failure_keeps_requested_identity_without_trusting_bad
                     result,
                     Err(Error::Remote(RemoteError::Error { .. }))
                 )),
-                6 => assert!(matches!(result, Err(Error::Timeout(_)))),
+                // The client reports its own wait running out as an Abort
+                // for its transaction's timeout.
+                6 => assert!(matches!(
+                    result,
+                    Err(Error::Remote(RemoteError::Abort {
+                        reason: AbortReason::TSM_TIMEOUT
+                    }))
+                )),
                 _ => assert!(matches!(result, Err(Error::Decoding(_)))),
             }
             let (record, _) = notification(&receive(&mut records).await, false);
@@ -201,7 +210,8 @@ async fn source_read_alias_cancelled_retry_resolves_identity_on_original_recipie
     let mut session = session(database(false), SessionRole::ClientOnly, &old);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
-    let read = start_alias(&session, peer.local_mac(), ObjectType::DEVICE);
+    let client = client_of(&session);
+    let read = start_alias(&client, peer.local_mac(), ObjectType::DEVICE);
     let first = receive(&mut requests).await;
     let (invoke, mut rp) = read_request(&first);
     read.abort();
@@ -248,7 +258,7 @@ async fn source_read_alias_cancelled_retry_resolves_identity_on_original_recipie
             .is_err()
     );
     // Subsequent admitted work uses the new route and concrete peer identity.
-    let read = start_alias(&session, peer.local_mac(), ObjectType::NETWORK_PORT);
+    let read = start_alias(&client, peer.local_mac(), ObjectType::NETWORK_PORT);
     let envelope = receive(&mut requests).await;
     let (invoke, mut rp) = read_request(&envelope);
     rp.object_identifier = oid(ObjectType::NETWORK_PORT, 17);
@@ -273,12 +283,19 @@ async fn source_read_range_concrete_device_ack_establishes_target_device_for_thi
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = session.cloned_client_handle().unwrap();
+    let client = client_of(&session);
     let mac = peer.local_mac().to_vec();
     let object = oid(ObjectType::DEVICE, 10);
+    let reader = Arc::clone(&client);
     let read = tokio::spawn(async move {
-        client
-            .read_range(&mac, object, PropertyIdentifier::OBJECT_LIST, None, None)
+        reader
+            .read_range(
+                &mac[..],
+                object,
+                PropertyIdentifier::OBJECT_LIST,
+                None,
+                None,
+            )
             .await
     });
     let envelope = receive(&mut requests).await;

@@ -19,6 +19,11 @@ impl<W: WebSocketPort> ScTransport<W> {
         if self.ws_shared.is_none() {
             return Err(crate::direct_response::unavailable());
         }
+        // Aborted (#2617): nothing more goes out, whether or not the hub
+        // socket has left its slot yet.
+        if self.abort_mark.is_set() {
+            return Err(crate::port::stopped());
+        }
         if mac.len() != 6 {
             return Err(Error::Encoding(format!(
                 "BACnet/SC VMAC must be 6 bytes, got {}",

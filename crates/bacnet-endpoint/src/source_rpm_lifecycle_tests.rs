@@ -1,161 +1,60 @@
 use super::*;
 
+/// A segmented answer is taken segment by segment, each acknowledged, and
+/// recorded once it is whole, as an unsegmented one is.
 #[tokio::test(start_paused = true)]
-async fn endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source() {
-    let (peer, mut requests) = network().await;
-    let (sink, mut received) = network().await;
-    for source in [false, true] {
-        let mut session = if source {
-            let mut db = database(false);
-            db.get_mut(&oid(ObjectType::DEVICE, 123))
-                .unwrap()
-                .device_authority_internal()
-                .unwrap()
-                .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
-                .unwrap();
-            let mut session = bare_session(
-                SessionRole::ClientOnly,
-                SessionConfig {
-                    queue_capacity: 128,
-                    ..SessionConfig::default()
-                },
-            )
-            .with_database(db)
-            .with_source_audit_reporter(selected());
-            session
-                .source_audit_bindings
-                .push((oid(ObjectType::DEVICE, 999), address(&sink)));
-            session
-        } else {
-            bare_session(SessionRole::ClientOnly, SessionConfig::default())
-        };
-        session.start().await.unwrap();
-        let client = session.cloned_client_handle().unwrap();
-        let mut bad = vec![vec![]];
-        let mut empty = specs();
-        empty[0].list_of_property_references.clear();
-        bad.push(empty);
-        for property in [
-            PropertyIdentifier::ALL,
-            PropertyIdentifier::REQUIRED,
-            PropertyIdentifier::OPTIONAL,
-        ] {
-            let mut s = specs();
-            s[0].list_of_property_references[0].property_identifier = property;
-            bad.push(s);
-        }
-        for kind in [ObjectType::DEVICE, ObjectType::NETWORK_PORT] {
-            let mut s = specs();
-            s[0].object_identifier = oid(kind, ObjectIdentifier::MAX_INSTANCE);
-            bad.push(s);
-        }
-        let single = ReadAccessSpecification {
-            object_identifier: target(),
-            list_of_property_references: vec![PropertyReference {
-                property_identifier: PropertyIdentifier::OBJECT_NAME,
-                property_array_index: Some(0),
-            }],
-        };
-        let mut too_many = single.clone();
-        too_many.list_of_property_references =
-            vec![single.list_of_property_references[0].clone(); 65];
-        bad.push(vec![too_many]);
-        let too_large = ReadAccessSpecification {
-            object_identifier: target(),
-            list_of_property_references: vec![
-                PropertyReference {
-                    property_identifier: PropertyIdentifier::from_raw(u32::MAX),
-                    property_array_index: Some(u32::MAX)
-                };
-                64
-            ],
-        };
-        bad.push(vec![too_large]);
-        for specs in bad {
-            assert!(
-                client
-                    .read_property_multiple(peer.local_mac(), specs)
-                    .await
-                    .is_err()
-            );
-            assert_eq!(session.active_leases(), 0);
-        }
-        assert!(requests.try_recv().is_err());
-        assert!(received.try_recv().is_err());
-        if source {
-            assert_eq!(
-                session
-                    .source_audit
-                    .as_ref()
-                    .unwrap()
-                    .available_operations(),
-                64
-            );
-        }
-        let mut valid = single;
-        valid.list_of_property_references[0].property_array_index = None;
-        valid.list_of_property_references = vec![valid.list_of_property_references[0].clone(); 64];
-        let read = start(&session, peer.local_mac(), vec![valid]);
-        let env = receive(&mut requests).await;
-        let (invoke, rpm) = request(&env);
-        send(&peer, &env.source_mac, response(invoke, &success(&rpm))).await;
-        assert!(read.await.unwrap().is_ok());
-        if source {
-            for record in records(&mut received, &sink, false, 64).await {
-                assert_eq!(
-                    record.source_timestamp,
-                    Some(BACnetTimeStamp::SequenceNumber(0))
-                );
-            }
-        }
-        session.stop().await.unwrap();
-        assert_eq!(session.active_leases(), 0);
-    }
-    peer.stop().await.unwrap();
-    sink.stop().await.unwrap();
-}
-
-#[tokio::test(start_paused = true)]
-async fn source_rpm_raw_ack_bound_and_segmented_terminal_fanout() {
+async fn source_rpm_segmented_answer_is_reassembled_and_recorded() {
+    use bacnet_encoding::apdu::SegmentAck;
     let (peer, mut requests) = network().await;
     let (sink, mut received) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    for segmented in [false, true] {
-        let read = start(&session, peer.local_mac(), specs());
-        let env = receive(&mut requests).await;
-        let (invoke, rpm) = request(&env);
-        let mut ack = success(&rpm);
-        if !segmented {
-            ack.list_of_read_access_results[0].list_of_results[0].property_value =
-                Some(vec![0; 481]);
-        }
-        let Apdu::ComplexAck(mut pdu) = response(invoke, &ack) else {
-            unreachable!()
+    let client = client_of(&session);
+    let read = start(&client, peer.local_mac(), specs());
+    let env = receive(&mut requests).await;
+    let (invoke, rpm) = request(&env);
+    let ack = success(&rpm);
+    let Apdu::ComplexAck(whole) = response(invoke, &ack) else {
+        unreachable!()
+    };
+    let half = whole.service_ack.len() / 2;
+    for (sequence, more) in [(0, true), (1, false)] {
+        let mut segment = whole.clone();
+        segment.segmented = true;
+        segment.more_follows = more;
+        segment.sequence_number = Some(sequence);
+        segment.proposed_window_size = Some(1);
+        segment.service_ack = if more {
+            whole.service_ack.slice(..half)
+        } else {
+            whole.service_ack.slice(half..)
         };
-        if segmented {
-            pdu.segmented = true;
-            pdu.more_follows = true;
-            pdu.sequence_number = Some(0);
-            pdu.proposed_window_size = Some(1);
-        }
-        send(&peer, &env.source_mac, Apdu::ComplexAck(pdu)).await;
-        assert!(read.await.unwrap().is_err());
-        for record in records(&mut received, &sink, false, 5).await {
-            assert!(record.result.is_some());
-            assert!(matches!(record.target_device, BACnetRecipient::Address(_)));
-        }
-        if segmented {
-            assert!(
-                matches!(decode_apdu(receive(&mut requests).await.apdu).unwrap(),Apdu::Abort(pdu) if pdu.abort_reason==AbortReason::SEGMENTATION_NOT_SUPPORTED)
-            );
-        }
+        send(&peer, &env.source_mac, Apdu::ComplexAck(segment)).await;
+        let acknowledged = decode_apdu(receive(&mut requests).await.apdu).unwrap();
+        assert!(
+            matches!(
+                &acknowledged,
+                Apdu::SegmentAck(SegmentAck { invoke_id, sequence_number, negative_ack: false, .. })
+                    if *invoke_id == invoke && *sequence_number == sequence
+            ),
+            "segment {sequence}: {acknowledged:?}"
+        );
     }
+    assert_eq!(read.await.unwrap().unwrap(), ack);
+    for record in records(&mut received, &sink, false, 5).await {
+        assert_eq!(record.result, None);
+        assert_eq!(record.invoke_id, Some(invoke));
+    }
+    assert!(received.try_recv().is_err());
+    drop(client);
     session.stop().await.unwrap();
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
 
+/// A caller that goes away loses nothing: the session's task retries the
+/// request unchanged and records its answer, to the recipient the request
+/// was admitted with; a stop then ends a request still waiting.
 #[tokio::test(start_paused = true)]
 async fn source_rpm_cancelled_retry_retains_one_snapshot_and_stop_joins() {
     let (peer, mut requests) = network().await;
@@ -164,7 +63,8 @@ async fn source_rpm_cancelled_retry_retains_one_snapshot_and_stop_joins() {
     let mut session = session(database(false), SessionRole::ClientOnly, &old);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
-    let read = start(&session, peer.local_mac(), specs());
+    let client = client_of(&session);
+    let read = start(&client, peer.local_mac(), specs());
     let first = receive(&mut requests).await;
     let (invoke, rpm) = request(&first);
     read.abort();
@@ -194,7 +94,7 @@ async fn source_rpm_cancelled_retry_retains_one_snapshot_and_stop_joins() {
             Some(BACnetTimeStamp::SequenceNumber(0))
         );
     }
-    let read = start(&session, peer.local_mac(), specs());
+    let read = start(&client, peer.local_mac(), specs());
     let env = receive(&mut requests).await;
     let (invoke, rpm) = request(&env);
     send(&peer, &env.source_mac, response(invoke, &success(&rpm))).await;
@@ -202,7 +102,7 @@ async fn source_rpm_cancelled_retry_retains_one_snapshot_and_stop_joins() {
     records(&mut new_records, &new, false, 5).await;
     assert!(old_records.try_recv().is_err());
     assert!(new_records.try_recv().is_err());
-    let read = start(&session, peer.local_mac(), specs());
+    let read = start(&client, peer.local_mac(), specs());
     receive(&mut requests).await;
     session.stop().await.unwrap();
     assert!(read.await.unwrap().is_err());
@@ -220,8 +120,8 @@ async fn source_rpm_drop_releases_pending_operation_and_database() {
     session.start().await.unwrap();
     let db = Arc::clone(session.database.as_ref().unwrap());
     let coordinator = Arc::clone(&session.coordinator);
-    let client = session.cloned_client_handle().unwrap();
-    let read = start(&session, peer.local_mac(), specs());
+    let client = client_of(&session);
+    let read = start(&client, peer.local_mac(), specs());
     receive(&mut requests).await;
     drop(session);
     assert!(timeout(WAIT, read).await.unwrap().unwrap().is_err());
@@ -231,6 +131,7 @@ async fn source_rpm_drop_releases_pending_operation_and_database() {
             .await
             .is_err()
     );
+    drop(client);
     eventually(WAIT, "the local Device can be removed", async || {
         db.write()
             .await
@@ -268,7 +169,8 @@ async fn source_rpm_partial_notification_admission_counts_only_dropped_occurrenc
     session.start().await.unwrap();
     let owner = Arc::clone(session.notifications.as_ref().unwrap());
     let held: Vec<_> = (0..62).map(|_| owner.try_admit_audit().unwrap()).collect();
-    let read = start(&session, peer.local_mac(), specs());
+    let client = client_of(&session);
+    let read = start(&client, peer.local_mac(), specs());
     let env = receive(&mut requests).await;
     let (invoke, rpm) = request(&env);
     send(&peer, &env.source_mac, response(invoke, &success(&rpm))).await;

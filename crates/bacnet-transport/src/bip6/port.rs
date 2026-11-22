@@ -814,6 +814,26 @@ impl TransportPort for Bip6Transport {
         Ok(())
     }
 
+    /// Abort through `&self` (#2617): the socket comes out of the send
+    /// slot, so every later send fails with [`crate::port::stopped`]'s
+    /// error, a send waiting for its VMAC to resolve fails, the tasks are
+    /// aborted, and a registered Network Port's lease is let go of. The
+    /// port is free once the runtime drops the aborted tasks, which still
+    /// hold the socket; a later stop joins them.
+    fn abort(&self) {
+        if let Some(fd) = &self.foreign_device {
+            fd.detach();
+        }
+        self.stop_gate.abort();
+        drop(self.socket.take());
+        self.resolver.clear();
+        self.tasks.abort();
+        self.network_port_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
     /// A router routes through this port: an NPDU for a VMAC that needs
     /// resolving is queued rather than waited for
     /// ([`UnresolvedSend::Queue`]), so one unknown destination, which any
@@ -932,7 +952,7 @@ impl Drop for Bip6Transport {
     fn drop(&mut self) {
         // The tasks own socket clones. Abort them so dropping the transport
         // cannot detach a receive/registration lifetime from its owner.
-        self.tasks.abort_and_forget();
+        self.tasks.abort();
         // Fails any waiter a leaked send left behind.
         self.resolver.clear();
     }

@@ -2,97 +2,116 @@ use super::*;
 use crate::session::bus_port::bus_port;
 use bacnet_types::error::RemoteError;
 
+/// A value that is not whole application data: a closing tag with no
+/// opening one, alone and after 33 NULLs.
+fn broken_values() -> Vec<(Vec<u8>, Option<u8>)> {
+    vec![
+        (vec![0x3e], None),
+        ([vec![0; 33], vec![0x3e]].concat(), None),
+    ]
+}
+
+/// A priority outside 1 to 16.
+fn bad_priorities() -> Vec<(Vec<u8>, Option<u8>)> {
+    vec![(vec![0], Some(0)), (vec![0], Some(17))]
+}
+
+/// An audited write refused before it is sent leaves nothing: no lease, no
+/// request, no record, and no sequence number taken. A value that is not
+/// whole application data, a priority outside 1 to 16 and a destination
+/// that is not one station are each refused so.
 #[tokio::test(start_paused = true)]
-async fn source_write_preflight_is_silent_with_and_without_reporter() {
+async fn source_write_preflight_is_silent_with_a_reporter() {
+    preflight(true, [broken_values(), bad_priorities()].concat()).await;
+}
+
+/// With no source Audit, a priority outside 1 to 16 is refused the same
+/// way.
+#[tokio::test(start_paused = true)]
+async fn endpoint_write_priority_preflight_is_silent_without_a_reporter() {
+    preflight(false, bad_priorities()).await;
+}
+
+/// Each of `refused`, a value and priority, is refused with nothing sent;
+/// so is each destination that is not one station when the write is
+/// audited (`reported`). A write then goes, with the first sequence number.
+async fn preflight(reported: bool, refused: Vec<(Vec<u8>, Option<u8>)>) {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
-    for reported in [false, true] {
-        let mut endpoint = if reported {
-            session(write_database(false), SessionRole::ClientOnly, &sink)
-        } else {
-            bare_session(SessionRole::ClientOnly, SessionConfig::default())
-        };
-        endpoint.start().await.unwrap();
-        let client = endpoint.cloned_client_handle().unwrap();
-        for (value, priority) in [
-            (vec![0x3e], None),
-            ([vec![0; 33], vec![0x3e]].concat(), None),
-            (vec![0; 2000], None),
-            (vec![0], Some(0)),
-            (vec![0], Some(17)),
-        ] {
-            assert!(
-                client
-                    .write_property(
-                        peer.local_mac(),
-                        WritePropertyRequest {
-                            object_identifier: target(),
-                            property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                            property_array_index: None,
-                            property_value: value,
-                            priority,
-                        },
-                        Commandability::Commandable,
-                    )
-                    .await
-                    .is_err()
-            );
-            assert_eq!(endpoint.active_leases(), 0);
-        }
-        for mac in [
-            vec![1],
-            encode_bip_mac([255; 4], 47808).to_vec(),
-            encode_bip_mac([127, 0, 0, 1], 0).to_vec(),
-            encode_bip_mac([224, 0, 0, 1], 47808).to_vec(),
-        ] {
-            assert!(
-                client
-                    .write_property(
-                        &mac,
-                        WritePropertyRequest {
-                            object_identifier: target(),
-                            property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                            property_array_index: None,
-                            property_value: vec![0],
-                            priority: None,
-                        },
-                        Commandability::Noncommandable,
-                    )
-                    .await
-                    .is_err()
-            );
-        }
-        assert!(requests.try_recv().is_err());
-        assert!(records.try_recv().is_err());
-        // Preflight refusal has not consumed the source's sequence number.
-        let task = write_value(
-            &endpoint,
+    let mut endpoint = if reported {
+        session(write_database(false), SessionRole::ClientOnly, &sink)
+    } else {
+        bare_session(SessionRole::ClientOnly, SessionConfig::default())
+    };
+    endpoint.start().await.unwrap();
+    let client = client_of(&endpoint);
+    let unsent = |requests: &mut bacnet_network::layer::ApduReceiver, what: &str| {
+        let stray = requests.try_recv().map(|sent| decode_apdu(sent.apdu));
+        assert!(stray.is_err(), "{what}: {stray:?}");
+    };
+    for (value, priority) in refused {
+        let what = format!("{} octets, priority {priority:?}", value.len());
+        let write = client.write_property(
             peer.local_mac(),
+            target(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            value,
+            priority,
+        );
+        assert!(write.await.is_err(), "{what}");
+        assert_eq!(endpoint.active_leases(), 0);
+        unsent(&mut requests, &what);
+    }
+    let not_one_station = [
+        vec![1],
+        encode_bip_mac([255; 4], 47808).to_vec(),
+        encode_bip_mac([127, 0, 0, 1], 0).to_vec(),
+        encode_bip_mac([224, 0, 0, 1], 47808).to_vec(),
+    ];
+    for mac in not_one_station.into_iter().filter(|_| reported) {
+        let write = client.write_property(
+            &mac[..],
+            target(),
             PropertyIdentifier::PRESENT_VALUE,
             None,
             vec![0],
             None,
-            Commandability::Commandable,
         );
-        let envelope = receive(&mut requests).await;
-        let (invoke, wp) = write_request(&envelope);
-        send(&peer, &envelope.source_mac, write_ack(invoke, &wp)).await;
-        assert!(task.await.unwrap().is_ok());
-        if reported {
-            let (record, _) = notification(&receive(&mut records).await, false);
-            assert_eq!(
-                record.source_timestamp,
-                Some(BACnetTimeStamp::SequenceNumber(0))
-            );
-        } else {
-            assert!(records.try_recv().is_err());
-        }
-        endpoint.stop().await.unwrap();
+        assert!(write.await.is_err(), "{mac:?}");
+        unsent(&mut requests, &format!("{mac:?}"));
     }
+    assert!(records.try_recv().is_err());
+    // Preflight refusal has not consumed the source's sequence number.
+    let task = write_value(
+        &client,
+        peer.local_mac(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        vec![0],
+        None,
+    );
+    let envelope = receive(&mut requests).await;
+    let (invoke, wp) = write_request(&envelope);
+    send(&peer, &envelope.source_mac, write_ack(invoke, &wp)).await;
+    assert!(task.await.unwrap().is_ok());
+    if reported {
+        let (record, _) = notification(&receive(&mut records).await, false);
+        assert_eq!(
+            record.source_timestamp,
+            Some(BACnetTimeStamp::SequenceNumber(0))
+        );
+    } else {
+        assert!(records.try_recv().is_err());
+    }
+    endpoint.stop().await.unwrap();
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
 
+/// A caller that goes away before its write is admitted leaves nothing: no
+/// slot, lease, request or record. One that goes away after loses nothing:
+/// the session's task retries the write unchanged and records it once.
 #[tokio::test(start_paused = true)]
 async fn source_write_before_admission_cancel_and_after_admission_retry_are_bounded() {
     let (peer, mut requests) = network().await;
@@ -100,10 +119,11 @@ async fn source_write_before_admission_cancel_and_after_admission_retry_are_boun
     let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
+    let client = client_of(&session);
     let db = Arc::clone(session.database.as_ref().unwrap());
     let guard = db.write().await;
     let pending = start_write(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -132,7 +152,7 @@ async fn source_write_before_admission_cancel_and_after_admission_retry_are_boun
     assert!(requests.try_recv().is_err());
     assert!(records.try_recv().is_err());
     let pending = start_write(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -163,53 +183,6 @@ async fn source_write_before_admission_cancel_and_after_admission_retry_are_boun
 }
 
 #[tokio::test(start_paused = true)]
-async fn endpoint_write_non_bip_without_reporter_is_refused_and_reads_remain_available() {
-    use bacnet_transport::loopback::LoopbackTransport;
-    let (transport, peer) = LoopbackTransport::pair(vec![1], vec![2]);
-    let mut session =
-        EndpointSession::new(transport, SessionRole::ClientOnly, SessionConfig::default()).unwrap();
-    let mut peer = NetworkLayer::new(peer);
-    let mut requests = peer.start().await.unwrap();
-    session.start().await.unwrap();
-    let client = session.cloned_client_handle().unwrap();
-    assert!(
-        client
-            .write_property(
-                &encode_bip_mac([127, 0, 0, 1], 47808),
-                WritePropertyRequest {
-                    object_identifier: target(),
-                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                    property_array_index: None,
-                    property_value: vec![0],
-                    priority: None,
-                },
-                Commandability::Noncommandable,
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("IPv4 B/IP")
-    );
-    assert_eq!(session.active_leases(), 0);
-    assert!(requests.try_recv().is_err());
-    let read = tokio::spawn(async move {
-        client
-            .read_property(&[2], target(), PropertyIdentifier::PRESENT_VALUE, None)
-            .await
-    });
-    let envelope = receive(&mut requests).await;
-    let (invoke, rp) = read_request(&envelope);
-    let mut encoded = BytesMut::new();
-    encode_apdu(&mut encoded, &ack(invoke, &rp)).unwrap();
-    peer.send_apdu(&encoded, &[1], false, NetworkPriority::Normal)
-        .await
-        .unwrap();
-    assert!(read.await.unwrap().is_ok());
-    session.stop().await.unwrap();
-    peer.stop().await.unwrap();
-}
-
-#[tokio::test(start_paused = true)]
 async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error() {
     use bacnet_objects::{analog::AnalogValueObject, notification_class::NotificationClass};
     use bacnet_server::server::{BACnetServer, ServerConfig};
@@ -237,6 +210,7 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
     .unwrap();
     let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
+    let client = client_of(&session);
     for (object, property, success) in [
         (
             oid(ObjectType::NOTIFICATION_CLASS, 1),
@@ -245,20 +219,8 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
         ),
         (target(), PropertyIdentifier::PRESENT_VALUE, false),
     ] {
-        let result = session
-            .client()
-            .unwrap()
-            .write_property(
-                remote.local_mac(),
-                WritePropertyRequest {
-                    object_identifier: object,
-                    property_identifier: property,
-                    property_array_index: None,
-                    property_value: vec![],
-                    priority: None,
-                },
-                Commandability::Noncommandable,
-            )
+        let result = client
+            .write_property(remote.local_mac(), object, property, None, vec![], None)
             .await;
         assert_eq!(result.is_ok(), success);
         if !success {
@@ -285,8 +247,9 @@ async fn source_write_wrong_service_error_cannot_finish_or_steal_retry_identity(
     let mut session = session(write_database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
+    let client = client_of(&session);
     let pending = start_write(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,

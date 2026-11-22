@@ -62,7 +62,7 @@ async fn ready(child: &Interactive) -> SocketAddrV4 {
         0,
         "published address must carry the actual ephemeral port"
     );
-    assert_eq!(lines[1], "Roles: requester=true server=true");
+    assert_eq!(lines[1], "Roles: client=true server=true");
     assert!(
         UdpSocket::bind(address).is_err(),
         "started owner still holds its socket"
@@ -79,9 +79,9 @@ fn assert_stopped(output: &std::process::Output, address: SocketAddrV4) {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         format!(
-            "Started endpoint: {address}\nRoles: requester=true server=true\n\
+            "Started endpoint: {address}\nRoles: client=true server=true\n\
              Press Enter to stop (or send EOF).\n\
-             Stopped: address=None requester=false server=false\n\
+             Stopped: address=None client=false server=false\n\
              Rebound endpoint: {address}; owner running=false\n"
         ),
         "post-stop owner state and rebind before owner destruction: {output:?}"
