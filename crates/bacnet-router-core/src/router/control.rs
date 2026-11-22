@@ -342,6 +342,26 @@ impl<
     /// neighbour that moved its route would loop. The message's other
     /// networks are learned here all the same; neighbours learn them from
     /// their next Who-Is-Router.
+    ///
+    /// With [`Options::duplicates`], a list that repeats one passed on
+    /// within the time to live is not passed on again, whoever sent it and
+    /// on whichever port: that is what ends a loop. It is still learned
+    /// from, but only where that keeps a route on its port (#2713): a
+    /// network the table lacks is added, and a route through the arrival
+    /// port is refreshed and takes the sender as its next router, as a
+    /// claim that is no repeat does (under hardened convergence that also
+    /// drops a pending claim from another port). So a node that announced
+    /// a router's list first on the router's own port doesn't keep that
+    /// router's announcement out. A network the table reaches through
+    /// another port stays there. The same list on two ports within one
+    /// time to live is what a loop looks like, and there the later copy is
+    /// the stale one: learned, it would point each router round the loop
+    /// at the next, with none left pointing at the networks' real router.
+    /// The known limit (kept by decision, pinned by
+    /// `repeated_claims.rs::by_design_…`): a node that sends the list first
+    /// on another port than the real router's holds the route past the time
+    /// to live, until the router announces again after it or the route
+    /// goes unconfirmed for [`Options::learned_age`] (300 s by default).
     fn i_am_router<'f>(
         &mut self,
         at: &Arrival<'f>,
@@ -365,15 +385,21 @@ impl<
         // either: the same list from the network's real router, within the
         // duplicate time to live, must still be taken and relayed.
         let withheld = list.iter().any(|network| self.claim_refused(at, network));
-        if !withheld && self.repeated_relay(at, npdu, kind, options) {
-            return Received::Discarded(Discard::Duplicate);
-        }
+        let repeat = !withheld && self.repeated_relay(at, npdu, kind, options);
         let mut claimed = Claimed::new();
         let mut networks = list.iter();
         for network in networks.by_ref() {
+            // A repeat moves no route to its port (the docs above).
+            let route = self.table.lookup(network);
+            if repeat && route.is_some_and(|route| route.port() != at.port) {
+                continue;
+            }
             if !self.claim(at, network, &mut claimed, ControlClass::IAm, options, host) {
                 break;
             }
+        }
+        if repeat {
+            return Received::Discarded(Discard::Duplicate);
         }
         if withheld {
             // Past the route cap nothing is learned, but a refusal there

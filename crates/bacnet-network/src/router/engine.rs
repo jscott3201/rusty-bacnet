@@ -246,23 +246,25 @@ totals!(
     }
 );
 
-/// Empty storage, made when the program compiles (#2656). Built at run
-/// time, `Storage::new` put the storage's 150,024 bytes, and temporaries
-/// for its parts, on the stack of the task that started the router before
-/// the copy to the heap: about 216 KiB in a release build on macOS arm64
-/// and 331 KiB in a debug one. Copied from here, the start takes no stack
-/// for it in a release build and about 147 KiB in a debug one, for
-/// 150,024 bytes of read-only data, almost all of them zero. It is a
-/// `const` because the one use moves it into the box: a `static` can't be
-/// moved out of, and `boxed_storage` is the only copy the lint warns of.
-#[allow(clippy::large_const_arrays)]
-const EMPTY_STORAGE: HostedStorage = Storage::new();
-
 /// Empty storage on the heap. Built here, outside any async function, so
 /// the large table and scratch never sit in a future's state.
+///
+/// The value is made when the program compiles (#2656). Built at run time,
+/// `Storage::new` put the storage's 150 KB, and temporaries for its parts,
+/// on the stack of the task that started the router before the copy to the
+/// heap: about 216 KiB in a release build on macOS arm64 and 331 KiB in a
+/// debug one. A constant takes no stack in a release build, and about
+/// 147 KiB in a debug one, which copies it through the stack.
+///
+/// Empty storage is all zero bits (#2679; the hosted group rule's empty
+/// value, no rule, is too), so a release build has no image of the
+/// constant to copy: this function compiles to one request for 150,032
+/// zeroed bytes from the allocator. Before #2679 the duplicate record's
+/// 512 empty slots each held one octet that was not zero, and every
+/// program with a router carried the whole storage as read-only data.
 #[inline(never)]
 fn boxed_storage() -> Box<HostedStorage> {
-    Box::new(EMPTY_STORAGE)
+    Box::new(const { Storage::new() })
 }
 
 #[cfg(test)]

@@ -22,7 +22,7 @@ The page describes **v{release}**.
 - A network number is 1 to 65534, and each port needs a different one. Every router on a network must use the same number for it.
 - All ports share one transport type. `RouterPort`'s transport type defaults to `AnyTransport`, so a router that mixes link types wraps each transport in `AnyTransport` and writes `RouterPort` alone.
 - `RouterOptions::new()` is the plain router. The options below turn on more.
-- `RouterPort::new(transport, network_number).isolated(true)` marks a port as isolated. The router carries nothing between two isolated ports and hides each from the other, while both still reach the ordinary ports: several BACnet/SC hubs can share one B/IP network without reaching each other. It limits transit only; it is not an access control on routing-table updates. The rustdoc of `RouterPort::isolated` says what differs on the wire.
+- `RouterPort::new(transport, network_number).isolated(true)` marks a port as isolated. The router carries nothing between two isolated ports and hides each from the other, while both still reach the ordinary ports: several BACnet/SC hubs can share one B/IP network without reaching each other. It limits transit only, by design: it is not a trust level for a port, and a reject or a routing-table update from an isolated port can still change a route through an ordinary port. `next_hop_rejects()` and the control policy, both below, are the controls for those. The rustdoc of `RouterPort::isolated` says what differs on the wire.
 
 `start` returns a `StartedRouter` with the router and a receiver, `apdus`, for messages addressed to the router itself, which an application on the router may answer. `router.table()` borrows the routing table: read or change what you need, then drop it before the next `.await`. `router.counters()` reports what the router dropped or refused, and `router.ports()` lists each port's network number and actual MAC.
 
@@ -51,10 +51,11 @@ A routed target is `NETWORK:INSTANCE`, as `5:1005` above, or `NETWORK:0xMAC` for
 
 Each option is a `RouterOptions` method:
 
-- `control_policy(ControlPolicy::Hardened)` with `control_authorizer(..)` decides which peers may change routes with network-layer messages. Without them, any peer's routing messages are applied. See <a href={`${repository}/blob/v${release}/docs/rust-api.md#who-may-change-routes-518`}>who may change routes</a>.
+- `control_policy(ControlPolicy::Hardened)` with `control_authorizer(..)` decides which peers may change routes with network-layer messages. Without them, any peer's routing messages are applied. The same gate decides whether the router answers a routing-table query that arrives from another network, which it does by default: the answer is the whole table, sent toward a source the query only claims. See <a href={`${repository}/blob/v${release}/docs/rust-api.md#who-may-change-routes-518`}>who may change routes</a>.
 - `congestion(Congestion::DEFAULT)` tells the other networks, with Router-Busy-To-Network, when a port's send queue stays full, and with Router-Available-To-Network when it drains.
 - `duplicates(Duplicates::DEFAULT)` drops a global broadcast the router saw within the last second. It is meant for a site whose routers form a loop, which the standard doesn't allow but a misconfigured site can have. The standard defines no such suppression, and a sender's own identical retry within that second is dropped too. It also covers three messages the router passes on without a hop count, so that nothing else stops them around a loop: I-Am-Router-To-Network, and Router-Busy-To-Network or Router-Available-To-Network from one sender.
 - `next_hop_rejects()` lets a Reject-Message-To-Network change a learned route only when it comes from that route's next router.
+- `remote_table_updates()` takes routing-table updates (Initialize-Routing-Table with a port count other than zero) that arrive from another network. Without it the router drops them, whatever the control policy, and applies only updates from its own networks: one update can remove or redirect any learned route. Table queries are answered either way.
 - `track_admission()` gives the local receiver queue counters and a per-source quota.
 
 ## Know the limits
@@ -75,7 +76,7 @@ At the route limit, the router stops learning new routes. See <a href={`${reposi
 
 `BACnetRouter([BipRouterPort(network, interface=..., port=..., broadcast_address=...), ...])` owns a B/IP router with 1 to 255 ports. The `bbmd=Bbmd(...)` and `foreign_device=ForeignDevice(...)` options the client and server take work on a port too. Start it with `async with` or `await router.start()`; `await router.ports()` gives each port's actual address, and `await router.routes()` copies the routing table. A successful `await router.close()`, or leaving the context, waits until every port's socket is closed.
 
-It routes between B/IP networks only. It uses the native defaults, including the permissive policy for routing messages, and exposes none of the options above.
+It routes between B/IP networks only. It uses the native defaults, including the permissive policy for routing messages, and exposes none of the options above. A port does take `isolated=True`, which keeps it apart from the router's other isolated ports as `RouterPort::isolated` does in Rust, with the same limit: it is a rule about transit, not a trust level for the port.
 
 The router's own application entity can host Python stacks too. Build the router with `application="client"` for one `BACnetClient`, or `application="client_and_server"` for a `BACnetClient` and a `BACnetServer`, and build each stack with `transport="router", router=router`. Each takes its share when it starts, once per router start. The client reaches every device through the router's table, so it names each one by its network: find devices with a Who-Is to every network or to one (`scope="global"` or a network number; the application has no network of its own for a local one), then use the `_from_device` methods. The server answers at the router's address on each network. Closing the router ends both shares, and their requests then fail at once.
 

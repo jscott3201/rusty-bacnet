@@ -3767,6 +3767,30 @@ the routing table. With `control_policy(ControlPolicy::Hardened)` and a
 `control_authorizer()`, only the controls the authorizer allows can learn, mark
 busy or available, reject or initialize routes.
 
+The gate also decides one read: a routing-table query that arrives from another
+network, an Initialize-Routing-Table with a port count of zero and an SNET
+(#2715). It changes nothing, but the router answers it with its whole table (up
+to three Acks for 256 routes) sent across the internetwork toward a source
+that the query only claims. The default gate answers it, a hardened one with no
+authorizer doesn't, and an authorizer sees it with `class` set to
+`ControlClass::InitQuery`, where an update or purge is `ControlClass::InitMgmt`
+(`ControlAuthContext::class` names every control's class). A query with no SNET is
+answered on its own link without the gate. `control_snapshot().init_query`
+counts the decisions.
+
+One control doesn't reach the gate by default: an Initialize-Routing-Table
+update (a port count other than zero) that carries an SNET, so one that came
+from another network (#2717). A single update can remove or redirect any
+learned route, and none of the router's own networks can vouch for a sender
+behind another router. The router drops it silently, whatever the policy and
+authorizer, and counts it in `Counters::denied`. Clause 6.6.3.8 itself has a
+router apply the update it receives, so a site that manages router tables from
+a station on another network turns it on with
+`RouterOptions::new().remote_table_updates()`; such an update then goes to the
+gate like a local one, with `source_net` set, and an authorizer can still pick
+which to take. Updates from the router's own networks, and table queries, are
+the same either way.
+
 `ControlAuthContext::sending_peer_principal()` is the `ScPrincipal` of the
 verified leaf certificate of the direct BACnet/SC peer that handed the message
 over: the last hop, even when the message carries an SNET. Trusting it trusts
@@ -3791,8 +3815,9 @@ to certificates), and keeps the standard behaviour on B/IP:
 
 ```rust
 use std::sync::Arc;
-use bacnet_network::router::control_policy::{ControlAuthContext, ControlAuthorizer, ControlPolicy};
-use bacnet_npdu::NetworkMessageType as Message;
+use bacnet_network::router::control_policy::{
+    ControlAuthContext, ControlAuthorizer, ControlClass, ControlPolicy,
+};
 
 let routers: Vec<ScPrincipal> = configured_router_certificates();
 let announcers: Vec<MacAddr> = configured_router_vmacs();
@@ -3800,13 +3825,14 @@ let authorizer: ControlAuthorizer = Arc::new(move |context: &ControlAuthContext|
     if ![0, 1].contains(&context.port_idx) {
         return true; // B/IP: no certificates
     }
-    let unicast = [
-        Message::INITIALIZE_ROUTING_TABLE,
-        Message::INITIALIZE_ROUTING_TABLE_ACK,
-        Message::REJECT_MESSAGE_TO_NETWORK,
-        Message::I_COULD_BE_ROUTER_TO_NETWORK,
-    ]
-    .contains(&context.message_type);
+    let unicast = matches!(
+        context.class,
+        ControlClass::InitMgmt
+            | ControlClass::InitQuery
+            | ControlClass::InitAck
+            | ControlClass::Reject
+            | ControlClass::ICouldBe
+    );
     if unicast {
         context.sending_peer_principal().is_some_and(|peer| routers.contains(&peer))
     } else {
@@ -4342,6 +4368,16 @@ as that latest one, so a clock that steps back holds the router's timers
 still instead of failing; the router keeps that time from `Router::new` on.
 The router always follows Clause 6, R1 to R7 above included, with no switch
 back to the hosted router's behaviour before 0.13.0.
+
+The `Host` a caller passes decides each protected network message
+(`Host::authorize`, with its `ControlClass`): the ones that change the table,
+and, as `ControlClass::InitQuery`, a routing-table query that carries an SNET
+(#2715), since its answer crosses networks toward a source the query only
+claims. `Permissive` allows them all. A routing-table update that carries an
+SNET is dropped before the host is asked unless
+`Options::remote_table_updates` is on (#2717). It is off in `STANDARD` and in
+`HOSTED`, so a router built on the crate takes table updates from its own
+networks only until it sets the field.
 
 The types that may grow are `#[non_exhaustive]` (#1684), so code outside the
 crate builds them like this:
@@ -10786,7 +10822,10 @@ successful empty table. Silence after the table query was sent yields
 `NoAnswer`; for a routed query its `routed` field holds the network, and its
 text says that an older router may answer a table query only on its own link,
 where only the next hop hears it, so query the next hop or ask from a node on
-that network.
+that network. A router that refuses table queries from other networks drops a
+routed query silently, so it ends as `NoAnswer` too: a hosted router on the
+hardened control policy with no authorizer does, as does a `bacnet-router-core`
+host that refuses `ControlClass::InitQuery` (#2715).
 A client runs one query at a time. A `first_answer` greater than `total`
 returns `InvalidArgument`.
 

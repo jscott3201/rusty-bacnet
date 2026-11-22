@@ -41,7 +41,10 @@ pub struct Counters {
     pub unknown_port: u64,
     /// Relays not sent because the hop count had run out.
     pub hop_count_drops: u64,
-    /// Protected network messages the control policy refused.
+    /// Protected network messages the control policy refused, and
+    /// routing-table updates from another network dropped because
+    /// [`RouterOptions::remote_table_updates`](super::RouterOptions::remote_table_updates)
+    /// is off.
     pub denied: u64,
     /// Received rejects that were neither for this router nor routable.
     pub unroutable_rejects: u64,

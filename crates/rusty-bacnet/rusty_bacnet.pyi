@@ -5937,7 +5937,11 @@ class BACnetClient:
         Replies must carry the remote station's source network and address and
         arrive through the selected hop. An older router that answers a table
         query only on its own link never answers this client: the call raises
-        BacnetTimeoutError, whose text for a routed query says so.
+        BacnetTimeoutError, whose text for a routed query says so. A router
+        that refuses table queries from other networks (a hardened hosted
+        router with no authorizer, or a host that refuses the query class)
+        drops a routed query silently, and the call raises BacnetTimeoutError
+        too.
         A reject for the requested DNET that comes through the next hop
         before the first ack ends a routed query, whether the hop sent it or
         relayed it from a router further on (reason 4, message too long, is
@@ -10790,8 +10794,16 @@ class BipRouterPort:
     name (the adapter friendly name on Windows), resolved once, at
     construction, to one usable IPv4 address; ``broadcast_address`` is not
     derived from it. See "Selecting an interface" in docs/python-api.md.
+
+    ``isolated=True`` keeps the port apart from the router's other isolated
+    ports (#2716): the router carries nothing between two isolated ports and
+    hides each from the other, while both still reach the ordinary ports.
+    A request from one isolated port for one device behind another draws
+    Reject-Message-To-Network, reason 1; a broadcast is dropped quietly. One
+    isolated port alone changes nothing. It limits transit only and is no
+    trust level for a port; see "Isolated ports" in docs/python-api.md.
     """
-    def __init__(self, network_number: int, *, interface: str = "0.0.0.0", port: int = 47808, broadcast_address: str = "255.255.255.255", bbmd: Bbmd | None = None, foreign_device: ForeignDevice | None = None) -> None: ...
+    def __init__(self, network_number: int, *, interface: str = "0.0.0.0", port: int = 47808, broadcast_address: str = "255.255.255.255", bbmd: Bbmd | None = None, foreign_device: ForeignDevice | None = None, isolated: bool = False) -> None: ...
     @property
     def network_number(self) -> int: ...
     @property
@@ -10802,6 +10814,10 @@ class BipRouterPort:
     def broadcast_address(self) -> str: ...
     @property
     def mode(self) -> Literal["normal", "bbmd", "foreign_device"]: ...
+    @property
+    def isolated(self) -> bool:
+        """Whether the router keeps this port apart from its other isolated ports."""
+        ...
 
 class RouterPortInfo:
     """Frozen owned snapshot of an actual started B/IP port."""

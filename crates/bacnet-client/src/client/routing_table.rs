@@ -89,6 +89,11 @@ pub enum RoutingTableError {
     /// For a routed query, an older router may answer a table query only
     /// on its own link: it then answers the next hop, never this client,
     /// so the call ends here as well. Nothing else tells the two apart.
+    /// So does a router whose control gate refuses table queries from
+    /// other networks: a routed query reaches it with an SNET, and it drops
+    /// the query silently. A hosted router on the hardened control policy
+    /// with no authorizer does this, as does a `bacnet-router-core` host
+    /// that refuses `ControlClass::InitQuery` (#2715).
     /// A far router that rejects the query as an unknown message (reason
     /// 3) can end here too: its reject arrives with its near-side network
     /// as SNET and names a network of its own choosing (Clause 6.4.4).

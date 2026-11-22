@@ -39,7 +39,10 @@ pub struct Counters {
     /// Relays not sent because the hop count had run out.
     pub hop_count_drops: u32,
     /// Protected network messages [`Host::authorize`](super::Host::authorize)
-    /// refused.
+    /// refused, and Initialize-Routing-Table updates from another network
+    /// dropped because
+    /// [`Options::remote_table_updates`](super::Options::remote_table_updates)
+    /// is off.
     pub denied: u32,
     /// Received rejects that were neither for this router nor routable.
     pub unroutable_rejects: u32,

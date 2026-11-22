@@ -170,6 +170,19 @@ pub struct Options {
     /// routers, and may reach their applications once per port; send it
     /// with [`SourceSelection::Port`](super::SourceSelection::Port) there.
     pub duplicates: Option<Duplicates>,
+    /// Take an Initialize-Routing-Table update, one with a port count
+    /// other than zero, that carries an SNET (#2717). Off, the default,
+    /// such an update is dropped before [`Host::authorize`](super::Host::authorize)
+    /// is asked, counted in [`Counters::denied`](super::Counters::denied)
+    /// and reported as
+    /// [`Event::RemoteUpdateRefused`](super::Event::RemoteUpdateRefused):
+    /// an SNET says the update came through another router, from a node
+    /// this router's own networks can't vouch for, and one update can
+    /// remove or redirect any learned route. On, it goes to the host as an
+    /// update with no SNET does, with the SNET in its
+    /// [`Claim`](super::Claim). Updates with no SNET, and queries, are the
+    /// same either way.
+    pub remote_table_updates: bool,
 }
 
 impl Options {
@@ -179,6 +192,13 @@ impl Options {
     /// age, a 60 s sweep, [`Timing::DEFAULT`], and a 5 s discovery cooldown
     /// and 30 s age, with every opt-in policy off. Firmware sizes its
     /// table with the storage's `R` and starts here.
+    ///
+    /// One default departs from the standard on purpose (#2717):
+    /// [`remote_table_updates`](Self::remote_table_updates) is off, so a
+    /// routing-table update that carries an SNET is refused. Clause 6.6.3.8
+    /// has a router apply an update it receives and doesn't exclude one
+    /// from another network; set the field to `true` to take those, under
+    /// [`Host::authorize`](super::Host::authorize) like a local one.
     pub const STANDARD: Self = Self {
         convergence: Convergence::Standard,
         route_cap: None,
@@ -190,6 +210,7 @@ impl Options {
         congestion: None,
         next_hop_rejects: false,
         duplicates: None,
+        remote_table_updates: false,
     };
 
     /// The hosted router's values: [`STANDARD`](Self::STANDARD)'s, with

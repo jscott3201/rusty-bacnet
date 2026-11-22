@@ -15,16 +15,27 @@
 //! fresh messages of its own, I-Am-Router, Router-Busy and
 //! Router-Available (#1810). They carry no hop count, and the relay
 //! names no origin, so around a loop nothing else stops them. A repeat
-//! within the time to live is neither applied to the table nor passed on.
-//! Each entry is tagged with its message type, so it matches only its own
-//! kind:
+//! within the time to live is never passed on, and a repeated Router-Busy
+//! or Router-Available isn't applied to the table either. Each entry is
+//! tagged with its message type, so it matches only its own kind:
 //!
 //! - An I-Am-Router is kept by its data alone, under network 0xFFFF, which
 //!   no origin's network can be: a loop hands it on from a different
 //!   router each time. So two routers announcing the same networks within
-//!   one time to live look like one, and the second is dropped until it
-//!   announces again; identical lists from two neighbours mean a loop or
-//!   a failover, and the first wins for one time to live.
+//!   one time to live look like one, and the second is not passed on. It
+//!   is still learned from where that keeps a route on its port (#2713):
+//!   a network the table lacks is added, and a route through the arrival
+//!   port is refreshed, with the sender as its next router, and loses any
+//!   pending hardened claim from another port, as with a claim that is no
+//!   repeat. A network reached through another port stays there: identical
+//!   lists on two ports mean a loop or a failover. Learned, the copy a loop
+//!   brings back would turn each router's route toward the next router
+//!   round the loop. So the first sender's port keeps the route past the
+//!   time to live: until the router whose copy was skipped announces again
+//!   after it, or until the route goes unconfirmed for
+//!   [`Options::learned_age`](super::Options::learned_age) (300 s by
+//!   default) and is purged. When the first sender was some other station,
+//!   that is a known limit, kept by decision.
 //! - A Router-Busy or Router-Available is kept by its sender, the arrival
 //!   network and link source, and its data, since its effect is scoped to
 //!   the routes through that sender: another router's identical message
@@ -97,8 +108,12 @@ impl Default for Duplicates {
     }
 }
 
-/// One broadcast seen. Network 0 marks an empty slot: no SNET or port
-/// network is 0.
+/// One broadcast seen. Network 0 marks an empty slot, and is what keeps a
+/// lookup from matching one: every lookup compares the network first, and
+/// none is made with network 0. A key's network is an SNET, which the NPDU
+/// decoder refuses when it is 0; a port's own network, which
+/// [`Router::new`](super::Router::new) refuses when it is 0; or 0xFFFF,
+/// for an I-Am-Router.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Seen {
     at: Instant,
@@ -112,12 +127,16 @@ struct Seen {
     resets: u8,
 }
 
+/// An empty slot: all zero bits, so that the record, and the
+/// [`Storage`](super::Storage) around it, can start as zeroed memory
+/// (#2679). Its tag is Who-Is-Router's, which is harmless: its network, 0,
+/// is no key's.
 const EMPTY: Seen = Seen {
     at: Instant::ZERO,
     payload: 0,
     source: 0,
     network: 0,
-    tag: APDU,
+    tag: 0,
     resets: 0,
 };
 
@@ -259,6 +278,7 @@ impl<const B: usize> Recent<B> {
 
     /// Put `entry` in the next slot, giving up the oldest when full.
     fn record(&mut self, entry: Seen) {
+        debug_assert_ne!(entry.network, 0, "network 0 marks an empty slot");
         if let Some(slot) = self.seen.get_mut(self.next) {
             *slot = entry;
             self.next += 1;
@@ -266,5 +286,74 @@ impl<const B: usize> Recent<B> {
                 self.next = 0;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TTL: Duration = Duration::from_secs(1);
+
+    /// Four octets whose FNV-1a hash is 0, as an empty slot's two hashes
+    /// are.
+    const ZERO_HASH: [u8; 4] = [0xcc, 0x24, 0x31, 0xc4];
+
+    /// An empty slot is zero in every field (#2679): all of them are
+    /// integers, so its bits are all zero and zeroed memory is an empty
+    /// record.
+    #[test]
+    fn an_empty_slot_is_zero_in_every_field() {
+        let Seen {
+            at,
+            payload,
+            source,
+            network,
+            tag,
+            resets,
+        } = EMPTY;
+        assert_eq!(at, Instant::ZERO);
+        assert_eq!((payload, source, network, tag, resets), (0, 0, 0, 0, 0));
+        let record = Recent::<4>::NEW;
+        assert!(record.seen.iter().all(|seen| *seen == EMPTY));
+        assert_eq!(record.next, 0);
+    }
+
+    /// The key nearest an empty slot is not taken for one: a Who-Is-Router
+    /// (tag 0) whose origin and data both hash to 0, at the time an empty
+    /// slot holds, differs from it by its network alone, and no key has
+    /// network 0. So the first copy is recorded, and only the second is a
+    /// repeat.
+    #[test]
+    fn an_empty_slot_matches_no_key() {
+        assert_eq!(fnv1a(&ZERO_HASH), 0);
+        for network in [1, 0xFFFE, 0xFFFF] {
+            let mut record = Recent::<4>::NEW;
+            let mut repeat =
+                || record.repeat_tagged(network, &ZERO_HASH, 0, &ZERO_HASH, Instant::ZERO, TTL);
+            assert!(!repeat(), "network {network}: an empty slot matched");
+            assert!(repeat(), "network {network}: the entry itself matches");
+        }
+    }
+
+    /// Nor does a Router-Busy or Router-Available take an empty slot for
+    /// its opposite, even when the opposite's tag is the empty slot's: the
+    /// reset count stays 0, where a live opposite would make it 1. A slot
+    /// that a reset cleared is empty again.
+    #[test]
+    fn an_empty_slot_is_no_opposite_to_forget() {
+        let mut record = Recent::<4>::NEW;
+        let mut flow = |tag, opposite| {
+            let repeat =
+                record.repeat_flow(1, &ZERO_HASH, tag, opposite, &ZERO_HASH, Instant::ZERO, TTL);
+            (repeat, record.seen)
+        };
+        let (repeat, seen) = flow(4, 0);
+        assert!(!repeat);
+        assert_eq!(seen[0].resets, 0);
+        let (repeat, seen) = flow(5, 4);
+        assert!(!repeat);
+        assert_eq!(seen[0], EMPTY);
+        assert_eq!((seen[1].tag, seen[1].resets), (5, 1));
     }
 }

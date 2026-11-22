@@ -7,12 +7,21 @@
 //!
 //! Protected (hardened denies unknown authority): Init updates/purges, I-Am
 //! learning, Init-ACK learning, Busy/Available marks, Reject transitions,
-//! I-Could-Be inserts. Read-only (always allowed): Who-Is relay/answer,
-//! Init queries, What-Is/Number-Is, Establish/Disconnect no-ops, security
+//! I-Could-Be inserts, and an Init query that carries an SNET (#2715): it
+//! changes nothing, but its answer is the whole table, sent across the
+//! internetwork toward a source the query only claims. Read-only (always
+//! allowed): Who-Is relay/answer, an Init query with no SNET,
+//! What-Is/Number-Is, Establish/Disconnect no-ops, security
 //! ack-only, proprietary explicit-reject, directed opaque forwarding.
 //! Deny is a silent local drop: no mutation, relay, ACK, or Reject emission.
 //! Validation precedes policy. The router's engine asks for each decision
 //! under its lock, with the message's claims, before anything changes.
+//!
+//! One control never gets this far by default: an Init update or purge
+//! that carries an SNET is dropped by the engine unless
+//! [`RouterOptions::remote_table_updates`](super::RouterOptions::remote_table_updates)
+//! is on (#2717). With it on, such an update is decided here like a local
+//! one, and [`ControlAuthContext::source_net`] tells the two apart.
 //!
 //! ## Who may change routes (#518)
 //!
@@ -41,9 +50,8 @@
 //! ```
 //! use std::sync::Arc;
 //! use bacnet_network::router::control_policy::{
-//!     ControlAuthContext, ControlAuthorizer, ControlPolicy,
+//!     ControlAuthContext, ControlAuthorizer, ControlClass, ControlPolicy,
 //! };
-//! use bacnet_npdu::NetworkMessageType as Message;
 //! use bacnet_transport::port::ScPrincipal;
 //! use bacnet_types::MacAddr;
 //!
@@ -54,13 +62,14 @@
 //!             // B/IP has no certificates: keep the standard behaviour.
 //!             return true;
 //!         }
-//!         let unicast = [
-//!             Message::INITIALIZE_ROUTING_TABLE,
-//!             Message::INITIALIZE_ROUTING_TABLE_ACK,
-//!             Message::REJECT_MESSAGE_TO_NETWORK,
-//!             Message::I_COULD_BE_ROUTER_TO_NETWORK,
-//!         ]
-//!         .contains(&context.message_type);
+//!         let unicast = matches!(
+//!             context.class,
+//!             ControlClass::InitMgmt
+//!                 | ControlClass::InitQuery
+//!                 | ControlClass::InitAck
+//!                 | ControlClass::Reject
+//!                 | ControlClass::ICouldBe
+//!         );
 //!         if unicast {
 //!             context
 //!                 .sending_peer_principal()
@@ -139,6 +148,10 @@ pub struct ControlAuthContext {
     pub port_idx: usize,
     /// Network number of that port.
     pub port_network: u16,
+    /// The class of change the control would make, or
+    /// [`ControlClass::InitQuery`] for a routing-table query from another
+    /// network (#2715). The same class its decision is counted under.
+    pub class: ControlClass,
     /// Data-link source address of the sending node.
     pub source_mac: bacnet_types::MacAddr,
     /// How the transport learned of the frame's origin (direct peer, hub, relayed).
@@ -176,6 +189,7 @@ impl std::fmt::Debug for ControlAuthContext {
         f.debug_struct("ControlAuthContext")
             .field("port_idx", &self.port_idx)
             .field("port_network", &self.port_network)
+            .field("class", &self.class)
             .field("source_mac_len", &self.source_mac.len())
             .field("provenance", &self.provenance)
             .field(
@@ -196,6 +210,9 @@ impl std::fmt::Debug for ControlAuthContext {
 /// Fast, nonblocking, side-effect-free control authorizer.
 ///
 /// Consulted for protected controls only; read-only discovery never calls it.
+/// A routing-table query from another network is one of them (#2715): its
+/// [`class`](ControlAuthContext::class) is [`ControlClass::InitQuery`],
+/// where an update or purge is [`ControlClass::InitMgmt`].
 /// Do not block, reenter the router/table, or perform side effects. It runs
 /// under the router's engine lock (#1679), one call at a time per router:
 /// every port's routing waits while it runs, and calling into the router
@@ -218,6 +235,7 @@ fn index(class: ControlClass) -> Option<usize> {
         ControlClass::Available => Some(4),
         ControlClass::Reject => Some(5),
         ControlClass::ICouldBe => Some(6),
+        ControlClass::InitQuery => Some(7),
         _ => None,
     }
 }
@@ -233,7 +251,7 @@ pub struct ControlServiceCounters {
     pub policy_deny_total: u64,
 }
 
-/// Fixed-shape telemetry for the seven protected classes.
+/// Fixed-shape telemetry for the eight protected classes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ControlDecisionCounters {
     /// Totals for I-Am-Router-To-Network.
@@ -250,6 +268,9 @@ pub struct ControlDecisionCounters {
     pub reject: ControlServiceCounters,
     /// Totals for I-Could-Be-Router-To-Network.
     pub i_could_be: ControlServiceCounters,
+    /// Totals for Initialize-Routing-Table queries that carried an SNET
+    /// (#2715). A query with no SNET is never put to the gate.
+    pub init_query: ControlServiceCounters,
 }
 
 #[derive(Clone, Copy)]
@@ -261,7 +282,7 @@ enum Decision {
 
 /// Atomic per-class totals shared via [`ControlGate`].
 #[derive(Default)]
-pub struct ControlDecisions([[AtomicU64; 3]; 7]);
+pub struct ControlDecisions([[AtomicU64; 3]; 8]);
 
 impl std::fmt::Debug for ControlDecisions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -290,6 +311,7 @@ impl ControlDecisions {
             available,
             reject,
             i_could_be,
+            init_query,
         ] = rows;
         ControlDecisionCounters {
             i_am,
@@ -299,6 +321,7 @@ impl ControlDecisions {
             available,
             reject,
             i_could_be,
+            init_query,
         }
     }
 
@@ -391,10 +414,11 @@ impl ControlGate {
         self.decisions.snapshot()
     }
 
-    /// Decide `class` for the redacted context `ctx`, counting the
-    /// decision. The engine's host calls it after validation, before any
+    /// Decide the redacted context `ctx`, counting the decision under its
+    /// class. The engine's host calls it after validation, before any
     /// change.
-    pub(super) fn decide(&self, ctx: &ControlAuthContext, class: ControlClass) -> bool {
+    pub(super) fn decide(&self, ctx: &ControlAuthContext) -> bool {
+        let class = ctx.class;
         match (&self.policy, &self.authorizer) {
             (ControlPolicy::Permissive, None) => {
                 self.decisions.record(class, Decision::Allow);
