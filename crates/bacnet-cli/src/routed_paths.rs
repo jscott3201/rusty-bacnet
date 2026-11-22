@@ -142,7 +142,6 @@ pub(crate) async fn around<T: TransportPort + 'static>(
     for (mac, limit) in &paths {
         client
             .configure_routed_path_max_npdu(mac, limit.network, limit.max_npdu)
-            .await
             .map_err(|error| format!("--routed-path-limit {}: {error}", limit.router))?;
     }
     let outcome = command.await;

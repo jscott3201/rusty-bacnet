@@ -2889,10 +2889,11 @@ until its path's limit is set by hand:
 
 None of the five sends anything through the path (a B/IPv6 router given as a
 socket address is first asked its VMAC), and each raises `RuntimeError`
-before the client starts and after `stop()`. The first two wait for a request
-active on the path, or one queued for it, but not out the hold a request with
-no answer leaves (the APDU timeout times the attempts): the change applies at
-once, and the next request still waits the hold out, sized to the new limit.
+before the client starts and after `stop()`. The first two apply at once
+(#2683): they wait neither for a request on the path nor out the hold a
+request with no answer leaves (the APDU timeout times the attempts). A request
+waiting out the hold still waits it out, then goes sized to the new limit; one
+already sent keeps its size, and a reject for it teaches nothing.
 They work on the client from `endpoint.client()` too.
 
 ```python

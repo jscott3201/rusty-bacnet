@@ -167,7 +167,6 @@ async fn the_warning_fires_once_per_path_until_its_limit_changes() {
     }
     path.client
         .configure_routed_path_max_npdu(&ROUTER, DNET, 128)
-        .await
         .unwrap();
     assert!(
         !path

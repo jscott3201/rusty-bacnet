@@ -9714,12 +9714,10 @@ Applications with path-specific evidence can configure the NPDU envelope
 without changing `ClientConfig`:
 
 ```rust
-client
-    .configure_routed_path_max_npdu(&router_mac, dnet, 1497)
-    .await?;
+client.configure_routed_path_max_npdu(&router_mac, dnet, 1497)?;
 
 // Restore the conservative unknown-path policy.
-client.clear_routed_path_limit(&router_mac, dnet).await?;
+client.clear_routed_path_limit(&router_mac, dnet)?;
 
 // Each path with a configured or learned limit, or a below-minimum reject.
 for path in client.routed_path_limits() {
@@ -9735,6 +9733,16 @@ a one-octet DADR and the client's own MAC as SADR), so 66 on B/IP and 61 on
 MS/TP (#2667). Any larger value is taken, 228 or below included. A request to
 a station whose longer MAC leaves less than the minimum is still refused as
 `Error::RoutedPathTooLong` when it is made.
+
+Both methods are synchronous and apply at once (#2683). They send nothing and
+wait neither for a request on the path nor out the hold a request with no
+answer leaves (the APDU timeout times the attempts, #2651). A request waiting
+out the hold still waits it out, then goes sized to the new limit; a reason-4
+reject that lands in the hold is still discarded. A request sized before the
+change keeps its size, and a reject for it teaches the path nothing. Requests
+to one path still go one at a time, in the order they were made.
+`clear_routed_path_limit` on a path the client holds nothing for reserves
+nothing, so it never fails for capacity.
 
 `routed_path_limits()` lists every path holding more than the default, as
 `RoutedPathLimit` values ordered by router MAC and then network: the router
