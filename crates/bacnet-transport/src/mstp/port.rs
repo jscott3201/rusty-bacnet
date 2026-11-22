@@ -206,23 +206,24 @@ impl<S: SerialPort> MstpTransport<S> {
     /// abort and a drop do. The queues close, so every later send is
     /// refused at once; the node's task is aborted, and the serial port
     /// goes with it as the runtime drops it; a dedicated thread is told to
-    /// end. A stop after it has nothing left to join.
+    /// end. The task and the thread stay here, so a stop after an abort
+    /// still waits for both, and so for the serial port.
     fn abort_task(&self) {
         if let Some(link) = &self.link {
             link.queues.close();
         }
-        let ended = {
-            let mut running = lock(&self.running);
-            if let Some(task) = running.task.take() {
-                if let Some(runtime) = &running.runtime {
-                    runtime.hold_until_node_dropped();
-                }
-                task.abort();
+        let mut running = lock(&self.running);
+        let Running { task, runtime } = &mut *running;
+        if let Some(task) = task {
+            if let Some(runtime) = runtime {
+                runtime.hold_until_node_dropped();
             }
-            running.runtime.take()
-        };
-        // Its thread ends once the sender inside goes, out of the lock.
-        drop(ended);
+            task.abort();
+        }
+        if let Some(runtime) = runtime {
+            // The thread ends once its runtime has dropped the aborted node.
+            drop(runtime.stopping());
+        }
     }
 
     /// Queue an NPDU for the core, refusing it at once if it cannot be sent.

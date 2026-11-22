@@ -28,7 +28,7 @@
 //! Every send runs this pipeline, unless the transport has stopped: from a
 //! stop's return, or an abort, to the next start every send fails at once
 //! with [`crate::port::stopped`]'s error, recording nothing, as a real
-//! link's does (#2617).
+//! link's does (#2617). After an abort, a start waits for a stop.
 //! 1. The [`SendMode`] for its kind (unicast or broadcast): `Ignore` returns
 //!    `Ok(())` untouched, skipping every later step, `Panic` panics, and
 //!    `Fail` records the frame and returns its error.
@@ -490,6 +490,13 @@ impl TransportPort for TestTransport {
 
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.shared.starts.fetch_add(1, Ordering::SeqCst);
+        // As on a real link, a start after an abort waits for a stop.
+        if self.stop_gate.is_aborted() {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "test transport aborted: stop it before starting again",
+            )));
+        }
         self.shared.stopped.store(false, Ordering::Release);
         self.stop_gate.open();
         if let Some(hook) = &self.hooks.on_start {
@@ -610,11 +617,12 @@ impl TransportPort for TestTransport {
     }
 
     /// Count the abort, through `&self` (#2617); then, as on a real link,
-    /// every send fails until the next start, the `Fresh` channel closes
-    /// and a held lease goes. The hook, or the inner transport's abort,
-    /// runs too.
+    /// every send fails, the `Fresh` channel closes, a held lease goes, and
+    /// a start is refused until a stop. The hook, or the inner transport's
+    /// abort, runs too.
     fn abort(&self) {
         self.shared.aborts.fetch_add(1, Ordering::SeqCst);
+        self.stop_gate.abort();
         self.shared.stopped.store(true, Ordering::Release);
         self.close_fresh_channel();
         self.port_lease

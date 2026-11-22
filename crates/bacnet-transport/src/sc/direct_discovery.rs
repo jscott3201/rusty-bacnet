@@ -497,6 +497,12 @@ impl<W: WebSocketPort> DirectShared<W> {
             }
         }
         #[cfg(feature = "sc-tls")]
+        self.end_intake();
+    }
+
+    /// Let go of the transport's NPDU sender, so its receiver can end.
+    #[cfg(feature = "sc-tls")]
+    pub(super) fn end_intake(&self) {
         self.intake.lock().unwrap().take();
     }
 

@@ -49,16 +49,17 @@ async fn reopen(in_use: &Arc<AtomicBool>) -> ExclusiveSerial {
 }
 
 #[tokio::test]
-async fn abort_takes_task_and_releases_serial_for_reopen() {
+async fn abort_releases_the_serial_port_and_leaves_the_task_to_a_stop() {
     let in_use = Arc::new(AtomicBool::new(false));
     let serial = ExclusiveSerial::open(in_use.clone()).unwrap();
     let mut transport = MstpTransport::new(serial, MstpConfig::default());
     let _rx = transport.start().await.unwrap();
     assert!(ExclusiveSerial::open(in_use.clone()).is_none());
 
-    // Later sends are refused as a stopped transport's are (#2617).
+    // Later sends are refused as a stopped transport's are (#2617), and the
+    // aborted task stays for a stop to join.
     transport.abort();
-    assert!(lock(&transport.running).task.is_none());
+    assert!(lock(&transport.running).task.is_some());
     let refused = transport.send_broadcast(&[1, 0]).await;
     assert!(
         matches!(&refused, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
@@ -66,6 +67,34 @@ async fn abort_takes_task_and_releases_serial_for_reopen() {
     );
     drop(reopen(&in_use).await);
     assert!(!in_use.load(Ordering::SeqCst));
+    transport.stop().await.unwrap();
+    assert!(
+        lock(&transport.running).task.is_none(),
+        "the stop joined it"
+    );
+}
+
+/// On a dedicated thread, a stop after an abort waits for the thread, and
+/// so for the serial port, as a stop alone does (#2617).
+#[tokio::test]
+async fn a_stop_after_an_abort_waits_for_the_dedicated_thread() {
+    let in_use = Arc::new(AtomicBool::new(false));
+    let serial = ExclusiveSerial::open(in_use.clone()).unwrap();
+    let mut transport = MstpTransport::new(serial, MstpConfig::default())
+        .with_execution_mode(MstpExecutionMode::dedicated_thread());
+    let _rx = transport.start().await.unwrap();
+    transport.abort();
+    assert!(
+        lock(&transport.running).runtime.is_some(),
+        "kept for the stop"
+    );
+    transport.stop().await.unwrap();
+    assert!(
+        !in_use.load(Ordering::SeqCst),
+        "the stop waited for the port"
+    );
+    let running = lock(&transport.running);
+    assert!(running.task.is_none() && running.runtime.is_none());
 }
 
 /// A stop cancelled while it waits leaves the rest to the next stop,

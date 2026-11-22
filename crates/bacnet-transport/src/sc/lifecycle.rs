@@ -9,6 +9,9 @@ use tokio::task::JoinHandle;
 
 use crate::port::TransportPort;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::{ScConnectionState, ScTransport, WebSocketPort};
 use crate::sc_frame::encode_sc_message;
 use bacnet_types::error::Error;
@@ -135,21 +138,34 @@ impl<W: WebSocketPort> ScTransport<W> {
     pub(super) fn abort_background_tasks(
         &self,
     ) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
-        self.direct_membership.retire_all();
+        self.end_at_once();
         let task = self
             .recv_task
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some(task) = &task {
-            task.abort();
-        }
         let restore_task = self
             .restore_disconnect_task
             .lock()
             .ok()
             .and_then(|mut task| task.take());
-        if let Some(task) = &restore_task {
+        (task, restore_task)
+    }
+
+    /// Abort the receive and restore tasks in place, where a stop finds and
+    /// joins them, end the direct links and close the connection's record.
+    fn end_at_once(&self) {
+        self.direct_membership.retire_all();
+        if let Some(task) = &*self
+            .recv_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            task.abort();
+        }
+        if let Ok(task) = self.restore_disconnect_task.lock()
+            && let Some(task) = &*task
+        {
             task.abort();
         }
         if let Some(conn) = &self.connection
@@ -165,38 +181,92 @@ impl<W: WebSocketPort> ScTransport<W> {
         // send or timeout and fall back to the hub path.
         if let Some(shared) = &self.direct {
             shared.disable();
+            // Direct NPDUs no longer reach the receiver, which can end.
+            #[cfg(feature = "sc-tls")]
+            shared.end_intake();
         }
-        (task, restore_task)
     }
 
     /// The abort, through `&self` (#2617): nothing is said to the hub or a
     /// direct peer. The direct listener is sealed, the receive and restore
-    /// tasks are aborted and the direct links ended, the sockets given
-    /// before start are let go of, and the hub socket comes out of the send
-    /// slot; every later send fails with [`crate::port::stopped`]'s error.
-    /// A send that holds the slot at that moment finishes, and the socket
-    /// then comes out on the runtime, or, with none current, as the
-    /// transport drops. What an aborted task still holds goes as the
-    /// runtime drops it. The transport does not start again.
+    /// tasks are aborted in place, for a later stop to join, the direct
+    /// links end, and the sockets given before start are let go of. Every
+    /// later send fails with [`crate::port::stopped`]'s error. The hub
+    /// socket comes out of the send slot now, and again as the aborted
+    /// receive task drops ([`ReleaseOnAbort`]), which also takes out one it
+    /// published as it was aborted. A slot a send holds is emptied on the
+    /// runtime: the current one, or, from a thread with none, the one the
+    /// transport started on. The transport does not start again.
     pub(super) fn abort_and_release(&self) {
-        self.aborted
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.abort_mark.set();
         self.stop_gate.abort();
         self.seal_direct_listener();
-        let _ = self.abort_background_tasks();
+        self.end_at_once();
         drop(lock_unstarted(&self.ws).take());
         drop(lock_unstarted(&self.failover_ws).take());
-        let Some(slot) = &self.ws_shared else {
+        if let Some(slot) = &self.ws_shared {
+            self.abort_mark.release(slot);
+        }
+    }
+}
+
+/// What an abort through `&self` shares with the receive task (#2617).
+#[derive(Debug, Default)]
+pub(super) struct AbortMark {
+    aborted: AtomicBool,
+    /// The runtime the transport started on, for an abort from a thread
+    /// with none.
+    runtime: std::sync::Mutex<Option<tokio::runtime::Handle>>,
+}
+
+impl AbortMark {
+    pub(super) fn set(&self) {
+        self.aborted.store(true, Ordering::Release);
+    }
+
+    pub(super) fn is_set(&self) -> bool {
+        self.aborted.load(Ordering::Acquire)
+    }
+
+    /// Remember the runtime a start runs on.
+    pub(super) fn started_on(&self, runtime: tokio::runtime::Handle) {
+        *self
+            .runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime);
+    }
+
+    /// Take the hub socket out of `slot`: now, or, while something holds
+    /// the slot, on a runtime as soon as it is free.
+    pub(super) fn release<T: Send + Sync + 'static>(&self, slot: &super::HubSlot<T>) {
+        if let Ok(mut hub) = slot.try_lock() {
+            drop(hub.take());
             return;
-        };
-        match slot.try_lock() {
-            Ok(mut hub) => drop(hub.take()),
-            Err(_) => {
-                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                    let slot = std::sync::Arc::clone(slot);
-                    runtime.spawn(async move { drop(slot.lock().await.take()) });
-                }
-            }
+        }
+        let runtime = tokio::runtime::Handle::try_current().ok().or_else(|| {
+            self.runtime
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        });
+        if let Some(runtime) = runtime {
+            let slot = Arc::clone(slot);
+            runtime.spawn(async move { drop(slot.lock().await.take()) });
+        }
+    }
+}
+
+/// Held by the receive task: once the transport is aborted, its drop takes
+/// out the hub socket, whatever the task published before it ended.
+pub(super) struct ReleaseOnAbort<T: Send + Sync + 'static> {
+    pub(super) slot: super::HubSlot<T>,
+    pub(super) mark: Arc<AbortMark>,
+}
+
+impl<T: Send + Sync + 'static> Drop for ReleaseOnAbort<T> {
+    fn drop(&mut self) {
+        if self.mark.is_set() {
+            self.mark.release(&self.slot);
         }
     }
 }

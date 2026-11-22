@@ -328,8 +328,8 @@ async fn bip6_stop_with_another_holder_alive_fails_later_sends_and_frees_the_por
 
 /// An abort through a shared reference, with another holder alive
 /// (#2617): every later send fails with the stopped error at once, the
-/// socket closes as the runtime drops the aborted tasks, and a stop after
-/// it joins them and returns.
+/// socket closes as the runtime drops the aborted tasks, and a start is
+/// refused until a stop has joined them.
 #[tokio::test]
 async fn bip6_abort_with_another_holder_alive_fails_later_sends_and_lets_go_of_the_socket() {
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(1));
@@ -359,7 +359,10 @@ async fn bip6_abort_with_another_holder_alive_fails_later_sends_and_lets_go_of_t
     })
     .await
     .expect("the socket closed");
-    other.stop().await.unwrap();
+    drop(other);
+    let mut transport = std::sync::Arc::into_inner(transport).unwrap();
+    assert!(transport.start().await.is_err(), "a start waits for a stop");
+    transport.stop().await.unwrap();
 }
 
 /// A send waiting on a resolution when the transport stops fails at the

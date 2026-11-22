@@ -539,7 +539,8 @@ async fn sends_fail_between_a_stop_and_the_next_start() {
 }
 
 /// An abort through a shared reference fails every later send, as a stop
-/// does, and closes the `Fresh` channel, until the next start (#2617).
+/// does, and closes the `Fresh` channel; a start then waits for a stop
+/// (#2617).
 #[tokio::test]
 async fn sends_fail_after_an_abort_until_the_next_start() {
     let mut transport = TestTransport::builder().start(StartMode::Fresh(4)).build();
@@ -556,6 +557,8 @@ async fn sends_fail_after_an_abort_until_the_next_start() {
     assert!(handle.sent().is_empty());
     assert_eq!((handle.stops(), handle.aborts()), (0, 1));
     let mut transport = Arc::into_inner(transport).unwrap();
+    assert!(transport.start().await.is_err(), "a start waits for a stop");
+    transport.stop().await.unwrap();
     transport.start().await.unwrap();
     transport.send_unicast(&[1, 0], &[2]).await.unwrap();
     assert_eq!(handle.sent().len(), 1, "a start opens the link again");

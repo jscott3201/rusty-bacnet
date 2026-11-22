@@ -798,8 +798,11 @@ impl TransportPort for BipTransport {
     /// lets go of the socket and every later send fails with
     /// [`crate::port::stopped`]'s error, and the tasks are aborted; and a
     /// registered Network Port's lease is let go of. The socket closes as
-    /// the runtime drops the aborted tasks, which still hold it.
+    /// the runtime drops the aborted tasks, which still hold it. A start is
+    /// refused until a stop has joined them; then the transport starts
+    /// again, as after any stop.
     fn abort(&self) {
+        self.stop_gate.abort();
         self.stop_at_once();
         self.release_network_port_lease();
     }

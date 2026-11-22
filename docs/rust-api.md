@@ -985,9 +985,12 @@ live `client()`. An abort never waits and needs no runtime: the background
 tasks are aborted, not joined, so their sockets close as the runtime drops
 them; the transport lets go of what it holds itself; every later send fails
 with the same `NotConnected` error as after a stop; and nothing graceful
-goes out (no BACnet/SC Disconnect-Request). Dropping a `NetworkLayer`
-aborts it. A custom transport's abort does what its stop does at once,
-through the same locks.
+goes out (no BACnet/SC Disconnect-Request). The aborted tasks stay with
+the transport: a stop after an abort joins them, and until that stop a
+start is refused; after it, B/IP, B/IPv6 and Ethernet start again as after
+any stop, and MS/TP, BACnet/SC and the loopback do not. Dropping a
+`NetworkLayer` aborts it. A custom transport's abort does what its stop
+does at once, through the same locks, and leaves its tasks for the stop.
 
 ### Throttled peer warnings
 

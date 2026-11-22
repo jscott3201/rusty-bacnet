@@ -21,7 +21,7 @@ impl<W: WebSocketPort> ScTransport<W> {
         }
         // Aborted (#2617): nothing more goes out, whether or not the hub
         // socket has left its slot yet.
-        if self.aborted.load(std::sync::atomic::Ordering::Acquire) {
+        if self.abort_mark.is_set() {
             return Err(crate::port::stopped());
         }
         if mac.len() != 6 {

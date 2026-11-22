@@ -261,15 +261,17 @@ async fn sc_abort_through_a_shared_reference_closes_the_hub_socket_without_a_goo
     assert!(stopped_start(transport.start().await));
 }
 
-/// An abort that finds the hub slot held, as by a send under way, still
-/// fails every later send at once, and the socket leaves the slot on the
-/// runtime once the holder lets go (#2617).
+/// An abort from a thread with no runtime, while a send holds the hub
+/// slot, still fails every later send at once, and the socket leaves the
+/// slot on the transport's runtime once the holder lets go (#2617).
 #[tokio::test]
-async fn sc_abort_beside_a_held_hub_slot_fails_later_sends_and_lets_go_on_the_runtime() {
+async fn sc_abort_off_the_runtime_beside_a_held_hub_slot_lets_go_once_it_is_free() {
     let (transport, ws_hub) = start_loopback_sc([0x01; 6], [0x10; 6]).await;
+    let transport = Arc::new(transport);
     let slot = Arc::clone(transport.ws_shared.as_ref().unwrap());
     let held = slot.lock().await;
-    transport.abort();
+    let other = Arc::clone(&transport);
+    std::thread::spawn(move || other.abort()).join().unwrap();
     drop(held);
     // Before the runtime runs anything: the socket is still in the slot.
     let sent = transport.send_unicast(&[0x01, 0x00], &[0x20; 6]).await;
@@ -283,4 +285,67 @@ async fn sc_abort_beside_a_held_hub_slot_fails_later_sends_and_lets_go_on_the_ru
     .await
     .expect("the hub socket closed");
     assert!(slot.lock().await.is_none(), "the socket left the slot");
+}
+
+/// A socket the receive task publishes as it is aborted, after the abort
+/// emptied the slot, leaves the slot as the task drops (#2617).
+#[tokio::test]
+async fn sc_a_socket_published_as_the_abort_lands_leaves_the_slot_with_the_task() {
+    let (transport, _ws_hub) = start_loopback_sc([0x01; 6], [0x10; 6]).await;
+    let slot = Arc::clone(transport.ws_shared.as_ref().unwrap());
+    let late = slot.lock().await.clone();
+    transport.abort();
+    // The task's late publish, before the runtime has dropped it.
+    let mut published = slot.try_lock().expect("the abort let go of the slot");
+    assert!(published.is_none(), "the abort emptied the slot");
+    *published = late;
+    drop(published);
+    timeout(Duration::from_secs(1), async {
+        while slot.lock().await.is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the task's drop took the late socket out");
+}
+
+/// A stop after an abort joins the receive task the abort left (#2617).
+#[tokio::test]
+async fn sc_a_stop_after_an_abort_joins_the_receive_task() {
+    let (transport, _ws_hub) = start_loopback_sc([0x01; 6], [0x10; 6]).await;
+    let receive = transport
+        .recv_task
+        .lock()
+        .unwrap()
+        .as_ref()
+        .expect("SC start spawns recv task")
+        .abort_handle();
+    transport.abort();
+    assert!(
+        transport.recv_task.lock().unwrap().is_some(),
+        "kept for a stop to join"
+    );
+    transport.stop().await.unwrap();
+    assert!(transport.recv_task.lock().unwrap().is_none());
+    assert!(receive.is_finished(), "the stop joined it");
+}
+
+/// With direct connections on, an abort lets go of the NPDU sender they
+/// deliver through, so the receiver ends, as after a stop (#2617).
+#[cfg(feature = "sc-tls")]
+#[tokio::test]
+async fn sc_an_abort_with_direct_connections_on_ends_the_receiver() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_direct_discovery(true);
+    let hub = tokio::spawn(async move {
+        hub_accept(&ws_hub, [0x10; 6]).await;
+        ws_hub
+    });
+    let mut rx = transport.start().await.unwrap();
+    let _ws_hub = hub.await.unwrap();
+    transport.abort();
+    let ended = timeout(Duration::from_secs(1), rx.recv()).await;
+    assert!(ended.expect("the receiver ends").is_none());
 }

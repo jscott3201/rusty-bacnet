@@ -119,3 +119,18 @@ async fn an_abort_reads_as_stopped_and_leaves_the_stop_to_run() {
     gate.open();
     assert!(!gate.is_stopped());
 }
+
+/// An abort that comes while a stop runs, which is then cancelled, is not
+/// forgotten: the gate stays aborted, and the next stop runs (#2617).
+#[tokio::test]
+async fn an_abort_during_a_cancelled_stop_leaves_the_gate_aborted() {
+    let gate = StopGate::default();
+    let stopping = gate.enter().await.expect("the first stop runs");
+    assert!(!gate.is_stopped());
+    gate.abort();
+    assert!(gate.is_stopped(), "an abort reads as stopped at once");
+    drop(stopping);
+    assert!(gate.is_stopped(), "the cancelled stop kept the abort");
+    gate.enter().await.expect("the next stop runs").finish();
+    assert!(gate.enter().await.is_none());
+}
