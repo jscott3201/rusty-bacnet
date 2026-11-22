@@ -76,6 +76,7 @@ pub(super) fn snapshot(name: &str) -> TagsSnapshot {
     TagsSnapshot {
         tags: Some(tags(name)),
         description: None,
+        zone: Default::default(),
     }
 }
 pub(super) fn framed(tags: &[BACnetNameValue]) -> PropertyValue {

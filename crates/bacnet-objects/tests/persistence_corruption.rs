@@ -114,7 +114,8 @@ fn damaged_files_never_panic_and_refused_restores_write_nothing() {
 /// Description in the log's, the forwarder's, the class's, Access Rights',
 /// the Tags and the colour output's formats (#2364), a Load Control's
 /// shed request (#2479), also with written Shed_Levels elements (#2502),
-/// and a written Description in the Audit Log's (#2407).
+/// a written Description in the Audit Log's (#2407), and a Device's
+/// written zone in the Tags format (#2395).
 #[test]
 fn every_format_has_a_sample() {
     let names: Vec<&str> = FORMATS.iter().map(|format| format.name).collect();
@@ -159,6 +160,7 @@ fn every_format_has_a_sample() {
             "load_control",
             "written_levels_load_control",
             "described_audit_log",
+            "zoned_tags",
         ]
     );
 }

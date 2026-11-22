@@ -43,10 +43,23 @@
 //!   or [`Reporter::set_zone`](crate::report::Reporter::set_zone) after. A
 //!   synchronized clock keeps its UTC instant and stays synchronized, so
 //!   local time, and with it the recipient windows, moves by the difference
-//!   ([`SyncedClock::set_zone`]). Only the host changes it: UTC_Offset and
-//!   Daylight_Savings_Status are read-only to a peer.
+//!   ([`SyncedClock::set_zone`]). UTC_Offset and Daylight_Savings_Status
+//!   are read-only to a peer, unless the host opts in
+//!   ([`DeviceClock::with_writable_zone`], #2395).
+//! - With that opt-in a peer's write of either moves the clock as
+//!   `set_zone` does. The lent copy the Device writes through holds the new
+//!   zone, so every read in the rest of the request sees it; the
+//!   [`Responder`](crate::responder::Responder) then takes it into its own
+//!   clock and lends that again. The core keeps nothing across a restart:
+//!   the write names the Device in [`Written`](crate::responder::Written)'s
+//!   objects, for the host to save [`DeviceClock::clock`]'s zone where it
+//!   keeps its settings and build its clock in it at the next boot. A
+//!   Device given Tags storage keeps the halves written there itself; the
+//!   host then puts its `written_zone()` over the zone it builds the clock
+//!   in.
 
 mod synced;
+mod written;
 
 use alloc::sync::Arc;
 
@@ -57,11 +70,14 @@ use bacnet_services::device_mgmt::TimeSynchronizationRequest;
 use bacnet_time::Instant;
 use bacnet_types::bitstring::{DaysOfWeek, ServicesSupported};
 use bacnet_types::constructed::BACnetDestination;
-use bacnet_types::enums::{PropertyIdentifier, ServiceSupported, UnconfirmedServiceChoice};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, PropertyIdentifier, ServiceSupported, UnconfirmedServiceChoice,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 
 pub use synced::{Basis, SyncedClock, Zone};
+use written::ZoneWrites;
 
 #[cfg(test)]
 mod tests;
@@ -84,6 +100,9 @@ pub type MonotonicNow = dyn Fn() -> Instant + Send + Sync;
 pub struct DeviceClock {
     clock: SyncedClock,
     now: Arc<MonotonicNow>,
+    /// With the opt-in, the zone a peer wrote that the clock hasn't taken
+    /// yet, shared by this clock and every copy it lends (#2395).
+    writes: Option<Arc<ZoneWrites>>,
 }
 
 impl core::fmt::Debug for DeviceClock {
@@ -99,7 +118,51 @@ impl DeviceClock {
     /// 1990-01-01, as `now` reads it now.
     pub fn new(zone: Zone, now: Arc<MonotonicNow>) -> Self {
         let clock = SyncedClock::new(zone, now());
-        Self { clock, now }
+        Self {
+            clock,
+            now,
+            writes: None,
+        }
+    }
+
+    /// This clock, taking a peer's write of the Device's UTC_Offset or
+    /// Daylight_Savings_Status (#2395): the host's opt-in, off unless it
+    /// asks. A write moves the clock as [`set_zone`](Self::set_zone) does,
+    /// once the [`Responder`](crate::responder::Responder) lending it has
+    /// run the request; see [the module](self) for what the host saves.
+    #[must_use]
+    pub fn with_writable_zone(mut self) -> Self {
+        self.writes = Some(Arc::default());
+        self
+    }
+
+    /// Whether a peer may write the zone ([`with_writable_zone`](Self::with_writable_zone)).
+    pub fn zone_writable(&self) -> bool {
+        self.writes.is_some()
+    }
+
+    /// Take a zone a peer wrote into the clock, now, as
+    /// [`set_zone`](Self::set_zone) does: `true` when there was one. A
+    /// database this clock was lent to before reads it already; lend the
+    /// clock again so its copies hold it as their own.
+    pub(crate) fn take_written_zone(&mut self) -> bool {
+        let Some(zone) = self.writes.as_ref().and_then(|writes| writes.take()) else {
+            return false;
+        };
+        // The write judged the zone at its own instant; one that no longer
+        // fits the BACnet dates, a whole lifetime of the device later,
+        // leaves the clock as it was.
+        let _ = self.set_zone(zone);
+        true
+    }
+
+    /// The clock as a peer's pending write leaves it, at `now`.
+    fn as_written(&self, now: Instant) -> Option<SyncedClock> {
+        let mut clock = self.clock;
+        if let Some(zone) = self.writes.as_ref().and_then(|writes| writes.peek()) {
+            clock.set_zone(zone, now).ok()?;
+        }
+        Some(clock)
     }
 
     /// The clock.
@@ -138,7 +201,30 @@ impl DeviceClock {
 
 impl ClockReader for DeviceClock {
     fn read_clock(&self) -> Option<ClockFrame> {
-        self.clock.frame(self.now())
+        let now = self.now();
+        self.as_written(now)?.frame(now)
+    }
+
+    fn takes_zone_writes(&self) -> bool {
+        self.zone_writable()
+    }
+
+    /// Keep a peer's write for the responder to take, once the clock as it
+    /// stands takes the zone now ([`SyncedClock::set_zone`]): an offset off
+    /// the 15-minute grid, or a zone whose local date falls outside 1900 to
+    /// 2154, is VALUE_OUT_OF_RANGE and changes nothing.
+    fn write_zone(&self, utc_offset: i16, daylight_savings_status: bool) -> Result<(), Error> {
+        let writes = self.writes.as_ref().ok_or(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))?;
+        let range = |_| Error::protocol(ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE);
+        let zone = Zone::new(utc_offset, daylight_savings_status).map_err(range)?;
+        let now = self.now();
+        let mut clock = self.clock;
+        clock.set_zone(zone, now).map_err(range)?;
+        writes.put(zone);
+        Ok(())
     }
 }
 

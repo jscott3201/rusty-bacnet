@@ -67,7 +67,7 @@ fn on_a_copy(
         None => Vec::new(),
     };
     write_tags(&mut copy, index, value)?;
-    fits(description, Some(&copy))?;
+    fits(&Default::default(), description, Some(&copy))?;
     Ok(copy)
 }
 
@@ -81,7 +81,12 @@ fn check(
 ) -> Result<(), Error> {
     let before = working.tags.clone();
     let expected = on_a_copy(&before, index, value, description);
-    let made = working.write(index, value, description, &mut BytesMut::new());
+    let made = working.write(
+        index,
+        value,
+        (&Default::default(), description),
+        &mut BytesMut::new(),
+    );
     assert_eq!(answer(&made), answer(&expected));
     assert_eq!(working.tags, expected.unwrap_or(before));
     let len = tags_len(&working.tags, &mut BytesMut::new()).unwrap();
@@ -116,8 +121,9 @@ fn the_counted_octets_judge_the_cap_as_the_encoded_body() {
             let counted = tags
                 .as_deref()
                 .map(|tags| tags_len(tags, &mut BytesMut::new()).unwrap());
-            let counted_answer = answer(&fits_len(description, counted));
-            let encoded = answer(&fits(description, tags.as_deref()));
+            let none = Default::default();
+            let counted_answer = answer(&fits_len(&none, description, counted));
+            let encoded = answer(&fits(&none, description, tags.as_deref()));
             assert_eq!(counted_answer, encoded, "{counted:?}");
         }
     }
@@ -209,6 +215,7 @@ fn a_description_after_a_refused_tags_write_fits_beside_the_saved_tags() {
     let saved = TagsSnapshot {
         tags: None,
         description: Some(text),
+        zone: Default::default(),
     };
     assert_eq!(store.saved(), Some(saved));
     state.release_staged_write(&wait);
@@ -220,6 +227,7 @@ fn kept_state(store: &Arc<Memory>, tags: Vec<BACnetNameValue>) -> ProfileState {
     *store.saved.lock().unwrap() = Some(TagsSnapshot {
         tags: Some(tags.clone()),
         description: Some("before".into()),
+        zone: Default::default(),
     });
     let mut state = ProfileState::persistent(oid(), store.clone(), true).unwrap();
     state
@@ -309,6 +317,7 @@ fn a_drop_after_one_of_two_writes_keeps_the_one_made() {
         let made = TagsSnapshot {
             tags: Some(tags),
             description: Some(description.into()),
+            zone: Default::default(),
         };
         assert_eq!(store.saved(), Some(made));
     }
@@ -462,6 +471,7 @@ proptest! {
             *store.saved.lock().unwrap() = saved.clone().map(|text| TagsSnapshot {
                 tags: None,
                 description: Some(text),
+                zone: Default::default(),
             });
             let mut state = ProfileState::persistent(oid(), store.clone(), true).unwrap();
             state.provision(ObjectProfile {

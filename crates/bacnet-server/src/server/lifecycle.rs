@@ -84,7 +84,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             warn!("vendor_id is 0 (ASHRAE reserved); set a valid vendor ID for production use");
         }
 
-        let (clock, monotonic) = period::install_database_clocks(&mut db, clock_config);
+        let (clock, monotonic) =
+            period::install_database_clocks(&mut db, clock_config, config.clock_zone_writable);
         // The device is starting: colour outputs go to their defaults
         // (#1526). The database isn't shared yet, so no lock is taken. This
         // runs before `network_port::start`, which can still fail; that's

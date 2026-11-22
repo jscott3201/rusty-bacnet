@@ -33,6 +33,7 @@ use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 
 mod audit_log;
 mod clear;
+mod device_zone;
 mod tags_and_colour;
 
 /// One snapshot in memory, saves counted, and a switch that fails them.

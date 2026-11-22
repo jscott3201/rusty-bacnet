@@ -4195,6 +4195,7 @@ server = BACnetServer(
     time_sync_policy=None,       # keyword-only dict of clock limits; see Time synchronization policy below
     utc_offset_minutes=0,        # keyword-only; the Device's UTC_Offset at start, minutes west of UTC
     daylight_savings=False,      # keyword-only; its Daylight_Savings_Status at start; see set_clock_zone
+    clock_zone_writable=False,   # keyword-only; let peers write UTC_Offset and Daylight_Savings_Status
 )
 ```
 
@@ -6731,7 +6732,14 @@ await server.set_clock_zone(300, True)
   timestamps follow at their next look at the clock. Timestamps already
   recorded stay as they were.
 - A request sees the old pair or the new, never one of each. Both properties
-  stay read-only to a peer.
+  stay read-only to a peer unless the constructor's keyword-only
+  `clock_zone_writable` is True (#2395). A WriteProperty or
+  WritePropertyMultiple of either then moves the clock the same way, and an
+  Audit Reporter monitoring the Device reports it. UTC_Offset takes a
+  multiple of 15 within -1440 to 1440, else VALUE_OUT_OF_RANGE, and
+  Daylight_Savings_Status a BOOLEAN. The Python server's Device has no
+  storage, so a written zone lasts until `stop()`; the next `start()`
+  begins in the constructor's zone.
 
 An offset outside that range or off the 15-minute grid raises `ValueError`
 when the method is called, and an int that doesn't fit 16 bits

@@ -14,7 +14,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 #[cfg(feature = "durable-writes")]
 use super::slot;
-use super::{ObjectProfile, TagsPersistence, TagsSnapshot, write_tags};
+use super::{ObjectProfile, TagsPersistence, TagsSnapshot, WrittenZone, write_tags};
 use crate::common;
 use crate::durable::SaveWriter;
 #[cfg(feature = "durable-writes")]
@@ -32,6 +32,8 @@ use crate::write_config::description;
 enum Next {
     Tags(Vec<BACnetNameValue>),
     Description(String),
+    /// The zone halves written, a Device's (#2395).
+    Zone(WrittenZone),
     /// A staged step: nothing beyond its write, which its claim makes again
     /// on the state served (#2546).
     #[cfg(feature = "durable-writes")]
@@ -66,6 +68,12 @@ struct Kept {
     /// Whether the object keeps a written Description here (#2364): a
     /// Device, a Lighting Output and a Binary Lighting Output do.
     keeps_description: bool,
+    /// Whether it keeps the zone halves a peer writes here (#2395): a
+    /// Device does.
+    keeps_zone: bool,
+    /// Whether its clock takes a peer's zone writes now, so storage keeps
+    /// one: a write the clock won't take is never staged or saved.
+    zone_writes: bool,
     storage: Storage,
 }
 
@@ -85,9 +93,15 @@ fn apply(snapshot: &mut TagsSnapshot, next: &Next) {
     match next {
         Next::Tags(tags) => snapshot.tags = Some(tags.clone()),
         Next::Description(text) => snapshot.description = Some(text.clone()),
+        Next::Zone(zone) => snapshot.zone = *zone,
         #[cfg(feature = "durable-writes")]
         Next::Staged => unreachable!("{AGAIN}"),
     }
+}
+
+/// Whether `property` is a half of the Device clock's zone (#2395).
+fn zone_half(property: P) -> bool {
+    matches!(property, P::UTC_OFFSET | P::DAYLIGHT_SAVINGS_STATUS)
 }
 
 /// Why only a claim sees [`Next::Staged`]: every other write is worked
@@ -129,6 +143,7 @@ fn same_kept(kept: &TagsSnapshot, saved: &TagsSnapshot) -> bool {
             }
     };
     kept.description == saved.description
+        && kept.zone == saved.zone
         && match (&kept.tags, &saved.tags) {
             (Some(kept), Some(saved)) => {
                 kept.len() == saved.len() && kept.iter().zip(saved).all(|(k, s)| same_tag(k, s))
@@ -154,14 +169,15 @@ impl Working {
     }
 
     /// Make a write of `value` at `index` in place, as [`write_tags`] makes
-    /// it, if the Tags it leaves fit a save beside `description`. A write
-    /// refused either way leaves the Tags as they were: [`write_tags`]
-    /// changes nothing it refuses, and a write that doesn't fit is undone.
+    /// it, if the Tags it leaves fit a save beside `description` and
+    /// `zone`. A write refused either way leaves the Tags as they were:
+    /// [`write_tags`] changes nothing it refuses, and a write that doesn't
+    /// fit is undone.
     fn write(
         &mut self,
         index: Option<u32>,
         value: &PropertyValue,
-        description: Option<&str>,
+        (zone, description): (&WrittenZone, Option<&str>),
         scratch: &mut BytesMut,
     ) -> Result<(), Error> {
         match index {
@@ -169,7 +185,7 @@ impl Working {
                 let mut written = Vec::new();
                 write_tags(&mut written, None, value)?;
                 let len = tags_len(&written, scratch)?;
-                fits_len(description, Some(len))?;
+                fits_len(zone, description, Some(len))?;
                 *self = Self { tags: written, len };
             }
             Some(0) => {
@@ -186,7 +202,7 @@ impl Working {
                 let len = write_tags(&mut self.tags, Some(0), value).and_then(|()| {
                     let added = tags_len(&self.tags[kept..], scratch)?;
                     let len = self.len - tags_len(&dropped, scratch)? + added;
-                    fits_len(description, Some(len)).map(|()| len)
+                    fits_len(zone, description, Some(len)).map(|()| len)
                 });
                 match len {
                     Ok(len) => self.len = len,
@@ -204,7 +220,7 @@ impl Working {
                 write_tags(&mut self.tags, Some(index), value)?;
                 let new = tags_len(core::slice::from_ref(&self.tags[slot]), scratch)?;
                 let len = self.len - tags_len(core::slice::from_ref(&old), scratch)? + new;
-                if let Err(error) = fits_len(description, Some(len)) {
+                if let Err(error) = fits_len(zone, description, Some(len)) {
                     self.tags[slot] = old;
                     return Err(error);
                 }
@@ -226,6 +242,24 @@ impl ProfileState {
         persistence: Arc<dyn TagsPersistence>,
         keeps_description: bool,
     ) -> Result<Self, Error> {
+        Self::open(oid, persistence, keeps_description, false)
+    }
+
+    /// [`persistent`](Self::persistent) for a Device, which keeps a written
+    /// Description and the zone halves a peer writes here (#2395).
+    pub(crate) fn persistent_device(
+        oid: ObjectIdentifier,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        Self::open(oid, persistence, true, true)
+    }
+
+    fn open(
+        oid: ObjectIdentifier,
+        persistence: Arc<dyn TagsPersistence>,
+        keeps_description: bool,
+        keeps_zone: bool,
+    ) -> Result<Self, Error> {
         let snapshot = persistence.load(oid)?.unwrap_or_default();
         // As the file backend refuses the same Tags in a file.
         crate::snapshot::tags::check_loaded(&snapshot)
@@ -233,6 +267,11 @@ impl ProfileState {
         if !keeps_description && snapshot.description.is_some() {
             return Err(Error::Encoding(
                 "saved Tags hold a Description, which this object type doesn't keep there".into(),
+            ));
+        }
+        if !keeps_zone && !snapshot.zone.is_empty() {
+            return Err(Error::Encoding(
+                "saved Tags hold a zone, which only a Device keeps there".into(),
             ));
         }
         let writer = SaveWriter::new(
@@ -248,6 +287,8 @@ impl ProfileState {
             kept: Some(Box::new(Kept {
                 saved: snapshot,
                 keeps_description,
+                keeps_zone,
+                zone_writes: false,
                 storage: Storage::new(writer),
             })),
             ..Self::default()
@@ -303,6 +344,23 @@ impl ProfileState {
         self.kept.as_ref()?.saved.description.as_deref()
     }
 
+    /// Whether the object's clock takes a peer's zone writes now (#2395), so
+    /// storage keeps the halves written.
+    pub(crate) fn take_zone_writes(&mut self, on: bool) {
+        if let Some(kept) = &mut self.kept {
+            kept.zone_writes = on;
+        }
+    }
+
+    /// The zone halves storage holds, ones a peer wrote now or before a
+    /// restart (#2395); none without storage, and on an object that doesn't
+    /// keep them here.
+    pub(crate) fn saved_zone(&self) -> WrittenZone {
+        self.kept
+            .as_ref()
+            .map_or_else(WrittenZone::default, |kept| kept.saved.zone)
+    }
+
     /// Whether storage keeps a write of `value` to `property`: Tags while
     /// the row is provisioned, and, on an object that keeps it here, a
     /// Description other than a NULL, which changes nothing.
@@ -313,6 +371,9 @@ impl ProfileState {
         match property {
             P::TAGS => self.profile.tags.is_some(),
             P::DESCRIPTION => kept.keeps_description && !description::null_write(property, value),
+            _ if zone_half(property) => {
+                kept.keeps_zone && kept.zone_writes && *value != PropertyValue::Null
+            }
             _ => false,
         }
     }
@@ -329,6 +390,11 @@ impl ProfileState {
             Next::Description(text) => {
                 if let Some(kept) = &mut self.kept {
                     kept.saved.description = Some(text);
+                }
+            }
+            Next::Zone(zone) => {
+                if let Some(kept) = &mut self.kept {
+                    kept.saved.zone = zone;
                 }
             }
             #[cfg(feature = "durable-writes")]
@@ -364,6 +430,18 @@ impl ProfileState {
                 || saved.clone(),
                 |kept| {
                     kept.description = Some(text);
+                    follows(kept, saved);
+                },
+            );
+        } else if zone_half(property) {
+            let zone = saved.zone.with_write(property, value);
+            debug_assert!(zone.is_ok(), "a staged zone half its stage took");
+            let Ok(zone) = zone else { return };
+            saved.zone = zone;
+            storage.correct_with(
+                || saved.clone(),
+                |kept| {
+                    kept.zone = zone;
                     follows(kept, saved);
                 },
             );
@@ -412,9 +490,10 @@ impl ProfileState {
         self.with_storage(|_| ());
     }
 
-    /// What a write of `value` to `property`, Tags or a kept Description,
-    /// leaves on top of `staged_tags` and `staged_text` (`None` for the
-    /// Tags served and the Description saved), or its refusal. With
+    /// What a write of `value` to `property`, Tags, a kept Description or a
+    /// kept zone half, leaves on top of `staged_tags` and `staged_text`
+    /// (`None` for the Tags served and the Description saved), or its
+    /// refusal. With
     /// storage, what the write leaves must fit a save beside the rest of
     /// what storage would then hold.
     ///
@@ -433,6 +512,8 @@ impl ProfileState {
     ) -> Result<Next, Error> {
         let next = if property == P::DESCRIPTION {
             Next::Description(description::written(value)?)
+        } else if zone_half(property) {
+            Next::Zone(self.saved_zone().with_write(property, value)?)
         } else {
             let current = staged_tags.or(self.profile.tags.as_deref());
             let mut tags = match index {
@@ -446,12 +527,20 @@ impl ProfileState {
             let saved = &kept.saved;
             match &next {
                 Next::Tags(tags) => fits(
+                    &saved.zone,
                     staged_text.or(saved.description.as_deref()),
                     Some(tags.as_slice()),
                 ),
-                Next::Description(text) => {
-                    fits(Some(text.as_str()), staged_tags.or(saved.tags.as_deref()))
-                }
+                Next::Description(text) => fits(
+                    &saved.zone,
+                    Some(text.as_str()),
+                    staged_tags.or(saved.tags.as_deref()),
+                ),
+                Next::Zone(zone) => fits(
+                    zone,
+                    staged_text.or(saved.description.as_deref()),
+                    staged_tags.or(saved.tags.as_deref()),
+                ),
                 #[cfg(feature = "durable-writes")]
                 Next::Staged => unreachable!("{AGAIN}"),
             }?;
@@ -495,6 +584,20 @@ impl ProfileState {
             *description = text.to_owned();
         }
         Some(result)
+    }
+
+    /// A write of a half of the Device clock's zone on a Device that keeps
+    /// it here (#2395): saved before the write is answered, and refused
+    /// with DEVICE / OPERATIONAL_PROBLEM when the save fails. `None` when
+    /// storage keeps nothing for the write (no storage, another kind of
+    /// object, or a NULL).
+    pub(crate) fn write_zone(
+        &mut self,
+        property: P,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
+        self.keeps(property, value)
+            .then(|| self.write_kept(property, None, value))
     }
 
     /// Make a kept write, saving it before the object serves it. A staged
@@ -550,10 +653,34 @@ impl ProfileState {
         kept.storage.save_now(TagsSnapshot {
             tags: kept.saved.tags.clone(),
             description: None,
+            zone: kept.saved.zone,
         })?;
         kept.saved.description = None;
         // A write staged before this gives way, and keeps the cleared state
         // as what is served.
+        self.writes = self.writes.wrapping_add(1);
+        self.with_storage(|_| ());
+        Ok(())
+    }
+
+    /// Drop the zone halves a write saved (#2395), so storage keeps none and
+    /// the zone the host gives the clock applies again from the next start.
+    /// Saves where it is and waits for the save; one that fails keeps them
+    /// and returns storage's error. Nothing to do without storage or a
+    /// saved half.
+    pub(crate) fn clear_written_zone(&mut self) -> Result<(), Error> {
+        let Some(kept) = &mut self.kept else {
+            return Ok(());
+        };
+        if kept.saved.zone.is_empty() {
+            return Ok(());
+        }
+        kept.storage.save_now(TagsSnapshot {
+            zone: WrittenZone::default(),
+            ..kept.saved.clone()
+        })?;
+        kept.saved.zone = WrittenZone::default();
+        // A write staged before this gives way, as for the Description.
         self.writes = self.writes.wrapping_add(1);
         self.with_storage(|_| ());
         Ok(())
@@ -600,17 +727,38 @@ impl DurableWrites for ProfileState {
         // the Tags the steps leave once one of them has been made. And the
         // octets the saved Tags encode to, counted once a step needs them.
         let (mut tags, mut text): (Option<Working>, Option<String>) = (None, None);
+        let mut zone = self.saved_zone();
         let (mut made, mut saved_len) = (false, None);
         let mut scratch = BytesMut::new();
         let steps = staged::steps(writes, |_, write| {
             if !self.keeps(write.property, &write.value) {
                 return Ok(None);
             }
-            if write.property == P::DESCRIPTION && write.array_index.is_some() {
+            if (write.property == P::DESCRIPTION || zone_half(write.property))
+                && write.array_index.is_some()
+            {
                 return Err(common::property_is_not_an_array_error());
             }
             let saved = &self.kept.as_ref().expect("a kept write").saved;
-            if write.property == P::DESCRIPTION {
+            if zone_half(write.property) {
+                // The halves it leaves must fit a save beside the Tags and
+                // the Description the steps so far leave.
+                let written = zone.with_write(write.property, &write.value)?;
+                let tags_len = match (tags.as_ref().filter(|_| made), saved_len) {
+                    (Some(working), _) => Some(working.len),
+                    (None, Some(len)) => len,
+                    (None, None) => {
+                        let len = saved
+                            .tags
+                            .as_deref()
+                            .map(|tags| tags_len(tags, &mut scratch));
+                        *saved_len.insert(len.transpose()?)
+                    }
+                };
+                let description = text.as_deref().or(saved.description.as_deref());
+                fits_len(&written, description, tags_len)?;
+                zone = written;
+            } else if write.property == P::DESCRIPTION {
                 // What the write leaves must fit a save beside the Tags the
                 // steps so far leave, or those storage holds.
                 let written = description::written(&write.value)?;
@@ -625,7 +773,7 @@ impl DurableWrites for ProfileState {
                         *saved_len.insert(len.transpose()?)
                     }
                 };
-                fits_len(Some(&written), tags_len)?;
+                fits_len(&zone, Some(&written), tags_len)?;
                 text = Some(written);
             } else {
                 let working = match &mut tags {
@@ -636,7 +784,12 @@ impl DurableWrites for ProfileState {
                     }
                 };
                 let description = text.as_deref().or(saved.description.as_deref());
-                working.write(write.array_index, &write.value, description, &mut scratch)?;
+                working.write(
+                    write.array_index,
+                    &write.value,
+                    (&zone, description),
+                    &mut scratch,
+                )?;
                 made = true;
             }
             Ok(Some(Next::Staged))
@@ -652,6 +805,7 @@ impl DurableWrites for ProfileState {
                 .map(|working| working.tags)
                 .or_else(|| saved.tags.clone()),
             description: text.or_else(|| saved.description.clone()),
+            zone,
         };
         storage.stage_built(steps, base, snapshot, saved.clone())
     }

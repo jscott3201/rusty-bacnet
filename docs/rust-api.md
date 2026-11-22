@@ -9289,8 +9289,11 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   sync. `Responder::set_zone(db, zone)` and `Reporter::set_zone` (#2395)
   change the clock's zone and lend it again, so the Device's UTC_Offset,
   Daylight_Savings_Status, Local_Date and Local_Time and the window follow
-  from that call on; they are refused without a clock. Only the host
-  changes the zone: both properties are read-only to a peer. With
+  from that call on; they are refused without a clock. Both properties are
+  read-only to a peer unless the clock is built with
+  `DeviceClock::with_writable_zone()` (#2395): a peer's write then moves
+  the clock once the request has run, and `Written::objects` names the
+  Device for the host to save the zone. With
   `event-reporting`, a `Responder` built without a clock refuses a
   Notification Class Recipient_List write that holds a destination not
   open every day, all day (to 23:59:59.99: an unspecified hundredth counts
@@ -12066,8 +12069,46 @@ server.set_clock_zone(ClockConfig::new(300, true)?).await?;
   `TimeSyncPolicy::max_step` and its value stored under one hold of the
   clock's lock, so the zone a local value is judged in is the zone it is
   stored under even while the zone changes.
-- Only the host changes the zone. UTC_Offset and Daylight_Savings_Status are
-  read-only to a peer.
+- UTC_Offset and Daylight_Savings_Status are read-only to a peer unless the
+  server opts in, below.
+
+#### Letting peers write the zone (#2395)
+
+`clock_zone_writable(true)` on any of the three builders (or
+`ServerConfig::clock_zone_writable`) lets a peer write UTC_Offset and
+Daylight_Savings_Status. It is off by default, and then both stay read-only
+on the wire, refused with WRITE_ACCESS_DENIED as before.
+
+- A WriteProperty or WritePropertyMultiple of either moves the clock as
+  `set_clock_zone` does: the other half stays, the clock keeps its UTC
+  instant and its synchronization, and a request reads one pair. An Audit
+  Reporter monitoring the Device reports the write like any other.
+- UTC_Offset takes an INTEGER that is a multiple of 15 within -1440 to 1440
+  (Clause 12.11.25); anything else of that datatype is VALUE_OUT_OF_RANGE.
+  Daylight_Savings_Status takes a BOOLEAN. Another datatype is
+  INVALID_DATA_TYPE, and a NULL succeeds and changes nothing.
+- A Device built with `DeviceObject::with_tags_persistence` keeps each half
+  written in that storage, as it keeps a written Description: saved before
+  the write is answered (staged off the database guard with the request's
+  other kept writes), and refused with DEVICE / OPERATIONAL_PROBLEM, the
+  clock left as it was, when the save fails. The file takes `RBNTAG03`
+  (`snapshot::tags::MAGIC_WITH_ZONE`) only while it holds a half, so other
+  files keep their octets; `TagsSnapshot` gained a `zone` field
+  (`WrittenZone`), and every Tags user but a Device refuses storage holding
+  one.
+- A kept half wins over the builder's `clock_zone` at start and over
+  `set_clock_zone`, which then moves only the other half, until
+  `DeviceObject::clear_written_zone` drops it (call it before the Device
+  joins the database). It stays with the opt-in turned off.
+  `DeviceObject::written_zone()` shows what is kept. A Device without
+  storage, the builders' own among them, keeps a written zone until the
+  server stops.
+- In the device core, `DeviceClock::with_writable_zone()` is the same
+  opt-in. The `Responder` takes a written zone into its clock once the
+  request has run, and names the Device in `Written::objects`. The core
+  keeps no settings of its own: the host saves `responder.clock()`'s zone
+  and builds its clock in it at the next boot, or gives the Device Tags
+  storage and puts `written_zone()` over the zone it builds the clock in.
 
 ### Confirmed notifications under DeviceCommunicationControl
 

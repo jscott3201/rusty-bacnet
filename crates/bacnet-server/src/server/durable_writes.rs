@@ -15,7 +15,8 @@
 //! objects, a Timer, a Channel, the three logs, a Notification Class or
 //! Forwarder, an Access Rights object, a Device, the two lighting outputs
 //! and the two colour objects a written Description (#2364), an Audit Log
-//! its written Description too (#2407), and a Load
+//! its written Description too (#2407), a Device a written UTC_Offset or
+//! Daylight_Savings_Status (#2395), and a Load
 //! Control the shed request, Enable, Description and Shed_Levels elements a
 //! peer writes (#2479, #2502),
 //! before serving it, and refuses the write if the save fails. So
@@ -120,7 +121,8 @@ enum TargetValue {
 /// the three logs, a Notification Class, a forwarder, an Access Rights
 /// object, a Device, a Lighting Output, a Binary Lighting Output and the
 /// two colour objects keep a written Description too (#2364), and an
-/// Audit Log does (#2407). A Load
+/// Audit Log does (#2407). A Device keeps a written UTC_Offset and
+/// Daylight_Savings_Status in its Tags storage (#2395). A Load
 /// Control keeps its four request properties, Enable, a written
 /// Description (#2479) and the Shed_Levels elements written (#2502).
 /// Under a policy that decides mutations, every attempt of a
@@ -179,12 +181,18 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 || kept_parameter(oid.object_type(), property)
         }
         // These keep a written Description in their Tags storage (#2364).
-        ObjectType::LIGHTING_OUTPUT | ObjectType::BINARY_LIGHTING_OUTPUT | ObjectType::DEVICE => {
-            matches!(
-                property,
-                PropertyIdentifier::TAGS | PropertyIdentifier::DESCRIPTION
-            )
-        }
+        ObjectType::LIGHTING_OUTPUT | ObjectType::BINARY_LIGHTING_OUTPUT => matches!(
+            property,
+            PropertyIdentifier::TAGS | PropertyIdentifier::DESCRIPTION
+        ),
+        // A Device keeps the zone halves a peer writes there too (#2395).
+        ObjectType::DEVICE => matches!(
+            property,
+            PropertyIdentifier::TAGS
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::UTC_OFFSET
+                | PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS
+        ),
         ObjectType::ACCESS_RIGHTS => matches!(
             property,
             PropertyIdentifier::POSITIVE_ACCESS_RULES

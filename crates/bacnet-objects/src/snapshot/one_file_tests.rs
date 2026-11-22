@@ -75,6 +75,7 @@ pub(super) fn tagged() -> (ObjectIdentifier, TagsSnapshot) {
             BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
         ]),
         description: None,
+        zone: Default::default(),
     };
     (oid(ObjectType::ANALOG_VALUE, 1), snapshot)
 }
@@ -303,6 +304,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
     let semicolon = TagsSnapshot {
         tags: Some(vec![BACnetNameValue::semantic("a;b")]),
         description: None,
+        zone: Default::default(),
     };
     let error = tags::encode(object, &semicolon).unwrap_err();
     assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
@@ -312,6 +314,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
         &TagsSnapshot {
             tags: Some(vec![BACnetNameValue::semantic("a:b")]),
             description: None,
+            zone: Default::default(),
         },
     )
     .unwrap();
@@ -412,7 +415,8 @@ mod file_backends {
         );
         same_octets!(FileTagsPersistence, tags, tagged(), |_| TagsSnapshot {
             tags: Some(Vec::new()),
-            description: None
+            description: None,
+            zone: Default::default(),
         });
         same_octets!(
             FileColorOutputPersistence,

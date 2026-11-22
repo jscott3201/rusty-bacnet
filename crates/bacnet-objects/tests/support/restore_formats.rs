@@ -262,4 +262,12 @@ pub const FORMATS: &[Format] = &[
         sample: samples::described_audit_log,
         kind: Kind::AuditLog,
     },
+    // The Tags format's version 3, on a Device with a written zone and
+    // Description (#2395). Last for the same reason.
+    Format {
+        name: "zoned_tags",
+        two_slot: false,
+        sample: samples::zoned_tags,
+        kind: Kind::DeviceTags,
+    },
 ];

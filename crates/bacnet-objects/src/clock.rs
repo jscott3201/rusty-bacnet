@@ -39,9 +39,42 @@ impl ClockFrame {
 ///
 /// `None` means that no wall-clock frame is available. Implementations must
 /// return all four fields from the same sample.
+///
+/// A host may also let peers write the Device's UTC_Offset and
+/// Daylight_Savings_Status through it (#2395): an opt-in, off unless the
+/// clock says so ([`takes_zone_writes`](Self::takes_zone_writes)). Clause
+/// 12.11 doesn't require either to be writable.
 pub trait ClockReader: Send + Sync {
     /// Read one coherent frame, or report that no wall clock is available.
     fn read_clock(&self) -> Option<ClockFrame>;
+
+    /// Whether a peer may write the Device's UTC_Offset and
+    /// Daylight_Savings_Status through this clock. `false` by default: both
+    /// are then read-only to a peer.
+    fn takes_zone_writes(&self) -> bool {
+        false
+    }
+
+    /// Move the clock to the zone a peer's write leaves: `utc_offset`
+    /// minutes west of UTC and `daylight_savings_status`, as the host's own
+    /// zone change does. The clock keeps its UTC instant, so local time
+    /// moves by the difference between the zones, and a synchronized clock
+    /// stays synchronized. The Device calls it only while
+    /// [`takes_zone_writes`](Self::takes_zone_writes) is `true`, for a
+    /// write it has checked, with the database held for writing, so no
+    /// reader sees part of the change. Refused, changing nothing, with the
+    /// error the write is answered with; the default refuses with PROPERTY
+    /// / WRITE_ACCESS_DENIED.
+    fn write_zone(
+        &self,
+        _utc_offset: i16,
+        _daylight_savings_status: bool,
+    ) -> Result<(), bacnet_types::error::Error> {
+        Err(bacnet_types::error::Error::protocol(
+            bacnet_types::enums::ErrorClass::PROPERTY,
+            bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+        ))
+    }
 }
 
 /// The local date and time to stamp on a BACnetDateTime property when an

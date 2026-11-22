@@ -6,7 +6,8 @@ Local_Time move by the difference, and a clock a UTCTimeSynchronization set
 keeps the instant it was given. An offset the clock doesn't take is refused
 when the method is called, and changes nothing. The constructor's
 utc_offset_minutes and daylight_savings keywords give the zone every start
-begins in.
+begins in. Its clock_zone_writable keyword lets a peer write both properties
+(off by default), which moves the clock the same way.
 """
 
 from __future__ import annotations
@@ -20,7 +21,16 @@ import socket
 import unittest
 from pathlib import Path
 
-from rusty_bacnet import BACnetClient, BACnetServer, ObjectIdentifier, ObjectType, PropertyIdentifier
+from rusty_bacnet import (
+    BACnetClient,
+    BacnetProtocolError,
+    BACnetServer,
+    ErrorCode,
+    ObjectIdentifier,
+    ObjectType,
+    PropertyIdentifier,
+    PropertyValue,
+)
 
 DEVICE = 2395
 UTC_TIME_SYNCHRONIZATION = 9
@@ -130,6 +140,45 @@ class ClockZoneTests(unittest.IsolatedAsyncioTestCase):
         await self.server.start()
         self.assertEqual(await self.zone(), (300, True))
 
+    async def test_without_the_opt_in_a_peer_cannot_write_the_zone(self) -> None:
+        await self.start()
+        async with BACnetClient(interface="127.0.0.1", port=0) as client:
+            for prop, value in ((P.UTC_OFFSET, PropertyValue.signed(300)),
+                                (P.DAYLIGHT_SAVINGS_STATUS, PropertyValue.boolean(True))):
+                with self.subTest(prop=prop), self.assertRaises(BacnetProtocolError) as raised:
+                    await client.write_property(self.address, self.device, prop, value)
+                self.assertEqual(raised.exception.error_code,
+                                 ErrorCode.WRITE_ACCESS_DENIED.to_raw())
+        self.assertEqual(await self.zone(), (0, False))
+
+    async def test_a_peer_write_moves_the_clock_and_keeps_the_sync(self) -> None:
+        self.server = BACnetServer(DEVICE, interface="127.0.0.1", port=0,
+                                   broadcast_address="127.0.0.1", clock_zone_writable=True)
+        await self.start()
+        synced = datetime.datetime(2024, 7, 4, 13, 15, tzinfo=UTC)
+        await self.synchronize(synced)
+        tolerance = datetime.timedelta(seconds=30)
+        async with BACnetClient(interface="127.0.0.1", port=0) as client:
+            await client.write_property(self.address, self.device, P.UTC_OFFSET,
+                                        PropertyValue.signed(300))
+            await client.write_property(self.address, self.device, P.DAYLIGHT_SAVINGS_STATUS,
+                                        PropertyValue.boolean(True))
+            self.assertEqual(await self.zone(), (300, True))
+            # Four hours behind the synchronized UTC: the sync is kept.
+            expected = synced.replace(tzinfo=None) - datetime.timedelta(hours=4)
+            self.assertLess(abs(await self.local() - expected), tolerance)
+            # Off the 15-minute grid: refused, and nothing changes.
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await client.write_property(self.address, self.device, P.UTC_OFFSET,
+                                            PropertyValue.signed(7))
+            self.assertEqual(raised.exception.error_code, ErrorCode.VALUE_OUT_OF_RANGE.to_raw())
+        self.assertEqual(await self.zone(), (300, True))
+        # The written zone lasts until stop; the next start is in the
+        # constructor's zone.
+        await self.server.stop()
+        await self.server.start()
+        self.assertEqual(await self.zone(), (0, False))
+
     def test_the_constructor_checks_its_zone(self) -> None:
         def build(**zone: object) -> BACnetServer:
             return BACnetServer(DEVICE, interface="127.0.0.1", port=0,
@@ -142,7 +191,9 @@ class ClockZoneTests(unittest.IsolatedAsyncioTestCase):
             build(utc_offset_minutes=1 << 20)
         with self.assertRaises(TypeError):
             build(daylight_savings="yes")
-        for name in ("utc_offset_minutes", "daylight_savings"):
+        with self.assertRaises(TypeError):
+            build(clock_zone_writable="yes")
+        for name in ("utc_offset_minutes", "daylight_savings", "clock_zone_writable"):
             parameter = inspect.signature(BACnetServer).parameters[name]
             self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
         build(utc_offset_minutes=-1440, daylight_savings=True)
@@ -184,6 +235,7 @@ class ClockZoneTests(unittest.IsolatedAsyncioTestCase):
                     if default is not None}
         self.assertEqual(keywords["utc_offset_minutes"], ("int", "0"))
         self.assertEqual(keywords["daylight_savings"], ("bool", "False"))
+        self.assertEqual(keywords["clock_zone_writable"], ("bool", "False"))
 
 
 if __name__ == "__main__":

@@ -7351,6 +7351,7 @@ class BACnetServer:
         time_sync_policy: TimeSyncPolicy | None = None,
         utc_offset_minutes: int = 0,
         daylight_savings: bool = False,
+        clock_zone_writable: bool = False,
         share_port_by_address: bool = False,
         share_wildcard_port: bool = False,
         segmentation_supported: Segmentation = Segmentation.NO_SEGMENTATION,
@@ -7433,6 +7434,16 @@ class BACnetServer:
         construction. Every ``start()`` begins in it, so the Schedule pass
         that runs as the server starts already judges local time there;
         ``set_clock_zone`` changes it while the server runs, until ``stop()``.
+
+        ``clock_zone_writable`` (keyword-only, default False): let peers
+        write the Device's UTC_Offset and Daylight_Savings_Status. Off, both
+        are read-only on the wire, as before. On, a WriteProperty or
+        WritePropertyMultiple of either moves the clock as
+        ``set_clock_zone`` does, and an Audit Reporter monitoring the Device
+        reports it like any write. UTC_Offset takes a multiple of 15 within
+        -1440..=1440 (else VALUE_OUT_OF_RANGE), Daylight_Savings_Status a
+        BOOLEAN. The Device has no storage here, so a written zone lasts
+        until ``stop()``; the next ``start()`` uses the constructor's zone.
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -9444,7 +9455,8 @@ class BACnetServer:
         recipient windows and new timestamps follow at their next look at
         the clock; timestamps already recorded stay. A request sees the old
         pair or the new, never one of each. Both properties stay read-only
-        to a peer.
+        to a peer unless the constructor's ``clock_zone_writable`` is True;
+        a peer's write then moves the clock the same way.
 
         An offset outside that range or off the 15-minute grid raises
         ValueError when called, and an int past 16 bits OverflowError;

@@ -423,7 +423,30 @@ impl Responder {
     /// origin to give: an object whose Present_Value is commandable (the
     /// default Binary Value, Analog Value and Analog Output among them)
     /// refuses a write to it with WRITE_ACCESS_DENIED.
+    ///
+    /// With a clock that takes a peer's zone writes
+    /// ([`DeviceClock::with_writable_zone`]), a write of UTC_Offset or
+    /// Daylight_Savings_Status moves the clock, and the responder lends it
+    /// to the database again before it returns; [`Written::objects`] names
+    /// the Device, for the host to save the zone.
     pub fn write(
+        &mut self,
+        db: &mut ObjectDatabase,
+        observer: Option<&mut dyn WriteCommitObserver>,
+        request: Inbound,
+        out: &mut BytesMut,
+    ) -> Written {
+        let written = self.run_write(db, observer, request, out);
+        if let Some(clocked) = self.clock.as_mut()
+            && clocked.clock.take_written_zone()
+        {
+            clocked.clock.lend(db);
+        }
+        written
+    }
+
+    /// [`write`](Self::write), before a zone a peer wrote is taken.
+    fn run_write(
         &mut self,
         db: &mut ObjectDatabase,
         observer: Option<&mut dyn WriteCommitObserver>,

@@ -55,7 +55,7 @@ mod persistence;
 mod saving;
 #[cfg(feature = "std")]
 pub use persistence::FileTagsPersistence;
-pub use persistence::{MAX_TAGS_SNAPSHOT_BYTES, TagsPersistence, TagsSnapshot};
+pub use persistence::{MAX_TAGS_SNAPSHOT_BYTES, TagsPersistence, TagsSnapshot, WrittenZone};
 pub(crate) use saving::ProfileState;
 
 /// Resource cap on Tags elements, the bound Exception_Schedule and a

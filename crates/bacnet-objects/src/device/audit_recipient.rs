@@ -77,6 +77,11 @@ impl DeviceAuthority<'_> {
     pub fn provision_audit_recipient(&mut self, recipient: BACnetRecipient) -> Result<(), Error> {
         self.0.provision_audit_recipient(recipient)
     }
+    /// The zone halves a peer wrote that the Device's storage keeps
+    /// (#2395), for the server to put over the zone it gives its clock.
+    pub fn written_zone(&self) -> crate::object_profile::WrittenZone {
+        self.0.written_zone()
+    }
     pub fn provisioned_audit_recipient(&self) -> Option<&BACnetRecipient> {
         self.0.recipient.value.as_ref()
     }
