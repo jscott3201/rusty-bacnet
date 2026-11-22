@@ -3772,8 +3772,9 @@ network, an Initialize-Routing-Table with a port count of zero and an SNET
 (#2715). It changes nothing, but the router answers it with its whole table (up
 to three Acks for 256 routes) sent across the internetwork toward a source
 that the query only claims. The default gate answers it, a hardened one with no
-authorizer doesn't, and an authorizer sees it with `source_net` set and no
-`target_nets`, where an update always names a network. A query with no SNET is
+authorizer doesn't, and an authorizer sees it with `class` set to
+`ControlClass::InitQuery`, where an update or purge is `ControlClass::InitMgmt`
+(`ControlAuthContext::class` names every control's class). A query with no SNET is
 answered on its own link without the gate. `control_snapshot().init_query`
 counts the decisions.
 
@@ -3814,8 +3815,9 @@ to certificates), and keeps the standard behaviour on B/IP:
 
 ```rust
 use std::sync::Arc;
-use bacnet_network::router::control_policy::{ControlAuthContext, ControlAuthorizer, ControlPolicy};
-use bacnet_npdu::NetworkMessageType as Message;
+use bacnet_network::router::control_policy::{
+    ControlAuthContext, ControlAuthorizer, ControlClass, ControlPolicy,
+};
 
 let routers: Vec<ScPrincipal> = configured_router_certificates();
 let announcers: Vec<MacAddr> = configured_router_vmacs();
@@ -3823,13 +3825,14 @@ let authorizer: ControlAuthorizer = Arc::new(move |context: &ControlAuthContext|
     if ![0, 1].contains(&context.port_idx) {
         return true; // B/IP: no certificates
     }
-    let unicast = [
-        Message::INITIALIZE_ROUTING_TABLE,
-        Message::INITIALIZE_ROUTING_TABLE_ACK,
-        Message::REJECT_MESSAGE_TO_NETWORK,
-        Message::I_COULD_BE_ROUTER_TO_NETWORK,
-    ]
-    .contains(&context.message_type);
+    let unicast = matches!(
+        context.class,
+        ControlClass::InitMgmt
+            | ControlClass::InitQuery
+            | ControlClass::InitAck
+            | ControlClass::Reject
+            | ControlClass::ICouldBe
+    );
     if unicast {
         context.sending_peer_principal().is_some_and(|peer| routers.contains(&peer))
     } else {
@@ -10811,7 +10814,10 @@ successful empty table. Silence after the table query was sent yields
 `NoAnswer`; for a routed query its `routed` field holds the network, and its
 text says that an older router may answer a table query only on its own link,
 where only the next hop hears it, so query the next hop or ask from a node on
-that network.
+that network. A router that refuses table queries from other networks drops a
+routed query silently, so it ends as `NoAnswer` too: a hosted router on the
+hardened control policy with no authorizer does, as does a `bacnet-router-core`
+host that refuses `ControlClass::InitQuery` (#2715).
 A client runs one query at a time. A `first_answer` greater than `total`
 returns `InvalidArgument`.
 

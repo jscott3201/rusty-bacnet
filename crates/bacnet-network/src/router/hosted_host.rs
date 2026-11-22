@@ -64,6 +64,7 @@ impl Host for HostedHost<'_> {
         let ctx = ControlAuthContext {
             port_idx: usize::from(claim.port.0),
             port_network: claim.port_network,
+            class: claim.class,
             source_mac: MacAddr::from_slice(claim.source),
             provenance: self.provenance.clone(),
             trust: ControlTrust::from_provenance(&self.provenance),
@@ -74,7 +75,7 @@ impl Host for HostedHost<'_> {
             target_nets: claim.targets.iter().collect(),
             targets_omitted: claim.targets_omitted,
         };
-        self.gate.decide(&ctx, claim.class)
+        self.gate.decide(&ctx)
     }
 
     fn observe(&mut self, event: Event) {

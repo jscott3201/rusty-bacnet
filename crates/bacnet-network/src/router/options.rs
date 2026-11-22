@@ -274,9 +274,15 @@ impl<A, C> RouterOptions<A, C> {
     /// the same networks within one time to live look like one. The second
     /// is still learned from where that keeps a route on its port (#2713):
     /// it adds a network the table lacks, and refreshes a route through
-    /// its own port, which takes its sender as the next router; a route
-    /// through another port stays where it is, since that is how a copy
-    /// come round a loop arrives.
+    /// its own port, which takes its sender as the next router and, under
+    /// hardened convergence, drops a pending claim from another port, as a
+    /// claim that is no repeat does. A route through another port stays
+    /// where it is, since that is how a copy come round a loop arrives. So
+    /// when another station sends a router's list first on one port and
+    /// the router sends it on a different port inside the time to live,
+    /// the route stays with that station past the time to live: until the
+    /// router announces again after it, or the route goes 300 s (the
+    /// learned age) unconfirmed. A known limit, kept by decision.
     /// A Router-Busy or Router-Available is kept by its sender (arrival
     /// network and link source) and data, and a repeat of one is not
     /// applied to the table. Another router's identical message is still

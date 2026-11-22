@@ -8,7 +8,9 @@
 //! router's own announcement out for one time to live. Now a repeat is
 //! learned from where that keeps a route on its port, and only there: the
 //! copy a loop brings back would otherwise move the route round the loop
-//! (`loops.rs` has the ring).
+//! (`loops.rs` has the ring). So a first sender on another port than the
+//! router's keeps the route for longer than one time to live; the
+//! `by_design_` test pins that known limit.
 
 mod fixture;
 
@@ -17,8 +19,8 @@ use bacnet_router_core::npdu::RejectMessageReason;
 use bacnet_router_core::router::{ControlClass, Discard, Duplicates, Event, Options};
 use bacnet_router_core::table::{Convergence, Reachability};
 use fixture::{
-    NODE_A, Outcome, R7, Recorder, TestRouter, at_ms, deliver_broadcast, i_am, message, options,
-    reject_data, router_with, two_ports,
+    NODE_A, Outcome, R7, Recorder, TestRouter, at, at_ms, deliver_broadcast, i_am, message,
+    options, reject_data, router_with, two_ports,
 };
 
 /// A station on port 1, beside R7, that is not the router it claims to be.
@@ -190,4 +192,47 @@ fn a_repeat_on_the_routes_port_refreshes_it_each_time() {
         assert_eq!(marked, Some(Reachability::Unreachable), "at {millis} ms");
     }
     assert_eq!(router.counters().duplicate_drops, 3);
+}
+
+/// A known limit, kept by decision (#2713): when another station sends a
+/// router's list first on one port and the router sends the identical list
+/// on a different port inside the time to live, the router's copy is a
+/// repeat from another port, which can't be told from a looped copy, so it
+/// moves nothing. The route stays with the first sender past the time to
+/// live, until the router announces again (here, under standard
+/// convergence, it moves at once) or the route goes unconfirmed for the
+/// learned age, 300 s, and the sweep purges it.
+#[test]
+fn by_design_a_first_list_on_another_port_holds_the_route_past_the_time_to_live() {
+    let held = || {
+        let mut router = router_with(&two_ports(), suppressing(|_| {}));
+        let mut host = Recorder::default();
+        assert_eq!(
+            announce(&mut router, &mut host, 0, NODE_A, &[9], 0),
+            (false, 1)
+        );
+        assert_eq!(announce(&mut router, &mut host, 1, R7, &[9], 10), (true, 0));
+        assert_eq!(via(&router, 9), Some((0, NODE_A.to_vec())));
+        // Well past the 1 s time to live, the route is still the first
+        // sender's: the repeat refreshed nothing and moved nothing.
+        router.on_deadline(at(240), &mut host);
+        assert_eq!(via(&router, 9), Some((0, NODE_A.to_vec())));
+        let route = router.table().lookup(9).unwrap();
+        assert_eq!(route.last_seen(), Some(at_ms(0)));
+        (router, host)
+    };
+
+    // The router announcing again, now a fresh message, moves the route.
+    let (mut router, mut host) = held();
+    assert_eq!(
+        announce(&mut router, &mut host, 1, R7, &[9], 240_000),
+        (false, 1)
+    );
+    assert_eq!(via(&router, 9), Some((1, R7.to_vec())));
+
+    // Without that, the route ages out with the learned age.
+    let (mut router, mut host) = held();
+    router.on_deadline(at(360), &mut host);
+    assert_eq!(via(&router, 9), None);
+    assert!(host.events.contains(&Event::Purged { network: 9 }));
 }

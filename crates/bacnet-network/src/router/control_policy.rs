@@ -50,9 +50,8 @@
 //! ```
 //! use std::sync::Arc;
 //! use bacnet_network::router::control_policy::{
-//!     ControlAuthContext, ControlAuthorizer, ControlPolicy,
+//!     ControlAuthContext, ControlAuthorizer, ControlClass, ControlPolicy,
 //! };
-//! use bacnet_npdu::NetworkMessageType as Message;
 //! use bacnet_transport::port::ScPrincipal;
 //! use bacnet_types::MacAddr;
 //!
@@ -63,13 +62,14 @@
 //!             // B/IP has no certificates: keep the standard behaviour.
 //!             return true;
 //!         }
-//!         let unicast = [
-//!             Message::INITIALIZE_ROUTING_TABLE,
-//!             Message::INITIALIZE_ROUTING_TABLE_ACK,
-//!             Message::REJECT_MESSAGE_TO_NETWORK,
-//!             Message::I_COULD_BE_ROUTER_TO_NETWORK,
-//!         ]
-//!         .contains(&context.message_type);
+//!         let unicast = matches!(
+//!             context.class,
+//!             ControlClass::InitMgmt
+//!                 | ControlClass::InitQuery
+//!                 | ControlClass::InitAck
+//!                 | ControlClass::Reject
+//!                 | ControlClass::ICouldBe
+//!         );
 //!         if unicast {
 //!             context
 //!                 .sending_peer_principal()
@@ -148,6 +148,10 @@ pub struct ControlAuthContext {
     pub port_idx: usize,
     /// Network number of that port.
     pub port_network: u16,
+    /// The class of change the control would make, or
+    /// [`ControlClass::InitQuery`] for a routing-table query from another
+    /// network (#2715). The same class its decision is counted under.
+    pub class: ControlClass,
     /// Data-link source address of the sending node.
     pub source_mac: bacnet_types::MacAddr,
     /// How the transport learned of the frame's origin (direct peer, hub, relayed).
@@ -185,6 +189,7 @@ impl std::fmt::Debug for ControlAuthContext {
         f.debug_struct("ControlAuthContext")
             .field("port_idx", &self.port_idx)
             .field("port_network", &self.port_network)
+            .field("class", &self.class)
             .field("source_mac_len", &self.source_mac.len())
             .field("provenance", &self.provenance)
             .field(
@@ -205,11 +210,9 @@ impl std::fmt::Debug for ControlAuthContext {
 /// Fast, nonblocking, side-effect-free control authorizer.
 ///
 /// Consulted for protected controls only; read-only discovery never calls it.
-/// A routing-table query from another network is one of them (#2715): it
-/// comes as an Initialize-Routing-Table with
-/// [`source_net`](ControlAuthContext::source_net) set and no
-/// [`target_nets`](ControlAuthContext::target_nets), where an update always
-/// names at least one network.
+/// A routing-table query from another network is one of them (#2715): its
+/// [`class`](ControlAuthContext::class) is [`ControlClass::InitQuery`],
+/// where an update or purge is [`ControlClass::InitMgmt`].
 /// Do not block, reenter the router/table, or perform side effects. It runs
 /// under the router's engine lock (#1679), one call at a time per router:
 /// every port's routing waits while it runs, and calling into the router
@@ -411,10 +414,11 @@ impl ControlGate {
         self.decisions.snapshot()
     }
 
-    /// Decide `class` for the redacted context `ctx`, counting the
-    /// decision. The engine's host calls it after validation, before any
+    /// Decide the redacted context `ctx`, counting the decision under its
+    /// class. The engine's host calls it after validation, before any
     /// change.
-    pub(super) fn decide(&self, ctx: &ControlAuthContext, class: ControlClass) -> bool {
+    pub(super) fn decide(&self, ctx: &ControlAuthContext) -> bool {
+        let class = ctx.class;
         match (&self.policy, &self.authorizer) {
             (ControlPolicy::Permissive, None) => {
                 self.decisions.record(class, Decision::Allow);

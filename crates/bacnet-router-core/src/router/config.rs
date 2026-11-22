@@ -192,6 +192,13 @@ impl Options {
     /// age, a 60 s sweep, [`Timing::DEFAULT`], and a 5 s discovery cooldown
     /// and 30 s age, with every opt-in policy off. Firmware sizes its
     /// table with the storage's `R` and starts here.
+    ///
+    /// One default departs from the standard on purpose (#2717):
+    /// [`remote_table_updates`](Self::remote_table_updates) is off, so a
+    /// routing-table update that carries an SNET is refused. Clause 6.6.3.8
+    /// has a router apply an update it receives and doesn't exclude one
+    /// from another network; set the field to `true` to take those, under
+    /// [`Host::authorize`](super::Host::authorize) like a local one.
     pub const STANDARD: Self = Self {
         convergence: Convergence::Standard,
         route_cap: None,

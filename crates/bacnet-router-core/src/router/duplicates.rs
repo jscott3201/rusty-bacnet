@@ -25,11 +25,17 @@
 //!   one time to live look like one, and the second is not passed on. It
 //!   is still learned from where that keeps a route on its port (#2713):
 //!   a network the table lacks is added, and a route through the arrival
-//!   port is refreshed, with the sender as its next router. A network
-//!   reached through another port stays there: identical lists on two
-//!   ports mean a loop or a failover, and for the port the first wins for
-//!   one time to live. Learned, the copy a loop brings back would turn
-//!   each router's route toward the next router round the loop.
+//!   port is refreshed, with the sender as its next router, and loses any
+//!   pending hardened claim from another port, as with a claim that is no
+//!   repeat. A network reached through another port stays there: identical
+//!   lists on two ports mean a loop or a failover. Learned, the copy a loop
+//!   brings back would turn each router's route toward the next router
+//!   round the loop. So the first sender's port keeps the route past the
+//!   time to live: until the router whose copy was skipped announces again
+//!   after it, or until the route goes unconfirmed for
+//!   [`Options::learned_age`](super::Options::learned_age) (300 s by
+//!   default) and is purged. When the first sender was some other station,
+//!   that is a known limit, kept by decision.
 //! - A Router-Busy or Router-Available is kept by its sender, the arrival
 //!   network and link source, and its data, since its effect is scoped to
 //!   the routes through that sender: another router's identical message

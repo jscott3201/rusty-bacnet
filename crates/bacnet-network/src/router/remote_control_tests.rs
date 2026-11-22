@@ -14,7 +14,8 @@ use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 
 use super::control_policy::{
-    ControlAuthContext, ControlAuthorizer, ControlGate, ControlPolicy, ControlServiceCounters,
+    ControlAuthContext, ControlAuthorizer, ControlClass, ControlGate, ControlPolicy,
+    ControlServiceCounters,
 };
 use super::envelope_harness::*;
 
@@ -78,17 +79,16 @@ async fn a_hardened_gate_answers_table_queries_from_its_own_networks_only() {
 }
 
 /// An authorizer is asked about a query from another network and can tell
-/// it from an update: an Initialize-Routing-Table with an SNET and no
-/// target networks. Refusing those leaves local queries and local updates
-/// as they were.
+/// it from an update by its class, `InitQuery`, as well as by its SNET and
+/// empty target networks. Refusing those leaves local queries and local
+/// updates as they were.
 #[tokio::test]
-async fn an_authorizer_tells_a_remote_table_query_by_its_snet_and_empty_targets() {
+async fn an_authorizer_tells_a_remote_table_query_by_its_class() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
     let authorizer: ControlAuthorizer = Arc::new(move |context: &ControlAuthContext| {
         record.lock().unwrap().push(context.clone());
-        let table = context.message_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE;
-        !(table && context.source_net.is_some() && context.target_nets.is_empty())
+        context.class != ControlClass::InitQuery
     });
     let gate = Arc::new(ControlGate::new(
         ControlPolicy::Permissive,
@@ -115,6 +115,14 @@ async fn an_authorizer_tells_a_remote_table_query_by_its_snet_and_empty_targets(
     assert_eq!((query.source_net, query.dest_net), (Some(REMOTE), None));
     assert_eq!(query.source_mac, MacAddr::from_slice(&[7]), "the link peer");
     assert!(query.target_nets.is_empty() && !query.targets_omitted);
+    assert_eq!(
+        query.message_type,
+        NetworkMessageType::INITIALIZE_ROUTING_TABLE
+    );
+    assert_eq!(
+        (query.class, update.class),
+        (ControlClass::InitQuery, ControlClass::InitMgmt)
+    );
     assert_eq!(
         (update.source_net, &update.target_nets[..]),
         (None, &[4000][..])

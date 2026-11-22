@@ -2866,7 +2866,11 @@ that advertises the network. Zero or multiple candidates, or lost discovery
 reports, raise `BacnetError`. Supply an explicit next hop to skip discovery.
 The destination router does not need to advertise a Device object. Acks must
 arrive through the selected hop with the destination router's source network
-and address. An older router that answers a table query only on its own link never
+and address. A router that refuses table queries from other networks drops a
+routed query silently, so the call raises `BacnetTimeoutError` there too: a
+hosted router on the hardened control policy with no authorizer does, as does
+one built on `bacnet-router-core` whose host refuses the query class (#2715).
+An older router that answers a table query only on its own link never
 answers this client: the call raises `BacnetTimeoutError`, whose text for a
 routed query says so (query the next hop, or ask from a node on that network).
 A reject for the requested DNET that comes through the selected hop before
