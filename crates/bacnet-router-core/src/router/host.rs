@@ -53,7 +53,10 @@ pub enum ControlClass {
     IAm,
     /// Initialize-Routing-Table-Ack learning.
     InitAck,
-    /// Initialize-Routing-Table updates and removals (not queries).
+    /// Initialize-Routing-Table updates and removals (not queries). One
+    /// that carries an SNET gets here only with
+    /// [`Options::remote_table_updates`](super::Options::remote_table_updates),
+    /// and [`Claim::snet`] tells it from a local one.
     InitMgmt,
     /// Router-Busy marks.
     Busy,
@@ -285,6 +288,16 @@ pub enum Event {
         port: PortId,
         /// The class of the message.
         class: ControlClass,
+    },
+    /// An Initialize-Routing-Table update that carried an SNET was
+    /// dropped, the host not asked, because
+    /// [`Options::remote_table_updates`](super::Options::remote_table_updates)
+    /// is off (#2717).
+    RemoteUpdateRefused {
+        /// The port it arrived on.
+        port: PortId,
+        /// The SNET it carried.
+        snet: u16,
     },
     /// A refused NPDU named this router as its origin, so no reject went.
     OwnOrigin {

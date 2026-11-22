@@ -1,7 +1,9 @@
 //! Initialize-Routing-Table messages that carry an SNET, at the hosted
-//! router's gate: a query from another network is a protected control
-//! (#2715), allowed by the default gate, refused by a hardened one with no
-//! authorizer, and an authorizer's to decide.
+//! router. A query from another network is a protected control (#2715),
+//! allowed by the default gate, refused by a hardened one with no
+//! authorizer, and an authorizer's to decide. An update from another
+//! network is dropped before the gate unless
+//! `RouterOptions::remote_table_updates` is on (#2717).
 //!
 //! In-memory and deterministic, on [`super::envelope_harness`].
 
@@ -120,4 +122,102 @@ async fn an_authorizer_tells_a_remote_table_query_by_its_snet_and_empty_targets(
     let snapshot = h.gate.snapshot();
     assert_eq!(snapshot.init_query, totals(0, 1, 0));
     assert_eq!(snapshot.init_mgmt, totals(1, 0, 0));
+}
+
+/// An update for network 4000 through port 1, and a purge of network 3000.
+const ADD_4000: [u8; 5] = [1, 0x0f, 0xa0, 2, 0];
+const PURGE_3000: [u8; 5] = [1, 0x0b, 0xb8, 0, 0];
+
+fn update(data: &[u8]) -> Npdu {
+    control_npdu(NetworkMessageType::INITIALIZE_ROUTING_TABLE, data)
+}
+
+/// By default the router drops a routing-table update that carries an SNET
+/// (#2717): no change, no Ack, and the gate is never asked, so its totals
+/// stay at zero and the drop shows in the router's own `denied` count. The
+/// same updates from the router's own network apply.
+#[tokio::test]
+async fn a_table_update_from_another_network_is_refused_by_default() {
+    let mut h = Harness::two_port();
+    h.learned(3000, 1, &[2]);
+    for data in [ADD_4000, PURGE_3000] {
+        h.handle(h.ctx(0, &[7], from_remote(update(&data)))).await;
+        h.assert_quiet();
+    }
+    assert!(h.table().lookup(4000).is_none());
+    assert!(h.table().lookup(3000).is_some());
+    assert_eq!(h.gate.snapshot().init_mgmt, totals(0, 0, 0));
+    assert_eq!(h.counters().denied, 2);
+
+    for data in [ADD_4000, PURGE_3000] {
+        h.handle(h.ctx(0, &[7], update(&data))).await;
+        assert_eq!(h.drain(0).len(), 1, "the data-less Ack");
+    }
+    assert!(h.table().lookup(4000).is_some());
+    assert!(h.table().lookup(3000).is_none());
+    assert_eq!(h.gate.snapshot().init_mgmt, totals(2, 0, 0));
+    assert_eq!(h.counters().denied, 2);
+}
+
+/// An authorizer that would allow the update is not asked about it either:
+/// the option is the switch, and the authorizer only narrows it.
+#[tokio::test]
+async fn an_authorizer_alone_does_not_admit_a_remote_table_update() {
+    let allow_all: ControlAuthorizer = Arc::new(|_| true);
+    let gate = Arc::new(ControlGate::new(ControlPolicy::Hardened, Some(allow_all)));
+    let mut h = Harness::with_capacities(gate, &[16, 16]);
+    h.handle(h.ctx(0, &[7], from_remote(update(&ADD_4000))))
+        .await;
+    h.assert_quiet();
+    assert!(h.table().lookup(4000).is_none());
+    assert_eq!(h.gate.snapshot().init_mgmt, totals(0, 0, 0));
+    assert_eq!(h.counters().denied, 1);
+}
+
+/// With the option on, an update from another network is the gate's to
+/// decide, as it was before #2717: the default gate applies it and
+/// acknowledges the link peer, a hardened one refuses it, and an authorizer
+/// sees its SNET.
+#[tokio::test]
+async fn with_the_option_a_remote_table_update_goes_to_the_gate() {
+    let on = |options: &mut bacnet_router_core::router::Options| {
+        options.remote_table_updates = true;
+    };
+    let mut h = Harness::with_options(Arc::new(ControlGate::permissive()), on);
+    h.handle(h.ctx(0, &[7], from_remote(update(&ADD_4000))))
+        .await;
+    assert_eq!(h.drain(0).len(), 1, "the data-less Ack");
+    assert!(h.table().lookup(4000).is_some());
+    assert_eq!(h.gate.snapshot().init_mgmt, totals(1, 0, 0));
+    assert_eq!(h.counters().denied, 0);
+
+    let mut h = Harness::with_options(Arc::new(ControlGate::hardened()), on);
+    h.handle(h.ctx(0, &[7], from_remote(update(&ADD_4000))))
+        .await;
+    h.assert_quiet();
+    assert!(h.table().lookup(4000).is_none());
+    assert_eq!(h.gate.snapshot().init_mgmt, totals(0, 1, 1));
+
+    let local_only: ControlAuthorizer = Arc::new(|context| context.source_net.is_none());
+    let gate = Arc::new(ControlGate::new(
+        ControlPolicy::Permissive,
+        Some(local_only),
+    ));
+    let mut h = Harness::with_options(gate, on);
+    h.handle(h.ctx(0, &[7], from_remote(update(&ADD_4000))))
+        .await;
+    h.assert_quiet();
+    h.handle(h.ctx(0, &[7], update(&ADD_4000))).await;
+    assert_eq!(h.drain(0).len(), 1);
+    assert_eq!(h.gate.snapshot().init_mgmt, totals(1, 1, 0));
+}
+
+/// `RouterOptions::remote_table_updates` is what turns the engine's option
+/// on; the plain options leave it off.
+#[test]
+fn the_router_option_sets_the_engines() {
+    use super::RouterOptions;
+    assert!(!RouterOptions::new().engine_options().remote_table_updates);
+    let on = RouterOptions::new().remote_table_updates();
+    assert!(on.engine_options().remote_table_updates);
 }

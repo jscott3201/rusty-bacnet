@@ -4,6 +4,7 @@
 use super::Storage;
 use super::config::Options;
 use super::control::Claimed;
+use super::counters::bump;
 use super::host::{ControlClass, Event, Host, Targets};
 use super::ingress::{Arrival, Discard, Received};
 use super::tasks::Task;
@@ -37,6 +38,12 @@ impl<
     /// and the sender, and the sender gets an Ack with no data. Reserved
     /// networks and unknown Port IDs are skipped, direct routes are never
     /// touched, and the route cap ends the update for new networks.
+    ///
+    /// An update that carries an SNET came from another network, and is
+    /// dropped before the host is asked unless
+    /// [`Options::remote_table_updates`] is on (#2717). Clause 6.6.3.8 has
+    /// a router apply the update it receives and sets no limit on who may
+    /// send one; this limit is the router's own.
     ///
     /// From an isolated port (one with an isolated peer), an entry is
     /// refused, counted and reported when its network's route goes through
@@ -79,6 +86,16 @@ impl<
             self.out
                 .push(Task::table_ack(at.port, at.source, npdu.source, named));
             return Received::Handled;
+        }
+        if let Some(source) = npdu.source
+            && !options.remote_table_updates
+        {
+            bump(&mut self.counters.denied);
+            host.observe(Event::RemoteUpdateRefused {
+                port: at.port,
+                snet: source.network,
+            });
+            return Received::Discarded(Discard::Denied);
         }
         if !self.authorize(
             at,

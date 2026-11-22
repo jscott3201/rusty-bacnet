@@ -17,6 +17,12 @@
 //! Validation precedes policy. The router's engine asks for each decision
 //! under its lock, with the message's claims, before anything changes.
 //!
+//! One control never gets this far by default: an Init update or purge
+//! that carries an SNET is dropped by the engine unless
+//! [`RouterOptions::remote_table_updates`](super::RouterOptions::remote_table_updates)
+//! is on (#2717). With it on, such an update is decided here like a local
+//! one, and [`ControlAuthContext::source_net`] tells the two apart.
+//!
 //! ## Who may change routes (#518)
 //!
 //! [`ControlAuthContext::sending_peer_principal`] is the verified leaf

@@ -252,6 +252,14 @@ fn log(event: Event) {
             ?class,
             "Router refused a route change from an isolated port"
         ),
+        // At the sender's pace, like a gate denial, which logs nothing:
+        // the count is the operator's signal (`Counters::denied`).
+        Event::RemoteUpdateRefused { port, snet } => debug!(
+            port = port.0,
+            snet,
+            "Router refused a routing-table update from another network \
+             (RouterOptions::remote_table_updates is off)"
+        ),
         Event::Purged { network } => debug!(network, "Purged stale route"),
         Event::PendingExpired { network } => {
             debug!(network, "Expired hardened pending challenger")

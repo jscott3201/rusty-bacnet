@@ -191,6 +191,15 @@ impl Harness {
         Self::build_with(networks, limits, gate, &capacities, OPTIONS)
     }
 
+    /// The two-port router with `gate` and the engine options `set`
+    /// changes from the hosted ones.
+    pub(super) fn with_options(gate: Arc<ControlGate>, set: impl FnOnce(&mut Options)) -> Self {
+        let mut options = OPTIONS;
+        set(&mut options);
+        let limits = [NpduLimits::default(); 2];
+        Self::build_with(&NETWORKS, &limits, gate, &[16, 16], options)
+    }
+
     fn build(networks: &[u16], gate: Arc<ControlGate>, capacities: &[usize]) -> Self {
         let limits = vec![NpduLimits::default(); networks.len()];
         Self::build_with(networks, &limits, gate, capacities, OPTIONS)

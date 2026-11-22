@@ -22,7 +22,7 @@ The page describes **v{release}**.
 - A network number is 1 to 65534, and each port needs a different one. Every router on a network must use the same number for it.
 - All ports share one transport type. `RouterPort`'s transport type defaults to `AnyTransport`, so a router that mixes link types wraps each transport in `AnyTransport` and writes `RouterPort` alone.
 - `RouterOptions::new()` is the plain router. The options below turn on more.
-- `RouterPort::new(transport, network_number).isolated(true)` marks a port as isolated. The router carries nothing between two isolated ports and hides each from the other, while both still reach the ordinary ports: several BACnet/SC hubs can share one B/IP network without reaching each other. It limits transit only; it is not an access control on routing-table updates. The rustdoc of `RouterPort::isolated` says what differs on the wire.
+- `RouterPort::new(transport, network_number).isolated(true)` marks a port as isolated. The router carries nothing between two isolated ports and hides each from the other, while both still reach the ordinary ports: several BACnet/SC hubs can share one B/IP network without reaching each other. It limits transit only, by design: it is not a trust level for a port, and a reject or a routing-table update from an isolated port can still change a route through an ordinary port. `next_hop_rejects()` and the control policy, both below, are the controls for those. The rustdoc of `RouterPort::isolated` says what differs on the wire.
 
 `start` returns a `StartedRouter` with the router and a receiver, `apdus`, for messages addressed to the router itself, which an application on the router may answer. `router.table()` borrows the routing table: read or change what you need, then drop it before the next `.await`. `router.counters()` reports what the router dropped or refused, and `router.ports()` lists each port's network number and actual MAC.
 
@@ -55,6 +55,7 @@ Each option is a `RouterOptions` method:
 - `congestion(Congestion::DEFAULT)` tells the other networks, with Router-Busy-To-Network, when a port's send queue stays full, and with Router-Available-To-Network when it drains.
 - `duplicates(Duplicates::DEFAULT)` drops a global broadcast the router saw within the last second. It is meant for a site whose routers form a loop, which the standard doesn't allow but a misconfigured site can have. The standard defines no such suppression, and a sender's own identical retry within that second is dropped too. It also covers three messages the router passes on without a hop count, so that nothing else stops them around a loop: I-Am-Router-To-Network, and Router-Busy-To-Network or Router-Available-To-Network from one sender.
 - `next_hop_rejects()` lets a Reject-Message-To-Network change a learned route only when it comes from that route's next router.
+- `remote_table_updates()` takes routing-table updates (Initialize-Routing-Table with a port count other than zero) that arrive from another network. Without it the router drops them, whatever the control policy, and applies only updates from its own networks: one update can remove or redirect any learned route. Table queries are answered either way.
 - `track_admission()` gives the local receiver queue counters and a per-source quota.
 
 ## Know the limits

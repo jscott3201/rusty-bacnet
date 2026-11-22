@@ -228,6 +228,31 @@ impl<A, C> RouterOptions<A, C> {
         self
     }
 
+    /// Take routing-table updates that arrive from another network (#2717).
+    ///
+    /// Off by default: the router drops an Initialize-Routing-Table update
+    /// (a port count other than zero) that carries an SNET, silently, and
+    /// counts it in [`Counters::denied`](super::Counters::denied), before
+    /// the [policy](Self::control_policy) or the
+    /// [authorizer](Self::control_authorizer) hears of it. One update can
+    /// remove or redirect any learned route, and an SNET says it came
+    /// through another router from a node none of this router's networks
+    /// can vouch for. Clause 6.6.3.8 has a router apply the update it
+    /// receives and names no limit on who sends one; this default is the
+    /// router's own.
+    ///
+    /// On, such an update goes to the wire-control gate as one from the
+    /// router's own networks does, with its SNET in
+    /// [`ControlAuthContext::source_net`](super::control_policy::ControlAuthContext::source_net),
+    /// so an authorizer can still pick which to take. Turn it on only for a
+    /// site that manages router tables from a station on another network.
+    /// Updates with no SNET, and table queries from any network, are the
+    /// same either way.
+    pub fn remote_table_updates(mut self) -> Self {
+        self.engine.remote_table_updates = true;
+        self
+    }
+
     /// Drop a global broadcast that repeats one seen within
     /// [`Duplicates::ttl`] (#1698): off unless this sets it.
     ///

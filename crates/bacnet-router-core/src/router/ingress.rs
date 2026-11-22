@@ -108,7 +108,10 @@ pub enum Discard {
     GroupDadr,
     /// Its hop count had run out.
     HopCount,
-    /// [`Host::authorize`] refused it.
+    /// [`Host::authorize`] refused it, or it was an Initialize-Routing-Table
+    /// update from another network with
+    /// [`Options::remote_table_updates`](super::Options::remote_table_updates)
+    /// off.
     Denied,
     /// A network message whose data, or whose addressing, its type doesn't
     /// allow.

@@ -357,9 +357,12 @@ fn a_table_update_from_an_isolated_port_cannot_move_a_route_onto_it() {
 
 /// Table updates the decision leaves alone: from an ordinary port, and,
 /// from an isolated one, a change that brings nothing to an isolated port.
-/// Isolation is no access control on updates.
+/// By design, isolation is a rule about transit and no access control on
+/// updates (decisions of 2026-11-20 and 2026-11-22, #2717): a node on an
+/// isolated port can still remove or redirect a route through an ordinary
+/// port, and what stops it is the host's authorizer.
 #[test]
-fn other_table_updates_apply_as_without_isolation() {
+fn by_design_isolation_is_no_access_control_on_table_updates() {
     let mut router = with_routes();
     let mut host = Recorder::default();
     // From an ordinary port: onto the other ordinary port (wire ID 4),
@@ -383,6 +386,48 @@ fn other_table_updates_apply_as_without_isolation() {
     let _ = deliver(&mut router, &mut host, 1, R7, &update, at(1));
     assert!(router.table().lookup(51).is_none());
     assert_eq!(router.counters().isolated_refusals, 0);
+
+    // The control that does stop it: a host that refuses table updates.
+    learn(&mut router, 51, 0, R9);
+    host.deny.push(ControlClass::InitMgmt);
+    let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &update, at(1));
+    assert_eq!(outcome, Outcome::Discarded(Discard::Denied));
+    assert!(sent.is_empty());
+    assert_eq!(route(&router, 51), (0, R9.to_vec()));
+}
+
+/// A reject that arrives on an isolated port and names a network reached
+/// through an ordinary port. By design it marks that route, as a reject
+/// from any port does (Clause 6.6.3.5 names no sender): isolation is no
+/// trust level for a port (#2717). The two controls that stop it are the
+/// ones the docs point at, `Options::next_hop_rejects` and a host that
+/// refuses rejects, and with either the route stays reachable.
+#[test]
+fn by_design_a_reject_from_an_isolated_port_marks_a_route_through_an_ordinary_port() {
+    let reject = message(
+        Msg::REJECT_MESSAGE_TO_NETWORK,
+        &reject_data(RejectMessageReason::NOT_DIRECTLY_CONNECTED, 50),
+    );
+    let state = |router: &TestRouter| router.table().effective_reachability(50, at(1));
+
+    let mut router = with_routes();
+    let mut host = Recorder::default();
+    let _ = deliver(&mut router, &mut host, 1, NODE, &reject, at(1));
+    assert_eq!(state(&router), Some(Reachability::Unreachable));
+    assert_eq!(router.counters().isolated_refusals, 0);
+
+    let next_hop_only = options(|options| options.next_hop_rejects = true);
+    let mut router = router_with(&ports(), next_hop_only);
+    learn(&mut router, 50, 0, R9);
+    let _ = deliver(&mut router, &mut host, 1, NODE, &reject, at(1));
+    assert_eq!(state(&router), Some(Reachability::Reachable));
+    assert_eq!(router.counters().not_next_hop, 1);
+
+    let mut router = with_routes();
+    host.deny.push(ControlClass::Reject);
+    let (outcome, _) = deliver(&mut router, &mut host, 1, NODE, &reject, at(1));
+    assert_eq!(outcome, Outcome::Discarded(Discard::Denied));
+    assert_eq!(state(&router), Some(Reachability::Reachable));
 }
 
 /// A routing table query relayed from another network (#2699) that

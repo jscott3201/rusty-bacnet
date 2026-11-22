@@ -9,7 +9,9 @@ mod fixture;
 use bacnet_router_core::PortId;
 use bacnet_router_core::message::RoutingEntries;
 use bacnet_router_core::npdu::{Address, Mac, NetworkMessageType, Npdu, NpduLimits};
-use bacnet_router_core::router::{ControlClass, Discard, Groups, Options, PortConfig, SendRefusal};
+use bacnet_router_core::router::{
+    ControlClass, Discard, Event, Groups, Options, PortConfig, SendRefusal,
+};
 use fixture::{
     OWN_0, OWN_1, Outcome, R7, Recorder, Sent, addr, at, bytes, deliver, drain, drain_refusing,
     port_on, router, router_with,
@@ -368,21 +370,71 @@ fn a_full_queue_ends_a_routed_answer() {
     assert!(drain(&mut router).is_empty());
 }
 
-/// Today an Initialize-Routing-Table update that arrives from another
-/// network (SNET set) goes through the host's `authorize` exactly as a local
-/// one does: refused, it changes nothing and draws nothing; allowed, it is
-/// applied and acknowledged to the link peer. Pinned as it stands; the
-/// default policy for remote updates is a separate decision.
-#[test]
-fn today_a_remote_table_update_is_authorized_like_a_local_one() {
-    let update = bytes(&Npdu {
+/// An Initialize-Routing-Table update that carries an SNET.
+fn remote_update(data: &[u8], destination: Option<Address<'_>>) -> Vec<u8> {
+    bytes(&Npdu {
         source: Some(REQUESTER),
-        ..Npdu::message(
-            NetworkMessageType::INITIALIZE_ROUTING_TABLE,
-            &[1, 0, 44, 1, 0],
-        )
-    });
-    let mut router = router();
+        destination,
+        ..Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, data)
+    })
+}
+
+/// By default an Initialize-Routing-Table update that arrives from another
+/// network (SNET set) is dropped before the host is asked (#2717): it
+/// changes nothing and draws no Ack, whether it would add a route or
+/// remove one, and whether or not it names the router at the arrival port.
+/// It is counted as denied and reported. The same update with no SNET is
+/// applied and acknowledged as it always was. Both sets of options start
+/// with the default.
+#[test]
+fn a_table_update_from_another_network_is_refused_by_default() {
+    for options in [Options::HOSTED, Options::STANDARD] {
+        assert!(!options.remote_table_updates);
+        let mut router = router_with(&fixture::two_ports(), options);
+        learn(&mut router, 100..101);
+        let mut host = Recorder::default();
+        let add: &[u8] = &[1, 0, 44, 1, 0];
+        let remove: &[u8] = &[1, 0, 100, 0, 0];
+        let named = Some(addr(2, OWN_1));
+        for (data, destination) in [(add, None), (remove, None), (add, named)] {
+            let frame = remote_update(data, destination);
+            let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &frame, at(1));
+            assert_eq!(outcome, Outcome::Discarded(Discard::Denied));
+            assert!(sent.is_empty(), "{sent:?}");
+        }
+        assert!(router.table().lookup(44).is_none());
+        assert!(router.table().lookup(100).is_some());
+        assert!(host.asked.is_empty(), "the host is not asked");
+        assert_eq!(router.counters().denied, 3);
+        let refused = Event::RemoteUpdateRefused {
+            port: PortId(1),
+            snet: 81,
+        };
+        assert_eq!(host.events, [refused; 3]);
+
+        // Local: the same data with no SNET.
+        let local = fixture::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, add);
+        let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &local, at(2));
+        assert_eq!(outcome, Outcome::Handled);
+        assert!(router.table().lookup(44).is_some());
+        assert_eq!(sent.len(), 1, "the data-less Ack");
+        let [asked] = &host.asked[..] else {
+            panic!("{:?}", host.asked)
+        };
+        assert_eq!((asked.class, asked.snet), (ControlClass::InitMgmt, None));
+        assert_eq!(router.counters().denied, 3);
+    }
+}
+
+/// With [`Options::remote_table_updates`] on, an update from another
+/// network goes through the host's `authorize` exactly as a local one
+/// does, as every update did before #2717: refused, it changes nothing and
+/// draws nothing; allowed, it is applied and acknowledged to the link peer.
+#[test]
+fn with_the_option_a_remote_table_update_is_authorized_like_a_local_one() {
+    let update = remote_update(&[1, 0, 44, 1, 0], None);
+    let on = fixture::options(|options| options.remote_table_updates = true);
+    let mut router = router_with(&fixture::two_ports(), on);
     let mut denying = Recorder {
         deny: vec![ControlClass::InitMgmt],
         ..Recorder::default()
