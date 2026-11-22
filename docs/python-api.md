@@ -4195,6 +4195,7 @@ server = BACnetServer(
     time_sync_policy=None,       # keyword-only dict of clock limits; see Time synchronization policy below
     utc_offset_minutes=0,        # keyword-only; the Device's UTC_Offset at start, minutes west of UTC
     daylight_savings=False,      # keyword-only; its Daylight_Savings_Status at start; see set_clock_zone
+    clock_zone_writable=False,   # keyword-only; let peers write UTC_Offset and Daylight_Savings_Status
 )
 ```
 
@@ -4277,12 +4278,12 @@ holding another fails its build the same way.
 
 These builders, `add_timer`, `add_channel`, the three log builders,
 `add_notification_class`, `add_notification_forwarder`, `add_access_rights`,
-`add_color` and `add_color_temperature` keep a written Description in their
-`storage_path` file, with these rules: every builder that takes
-`storage_path` does, except `add_audit_log`. An Audit Log's files keep its
-records, Enable and Buffer_Size, and a Description a peer writes to it
-lasts until the server restarts. So does one written to an object built
-without `storage_path`, or to a type whose builder has none: the Device and
+`add_color`, `add_color_temperature` and `add_audit_log` keep a written
+Description in their `storage_path` file, with these rules: every builder
+that takes `storage_path` does. An Audit Log keeps it in the files that hold
+its records, Enable and Buffer_Size (#2407). A Description written to an
+object built without `storage_path`, or to a type whose builder has none,
+lasts until the server restarts: the Device and
 the two lighting outputs among them, which keep one only through the Rust
 API's `with_tags_persistence`, and the Network Port, whose transport keeps
 only its own tables in `bdt_persist_path`.
@@ -6731,7 +6732,15 @@ await server.set_clock_zone(300, True)
   timestamps follow at their next look at the clock. Timestamps already
   recorded stay as they were.
 - A request sees the old pair or the new, never one of each. Both properties
-  stay read-only to a peer.
+  stay read-only to a peer unless the constructor's keyword-only
+  `clock_zone_writable` is True (#2395). A WriteProperty or
+  WritePropertyMultiple of either then moves the clock the same way, and an
+  Audit Reporter monitoring the Device reports it. UTC_Offset takes a
+  multiple of 15 within -1440 to 1440, else VALUE_OUT_OF_RANGE, and
+  Daylight_Savings_Status a BOOLEAN. The Python server's Device has no
+  storage, so a written zone lasts until this method, which is newer,
+  changes it, or until `stop()`; the next `start()` begins in the
+  constructor's zone.
 
 An offset outside that range or off the 15-minute grid raises `ValueError`
 when the method is called, and an int that doesn't fit 16 bits

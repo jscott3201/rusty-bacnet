@@ -18,6 +18,7 @@ fn snapshot() -> AuditLogSnapshot {
         total_record_count: 0,
         records: Vec::new(),
         completed_receipts: Vec::new(),
+        description: None,
     }
 }
 

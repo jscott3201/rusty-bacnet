@@ -87,6 +87,7 @@ impl TagsPersistence for SavedEmpty {
         Ok(Some(TagsSnapshot {
             tags: Some(vec![]),
             description: None,
+            zone: Default::default(),
         }))
     }
 

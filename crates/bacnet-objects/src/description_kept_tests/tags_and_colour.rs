@@ -106,6 +106,7 @@ pub(super) fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
         Memory::holding(saved.map(|text| TagsSnapshot {
             tags: None,
             description: Some(text.into()),
+            zone: Default::default(),
         }))
     };
     let coloured = || {
@@ -180,6 +181,7 @@ fn a_tags_user_that_keeps_no_description_refuses_and_never_saves_one() {
         Memory::holding(Some(TagsSnapshot {
             tags: None,
             description: Some("lobby".into()),
+            zone: Default::default(),
         }))
     };
     let object = oid(ObjectType::ANALOG_INPUT);
@@ -292,6 +294,7 @@ fn a_request_stops_before_tags_past_the_file_cap_beside_its_description() {
     let lobby = TagsSnapshot {
         tags: None,
         description: Some("lobby".into()),
+        zone: Default::default(),
     };
     assert_eq!(storage.saved(), Some(lobby));
     assert_eq!(storage.saves.load(Ordering::SeqCst), 1);

@@ -7,7 +7,11 @@
 //! everything before it. The payload holds the capacity, a Boolean Enable
 //! octet, Total_Record_Count, the record count, then each record's sequence
 //! number, length and Clause 21 encoding, and from schema version 2 the
-//! completed receipts. Every integer is big-endian.
+//! completed receipts. Schema version 4 (#2407) ends the payload with a
+//! written Description, its length in four octets and then its UTF-8; only
+//! a snapshot holding one takes it, so a slot without one keeps version 3's
+//! octets, and a build that predates version 4 refuses one with it as an
+//! unknown version. Every integer is big-endian.
 
 use crate::prelude::*;
 use bacnet_encoding::constructed::{
@@ -24,7 +28,9 @@ use bytes::BytesMut;
 use super::{AuditLogSnapshot, MAX_AUDIT_RECORDS};
 use crate::audit::receipt;
 use crate::durable::crc32;
+use crate::snapshot::framing;
 use crate::snapshot::{SnapshotError, SnapshotErrorKind};
+use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
 #[path = "receipt_codec.rs"]
 mod receipt_codec;
@@ -35,8 +41,11 @@ pub(crate) const SCHEMA_VERSION_V1: u16 = 1;
 /// reversed bit order of releases up to 0.11.0.
 pub(crate) const SCHEMA_VERSION_V2: u16 = 2;
 /// Holds log-status records in the bit0-first order of every BACnet bit
-/// string.
+/// string: the schema written for a snapshot without a Description.
 pub(crate) const SCHEMA_VERSION: u16 = 3;
+/// Version 3 with a written Description after the receipts (#2407): the
+/// schema written for a snapshot holding one.
+pub(crate) const SCHEMA_VERSION_DESCRIBED: u16 = 4;
 pub(crate) const HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
 pub(crate) const TRAILER_LEN: usize = 4;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
@@ -44,10 +53,15 @@ pub(crate) const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 /// What an Audit Log snapshot's error text is led by.
 pub(crate) const WHAT: &str = "AuditLog snapshot";
 
-/// The slot octets for `snapshot` in today's schema. Every refusal is
-/// [`OutOfRange`](SnapshotErrorKind::OutOfRange): nothing was stored.
+/// The slot octets for `snapshot` in today's schema: version 4 for a
+/// snapshot holding a Description, version 3 for one without. Every refusal
+/// is [`OutOfRange`](SnapshotErrorKind::OutOfRange): nothing was stored.
 pub(crate) fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, SnapshotError> {
-    encode_for_version(snapshot, SCHEMA_VERSION)
+    let version = match snapshot.description {
+        Some(_) => SCHEMA_VERSION_DESCRIBED,
+        None => SCHEMA_VERSION,
+    };
+    encode_for_version(snapshot, version)
 }
 
 /// [`encode`] under the header of schema `version`. Only tests write an
@@ -64,6 +78,12 @@ fn encode_slot(snapshot: &AuditLogSnapshot, version: u16) -> Result<Vec<u8>, Sna
     if version == SCHEMA_VERSION_V1 && !snapshot.completed_receipts.is_empty() {
         return Err(SnapshotError::out_of_range(
             "in schema version 1 cannot hold completed receipts",
+        ));
+    }
+    // Only version 4 holds a Description, and it always holds one.
+    if (version == SCHEMA_VERSION_DESCRIBED) != snapshot.description.is_some() {
+        return Err(SnapshotError::out_of_range(
+            "holds a Description only in schema version 4",
         ));
     }
     let too_long = SnapshotError::out_of_range("length exceeds the slot cap");
@@ -98,6 +118,9 @@ fn encode_slot(snapshot: &AuditLogSnapshot, version: u16) -> Result<Vec<u8>, Sna
     if version != SCHEMA_VERSION_V1 {
         receipt_codec::encode(&snapshot.completed_receipts, &mut data)?;
     }
+    if let Some(text) = &snapshot.description {
+        framing::put_description(&mut data, text)?;
+    }
     let total_len = data.len().checked_add(TRAILER_LEN).ok_or(too_long)?;
     if total_len > MAX_SNAPSHOT_BYTES {
         return Err(too_long);
@@ -127,7 +150,7 @@ fn decode_slot(data: &[u8], expected: ObjectIdentifier) -> Result<AuditLogSnapsh
     let version = u16::from_be_bytes([data[8], data[9]]);
     if !matches!(
         version,
-        SCHEMA_VERSION_V1 | SCHEMA_VERSION_V2 | SCHEMA_VERSION
+        SCHEMA_VERSION_V1 | SCHEMA_VERSION_V2 | SCHEMA_VERSION | SCHEMA_VERSION_DESCRIBED
     ) {
         return Err(SnapshotError::new(
             SnapshotErrorKind::UnknownVersion(version),
@@ -230,7 +253,7 @@ fn decode_payload(
         let record_data = take(payload, &mut offset, record_len, "record")?;
         let mut record = decode_audit_log_record(record_data)
             .map_err(|_| SnapshotError::damaged("record does not decode"))?;
-        if version != SCHEMA_VERSION {
+        if version < SCHEMA_VERSION {
             restore_pre_v3_log_status(&mut record);
         }
         records.push(BACnetAuditLogRecordResult {
@@ -242,6 +265,14 @@ fn decode_payload(
         Vec::new()
     } else {
         receipt_codec::decode(payload, &mut offset)?
+    };
+    let description = if version == SCHEMA_VERSION_DESCRIBED {
+        let (text, rest) = framing::take_description(&payload[offset..])
+            .map_err(|error| error.in_field("description"))?;
+        offset = payload.len() - rest.len();
+        Some(text)
+    } else {
+        None
     };
     if offset != payload.len() {
         return Err(SnapshotError::damaged("payload has trailing bytes"));
@@ -255,6 +286,7 @@ fn decode_payload(
         total_record_count,
         records,
         completed_receipts,
+        description,
     };
     // A record that decodes but would not encode again could never be
     // served, so such a snapshot is damaged. The exception is a record an
@@ -407,6 +439,15 @@ pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), SnapshotError> {
         receipt_codec::checked_len(&snapshot.completed_receipts)?
     };
     projected_len = projected_len.checked_add(receipt_len).ok_or(too_long)?;
+    // A written Description: its length in four octets, then its text.
+    if let Some(text) = &snapshot.description {
+        if text.len() > MAX_DESCRIPTION_OCTETS {
+            return Err(SnapshotError::out_of_range(
+                "holds a Description past its cap",
+            ));
+        }
+        projected_len = projected_len.checked_add(4 + text.len()).ok_or(too_long)?;
+    }
     if projected_len > MAX_SNAPSHOT_BYTES {
         return Err(too_long);
     }

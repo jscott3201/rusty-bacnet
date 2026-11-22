@@ -81,11 +81,18 @@ impl Parity {
     /// daylight-saving state `summer`: the server's own, and a
     /// `DeviceClock` on `timer` lent by the core's `Responder`.
     async fn start_clocked(offset: i16, summer: bool, timer: &Timer) -> Self {
+        Self::start_clocked_with(offset, summer, timer, false).await
+    }
+
+    /// [`start_clocked`](Self::start_clocked), each side's clock taking a
+    /// peer's zone writes when `writable` (#2395).
+    async fn start_clocked_with(offset: i16, summer: bool, timer: &Timer, writable: bool) -> Self {
         let identity = identity();
         let (transport, tx) = TestTransport::inbound(16);
         let sent = transport.sent();
         let config = ServerConfig {
             device: identity.clone(),
+            clock_zone_writable: writable,
             ..ServerConfig::default()
         };
         let clock = ClockConfig::new(offset, summer).unwrap();
@@ -102,6 +109,11 @@ impl Parity {
         let mut db = database(&identity);
         timer.pin();
         let clock = DeviceClock::new(Zone::new(offset, summer).unwrap(), timer.reader());
+        let clock = if writable {
+            clock.with_writable_zone()
+        } else {
+            clock
+        };
         let responder = Responder::new(core_identity, limits)
             .unwrap()
             .with_clock(clock, &mut db);
@@ -260,6 +272,120 @@ async fn zone_change_rows_match() {
     parity.clock_rows(&timer, &all, "a UTC sync").await;
     parity.set_zone(-1440, true).await;
     parity.clock_rows(&timer, &all, "a day east").await;
+}
+
+/// A WriteProperty of `value` to the Device's `property`.
+fn write_zone(property: P, value: PropertyValue) -> Bytes {
+    let mut octets = BytesMut::new();
+    bacnet_encoding::primitives::encode_property_value(&mut octets, &value).unwrap();
+    let mut body = BytesMut::new();
+    bacnet_services::write_property::WritePropertyRequest {
+        object_identifier: oid(ObjectType::DEVICE, DEVICE),
+        property_identifier: property,
+        property_array_index: None,
+        property_value: octets.to_vec(),
+        priority: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    confirmed(3, ConfirmedServiceChoice::WRITE_PROPERTY, &body, 1476)
+}
+
+/// The same peer writes of the zone, host zone changes and synchronizations
+/// to both sides (#2395): each write draws the same answer, a refusal
+/// included, and the Device's four clock properties read the same after
+/// every step. Without the opt-in both refuse alike.
+#[tokio::test(start_paused = true)]
+async fn peer_zone_write_rows_match() {
+    let all = [
+        P::LOCAL_DATE,
+        P::LOCAL_TIME,
+        P::UTC_OFFSET,
+        P::DAYLIGHT_SAVINGS_STATUS,
+    ];
+    let timer = Timer::default();
+    let mut closed = Parity::start_clocked(0, false, &timer).await;
+    timer.pin();
+    let refused = closed
+        .same(
+            "a write without the opt-in",
+            write_zone(P::UTC_OFFSET, PropertyValue::Signed(300)),
+            1476,
+        )
+        .await;
+    assert!(matches!(refused, Some(Apdu::Error(_))), "{refused:?}");
+
+    let mut parity = Parity::start_clocked_with(0, false, &timer, true).await;
+    // Before any synchronization only the zone rows can agree.
+    timer.pin();
+    parity
+        .same(
+            "a write before any sync",
+            write_zone(P::UTC_OFFSET, PropertyValue::Signed(300)),
+            1476,
+        )
+        .await;
+    parity
+        .clock_rows(&timer, &all[2..], "a write before any sync")
+        .await;
+    // Thursday 2024-07-04, 13:15 UTC: 08:15 five hours west.
+    parity
+        .sync(&timer, Basis::Utc, date(2024, 7, 4, 4), time(13, 15, 0, 0))
+        .await;
+    let before = parity.clock_rows(&timer, &all, "the sync").await;
+    let summer = parity
+        .peer_writes(
+            &timer,
+            P::DAYLIGHT_SAVINGS_STATUS,
+            PropertyValue::Boolean(true),
+        )
+        .await;
+    assert_ne!(summer[1], before[1]);
+    parity.set_zone(360, true).await;
+    parity.clock_rows(&timer, &all, "a host change").await;
+    // 10:45 east across midnight, then a value off the grid both refuse.
+    let writes = [
+        (P::UTC_OFFSET, PropertyValue::Signed(-645)),
+        (P::UTC_OFFSET, PropertyValue::Signed(7)),
+        (P::DAYLIGHT_SAVINGS_STATUS, PropertyValue::Null),
+    ];
+    for (property, value) in writes {
+        parity.peer_writes(&timer, property, value).await;
+    }
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    parity
+        .sync(
+            &timer,
+            Basis::Local,
+            date(2024, 12, 31, 2),
+            time(23, 30, 0, 0),
+        )
+        .await;
+    let writes = [
+        (P::DAYLIGHT_SAVINGS_STATUS, PropertyValue::Boolean(false)),
+        (P::UTC_OFFSET, PropertyValue::Signed(1440)),
+    ];
+    for (property, value) in writes {
+        parity.peer_writes(&timer, property, value).await;
+    }
+}
+
+impl Parity {
+    /// The same peer write of `value` to the Device's `property` to both
+    /// sides, which must answer alike; then the four clock rows from both.
+    async fn peer_writes(&mut self, timer: &Timer, property: P, value: PropertyValue) -> Vec<Apdu> {
+        let what = format!("{property:?} written as {value:?}");
+        timer.pin();
+        let answer = self.same(&what, write_zone(property, value), 1476).await;
+        assert!(answer.is_some(), "{what}");
+        let all = [
+            P::LOCAL_DATE,
+            P::LOCAL_TIME,
+            P::UTC_OFFSET,
+            P::DAYLIGHT_SAVINGS_STATUS,
+        ];
+        self.clock_rows(timer, &all, &what).await
+    }
 }
 
 /// The destinations the window rows judge, process identifiers 1 to 9.

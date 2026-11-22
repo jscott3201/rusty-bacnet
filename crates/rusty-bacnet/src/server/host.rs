@@ -224,6 +224,7 @@ impl super::BACnetServer {
             cov_policy: bacnet_device_core::cov::CovPolicy::default(),
             time_sync_policy: server::TimeSyncPolicy::default(),
             clock_zone: server::ClockConfig::default(),
+            clock_zone_writable: false,
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),

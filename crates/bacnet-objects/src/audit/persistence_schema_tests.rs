@@ -94,6 +94,7 @@ fn snapshot(datums: Vec<BACnetAuditLogDatum>, generation: u64) -> AuditLogSnapsh
             })
             .collect(),
         completed_receipts: Vec::new(),
+        description: None,
     }
 }
 

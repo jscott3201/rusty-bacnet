@@ -8,7 +8,10 @@
 //! number and length; from version 2 the completed receipts follow. Version
 //! 3 stores log-status records bit 0 first, as every BACnet bit string is;
 //! versions 1 and 2, from releases up to 0.11.0, stored them reversed, and
-//! [`decode`] puts them right. [`encode`] writes version 3 only.
+//! [`decode`] puts them right. Version 4 ([`VERSION_WITH_DESCRIPTION`],
+//! #2407) ends the payload with a written Description; [`encode`] writes it
+//! only for a snapshot holding one, and version 3 for any other, so a slot
+//! without one keeps version 3's octets.
 //!
 //! The file backend keeps two slots and writes the one the generation's
 //! parity names. A backend of its own can do the same: hand both slots'
@@ -23,8 +26,12 @@ use crate::audit::persistence::codec;
 
 /// The magic tag every slot starts with.
 pub const MAGIC: [u8; 8] = *codec::MAGIC;
-/// The schema version [`encode`] writes.
+/// The schema version [`encode`] writes for a snapshot without a written
+/// Description.
 pub const VERSION: u16 = codec::SCHEMA_VERSION;
+/// The schema version [`encode`] writes for a snapshot with a written
+/// Description (#2407): the newest [`decode`] reads.
+pub const VERSION_WITH_DESCRIPTION: u16 = codec::SCHEMA_VERSION_DESCRIBED;
 /// The oldest schema version [`decode`] still reads.
 pub const OLDEST_VERSION: u16 = codec::SCHEMA_VERSION_V1;
 /// The most octets a slot may take.
@@ -36,7 +43,8 @@ pub const MAX_LEN: usize = codec::MAX_SNAPSHOT_BYTES;
 /// doesn't hold together, as [`decode`] would refuse it (a zero generation,
 /// more records than its capacity or than the Audit Log keeps, sequence
 /// numbers that don't run on to Total_Record_Count, receipts past their
-/// caps or repeated), a record past 1 MiB, and a slot past [`MAX_LEN`].
+/// caps or repeated), a record past 1 MiB, a Description past 16 KiB, and a
+/// slot past [`MAX_LEN`].
 pub fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, SnapshotError> {
     codec::encode(snapshot)
 }
@@ -46,7 +54,8 @@ pub fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, SnapshotError> {
 /// Refuses damage (a slot cut short or past [`MAX_LEN`], a bad magic tag,
 /// length or checksum, or contents that don't decode or don't hold
 /// together), and a sound slot of another object or of a schema version
-/// this build doesn't read (any but [`OLDEST_VERSION`] to [`VERSION`]).
+/// this build doesn't read (any but [`OLDEST_VERSION`] to
+/// [`VERSION_WITH_DESCRIPTION`]).
 pub fn decode(object: ObjectIdentifier, octets: &[u8]) -> Result<AuditLogSnapshot, SnapshotError> {
     codec::decode(octets, object)
 }

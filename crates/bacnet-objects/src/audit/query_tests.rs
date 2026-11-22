@@ -113,6 +113,7 @@ fn log_with_records(records: Vec<BACnetAuditLogRecordResult>) -> AuditLogObject 
         total_record_count,
         records,
         completed_receipts: Vec::new(),
+        description: None,
     }));
     AuditLogObject::new(1, "Audit-1", capacity, persistence).unwrap()
 }
@@ -603,6 +604,7 @@ fn records_appended_during_paging_cause_no_omission_or_duplication() {
             total_record_count: 3,
             records,
             completed_receipts: Vec::new(),
+            description: None,
         }));
         AuditLogObject::new(1, "Audit-1", 4, persistence).unwrap()
     };

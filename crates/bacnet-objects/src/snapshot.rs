@@ -24,26 +24,27 @@
 //! | Module | Snapshot | Tag | Versions read (written) | File backend |
 //! | --- | --- | --- | --- | --- |
 //! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2, 3 (2, 3) | `FileLogPersistence`, one slot of two |
-//! | [`audit_log`] | [`AuditLogSnapshot`] | `RBALOG01` | 1, 2, 3 (3) | `FileAuditLogPersistence`, one slot of two |
+//! | [`audit_log`] | [`AuditLogSnapshot`] | `RBALOG01` | 1, 2, 3, 4 (3, 4) | `FileAuditLogPersistence`, one slot of two |
 //! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1 to 6 (2 to 6) | `FileWriteConfigPersistence` |
 //! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1, 2 (1, 2) | `FileNotificationClassPersistence` |
 //! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1, 2 (1, 2) | `FileNotificationForwarderPersistence` |
-//! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1, 2 (1, 2) | `FileTagsPersistence` |
+//! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1, 2, 3 (1, 2, 3) | `FileTagsPersistence` |
 //! | [`color`] | [`ColorOutputSnapshot`] | `RBNCLR02` | 1 (`RBNCLR01`), 2, 3 (2, 3) | `FileColorOutputPersistence` |
 //! | [`access_rights`] | [`AccessRightsSnapshot`] | `RBNACR01` | 1, 2 (1, 2) | `FileAccessRightsPersistence` |
 //! | [`load_control`] | [`LoadControlSnapshot`] | `RBNLCT02` | 1 (`RBNLCT01`), 2 (1, 2) | `FileLoadControlPersistence` |
 //!
 //! A written Description (#2364) takes the newest version (or kind) in each
-//! row it changed: log schema version 3, write configuration kind 5, the
-//! colour output's version 3 and the other one-file formats' version 2.
+//! row it changed: log schema version 3, the Audit Log's schema version 4
+//! (#2407), write configuration kind 5, the colour output's version 3 and
+//! the other one-file formats' version 2.
 //! Only a snapshot holding one is written that
 //! way, so a snapshot without one keeps the octets an earlier release wrote,
 //! and a release that predates the version refuses one with it as
 //! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
 //! [`UnknownKind`](SnapshotErrorKind::UnknownKind). A written event
 //! algorithm parameter (#2331) takes write configuration kind 6 the same
-//! way, and a written Shed_Levels element (#2502) the Load Control's
-//! version 2.
+//! way, a written Shed_Levels element (#2502) the Load Control's version
+//! 2, and a Device's written zone half (#2395) the Tags format's version 3.
 //!
 //! The one-file formats share a header: the eight-octet tag, which names the
 //! format and its version, then the four-octet identifier of the object the

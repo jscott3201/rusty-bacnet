@@ -93,6 +93,7 @@ fn file_snapshot_presence_identity_and_independent_bytes() {
         TagsSnapshot {
             tags: Some(vec![]),
             description: None,
+            zone: Default::default(),
         },
         snapshot("floor"),
     ] {
@@ -139,6 +140,7 @@ fn semantic_null_date_and_time_tags_round_trip_without_reinterpretation() {
             ),
         ]),
         description: None,
+        zone: Default::default(),
     };
     case.store.save(oid(), &saved).unwrap();
     // Independently authored body; absent value and explicit NULL differ.
@@ -180,6 +182,7 @@ fn nonprimitive_file_saves_leave_existing_bytes_intact() {
         let invalid = TagsSnapshot {
             tags: Some(vec![BACnetNameValue::valued("a", value)]),
             description: None,
+            zone: Default::default(),
         };
         assert_code(
             case.store.save(oid(), &invalid),

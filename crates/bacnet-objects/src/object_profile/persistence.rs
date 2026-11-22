@@ -31,6 +31,81 @@ pub struct TagsSnapshot {
     /// Lighting Output keep theirs here. Every other object saves `None`
     /// and refuses storage that holds one.
     pub description: Option<String>,
+    /// The halves of the Device clock's zone a peer wrote (#2395), on a
+    /// Device whose clock takes such writes; none held until then. Only a
+    /// Device keeps them here. Every other object saves none and refuses
+    /// storage that holds one.
+    pub zone: WrittenZone,
+}
+
+/// The halves of the Device clock's zone a peer wrote and storage keeps
+/// (#2395): each is `None` until a write sets it, and then wins over the
+/// zone the host gives the clock, until the Device's
+/// `clear_written_zone`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WrittenZone {
+    /// UTC_Offset: minutes west of UTC, a multiple of 15 within -1440 to
+    /// 1440.
+    pub utc_offset: Option<i16>,
+    /// Daylight_Savings_Status.
+    pub daylight_savings_status: Option<bool>,
+}
+
+impl WrittenZone {
+    /// Whether neither half is held.
+    pub fn is_empty(&self) -> bool {
+        self.utc_offset.is_none() && self.daylight_savings_status.is_none()
+    }
+
+    /// The zone `(utc_offset, daylight_savings_status)` with each held half
+    /// in place of the one given.
+    pub fn over(&self, (utc_offset, daylight_savings_status): (i16, bool)) -> (i16, bool) {
+        (
+            self.utc_offset.unwrap_or(utc_offset),
+            self.daylight_savings_status
+                .unwrap_or(daylight_savings_status),
+        )
+    }
+
+    /// Whether every held half is one a write takes: an offset that is a
+    /// multiple of 15 within -1440 to 1440.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.utc_offset.is_none_or(offset_written)
+    }
+
+    /// These halves with a write of `value` to `property` held too: an
+    /// INTEGER UTC_Offset within the range [`is_valid`](Self::is_valid)
+    /// names, else VALUE_OUT_OF_RANGE, or a BOOLEAN Daylight_Savings_Status;
+    /// INVALID_DATA_TYPE for another datatype.
+    #[cfg(any(feature = "zone-writes", feature = "durable-writes"))]
+    pub(crate) fn with_write(
+        mut self,
+        property: bacnet_types::enums::PropertyIdentifier,
+        value: &bacnet_types::primitives::PropertyValue,
+    ) -> Result<Self, Error> {
+        use bacnet_types::enums::PropertyIdentifier as P;
+        use bacnet_types::primitives::PropertyValue as V;
+        match (property, value) {
+            (P::UTC_OFFSET, V::Signed(minutes)) => {
+                let minutes = i16::try_from(*minutes)
+                    .ok()
+                    .filter(|minutes| offset_written(*minutes))
+                    .ok_or_else(crate::common::value_out_of_range_error)?;
+                self.utc_offset = Some(minutes);
+            }
+            (P::DAYLIGHT_SAVINGS_STATUS, V::Boolean(summer)) => {
+                self.daylight_savings_status = Some(*summer);
+            }
+            _ => return Err(crate::common::invalid_data_type_error()),
+        }
+        Ok(self)
+    }
+}
+
+/// Whether a written UTC_Offset may hold `minutes`: a multiple of 15
+/// within a day either way.
+fn offset_written(minutes: i16) -> bool {
+    (-1440..=1440).contains(&minutes) && minutes % 15 == 0
 }
 
 /// Application-owned storage shared by all objects supporting durable Tags.

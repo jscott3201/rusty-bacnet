@@ -104,6 +104,7 @@ fn formats() -> [Format; 5] {
                 let snapshot = TagsSnapshot {
                     tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
                     description: description.map(Into::into),
+                    zone: Default::default(),
                 };
                 tags::encode(object, &snapshot)
             },
@@ -180,11 +181,18 @@ fn a_reader_of_the_previous_version_refuses_the_new_one() {
             "{}",
             format.object
         );
-        // And this build refuses the version after it the same way.
+        // And this build refuses a version past the newest it reads the
+        // same way: the Tags format's version 3 holds a written zone
+        // (#2395), so its next is 4.
+        let newest = if format.magic == tags::MAGIC {
+            3
+        } else {
+            format.version
+        };
         let mut later = described.clone();
-        later[7] = b'0' + format.version + 1;
+        later[7] = b'0' + newest + 1;
         let error = (format.decode)(format.object, &later).unwrap_err();
-        let unknown = SnapshotErrorKind::UnknownVersion(u16::from(format.version) + 1);
+        let unknown = SnapshotErrorKind::UnknownVersion(u16::from(newest) + 1);
         assert_eq!(error.kind(), unknown, "{}", format.object);
     }
 }

@@ -5357,7 +5357,9 @@ writes in the same file, with the same rules:
 - Device and the two lighting outputs (Lighting Output, Binary Lighting
   Output), in their Tags storage, through `with_tags_persistence`;
 - Color and Color Temperature, with Present_Value and a written default,
-  through `with_output_persistence`.
+  through `with_output_persistence`;
+- the Audit Log, in the snapshot its `AuditLogPersistence` commits, beside
+  its records, Enable and Buffer_Size (#2407).
 
 A write of Description is saved before it is answered, refused with DEVICE /
 OPERATIONAL_PROBLEM when the save fails, and staged by the server with the
@@ -5367,8 +5369,8 @@ anything is saved; a long one the object took before it had storage refuses
 no other write. A NULL succeeds, changes nothing and saves nothing. A saved
 Description wins over `set_description` (on the analog, binary and
 multi-state objects, Event Enrollment, the logs, Notification Class,
-Notification Forwarder, Device and the two lighting outputs; the others have
-no setter) until the type's clear drops it:
+Notification Forwarder, Device, the two lighting outputs and the Audit Log;
+the others have no setter) until the type's clear drops it:
 
 - `clear_written_reporting` on the thirteen reporting types and the logs,
   with their written reporting settings;
@@ -5376,8 +5378,8 @@ no setter) until the type's clear drops it:
   they keep;
 - `clear_written_description` on Notification Class, Notification
   Forwarder, Access Rights, Device, Lighting Output, Binary Lighting Output,
-  Color and Color Temperature, which drops the Description alone. A colour
-  object's `clear_written_default` leaves it in place.
+  Color, Color Temperature and Audit Log, which drops the Description alone.
+  A colour object's `clear_written_default` leaves it in place.
 
 Each clear saves before it returns, keeps what was written when the save
 fails and returns storage's error, and does nothing without storage or a
@@ -5386,8 +5388,10 @@ are: it waits for its save. The text served stays until the setter or a
 write changes it. A log's `written_reporting().description`, and the
 `description` field of `TimerWriteConfig`, `ChannelWriteConfig`,
 `LogReportingSettings`, `NotificationClassSnapshot`, `ForwarderSnapshot`,
-`AccessRightsSnapshot`, `TagsSnapshot` and `ColorOutputSnapshot`, show what
-is saved.
+`AccessRightsSnapshot`, `TagsSnapshot`, `ColorOutputSnapshot` and
+`AuditLogSnapshot`, and an Audit Log's `written_description()`, show what is
+saved. `AuditLogSnapshot` gained the field: a struct literal of it now sets
+`description` (`None` for none).
 
 Storage holds it as kind 5 of `RBNWCF01`
 (`snapshot::write_config::KIND_WITH_DESCRIPTION`): the Description, then the
@@ -5416,17 +5420,19 @@ build refuses one with it as an unknown version:
   that holds a Description;
 - `RBNCLR03` (`snapshot::color::MAGIC_WITH_DESCRIPTION`): the Description
   between the header and version 2's body. Versions 1 to 3 all load, and
-  the file's cap rises from 64 octets to 16,452.
+  the file's cap rises from 64 octets to 16,452;
+- the Audit Log's slot, schema version 4 of `RBALOG01`
+  (`snapshot::audit_log::VERSION_WITH_DESCRIPTION`, #2407): the Description,
+  its length in four octets and its UTF-8, after the completed receipts.
+  Versions 1 to 4 all load.
 
 Once a clear leaves no Description saved, the next save writes the older
 version again.
 
 An endpoint session's server, a full server (#2617), keeps it the same way.
 
-So every type with a store keeps a written Description, with one
-exception: the Audit Log. Its `AuditLogPersistence` keeps the records,
-Enable and Buffer_Size, and a Description a peer writes to it lasts
-until a restart. The store must also be the one that takes it: an analog,
+So every type with a store keeps a written Description. The store must be
+the one that takes it: an analog,
 binary or multi-state object, a Color or a Color Temperature built with
 Tags storage alone keeps a written Description in memory, since its
 reporting or output store is the one that holds it. An object built
@@ -9297,8 +9303,11 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   sync. `Responder::set_zone(db, zone)` and `Reporter::set_zone` (#2395)
   change the clock's zone and lend it again, so the Device's UTC_Offset,
   Daylight_Savings_Status, Local_Date and Local_Time and the window follow
-  from that call on; they are refused without a clock. Only the host
-  changes the zone: both properties are read-only to a peer. With
+  from that call on; they are refused without a clock. Both properties are
+  read-only to a peer unless the clock is built with
+  `DeviceClock::with_writable_zone()` (#2395): a peer's write then moves
+  the clock once the request has run, and `Written::objects` names the
+  Device for the host to save the zone. With
   `event-reporting`, a `Responder` built without a clock refuses a
   Notification Class Recipient_List write that holds a destination not
   open every day, all day (to 23:59:59.99: an unspecified hundredth counts
@@ -12073,8 +12082,63 @@ server.set_clock_zone(ClockConfig::new(300, true)?).await?;
   `TimeSyncPolicy::max_step` and its value stored under one hold of the
   clock's lock, so the zone a local value is judged in is the zone it is
   stored under even while the zone changes.
-- Only the host changes the zone. UTC_Offset and Daylight_Savings_Status are
-  read-only to a peer.
+- UTC_Offset and Daylight_Savings_Status are read-only to a peer unless the
+  server opts in, below.
+
+#### Letting peers write the zone (#2395)
+
+`clock_zone_writable(true)` on any of the three builders (or
+`ServerConfig::clock_zone_writable`) lets a peer write UTC_Offset and
+Daylight_Savings_Status. It is off by default, and then both stay read-only
+on the wire, refused with WRITE_ACCESS_DENIED as before.
+
+- A WriteProperty or WritePropertyMultiple of either moves the clock as
+  `set_clock_zone` does: the other half stays, the clock keeps its UTC
+  instant and its synchronization, and a request reads one pair. An Audit
+  Reporter monitoring the Device reports the write like any other.
+- UTC_Offset takes an INTEGER that is a multiple of 15 within -1440 to 1440
+  (Clause 12.11.25); anything else of that datatype is VALUE_OUT_OF_RANGE.
+  Daylight_Savings_Status takes a BOOLEAN. Another datatype is
+  INVALID_DATA_TYPE, and a NULL succeeds and changes nothing.
+- A Device built with `DeviceObject::with_tags_persistence` keeps each half
+  written in that storage, as it keeps a written Description: saved before
+  the write is answered (staged off the database guard with the request's
+  other kept writes), and refused with DEVICE / OPERATIONAL_PROBLEM when the
+  save fails. The clock is asked first (`ClockReader::check_zone`) and moved
+  only once storage has the half (`ClockReader::write_zone`), so a refused
+  write never reaches it. The file takes `RBNTAG03`
+  (`snapshot::tags::MAGIC_WITH_ZONE`) only while it holds a half, so other
+  files keep their octets; `TagsSnapshot` gained a `zone` field
+  (`WrittenZone`), and every Tags user but a Device refuses storage holding
+  one.
+- The newest change wins. A kept half wins over the builder's `clock_zone`
+  at start, so it survives a restart. The host's `set_clock_zone` is newer:
+  it drops the kept halves from storage (saved off the database guard, the
+  file back to the version without them) and applies its zone in full. A
+  save that fails is returned and changes nothing, clock and storage alike.
+  A peer's later write wins again. `DeviceObject::written_zone()` shows what
+  is kept. A Device without storage, the builders' own among them, keeps a
+  written zone until the server stops or the host changes it.
+- With the opt-in off a half the file holds is left there and not applied:
+  the configured zone runs, the server logs a warning at start naming the
+  half, and later saves of Tags or a Description keep it, so the file keeps
+  its octets. Turning the opt-in on applies it again.
+- Every writer of the clock holds the database guard (a request, the
+  host's `set_clock_zone`, and a TimeSynchronization, which now takes a
+  shared one), so a WritePropertyMultiple of both halves is seen as one
+  change.
+- In the device core, `DeviceClock::with_writable_zone()` is the same
+  opt-in. A written zone moves the `Responder`'s clock once the request has
+  run, or at once for the `Reporter`'s local write, and `Written::objects`
+  names the Device. The host's `Responder::set_zone` is newer: it drops a
+  written zone and the Device's kept halves. The core keeps no settings of
+  its own: the host saves `responder.clock()`'s zone and builds its clock in
+  it at the next boot, or gives the Device Tags storage and puts
+  `written_zone()` over the zone it builds the clock in.
+- The capability feature `zone-writes` on `bacnet-objects` and
+  `bacnet-device-core` (on with `std`) carries this path. A firmware image
+  built without it keeps both properties read-only and leaves the path out
+  of its flash; a Tags file holding a written half still loads, unapplied.
 
 ### Confirmed notifications under DeviceCommunicationControl
 

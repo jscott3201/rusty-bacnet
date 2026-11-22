@@ -23,9 +23,18 @@
 //! writer as every other commit ([`super::staging`]). A commit that fails
 //! refuses the change with DEVICE / OPERATIONAL_PROBLEM and leaves the log as
 //! it was.
+//!
+//! A Description a peer writes is kept the same way (#2407), as the other
+//! object types with storage keep theirs (#2364): committed before the write
+//! is answered, refused with DEVICE / OPERATIONAL_PROBLEM when the commit
+//! fails, and winning over `set_description` until
+//! `clear_written_description`. A NULL changes nothing and is never
+//! committed (Clause 15.9), and a text past 16 KiB is refused with
+//! RESOURCES / NO_SPACE_TO_WRITE_PROPERTY before anything is committed.
 
 use super::staging::{StagedChange, operational_problem};
 use super::*;
+use crate::write_config::description;
 
 /// The local date and time a record is stamped with.
 pub(super) type Timestamp = (
@@ -61,6 +70,19 @@ impl AuditLogObject {
         }
         self.commit_change(StagedChange::BufferSize(size))
     }
+
+    /// A Description write. A NULL changes nothing; a write of the text
+    /// storage already holds changes nothing either.
+    pub(super) fn write_description(&mut self, value: &PropertyValue) -> Result<(), Error> {
+        if *value == PropertyValue::Null {
+            return Ok(());
+        }
+        let text = description::written(value)?;
+        if self.written_description() == Some(text.as_str()) {
+            return Ok(());
+        }
+        self.commit_change(StagedChange::Description(text))
+    }
 }
 
 /// The size a Buffer_Size write asks for, written while Enable is
@@ -86,10 +108,10 @@ pub(super) fn written_buffer_size(log_enable: bool, value: &PropertyValue) -> Re
 /// with `timestamp`, and fail with DEVICE / OPERATIONAL_PROBLEM without one.
 pub(super) fn apply_change(
     snapshot: &mut AuditLogSnapshot,
-    change: StagedChange,
+    change: &StagedChange,
     timestamp: Option<Timestamp>,
 ) -> Result<(), Error> {
-    match change {
+    match *change {
         StagedChange::LogEnable(log_enable) => {
             let timestamp = timestamp.ok_or_else(operational_problem)?;
             snapshot.log_enable = log_enable;
@@ -100,6 +122,7 @@ pub(super) fn apply_change(
             snapshot.records.drain(..dropped);
             snapshot.capacity = size;
         }
+        StagedChange::Description(ref text) => snapshot.description = Some(text.clone()),
         StagedChange::Purge => {
             let timestamp = timestamp.ok_or_else(operational_problem)?;
             snapshot.records.clear();

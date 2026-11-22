@@ -108,6 +108,8 @@ impl Reporter {
         #[cfg(not(feature = "event-reporting"))]
         let observed = None;
         let applied = local::apply(db, oid, change, observed);
+        // A local write of the zone moves the clock now (#2395).
+        self.responder.take_written_zone(db);
         if let Ok(Applied::Written) = applied {
             self.changed(db, &[oid], now);
         } else {

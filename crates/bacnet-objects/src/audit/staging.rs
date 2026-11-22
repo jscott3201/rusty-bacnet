@@ -1,8 +1,9 @@
 //! Audit Log commits off the database lock (#1270).
 //!
 //! Every commit runs on the log's writer thread ([`crate::durable`]). The
-//! server stages an inbound notification batch, a Enable or Buffer_Size
-//! write it receives, and an application's purge (#1238): the log builds the
+//! server stages an inbound notification batch, a Enable, Buffer_Size or
+//! Description (#2407) write it receives, and an application's purge
+//! (#1238): the log builds the
 //! next snapshot and queues its commit, goes on serving the committed state,
 //! and takes the new snapshot only once the commit is durable. The server
 //! awaits the commit after dropping the database guard, so readers carry on
@@ -10,7 +11,8 @@
 //! records and receipt are stored. A commit that fails leaves the log as it
 //! was, and the request is refused.
 //!
-//! A request's Enable and Buffer_Size writes are staged together: one
+//! A request's Enable, Buffer_Size and Description writes are staged
+//! together: one
 //! commit holds them all, and the log keeps the state each leaves as a step
 //! the request takes when it makes that write. If the request stops before
 //! taking every step, the log keeps what it took and storage is set back to
@@ -94,12 +96,14 @@ pub(super) struct Step {
 
 /// A change a request stages and then makes under the guard, where the log
 /// takes the staged step if it still builds on the state served.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum StagedChange {
     /// A Enable write of this value.
     LogEnable(bool),
     /// A Buffer_Size write of this size.
     BufferSize(u32),
+    /// A Description write of this text, which storage then keeps (#2407).
+    Description(String),
     /// The application's purge.
     Purge,
 }
@@ -163,6 +167,12 @@ impl AuditLogObject {
         self.total_record_count = snapshot.total_record_count;
         self.buffer = snapshot.records.into();
         self.completed_receipts = snapshot.completed_receipts;
+        // A snapshot without a Description leaves the text served, which
+        // the setter may change again.
+        self.description_kept = snapshot.description.is_some();
+        if let Some(text) = snapshot.description {
+            self.description = text;
+        }
     }
 
     /// Before the log builds on its state in place, let a staged commit
@@ -364,15 +374,15 @@ impl AuditLogObject {
     /// cannot save, and leaves the log as it was. The writer has logged the
     /// storage error.
     pub(super) fn commit_change(&mut self, change: StagedChange) -> Result<(), Error> {
-        if let Some(taken) = self.take_step(change) {
+        if let Some(taken) = self.take_step(&change) {
             return taken.map_err(|_| operational_problem());
         }
         let timestamp = match change {
-            StagedChange::BufferSize(_) => None,
+            StagedChange::BufferSize(_) | StagedChange::Description(_) => None,
             StagedChange::LogEnable(_) | StagedChange::Purge => Some(self.valid_timestamp()?),
         };
         let mut prospective = self.snapshot_for_next_generation()?;
-        apply_change(&mut prospective, change, timestamp)?;
+        apply_change(&mut prospective, &change, timestamp)?;
         self.commit_and_apply(prospective)
             .map_err(|_| operational_problem())
     }
@@ -381,7 +391,7 @@ impl AuditLogObject {
     /// served: the first step on the state the changes were staged on, a
     /// later one on the step before it. A commit that failed drops every
     /// step and returns its error.
-    fn take_step(&mut self, change: StagedChange) -> Option<Result<(), Error>> {
+    fn take_step(&mut self, change: &StagedChange) -> Option<Result<(), Error>> {
         let served = self.generation;
         let commit = self.staged.as_mut()?;
         let generation = commit.snapshot.generation;
@@ -393,7 +403,7 @@ impl AuditLogObject {
         } else {
             Some(generation)
         };
-        if steps.front().map(|step| step.change) != Some(change) || base != Some(served) {
+        if steps.front().map(|step| &step.change) != Some(change) || base != Some(served) {
             return None;
         }
         if let Err(error) = commit.ticket.take_outcome() {
@@ -446,9 +456,10 @@ impl AuditLogObject {
         // The change made to `state` but not yet kept as a step. Only the
         // states between changes are copied; the last one is moved.
         let mut made: Option<StagedChange> = None;
-        for &change in changes {
-            let before = made.map(|change| (change, state.clone()));
+        for change in changes {
+            let before = made.take().map(|change| (change, state.clone()));
             if apply_change(&mut state, change, timestamp).is_err() {
+                made = before.map(|(change, _)| change);
                 break;
             }
             if let Some((change, kept)) = before {
@@ -457,7 +468,7 @@ impl AuditLogObject {
                     state: Arc::new(kept),
                 });
             }
-            made = Some(change);
+            made = Some(change.clone());
         }
         let Some(last) = made else {
             return StageStep::Skip;
@@ -474,18 +485,20 @@ impl AuditLogObject {
     }
 }
 
-/// The Enable and Buffer_Size changes `writes` make, in order, each
-/// judged as the log will be when the request makes it. A write the log will
-/// refuse ends the list, since the request makes no write after it; a write
-/// of the value the log will already hold changes nothing; other properties
-/// commit nothing. Neither property takes a NULL, so one the log refuses as
-/// the wrong datatype changes nothing either: the server answers it as a
-/// relinquish that leaves the property as it is, and the request goes on
-/// (#1396).
+/// The Enable, Buffer_Size and Description changes `writes` make, in
+/// order, each judged as the log will be when the request makes it. A write
+/// the log will refuse ends the list, since the request makes no write after
+/// it; a write of the value the log will already hold changes nothing; other
+/// properties commit nothing. Neither Enable nor Buffer_Size takes a NULL,
+/// so one the log refuses as the wrong datatype changes nothing either: the
+/// server answers it as a relinquish that leaves the property as it is, and
+/// the request goes on (#1396). A NULL to Description changes nothing and
+/// commits nothing (#2407).
 #[cfg(feature = "durable-writes")]
 fn changes_made(
     mut log_enable: bool,
     mut buffer_size: u32,
+    mut kept: Option<String>,
     writes: &[PendingWrite],
 ) -> Vec<StagedChange> {
     let mut changes = Vec::new();
@@ -511,7 +524,23 @@ fn changes_made(
                     Err(_) => break,
                 }
             }
-            (PropertyIdentifier::ENABLE | PropertyIdentifier::BUFFER_SIZE, ..) => break,
+            (PropertyIdentifier::DESCRIPTION, None, PropertyValue::Null) => continue,
+            (PropertyIdentifier::DESCRIPTION, None, value) => {
+                match crate::write_config::description::written(value) {
+                    Ok(text) if kept.as_ref() == Some(&text) => continue,
+                    Ok(text) => {
+                        kept = Some(text.clone());
+                        StagedChange::Description(text)
+                    }
+                    Err(_) => break,
+                }
+            }
+            (
+                PropertyIdentifier::ENABLE
+                | PropertyIdentifier::BUFFER_SIZE
+                | PropertyIdentifier::DESCRIPTION,
+                ..,
+            ) => break,
             _ => continue,
         };
         changes.push(change);
@@ -534,14 +563,16 @@ impl DurableWrites for AuditLogObject {
         }])
     }
 
-    /// Fold the request's Enable and Buffer_Size writes into one staged
-    /// commit, so a WritePropertyMultiple that turns logging off and then
-    /// resizes commits both off the guard.
+    /// Fold the request's Enable, Buffer_Size and Description writes into
+    /// one staged commit, so a WritePropertyMultiple that turns logging off
+    /// and then resizes commits both off the guard.
     fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
         if !writes.iter().any(|write| {
             matches!(
                 write.property,
-                PropertyIdentifier::ENABLE | PropertyIdentifier::BUFFER_SIZE
+                PropertyIdentifier::ENABLE
+                    | PropertyIdentifier::BUFFER_SIZE
+                    | PropertyIdentifier::DESCRIPTION
             )
         }) {
             return StageStep::Skip;
@@ -551,7 +582,8 @@ impl DurableWrites for AuditLogObject {
         if let Some(wait) = self.make_way() {
             return StageStep::Busy(wait);
         }
-        let changes = changes_made(self.log_enable, self.buffer_size, writes);
+        let kept = self.written_description().map(String::from);
+        let changes = changes_made(self.log_enable, self.buffer_size, kept, writes);
         self.stage_changes(&changes)
     }
 

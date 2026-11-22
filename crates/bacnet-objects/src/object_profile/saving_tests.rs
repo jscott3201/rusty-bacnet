@@ -19,6 +19,7 @@ fn saved_empty_is_distinct_from_no_write_and_provisioning_stays_independent() {
         Some(TagsSnapshot {
             tags: Some(vec![]),
             description: None,
+            zone: Default::default(),
         }),
     ] {
         let store = Arc::new(Memory::default());
@@ -98,6 +99,7 @@ fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
         TagsSnapshot {
             tags: Some(vec![BACnetNameValue::semantic(""); MAX_TAGS + 1]),
             description: None,
+            zone: Default::default(),
         },
         snapshot(&"x".repeat(MAX_TAGS_SNAPSHOT_BYTES)),
         TagsSnapshot {
@@ -106,6 +108,7 @@ fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
                 PropertyValue::List(vec![]),
             )]),
             description: None,
+            zone: Default::default(),
         },
         TagsSnapshot {
             tags: Some(vec![BACnetNameValue::valued(
@@ -113,6 +116,7 @@ fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
                 PropertyValue::ApplicationData(vec![0xa4, 126, 10, 6, 2, 0xb4, 12, 30, 0, 0]),
             )]),
             description: None,
+            zone: Default::default(),
         },
     ] {
         *store.saved.lock().unwrap() = Some(invalid);
@@ -165,7 +169,8 @@ fn ordered_array_steps_save_once_and_each_claim_serves_its_prefix() {
         store.saved(),
         Some(TagsSnapshot {
             tags: Some(expected.clone()),
-            description: None
+            description: None,
+            zone: Default::default(),
         })
     );
     assert_eq!(state.profile().tags, Some(tags("configured")));
@@ -230,7 +235,8 @@ fn each_claim_makes_its_write_on_the_tags_served() {
         store.saved(),
         Some(TagsSnapshot {
             tags: Some(last),
-            description: None
+            description: None,
+            zone: Default::default(),
         })
     );
     assert_eq!(store.attempts(), 1);

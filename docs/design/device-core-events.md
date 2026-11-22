@@ -1387,7 +1387,17 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       synchronized, so windows already open or closed are judged by the
       new local time from the next look; one never set keeps its count of
       local time from 1990. UTC_Offset and Daylight_Savings_Status stay
-      read-only to a peer.
+      read-only to a peer unless the host builds the clock with
+      `DeviceClock::with_writable_zone` (maintainer decision of 2026-11-22
+      on #2395). The Device writes through the copy it was lent, which
+      holds the zone in a cell it shares with the responder's clock, so the
+      rest of the request reads it; the responder then takes it into its
+      own clock and lends that again (the `Reporter` takes it at once after
+      a local write). The newest change wins: the host's `set_zone` drops a
+      written zone not yet taken. The core keeps no settings, so the write
+      names the Device in `Written::objects` and the host saves the zone.
+      The `zone-writes` feature carries the path; an image without it
+      keeps both properties read-only.
     - Restricted Recipient_List entries: stored, not refused, on a build
       with a clock. The list survives restarts (Clause 12.21.8) and the
       clock restarts unsynchronized, so a refusal that lifted only once

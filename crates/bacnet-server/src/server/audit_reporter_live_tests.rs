@@ -668,5 +668,8 @@ async fn target_reporter_none_property_change_can_use_other_nominal_reporter_but
 #[path = "audit_reporter_description_tests.rs"]
 mod description;
 
+#[path = "audit_reporter_zone_tests.rs"]
+mod zone;
+
 #[path = "audit_reporter_sync_tests.rs"]
 mod synchronous;

@@ -28,6 +28,7 @@ use crate::traits::BACnetObject;
 
 mod audit_recipient;
 mod metadata;
+mod zone;
 pub use audit_recipient::{AuditRecipientChangeSink, AuditWriteSource, DeviceAuthority};
 
 /// Every service the bundled `bacnet-server` dispatch executes, as
@@ -424,13 +425,16 @@ impl DeviceObject {
     /// it is saved before the write is answered, a write whose save fails
     /// is refused with DEVICE / OPERATIONAL_PROBLEM, and the saved one is
     /// served from the start and wins over
-    /// [`set_description`](Self::set_description).
+    /// [`set_description`](Self::set_description). It keeps the halves of
+    /// the clock's zone a peer writes the same way (#2395; see
+    /// [`written_zone`](Self::written_zone)), in a build with the
+    /// `zone-writes` feature.
     pub fn with_tags_persistence(
         config: DeviceConfig,
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::new(config)?;
-        object.profile = ProfileState::persistent(object.oid, persistence, true)?;
+        object.profile = ProfileState::persistent_device(object.oid, persistence)?;
         if let Some(text) = object.profile.saved_description() {
             let saved = PropertyValue::CharacterString(text.to_owned());
             object
@@ -758,6 +762,10 @@ impl BACnetObject for DeviceObject {
         if let Some(result) = self.profile.write(property, array_index, &value) {
             return result;
         }
+        #[cfg(feature = "zone-writes")]
+        if let Some(result) = self.write_zone(property, &value) {
+            return result;
+        }
         if property == PropertyIdentifier::DESCRIPTION {
             if array_index.is_some() {
                 return Err(Error::protocol(
@@ -815,6 +823,8 @@ impl BACnetObject for DeviceObject {
 impl crate::traits::Timed for DeviceObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
         self.clock = clocks.clock.clone();
+        #[cfg(feature = "zone-writes")]
+        self.profile.take_zone_writes(self.zone_writable());
     }
 }
 

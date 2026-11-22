@@ -77,6 +77,7 @@ fn snapshot(receipts: Vec<CompletedAuditReceipt>) -> AuditLogSnapshot {
         total_record_count: 0,
         records: Vec::new(),
         completed_receipts: receipts,
+        description: None,
     }
 }
 
@@ -146,7 +147,7 @@ fn unknown_and_malformed_v2_receipt_fields_fail_closed() {
     let original = std::fs::read(&active).unwrap();
 
     let mut unknown = original.clone();
-    unknown[8..10].copy_from_slice(&4u16.to_be_bytes());
+    unknown[8..10].copy_from_slice(&5u16.to_be_bytes());
     rewrite_checksum(&mut unknown);
     std::fs::write(&active, unknown).unwrap();
     assert!(storage.load(oid()).is_err());

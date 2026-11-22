@@ -16,6 +16,17 @@
 //! build that reads only version 1 refuses version 2 as an unknown version.
 //! Only a Device, a Lighting Output and a Binary Lighting Output keep their
 //! Description here; any other object refuses storage that holds one.
+//!
+//! A file holding a half of the Device clock's zone a peer wrote (#2395)
+//! takes version 3's tag, [`MAGIC_WITH_ZONE`]: after the header, one octet
+//! saying what follows (bit 0 UTC_Offset, bit 1 Daylight_Savings_Status,
+//! bit 2 a Description; at least one of the first two set, no other bit),
+//! UTC_Offset as two big-endian octets of minutes if held,
+//! Daylight_Savings_Status as one octet, 0 or 1, if held, then version 2's
+//! body with a Description or version 1's without. Only a snapshot holding
+//! a zone half is written that way, so other files keep their octets. Only
+//! a Device keeps its zone here; any other object refuses storage that
+//! holds one.
 
 use crate::prelude::*;
 use bacnet_encoding::constructed::{decode_name_value, encode_name_value};
@@ -27,7 +38,7 @@ use bytes::BytesMut;
 use super::SnapshotError;
 use super::framing::{self, HEADER_LEN};
 use crate::object_profile::{
-    MAX_TAGS, MAX_TAGS_SNAPSHOT_BYTES, TagsSnapshot, check_tags, no_space_error,
+    MAX_TAGS, MAX_TAGS_SNAPSHOT_BYTES, TagsSnapshot, WrittenZone, check_tags, no_space_error,
 };
 #[cfg(feature = "durable-writes")]
 use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
@@ -36,6 +47,14 @@ use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 pub const MAGIC: [u8; 8] = *b"RBNTAG01";
 /// Version 2's tag, for a snapshot with a written Description (#2364).
 pub const MAGIC_WITH_DESCRIPTION: [u8; 8] = *b"RBNTAG02";
+/// Version 3's tag, for a snapshot holding a half of the Device clock's
+/// zone a peer wrote (#2395).
+pub const MAGIC_WITH_ZONE: [u8; 8] = *b"RBNTAG03";
+
+/// Version 3's octet saying what follows it.
+const ZONE_OFFSET: u8 = 1;
+const ZONE_SUMMER: u8 = 2;
+const ZONE_DESCRIBED: u8 = 4;
 /// The most octets a file may take, header included:
 /// [`MAX_TAGS_SNAPSHOT_BYTES`].
 pub const MAX_LEN: usize = MAX_TAGS_SNAPSHOT_BYTES;
@@ -44,8 +63,8 @@ pub const MAX_LEN: usize = MAX_TAGS_SNAPSHOT_BYTES;
 ///
 /// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) Tags a
 /// write would refuse (more than `MAX_TAGS`, a `;` in a name, a constructed
-/// value), a Description past 16 KiB and octets past [`MAX_LEN`]: what
-/// [`decode`] would refuse.
+/// value), a Description past 16 KiB, a UTC_Offset a write would refuse and
+/// octets past [`MAX_LEN`]: what [`decode`] would refuse.
 pub fn encode(object: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<Vec<u8>, SnapshotError> {
     encode_checked(object, snapshot).map_err(|_| {
         SnapshotError::out_of_range(
@@ -57,10 +76,11 @@ pub fn encode(object: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<Vec<u
 
 /// The snapshot a file's `octets` hold for `object`.
 ///
-/// Refuses octets past [`MAX_LEN`], without either version's tag, saved for
-/// another object, with a presence octet other than 0 or 1 (or octets after
-/// a 0), a tag that does not decode, Tags [`encode`] would refuse, or a
-/// Description cut short, past 16 KiB or not UTF-8.
+/// Refuses octets past [`MAX_LEN`], without one of the three versions'
+/// tags, saved for another object, with a presence octet other than 0 or 1
+/// (or octets after a 0), a tag that does not decode, Tags [`encode`] would
+/// refuse, a Description cut short, past 16 KiB or not UTF-8, or a zone a
+/// write would not leave.
 pub fn decode(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, SnapshotError> {
     decode_file(object, octets).map_err(|error| error.in_format("Tags file"))
 }
@@ -72,21 +92,50 @@ pub(crate) fn encode_checked(
     object: ObjectIdentifier,
     snapshot: &TagsSnapshot,
 ) -> Result<Vec<u8>, Error> {
-    let magic = match snapshot.description {
-        Some(_) => &MAGIC_WITH_DESCRIPTION,
-        None => &MAGIC,
+    let magic = match (&snapshot.zone, &snapshot.description) {
+        (zone, _) if !zone.is_empty() => &MAGIC_WITH_ZONE,
+        (_, Some(_)) => &MAGIC_WITH_DESCRIPTION,
+        (_, None) => &MAGIC,
     };
-    let body = encode_body(snapshot.description.as_deref(), snapshot.tags.as_deref())?;
+    let body = encode_body(
+        &snapshot.zone,
+        snapshot.description.as_deref(),
+        snapshot.tags.as_deref(),
+    )?;
     Ok(framing::seal(magic, object, &body))
 }
 
-/// The body after the header for `tags` and a written `description`, which
-/// comes first, checked as a write is.
+/// The body after the header for `tags`, a written `description` and the
+/// `zone` halves written, which come first, checked as a write is.
 fn encode_body(
+    zone: &WrittenZone,
     description: Option<&str>,
     tags: Option<&[BACnetNameValue]>,
 ) -> Result<BytesMut, Error> {
     let mut body = BytesMut::new();
+    if !zone.is_empty() {
+        if !zone.is_valid() {
+            return Err(crate::common::value_out_of_range_error());
+        }
+        let mut held = if description.is_some() {
+            ZONE_DESCRIBED
+        } else {
+            0
+        };
+        if zone.utc_offset.is_some() {
+            held |= ZONE_OFFSET;
+        }
+        if zone.daylight_savings_status.is_some() {
+            held |= ZONE_SUMMER;
+        }
+        body.extend_from_slice(&[held]);
+        if let Some(minutes) = zone.utc_offset {
+            body.extend_from_slice(&minutes.to_be_bytes());
+        }
+        if let Some(summer) = zone.daylight_savings_status {
+            body.extend_from_slice(&[u8::from(summer)]);
+        }
+    }
     if let Some(text) = description {
         framing::put_description(&mut body, text).map_err(|_| no_space_error())?;
     }
@@ -103,13 +152,24 @@ fn encode_body(
     Ok(body)
 }
 
-/// Whether a snapshot of `description` and `tags` saves, or the refusal a
-/// write leaving it gets: what a prospective write must fit.
+/// Whether a snapshot of `zone`, `description` and `tags` saves, or the
+/// refusal a write leaving it gets: what a prospective write must fit.
 pub(crate) fn fits(
+    zone: &WrittenZone,
     description: Option<&str>,
     tags: Option<&[BACnetNameValue]>,
 ) -> Result<(), Error> {
-    encode_body(description, tags).map(|_| ())
+    encode_body(zone, description, tags).map(|_| ())
+}
+
+/// The octets version 3 gives `zone` ahead of the Description: none for no
+/// half held, else the octet saying what follows and each half held.
+#[cfg(feature = "durable-writes")]
+fn zone_len(zone: &WrittenZone) -> usize {
+    if zone.is_empty() {
+        return 0;
+    }
+    1 + zone.utc_offset.map_or(0, |_| 2) + zone.daylight_savings_status.map_or(0, |_| 1)
 }
 
 /// The octets [`encode_body`] gives `tags`, each encoded in turn in
@@ -130,7 +190,11 @@ pub(crate) fn tags_len(tags: &[BACnetNameValue], scratch: &mut BytesMut) -> Resu
 /// the same: the body only grows as each tag goes in, so judging its whole
 /// length once judges each length [`encode_body`] judges on the way.
 #[cfg(feature = "durable-writes")]
-pub(crate) fn fits_len(description: Option<&str>, tags_len: Option<usize>) -> Result<(), Error> {
+pub(crate) fn fits_len(
+    zone: &WrittenZone,
+    description: Option<&str>,
+    tags_len: Option<usize>,
+) -> Result<(), Error> {
     // A Description's length in four octets, then its text, as
     // `framing::put_description` writes it and refuses past its cap.
     let description_len = match description {
@@ -139,30 +203,83 @@ pub(crate) fn fits_len(description: Option<&str>, tags_len: Option<usize>) -> Re
         None => 0,
     };
     // The presence octet, then the tags.
-    if description_len + 1 + tags_len.unwrap_or(0) > MAX_LEN - HEADER_LEN {
+    if zone_len(zone) + description_len + 1 + tags_len.unwrap_or(0) > MAX_LEN - HEADER_LEN {
         return Err(no_space_error());
     }
     Ok(())
 }
 
 fn decode_file(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, SnapshotError> {
-    let (description, body) =
-        framing::open_described(octets, (&MAGIC, &MAGIC_WITH_DESCRIPTION), MAX_LEN, object)?;
+    let zoned = octets.get(..MAGIC_WITH_ZONE.len()) == Some(&MAGIC_WITH_ZONE[..]);
+    let (zone, description, body) = if zoned {
+        let (_, body) = framing::open(octets, &MAGIC_WITH_ZONE, None, MAX_LEN, object)?;
+        let (zone, described, body) = take_zone(body)?;
+        if described {
+            let (text, body) = framing::take_description(body)?;
+            (zone, Some(text), body)
+        } else {
+            (zone, None, body)
+        }
+    } else {
+        let (description, body) =
+            framing::open_described(octets, (&MAGIC, &MAGIC_WITH_DESCRIPTION), MAX_LEN, object)?;
+        (WrittenZone::default(), description, body)
+    };
     let tags = match body.split_first() {
         Some((0, [])) => None,
         Some((1, tags)) => Some(framing::decode_capped(tags, MAX_TAGS, decode_name_value)?),
         None => return Err(SnapshotError::truncated("has no valid presence marker")),
         _ => return Err(SnapshotError::damaged("has no valid presence marker")),
     };
-    let snapshot = TagsSnapshot { tags, description };
+    let snapshot = TagsSnapshot {
+        tags,
+        description,
+        zone,
+    };
     check_loaded(&snapshot)?;
     Ok(snapshot)
+}
+
+/// Version 3's zone halves at the start of `body`, whether a Description
+/// follows them, and the rest.
+fn take_zone(body: &[u8]) -> Result<(WrittenZone, bool, &[u8]), SnapshotError> {
+    let short = || SnapshotError::truncated("ends inside its zone");
+    let (&held, mut rest) = body.split_first().ok_or_else(short)?;
+    if held & !(ZONE_OFFSET | ZONE_SUMMER | ZONE_DESCRIBED) != 0
+        || held & (ZONE_OFFSET | ZONE_SUMMER) == 0
+    {
+        return Err(SnapshotError::damaged("holds no valid zone marker"));
+    }
+    let mut zone = WrittenZone::default();
+    if held & ZONE_OFFSET != 0 {
+        let (minutes, after) = rest.split_first_chunk::<2>().ok_or_else(short)?;
+        zone.utc_offset = Some(i16::from_be_bytes(*minutes));
+        rest = after;
+    }
+    if held & ZONE_SUMMER != 0 {
+        let (&summer, after) = rest.split_first().ok_or_else(short)?;
+        zone.daylight_savings_status = Some(match summer {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(SnapshotError::damaged(
+                    "holds a daylight-saving octet past 1",
+                ));
+            }
+        });
+        rest = after;
+    }
+    Ok((zone, held & ZONE_DESCRIBED != 0, rest))
 }
 
 /// Refuse loaded Tags, or a loaded Description, a write would refuse, as
 /// damage: the file backend's decode and a custom backend's load answer
 /// alike.
 pub(crate) fn check_loaded(snapshot: &TagsSnapshot) -> Result<(), SnapshotError> {
-    fits(snapshot.description.as_deref(), snapshot.tags.as_deref())
-        .map_err(|_| SnapshotError::damaged("holds Tags or a Description a write would refuse"))
+    fits(
+        &snapshot.zone,
+        snapshot.description.as_deref(),
+        snapshot.tags.as_deref(),
+    )
+    .map_err(|_| SnapshotError::damaged("holds Tags, a Description or a zone a write would refuse"))
 }

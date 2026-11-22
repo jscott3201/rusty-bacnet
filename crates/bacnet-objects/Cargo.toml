@@ -28,6 +28,7 @@ std = [
     "dep:libc",
     "event-reporting",
     "durable-writes",
+    "zone-writes",
 ]
 # Capability features (#2215). Each one lets the built-in objects lend a
 # capability through its `BACnetObject` accessors; with it off, those
@@ -58,6 +59,13 @@ event-reporting = []
 # don't implement `DurableWrites` at all: an object's staging code is not
 # compiled, which keeps it out of a firmware image (#2538).
 durable-writes = []
+# `zone-writes`: a peer's write of the Device's UTC_Offset and
+# Daylight_Savings_Status through a clock that takes it
+# (`ClockReader::takes_zone_writes`, #2395), and the halves a Device with
+# Tags storage keeps. Off, both stay read-only whatever the clock says, and
+# the code only that path reaches drops out of a firmware image. A Tags
+# file holding a written half still loads, and keeps it, unapplied.
+zone-writes = []
 # no_std with a global allocator. Saves run on the caller's thread, and the
 # hash maps, locks and float rounding come from hashbrown, spinning_top and
 # libm. A hosted application wants `std`: this one drops the file backends,

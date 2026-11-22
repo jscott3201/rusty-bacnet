@@ -1,7 +1,8 @@
-//! `clear_written_description` (#2364), on the eight types that have no
+//! `clear_written_description` (#2364), on the nine types that have no
 //! clear covering all they keep: Notification Class, Notification
 //! Forwarder, Access Rights, Device, Lighting Output, Binary Lighting
-//! Output, Color and Color Temperature. It drops the saved Description, so
+//! Output, Color, Color Temperature and Audit Log (#2407). It drops the
+//! saved Description, so
 //! the file goes back to the version without one and the setter applies
 //! again; a save that fails keeps it; and it saves nothing when there is
 //! nothing to drop.
@@ -14,7 +15,7 @@ fn clearing(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
         .into_iter()
         .filter(|case| case.clears())
         .collect();
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 9);
     cases
 }
 

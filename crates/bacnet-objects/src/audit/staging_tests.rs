@@ -458,8 +458,14 @@ fn staging_skips_a_write_with_nothing_to_commit() {
         None,
         &PropertyValue::Unsigned(0),
     )));
+    // A NULL to Description changes nothing, so it commits nothing (#2407).
     assert!(skipped(log.stage_write(
         PropertyIdentifier::DESCRIPTION,
+        None,
+        &PropertyValue::Null,
+    )));
+    assert!(skipped(log.stage_write(
+        PropertyIdentifier::OBJECT_NAME,
         None,
         &PropertyValue::CharacterString("x".into()),
     )));
