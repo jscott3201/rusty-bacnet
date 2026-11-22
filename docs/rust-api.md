@@ -14244,14 +14244,17 @@ What a caller sees differently:
   client does, where the narrow requester refused a value that isn't whole
   application data. A source-audited write still refuses such a value before
   it is sent, since its record could not report what it names.
+- A request waiting for its turn at a destination (`min_request_interval_ms`)
+  fails at once when the session stops or is dropped, as the narrow
+  requester's did, but with the error an open request cut off by the stop
+  gets, `Error::Encoding("TSM response channel closed")`, where the narrow
+  requester returned `"endpoint shutdown"` (#2720).
 - A routed request whose router is the link's broadcast or a group address
   is refused before anything is sent, as the narrow requester refused it
   (#2722); so is one whose station's MAC is its network's broadcast (#2709).
-- Not yet as the narrow requester had it, each with its own issue: a
-  Complex-ACK naming WriteProperty ends a write as success, where the narrow
-  requester ignored it (#2721); and a request waiting for its turn at a
-  destination (`min_request_interval_ms`) isn't ended by the session's stop,
-  but when its turn comes and its send fails (#2720).
+- Not yet as the narrow requester had it: a Complex-ACK naming
+  WriteProperty ends a write as success, where the narrow requester ignored
+  it (#2721).
 
 ### Bounded endpoint source READ reporting
 

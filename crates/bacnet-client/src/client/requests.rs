@@ -31,6 +31,15 @@ impl core::fmt::Display for LengthBoundedBy {
     }
 }
 
+/// What a confirmed request fails with when the client's tasks end under it
+/// (#2617, #2720): its open transaction is dropped by the stop, or, still
+/// waiting for its turn at the destination, it is woken by the dispatch
+/// task's end. The Python binding reads this text as that case.
+#[cold]
+pub(super) fn request_cut_off() -> Error {
+    Error::Encoding("TSM response channel closed".into())
+}
+
 /// Whether `response` is the device's own answer to a confirmed request: an
 /// acknowledgment, or its Error, Reject or Abort. Any of them shows that the
 /// request reached the device (Clause 19.4). A router's refusal, a reason 4
@@ -119,7 +128,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// named router that is a broadcast or group address on this link
     /// (#2722). [`Error::UnknownDevice`] for a remote address with no named
     /// router and no row in the discovery table, since the row is the route.
-    /// Then the errors of the request itself.
+    /// Then the errors of the request itself; a request the client's stop
+    /// cuts off, waiting for its turn or open, fails with
+    /// `Error::Encoding("TSM response channel closed")`.
     ///
     /// [`BACnetAddress`]: bacnet_types::constructed::BACnetAddress
     pub async fn confirmed_request(
@@ -216,8 +227,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // Pace before the path lease, so the wait holds up no other request
         // through the same router. The guard lives until this request
         // returns, by any path or by being dropped, and then starts the
-        // interval for the next request to this destination.
-        let mut _pace = self.pacer.wait(pacing::PaceKey::of(target)).await;
+        // interval for the next request to this destination. A request still
+        // waiting when the client's tasks end (its stop, or its node's stop
+        // or drop) ends then, as the open requests do, and claims no turn
+        // (#2720).
+        let Some(mut _pace) = self
+            .pacer
+            .wait(pacing::PaceKey::of(target), &self.routing_query.ended)
+            .await
+        else {
+            return Err(request_cut_off());
+        };
         // The lease serializes one active request per (immediate router, DNET)
         // and remains live through every return path, including cancellation.
         // A request by local broadcast names no router, so it takes none.
@@ -489,7 +509,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
             tokio::select! {
                 response = &mut response_rx => {
-                    return response.map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                    return response.map_err(|_| request_cut_off());
                 }
                 // Progress is never published after the transaction leaves
                 // the TSM; the response arm above resolves then instead.
@@ -538,7 +558,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         retry_apdu.len(),
                                     ) {
                                         return (&mut response_rx).await.map_err(|_| {
-                                            Error::Encoding("TSM response channel closed".into())
+                                            request_cut_off()
                                         });
                                     }
                                     let send_result = self
@@ -557,7 +577,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                             RequestTimerExpiration::NoTransaction => {
                                                 return (&mut response_rx)
                                                     .await
-                                                    .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                                    .map_err(|_| request_cut_off());
                                             }
                                             RequestTimerExpiration::TimedOut => {
                                                 self.enqueue_transaction_cleanup(
@@ -606,7 +626,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 RequestTimerExpiration::NoTransaction => {
                                     return (&mut response_rx)
                                         .await
-                                        .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                        .map_err(|_| request_cut_off());
                                 }
                             }
                         }
@@ -637,7 +657,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 SegmentTimerExpiration::NoTransaction => {
                                     return (&mut response_rx)
                                         .await
-                                        .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                        .map_err(|_| request_cut_off());
                                 }
                             }
                         }

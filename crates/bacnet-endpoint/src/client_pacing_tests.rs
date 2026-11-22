@@ -233,10 +233,10 @@ async fn an_endpoint_request_given_up_counts_as_finished_when_given_up() {
     session.stop().await.unwrap();
 }
 
-/// A request waiting for its turn when the session stops fails at once
-/// with the shutdown error, rather than at its turn minutes later.
+/// A request waiting for its turn when the session stops fails at once,
+/// rather than at its turn minutes later, with the error a request the stop
+/// cut off in flight gets (#2720).
 #[tokio::test(start_paused = true)]
-#[ignore = "#2720: the client's wait for its turn at a destination doesn't end when the session stops"]
 async fn a_waiting_endpoint_request_fails_at_once_when_the_session_stops() {
     let (mut session, client, sends) = paced(300_000, 0, 0, Duration::ZERO).await;
     read(&client, A).await;
@@ -248,7 +248,7 @@ async fn a_waiting_endpoint_request_fails_at_once_when_the_session_stops() {
     let ended = tokio::time::timeout(Duration::from_secs(1), waiting).await;
     let error = ended.expect("ended at once").unwrap().unwrap_err();
     assert!(
-        matches!(&error, Error::Encoding(message) if message == "endpoint shutdown"),
+        matches!(&error, Error::Encoding(message) if message == "TSM response channel closed"),
         "{error:?}"
     );
     assert_eq!(sends.lock().unwrap().len(), 1);
