@@ -148,6 +148,7 @@ impl App {
                     connection.reply(result);
                 }
             }
+            WorkerEvent::PathLimit(text) => self.flash(text, FLASH_FOR),
             WorkerEvent::Rejected { error } if self.monitor_join_refused(&error) => {}
             WorkerEvent::Rejected { error } => {
                 if self.link == Link::Connecting {

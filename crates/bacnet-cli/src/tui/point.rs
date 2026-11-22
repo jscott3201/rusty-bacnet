@@ -186,6 +186,10 @@ pub(crate) enum BrowseResult {
     },
     /// The request failed.
     Failed(String),
+    /// Sent before a [`Failed`](Self::Failed) timeout to a device behind a
+    /// router whose path dropped a too-long reject for a small request:
+    /// why it may not answer, and how to set the path's limit (#2667).
+    PathHint(String),
 }
 
 #[cfg(test)]

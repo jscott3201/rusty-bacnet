@@ -316,7 +316,7 @@ fn help_scrolls_at_80x24() {
     assert!(top.contains("1-20 of"), "{top}");
     assert!(!top.contains("Commands (:)"), "{top}");
     // The last page ends with the command list's last rows.
-    assert!(end.contains("find --global NAME"), "{end}");
+    assert!(end.contains("path-limit ROUTER/NETWORK clear"), "{end}");
     assert!(end.contains("mstp listen SECS"), "{end}");
     assert!(end.contains("reinit coldstart|warmstart|STATE"), "{end}");
     assert_snapshot!("help_devices_80x24_top", top);

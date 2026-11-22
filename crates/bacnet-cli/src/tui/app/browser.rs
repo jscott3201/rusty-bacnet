@@ -91,6 +91,9 @@ pub(crate) struct Browser {
     pub(crate) focus: Pane,
     /// First visible property line, kept by the view between frames.
     pub(crate) scroll: Cell<usize>,
+    /// Why the device, behind a router, may not answer and how to set its
+    /// path's limit, from the latest failed read (#2667).
+    pub(crate) path_hint: Option<String>,
     device_req: ReqId,
     object_req: Option<ReqId>,
 }
@@ -107,6 +110,7 @@ impl Browser {
             view: ViewState::Empty,
             focus: Pane::Objects,
             scroll: Cell::new(0),
+            path_hint: None,
             device_req,
             object_req: None,
         }
@@ -120,9 +124,20 @@ impl Browser {
     /// Apply a result for request `req`; one for any other request is
     /// stale and dropped. Returns whether it was applied.
     pub(crate) fn apply(&mut self, req: ReqId, result: BrowseResult) -> bool {
+        if let BrowseResult::PathHint(hint) = result {
+            let ours = req == self.device_req || Some(req) == self.object_req;
+            if ours {
+                self.path_hint = Some(hint);
+            }
+            return ours;
+        }
         if req == self.device_req {
             match result {
-                BrowseResult::Card(card) => self.card = Some(card),
+                BrowseResult::Card(card) => {
+                    // The device answered: the hint is stale.
+                    self.path_hint = None;
+                    self.card = Some(card);
+                }
                 BrowseResult::Progress { done, total } => {
                     self.list = ListState::Reading { done, total };
                 }
@@ -138,7 +153,9 @@ impl Browser {
                     };
                 }
                 BrowseResult::Failed(error) => self.list = ListState::Failed(error),
-                BrowseResult::Object(_) | BrowseResult::Names { .. } => return false,
+                BrowseResult::Object(_)
+                | BrowseResult::Names { .. }
+                | BrowseResult::PathHint(_) => return false,
             }
             return true;
         }
@@ -150,7 +167,10 @@ impl Browser {
             _ => return false,
         };
         self.view = match result {
-            BrowseResult::Object(view) => ViewState::Ready(view),
+            BrowseResult::Object(view) => {
+                self.path_hint = None;
+                ViewState::Ready(view)
+            }
             BrowseResult::Failed(error) => ViewState::Failed(object, error),
             _ => return false,
         };
@@ -394,6 +414,30 @@ mod tests {
                 total: 500
             }
         );
+    }
+
+    /// A routed path hint (#2667) applies to the device read or the latest
+    /// object read, not to another request; it stays with the failure that
+    /// follows it, and an answer from the device clears it.
+    #[test]
+    fn a_path_hint_follows_its_request_and_clears_on_an_answer() {
+        let ai = |n| ObjectIdentifier::new(ObjectType::ANALOG_INPUT, n).unwrap();
+        let mut browser = Browser::new(7, "2:0x05".parse().unwrap(), "2:0x05".into(), 1);
+        let hint = || BrowseResult::PathHint("set the path's limit".into());
+        assert!(!browser.apply(9, hint()), "another request's");
+        assert_eq!(browser.path_hint, None);
+        assert!(browser.apply(1, hint()));
+        assert!(browser.apply(1, BrowseResult::Failed("timed out".into())));
+        assert_eq!(browser.path_hint.as_deref(), Some("set the path's limit"));
+        browser.object_req = Some(3);
+        browser.view = ViewState::Reading(ai(2));
+        assert!(browser.apply(3, view(2)));
+        assert_eq!(browser.path_hint, None, "the device answered");
+        browser.object_req = Some(4);
+        browser.view = ViewState::Reading(ai(2));
+        assert!(browser.apply(4, hint()));
+        assert!(browser.apply(4, BrowseResult::Failed("timed out".into())));
+        assert!(browser.path_hint.is_some());
     }
 
     /// A device read started while an object read waits replaces it, and

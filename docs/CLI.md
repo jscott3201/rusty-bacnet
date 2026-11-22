@@ -207,6 +207,12 @@ anything, and so are a router named as a device or as a station behind a
 router (`1234`, `5:0x0a`) and one path named twice, however its router is
 written. A path's limit lasts for the run only. `tui`, `mcp`, plain `bacnet`,
 `capture`, `sc-check` and `mstp-ports` refuse the flag rather than ignore it.
+In the TUI, the command bar's `path-limit ROUTER/NETWORK=SIZE` sets a path's
+limit for the session, and `path-limit ROUTER/NETWORK clear` puts the default
+back; they take the router as the flag does (a B/IPv6 router by its
+`bip6:0x...` VMAC), send nothing, and work at every write level. When a device
+behind a router stops answering after a small request was refused there, the
+browser says so under its failed read and names the command.
 
 After the command, the CLI prints the client's routed paths to stderr when
 something happened that the command line didn't ask for: a path learned a
@@ -622,7 +628,7 @@ table is refreshed from the client's discovery table afterwards.
 | `/` | Filter rows by instance, address, network or vendor; Enter keeps the filter, Esc clears it |
 | `Enter` | Browse the selected device |
 | `1` / `2` / `3` / `4` / `5` / `6` / `7` / `8` | The devices / Browse, the open device's browser / the watch list / the Network screen (BBMD tables on B/IP; the Networks tab on every transport) / the SC screen / the MS/TP screen / Capture / the agent pane, the attached agents' MCP calls and the write requests waiting for you (only while the profile's MCP listener runs; otherwise `8` stays and says so). The status bar's strip numbers those that apply to the session (Network once connected, SC on SC, MS/TP with a serial port, Agents with a listener), with the one shown in brackets. `1` keeps an open browser as it was, and `2` shows it again; with no device open, `2` stays on the devices and says so |
-| `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `find --dnet N NAME`, `find --global NAME`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`, `mstp scan SECS`, `mstp scan cancel`, `dcc enable`, `dcc ACTION [MINUTES|forever]`, `reinit STATE`; the footer shows the syntax of the commands matching what is typed |
+| `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `find --dnet N NAME`, `find --global NAME`, `path-limit ROUTER/NETWORK=SIZE`, `path-limit ROUTER/NETWORK clear`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`, `mstp scan SECS`, `mstp scan cancel`, `dcc enable`, `dcc ACTION [MINUTES|forever]`, `reinit STATE`; the footer shows the syntax of the commands matching what is typed |
 | `W` | Arm a write session, or disarm the armed one |
 | `w` / `n` | On an open object, in a write session: write a property / relinquish a priority slot |
 | `u` | The session ledger |

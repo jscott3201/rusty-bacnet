@@ -23,7 +23,7 @@ use bacnet_types::error::Error;
 use serde::Serialize;
 
 use super::Client;
-use crate::device::Device;
+use crate::device::{Device, DeviceAddress};
 use crate::error::OpsError;
 use crate::target::{AddressStyle, address_mac};
 
@@ -54,6 +54,21 @@ impl RoutedPath {
             router_mac: MacAddr::from_slice(router_mac),
             network,
         }
+    }
+
+    /// The path a request from `client` to the device at `address` takes:
+    /// through the router `client`'s discovery table holds for its network,
+    /// `None` on `client`'s own network. A remote address whose network has
+    /// no router in the table fails as [`OpsError::UnknownDevice`]. Sends
+    /// nothing. [`Device::routed_path`] for a handle; this for a front end
+    /// with the low-level client alone.
+    pub async fn to_device<T: TransportPort + 'static>(
+        client: &BACnetClient<T>,
+        address: &DeviceAddress,
+    ) -> Result<Option<Self>, OpsError> {
+        let router = crate::device::router_for(client, address).await?;
+        let style = AddressStyle::of(client.transport());
+        Ok(router.map(|(router_mac, network)| Self::new(style, &router_mac, network)))
     }
 }
 
@@ -238,9 +253,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// has no router in the table fails as
     /// [`OpsError::UnknownDevice`]. Sends nothing.
     pub async fn routed_path(&self) -> Result<Option<RoutedPath>, OpsError> {
-        let client = self.client();
-        let router = crate::device::router_for(client.low_level(), &self.address()).await?;
-        Ok(router.map(|(router_mac, network)| client.routed_path(&router_mac, network)))
+        RoutedPath::to_device(self.client().low_level(), &self.address()).await
     }
 }
 

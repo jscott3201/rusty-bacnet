@@ -215,6 +215,10 @@ async fn job<T: TransportPort + 'static>(
     match outcome {
         Ok(()) | Err(Halt::Cancelled) => {}
         Err(Halt::Device(error)) => {
+            if let Some(hint) = crate::tui::routed_paths::hint(client, &reader.device, &error).await
+            {
+                deliver(sink, req, BrowseResult::PathHint(hint)).await;
+            }
             deliver(sink, req, BrowseResult::Failed(error.to_string())).await;
         }
     }

@@ -203,6 +203,9 @@ pub(crate) fn refusal(command: Command) -> Option<WorkerEvent> {
                 reason: "only a receive-only MS/TP monitor can scan".into(),
             })
         }
+        Command::PathLimit(_) => WorkerEvent::PathLimit(
+            "path-limit: a passive session has no client whose requests it could size".into(),
+        ),
         Command::Capture(_) => WorkerEvent::Capture(CaptureEvent::Ended {
             what: crate::tui::capture::worker::TAP.into(),
             why: "a passive session has no transport to tap".into(),

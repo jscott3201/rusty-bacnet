@@ -34,9 +34,9 @@ const SHAPE: &str = "ROUTER/NETWORK=MAX_NPDU, such as 192.168.1.20:47808/5=480";
 /// network and the limit in NPDU octets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LimitArg {
-    router: String,
-    network: u16,
-    max_npdu: u16,
+    pub(crate) router: String,
+    pub(crate) network: u16,
+    pub(crate) max_npdu: u16,
 }
 
 /// Parse `ROUTER/NETWORK=MAX_NPDU`. The router is everything before the
@@ -47,28 +47,36 @@ pub(crate) fn parse_limit_arg(text: &str) -> Result<LimitArg, String> {
     let (path, max_npdu) = text
         .rsplit_once('=')
         .ok_or_else(|| format!("'{text}' is not {SHAPE}"))?;
-    let (router, network) = path
-        .rsplit_once('/')
-        .ok_or_else(|| format!("'{text}' is not {SHAPE}"))?;
-    if router.is_empty() {
-        return Err(format!("'{text}' names no router: {SHAPE}"));
-    }
-    let network = match network.parse::<u16>() {
-        Ok(network @ 1..=65534) => network,
-        _ => {
-            return Err(format!(
-                "'{network}' is not a remote network number from 1 to 65534"
-            ));
-        }
-    };
+    let (router, network) = parse_path_arg(path).map_err(|why| match path.rsplit_once('/') {
+        None => format!("'{text}' is not {SHAPE}"),
+        Some(("", _)) => format!("'{text}' names no router: {SHAPE}"),
+        Some(_) => why,
+    })?;
     let max_npdu = max_npdu
         .parse::<u16>()
         .map_err(|_| format!("'{max_npdu}' is not a number of NPDU octets from 0 to 65535"))?;
     Ok(LimitArg {
-        router: router.to_owned(),
+        router,
         network,
         max_npdu,
     })
+}
+
+/// Parse `ROUTER/NETWORK`, the path part of [`parse_limit_arg`]: the router
+/// is everything before the last `/`, and the network 1 to 65534.
+pub(crate) fn parse_path_arg(path: &str) -> Result<(String, u16), String> {
+    let Some((router, network)) = path.rsplit_once('/') else {
+        return Err("is not ROUTER/NETWORK".into());
+    };
+    if router.is_empty() {
+        return Err("names no router".into());
+    }
+    match network.parse::<u16>() {
+        Ok(network @ 1..=65534) => Ok((router.to_owned(), network)),
+        _ => Err(format!(
+            "'{network}' is not a remote network number from 1 to 65534"
+        )),
+    }
 }
 
 /// The subcommands with no client of their own to set a limit on, or whose
