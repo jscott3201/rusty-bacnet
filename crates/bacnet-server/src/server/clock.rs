@@ -3,8 +3,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::durable::{SaveWait, StageStep};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::{Date, Time};
 
 use super::{BACnetServer, BipServerBuilder, ServerBuilder, ServerConfig, time_sync_policy};
@@ -118,10 +120,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// change, and timestamps already recorded stay as they were, as after a
     /// TimeSynchronization that moved local time by the same amount.
     ///
-    /// A half of the zone a peer wrote that the Device's storage keeps
-    /// stays over `zone` (#2395): only the other half changes, until the
-    /// Device's `clear_written_zone`. [`clock_zone`](Self::clock_zone)
-    /// reads the zone the clock then keeps.
+    /// The newest change wins (#2395). With
+    /// [`clock_zone_writable`](ServerBuilder::clock_zone_writable) on, a
+    /// half a peer wrote that the Device's Tags storage keeps is older than
+    /// this call: it is dropped from storage, which is saved first with the
+    /// database guard dropped, and `zone` applies in full. A save that fails
+    /// is returned and changes nothing: the clock keeps its zone and storage
+    /// its halves. A peer's later write wins again. With the opt-in off a
+    /// half held stays in storage, unapplied.
     ///
     /// Refused, changing nothing, on a clockless server, and when the local
     /// date in `zone` would fall outside 1900 to 2154. It changes the clock
@@ -132,8 +138,44 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .clock
             .as_ref()
             .ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?;
+        let device = crate::local_device::initiating_device(&self.config.device);
+        let staged = self.stage_zone_reset(device).await;
         let mut requests = self.db.write().await;
-        clock.set_zone(kept_over(&mut requests, zone))
+        let mut authority = requests
+            .get_mut(&device)
+            .and_then(|device| device.device_authority_internal());
+        let result = clock.check(zone).and_then(|()| match authority.as_mut() {
+            Some(authority) => authority.reset_written_zone(),
+            None => Ok(()),
+        });
+        if let (Some(staged), Some(authority)) = (&staged, authority.as_mut()) {
+            authority.release_staged(staged);
+        }
+        result?;
+        clock.set_zone(zone)
+    }
+
+    /// Stage the drop of the zone halves the Device's storage keeps, and
+    /// wait for its save with the database guard dropped: the wait to
+    /// release it with, or `None` when there is nothing to drop.
+    async fn stage_zone_reset(&self, device: ObjectIdentifier) -> Option<SaveWait> {
+        loop {
+            let step = self
+                .db
+                .write()
+                .await
+                .get_mut(&device)
+                .and_then(|device| device.device_authority_internal())
+                .map(|mut device| device.stage_zone_reset())?;
+            match step {
+                StageStep::Staged(wait) => {
+                    wait.clone().await;
+                    return Some(wait);
+                }
+                StageStep::Busy(wait) => wait.await,
+                StageStep::Skip => return None,
+            }
+        }
     }
 }
 
@@ -143,8 +185,10 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// saving. The first Schedule pass, which runs as the server starts,
     /// already judges local time in it;
     /// [`set_clock_zone`](BACnetServer::set_clock_zone) changes it later.
-    /// A half a peer wrote that the Device's storage keeps wins over it
-    /// (#2395), as it does over `set_clock_zone`.
+    /// With [`clock_zone_writable`](Self::clock_zone_writable) on, a half a
+    /// peer wrote that the Device's storage keeps wins over it (#2395),
+    /// until the host's next `set_clock_zone`; with it off, the server logs
+    /// a warning naming the half it leaves unapplied.
     pub fn clock_zone(mut self, zone: ClockConfig) -> Self {
         self.clock_zone = zone;
         self
@@ -188,10 +232,15 @@ impl super::ScServerBuilder {
     }
 }
 
-/// `zone` with each half a peer wrote that the local Device's storage keeps
-/// over it (#2395): the zone the clock starts in and each host change
-/// leaves.
-pub(super) fn kept_over(db: &mut ObjectDatabase, zone: ClockConfig) -> ClockConfig {
+/// The zone the clock starts in: `zone`, with each half a peer wrote that
+/// the local Device's storage keeps over it while peers may write the zone
+/// (#2395). With the opt-in off a half held is left unapplied, in storage,
+/// and named in a warning.
+pub(super) fn start_zone(
+    db: &mut ObjectDatabase,
+    zone: ClockConfig,
+    writable: bool,
+) -> ClockConfig {
     let written = db
         .local_device()
         .identifier()
@@ -199,6 +248,17 @@ pub(super) fn kept_over(db: &mut ObjectDatabase, zone: ClockConfig) -> ClockConf
         .and_then(|device| device.device_authority_internal())
         .map(|device| device.written_zone())
         .unwrap_or_default();
+    if written.is_empty() {
+        return zone;
+    }
+    if !writable {
+        tracing::warn!(
+            utc_offset = ?written.utc_offset,
+            daylight_savings_status = ?written.daylight_savings_status,
+            "Device storage holds a zone a peer wrote, left unapplied while peers may not write the zone"
+        );
+        return zone;
+    }
     let (offset, summer) =
         written.over((zone.utc_offset_minutes(), zone.daylight_savings_status()));
     // Storage only keeps halves a write takes, so this holds.
@@ -287,6 +347,15 @@ impl ServerClock {
         self.synchronize_within(date, time, is_utc, None, &mut None)
     }
 
+    /// Whether the clock takes `config` now: refused, as
+    /// [`set_zone`](Self::set_zone) refuses it, when its local date falls
+    /// outside the BACnet Date range.
+    pub(super) fn check(&self, config: ClockConfig) -> Result<(), Error> {
+        self.lock()?.frame_in(config).map(drop).ok_or_else(|| {
+            Error::Encoding("local time in that zone is outside the BACnet Date range".into())
+        })
+    }
+
     /// Replace the zone, keeping the UTC instant and whether a
     /// synchronization set it. The offset and the daylight-saving status
     /// change as one value under the lock every read takes, so no read
@@ -370,13 +439,11 @@ impl ClockReader for ServerClock {
         self.zone_writes
     }
 
-    /// A peer's write, made as [`set_zone`](ServerClock::set_zone) makes
-    /// the host's. The request holds the database for writing, as
-    /// [`BACnetServer::set_clock_zone`] takes it, so a ReadPropertyMultiple
-    /// still reads one pair. A zone whose local date falls outside the
-    /// BACnet Date range now is VALUE_OUT_OF_RANGE, and a poisoned lock
-    /// DEVICE / OPERATIONAL_PROBLEM; either changes nothing.
-    fn write_zone(&self, utc_offset: i16, daylight_savings_status: bool) -> Result<(), Error> {
+    /// Whether a peer's write leaves a zone the clock takes now: an offset
+    /// off the 15-minute grid, or a zone whose local date falls outside the
+    /// BACnet Date range, is VALUE_OUT_OF_RANGE; a poisoned lock DEVICE /
+    /// OPERATIONAL_PROBLEM.
+    fn check_zone(&self, utc_offset: i16, daylight_savings_status: bool) -> Result<(), Error> {
         let range = || {
             Error::protocol(
                 bacnet_types::enums::ErrorClass::PROPERTY,
@@ -384,16 +451,38 @@ impl ClockReader for ServerClock {
             )
         };
         let zone = ClockConfig::new(utc_offset, daylight_savings_status).map_err(|_| range())?;
-        let mut state = self.lock().map_err(|_| {
+        self.lock()
+            .map_err(|_| unreachable_clock())?
+            .frame_in(zone)
+            .map(drop)
+            .ok_or_else(range)
+    }
+
+    /// A peer's write, made as [`set_zone`](ServerClock::set_zone) makes
+    /// the host's, once [`check_zone`](ClockReader::check_zone) took it.
+    /// The request has held the database for writing since, and every
+    /// other writer of the clock (a host's zone change, a
+    /// TimeSynchronization) takes the database guard too, so the zone it
+    /// checked is still one the clock takes, and a reader holding the
+    /// guard sees one pair.
+    fn write_zone(&self, utc_offset: i16, daylight_savings_status: bool) -> Result<(), Error> {
+        let zone = ClockConfig::new(utc_offset, daylight_savings_status).map_err(|_| {
             Error::protocol(
-                bacnet_types::enums::ErrorClass::DEVICE,
-                bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM,
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
             )
         })?;
-        state.frame_in(zone).ok_or_else(range)?;
-        state.config = zone;
+        self.lock().map_err(|_| unreachable_clock())?.config = zone;
         Ok(())
     }
+}
+
+/// DEVICE / OPERATIONAL_PROBLEM: the clock's lock is poisoned.
+fn unreachable_clock() -> Error {
+    Error::protocol(
+        bacnet_types::enums::ErrorClass::DEVICE,
+        bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM,
+    )
 }
 
 #[cfg(test)]

@@ -12090,25 +12090,42 @@ on the wire, refused with WRITE_ACCESS_DENIED as before.
 - A Device built with `DeviceObject::with_tags_persistence` keeps each half
   written in that storage, as it keeps a written Description: saved before
   the write is answered (staged off the database guard with the request's
-  other kept writes), and refused with DEVICE / OPERATIONAL_PROBLEM, the
-  clock left as it was, when the save fails. The file takes `RBNTAG03`
+  other kept writes), and refused with DEVICE / OPERATIONAL_PROBLEM when the
+  save fails. The clock is asked first (`ClockReader::check_zone`) and moved
+  only once storage has the half (`ClockReader::write_zone`), so a refused
+  write never reaches it. The file takes `RBNTAG03`
   (`snapshot::tags::MAGIC_WITH_ZONE`) only while it holds a half, so other
   files keep their octets; `TagsSnapshot` gained a `zone` field
   (`WrittenZone`), and every Tags user but a Device refuses storage holding
   one.
-- A kept half wins over the builder's `clock_zone` at start and over
-  `set_clock_zone`, which then moves only the other half, until
-  `DeviceObject::clear_written_zone` drops it (call it before the Device
-  joins the database). It stays with the opt-in turned off.
-  `DeviceObject::written_zone()` shows what is kept. A Device without
-  storage, the builders' own among them, keeps a written zone until the
-  server stops.
+- The newest change wins. A kept half wins over the builder's `clock_zone`
+  at start, so it survives a restart. The host's `set_clock_zone` is newer:
+  it drops the kept halves from storage (saved off the database guard, the
+  file back to the version without them) and applies its zone in full. A
+  save that fails is returned and changes nothing, clock and storage alike.
+  A peer's later write wins again. `DeviceObject::written_zone()` shows what
+  is kept. A Device without storage, the builders' own among them, keeps a
+  written zone until the server stops or the host changes it.
+- With the opt-in off a half the file holds is left there and not applied:
+  the configured zone runs, the server logs a warning at start naming the
+  half, and later saves of Tags or a Description keep it, so the file keeps
+  its octets. Turning the opt-in on applies it again.
+- Every writer of the clock holds the database guard (a request, the
+  host's `set_clock_zone`, and a TimeSynchronization, which now takes a
+  shared one), so a WritePropertyMultiple of both halves is seen as one
+  change.
 - In the device core, `DeviceClock::with_writable_zone()` is the same
-  opt-in. The `Responder` takes a written zone into its clock once the
-  request has run, and names the Device in `Written::objects`. The core
-  keeps no settings of its own: the host saves `responder.clock()`'s zone
-  and builds its clock in it at the next boot, or gives the Device Tags
-  storage and puts `written_zone()` over the zone it builds the clock in.
+  opt-in. A written zone moves the `Responder`'s clock once the request has
+  run, or at once for the `Reporter`'s local write, and `Written::objects`
+  names the Device. The host's `Responder::set_zone` is newer: it drops a
+  written zone and the Device's kept halves. The core keeps no settings of
+  its own: the host saves `responder.clock()`'s zone and builds its clock in
+  it at the next boot, or gives the Device Tags storage and puts
+  `written_zone()` over the zone it builds the clock in.
+- The capability feature `zone-writes` on `bacnet-objects` and
+  `bacnet-device-core` (on with `std`) carries this path. A firmware image
+  built without it keeps both properties read-only and leaves the path out
+  of its flash; a Tags file holding a written half still loads, unapplied.
 
 ### Confirmed notifications under DeviceCommunicationControl
 

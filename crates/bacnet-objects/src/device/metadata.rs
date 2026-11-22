@@ -114,6 +114,7 @@ pub(super) fn for_object(object: &DeviceObject) -> Cow<'_, [PropertyMetadata]> {
     };
     // A clock that takes a peer's zone writes makes both rows writable
     // (#2395).
+    #[cfg(feature = "zone-writes")]
     if clock && object.zone_writable() {
         for row in rows.to_mut() {
             if matches!(

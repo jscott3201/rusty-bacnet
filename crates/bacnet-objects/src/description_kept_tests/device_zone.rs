@@ -1,10 +1,11 @@
 //! A Device keeps the halves of its clock's zone a peer writes in its Tags
 //! storage (#2395), as it keeps a written Description: Tags format version
 //! 3, written only while a half is held; saved before the write is
-//! answered; refused with DEVICE / OPERATIONAL_PROBLEM, the clock put back,
-//! when the save fails; one save for a request's writes; nothing kept
-//! without the clock's opt-in; dropped by `clear_written_zone`. Only a
-//! Device keeps one there.
+//! answered; refused with DEVICE / OPERATIONAL_PROBLEM, the clock never
+//! moved, when the save fails; one save for a request's writes; nothing
+//! kept without the clock's opt-in, and a half held then left in storage
+//! through later saves; dropped by the host's reset. Only a Device keeps
+//! one there.
 
 use std::sync::Mutex as StdMutex;
 
@@ -62,6 +63,10 @@ impl ClockReader for ZoneClock {
 
     fn takes_zone_writes(&self) -> bool {
         self.writable
+    }
+
+    fn check_zone(&self, _: i16, _: bool) -> Result<(), Error> {
+        Ok(())
     }
 
     fn write_zone(&self, utc_offset: i16, daylight_savings_status: bool) -> Result<(), Error> {
@@ -146,7 +151,7 @@ fn a_written_zone_half_survives_a_rebuild_in_version_3() {
 }
 
 #[test]
-fn a_zone_half_whose_save_fails_is_refused_and_the_clock_put_back() {
+fn a_zone_half_whose_save_fails_is_refused_and_the_clock_never_moves() {
     let storage = Memory::holding(None);
     let clock = ZoneClock::new(true);
     let (mut db, device) = served(&storage, &clock);
@@ -245,30 +250,65 @@ fn a_request_writing_both_halves_saves_once() {
     assert_eq!(saved.description.as_deref(), Some("lobby"));
 }
 
+/// The host's reset drops the halves, and the file goes back to the
+/// version without them; one whose save fails keeps them. With the opt-in
+/// off the reset leaves a half held alone, and so does every later save:
+/// the half stays in the file, unapplied.
 #[test]
-fn clear_written_zone_drops_the_halves_and_the_file_goes_back() {
-    let storage = Memory::holding(Some(TagsSnapshot {
-        tags: None,
-        description: Some("lobby".into()),
-        zone: WrittenZone {
-            utc_offset: Some(360),
-            daylight_savings_status: None,
-        },
-    }));
-    let mut device =
-        DeviceObject::with_tags_persistence(DeviceConfig::default(), storage.clone()).unwrap();
-    assert_eq!(device.written_zone().utc_offset, Some(360));
-    device.clear_written_zone().unwrap();
+fn the_reset_drops_the_halves_and_a_half_held_while_off_stays() {
+    let zoned = || {
+        Memory::holding(Some(TagsSnapshot {
+            tags: None,
+            description: Some("lobby".into()),
+            zone: WrittenZone {
+                utc_offset: Some(360),
+                daylight_savings_status: None,
+            },
+        }))
+    };
+    let reset = |db: &mut ObjectDatabase, device: &ObjectIdentifier| {
+        db.get_mut(device)
+            .unwrap()
+            .device_authority_internal()
+            .unwrap()
+            .reset_written_zone()
+    };
+    let storage = zoned();
+    let (mut db, device) = served(&storage, &ZoneClock::new(true));
+    reset(&mut db, &device).unwrap();
     assert_eq!(saves(&storage), 1);
     let saved = storage.saved().unwrap();
     assert!(saved.zone.is_empty());
     assert_eq!(saved.description.as_deref(), Some("lobby"));
     assert_eq!(file_tag(&saved), tags::MAGIC_WITH_DESCRIPTION);
-    assert!(device.written_zone().is_empty());
     // Nothing left to drop: no save.
-    device.clear_written_zone().unwrap();
+    reset(&mut db, &device).unwrap();
     assert_eq!(saves(&storage), 1);
-    // A clear whose save fails keeps the halves.
+
+    let storage = zoned();
+    let (mut db, device) = served(&storage, &ZoneClock::new(true));
+    storage.fail.store(true, Ordering::SeqCst);
+    assert!(reset(&mut db, &device).is_err());
+    storage.fail.store(false, Ordering::SeqCst);
+    assert_eq!(storage.saved().unwrap().zone.utc_offset, Some(360));
+
+    // Opt-in off: the reset leaves it, and a Description save keeps it.
+    let storage = zoned();
+    let (mut db, device) = served(&storage, &ZoneClock::new(false));
+    reset(&mut db, &device).unwrap();
+    write(device_of(&mut db, &device), P::DESCRIPTION, text("hall")).unwrap();
+    assert_eq!(saves(&storage), 1);
+    let saved = storage.saved().unwrap();
+    assert_eq!(saved.zone.utc_offset, Some(360));
+    assert_eq!(saved.description.as_deref(), Some("hall"));
+    assert_eq!(file_tag(&saved), tags::MAGIC_WITH_ZONE);
+}
+
+/// The host's reset staged off the guard: one save, which the reset then
+/// takes without saving again.
+#[cfg(feature = "durable-writes")]
+#[test]
+fn a_staged_reset_saves_once() {
     let storage = Memory::holding(Some(TagsSnapshot {
         zone: WrittenZone {
             utc_offset: None,
@@ -276,11 +316,18 @@ fn clear_written_zone_drops_the_halves_and_the_file_goes_back() {
         },
         ..TagsSnapshot::default()
     }));
-    let mut device =
-        DeviceObject::with_tags_persistence(DeviceConfig::default(), storage.clone()).unwrap();
-    storage.fail.store(true, Ordering::SeqCst);
-    assert!(device.clear_written_zone().is_err());
-    assert_eq!(device.written_zone().daylight_savings_status, Some(true));
+    let (mut db, device) = served(&storage, &ZoneClock::new(true));
+    let object = db.get_mut(&device).unwrap();
+    let mut authority = object.device_authority_internal().unwrap();
+    let StageStep::Staged(wait) = authority.stage_zone_reset() else {
+        panic!("expected a staged reset");
+    };
+    wait.block();
+    assert_eq!(saves(&storage), 1);
+    assert!(storage.saved().unwrap().zone.is_empty());
+    authority.reset_written_zone().unwrap();
+    authority.release_staged(&wait);
+    assert_eq!(saves(&storage), 1);
 }
 
 /// Only a Device keeps a zone in Tags storage: any other user refuses

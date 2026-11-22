@@ -33,6 +33,7 @@ use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 
 mod audit_log;
 mod clear;
+#[cfg(feature = "zone-writes")]
 mod device_zone;
 mod tags_and_colour;
 

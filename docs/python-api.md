@@ -6738,8 +6738,9 @@ await server.set_clock_zone(300, True)
   Audit Reporter monitoring the Device reports it. UTC_Offset takes a
   multiple of 15 within -1440 to 1440, else VALUE_OUT_OF_RANGE, and
   Daylight_Savings_Status a BOOLEAN. The Python server's Device has no
-  storage, so a written zone lasts until `stop()`; the next `start()`
-  begins in the constructor's zone.
+  storage, so a written zone lasts until this method, which is newer,
+  changes it, or until `stop()`; the next `start()` begins in the
+  constructor's zone.
 
 An offset outside that range or off the 15-minute grid raises `ValueError`
 when the method is called, and an int that doesn't fit 16 bits

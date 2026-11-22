@@ -7443,7 +7443,8 @@ class BACnetServer:
         reports it like any write. UTC_Offset takes a multiple of 15 within
         -1440..=1440 (else VALUE_OUT_OF_RANGE), Daylight_Savings_Status a
         BOOLEAN. The Device has no storage here, so a written zone lasts
-        until ``stop()``; the next ``start()`` uses the constructor's zone.
+        until ``set_clock_zone``, which is newer, or ``stop()``; the next
+        ``start()`` uses the constructor's zone.
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on

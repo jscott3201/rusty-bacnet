@@ -286,6 +286,7 @@ impl Responder {
         date: Date,
         time: Time,
     ) -> Result<(), Error> {
+        self.take_written_zone(db);
         let clock = self.clock_mut()?;
         clock.set(basis, date, time)?;
         clock.lend(db);
@@ -297,12 +298,31 @@ impl Responder {
     /// the Device's UTC_Offset, Daylight_Savings_Status, Local_Date and
     /// Local_Time, and every object's clock, read the new zone from this
     /// call on. A synchronized clock stays synchronized
-    /// ([`SyncedClock::set_zone`](clock::SyncedClock::set_zone)). Refused,
-    /// changing nothing, when the responder has no clock or the clock
-    /// refuses the zone.
+    /// ([`SyncedClock::set_zone`](clock::SyncedClock::set_zone)). The
+    /// host's change is newer than a peer's write (#2395): with the
+    /// `zone-writes` feature it drops a written zone not yet taken, and the
+    /// halves the Device's Tags storage keeps, saving that first. Refused,
+    /// changing nothing, when the responder has no clock, the clock refuses
+    /// the zone, or that save fails.
     pub fn set_zone(&mut self, db: &mut ObjectDatabase, zone: Zone) -> Result<(), Error> {
+        #[cfg(feature = "zone-writes")]
+        let device = self.identity.device_oid();
         let clock = self.clock_mut()?;
-        clock.set_zone(zone)?;
+        let mut moved = clock.clone();
+        moved.set_zone(zone)?;
+        // The host's change is newer than a zone a peer wrote: it drops one
+        // not yet taken, and the halves the Device's storage keeps (#2395).
+        #[cfg(feature = "zone-writes")]
+        {
+            if let Some(mut device) = db
+                .get_mut(&device)
+                .and_then(|device| device.device_authority_internal())
+            {
+                device.reset_written_zone()?;
+            }
+            clock.discard_written_zone();
+        }
+        *clock = moved;
         clock.lend(db);
         Ok(())
     }
@@ -425,7 +445,7 @@ impl Responder {
     /// refuses a write to it with WRITE_ACCESS_DENIED.
     ///
     /// With a clock that takes a peer's zone writes
-    /// ([`DeviceClock::with_writable_zone`]), a write of UTC_Offset or
+    /// (`DeviceClock::with_writable_zone`), a write of UTC_Offset or
     /// Daylight_Savings_Status moves the clock, and the responder lends it
     /// to the database again before it returns; [`Written::objects`] names
     /// the Device, for the host to save the zone.
@@ -436,13 +456,24 @@ impl Responder {
         request: Inbound,
         out: &mut BytesMut,
     ) -> Written {
+        self.take_written_zone(db);
         let written = self.run_write(db, observer, request, out);
+        self.take_written_zone(db);
+        written
+    }
+
+    /// Take a zone a peer wrote into the Device's clock and lend it again
+    /// (#2395): after each request, and before anything else sets the
+    /// clock, so no written zone outlives the write that made it.
+    pub(crate) fn take_written_zone(&mut self, db: &mut ObjectDatabase) {
+        #[cfg(feature = "zone-writes")]
         if let Some(clocked) = self.clock.as_mut()
             && clocked.clock.take_written_zone()
         {
             clocked.clock.lend(db);
         }
-        written
+        #[cfg(not(feature = "zone-writes"))]
+        let _ = db;
     }
 
     /// [`write`](Self::write), before a zone a peer wrote is taken.

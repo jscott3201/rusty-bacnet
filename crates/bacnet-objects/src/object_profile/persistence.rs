@@ -77,6 +77,7 @@ impl WrittenZone {
     /// INTEGER UTC_Offset within the range [`is_valid`](Self::is_valid)
     /// names, else VALUE_OUT_OF_RANGE, or a BOOLEAN Daylight_Savings_Status;
     /// INVALID_DATA_TYPE for another datatype.
+    #[cfg(any(feature = "zone-writes", feature = "durable-writes"))]
     pub(crate) fn with_write(
         mut self,
         property: bacnet_types::enums::PropertyIdentifier,

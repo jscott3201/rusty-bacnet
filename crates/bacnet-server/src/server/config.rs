@@ -214,8 +214,10 @@ pub struct ServerConfig {
     /// read-only on the wire, as Clause 12.11 permits. On, a write moves
     /// the Device clock as
     /// [`set_clock_zone`](super::BACnetServer::set_clock_zone) does, and
-    /// is audited like any other write. A clockless server has neither
-    /// property, so this changes nothing there.
+    /// is audited like any other write. Off, a half a peer wrote that the
+    /// Device's Tags storage still holds is left there unapplied, with a
+    /// warning at start. A clockless server has neither property, so this
+    /// changes nothing there.
     pub clock_zone_writable: bool,
 }
 

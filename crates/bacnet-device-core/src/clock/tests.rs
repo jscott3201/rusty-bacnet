@@ -6,6 +6,7 @@ use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
+#[cfg(feature = "zone-writes")]
 #[path = "peer_zone_tests.rs"]
 mod peer_zone;
 #[path = "responder_tests.rs"]

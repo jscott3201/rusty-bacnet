@@ -427,7 +427,8 @@ impl DeviceObject {
     /// served from the start and wins over
     /// [`set_description`](Self::set_description). It keeps the halves of
     /// the clock's zone a peer writes the same way (#2395; see
-    /// [`written_zone`](Self::written_zone)).
+    /// [`written_zone`](Self::written_zone)), in a build with the
+    /// `zone-writes` feature.
     pub fn with_tags_persistence(
         config: DeviceConfig,
         persistence: Arc<dyn TagsPersistence>,
@@ -761,6 +762,7 @@ impl BACnetObject for DeviceObject {
         if let Some(result) = self.profile.write(property, array_index, &value) {
             return result;
         }
+        #[cfg(feature = "zone-writes")]
         if let Some(result) = self.write_zone(property, &value) {
             return result;
         }
@@ -821,8 +823,8 @@ impl BACnetObject for DeviceObject {
 impl crate::traits::Timed for DeviceObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
         self.clock = clocks.clock.clone();
-        let writable = self.zone_writable();
-        self.profile.take_zone_writes(writable);
+        #[cfg(feature = "zone-writes")]
+        self.profile.take_zone_writes(self.zone_writable());
     }
 }
 

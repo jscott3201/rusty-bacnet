@@ -343,7 +343,24 @@ pub(super) async fn try_servers_config(
     max_apdu_length: u32,
     transport: AuditCapture,
 ) -> Result<Fixture, Error> {
+    let options = (enabled, max_apdu_length, transport);
+    try_servers_with(reporters, devices, recipient, bindings, options, Vec::new()).await
+}
+
+/// [`try_servers_config`], with `extra` objects in the database from the
+/// start.
+pub(super) async fn try_servers_with(
+    reporters: Vec<AuditReporterObject>,
+    devices: &[u32],
+    recipient: Option<bacnet_types::constructed::BACnetRecipient>,
+    bindings: Vec<DeviceBinding>,
+    (enabled, max_apdu_length, transport): (bool, u32, AuditCapture),
+    extra: Vec<Box<dyn BACnetObject>>,
+) -> Result<Fixture, Error> {
     let mut db = ObjectDatabase::new();
+    for object in extra {
+        db.add(object).unwrap();
+    }
     let writes = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::new(AtomicUsize::new(0));
     let execution_error = Arc::new(StdMutex::new(None));

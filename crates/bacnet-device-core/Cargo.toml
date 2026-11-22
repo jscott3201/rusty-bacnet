@@ -29,6 +29,7 @@ std = [
     "cov-multiple",
     "event-reporting",
     "event-enrollment",
+    "zone-writes",
 ]
 # no_std with a global allocator.
 alloc = [
@@ -71,6 +72,12 @@ event-reporting = ["bacnet-objects/event-reporting"]
 # pass that runs them, on top of `event-reporting`. `alloc` is enough;
 # `std` turns this on, so bacnet-server has it.
 event-enrollment = ["event-reporting"]
+# A peer's write of the Device's UTC_Offset and Daylight_Savings_Status
+# (#2395): `DeviceClock::with_writable_zone` and what the `Responder` and
+# `Reporter` do with a written zone. It turns on bacnet-objects'
+# `zone-writes`. `std` turns it on; an image built on `alloc` leaves it off
+# unless a peer writes its zone, which keeps the path out of its flash.
+zone-writes = ["bacnet-objects/zone-writes"]
 # Hidden hooks for hosts' own tests (the COV table's generation counter, so
 # bacnet-server's table tests reach generation exhaustion, an event payload
 # built without a projection, and GetEventInformation within a byte budget).

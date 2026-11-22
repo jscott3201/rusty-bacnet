@@ -259,3 +259,79 @@ fn the_recipient_window_follows_a_written_zone() {
     handle(&mut responder, &mut db, apdu);
     assert_eq!(window(&responder), Some((thursday, at(9))));
 }
+
+/// A local write of the zone through the `Reporter` moves the clock at
+/// once (#2395): its window and a local synchronization read the new zone,
+/// and the host's later `set_zone`, newer, holds against the next peer
+/// write, which can't bring the local write's zone back.
+#[test]
+fn a_local_write_moves_the_clock_at_once_and_the_hosts_zone_holds() {
+    use crate::cov::CovPolicy;
+    use crate::report::{ReportConfig, Reporter};
+    use crate::write::local::{LocalChange, LocalCommandSource};
+
+    let (responder, mut db) = responder(true);
+    let mut reporter = Reporter::new(responder, ReportConfig::new(CovPolicy::default())).unwrap();
+    let change = LocalChange::Property {
+        property: P::DAYLIGHT_SAVINGS_STATUS,
+        array_index: None,
+        value: PropertyValue::Boolean(true),
+        priority: None,
+        source: LocalCommandSource::ServerDevice,
+    };
+    reporter
+        .apply_local(&mut db, device(), change, Instant::from_secs(1_000))
+        .unwrap();
+    let own = reporter.clock().unwrap();
+    assert_eq!(own.clock().zone(), Zone::new(300, true).unwrap());
+    let at = |hour| Time {
+        hour,
+        minute: 15,
+        second: 0,
+        hundredths: 0,
+    };
+    assert_eq!(
+        own.clock().window(own.now()),
+        Some((DaysOfWeek::THURSDAY, at(9)))
+    );
+
+    // The host's zone is newer; an unrelated peer write after it leaves it.
+    reporter
+        .set_zone(&mut db, Zone::new(0, false).unwrap())
+        .unwrap();
+    let mut out = BytesMut::new();
+    let description = write_property(P::DESCRIPTION, PropertyValue::CharacterString("x".into()));
+    let peer = crate::cov::SubscriberEndpoint::new(&[7], None);
+    let request = Inbound::new(description, 1476);
+    reporter.handle(&mut db, &peer, request, Instant::from_secs(1_000), &mut out);
+    let frame = db.clock_frame().unwrap();
+    assert_eq!(
+        (frame.utc_offset, frame.daylight_savings_status),
+        (0, false)
+    );
+    assert_eq!(
+        reporter.clock().unwrap().clock().zone(),
+        Zone::new(0, false).unwrap()
+    );
+}
+
+/// A peer's write, then the host's `set_zone` before the responder runs
+/// again: the host's zone holds (it is newer), and no stale written zone
+/// is applied later.
+#[test]
+fn the_hosts_zone_drops_a_written_zone_not_yet_taken() {
+    let (mut responder, mut db) = responder(true);
+    // A write made on the database directly, as a host's own local write
+    // through `write::local::apply`, leaves the zone for the responder.
+    db.get_mut(&device())
+        .unwrap()
+        .write_property(P::UTC_OFFSET, None, PropertyValue::Signed(-60), None)
+        .unwrap();
+    assert_eq!(db.clock_frame().unwrap().utc_offset, -60);
+    responder
+        .set_zone(&mut db, Zone::new(0, true).unwrap())
+        .unwrap();
+    let apdu = write_property(P::DESCRIPTION, PropertyValue::CharacterString("x".into()));
+    handle(&mut responder, &mut db, apdu);
+    assert_eq!(reading(&responder, &db), (14, 15, 0, true));
+}

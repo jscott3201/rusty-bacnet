@@ -1,8 +1,9 @@
 //! A Device with Tags storage keeps each half of the clock's zone a peer
 //! writes across a restart (#2395): the server puts it over the zone its
-//! builder gives at start and over each `set_clock_zone`, until the
-//! Device's `clear_written_zone`; a save that fails refuses the write and
-//! leaves the clock as it was.
+//! builder gives at start, and the host's own `set_clock_zone`, newer,
+//! drops it; a save that fails refuses the write, or the host's change, and
+//! leaves the clock as it was. With the opt-in off a half held is kept,
+//! unapplied.
 use super::*;
 use crate::server::test_transport::TestTransport;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -91,13 +92,29 @@ async fn write(
         .write_property(property, None, value, None)
 }
 
-/// A half a peer wrote is saved, and a server started again on the same
-/// storage puts it over the builder's zone; the host's own change then
-/// moves only the other half. It stays with the opt-in off, until the
-/// Device's `clear_written_zone`, after which the builder's zone applies in
-/// full.
+fn kept(utc_offset: Option<i16>, daylight_savings_status: Option<bool>) -> WrittenZone {
+    WrittenZone {
+        utc_offset,
+        daylight_savings_status,
+    }
+}
+
+/// Storage already holding `zone`.
+fn holding(zone: WrittenZone) -> Arc<ZoneStore> {
+    let storage = Arc::new(ZoneStore::default());
+    *storage.saved.lock().unwrap() = Some(TagsSnapshot {
+        zone,
+        ..TagsSnapshot::default()
+    });
+    storage
+}
+
+/// The newest change wins (#2395): a half a peer wrote is saved and wins
+/// over the builder's zone at the next start; the host's own change, newer,
+/// drops it from storage, so the start after runs the builder's zone; a
+/// peer's write after that wins again.
 #[tokio::test(start_paused = true)]
-async fn a_written_half_is_kept_across_a_restart_over_the_hosts_zone() {
+async fn the_newest_change_wins_across_restarts() {
     let storage = Arc::new(ZoneStore::default());
     let (mut server, device) = built_on(&storage, zone(300, false), true, None).await;
     write(
@@ -110,32 +127,82 @@ async fn a_written_half_is_kept_across_a_restart_over_the_hosts_zone() {
     .unwrap();
     assert_eq!(server.clock_zone(), Some(zone(300, true)));
     assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
-    let kept = WrittenZone {
-        utc_offset: None,
-        daylight_savings_status: Some(true),
-    };
-    assert_eq!(storage.saved().unwrap().zone, kept);
+    assert_eq!(storage.saved().unwrap().zone, kept(None, Some(true)));
+    server.stop().await.unwrap();
+    drop(server);
+
+    let (mut server, device) = built_on(&storage, zone(360, false), true, None).await;
+    assert_eq!(server.clock_zone(), Some(zone(360, true)));
+    server.set_clock_zone(zone(0, false)).await.unwrap();
+    assert_eq!(server.clock_zone(), Some(zone(0, false)));
+    assert!(storage.saved().unwrap().zone.is_empty());
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 2);
     server.stop().await.unwrap();
     drop(server);
 
     let (mut server, _) = built_on(&storage, zone(360, false), true, None).await;
-    assert_eq!(server.clock_zone(), Some(zone(360, true)));
+    assert_eq!(server.clock_zone(), Some(zone(360, false)));
+    write(&server, device, P::UTC_OFFSET, PropertyValue::Signed(-60))
+        .await
+        .unwrap();
+    server.stop().await.unwrap();
+    drop(server);
+
+    let (mut server, _) = built_on(&storage, zone(360, false), true, None).await;
+    assert_eq!(server.clock_zone(), Some(zone(-60, false)));
+    server.stop().await.unwrap();
+}
+
+/// A host's change whose save fails is returned and changes nothing: the
+/// clock keeps its zone and storage its half.
+#[tokio::test(start_paused = true)]
+async fn a_host_change_whose_save_fails_changes_nothing() {
+    let storage = holding(kept(None, Some(true)));
+    let (mut server, _) = built_on(&storage, zone(300, false), true, None).await;
+    assert_eq!(server.clock_zone(), Some(zone(300, true)));
+    storage.fail.store(true, Ordering::SeqCst);
+    assert!(server.set_clock_zone(zone(0, false)).await.is_err());
+    assert_eq!(server.clock_zone(), Some(zone(300, true)));
+    assert_eq!(storage.saved().unwrap().zone, kept(None, Some(true)));
+    storage.fail.store(false, Ordering::SeqCst);
     server.set_clock_zone(zone(0, false)).await.unwrap();
-    assert_eq!(server.clock_zone(), Some(zone(0, true)));
-    server.stop().await.unwrap();
-    drop(server);
-
-    let (mut server, _) = built_on(&storage, zone(0, false), false, None).await;
-    assert_eq!(server.clock_zone(), Some(zone(0, true)));
-    server.stop().await.unwrap();
-    drop(server);
-
-    let mut cleared =
-        DeviceObject::with_tags_persistence(DeviceConfig::default(), storage.clone()).unwrap();
-    cleared.clear_written_zone().unwrap();
-    let (mut server, _) = built_on(&storage, zone(0, false), true, Some(cleared)).await;
-    assert_eq!(server.clock_zone(), Some(zone(0, false)));
     assert!(storage.saved().unwrap().zone.is_empty());
+    server.stop().await.unwrap();
+}
+
+/// With the opt-in off a half held is left unapplied, named in a warning,
+/// and kept: the host's change and a Description write leave the file's
+/// half alone. Turning the opt-in on applies it.
+#[tokio::test(start_paused = true)]
+async fn with_the_opt_in_off_a_held_half_is_kept_unapplied() {
+    let storage = holding(kept(Some(-60), None));
+    let (spy, _guard) = super::super::warn_spy::WarnSpy::install();
+    let (mut server, device) = built_on(&storage, zone(300, false), false, None).await;
+    assert_eq!(server.clock_zone(), Some(zone(300, false)));
+    assert!(
+        spy.warnings()
+            .iter()
+            .any(|warning| warning.message.contains("left unapplied")),
+        "{:?}",
+        spy.warnings()
+    );
+    server.set_clock_zone(zone(0, true)).await.unwrap();
+    write(
+        &server,
+        device,
+        P::DESCRIPTION,
+        PropertyValue::CharacterString("lobby".into()),
+    )
+    .await
+    .unwrap();
+    let saved = storage.saved().unwrap();
+    assert_eq!(saved.zone, kept(Some(-60), None));
+    assert_eq!(saved.description.as_deref(), Some("lobby"));
+    server.stop().await.unwrap();
+    drop(server);
+
+    let (mut server, _) = built_on(&storage, zone(300, false), true, None).await;
+    assert_eq!(server.clock_zone(), Some(zone(-60, false)));
     server.stop().await.unwrap();
 }
 

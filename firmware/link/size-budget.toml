@@ -896,6 +896,26 @@
 # refusal over a whole I-Am-Router before any of it is learned. .bss is 8
 # octets larger, the two new u32 counts in the router's storage; the .bss
 # and ram budgets stay at 17,376. The other images are unchanged.
+#
+# On 2026-11-22 (#2395 and #2407, Rust 1.99.0, dev at eb05b52ab) a peer may
+# write the Device clock's zone, behind bacnet-objects' and
+# bacnet-device-core's `zone-writes` feature, which no image turns on, and
+# a Device's Tags file and the Audit Log's slot can hold more. As flash,
+# dev then this change, and in brackets with `zone-writes` on in the
+# objects images; RAM, the memmove counts and the 32 images without a
+# database unchanged:
+#
+#   thumbv7m      objects 143952, 144108 (147752)    points 185068, 185212 (188864)
+#                 reporting 254176, 254472 (256948)  enrollment 326768, 326980 (329860)
+#   thumbv7em     objects 143768, 143924 (147540)    points 185004, 185140 (188764)
+#                 reporting 253540, 253828 (256380)  enrollment 326628, 326812 (329820)
+#   riscv32imac   objects 172618, 172898 (177058)    points 221886, 222170 (226338)
+#                 reporting 308622, 309062 (312354)  enrollment 396650, 397050 (400358)
+#
+# 136 to 440 octets of flash without the feature, from the code it doesn't
+# gate (the Tags format's zone section, the Device's check of a loaded
+# zone and the clock port's three provided methods; not measured part by
+# part). With it, 2.8 to 4.5 KB. Every budget stays.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320

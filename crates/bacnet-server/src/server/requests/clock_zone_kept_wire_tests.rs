@@ -128,3 +128,34 @@ async fn a_zone_write_that_cannot_be_saved_is_refused_on_the_wire() {
         PropertyValue::Signed(300)
     );
 }
+
+/// Both halves and then an attempt the Device refuses: the request stops
+/// there, the two halves stay made, on the clock and in storage, saved
+/// once, and the request answers with an Error.
+#[tokio::test(start_paused = true)]
+async fn both_halves_then_a_refused_attempt_keep_the_halves() {
+    let clock = synced_clock(true);
+    let store = Arc::new(Store::default());
+    let (fixture, device) = fixture(&clock, &store).await;
+    let request = wpm(vec![WriteAccessSpecification {
+        object_identifier: device,
+        list_of_properties: vec![
+            attempt(P::UTC_OFFSET, PropertyValue::Signed(-60)),
+            attempt(P::DAYLIGHT_SAVINGS_STATUS, PropertyValue::Boolean(true)),
+            attempt(P::DESCRIPTION, PropertyValue::Unsigned(1)),
+        ],
+    }]);
+    let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
+    let answer = wire(&fixture, service, request).await;
+    // An Error PDU for WritePropertyMultiple, invoke ID 5.
+    assert_eq!(answer[..3], [0x50, 5, 16]);
+    let frame = clock.read_clock().unwrap();
+    assert_eq!(
+        (frame.utc_offset, frame.daylight_savings_status),
+        (-60, true)
+    );
+    assert_eq!(store.saves.load(Ordering::SeqCst), 1);
+    let saved = store.saved.lock().unwrap().clone().unwrap();
+    assert_eq!(saved.zone.over((0, false)), (-60, true));
+    assert_eq!(saved.description, None);
+}

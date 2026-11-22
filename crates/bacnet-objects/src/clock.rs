@@ -55,16 +55,32 @@ pub trait ClockReader: Send + Sync {
         false
     }
 
-    /// Move the clock to the zone a peer's write leaves: `utc_offset`
-    /// minutes west of UTC and `daylight_savings_status`, as the host's own
-    /// zone change does. The clock keeps its UTC instant, so local time
-    /// moves by the difference between the zones, and a synchronized clock
-    /// stays synchronized. The Device calls it only while
-    /// [`takes_zone_writes`](Self::takes_zone_writes) is `true`, for a
-    /// write it has checked, with the database held for writing, so no
-    /// reader sees part of the change. Refused, changing nothing, with the
-    /// error the write is answered with; the default refuses with PROPERTY
-    /// / WRITE_ACCESS_DENIED.
+    /// Whether the clock takes the zone a peer's write leaves,
+    /// `utc_offset` minutes west of UTC and `daylight_savings_status`, now,
+    /// without moving it: the error the write is answered with when it
+    /// doesn't. The Device asks before it saves the write, and only moves
+    /// the clock ([`write_zone`](Self::write_zone)) once storage has it.
+    /// The default refuses with PROPERTY / WRITE_ACCESS_DENIED.
+    fn check_zone(
+        &self,
+        _utc_offset: i16,
+        _daylight_savings_status: bool,
+    ) -> Result<(), bacnet_types::error::Error> {
+        Err(bacnet_types::error::Error::protocol(
+            bacnet_types::enums::ErrorClass::PROPERTY,
+            bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+        ))
+    }
+
+    /// Move the clock to a zone [`check_zone`](Self::check_zone) took, as
+    /// the host's own zone change does: the clock keeps its UTC instant, so
+    /// local time moves by the difference between the zones, and a
+    /// synchronized clock stays synchronized. The Device calls it only
+    /// while [`takes_zone_writes`](Self::takes_zone_writes) is `true`, with
+    /// the database held for writing since the check, so a reader holding
+    /// the database guard sees the old zone or the new, never part of the
+    /// change. Refused only by a clock that can't be reached; the default
+    /// refuses with PROPERTY / WRITE_ACCESS_DENIED.
     fn write_zone(
         &self,
         _utc_offset: i16,
