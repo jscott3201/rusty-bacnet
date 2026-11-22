@@ -86,13 +86,13 @@ pub(super) fn refusals(spy: &WarnSpy) -> usize {
         .count()
 }
 
-/// `(queued, delivered, dropped)` owed-ID revisits.
+/// `(queued, delivered, dropped)` revisits owed room.
 pub(super) fn owed_counts(h: &Harness) -> (u64, u64, u64) {
     let counters = &h.server.cov_counters;
     (
-        counters.owed_id_revisits_queued.load(Relaxed),
-        counters.owed_id_revisits_delivered.load(Relaxed),
-        counters.owed_id_revisits_dropped.load(Relaxed),
+        counters.owed_revisits_queued.load(Relaxed),
+        counters.owed_revisits_delivered.load(Relaxed),
+        counters.owed_revisits_dropped.load(Relaxed),
     )
 }
 

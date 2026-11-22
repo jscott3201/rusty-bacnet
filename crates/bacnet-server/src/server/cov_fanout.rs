@@ -109,8 +109,9 @@ impl<T: TransportPort + 'static> CovFanout<T> {
     /// so changes held back while it was outstanding reach the subscriber
     /// (#896), each context whose queued timestamped changes reached
     /// their Max_Notification_Delay deadline (#856), and each reference
-    /// whose confirmed report found no invoke ID free, once one comes back
-    /// (#2661). Runs until the server aborts it.
+    /// whose confirmed report found no room, once there is some: an invoke
+    /// ID (#2661), a slot of the pool and one of its peer's (#2671). Runs
+    /// until the server aborts it.
     pub(super) async fn run_revisits(self) {
         use futures_util::FutureExt;
         let (revisits, timed, in_flight) = {
@@ -133,7 +134,7 @@ impl<T: TransportPort + 'static> CovFanout<T> {
         loop {
             // No wait loses work when another wins: revisits stay queued, a
             // due context comes back after its spacing, and references owed
-            // an ID keep their places and any hold. Each takes what it
+            // room keep their places and any hold. Each takes what it
             // returns in the poll that returns it, and none holds a lock.
             let (keys, wakes) = tokio::select! {
                 keys = revisits.next() => (keys, None),
@@ -169,8 +170,8 @@ impl<T: TransportPort + 'static> CovFanout<T> {
 /// confirmed notification in flight ended.
 type Wakes<'a> = [tokio::sync::futures::Notified<'a>; 2];
 
-/// What lets references owed an invoke ID go (#2661): the IDs free, and
-/// the confirmed COV notifications in flight, in the pool and per peer.
+/// What lets references owed room go (#2661, #2671): the IDs free, and the
+/// confirmed COV notifications in flight, in the pool and per peer.
 struct OwedRoom<'a> {
     ids: &'a NotificationTransactions,
     in_flight: &'a crate::cov::CovInFlightTracker,
@@ -183,7 +184,10 @@ impl OwedRoom<'_> {
     /// (a subscription, or a whole COV-multiple context) takes an ID, a slot
     /// of the pool and one of its peer's, as its report will. One that
     /// can't go keeps its place, and those behind it are still looked at,
-    /// so no reservation is tried that would be refused for want of room.
+    /// so no reservation is tried that would be refused for want of room,
+    /// and a peer at its limit holds back none but its own. One held back
+    /// costs a lookup and no copy: a busy peer's references may wait
+    /// through many passes.
     fn admit(&self) -> impl FnMut(&CovSubscriptionKey) -> bool + use<> {
         let (mut ids, mut pool) = (self.ids.free_invoke_ids(), self.pool.available_permits());
         let mut peers = self.in_flight.in_flight();
@@ -204,11 +208,11 @@ impl OwedRoom<'_> {
             if ids == 0 || pool == 0 {
                 return false;
             }
-            let peer = peers.entry(recipient(key).clone()).or_default();
-            if *peer >= per_peer {
+            let peer = recipient(key);
+            if peers.get(peer).is_some_and(|&count| count >= per_peer) {
                 return false;
             }
-            *peer += 1;
+            *peers.entry(peer.clone()).or_default() += 1;
             ids -= 1;
             pool -= 1;
             contexts.extend(context.cloned());
@@ -226,8 +230,8 @@ fn recipient(key: &CovSubscriptionKey) -> &bacnet_device_core::cov::CovRecipient
     }
 }
 
-/// Wait until references owed an invoke ID can be looked at again, and take
-/// those the room lets go, oldest first (#2661), with the waits the pass
+/// Wait until references owed room can be looked at again, and take those
+/// the room lets go, oldest first (#2661, #2671), with the waits the pass
 /// made before it read the room. A pass follows a lease ending, a confirmed
 /// notification in flight ending, or a reference owed, and takes only what
 /// can go, so at a limit it waits rather than spins: a reference held back,
@@ -249,7 +253,7 @@ async fn owed_look<'r>(
     }
     loop {
         let owed = revisits.owed_notified();
-        if !revisits.owes_invoke_id() {
+        if !revisits.owes_any() {
             owed.await;
             continue;
         }

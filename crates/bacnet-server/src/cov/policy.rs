@@ -35,7 +35,10 @@ pub struct AtomicCovCounters {
     pub notification_bytes_sent: AtomicU64,
     /// Total number of notifications throttled due to per-event fanout or byte budget.
     pub notifications_throttled_fanout: AtomicU64,
-    /// Total number of notifications throttled due to peer in-flight confirmed limit.
+    /// Total number of confirmed notifications held back because their
+    /// peer already had its limit in flight: each waits, and goes with the
+    /// value then current once one of the peer's reports ends (#2671). A
+    /// subscription waits once, however often it is held back.
     pub notifications_throttled_peer: AtomicU64,
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted on overflow of the
@@ -54,19 +57,20 @@ pub struct AtomicCovCounters {
     /// subscriber. The value is not queued: the reference is evaluated again
     /// at its next fanout, and each report that leaves it out counts once.
     pub untimed_references_oversized: AtomicU64,
-    /// Times a reference entered the queue of those waiting for an invoke
-    /// ID (#2661): when its confirmed report found none free, unless it
-    /// waited already, and again each time a look at it was refused for
-    /// want of room. Not in [`CovCounters`] yet, so the server's API
-    /// doesn't report these three. `queued` is `delivered` plus `dropped`
-    /// plus those still waiting.
-    pub(crate) owed_id_revisits_queued: AtomicU64,
-    /// Of those, handed to the fanout once an ID came back.
-    pub(crate) owed_id_revisits_delivered: AtomicU64,
+    /// Times a reference entered the queue of those waiting for room for
+    /// a confirmed report: when its report found no invoke ID free (#2661),
+    /// its peer at its in-flight limit or the pool of in-flight slots full
+    /// (#2671), unless it waited already, and again each time a look at it
+    /// was refused for want of room. Not in [`CovCounters`] yet, so the
+    /// server's API doesn't report these three. `queued` is `delivered`
+    /// plus `dropped` plus those still waiting.
+    pub(crate) owed_revisits_queued: AtomicU64,
+    /// Of those, handed to the fanout once room came back.
+    pub(crate) owed_revisits_delivered: AtomicU64,
     /// Of those, dropped while they waited: the subscription was
     /// cancelled, expired, removed or replaced (a replacement reports for
-    /// itself).
-    pub(crate) owed_id_revisits_dropped: AtomicU64,
+    /// itself), or the server stopped.
+    pub(crate) owed_revisits_dropped: AtomicU64,
 }
 
 impl AtomicCovCounters {
@@ -147,7 +151,8 @@ pub enum InFlightAcquireError {
 pub struct CovInFlightTracker {
     peer_in_flight: Mutex<HashMap<CovRecipient, usize>>,
     /// Wakes, once a notification's peer slot and pool permit are both
-    /// back, what waits for one to end: references owed a look (#2661).
+    /// back, what waits for one to end: references owed a look (#2661,
+    /// #2671).
     ended: tokio::sync::Notify,
 }
 

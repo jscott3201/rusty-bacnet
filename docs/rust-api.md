@@ -10214,33 +10214,42 @@ outstanding for the transport's send bounds plus the retry cycle. The standard
 ends delivery with the confirmed-request retries (Clause 5.4.4); reporting again
 after a hold-off is local policy.
 
-A confirmed report also needs an invoke ID. The server's confirmed event, COV
-and Audit notifications and the reads its runs make share one pool of 256; on an
-endpoint session's seat the server holds at most 64 of the node's. When none is
-free, the report is not sent and the baselines stay, and
-its coordinate (the subscription, or every reference of the COV-multiple context,
-a split report's later parts included) waits for an ID (#2661). While anything
+A confirmed report also needs room: an invoke ID, a slot of the server's pool
+of 255 confirmed COV notifications in flight, and one of its subscriber's
+`max_confirmed_in_flight_per_peer` (16 by default). The server's confirmed
+event, COV and Audit notifications and the reads its runs make share one pool of
+256 invoke IDs; on an endpoint session's seat the server holds at most 64 of the
+node's. The two in-flight limits keep a subscriber that subscribes to much and
+acknowledges slowly from tying up the server (#533, #561). A report that finds
+no room is not sent and the baselines stay, and its coordinate (the
+subscription, or every reference of the COV-multiple context, a split report's
+later parts included) waits for room, whichever of the three it lacked (#2661,
+#2671): the limits cap what is in flight and drop no change. While anything
 waits, the server looks again whenever an ID comes back or a confirmed COV
-notification in flight ends. Each pass takes, in the order they were refused,
-the waiting coordinates that have room now: an ID, a slot of the in-flight pool
-and one of their subscriber's `max_confirmed_in_flight_per_peer`. A coordinate
-without room keeps its place and those behind it still go, so one subscriber
-whose notifications are all out holds back no other. The usual fanout then
-reports from the kept baselines: a value back at its baseline sends nothing, one
-that changed again reports its current value once. A coordinate waits once
-however often it is refused, and keeps its place when its look is refused
-anyway, for want of an ID or of an in-flight slot that other work took first;
-it is looked at again when room comes back. Nothing is tried while there is no
-room, so a server at a limit doesn't spin. A cancelled, expired or removed
-subscription stops waiting, and so does one a re-subscription replaces, which
-sends its own initial report (waiting in its turn when it finds no ID).
-Timestamped history refused with its report goes back to its references and
-leaves with the next report, once. `stop()` ends the wait with the server.
-What still waits for its next fanout: a first report refused by the subscriber's
-in-flight limit or the pool of 255 (a deliberate throttle, #533), one past the
-fanout budget, and a look DCC drops, as it drops any fanout. The standard
-doesn't say what a server does when it cannot start a confirmed notification;
-this is local policy.
+notification in flight ends, and at no other time. Each pass takes, in the
+order they were first refused, the waiting coordinates that have room now. A
+coordinate without room keeps its place and those behind it still go, so one
+subscriber whose notifications are all out holds back no other, in its own
+limit or in the pool. A waiting coordinate reserves nothing: a change of
+another subscription, or the follow-up after an Ack, may take freed room first,
+and the wait goes on to the next end. The usual fanout then reports from the
+kept baselines, with the value current at the look: a value back at its
+baseline, or within its COV increment of it, sends nothing, and one that
+changed several times reports once. A coordinate waits once however often it
+is refused, so the waits are never more than the subscriptions, and keeps its
+place when its look is refused anyway, for want of room that other work took
+first; it is looked at again when room comes back. Nothing is tried while there
+is no room, so a server at a limit doesn't spin. A cancelled, expired or
+removed subscription stops waiting (with its object, or with its peer through
+`remove_peer_subscriptions`), and so does one a re-subscription replaces, which
+sends its own initial report (waiting in its turn, at the back, when it finds
+no room). Timestamped history refused with its report goes back to its
+references and leaves with the next report, once. `stop()` ends every wait.
+`CovCounters::notifications_throttled_peer` counts each report the per-peer
+limit held back; the pool and the invoke IDs log theirs. What still waits for
+its next fanout: a report past the fanout budget, and a look DCC drops, as it
+drops any fanout. The standard doesn't say what a server does when it cannot
+start a confirmed notification; this is local policy.
 
 A replaced ordinary or SubscribeCOVProperty subscription starts unmarked, as does
 a context whose route changes or which is re-subscribed with a non-empty list

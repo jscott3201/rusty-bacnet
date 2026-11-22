@@ -79,14 +79,11 @@ pub(in crate::server) struct ConfirmedSend {
 /// Why [`BACnetServer::admit_confirmed`] gave a report nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::server) enum Refusal {
-    /// The peer's in-flight limit or the pool of in-flight slots, counted
-    /// or logged. References already waiting for an invoke ID keep their
-    /// places; others wait for their next fanout (a deliberate throttle,
-    /// #533).
-    InFlight,
-    /// Every invoke ID the server may hold is leased: the report's
-    /// references are owed a look once one comes back (#2661).
-    InvokeId,
+    /// No room: the peer's in-flight limit, the pool of in-flight slots or
+    /// the invoke IDs, counted or logged. The report's references are owed
+    /// a look once there is room (#2661, #2671); the limits cap what is in
+    /// flight, and drop no change.
+    NoRoom,
     /// A closed or broken pool, logged.
     Other,
 }
@@ -95,9 +92,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Admit a confirmed report to `route` against the peer and global
     /// in-flight limits and an invoke ID. A refusal is counted or logged,
     /// and the report isn't sent; the caller owes its references a look
-    /// when it was refused an invoke ID. Synchronous: it takes leaf mutexes
-    /// only, so the Single fanout calls it under its database and table
-    /// guards.
+    /// when it was refused for want of room. Synchronous: it takes leaf
+    /// mutexes only, so the Single fanout calls it under its database and
+    /// table guards.
     pub(in crate::server) fn admit_confirmed(
         handles: &CovFanoutHandles<'_, '_, T>,
         route: &CovSubscriptionSnapshot,
@@ -120,14 +117,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 counters
                     .notifications_throttled_peer
                     .fetch_add(1, Ordering::Relaxed);
-                return Err(Refusal::InFlight);
+                return Err(Refusal::NoRoom);
             }
             Err(InFlightAcquireError::GlobalPoolExhausted) => {
                 warn!(
                     object = ?route.monitored_object_identifier,
-                    "255 confirmed COV notifications in-flight, skipping {label}"
+                    "255 confirmed COV notifications in flight; {label} goes once one ends"
                 );
-                return Err(Refusal::InFlight);
+                return Err(Refusal::NoRoom);
             }
         };
         let (operation, result_rx) = match ctx
@@ -140,7 +137,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     object = ?route.monitored_object_identifier,
                     "No free invoke ID for confirmed {label}; it goes once one comes back"
                 );
-                return Err(Refusal::InvokeId);
+                return Err(Refusal::NoRoom);
             }
             Err(error) => {
                 warn!(%error, "No invoke ID for confirmed {label}");
@@ -154,10 +151,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         })
     }
 
-    /// `report`, a COV-multiple context's, was refused an invoke ID
-    /// (#2661). Its timestamped history, deferred parts included, goes back
+    /// `report`, a COV-multiple context's, found no room: no invoke ID
+    /// (#2661), or its peer at its in-flight limit or the pool full
+    /// (#2671). Its timestamped history, deferred parts included, goes back
     /// to its references first; then every reference of the context is owed
-    /// a look once an ID comes back: a split report's later parts as much as
+    /// a look once there is room: a split report's later parts as much as
     /// its first, which alone it carried. No other lock is held here; the
     /// references are read live under the table's, so one cancelled
     /// meanwhile isn't queued.
@@ -187,22 +185,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let label = report.label();
         let lease = match Self::admit_confirmed(handles, &report.route, report.service, label) {
             Ok(lease) => lease,
-            // Boxed, and only on a refusal: inline, either wait would add
-            // the whole report to every fanout's future, on the request path.
-            Err(Refusal::InvokeId) => {
+            // Boxed, and only on a refusal: inline, the wait for the table
+            // would add the whole report to every fanout's future, on the
+            // request path.
+            Err(Refusal::NoRoom) => {
                 return Box::pin(Self::owe_context(handles, report)).await;
-            }
-            // Its history goes back first; then those of its references
-            // being looked at for an invoke ID keep their places. Usually
-            // none is: the check is the revisits' lock alone, reached
-            // through the histories with no table guard and no await.
-            Err(Refusal::InFlight) => {
-                let context = report.route.key().multiple_context().cloned();
-                drop(report);
-                if let Some(context) = context {
-                    handles.timed.revisits().keep_context_waiting(&context);
-                }
-                return;
             }
             Err(Refusal::Other) => return,
         };

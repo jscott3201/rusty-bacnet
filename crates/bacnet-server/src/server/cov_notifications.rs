@@ -286,15 +286,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     "COV notification",
                 ) {
                     Ok(lease) => Some(Some(lease)),
-                    // Its baseline stays; it is looked at again once an
-                    // invoke ID comes back (#2661).
-                    Err(Refusal::InvokeId) => {
+                    // Its baseline stays; it is looked at again once there
+                    // is room (#2661, #2671), in its old place if it
+                    // already waited.
+                    Err(Refusal::NoRoom) => {
                         revisits.owe([sub.key().clone()]);
-                        None
-                    }
-                    // A reference already waiting keeps its place.
-                    Err(Refusal::InFlight) => {
-                        revisits.keep_waiting(sub.key());
                         None
                     }
                     Err(Refusal::Other) => None,

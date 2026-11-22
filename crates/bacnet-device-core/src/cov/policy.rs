@@ -203,7 +203,11 @@ pub struct CovCounters {
     pub notification_bytes_sent: u64,
     /// Total number of notifications throttled due to per-event fanout or byte budget.
     pub notifications_throttled_fanout: u64,
-    /// Total number of notifications throttled due to peer in-flight confirmed limit.
+    /// Total number of confirmed notifications a host held back because
+    /// their peer already had its limit in flight. The server's report
+    /// waits and goes, with the value then current, once one of the peer's
+    /// reports ends; a subscription waits once, however often it is held
+    /// back.
     pub notifications_throttled_peer: u64,
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted on overflow of the

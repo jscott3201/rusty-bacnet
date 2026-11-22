@@ -7,7 +7,8 @@
 //! (Status_Flags and queued timestamped changes included) and nothing when it
 //! is unchanged. References whose outstanding report was fenced by a route
 //! change or re-subscription come through here too, and so do references
-//! whose report found no invoke ID free, once one comes back (#2661).
+//! whose report found no room, once there is some: an invoke ID (#2661), a
+//! slot of the in-flight pool and one of the peer's (#2671).
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
 use bacnet_device_core::cov::CovSubscriptionKey;
