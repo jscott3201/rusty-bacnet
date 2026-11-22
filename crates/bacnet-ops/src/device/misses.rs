@@ -170,7 +170,9 @@ mod tests {
             misses.answered_network_form(station(7, &mac), later);
         }
         let newest = start + Duration::from_secs(1);
-        misses.answered_network_form(station(7, &[0xff, 0xff, 0xff]), newest);
+        // Three octets, so none of the two-octet stations above; not all
+        // ones, which is no station (#2709).
+        misses.answered_network_form(station(7, &[0x3f, 0xff, 0xff]), newest);
         assert_eq!(
             misses.get(&station(7, &[0, 0]), newest),
             Known::default(),

@@ -114,10 +114,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// would make it a local broadcast (Clause 6.3, #1479); an empty MAC in
     /// an address; and on another network a network of 0 or 65535 or a MAC
     /// longer than [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets, which
-    /// no router carries to one station. [`Error::UnknownDevice`] for a
-    /// remote address with no named router and no row in the discovery
-    /// table, since the row is the route. Then the errors of the request
-    /// itself.
+    /// no router carries to one station, a MAC that is that network's
+    /// broadcast ([`RemoteBroadcast`], #2709), or a
+    /// named router that is a broadcast or group address on this link
+    /// (#2722). [`Error::UnknownDevice`] for a remote address with no named
+    /// router and no row in the discovery table, since the row is the route.
+    /// Then the errors of the request itself.
     ///
     /// [`BACnetAddress`]: bacnet_types::constructed::BACnetAddress
     pub async fn confirmed_request(
@@ -173,19 +175,36 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             check_routed_unicast(dest_network, dest_mac.len())?;
         }
         let target = named.localized(self.network.local_network_number().get());
-        if let ConfirmedTarget::Local { mac } = target {
-            // An empty MAC names no one station: refused as an address on
-            // network 0 with no MAC is, whichever form named it (#2588).
-            Self::station_of(0, mac)?;
-            // With no DNET, a group destination is a local broadcast, which
-            // carries no confirmed request (Clause 6.3, #1479).
-            if self.network.transport().is_group_destination(mac) {
-                return Err(Error::Encoding(
-                    "a confirmed request goes to one device, not to a broadcast or group \
-                     address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
-                     Clause 6.3)"
-                        .into(),
-                ));
+        match target {
+            ConfirmedTarget::Local { mac } => {
+                // An empty MAC names no one station: refused as an address
+                // on network 0 with no MAC is, whichever form named it
+                // (#2588).
+                Self::station_of(0, mac)?;
+                // With no DNET, a group destination is a local broadcast,
+                // which carries no confirmed request (Clause 6.3, #1479).
+                if self.network.transport().is_group_destination(mac) {
+                    return Err(Error::Encoding(
+                        "a confirmed request goes to one device, not to a broadcast or group \
+                         address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
+                         Clause 6.3)"
+                            .into(),
+                    ));
+                }
+            }
+            // Still routed, so on another network: its MAC there must not
+            // spell that network's broadcast (#2709), and the router it goes
+            // through must be one station on this link (#2722). The local
+            // broadcast form names no router; its DNET and DADR name the
+            // one station, so they are all it is checked by.
+            ConfirmedTarget::Routed {
+                router_mac,
+                dest_network,
+                dest_mac,
+                arcnet,
+            } => {
+                send_checks::check_remote_station(dest_network, dest_mac, arcnet)?;
+                send_checks::check_router(self.network.transport(), dest_network, router_mac)?;
             }
         }
         let routed_forwarded_npci_len = match target {
@@ -201,13 +220,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut _pace = self.pacer.wait(pacing::PaceKey::of(target)).await;
         // The lease serializes one active request per (immediate router, DNET)
         // and remains live through every return path, including cancellation.
-        let mut path_lease = match target {
-            ConfirmedTarget::Local { .. } => None,
-            ConfirmedTarget::Routed {
-                router_mac,
-                dest_network,
-                ..
-            } => Some(
+        // A request by local broadcast names no router, so it takes none.
+        let mut path_lease = match target.routed_path() {
+            None => None,
+            Some((router_mac, dest_network)) => Some(
                 self.routed_path_limits
                     .acquire(router_mac, dest_network)
                     .await?,
@@ -652,31 +668,53 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         super::confirmed_response_result(response)
     }
 
+    /// Send one frame of a confirmed request (its first, a retry or a
+    /// segment) with this client's data attributes
+    /// ([`ClientOptions::with_data_attributes`]): to the station's MAC, to
+    /// its router, or by one broadcast on this link for the form that names
+    /// no router.
     pub(super) async fn send_confirmed_target_apdu(
         &self,
         target: ConfirmedTarget<'_>,
         apdu: &[u8],
     ) -> Result<(), Error> {
+        let (priority, attributes) = (NetworkPriority::Normal, &*self.data_attributes);
         match target {
             ConfirmedTarget::Local { mac } => {
                 self.network
-                    .send_apdu(apdu, mac, true, NetworkPriority::Normal)
+                    .send_apdu_with_data_attributes(apdu, mac, true, priority, attributes)
                     .await
             }
             ConfirmedTarget::Routed {
                 router_mac,
                 dest_network,
                 dest_mac,
-            } => {
+                ..
+            } if router_mac == station::VIA_LOCAL_BROADCAST => {
                 self.network
-                    .send_apdu_routed(
+                    .send_apdu_routed_via_local_broadcast_with_data_attributes(
                         apdu,
                         dest_network,
                         dest_mac,
-                        router_mac,
                         true,
-                        NetworkPriority::Normal,
+                        priority,
+                        attributes,
                     )
+                    .await
+            }
+            ConfirmedTarget::Routed {
+                router_mac,
+                dest_network,
+                dest_mac,
+                ..
+            } => {
+                let to = bacnet_network::layer::RoutedTarget {
+                    network: dest_network,
+                    mac: dest_mac,
+                    router_mac,
+                };
+                self.network
+                    .send_apdu_routed_with_data_attributes(apdu, to, true, priority, attributes)
                     .await
             }
         }

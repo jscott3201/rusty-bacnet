@@ -10725,11 +10725,39 @@ client.write_property(&station, object, PropertyIdentifier::PRESENT_VALUE, None,
 let behind = Station::routed(&router_mac, 2, &[0x05]);
 client.time_synchronization(&behind, date, time).await?;
 client.confirmed_request(&behind, ConfirmedServiceChoice::READ_PROPERTY, &request).await?;
+// No router to network 2 known yet: one broadcast on this link that names the
+// station; the router serving network 2 passes it on.
+let unknown_route = Station::routed_via_local_broadcast(2, &[0x05]);
+// Station 255 on an ARCNET network, an explicit opt-in (see below).
+let arcnet = Station::routed(&router_mac, 3, &[0xFF]).arcnet();
 ```
 
-`Station` is the one address type: `Local { mac }`, `Remote { network, mac }`
-(the router from the table, as a `BACnetAddress`) and `Routed { router,
-network, mac }`. The `ToStation` trait is sealed; it takes a `Station`, a
+`Station` is the one address type: `Local { mac }`, `Remote { network, mac,
+arcnet }` (the router from the table, as a `BACnetAddress`), `Routed { router,
+network, mac, arcnet }` and `RoutedViaLocalBroadcast { network, mac, arcnet }`
+(no router known: each attempt goes by one broadcast on this link whose NPDU
+names the station, takes no routed path lease and learns no route).
+
+A confirmed request on another network is checked before anything is sent
+or looked up, whatever form names it, and fails with `Error::Encoding`
+naming the address in its link's form (#2722, #2709):
+
+- a router that is this link's broadcast or a group address (a B/IP limited,
+  directed or multicast address, MS/TP station 255, an Ethernet group MAC,
+  the BACnet/SC broadcast VMAC): it would reach every router at once. Name
+  the router's own address, or use `RoutedViaLocalBroadcast`, which names
+  none;
+- a station MAC that is its network's broadcast, read from its length since
+  the far link is unknown: one octet `0xFF` (MS/TP's broadcast), three
+  octets of `0xFF` (no device's VMAC) or six (Ethernet's and BACnet/SC's
+  broadcast, a B/IP broadcast). `RemoteBroadcast::of` names the form. On an
+  ARCNET network 255 is a station and 0 the broadcast: mark the station with
+  `.arcnet()` to send to `0xFF` (and have `0x00` refused).
+
+Unconfirmed requests are left alone: a remote broadcast carries those, and
+`Broadcast::Network(n)` sends one. `Station::check_confirmed` makes the
+checks that need no link, for a caller that looks a station up before
+calling. The `ToStation` trait is sealed; it takes a `Station`, a
 `BACnetAddress`, the MAC types and a reference to any of them. A station on
 the client's own network, once it has learned the number, is the station at
 that MAC on this link, whichever form names it. Every form takes the same
@@ -14068,6 +14096,11 @@ session.stop().await?; // stops the server, then the link
   COLDSTART, or the server's stop or drop. An operator's own tool may start a client
   outside it with `ClientOptions::with_node_dcc_override(true)`, an override
   of Clause 16.1 the node warns about in its log.
+- `client_with(ClientOptions::default().with_data_attributes(attributes))`
+  gives a client whose confirmed requests carry those data attributes on
+  every frame (on BACnet/SC, Annex AB header data options); unconfirmed
+  requests and answers carry none. Each client takes its own, so a session
+  serves several sets at once (#2723).
 - A segmented Complex-ACK, or a Segment-ACK from an answering device, that
   answers no request of the node's goes to the full client, which aborts it
   as an idle client does (Clause 5.4.4.1); it takes at most half of the
@@ -14185,7 +14218,8 @@ concrete references, ReadRange and a WriteProperty to a direct B/IP peer.
 | `full_client()`, `full_client_with(options)` (never released) | `client()`, `client_with(options)` |
 | `read_property`, `read_property_multiple`, `read_range`, `read_range_with`, `read_log_page` taking a MAC | the client's calls of the same names, whose destination is any `ToStation`: a MAC slice or array, a `MacAddr`, a `BACnetAddress` or a `Station` |
 | the `_with_destination` forms with `EndpointApduDestination::Routed { router_mac, destination_network, destination_mac }` | the same call with `Station::routed(&router_mac, network, &mac)`, or `Station::remote(network, &mac)` to use the router the station's row in the discovery table names |
-| `EndpointApduDestination::RoutedViaLocalBroadcast`, the `data_attributes` argument | not on the session's client yet: a confirmed routed request by one local broadcast, and data attributes on its sends, are added before the next release (#2723). Until then the client sends a confirmed request through the router the call or the discovery table names, and sets no data attributes |
+| `EndpointApduDestination::RoutedViaLocalBroadcast { destination_network, destination_mac }` | the same call with `Station::routed_via_local_broadcast(network, &mac)`: one broadcast on the link whose NPDU names the station, while no router to its network is known (#2723) |
+| the `data_attributes` argument | `ClientOptions::with_data_attributes(attributes)` on `client_with(options)`: every frame of that client's confirmed requests carries them; start one client per set of attributes (#2723) |
 | the `bacnet_endpoint::EndpointApduDestination` re-export | `bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination`, where the type lives |
 | `write_property(mac, WritePropertyRequest, Commandability)`, `roles::Commandability` | `write_property(to, object, property, index, value, priority)`, on every link and through routers. A write sent with a priority is audited as a command at that priority; one without names none |
 | `LeaseHolder::EndpointRequester`, `OutboundTransactionCoordinator::mark_endpoint_requester`, `EndpointEgress::admit_owned_apdu` (hidden) | `LeaseHolder::Client` |
@@ -14210,13 +14244,14 @@ What a caller sees differently:
   client does, where the narrow requester refused a value that isn't whole
   application data. A source-audited write still refuses such a value before
   it is sent, since its record could not report what it names.
+- A routed request whose router is the link's broadcast or a group address
+  is refused before anything is sent, as the narrow requester refused it
+  (#2722); so is one whose station's MAC is its network's broadcast (#2709).
 - Not yet as the narrow requester had it, each with its own issue: a
   Complex-ACK naming WriteProperty ends a write as success, where the narrow
-  requester ignored it (#2721); a request waiting for its turn at a
+  requester ignored it (#2721); and a request waiting for its turn at a
   destination (`min_request_interval_ms`) isn't ended by the session's stop,
-  but when its turn comes and its send fails (#2720); and a routed request
-  whose router is the link's broadcast or a group address is sent, where the
-  narrow requester refused it before sending (#2722).
+  but when its turn comes and its send fails (#2720).
 
 ### Bounded endpoint source READ reporting
 

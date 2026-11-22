@@ -40,7 +40,7 @@ use bacnet_transport::bbmd_lookup::BbmdResolver;
 use bacnet_transport::bip::{BipMode, BipMulticast, BipTransport};
 #[cfg(feature = "ipv6")]
 use bacnet_transport::bip6::{Bip6ForeignDeviceConfig, Bip6Transport};
-use bacnet_transport::port::{TransportPort, TransportProvenance};
+use bacnet_transport::port::{DataAttribute, TransportPort, TransportProvenance};
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_transport::warn_throttled;
 use bacnet_types::MacAddr;
@@ -191,6 +191,8 @@ pub struct ClientOptions {
     confirmed_cov_notification_ack_policy: ConfirmedCOVNotificationAckPolicy,
     /// See [`Self::with_node_dcc_override`].
     node_dcc_override: bool,
+    /// See [`Self::with_data_attributes`].
+    data_attributes: Vec<DataAttribute>,
 }
 
 impl Default for ClientConfig {
@@ -220,6 +222,7 @@ impl Default for ClientOptions {
             confirmed_cov_notification_ack_policy:
                 cov_notifications::default_confirmed_cov_notification_ack_policy(),
             node_dcc_override: false,
+            data_attributes: Vec::new(),
         }
     }
 }
@@ -652,6 +655,10 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     /// See [`Self::group_source_request_drops`].
     group_source_request_drops: Arc<std::sync::atomic::AtomicU64>,
     pacer: Arc<pacing::RequestPacer>,
+    /// The data attributes each confirmed request's frames carry
+    /// ([`ClientOptions::with_data_attributes`]); empty, and unallocated,
+    /// by default.
+    data_attributes: Box<[DataAttribute]>,
 }
 
 impl BACnetClient<BipTransport> {
@@ -929,6 +936,8 @@ mod segmentation;
 mod segmentation_abort;
 mod segmentation_context;
 mod segmented_request;
+mod send_checks;
+pub use send_checks::RemoteBroadcast;
 mod service;
 mod source_audit;
 mod source_audit_targets;

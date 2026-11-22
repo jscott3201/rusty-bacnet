@@ -335,6 +335,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             routed_path_limits: Arc::clone(&self.routed_path_limits),
             group_source_request_drops: Arc::clone(&self.group_source_request_drops),
             pacer: Arc::new(pacer),
+            // The request's frames carry its client's attributes.
+            data_attributes: self.data_attributes.clone(),
         };
         (runner, invoke_id)
     }
@@ -349,7 +351,15 @@ impl Station {
                 router_mac,
                 dest_network,
                 dest_mac,
-            } => Self::routed(router_mac, dest_network, dest_mac),
+                arcnet,
+            } => {
+                let station = if router_mac == super::station::VIA_LOCAL_BROADCAST {
+                    Self::routed_via_local_broadcast(dest_network, dest_mac)
+                } else {
+                    Self::routed(router_mac, dest_network, dest_mac)
+                };
+                if arcnet { station.arcnet() } else { station }
+            }
         }
     }
 }

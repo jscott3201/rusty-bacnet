@@ -58,8 +58,22 @@ fn only_a_station_is_an_address() {
     assert!(DeviceAddress::new(0, &[]).is_err());
     assert!(DeviceAddress::new(0, &[0xFF]).is_err());
     // A remote 0xFF is that MS/TP network's broadcast: a write there would
-    // reach every station on it.
-    assert!(DeviceAddress::new(5, &[0xFF]).is_err());
+    // reach every station on it. So do the all-ones VMAC and six octets of
+    // 0xFF, the client's other remote broadcast forms (#2709), here or on
+    // another network.
+    for network in [0, 5] {
+        for mac in [&[0xFF][..], &[0xFF; 3], &[0xFF; 6]] {
+            let refused = DeviceAddress::new(network, mac).unwrap_err();
+            assert!(
+                refused.contains("is a broadcast, not a station"),
+                "{refused}"
+            );
+        }
+    }
+    assert!("5:0xFFFFFFFFFFFF".parse::<DeviceAddress>().is_err());
+    // Other one- and six-octet MACs are stations.
+    assert!(DeviceAddress::new(5, &[0x00]).is_ok());
+    assert!(DeviceAddress::new(5, &[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0]).is_ok());
     assert!(DeviceAddress::new(1, &[0; 19]).is_err());
     assert!(DeviceAddress::new(1, &[0; 18]).is_ok());
 }

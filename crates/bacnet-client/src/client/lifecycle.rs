@@ -455,6 +455,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             routed_path_limits,
             group_source_request_drops,
             pacer,
+            data_attributes: options.data_attributes.into_boxed_slice(),
         }
     }
 

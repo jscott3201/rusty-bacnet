@@ -445,12 +445,7 @@ impl RoutedPathLimits {
         forwarded_npci_len: u16,
         ingress_floor: u64,
     ) {
-        let ConfirmedTarget::Routed {
-            router_mac,
-            dest_network,
-            ..
-        } = target
-        else {
+        let Some((router_mac, dest_network)) = target.routed_path() else {
             return;
         };
         let key = RoutedPathKey::new(router_mac, dest_network);
@@ -481,12 +476,7 @@ impl RoutedPathLimits {
         owner: &TransactionOwner,
         outgoing_apdu_len: usize,
     ) -> bool {
-        let ConfirmedTarget::Routed {
-            router_mac,
-            dest_network,
-            ..
-        } = target
-        else {
+        let Some((router_mac, dest_network)) = target.routed_path() else {
             return true;
         };
         let Ok(outgoing_apdu_len) = u16::try_from(outgoing_apdu_len) else {
