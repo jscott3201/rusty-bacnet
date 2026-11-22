@@ -16,8 +16,9 @@
 
 use std::future::Future;
 
-use bacnet_client::client::{BACnetClient, RoutedPathLimit};
+use bacnet_client::client::BACnetClient;
 use bacnet_ops::target::{AddressStyle, address_mac};
+use bacnet_ops::{RoutedPathStatus, RoutedPaths};
 use bacnet_transport::port::TransportPort;
 use serde::Serialize;
 
@@ -179,39 +180,13 @@ fn timed_out(outcome: &CliResult) -> bool {
     false
 }
 
-/// One path as the summary shows it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct PathRow {
-    /// The router's address on this network, in the link's own form.
-    router: String,
-    network: u16,
-    max_npdu: u16,
-    /// `default`, `configured` or `learned`.
-    source: &'static str,
-    configured_max_npdu: Option<u16>,
-    learned_max_npdu: Option<u16>,
-    below_minimum_reject_seen: bool,
-}
-
-impl PathRow {
-    fn of(path: &RoutedPathLimit, style: AddressStyle) -> Self {
-        Self {
-            router: style.format(&path.router_mac),
-            network: path.dnet,
-            max_npdu: path.max_npdu(),
-            source: path.source().name(),
-            configured_max_npdu: path.configured_max_npdu,
-            learned_max_npdu: path.learned_max_npdu,
-            below_minimum_reject_seen: path.below_minimum_reject_seen,
-        }
-    }
-}
-
 /// The client's routed paths and its two counts of too-long rejects it
 /// did not believe, after the command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct Summary {
-    routed_paths: Vec<PathRow>,
+    /// Each path as `bacnet_ops` decodes it: router in the link's own form,
+    /// network, the limit and its source, and the raw values.
+    routed_paths: Vec<RoutedPathStatus>,
     too_long_reject_drops: u64,
     below_minimum_reject_drops: u64,
     /// What to do about a timeout on a path whose router refused a small
@@ -221,23 +196,17 @@ struct Summary {
 
 impl Summary {
     fn of<T: TransportPort + 'static>(client: &BACnetClient<T>, timed_out: bool) -> Self {
-        let style = AddressStyle::of(client.transport());
-        let routed_paths: Vec<PathRow> = client
-            .routed_path_limits()
-            .iter()
-            .map(|path| PathRow::of(path, style))
-            .collect();
-        let below_minimum_reject_drops = client.below_minimum_reject_drops();
+        let paths = RoutedPaths::of(client);
         Self::new(
-            routed_paths,
-            client.too_long_reject_drops(),
-            below_minimum_reject_drops,
+            paths.paths,
+            paths.too_long_reject_drops,
+            paths.below_minimum_reject_drops,
             timed_out,
         )
     }
 
     fn new(
-        routed_paths: Vec<PathRow>,
+        routed_paths: Vec<RoutedPathStatus>,
         too_long_reject_drops: u64,
         below_minimum_reject_drops: u64,
         timed_out: bool,
@@ -286,10 +255,10 @@ impl Summary {
             ]);
             for path in &self.routed_paths {
                 table.add_row(vec![
-                    path.router.clone(),
-                    path.network.to_string(),
+                    path.path.router.clone(),
+                    path.path.network.to_string(),
                     path.max_npdu.to_string(),
-                    path.source.to_owned(),
+                    path.source.name().to_owned(),
                     dash(path.configured_max_npdu),
                     dash(path.learned_max_npdu),
                     if path.below_minimum_reject_seen {
@@ -316,11 +285,11 @@ impl Summary {
 
 /// The hint for a timeout after a dropped below-minimum reject, naming the
 /// flag for each path that drew one.
-fn hint(paths: &[PathRow]) -> String {
+fn hint(paths: &[RoutedPathStatus]) -> String {
     let flagged: Vec<String> = paths
         .iter()
         .filter(|path| path.below_minimum_reject_seen)
-        .map(|path| format!("--routed-path-limit {}/{}=SIZE", path.router, path.network))
+        .map(|path| format!("--routed-path-limit {}=SIZE", path.path))
         .collect();
     let set = if flagged.is_empty() {
         "--routed-path-limit ROUTER/NETWORK=SIZE".to_owned()

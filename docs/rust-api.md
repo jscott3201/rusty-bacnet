@@ -13065,6 +13065,44 @@ place of `device: Option<u32>`; take the instance from
 `decode::frame::Link` the typed origin (`origin`) and the source MAC the frame
 names (`source_mac`).
 
+### Routed path limits
+
+`Client` carries the low-level client's routed path limits
+([Routed Confirmed-Request Limits](#routed-confirmed-request-limits), #2667)
+in decoded form. A `RoutedPath` is a router on this client's link and a
+destination network: `router` in the link's own form (`192.168.1.20:47808`,
+`mstp:5`), `router_mac` and `network`, shown as `ROUTER/NETWORK`.
+
+- `routed_paths()` returns `RoutedPaths`: each path holding more than the
+  default as a `RoutedPathStatus` (`max_npdu`, `source` as
+  `RoutedPathLimitSource`, the configured and learned values, and
+  `below_minimum_reject_seen`), with `too_long_reject_drops` and
+  `below_minimum_reject_drops`. `status(&path)` reads one path, the default
+  of 228 octets when it is not listed. It serializes with `source` as
+  `default`, `configured` or `learned`. `RoutedPaths::of(&low_level)` builds
+  the same from a `BACnetClient` alone, as the CLI's summary does.
+- `set_routed_path_limit(&path, max_npdu)` and `clear_routed_path_limit(&path)`
+  apply at once and send nothing; a limit that carries no request is an
+  `OpsError::Parse`.
+- `routed_path_at("ROUTER", network)` reads a router address in the target
+  grammar, and `routed_path(router_mac, network)` takes the MAC.
+- `Device::routed_path()` is the path a handle's device is reached by now,
+  through the router the discovery table holds for its network: `None` on
+  this client's own network, `OpsError::UnknownDevice` when no router is
+  known.
+
+```rust,ignore
+let device = client.device("5:0x09").await?;
+if let Some(path) = device.routed_path().await? {
+    if client.routed_paths().status(&path).below_minimum_reject_seen {
+        client.set_routed_path_limit(&path, 128)?;
+    }
+}
+```
+
+The client never shrinks a request by itself after a timeout: setting a limit
+stays the caller's step.
+
 ### Moved to bacnet-tool
 
 The tool-only modules left `bacnet-ops` in #2560, with no re-exports left

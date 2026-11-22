@@ -7,6 +7,7 @@
 
 use bacnet_client::client::{BACnetClient, Station};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
 
 use super::DeviceAddress;
@@ -21,15 +22,34 @@ pub(crate) async fn path_to<T: TransportPort + 'static>(
     address: &DeviceAddress,
 ) -> Result<Station, Error> {
     let address = address.clone().localized(client.network_number());
+    match routed_from(client, &address).await? {
+        None => Ok(Station::local(address.mac())),
+        Some((router, network)) => Ok(Station::routed(&router, network, address.mac())),
+    }
+}
+
+/// The router a request to `address` goes through, with the network behind
+/// it: `None` for an address on `client`'s own network, and for a routed
+/// one the router MAC its row in `client`'s discovery table names. A routed
+/// address with no row fails with [`Error::UnknownDevice`].
+pub(crate) async fn router_for<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    address: &DeviceAddress,
+) -> Result<Option<(MacAddr, u16)>, Error> {
+    let address = address.clone().localized(client.network_number());
+    routed_from(client, &address).await
+}
+
+/// [`router_for`] for an address already localized.
+async fn routed_from<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    address: &DeviceAddress,
+) -> Result<Option<(MacAddr, u16)>, Error> {
     if address.is_local() {
-        return Ok(Station::local(address.mac()));
+        return Ok(None);
     }
     match client.get_device_at(address.network(), address.mac()).await {
-        Some(row) => Ok(Station::routed(
-            &row.mac_address,
-            address.network(),
-            address.mac(),
-        )),
+        Some(row) => Ok(Some((row.mac_address, address.network()))),
         None => Err(Error::UnknownDevice {
             device: address.to_string(),
         }),

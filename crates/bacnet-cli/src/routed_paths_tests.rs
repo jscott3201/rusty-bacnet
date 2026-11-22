@@ -34,12 +34,16 @@ fn limit(router: &str, network: u16, max_npdu: u16) -> LimitArg {
     }
 }
 
-fn row(source: &'static str, learned: Option<u16>, seen: bool) -> PathRow {
-    PathRow {
-        router: "192.168.1.20:47808".to_owned(),
-        network: 5,
+fn row(source: &'static str, learned: Option<u16>, seen: bool) -> RoutedPathStatus {
+    use bacnet_ops::RoutedPathLimitSource::{Configured, Default, Learned};
+    RoutedPathStatus {
+        path: bacnet_ops::RoutedPath::new(AddressStyle::Bip, &[192, 168, 1, 20, 0xBA, 0xC0], 5),
         max_npdu: 128,
-        source,
+        source: match source {
+            "configured" => Configured,
+            "learned" => Learned,
+            _ => Default,
+        },
         configured_max_npdu: Some(128),
         learned_max_npdu: learned,
         below_minimum_reject_seen: seen,
