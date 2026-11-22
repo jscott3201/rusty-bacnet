@@ -22,6 +22,7 @@ use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::loopback::LoopbackTransport;
 use serde_json::{Value, json};
 use support::lab::{lab_database, lab_identity};
+use support::unsent::Unsent;
 use support::{Process, boxed, command, failure, run};
 
 /// The lab device's network and instance.
@@ -275,3 +276,6 @@ mod object_alarm;
 
 #[path = "cli_routed/discovery.rs"]
 mod discovery;
+
+#[path = "cli_routed/unsent.rs"]
+mod unsent;
