@@ -140,8 +140,42 @@ async fn device_session_and_ledger_resources() {
     assert_eq!(session["cov"]["max"], json!(256));
     assert_eq!(session["cov"]["lifetime_s"], json!(300));
     assert_eq!(session["cov"]["cov_multiple_ignored"], json!(0));
+    assert_eq!(
+        session["routed_paths"],
+        json!({"paths": [], "too_long_reject_drops": 0, "below_minimum_reject_drops": 0})
+    );
     let ledger = lab.agent.read("bacnet://ledger").await.unwrap();
     assert_eq!(ledger["entries"], json!([]));
+    assert_eq!(lab.sends().len(), before);
+    lab.stop().await;
+}
+
+/// The session lists the routed paths' limits decoded: the router in the
+/// link's own form, the limit and where it comes from (#2667).
+#[tokio::test(start_paused = true)]
+async fn the_session_lists_routed_path_limits() {
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.low
+        .configure_routed_path_max_npdu(&[10, 0, 0, 254, 0xBA, 0xC0], 2001, 480)
+        .unwrap();
+    let before = lab.sends().len();
+    let session = lab.agent.read("bacnet://session").await.unwrap();
+    assert_eq!(
+        session["routed_paths"],
+        json!({
+            "paths": [{
+                "router": "10.0.0.254:47808",
+                "network": 2001,
+                "max_npdu": 480,
+                "source": "configured",
+                "configured_max_npdu": 480,
+                "learned_max_npdu": null,
+                "below_minimum_reject_seen": false,
+            }],
+            "too_long_reject_drops": 0,
+            "below_minimum_reject_drops": 0,
+        })
+    );
     assert_eq!(lab.sends().len(), before);
     lab.stop().await;
 }
