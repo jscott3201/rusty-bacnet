@@ -9,10 +9,10 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
+use bacnet_client::client::Station;
 use bacnet_client::log_reader::LogCursor;
 use bacnet_encoding::apdu::{Apdu, ComplexAck, ConfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
-use bacnet_endpoint::EndpointApduDestination;
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::session::SessionRole;
 use bacnet_npdu::NetworkPriority;
@@ -149,18 +149,14 @@ async fn a_routed_log_page_sends_every_request_to_the_station() {
         .unwrap();
     endpoint.start().await.unwrap();
     let (router, router_mac) = peer().await;
-    let destination = EndpointApduDestination::Routed {
-        destination_network: NETWORK,
-        destination_mac: MacAddr::from_slice(&STATION),
-        router_mac,
-    };
+    let destination = Station::routed(&router_mac, NETWORK, &STATION);
 
     // From the oldest record: three count reads find an empty log.
-    let client = endpoint.cloned_client_handle().unwrap();
-    let to = destination.clone();
+    let client = std::sync::Arc::new(endpoint.client().unwrap());
+    let (reader, to) = (std::sync::Arc::clone(&client), destination.clone());
     let page = tokio::spawn(async move {
-        client
-            .read_log_page_with_destination(to, Vec::new(), log(), LogCursor::Oldest, 10)
+        reader
+            .read_log_page(&to, log(), LogCursor::Oldest, 10)
             .await
     });
     answer_count(&router, PropertyIdentifier::TOTAL_RECORD_COUNT, 0).await;
@@ -176,16 +172,9 @@ async fn a_routed_log_page_sends_every_request_to_the_station() {
     assert_eq!(page.next, LogCursor::Sequence(1));
 
     // By position: one ReadRange, answered with no items.
-    let client = endpoint.cloned_client_handle().unwrap();
     let page = tokio::spawn(async move {
         client
-            .read_log_page_with_destination(
-                destination,
-                Vec::new(),
-                log(),
-                LogCursor::Position(1),
-                10,
-            )
+            .read_log_page(&destination, log(), LogCursor::Position(1), 10)
             .await
     });
     let (datagram, source) = receive(&router).await;
@@ -257,7 +246,7 @@ async fn the_session_reads_a_bbmd_table_through_its_own_socket() {
     let local = endpoint.bip_local_address().unwrap();
 
     // A ReadProperty to the same peer goes out first and stays unanswered.
-    let client = endpoint.cloned_client_handle().unwrap();
+    let client = endpoint.client().unwrap();
     let to = bbmd_mac.clone();
     let read = tokio::spawn(async move {
         client
@@ -392,13 +381,11 @@ fn relayed_count(invoke_id: u8, count: u64) -> Bytes {
     npdu.freeze()
 }
 
-/// With no router known, a read goes as one broadcast on the local link
-/// naming the station's network and MAC (Clause 6.5.3). When two routers
-/// both forward it, the first answer completes the read, the second is
-/// dropped and counted, and no lease is left; a network no router answers
-/// for times out (#2612).
+/// A routed read whose answer two routers relay in turn: the first answer
+/// completes the read, the second is dropped and counted, and no lease is
+/// left; a station that never answers times the read out (#2612).
 #[tokio::test(start_paused = true)]
-async fn a_read_by_local_broadcast_takes_the_first_of_two_answers() {
+async fn a_routed_read_takes_the_first_of_two_relayed_answers() {
     use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
     use bacnet_transport::test_transport::{BIP_LOCAL_MAC, TestTransport};
 
@@ -419,83 +406,128 @@ async fn a_read_by_local_broadcast_takes_the_first_of_two_answers() {
     )
     .unwrap();
     session.start().await.unwrap();
-    let by_broadcast = |network| EndpointApduDestination::RoutedViaLocalBroadcast {
-        destination_network: network,
-        destination_mac: MacAddr::from_slice(&STATION),
-    };
-    let client = session.cloned_client_handle().unwrap();
-    let to = by_broadcast(NETWORK);
+    const ROUTER: [u8; 6] = [10, 0, 0, 1, 0xBA, 0xC0];
+    let client = std::sync::Arc::new(session.client().unwrap());
+    let reader = std::sync::Arc::clone(&client);
     let read = tokio::spawn(async move {
-        client
-            .read_property_with_destination(
-                to,
-                Vec::new(),
+        reader
+            .read_property(
+                &Station::routed(&ROUTER, NETWORK, &STATION),
                 log(),
                 PropertyIdentifier::RECORD_COUNT,
                 None,
             )
             .await
     });
-    eventually::eventually(WAIT, "the broadcast goes out", async || {
-        sent.broadcasts().len() == 1
+    eventually::eventually(WAIT, "the request goes out", async || {
+        sent.unicasts().len() == 1
     })
     .await;
-    let frame = sent.broadcasts().remove(0);
-    assert!(frame.broadcast);
+    let frame = sent.unicasts().remove(0);
+    assert_eq!(frame.mac.as_slice(), ROUTER);
     let npdu = frame.decode_npdu();
-    let destination = npdu
-        .destination
-        .clone()
-        .expect("DNET/DADR on the broadcast");
+    let destination = npdu.destination.clone().expect("DNET/DADR on the request");
     assert_eq!(
         (destination.network, destination.mac_address.as_slice()),
         (NETWORK, &STATION[..])
     );
-    assert_eq!(npdu.hop_count, 255);
     assert!(npdu.expecting_reply);
     let Apdu::ConfirmedRequest(request) = frame.apdu() else {
         panic!("a confirmed request")
     };
     assert_eq!(session.active_leases(), 1);
-    // Both routers on the link forward it, and both relay the answer.
-    for (router, count) in [
-        ([10, 0, 0, 1, 0xBA, 0xC0], 3),
-        ([10, 0, 0, 2, 0xBA, 0xC0], 4),
-    ] {
-        inbound
-            .send(ReceivedNpdu {
-                direct_response: None,
-                npdu: relayed_count(request.invoke_id, count),
-                source_mac: MacAddr::from_slice(&router),
-                link_layer_group: false,
-                data_attributes: Vec::new(),
-                provenance: TransportProvenance::unverified(),
-                reply_tx: None,
-            })
-            .await
-            .unwrap();
-    }
+    // Two routers on the link relay the answer, one after the other. The
+    // first completes the read and gives its invoke ID back; the second
+    // then answers nothing the node asked, and the session counts it.
+    let relayed = |router: [u8; 6], count| ReceivedNpdu {
+        direct_response: None,
+        npdu: relayed_count(request.invoke_id, count),
+        source_mac: MacAddr::from_slice(&router),
+        link_layer_group: false,
+        data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
+        reply_tx: None,
+    };
+    inbound.send(relayed(ROUTER, 3)).await.unwrap();
     let ack = read.await.unwrap().unwrap();
     assert_eq!(ack.property_value, [0x21, 3]);
+    assert_eq!(session.active_leases(), 0);
+    inbound
+        .send(relayed([10, 0, 0, 2, 0xBA, 0xC0], 4))
+        .await
+        .unwrap();
     eventually::eventually(WAIT, "the second answer is counted", async || {
         session.policy_counters().await.unclaimed_terminal == 1
     })
     .await;
     assert_eq!(session.active_leases(), 0);
 
-    // A network no router answers for: the read ends at its timeout.
-    let client = session.cloned_client_handle().unwrap();
+    // A station that never answers: the read ends at its timeout.
     let silent = client
-        .read_property_with_destination(
-            by_broadcast(9),
-            Vec::new(),
+        .read_property(
+            &Station::routed(&ROUTER, 9, &STATION),
             log(),
             PropertyIdentifier::RECORD_COUNT,
             None,
         )
         .await;
-    assert!(matches!(silent, Err(Error::Timeout(_))), "{silent:?}");
-    assert_eq!(sent.broadcasts().len(), 2);
+    assert!(
+        matches!(
+            silent,
+            Err(Error::Remote(bacnet_types::error::RemoteError::Abort {
+                reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT
+            }))
+        ),
+        "{silent:?}"
+    );
+    assert_eq!(sent.unicasts().len(), 2);
+    assert_eq!(session.active_leases(), 0);
+    session.stop().await.unwrap();
+}
+
+/// A routed read whose router is the link's broadcast or a group address
+/// is refused before a transaction is registered and before anything is
+/// sent (#2612): a confirmed request goes through one router.
+#[tokio::test(start_paused = true)]
+#[ignore = "#2722: the client sends a routed confirmed request whose router is a broadcast or group address"]
+async fn a_routed_read_through_a_group_router_is_refused_unsent() {
+    use bacnet_transport::test_transport::{BIP_LOCAL_MAC, TestTransport};
+
+    const GROUP: [u8; 6] = [10, 0, 0, 255, 0xBA, 0xC0];
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .on_is_group_destination(|mac| mac == GROUP)
+        .build();
+    let sent = transport.sent();
+    let mut session = bacnet_endpoint::session::EndpointSession::new(
+        transport,
+        SessionRole::ClientOnly,
+        bacnet_endpoint::session::SessionConfig {
+            apdu_timeout_ms: 1_000,
+            apdu_retries: 0,
+            ..bacnet_endpoint::session::SessionConfig::default()
+        },
+    )
+    .unwrap();
+    session.start().await.unwrap();
+    let client = session.client().unwrap();
+    let before = sent.len();
+    let refused = client
+        .read_property(
+            &Station::routed(&GROUP, NETWORK, &STATION),
+            log(),
+            PropertyIdentifier::RECORD_COUNT,
+            None,
+        )
+        .await;
+    let stray: Vec<_> = sent.frames().into_iter().skip(before).collect();
+    assert!(
+        stray.is_empty(),
+        "sent {} frame(s), first to {:?}; the read returned {refused:?}",
+        stray.len(),
+        stray[0].mac
+    );
+    assert!(matches!(refused, Err(Error::Encoding(_))), "{refused:?}");
     assert_eq!(session.active_leases(), 0);
     session.stop().await.unwrap();
 }

@@ -52,7 +52,7 @@ async fn start_once_stop_once() {
 
 #[tokio::test(start_paused = true)]
 async fn client_only_and_server_only_compose() {
-    // Client-only session has a client handle, no server handle.
+    // A client-only session has no server; either gives a client.
     let (client_transport, server_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut client =
         EndpointSession::new(client_transport, SessionRole::ClientOnly, session_config()).unwrap();
@@ -63,10 +63,8 @@ async fn client_only_and_server_only_compose() {
             .with_database(database_with_analog(7, 42.0));
     client.start().await.unwrap();
     server.start().await.unwrap();
-    assert!(client.client().is_some());
     assert!(client.server().is_none());
     assert!(server.server().is_some());
-    assert!(server.client().is_none());
 
     let ack = tokio::time::timeout(
         WAIT,
@@ -152,8 +150,8 @@ async fn concurrent_equal_inbound_outbound_ids_stay_unambiguous() {
     assert_eq!(session_a.active_leases(), 0);
     assert_eq!(session_b.active_leases(), 0);
 
-    let client_a = session_a.cloned_client_handle().unwrap();
-    let client_b = session_b.cloned_client_handle().unwrap();
+    let client_a = session_a.client().unwrap();
+    let client_b = session_b.client().unwrap();
     let (result_a, result_b) = tokio::join!(
         client_a.read_property(
             &[0x02],

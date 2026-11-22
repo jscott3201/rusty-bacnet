@@ -108,7 +108,7 @@ impl Running {
                 Liveness::Stopped => {}
             }
         }
-        let core = self.session.full_client().map_err(to_py_err)?;
+        let core = self.session.client().map_err(to_py_err)?;
         let own_instance = self.session.identity().map(|identity| identity.instance());
         if !state.seat(core, own_instance) {
             return Err(PyRuntimeError::new_err(

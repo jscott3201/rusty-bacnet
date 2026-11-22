@@ -1,8 +1,8 @@
 //! RB-18 public API tests (Loopback + real B/IP loopback, deterministic).
 //!
-//! Covers the promotion contract: public paths resolve, the role handle is
-//! `Send + Sync` (clones survive session drop as fail-closed values), owner
-//! shutdown with live handles, use-after-stop, role teardown while others
+//! Covers the promotion contract: public paths resolve, the session's
+//! client is `Send + Sync` (one kept past its session fails closed), owner
+//! shutdown with a live client, use-after-stop, role teardown while others
 //! remain, migration-adapter builds, and BBMD experimental ordering.
 //! Wire proofs stay in `rb16_*` / `rb17_*`; this file asserts the API shape.
 
@@ -10,15 +10,15 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 // Promotion list resolves at both module and top-level paths.
+use bacnet_client::client::BACnetClient;
+use bacnet_endpoint::DeviceIdentity as TopIdentity;
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::{DeviceIdentity, NetworkPortEntry, build_database_with_extra};
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
-use bacnet_endpoint::roles::ClientRoleHandle;
 use bacnet_endpoint::sc::ScEndpointBuilder;
 use bacnet_endpoint::session::{
     EndpointSession, PolicyCountersSnapshot, SessionConfig, SessionExit, SessionRole,
 };
-use bacnet_endpoint::{ClientRoleHandle as TopClient, DeviceIdentity as TopIdentity};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::mstp::LoopbackSerial;
@@ -31,15 +31,13 @@ fn assert_send_sync<T: Send + Sync>() {}
 #[test]
 fn promoted_paths_and_thread_safety_resolve() {
     // Top-level re-exports name the same types (pass-by-value proves it).
-    fn takes_top(_: TopClient) {}
     fn takes_top_identity(_: TopIdentity) {}
-    fn takes_mod(handle: ClientRoleHandle, identity: DeviceIdentity) {
-        takes_top(handle);
+    fn takes_mod(identity: DeviceIdentity) {
         takes_top_identity(identity);
     }
     let _ = takes_mod;
-    // The role handle is Send + Sync, including clones that outlive the borrow.
-    assert_send_sync::<ClientRoleHandle>();
+    // The session's client is Send + Sync: it is shared behind an `Arc`.
+    assert_send_sync::<BACnetClient<LoopbackTransport>>();
     // Session-level types resolve.
     let _ = SessionRole::Both;
     let _ = SessionConfig::default();
@@ -82,10 +80,10 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
     a.start().await.unwrap();
     b.start().await.unwrap();
 
-    // A live clone proves binding while running.
-    let live_client = a.cloned_client_handle().unwrap();
+    // The session's client, alive while it runs.
+    let live_client = a.client().unwrap();
 
-    // Owner shutdown with a handle alive: stop joins, the clone fails closed.
+    // Owner shutdown with the client alive: stop joins, the client fails closed.
     a.stop().await.unwrap();
     assert!(
         live_client
@@ -98,8 +96,9 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
             .await
             .is_err()
     );
-    // Session borrows are released at termination.
-    assert!(a.client().is_none());
+    // A stopped session gives no client and has no server.
+    drop(live_client);
+    assert!(a.client().is_err());
     assert!(a.server().is_none());
 
     b.stop().await.unwrap();
@@ -112,13 +111,13 @@ async fn use_after_stop_fails_closed() {
         .unwrap()
         .device(bacnet_endpoint::DeviceIdentity::new(903, 42).unwrap());
     s.start().await.unwrap();
-    let client = s.cloned_client_handle().unwrap();
+    let client = s.client().unwrap();
     s.stop().await.unwrap();
     // Second stop is stop-once error, not a hang.
     assert!(s.stop().await.is_err());
     // Broadcast without running errors (no invented device, no send).
     assert!(s.broadcast_i_am().await.is_err());
-    // Cloned client fails closed after stop.
+    // The client fails closed after stop.
     assert!(
         tokio::time::timeout(
             WAIT,
@@ -154,9 +153,10 @@ async fn role_teardown_while_other_session_remains() {
     client.start().await.unwrap();
     server.start().await.unwrap();
 
+    let reader = client.client().unwrap();
     let ack = tokio::time::timeout(
         WAIT,
-        client.client().unwrap().read_property(
+        reader.read_property(
             &[0x02],
             object_id(9),
             PropertyIdentifier::PRESENT_VALUE,
@@ -174,7 +174,7 @@ async fn role_teardown_while_other_session_remains() {
     assert!(
         tokio::time::timeout(
             WAIT,
-            client.client().unwrap().read_property(
+            reader.read_property(
                 &[0x02],
                 object_id(9),
                 PropertyIdentifier::PRESENT_VALUE,
@@ -199,9 +199,9 @@ async fn detached_handles_survive_drop_as_fail_closed_values() {
         .device(bacnet_endpoint::DeviceIdentity::new(906, 42).unwrap());
     a.start().await.unwrap();
     b.start().await.unwrap();
-    let detached_client = a.cloned_client_handle().unwrap();
-    // A `Send + Sync` clone moves across tasks while bound.
-    let moved = detached_client.clone();
+    let detached_client = std::sync::Arc::new(a.client().unwrap());
+    // Shared behind an `Arc`, it moves across tasks while bound.
+    let moved = std::sync::Arc::clone(&detached_client);
     tokio::spawn(async move { drop(moved) }).await.unwrap();
     drop(a);
     assert!(

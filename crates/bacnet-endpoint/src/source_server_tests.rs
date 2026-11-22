@@ -389,7 +389,7 @@ async fn the_servers_dcc_reaches_the_audited_client() {
         },
     );
     session.start().await.unwrap();
-    let client = Arc::new(session.full_client().unwrap());
+    let client = Arc::new(session.client().unwrap());
     let sent = read(&client, &peer);
     let request = receive(&mut requests).await;
     let (invoke, _) = read_request(&request);
@@ -422,7 +422,7 @@ async fn the_servers_dcc_reaches_the_audited_client() {
     drop(client);
     let exempt = Arc::new(
         session
-            .full_client_with(ClientOptions::default().with_node_dcc_override(true))
+            .client_with(ClientOptions::default().with_node_dcc_override(true))
             .unwrap(),
     );
     let exempt_read = read(&exempt, &peer);

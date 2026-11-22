@@ -150,6 +150,7 @@ fn multicast_endpoint() -> Endpoint {
             .unwrap(),
         inbound,
         sent,
+        client: std::sync::OnceLock::new(),
     }
 }
 

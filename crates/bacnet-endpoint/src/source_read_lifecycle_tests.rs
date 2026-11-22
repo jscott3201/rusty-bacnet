@@ -7,6 +7,7 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::Both, &sink);
     session.start().await.unwrap();
+    let client = client_of(&session);
     for (level, bits, property, reports) in [
         (AuditLevel::NONE, 1, PropertyIdentifier::OBJECT_NAME, false),
         (
@@ -53,7 +54,7 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
                 None,
             )
             .unwrap();
-        let read = start_read(&session, peer.local_mac(), property, None);
+        let read = start_read(&client, peer.local_mac(), property, None);
         let request = receive(&mut requests).await;
         let (invoke, rp) = read_request(&request);
         send(&peer, &request.source_mac, ack(invoke, &rp)).await;
@@ -68,7 +69,6 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
             );
         }
     }
-    let client = session.cloned_client_handle().unwrap();
     // Unpolled futures do not reserve leases or produce traffic.
     drop(client.read_property(
         peer.local_mac(),
@@ -76,31 +76,19 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
         PropertyIdentifier::PRESENT_VALUE,
         None,
     ));
-    for destination in [
-        bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::Direct {
-            destination_mac: MacAddr::from_slice(&[1]),
-        },
-        bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::Direct {
-            destination_mac: MacAddr::from_slice(&encode_bip_mac([255; 4], 47808)),
-        },
+    use bacnet_client::client::Station;
+    for station in [
+        Station::local(&[1]),
+        Station::local(&encode_bip_mac([255; 4], 47808)),
         // A routed station is audited (#2371), but not the global network.
-        bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::Routed {
-            router_mac: MacAddr::from_slice(peer.local_mac()),
-            destination_network: 0xFFFF,
-            destination_mac: MacAddr::from_slice(&[2]),
-        },
+        Station::routed(peer.local_mac(), 0xFFFF, &[2]),
     ] {
         assert!(
             client
-                .read_property_with_destination(
-                    destination,
-                    Vec::new(),
-                    target(),
-                    PropertyIdentifier::PRESENT_VALUE,
-                    None
-                )
+                .read_property(&station, target(), PropertyIdentifier::PRESENT_VALUE, None)
                 .await
-                .is_err()
+                .is_err(),
+            "{station:?}"
         );
     }
     assert!(requests.try_recv().is_err());
@@ -111,56 +99,57 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
     sink.stop().await.unwrap();
 }
 
+/// 64 audited reads admitted while the database is held: each holds a slot
+/// and waits for the database, with no invoke ID and nothing sent, and a
+/// 65th waits for a slot. A stop then seals admission at once, waits for
+/// the database itself, and ends every one of them unsent.
 #[tokio::test(start_paused = true)]
 async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop() {
     let (peer, mut requests) = network().await;
     let (sink, _records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
+    let client = client_of(&session);
+    let source = Arc::clone(session.source_audit.as_ref().unwrap());
     let database = Arc::clone(session.database.as_ref().unwrap());
     let guard = database.write().await;
     let mut tasks = Vec::new();
     for _ in 0..64 {
         tasks.push(start_read(
-            &session,
+            &client,
             peer.local_mac(),
             PropertyIdentifier::PRESENT_VALUE,
             None,
         ));
     }
     eventually(WAIT, "every source operation is in use", async || {
-        session
-            .source_audit
-            .as_ref()
-            .unwrap()
-            .available_operations()
-            == 0
+        source.available_operations() == 0
     })
     .await;
     assert_eq!(session.coordinator.active_count().unwrap(), 0);
-    assert!(
-        start_read(
-            &session,
-            peer.local_mac(),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
-        )
-        .await
-        .unwrap()
-        .is_err()
+    // One more waits for a slot, in its caller's task (#2617).
+    let waiter = start_read(
+        &client,
+        peer.local_mac(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
     );
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!waiter.is_finished());
+    tasks.push(waiter);
     // Seal while admitted caller futures wait on the DB: no task/lease/egress yet.
-    let token = session.shared.token.clone();
+    let coordinator = Arc::clone(&session.coordinator);
     let stop = session.stop();
     tokio::pin!(stop);
     assert!(timeout(Duration::from_millis(10), &mut stop).await.is_err());
-    assert!(!token.is_open());
+    assert!(source.sealed());
     drop(guard);
     stop.await.unwrap();
     for task in tasks {
         assert!(timeout(WAIT, task).await.unwrap().unwrap().is_err());
     }
     assert!(requests.try_recv().is_err());
+    assert_eq!(coordinator.active_count().unwrap(), 0);
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
@@ -171,10 +160,11 @@ async fn source_read_audit_capacity_deadline_health_and_later_recovery() {
     let (sink, mut records) = network().await;
     let mut session = session(database(true), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
+    let client = client_of(&session);
     let mut first_notification = None;
     for _ in 0..64 {
         let read = start_read(
-            &session,
+            &client,
             peer.local_mac(),
             PropertyIdentifier::PRESENT_VALUE,
             None,
@@ -191,7 +181,7 @@ async fn source_read_audit_capacity_deadline_health_and_later_recovery() {
     }
     assert_eq!(session.coordinator.active_count().unwrap(), 64);
     let read = start_read(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -242,7 +232,7 @@ async fn source_read_audit_capacity_deadline_health_and_later_recovery() {
     .unwrap();
     assert!(records.try_recv().is_err());
     let read = start_read(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -279,11 +269,11 @@ async fn source_read_stop_and_drop_cancel_owned_work_with_held_client_clones() {
         let mut session = session(database(true), SessionRole::Both, &sink);
         session.client_config.apdu_timeout_ms = 60_000;
         session.start().await.unwrap();
-        let client = session.cloned_client_handle().unwrap();
+        let client = client_of(&session);
         let weak_db = Arc::downgrade(session.database.as_ref().unwrap());
         let coordinator = Arc::clone(&session.coordinator);
         let pending = start_read(
-            &session,
+            &client,
             peer.local_mac(),
             PropertyIdentifier::PRESENT_VALUE,
             None,
@@ -376,10 +366,9 @@ async fn source_read_and_target_reporting_remain_independent() {
         .unwrap();
     let mut session = session(database(false), SessionRole::Both, &sink);
     session.start().await.unwrap();
+    let client = client_of(&session);
     assert!(
-        session
-            .client()
-            .unwrap()
+        client
             .read_property(
                 target_server.local_mac(),
                 target(),

@@ -8,8 +8,8 @@ request settings or a transport-specific builder for connection setup.
 
 This hosted crate requires `std`, Tokio and allocating state. It has no
 alloc-only or no-heap profile. For one device combining client and server roles
-under one transport owner, see the separate `bacnet-endpoint` crate and its
-narrower service contract.
+under one transport owner, see the separate `bacnet-endpoint` crate, whose
+session runs this client on its transport.
 
 ## Send Who-Is using development source
 

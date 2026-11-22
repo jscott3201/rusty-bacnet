@@ -193,7 +193,7 @@ async fn bidirectional_impl(mode: MstpExecutionMode, frames: Frames) {
 
     // Outbound: the session client initiates a confirmed request; the token
     // drive carries it (MAC self-organization is the backstop).
-    let client = h.session.cloned_client_handle().expect("client role");
+    let client = h.session.client().expect("the session's client");
     let outbound = tokio::spawn(async move {
         client
             .read_property(

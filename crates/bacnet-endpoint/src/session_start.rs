@@ -10,9 +10,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let egress = receivers.egress.clone();
         self.egress = Some(egress.clone());
         // Role registration shares ONE coordinator + ONE egress. No second
-        // demultiplexer, no role-side Invoke-ID allocation: the requester and
-        // the source Audit's notification pool reserve from
-        // `self.coordinator`. A full server's pool is its own, and the
+        // demultiplexer, no role-side Invoke-ID allocation: the client on
+        // the session's seat and the source Audit's notification pool
+        // reserve from `self.coordinator`. A full server's pool is its own, and the
         // source Audit sends through it (#2617): the server completes and
         // joins those records. A session with no server has a pool only for
         // its source Audit.
@@ -65,31 +65,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         };
         self.source_audit = source_audit.clone();
         self.source_recipient = source_recipient.clone();
-        let (requester, client_handle) =
-            if matches!(self.role, SessionRole::ClientOnly | SessionRole::Both) {
-                let requester = EndpointRequester::new(
-                    egress.clone(),
-                    Arc::clone(&self.coordinator),
-                    self.client_config.clone(),
-                )?;
-                // DeviceCommunicationControl a full server on the node
-                // accepts binds this requester too (#2617).
-                if let Some(dcc) = self.ingress.as_ref().and_then(EndpointIngress::node_dcc) {
-                    requester.follow_node_dcc(&dcc);
-                }
-                let mut handle = ClientRoleHandle::new(&self.shared.token, requester.clone())
-                    .with_bip_broadcast(
-                        receivers
-                            .bip_broadcast_endpoint
-                            .map(|address| *address.ip()),
-                    );
-                if let Some(source) = &source_audit {
-                    handle = handle.with_source_audit(source);
-                }
-                (Some(requester), Some(handle))
-            } else {
-                (None, None)
-            };
+        // A maximum APDU length no request can state is refused here, with
+        // the start, not left for the first `client()` to find.
+        bacnet_encoding::apdu::max_apdu_header_at_or_below(u32::from(
+            self.client_config.max_apdu_length,
+        ))?;
 
         // Routed source Audit bindings' routers, which router announcements
         // teach here, and traffic at ingress (#2371).
@@ -101,7 +81,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             let egress = egress.clone();
             let registration_lease = self.registered_port_lease.upgrade();
             // The owner copies its state into the layer's number slot after
-            // each control, where the requester and source routes read it
+            // each control, where the client and source routes read it
             // (#1403).
             let mut owner = bacnet_server::network_number::NetworkNumberOwner::new(
                 self.registered_network_port.map(|oid| {
@@ -120,7 +100,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             // resolves; its Reporter's health follows at once (#1461).
             let source = source_recipient.as_ref().map(Arc::downgrade);
             let database = self.database.as_ref().map(Arc::downgrade);
-            // A full client on the seat runs no owner of its own: it folds
+            // The client on the seat runs no owner of its own: it folds
             // its table when this one has published (#2617).
             let seat_number = receivers.seat_number.clone();
             tokio::spawn(async move {
@@ -177,7 +157,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             inbound: receivers.inbound_requests,
             terminal: receivers.terminal_or_segment,
             policy: receivers.policy_outcomes,
-            requester: requester.clone(),
             notifications: notifications.clone(),
             coordinator: Arc::clone(&self.coordinator),
             shared: Arc::clone(&self.shared),
@@ -199,9 +178,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.egress = Some(egress);
         self.source_audit = source_audit;
         self.source_recipient = source_recipient;
-        self.requester = requester;
         self.notifications = notifications;
-        self.client_handle = client_handle;
         self.dispatch_task = Some(task);
         self.cancel_tx = Some(cancel_tx);
         Ok(())

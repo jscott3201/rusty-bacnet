@@ -307,7 +307,7 @@ impl BipEndpointBuilder {
     /// its one B/IP transport passed through `wrap` first (#2617): for an
     /// owner that keeps several kinds of link in one type, such as a
     /// binding's enum over [`AnyTransport`](bacnet_transport::any::AnyTransport),
-    /// so a [`full_client`](EndpointSession::full_client) has the type its
+    /// so a [`client`](EndpointSession::client) has the type its
     /// other clients have. The transport's BVLC status, table reader and
     /// frame tap are taken before `wrap`, so the session's B/IP calls keep
     /// working. `wrap` must pass every [`TransportPort`](bacnet_transport::port::TransportPort)

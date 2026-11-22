@@ -51,8 +51,8 @@ fn object_id(t: ObjectType, instance: u32) -> ObjectIdentifier {
 
 #[test]
 fn identity_defaults_are_endpoint_composed_no_superset() {
-    // Default = narrow endpoint reality (READ_PROPERTY only), not the full
-    // server EXECUTED_SERVICES. No superset flags.
+    // Default = READ_PROPERTY only, not the full server EXECUTED_SERVICES.
+    // No superset flags.
     let id = DeviceIdentity::new(42, 7).unwrap();
     assert_eq!(id.instance(), 42);
     assert_eq!(id.vendor_id(), 7);
@@ -245,10 +245,10 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
     assert!(a.identity().is_some());
     assert_eq!(a.identity().unwrap().max_apdu_length(), 1476);
 
-    // Narrow admin borrow works while roles run; roles expose no lifecycle.
+    // The session's own counters and server are there while it runs.
     assert_eq!(a.active_leases(), 0);
     let _ = a.policy_counters().await;
-    assert!(a.client().is_some() && a.server().is_some());
+    assert!(a.server().is_some());
 
     a.broadcast_i_am().await.unwrap();
     let got = tokio::time::timeout(WAIT, b_rx.recv())
@@ -428,7 +428,7 @@ async fn capability_matrix_services_and_segmentation_refuse() {
 
     // Role-attempt-to-stop-transport fails: roles expose no stop; session
     // stop-once holds (second stop errs); post-stop role calls fail closed.
-    let detached = a.cloned_client_handle().unwrap();
+    let detached = a.client().unwrap();
     a.stop().await.unwrap();
     b.stop().await.unwrap();
     c.stop().await.unwrap();

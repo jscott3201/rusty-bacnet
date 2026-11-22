@@ -62,7 +62,7 @@ async fn cancel_pending_request_releases_exact_lease() {
     let mut peer_rx = peer.start().await.unwrap();
     // Consume the request so the peer side does not apply backpressure, but
     // never send a reply.
-    let client_handle = client.cloned_client_handle().unwrap();
+    let client_handle = client.client().unwrap();
     let request = tokio::spawn(async move {
         client_handle
             .read_property(
@@ -99,7 +99,7 @@ async fn shutdown_with_pending_reply_cleans_up() {
     let mut peer = bacnet_network::layer::NetworkLayer::new(peer_transport);
     let mut peer_rx = peer.start().await.unwrap();
 
-    let client_handle = client.cloned_client_handle().unwrap();
+    let client_handle = client.client().unwrap();
     let pending = tokio::spawn(async move {
         client_handle
             .read_property(
@@ -134,9 +134,9 @@ async fn shutdown_with_pending_reply_cleans_up() {
 
 #[tokio::test(start_paused = true)]
 async fn shutdown_with_pending_segmented_response_cleans_up() {
-    // Server sends a segmented ComplexAck the requester cannot reassemble
-    // (unsegmented requester): the session must abort + release without hang,
-    // and stop() with that in flight must still terminate.
+    // A peer sends segment zero of a segmented answer and never the rest:
+    // the client acknowledges the segment and waits. A stop with that
+    // reassembly in flight ends the request and releases its lease.
     let (client_transport, peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut client =
         EndpointSession::new(client_transport, SessionRole::ClientOnly, session_config()).unwrap();
@@ -145,7 +145,7 @@ async fn shutdown_with_pending_segmented_response_cleans_up() {
     let mut peer_rx = peer.start().await.unwrap();
     let coordinator = client.coordinator();
 
-    let client_handle = client.cloned_client_handle().unwrap();
+    let client_handle = client.client().unwrap();
     let pending = tokio::spawn(async move {
         client_handle
             .read_property(
@@ -184,25 +184,25 @@ async fn shutdown_with_pending_segmented_response_cleans_up() {
     )
     .await
     .unwrap();
-    // The requester answers with a client Abort and releases the exact lease;
-    // the waiter observes Abort, never a hang.
-    let abort = tokio::time::timeout(WAIT, peer_rx.recv())
+    let acknowledged = tokio::time::timeout(WAIT, peer_rx.recv())
         .await
-        .expect("abort must arrive")
+        .expect("the segment's acknowledgment must arrive")
         .expect("peer closed");
-    match decode_apdu(abort.apdu).unwrap() {
-        Apdu::Abort(abort) => {
-            assert!(!abort.sent_by_server);
-            assert_eq!(abort.invoke_id, invoke_id);
+    match decode_apdu(acknowledged.apdu).unwrap() {
+        Apdu::SegmentAck(ack) => {
+            assert!(!ack.sent_by_server && !ack.negative_ack);
+            assert_eq!((ack.invoke_id, ack.sequence_number), (invoke_id, 0));
         }
-        other => panic!("expected client Abort, got {other:?}"),
+        other => panic!("expected a SegmentACK, got {other:?}"),
     }
+    assert_eq!(coordinator.active_count().unwrap(), 1);
+    assert!(!pending.is_finished());
+    client.stop().await.unwrap();
     let outcome = tokio::time::timeout(WAIT, pending)
         .await
         .expect("segment path hung");
     assert!(outcome.unwrap().is_err());
     assert_eq!(coordinator.active_count().unwrap(), 0);
-    client.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
 
@@ -284,11 +284,11 @@ async fn no_detached_role_outlives_session() {
     session_a.start().await.unwrap();
     session_b.start().await.unwrap();
 
-    // Clone the client role out of the session (a detached handle).
-    let detached_client = session_a.cloned_client_handle().unwrap();
+    // The session's client, kept past the session.
+    let detached_client = session_a.client().unwrap();
 
-    // Dropping the session ends role work: Weak upgrade fails, methods fail
-    // closed, no orphaned task keeps the lease pool alive.
+    // Dropping the session ends the client's work: its seat has closed, so
+    // its calls fail and no task of its own keeps the lease pool alive.
     drop(session_a);
     assert!(
         detached_client

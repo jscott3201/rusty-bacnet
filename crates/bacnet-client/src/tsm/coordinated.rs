@@ -1,4 +1,3 @@
-use bacnet_types::error::RemoteError;
 use bacnet_types::map_hash::BuildMapHasher;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -7,8 +6,8 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::Apdu;
 use bacnet_endpoint_core::coordinator::{
-    Admission, AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseOwner,
-    LeaseToken, OutboundTransactionCoordinator, ReserveError, TerminalPolicy,
+    AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseToken,
+    OutboundTransactionCoordinator, ReserveError, TerminalPolicy,
 };
 use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
@@ -308,152 +307,6 @@ impl Tsm {
                 Err(CoordinatedRegistrationError::DuplicateInvokeId)
             }
         }
-    }
-
-    /// Mark the transaction just registered under `invoke_id` as the narrow
-    /// endpoint requester's, which shares its coordinator with a full
-    /// client on the endpoint's seat (#2617).
-    pub(crate) fn mark_endpoint_requester(&self, invoke_id: u8) {
-        if let Some(coordinator) = self.coordinator.as_ref() {
-            let _ = coordinator.mark_endpoint_requester(invoke_id);
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn complete_pre_admitted_terminal_response(
-        &mut self,
-        source_mac: &[u8],
-        admission: &Admission,
-        apdu: &Apdu,
-        response: TsmResponse,
-    ) -> CoordinatedCompletion {
-        self.complete_pre_admitted_terminal_response_for_peer(
-            &MacAddr::from_slice(source_mac),
-            &CanonicalPeer::direct(source_mac),
-            admission,
-            apdu,
-            response,
-        )
-    }
-
-    pub(crate) fn complete_pre_admitted_terminal_response_for_peer(
-        &mut self,
-        tsm_mac: &MacAddr,
-        peer: &CanonicalPeer,
-        admission: &Admission,
-        apdu: &Apdu,
-        response: TsmResponse,
-    ) -> CoordinatedCompletion {
-        if admission.kind() != AdmissionKind::Terminal
-            || admission.metadata().owner() != LeaseOwner::Requester
-            || admission.metadata().peer() != peer
-        {
-            return CoordinatedCompletion::Rejected;
-        }
-
-        let invoke_id = admission.token().invoke_id();
-        let key = (MacAddr::from_slice(tsm_mac), invoke_id);
-        let Some(pending) = self.pending.get(&key) else {
-            return CoordinatedCompletion::Rejected;
-        };
-        if pending.lease != PendingLease::Coordinated(admission.token())
-            || pending.expected_service_choice != admission.metadata().service_choice()
-            || !matches!(pending.phase, TransactionPhase::AwaitingResponse)
-        {
-            return CoordinatedCompletion::Rejected;
-        }
-        let owner = pending.owner.clone();
-
-        let observed_service_choice = match (apdu, &response) {
-            (Apdu::SimpleAck(pdu), TsmResponse::SimpleAck) if pdu.invoke_id == invoke_id => {
-                Some(pdu.service_choice)
-            }
-            (Apdu::ComplexAck(pdu), TsmResponse::ComplexAck { .. })
-                if !pdu.segmented && pdu.invoke_id == invoke_id =>
-            {
-                Some(pdu.service_choice)
-            }
-            (
-                Apdu::Error(pdu),
-                TsmResponse::Remote {
-                    error: RemoteError::Error { .. },
-                    ..
-                },
-            ) if pdu.invoke_id == invoke_id => Some(pdu.service_choice),
-            (
-                Apdu::Reject(pdu),
-                TsmResponse::Remote {
-                    error: RemoteError::Reject { .. },
-                    ..
-                },
-            ) if pdu.invoke_id == invoke_id => None,
-            (
-                Apdu::Abort(pdu),
-                TsmResponse::Remote {
-                    error: RemoteError::Abort { .. },
-                    ..
-                },
-            ) if pdu.invoke_id == invoke_id => None,
-            _ => return CoordinatedCompletion::Rejected,
-        };
-        if observed_service_choice
-            .is_some_and(|observed| observed != admission.metadata().service_choice())
-        {
-            return CoordinatedCompletion::ServiceChoiceMismatch {
-                expected: admission.metadata().service_choice(),
-                observed: observed_service_choice.expect("observed service exists"),
-            };
-        }
-
-        CoordinatedCompletion::Completed(self.complete_transaction_inner(
-            tsm_mac.as_slice(),
-            invoke_id,
-            Some(&owner),
-            observed_service_choice,
-            response,
-            PendingRelease::Complete,
-        ))
-    }
-
-    pub(crate) fn reject_pre_admitted_segmented_response_for_peer(
-        &mut self,
-        tsm_mac: &MacAddr,
-        peer: &CanonicalPeer,
-        admission: &Admission,
-        apdu: &Apdu,
-    ) -> bool {
-        if admission.kind() != AdmissionKind::NonTerminal
-            || admission.metadata().owner() != LeaseOwner::Requester
-            || admission.metadata().peer() != peer
-        {
-            return false;
-        }
-
-        let Apdu::ComplexAck(ack) = apdu else {
-            return false;
-        };
-        let invoke_id = admission.token().invoke_id();
-        if !ack.segmented
-            || ack.invoke_id != invoke_id
-            || ack.sequence_number != Some(0)
-            || ack.service_choice != admission.metadata().service_choice()
-        {
-            return false;
-        }
-
-        let key = (MacAddr::from_slice(tsm_mac), invoke_id);
-        let Some(pending) = self.pending.get(&key) else {
-            return false;
-        };
-        if pending.lease != PendingLease::Coordinated(admission.token())
-            || pending.expected_service_choice != admission.metadata().service_choice()
-            || !matches!(pending.phase, TransactionPhase::AwaitingResponse)
-        {
-            return false;
-        }
-        let owner = pending.owner.clone();
-        self.abort_invalid_apdu_in_current_state(tsm_mac.as_slice(), invoke_id, &owner);
-        true
     }
 
     pub(crate) fn complete_coordinated_terminal_response(

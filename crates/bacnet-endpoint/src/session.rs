@@ -1,6 +1,7 @@
 //! Single-owner endpoint session: one ingress + shared coordinator.
 //!
-//! Lifecycle lives here ONLY. Role handles expose no lifecycle methods.
+//! Lifecycle lives here ONLY: the session's client and server stop with it,
+//! and neither can stop the link.
 //!
 //! # Lifecycle
 //!
@@ -13,16 +14,17 @@
 //!
 //! # Cancellation and drop
 //!
-//! Outbound leases use RAII guards. Ordinary `read_property*` calls release their
-//! exact lease when cancelled. Source-audited calls transfer to bounded session
-//! ownership before egress admission, so dropping their caller does not cancel
-//! admitted work. `stop()` stops the server first, whose own stop settles its
+//! The session's client ([`client`](EndpointSession::client)) is a
+//! [`BACnetClient`](bacnet_client::client::BACnetClient): a request whose
+//! caller goes away is cancelled and its invoke ID released, as on any
+//! client. A source-audited request is the session's once it is admitted,
+//! before anything is sent, so dropping its caller does not cancel it.
+//! `stop()` stops the server first, whose own stop settles its
 //! objects' saves, or hands that to a task while the database is held (see
-//! [`stop`](EndpointSession::stop)), then seals admission, closes roles, joins
-//! dispatch and owned workers, and stops ingress. Undelivered audit records may be lost on shutdown.
-//! Cloned role handles keep working until shutdown, then fail closed; after
-//! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
-//! call reports shutdown.
+//! [`stop`](EndpointSession::stop)), then seals admission, joins dispatch
+//! and owned workers, and stops ingress. Undelivered audit records may be
+//! lost on shutdown. A client kept past the stop, or past the session's
+//! drop, fails each call.
 //!
 //! The session keeps its object database through `stop()` and lets go of it
 //! when it drops. Every holder of the database (the session, its server,
@@ -47,16 +49,15 @@
 //! task, channels, and shared counters are all `Send`-owned. Shared `&self`
 //! borrows (`client`, `server`, counters, `broadcast_i_am`) are safe because
 //! lifecycle mutation is owner-exclusive (`&mut`) or via atomics/async
-//! mutexes; role handles synchronize through the shared session token.
+//! mutexes.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use bacnet_client::EndpointRequester;
 use bacnet_client::client::ClientConfig;
 use bacnet_encoding::apdu::Apdu;
 use bacnet_endpoint_core::coordinator::{
-    AdmissionOutcome, CoordinatorError, OutboundTransactionCoordinator,
+    AdmissionOutcome, CoordinatorError, LeaseOwner, OutboundTransactionCoordinator,
 };
 use bacnet_endpoint_core::endpoint_ingress::{EndpointIngress, PolicyOutcome, PolicyReason};
 use bacnet_network::layer::ReceivedApdu;
@@ -87,9 +88,6 @@ mod frame_observation;
 #[path = "registered_port.rs"]
 mod registered_port;
 
-use crate::roles::{
-    ClientRoleHandle, SessionToken, admit_once, decode_terminal, is_requester_lease,
-};
 use bacnet_server::server::{
     __endpoint_NotificationTransactions as NotificationTransactions, drop_database_off_runtime,
 };
@@ -105,28 +103,32 @@ enum Lifecycle {
 /// Which roles the session composes.
 ///
 /// Chosen at [`EndpointSession::new`] time (or via the endpoint builders'
-/// `role()` setter) and fixed for the session lifetime. Determines which
-/// role handles exist after [`start`](EndpointSession::start):
+/// `role()` setter) and fixed for the session lifetime. It says what the
+/// node serves and declares:
 ///
-/// - [`ClientOnly`](SessionRole::ClientOnly): `client()` is `Some`, the
-///   server role's accessors are `None`. Inbound requests are counted
-///   (`no_server_role`) and their one-use reply sender released without
-///   sending.
+/// - [`ClientOnly`](SessionRole::ClientOnly): no server, and the server
+///   role's accessors are `None`. A request that reaches the session's own
+///   queue is counted (`no_server_role`) and its one-use reply sender
+///   released without sending; while a [`client`](EndpointSession::client)
+///   is attached, a confirmed request is that client's to answer.
 /// - [`ServerOnly`](SessionRole::ServerOnly): the server role is the full
 ///   `server()` the session builds at start, the read-only one
 ///   ([`read_only_server`]) unless
 ///   [`with_server`](EndpointSession::with_server) gave it a builder
-///   (#2617); `client()` is `None`. Terminal responses with no consumer
-///   release their exact lease and count `no_client_role`.
-/// - [`Both`](SessionRole::Both): both roles are present above the one
-///   shared coordinator.
+///   (#2617). Its Device lists no client services, and a source Audit
+///   Reporter is refused.
+/// - [`Both`](SessionRole::Both): that server, whose Device also lists the
+///   services the node's client executes.
+///
+/// [`client`](EndpointSession::client) gives a client on a running session
+/// of any role, above the one shared coordinator.
 ///
 /// A session with a server role needs a Device identity
 /// ([`device`](EndpointSession::device)): its start refuses one without,
 /// before the link starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionRole {
-    /// Client requester only.
+    /// No server: the session gives a client and serves nothing.
     ClientOnly,
     /// Server role only: a full server ([`EndpointSession::with_server`],
     /// or [`read_only_server`] without one).
@@ -166,8 +168,8 @@ pub struct SessionConfig {
     /// capacity of 1 keeps no reserve, so there one Who-Is can shut out a
     /// confirmed request. Under a flood of stray answers, then, the
     /// session's own answers keep 64 slots at the default capacity, and 4
-    /// at 16. A [`full_client`](EndpointSession::full_client)'s answers
-    /// don't use this queue but its seat's, which has tiers of its own.
+    /// at 16. A [`client`](EndpointSession::client)'s answers don't use
+    /// this queue but its seat's, which has tiers of its own.
     ///
     /// A queued item takes a slot of at most 192 octets (176 to 184 on a
     /// 64-bit target today) plus its NPDU or APDU (B/IP copies each NPDU to
@@ -185,13 +187,13 @@ pub struct SessionConfig {
     /// [`Error::Encoding`] otherwise.
     pub queue_capacity: usize,
     /// The node's APDU timeout in milliseconds (default 6000): how long the
-    /// client roles wait for an answer before they send a request again,
+    /// client waits for an answer before it sends a request again,
     /// and, with a full server ([`with_server`](EndpointSession::with_server)), how long
     /// its confirmed notifications wait, and the Device's APDU_Timeout
     /// (Clause 12.11.28).
     pub apdu_timeout_ms: u64,
-    /// The node's APDU retries (default 3): how many times the client roles
-    /// send a request again, and, with a full server
+    /// The node's APDU retries (default 3): how many times the client
+    /// sends a request again, and, with a full server
     /// ([`with_server`](EndpointSession::with_server)), its confirmed
     /// notifications, and the Device's Number_Of_APDU_Retries
     /// (Clause 12.11.29).
@@ -262,7 +264,9 @@ pub struct PolicyCountersSnapshot {
     pub ingress_policy: u64,
     /// Inbound requests with no server role (client-only).
     pub no_server_role: u64,
-    /// Terminal responses with no client/notification role.
+    /// Answers that matched a lease whose role was not there to take them,
+    /// such as one for a client that has just gone; the lease is released.
+    /// The session's own queue sees an answer only when no seat takes it.
     pub no_client_role: u64,
     /// Terminal responses no lease claimed (unknown/peer/service/policy).
     pub unclaimed_terminal: u64,
@@ -271,7 +275,7 @@ pub struct PolicyCountersSnapshot {
     pub unconfirmed_full_drops: u64,
     /// Confirmed requests for the session's own roles that its full request
     /// queue had no room for; none was answered, and the requester's retry
-    /// is its recovery. One for a full client (its COV notification, or any
+    /// is its recovery. One for the client (its COV notification, or any
     /// on a session with no server role) that the client's seat refuses is
     /// counted in [`client_seat_counters`](EndpointSession::client_seat_counters)
     /// instead.
@@ -292,15 +296,15 @@ struct PolicyCounters {
 }
 
 struct SessionShared {
-    token: Arc<SessionToken>,
     counters: Mutex<PolicyCounters>,
 }
 
 /// One owned single-device endpoint session.
 ///
 /// Owns ONE [`EndpointIngress`], the shared [`OutboundTransactionCoordinator`],
-/// role registration, policy-outcome ownership, timers, egress and
-/// termination. Start-once/stop-once; `Drop` aborts without orphaning.
+/// its server and its client's seat, policy-outcome ownership, timers,
+/// egress and termination. Start-once/stop-once; `Drop` aborts without
+/// orphaning.
 ///
 /// A [`DeviceIdentity`](crate::identity::DeviceIdentity) is the single
 /// source for I-Am + Device readback + role limits when composed via
@@ -334,11 +338,9 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     shared: Arc<SessionShared>,
     coordinator: Arc<OutboundTransactionCoordinator>,
     ingress: Option<EndpointIngress<T>>,
-    requester: Option<EndpointRequester>,
     /// The source Audit's pool of notifications on a session with no
     /// server; beside a server, its pool is the server's.
     notifications: Option<Arc<NotificationTransactions>>,
-    client_handle: Option<ClientRoleHandle>,
     /// The full server's builder until start ([`Self::with_server`]), then
     /// the server until stop (#2617), and the error its stop gave.
     server_builder: Option<bacnet_server::server::ServerBuilder<T>>,
@@ -419,7 +421,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     pub fn new(transport: T, role: SessionRole, config: SessionConfig) -> Result<Self, Error> {
         config.validate()?;
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
-        let token = SessionToken::new(Arc::clone(&coordinator));
         let client_config = ClientConfig {
             apdu_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,
@@ -435,7 +436,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         Ok(Self {
             local_receive_capacity,
             shared: Arc::new(SessionShared {
-                token,
                 counters: Mutex::new(PolicyCounters {
                     ingress_policy: 0,
                     no_server_role: 0,
@@ -445,9 +445,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             }),
             coordinator,
             ingress: Some(ingress),
-            requester: None,
             notifications: None,
-            client_handle: None,
             server_builder: None,
             server: None,
             server_stop_error: None,
@@ -503,7 +501,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     /// Select the sole source Audit Reporter in the attached local database.
     ///
-    /// Activates bounded source READ reporting on direct IPv4 B/IP. The built-in
+    /// Activates source Audit reporting of what the session's
+    /// [`client`](Self::client) asks, which lists the audited services. The built-in
     /// Device must have a typed Audit recipient provision, even at Audit_Level
     /// NONE. Device choices use immutable builder route bindings; direct Address
     /// choices need no binding. Monitored_Objects must be absent. `Both`
@@ -631,8 +630,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// and sealed membership protection; a later call finishes teardown. Calling before
     /// `start()` or twice returns
     /// [`Error::Encoding`]. Takes
-    /// `&mut self` so only the owner can stop; cloned role handles observe
-    /// shutdown and fail closed.
+    /// `&mut self` so only the owner can stop.
     ///
     /// The session's server ([`with_server`](Self::with_server), or the
     /// read-only one) is stopped first, while the link is still up, as
@@ -663,7 +661,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// does: code that takes the database back once the session is gone
     /// (`Arc::try_unwrap` of a clone it kept) lets that turn pass first.
     ///
-    /// A [`full_client`](Self::full_client) still alive doesn't hold the
+    /// A [`client`](Self::client) still alive doesn't hold the
     /// stop up (#2617): its tasks end, the link stops, and its requests
     /// after that fail with the transport's stopped error; dropping it later
     /// changes nothing. The database remains attached after termination.
@@ -674,7 +672,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
         self.lifecycle
             .store(Lifecycle::Stopping as u8, Ordering::Release);
-        self.shared.token.shutdown();
         if let Some(task) = self.network_number_task.as_mut() {
             task.abort();
             let _ = task.await;
@@ -684,9 +681,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             source.close();
         }
         self.stop_server().await;
-        if let Some(requester) = &self.requester {
-            requester.close();
-        }
+        // Closing the pool aborts its workers, an audited request's runner
+        // among them; the join below waits for each. Beside a server the
+        // pool is the server's, which its stop above closed and joined.
         if let Some(notifications) = &self.notifications {
             notifications.close();
         }
@@ -732,8 +729,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.source_recipient.take();
         self.source_audit.take();
         self.notifications.take();
-        self.requester.take();
-        self.client_handle = None;
         self.lifecycle
             .store(Lifecycle::Stopped as u8, Ordering::Release);
         let exit = self.stop_exit.take().expect("joined dispatch");
@@ -741,23 +736,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             Some(error) if exit.is_ok() => Err(error),
             _ => exit,
         }
-    }
-
-    /// Borrows the client role (`None` when not composed).
-    ///
-    /// Returns `None` for [`ServerOnly`](SessionRole::ServerOnly) sessions,
-    /// and after [`stop`](Self::stop) (handles are released at termination).
-    pub fn client(&self) -> Option<&ClientRoleHandle> {
-        self.client_handle.as_ref()
-    }
-
-    /// Clones the client role handle with its session binding.
-    ///
-    /// The clone holds only a [`Weak`](std::sync::Weak) session token: it
-    /// works while the session runs and fails closed after `stop()`/drop.
-    /// Used to hand the client role to tasks that outlive the borrow.
-    pub fn cloned_client_handle(&self) -> Option<ClientRoleHandle> {
-        self.client_handle.clone()
     }
 
     /// Samples policy-outcome ownership counters.
@@ -797,12 +775,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         Arc::clone(&self.coordinator)
     }
 
-    /// Borrows the composed identity (narrow admin; no lifecycle).
-    ///
-    /// RB-15 narrow admin borrow: roles hold no transport/session lifecycle;
-    /// only the session owner exposes identity + counters + coordinator.
-    /// A role handle attempting `stop`/transport access fails at compile
-    /// time (no such method) and at runtime its post-stop calls fail closed.
+    /// Borrows the composed identity.
     pub fn identity(&self) -> Option<&crate::identity::DeviceIdentity> {
         self.identity.as_ref()
     }
@@ -868,12 +841,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.sc_link.clone()
     }
 
-    /// Returns the composed session role (narrow admin).
+    /// Returns the composed session role.
     pub fn session_role(&self) -> SessionRole {
         self.role
     }
 
-    /// Returns true while the session dispatch is running (narrow admin).
+    /// Returns true while the session dispatch is running.
     pub fn is_running(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire) == Lifecycle::Running as u8
     }
@@ -944,15 +917,11 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
     fn drop(&mut self) {
         // Synchronous abort path: never orphan dispatch/ingress/role work.
         // `stop()` remains the graceful path; Drop only seals + aborts.
-        self.shared.token.shutdown();
         if let Some(task) = &self.network_number_task {
             task.abort();
         }
         if let Some(source) = self.source_audit.take() {
             source.close();
-        }
-        if let Some(requester) = self.requester.take() {
-            requester.close();
         }
         if let Some(notifications) = self.notifications.take() {
             notifications.close();
@@ -980,7 +949,6 @@ struct DispatchParts {
     inbound: mpsc::Receiver<ReceivedApdu>,
     terminal: mpsc::Receiver<ReceivedApdu>,
     policy: mpsc::Receiver<PolicyOutcome>,
-    requester: Option<EndpointRequester>,
     notifications: Option<Arc<NotificationTransactions>>,
     coordinator: Arc<OutboundTransactionCoordinator>,
     shared: Arc<SessionShared>,

@@ -30,7 +30,7 @@ async fn a_wrapped_bip_session_keeps_its_link_calls_and_one_socket() {
         session.frames(4).is_some(),
         "the tap, taken before the wrap"
     );
-    let client = session.full_client().unwrap();
+    let client = session.client().unwrap();
     let (ip, port) =
         bacnet_transport::bvll::decode_bip_mac(client.transport().local_mac()).unwrap();
     assert_eq!((Ipv4Addr::from(ip), port), (*local.ip(), local.port()));

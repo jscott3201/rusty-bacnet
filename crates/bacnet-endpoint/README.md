@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     server.start().await?;
 
     let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7)?;
-    let handle = client.client().expect("the client role is enabled");
+    let handle = client.client()?;
     let ack = timeout(
         Duration::from_secs(2),
         handle.read_property(&[2], object, PropertyIdentifier::PRESENT_VALUE, None),
@@ -134,20 +134,24 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
 }
 ```
 
-## A full client on the session
+## The client on the session
 
-[`EndpointSession::full_client`](session::EndpointSession::full_client) gives
+[`EndpointSession::client`](session::EndpointSession::client) gives
 a full `bacnet-client` `BACnetClient` on the session's one transport, beside
-the server role and the narrow client role below: discovery in every scope,
+the server role: discovery in every scope,
 segmented reads, files, COV, router discovery, and the link's own calls and
-frame tap through its `transport()`. It shares the session's invoke-ID pool,
+frame tap through its `transport()`. A running session of any role gives one,
+one at a time: it is owned, so keep it and share it by reference or in an
+`Arc`. It shares the session's invoke-ID pool,
 so its requests and the server role's notifications never collide, and
 `bacnet_ops::Client::over` takes it as it is. Beside a server role the client
 answers only the COV notifications of its own subscriptions; the server
 answers everything else, a ConfirmedEventNotification among them, which the
 client hears a copy of. The session has the one owner of the local network
-number. With a source Audit Reporter the session audits the full client's reads and
-writes, each owned by the session once admitted (#2617). One stop stops the session with the client
+number. With a source Audit Reporter the session audits the client's reads and
+writes, each owned by the session once admitted (#2617); an audited write whose
+value isn't whole application data is refused before it is sent, where an
+unaudited one sends its value as given. One stop stops the session with the client
 still alive (#2617): its tasks end, its open requests fail and the link stops.
 From then on the client sends nothing more: its requests and unconfirmed sends
 fail at once, and a call made directly on its `transport()`, such as a BVLC
@@ -173,7 +177,7 @@ The session owns the server: [`server`](session::EndpointSession::server)
 borrows it while the session runs, and [`stop`](session::EndpointSession::stop)
 stops it first, so its work joins and its saves settle while the link is
 still up. The session hands it its database, and it answers every request but
-the full client's COV notifications. The server's seat is attached as the
+the client's COV notifications. The server's seat is attached as the
 link starts, before its first request is classified, so a request that
 arrives while the server builds waits for it; its queue is as deep as the
 session's request queue. A builder setting a server's start would refuse is
@@ -192,22 +196,19 @@ identity, Max_APDU_Length_Accepted the smaller of the two roles', the session's
 APDU timeout and retries (which the server's confirmed notifications use too),
 and on a `Both` session the client's executed services beside the server's. A
 builder or database that contradicts them is refused. A DeviceCommunicationControl
-the server accepts binds the whole node (Clause 16.1): the full client's
-requests, the narrow client's and the session's own I-Am fail with
+the server accepts binds the whole node (Clause 16.1): the client's
+requests and the session's own I-Am fail with
 `Error::InitiationDisabled` until it ends, unless an operator starts a client
-with `ClientOptions::with_node_dcc_override`. The full client keeps its own
+with `ClientOptions::with_node_dcc_override`. The client keeps its own
 segmentation settings for now (a later step of #2617).
 
 ## What is proven
 
-- The client role initiates unsegmented ReadProperty, ReadRange and bounded
-  explicit ReadPropertyMultiple (1–64 concrete-object references), plus
-  [`ClientRoleHandle::write_property`] to direct B/IP IPv4 unicast peers.
-  WriteProperty requires an explicit commandability classification and a valid
-  encoded value that fits the unsegmented request. Direct
-  B/IP source reporting emits one value-free READ record per eligible RP/RR
-  operation or RPM occurrence, sharing request cancellation/retry and notification
-  ownership. Source filters may suppress records.
+- The client is the full client, with its own tests in `bacnet-client`. On
+  the session, in-memory wire tests show source reporting of its reads and
+  writes: one record per eligible ReadProperty, ReadRange or WriteProperty
+  and per ReadPropertyMultiple reference, sharing the request's retries, and
+  kept through a caller that goes away. Source filters may suppress records.
 
 - One socket / one serial owner per session (RB-16 B/IP + SC-hub proofs,
   RB-17 MS/TP simulator proof). No second hidden socket or serial owner is
@@ -249,19 +250,18 @@ dial, and MS/TP station/timing knobs stay transport-specific by design.
 
 - [`session::EndpointSession`] is the sole lifecycle owner:
   start-once/completed-stop-once; canceled stop can resume joining. `Drop`
-  aborts owned tasks and retains Audit membership through their quiescence. Role handles
-  expose no lifecycle methods.
-- The narrow client's handle ([`ClientRoleHandle`]) holds only a
-  [`Weak`](std::sync::Weak) session token plus role state. Dropping or
-  stopping the session ends its work even when a handle was cloned out
-  beforehand; cloned handles survive the drop as values but fail closed.
+  aborts owned tasks and retains Audit membership through their quiescence.
+- The client ([`client`](session::EndpointSession::client)) is an owned
+  `BACnetClient`. Its own `stop` stops it alone, never the link. Stopping or
+  dropping the session ends its work; a client kept past that survives as a
+  value and fails each call.
   The server is the session's, borrowed through `server()`.
 - `start(&mut self)` / `stop(&mut self)` take `&mut` so only the owner can
   drive lifecycle; `&self` borrows (`client`, `server`, counters,
   `broadcast_i_am`) stay usable while running. Cancellation is
-  await-boundary only: aborting a pending read future releases
-  its exact coordinator lease via RAII for ordinary reads. Admitted audited
-  reads are session-owned through their terminal outcome. `stop()` seals admission, cancels
+  await-boundary only: dropping a pending request's future cancels it and
+  releases its invoke ID. Admitted audited
+  requests are session-owned through their terminal outcome. `stop()` seals admission, cancels
   waiters, and joins dispatch exactly once.
 - Ingress never waits for its queues and a full one never ends the session
   (#2635): what finds no room is dropped, counted by class in
@@ -277,14 +277,6 @@ dial, and MS/TP station/timing knobs stay transport-specific by design.
 - All fallible boundaries return typed [`bacnet_types::error::Error`];
   queue-capacity, BBMD-ordering, SC identity/heartbeat, and MS/TP
   addressing misconfiguration fail fast at build time.
-
-```compile_fail,E0599
-// Role handles expose no lifecycle: `stop` exists only on `EndpointSession`.
-# use bacnet_endpoint::roles::ClientRoleHandle;
-# fn forbidden(handle: ClientRoleHandle) {
-handle.stop();
-# }
-```
 
 ## Trust: verified-origin getters
 
@@ -335,14 +327,9 @@ See `docs/rust-api.md` for the same table with service-scope notes.
   [`SessionRole`], [`SessionConfig`],
   [`PolicyCountersSnapshot`],
   [`SessionExit`].
-- [`roles`] — [`ClientRoleHandle`] (`read_property`,
-  `read_property_multiple` and `read_range`, each with a `_with_destination`
-  form addressed by [`EndpointApduDestination`], plus `read_log_page` and
-  `write_property`).
 - [`identity`] — [`DeviceIdentity`],
   [`NetworkPortEntry`],
   [`build_database_with_extra`].
 - [`bip`], [`sc`], [`mstp`] — the three endpoint builders.
 
-Hidden by design: `SessionToken`, single-admit/decode helpers,
-`complete_pre_admitted`, `close_for_owner`, and all `__endpoint_*` hooks.
+Hidden by design: `complete_pre_admitted` and all `__endpoint_*` hooks.

@@ -100,7 +100,7 @@ async fn the_sessions_stop_reaches_the_link_only_once_a_client_send_returns() {
             .device(identity)
             .with_database(database);
     session.start().await.unwrap();
-    let client = session.full_client().unwrap();
+    let client = session.client().unwrap();
     let _notifications = client.cov_notifications();
 
     hold.store(true, Ordering::SeqCst);

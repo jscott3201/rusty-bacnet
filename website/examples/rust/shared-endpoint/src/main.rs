@@ -28,10 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let observed = async {
         let address = address.ok_or("started endpoint did not publish its B/IP address")?;
         writeln!(io::stdout(), "Started endpoint: {address}")?;
+        // A running session gives a client; its server is there while it runs.
         writeln!(
             io::stdout(),
-            "Roles: requester={} server={}",
-            session.client().is_some(),
+            "Roles: client={} server={}",
+            session.is_running(),
             session.server().is_some()
         )?;
         writeln!(io::stdout(), "Press Enter to stop (or send EOF).")?;
@@ -46,9 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.stop().await?;
     writeln!(
         io::stdout(),
-        "Stopped: address={:?} requester={} server={}",
+        "Stopped: address={:?} client={} server={}",
         session.bip_local_address(),
-        session.client().is_some(),
+        session.is_running(),
         session.server().is_some()
     )?;
     if let Some(address) = address {

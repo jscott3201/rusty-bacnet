@@ -58,7 +58,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_session()?;
     endpoint.start().await?;
     assert!(endpoint.server().is_some(), "the read-only server");
-    assert!(endpoint.client().is_none());
     assert!(endpoint.is_running());
 
     // Endpoint MAC is the bound IP + port (single socket, known here).

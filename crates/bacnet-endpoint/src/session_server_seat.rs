@@ -54,7 +54,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///   notifications) beside the server's services (Clause 12.11.14);
     /// - Segmentation_Supported, Max_Segments_Accepted and
     ///   APDU_Segment_Timeout are the identity's, which the server follows.
-    ///   A [`full_client`](Self::full_client) keeps its own segmentation
+    ///   A [`client`](Self::client) keeps its own segmentation
     ///   settings for now (a later step of #2617): it accepts segmented
     ///   answers even where the Device says it receives none, and it
     ///   aborts a segmented ConfirmedCOVNotification, which it can't
@@ -109,14 +109,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// fails or is cancelled drops the database it was given.
     ///
     /// **Who answers what.** The server answers every confirmed request but
-    /// a ConfirmedCOVNotification, which is a full client's; a
-    /// ConfirmedEventNotification is the server's to acknowledge, and a full
+    /// a ConfirmedCOVNotification, which is the client's; a
+    /// ConfirmedEventNotification is the server's to acknowledge, and the
     /// client hears a copy. It hears every unconfirmed request (Who-Is among
-    /// them), as a full client does.
+    /// them), as the client does.
     ///
     /// **A server that falls behind.** The session never waits for it:
     /// what its seat's queue has no room for is dropped and counted in
-    /// [`server_seat_counters`](Self::server_seat_counters), and a full
+    /// [`server_seat_counters`](Self::server_seat_counters), and the
     /// client's traffic goes on. The queue is as deep as the session's
     /// request queue ([`SessionConfig::queue_capacity`]). Unconfirmed
     /// requests fill at most half of it, confirmed requests all but its last
@@ -141,15 +141,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// server holds its own requests and notifications, and its
     /// [`broadcast_i_am`](BACnetServer::broadcast_i_am) fails with a
     /// SERVICES / COMMUNICATION_DISABLED [`Error::Remote`], as on a
-    /// standalone server; the full client's requests and unconfirmed sends,
-    /// the narrow [`client`](Self::client)'s requests and the session's own
+    /// standalone server; the [`client`](Self::client)'s requests and
+    /// unconfirmed sends and the session's own
     /// [`broadcast_i_am`](Self::broadcast_i_am) fail with
     /// [`Error::InitiationDisabled`] and `sent: false`. A client request
     /// already waiting ends with `sent: true` when its retry falls due.
     /// Answers, and network-layer messages, still go. It ends when the
     /// control's duration runs out, on an ENABLE or an accepted WARMSTART or
     /// COLDSTART ReinitializeDevice, or when the server stops or is dropped.
-    /// A full client its operator started with
+    /// A client its operator started with
     /// [`ClientOptions::with_node_dcc_override`](bacnet_client::client::ClientOptions::with_node_dcc_override)
     /// keeps initiating; the session logs a warning then.
     pub fn with_server(mut self, builder: ServerBuilder<T>) -> Self {

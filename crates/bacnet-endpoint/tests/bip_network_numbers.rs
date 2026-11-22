@@ -27,7 +27,6 @@ async fn foreign() -> (Endpoint, SocketAddrV4, UdpSocket) {
     )
     .await
     .unwrap(); // port 0: nothing to lose
-    assert!(endpoint.client().is_some());
     assert!(endpoint.server().is_none());
     let (registration, source) = receive(&bbmd).await;
     assert_eq!(source, local);
@@ -188,7 +187,6 @@ async fn endpoint_number_bbmd_server_wire_admission() {
             }));
         let (server, local) = start(configured).await?;
         assert!(server.server().is_some());
-        assert!(server.client().is_none());
         let group = SocketAddrV4::new(BROADCAST, local.port());
         // Before relying on shared capture, prove the real production wildcard
         // receives this broadcast (BDT fanout) and the independent observer sees it.

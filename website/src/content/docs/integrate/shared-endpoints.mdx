@@ -14,7 +14,7 @@ Use an endpoint when one local device needs to initiate requests and serve them 
 
 ## One session owns the connection
 
-Rust's `EndpointSession` owns transport startup, ingress and shared outbound coordination. Choose `ClientOnly`, `ServerOnly` or `Both` before startup. The role handles use that owner and cannot independently restart its transport.
+Rust's `EndpointSession` owns transport startup, ingress and shared outbound coordination. Choose `ClientOnly`, `ServerOnly` or `Both` before startup. The session's client and server use that owner and cannot independently restart its transport.
 
 This complete B/IP program uses synthetic Device instance `1001` and vendor identifier `42`, creates both roles on an ephemeral port, and waits for Enter or stdin EOF before explicitly stopping the owner. It demonstrates startup, role availability and socket cleanup; it does **not** exercise a BACnet request/reply, discovery, a property write or Audit reporting.
 
@@ -47,9 +47,9 @@ The first line contains the actual nonzero port assigned by the OS. Press Enter 
 
 ```text
 Started endpoint: 127.0.0.1:<assigned-port>
-Roles: requester=true server=true
+Roles: client=true server=true
 Press Enter to stop (or send EOF).
-Stopped: address=None requester=false server=false
+Stopped: address=None client=false server=false
 Rebound endpoint: 127.0.0.1:<assigned-port>; owner running=false
 ```
 
@@ -67,16 +67,15 @@ B/IPv6 has no endpoint builder, as it has no server builder. In Rust, compose an
 
 | Role | Contract |
 |---|---|
-| Requester reads | ReadProperty, ReadRange and ReadPropertyMultiple; unsegmented requests/responses |
-| Requester RPM | 1–64 explicit property occurrences; concrete objects; no ALL, REQUIRED, OPTIONAL or wildcard object selectors |
-| Requester writes | Direct IPv4 B/IP WriteProperty only; required commandability declaration; no routed WP or WPM in this profile |
+| Client | Rust `session.client()` or Python `await endpoint.client()`: a `BACnetClient` with every call the standalone client has, one at a time, on a running session of any role |
+| Client beside a server | Answers only the COV notifications of its own subscriptions; the server answers every other request |
 | Server role | The full server's service set, on the session's Device identity, which a Rust session with a server role must have |
 | Default server | Read-only: reads, Who-Is, Who-Has and COV subscriptions answered; writes, creates and deletes denied; ReinitializeDevice and DeviceCommunicationControl refused; time synchronization ignored |
 | Server with a policy | Rust `with_server(builder)` or Python `mutation_policy`: that policy, as on a standalone server |
 
-The Device lists the services the node executes: the full server's, and on a session of both roles the client's COV notification, I-Am and I-Have services beside them. Earlier releases ran a narrow responder in the Rust session instead, which answered ReadProperty alone unless opted in.
+The Device lists the services the node executes: the full server's, and on a session of both roles the client's COV notification, I-Am and I-Have services beside them. Earlier releases ran a narrow responder in the Rust session instead, which answered ReadProperty alone unless opted in, and a narrow requester limited to unsegmented reads and direct B/IP writes.
 
-A requester write's commandability is a declaration about the remote property, not permission to write it. Rust requires `Commandability::{Commandable, Noncommandable}`; Python requires `commandability="commandable"` or `"noncommandable"`. For a first integration, exercise reads before enabling mutations. Consult <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission limits</a> for the shared budgets.
+A write takes no commandability declaration: one sent with a priority is a command at that priority, and one without names none. Neither is permission to write the remote property. For a first integration, exercise reads before enabling mutations. Consult <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission limits</a> for the shared budgets.
 
 ## Add source READ or WRITE Audit reporting deliberately
 
@@ -96,7 +95,7 @@ This source profile is separate from the full server's <a href={`${repository}/b
 
 ## Close the owner, including after cancellation
 
-In Rust, await `session.stop()`; in Python, await `close()` or leave the async context. Exported role handles do not keep a closed session usable. Stop owns admitted work and transport cleanup; dropping a caller's request is not a substitute for stopping the endpoint.
+In Rust, await `session.stop()`; in Python, await `close()` or leave the async context. A client kept past the stop does not keep a closed session usable: each of its calls fails. Stop owns admitted work and transport cleanup; dropping a caller's request is not a substitute for stopping the endpoint.
 
 Eligible source-reported requests retain terminal observation after caller cancellation. Other caller-owned requests can cancel queued sends, but an already attempted send may have reached its peer. Cancellation never proves that a remote write did not execute.
 

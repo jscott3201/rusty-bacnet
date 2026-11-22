@@ -24,7 +24,6 @@ use bacnet_encoding::apdu::{
 };
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
-use bacnet_endpoint::EndpointApduDestination;
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_endpoint::session::SessionRole;
@@ -93,7 +92,7 @@ async fn bip_same_id_opposite_directions_routed_and_wrong_peer() {
 
     // Same-ID opposite: endpoint→A and A→endpoint both use invoke ID 0 on
     // fresh coordinators. Run concurrently; both must deliver (no cross-talk).
-    let client = endpoint.cloned_client_handle().unwrap();
+    let client = endpoint.client().unwrap();
     let mac_a_c = mac_a.clone();
     let outbound = tokio::spawn(async move {
         client
@@ -210,7 +209,7 @@ async fn bip_same_id_opposite_directions_routed_and_wrong_peer() {
     let peer_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut net_b = NetworkLayer::new(peer_b);
     let mut _rx_b = net_b.start().await.unwrap();
-    let client2 = endpoint.cloned_client_handle().unwrap();
+    let client2 = endpoint.client().unwrap();
     let mac_a2 = mac_a.clone();
     let pending = tokio::spawn(async move {
         client2
@@ -330,7 +329,7 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
 
     // Trigger an outbound so we learn the endpoint's bound address: use the
     // endpoint client to send to the raw peer (raw speaks BVLL manually).
-    let client = endpoint.cloned_client_handle().unwrap();
+    let client = endpoint.client().unwrap();
     let raw_mac_c = raw_mac.clone();
     let outbound = tokio::spawn(async move {
         client
@@ -405,17 +404,12 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
     // Routed: endpoint client sends via router (raw peer as router MAC) to
     // DNET 77 / DADR [0x44]; raw asserts the routed destination on wire bytes,
     // then returns a routed reply (SNET 77) which the coordinator admits.
-    let client2 = endpoint.cloned_client_handle().unwrap();
+    let client2 = endpoint.client().unwrap();
     let raw_mac2 = raw_mac.clone();
     let routed = tokio::spawn(async move {
         client2
-            .read_property_with_destination(
-                EndpointApduDestination::Routed {
-                    router_mac: MacAddr::from_slice(&raw_mac2),
-                    destination_network: 77,
-                    destination_mac: MacAddr::from_slice(&[0x44]),
-                },
-                Vec::new(),
+            .read_property(
+                &bacnet_client::client::Station::routed(&raw_mac2, 77, &[0x44]),
                 oid(ObjectType::ANALOG_INPUT, 1),
                 PropertyIdentifier::PRESENT_VALUE,
                 None,

@@ -183,7 +183,7 @@ fn cov_notification(invoke_id: u8) -> Bytes {
 /// opportunity, once, with the request's invoke ID.
 async fn postponed_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = node(mode, frames).await;
-    let client = h.session.full_client().expect("the node's full client");
+    let client = h.session.client().expect("the node's full client");
     let mut heard = client.cov_notifications();
     let db = Arc::clone(h.session.server().expect("the full server").database());
     let held = db.write().await;
@@ -318,7 +318,7 @@ async fn answer_requests(h: &mut Harness, count: usize) -> Vec<ConfirmedRequest>
 /// goes no second time.
 async fn one_pool_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = node(mode, frames).await;
-    let client = Arc::new(h.session.full_client().expect("the node's full client"));
+    let client = Arc::new(h.session.client().expect("the node's full client"));
     h.peer_deliver(&to_node(
         FrameType::BACNET_DATA_EXPECTING_REPLY,
         subscribe(5),

@@ -37,14 +37,15 @@ fn specs() -> Vec<ReadAccessSpecification> {
         },
     ]
 }
-fn start<T: TransportPort>(
-    session: &EndpointSession<T>,
+/// A ReadPropertyMultiple of `specs`, in a task of its own.
+fn start(
+    client: &Client,
     mac: &[u8],
     specs: Vec<ReadAccessSpecification>,
 ) -> tokio::task::JoinHandle<Result<ReadPropertyMultipleACK, Error>> {
-    let client = session.cloned_client_handle().unwrap();
+    let client = Arc::clone(client);
     let mac = mac.to_vec();
-    tokio::spawn(async move { client.read_property_multiple(&mac, specs).await })
+    tokio::spawn(async move { client.read_property_multiple(&mac[..], specs).await })
 }
 fn request(envelope: &ReceivedApdu) -> (u8, ReadPropertyMultipleRequest) {
     let Apdu::ConfirmedRequest(pdu) = decode_apdu(envelope.apdu.clone()).unwrap() else {
@@ -54,7 +55,6 @@ fn request(envelope: &ReceivedApdu) -> (u8, ReadPropertyMultipleRequest) {
         pdu.service_choice,
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE
     );
-    assert!(!pdu.segmented_response_accepted);
     (
         pdu.invoke_id,
         ReadPropertyMultipleRequest::decode(&pdu.service_request).unwrap(),
@@ -94,6 +94,33 @@ fn response(invoke: u8, ack: &ReadPropertyMultipleACK) -> Apdu {
         service_ack: bytes.freeze(),
     })
 }
+/// What a record names: its object, property and array index.
+fn what(record: &BACnetAuditNotification) -> (ObjectIdentifier, PropertyIdentifier, Option<u64>) {
+    let property = record.target_property.as_ref().expect("a property");
+    (
+        record.target_object.expect("an object"),
+        property.property_identifier,
+        property.property_array_index,
+    )
+}
+/// What `request` asks for, reference by reference.
+fn asked(
+    request: &ReadPropertyMultipleRequest,
+) -> Vec<(ObjectIdentifier, PropertyIdentifier, Option<u64>)> {
+    request
+        .list_of_read_access_specs
+        .iter()
+        .flat_map(|spec| {
+            spec.list_of_property_references.iter().map(|reference| {
+                (
+                    spec.object_identifier,
+                    reference.property_identifier,
+                    reference.property_array_index.map(u64::from),
+                )
+            })
+        })
+        .collect()
+}
 async fn records(
     receiver: &mut bacnet_network::layer::ApduReceiver,
     sink: &NetworkLayer<TestTransport>,
@@ -128,7 +155,8 @@ async fn source_rpm_ordered_occurrences_mixed_results_both_roles_modes() {
         for confirmed in [false, true] {
             let mut session = session(database(confirmed), role, &sink);
             session.start().await.unwrap();
-            let read = start(&session, peer.local_mac(), specs());
+            let client = client_of(&session);
+            let read = start(&client, peer.local_mac(), specs());
             let env = receive(&mut requests).await;
             let (invoke, rpm) = request(&env);
             let mut ack = success(&rpm);
@@ -185,54 +213,28 @@ async fn source_rpm_ordered_occurrences_mixed_results_both_roles_modes() {
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
+/// A ReadPropertyMultiple that fails as a whole records every reference
+/// it asked for with the failure's Result, on the station it was sent to:
+/// a peer's Error, an answer that doesn't decode, no answer, an Abort and
+/// a Reject.
 #[tokio::test(start_paused = true)]
-async fn source_rpm_complete_correlation_before_any_success_projection() {
+async fn source_rpm_whole_operation_failure_records_every_reference() {
     let (peer, mut requests) = network().await;
     let (sink, mut received) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    for fault in 0..15 {
-        let read = start(&session, peer.local_mac(), specs());
+    let client = client_of(&session);
+    let communication = |code| (ErrorClass::COMMUNICATION, code);
+    for (fault, expected) in [
+        (9, (ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)),
+        (10, communication(ErrorCode::OTHER)),
+        (11, communication(ErrorCode::TIMEOUT)),
+        (12, communication(ErrorCode::ABORT_OTHER)),
+        (13, communication(ErrorCode::REJECT_UNRECOGNIZED_SERVICE)),
+    ] {
+        let read = start(&client, peer.local_mac(), specs());
         let env = receive(&mut requests).await;
         let (invoke, rpm) = request(&env);
-        let mut ack = success(&rpm);
-        match fault {
-            0 => {
-                ack.list_of_read_access_results.pop();
-            }
-            1 => ack.list_of_read_access_results.swap(0, 1),
-            2 => ack
-                .list_of_read_access_results
-                .push(ack.list_of_read_access_results[0].clone()),
-            3 => {
-                ack.list_of_read_access_results[0].list_of_results.pop();
-            }
-            4 => ack.list_of_read_access_results[0]
-                .list_of_results
-                .swap(0, 1),
-            5 => {
-                ack.list_of_read_access_results[1].object_identifier =
-                    oid(ObjectType::ANALOG_VALUE, 8)
-            }
-            6 => {
-                ack.list_of_read_access_results[0].list_of_results[0].property_identifier =
-                    PropertyIdentifier::DESCRIPTION
-            }
-            7 => ack.list_of_read_access_results[0].list_of_results[1].property_array_index = None,
-            8 => {
-                let e = &mut ack.list_of_read_access_results[0].list_of_results[2];
-                e.property_value = None;
-                e.error = Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY));
-                e.property_array_index = Some(3);
-            }
-            14 => {
-                let extra = ack.list_of_read_access_results[0].list_of_results[0].clone();
-                ack.list_of_read_access_results[0]
-                    .list_of_results
-                    .push(extra);
-            }
-            _ => {}
-        }
         let pdu = match fault {
             12 => Apdu::Abort(AbortPdu {
                 sent_by_server: true,
@@ -250,25 +252,31 @@ async fn source_rpm_complete_correlation_before_any_success_projection() {
                 error_code: ErrorCode::UNKNOWN_OBJECT,
                 error_data: Bytes::new(),
             }),
-            10 => {
-                let Apdu::ComplexAck(mut a) = response(invoke, &ack) else {
+            _ => {
+                let Apdu::ComplexAck(mut a) = response(invoke, &success(&rpm)) else {
                     unreachable!()
                 };
                 a.service_ack = Bytes::from_static(&[0]);
                 Apdu::ComplexAck(a)
             }
-            _ => response(invoke, &ack),
         };
         if fault != 11 {
             send(&peer, &env.source_mac, pdu).await;
         }
-        assert!(read.await.unwrap().is_err());
-        for record in records(&mut received, &sink, false, 5).await {
+        assert!(read.await.unwrap().is_err(), "fault {fault}");
+        let found = records(&mut received, &sink, false, 5).await;
+        assert_eq!(
+            found.iter().map(what).collect::<Vec<_>>(),
+            asked(&rpm),
+            "fault {fault}"
+        );
+        for record in found {
             assert!(matches!(record.target_device, BACnetRecipient::Address(_)));
-            assert!(record.result.is_some());
+            assert_eq!(record.result, Some(expected), "fault {fault}");
             assert_eq!(record.invoke_id, Some(invoke));
         }
     }
+    assert!(received.try_recv().is_err());
     session.stop().await.unwrap();
     assert_eq!(session.active_leases(), 0);
     peer.stop().await.unwrap();
@@ -297,13 +305,14 @@ async fn source_rpm_unique_successful_device_projection_and_per_reference_filter
         }
         let mut session = session(db, SessionRole::ClientOnly, &sink);
         session.start().await.unwrap();
+        let client = client_of(&session);
         let mut specs = specs();
         if matches!(case, 1 | 4 | 5) {
             let mut second = specs[0].clone();
             second.object_identifier = oid(ObjectType::DEVICE, if case == 4 { 10 } else { 11 });
             specs.push(second);
         }
-        let read = start(&session, peer.local_mac(), specs);
+        let read = start(&client, peer.local_mac(), specs);
         let env = receive(&mut requests).await;
         let (invoke, rpm) = request(&env);
         let mut ack = success(&rpm);

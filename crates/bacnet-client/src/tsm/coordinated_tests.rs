@@ -439,98 +439,72 @@ fn drop_releases_every_coordinated_lease() {
 }
 
 #[tokio::test]
-async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
+async fn error_service_is_checked_in_coordinated_completion() {
     use bacnet_encoding::apdu::ErrorPdu;
-    use bacnet_endpoint_core::coordinator::AdmissionOutcome;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
-    for pre_admitted in [false, true] {
-        let (mut tsm, coordinator) = coordinated_tsm();
-        let mac = [7];
-        let peer = CanonicalPeer::direct(&mac);
-        let (invoke_id, mut registration) = register(
-            &mut tsm,
+    let (mut tsm, coordinator) = coordinated_tsm();
+    let mac = [7];
+    let peer = CanonicalPeer::direct(&mac);
+    let (invoke_id, mut registration) = register(
+        &mut tsm,
+        &mac,
+        peer.clone(),
+        ConfirmedServiceChoice::WRITE_PROPERTY,
+        false,
+    );
+    let error = |service_choice| {
+        Apdu::Error(ErrorPdu {
+            invoke_id,
+            service_choice,
+            error_class: ErrorClass::PROPERTY,
+            error_code: ErrorCode::WRITE_ACCESS_DENIED,
+            error_data: Bytes::new(),
+        })
+    };
+    let response = || {
+        TsmResponse::remote(RemoteError::Error {
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
+        })
+    };
+    let wrong = error(ConfirmedServiceChoice::READ_PROPERTY);
+    let matching = error(ConfirmedServiceChoice::WRITE_PROPERTY);
+    assert!(matches!(
+        tsm.complete_coordinated_terminal_response(
             &mac,
-            peer.clone(),
-            ConfirmedServiceChoice::WRITE_PROPERTY,
-            false,
-        );
-        let error = |service_choice| {
-            Apdu::Error(ErrorPdu {
-                invoke_id,
-                service_choice,
-                error_class: ErrorClass::PROPERTY,
-                error_code: ErrorCode::WRITE_ACCESS_DENIED,
-                error_data: Bytes::new(),
-            })
-        };
-        let response = || {
-            TsmResponse::remote(RemoteError::Error {
+            invoke_id,
+            Some(&registration.owner),
+            &peer,
+            &wrong,
+            response()
+        ),
+        CoordinatedCompletion::ServiceChoiceMismatch { .. }
+    ));
+    assert!(registration.response.try_recv().is_err());
+    assert_eq!(tsm.pending_count(), 1);
+    assert_eq!(
+        tsm.complete_coordinated_terminal_response(
+            &mac,
+            invoke_id,
+            Some(&registration.owner),
+            &peer,
+            &matching,
+            response()
+        ),
+        CoordinatedCompletion::Completed(CompletionOutcome::Delivered)
+    );
+    assert!(matches!(
+        registration.response.await.unwrap(),
+        TsmResponse::Remote {
+            error: RemoteError::Error {
                 class: ErrorClass::PROPERTY,
                 code: ErrorCode::WRITE_ACCESS_DENIED,
-            })
-        };
-        let wrong = error(ConfirmedServiceChoice::READ_PROPERTY);
-        let matching = error(ConfirmedServiceChoice::WRITE_PROPERTY);
-        if pre_admitted {
-            let AdmissionOutcome::Admitted(admission) =
-                coordinator.admit(&peer, &matching).unwrap()
-            else {
-                panic!()
-            };
-            assert!(matches!(
-                tsm.complete_pre_admitted_terminal_response(&mac, &admission, &wrong, response()),
-                CoordinatedCompletion::ServiceChoiceMismatch { .. }
-            ));
-            assert!(registration.response.try_recv().is_err());
-            assert_eq!(tsm.pending_count(), 1);
-            assert_eq!(
-                tsm.complete_pre_admitted_terminal_response(
-                    &mac,
-                    &admission,
-                    &matching,
-                    response()
-                ),
-                CoordinatedCompletion::Completed(CompletionOutcome::Delivered)
-            );
-        } else {
-            assert!(matches!(
-                tsm.complete_coordinated_terminal_response(
-                    &mac,
-                    invoke_id,
-                    Some(&registration.owner),
-                    &peer,
-                    &wrong,
-                    response()
-                ),
-                CoordinatedCompletion::ServiceChoiceMismatch { .. }
-            ));
-            assert!(registration.response.try_recv().is_err());
-            assert_eq!(tsm.pending_count(), 1);
-            assert_eq!(
-                tsm.complete_coordinated_terminal_response(
-                    &mac,
-                    invoke_id,
-                    Some(&registration.owner),
-                    &peer,
-                    &matching,
-                    response()
-                ),
-                CoordinatedCompletion::Completed(CompletionOutcome::Delivered)
-            );
+            },
+            detail: None
         }
-        assert!(matches!(
-            registration.response.await.unwrap(),
-            TsmResponse::Remote {
-                error: RemoteError::Error {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::WRITE_ACCESS_DENIED,
-                },
-                detail: None
-            }
-        ));
-        assert_eq!(coordinator.active_count().unwrap(), 0);
-        assert_eq!(tsm.pending_count(), 0);
-    }
+    ));
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+    assert_eq!(tsm.pending_count(), 0);
 }
 
 /// Diverted registrations (#2617): the client's registration is refused
