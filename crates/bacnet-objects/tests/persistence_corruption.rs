@@ -112,8 +112,9 @@ fn damaged_files_never_panic_and_refused_restores_write_nothing() {
 /// Enrollment's, with its Event_Parameters and Fault_Parameters, plain and
 /// under kind 5, #2331), and a written
 /// Description in the log's, the forwarder's, the class's, Access Rights',
-/// the Tags and the colour output's formats (#2364), and a Load Control's
-/// shed request (#2479), also with written Shed_Levels elements (#2502).
+/// the Tags and the colour output's formats (#2364), a Load Control's
+/// shed request (#2479), also with written Shed_Levels elements (#2502),
+/// and a written Description in the Audit Log's (#2407).
 #[test]
 fn every_format_has_a_sample() {
     let names: Vec<&str> = FORMATS.iter().map(|format| format.name).collect();
@@ -157,6 +158,7 @@ fn every_format_has_a_sample() {
             "described_state_text_reporting_write_config",
             "load_control",
             "written_levels_load_control",
+            "described_audit_log",
         ]
     );
 }

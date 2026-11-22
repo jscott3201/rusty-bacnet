@@ -70,6 +70,16 @@ pub fn audit_log(base: &Path) {
         .expect("the sample commits");
 }
 
+/// An Audit Log with a written Description: schema version 4 (#2407).
+pub fn described_audit_log(base: &Path) {
+    let mut snapshot = audit_snapshot();
+    snapshot.description = Some("Lobby".into());
+    FileAuditLogPersistence::new(base)
+        .unwrap()
+        .commit(&snapshot)
+        .expect("the sample commits");
+}
+
 pub fn notification_forwarder(path: &Path) {
     save_forwarder(path, forwarder_snapshot());
 }
@@ -702,6 +712,7 @@ fn audit_snapshot() -> AuditLogSnapshot {
         completed_receipts: vec![
             CompletedAuditReceipt::new(vec![1, 2, 3], 1_700_000_000_000).expect("a short key"),
         ],
+        description: None,
     }
 }
 

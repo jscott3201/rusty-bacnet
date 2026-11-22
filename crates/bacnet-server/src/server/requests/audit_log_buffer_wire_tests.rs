@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, mpsc};
 use std::time::Duration;
 
-const WAIT: Duration = Duration::from_secs(10);
-const SIMPLE_ACK_WRITE: [u8; 3] = [0x20, 5, 15];
-const SIMPLE_ACK_WPM: [u8; 3] = [0x20, 5, 16];
+pub(super) const WAIT: Duration = Duration::from_secs(10);
+pub(super) const SIMPLE_ACK_WRITE: [u8; 3] = [0x20, 5, 15];
+pub(super) const SIMPLE_ACK_WPM: [u8; 3] = [0x20, 5, 16];
 
 /// The WriteProperty Error PDU for invoke ID 5: class, then code, each an
 /// application-tagged Enumerated.
-fn write_error(class: ErrorClass, code: ErrorCode) -> Vec<u8> {
+pub(super) fn write_error(class: ErrorClass, code: ErrorCode) -> Vec<u8> {
     vec![
         0x50,
         5,
@@ -38,22 +38,22 @@ fn write_error(class: ErrorClass, code: ErrorCode) -> Vec<u8> {
 /// Audit Log storage whose commits can fail, or wait until the test lets
 /// each one go.
 #[derive(Default)]
-struct HeldStorage {
+pub(super) struct HeldStorage {
     snapshot: StdMutex<Option<AuditLogSnapshot>>,
-    commits: AtomicUsize,
-    fail: AtomicBool,
+    pub(super) commits: AtomicUsize,
+    pub(super) fail: AtomicBool,
     hold: StdMutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl HeldStorage {
-    fn hold(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    pub(super) fn hold(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         let (started, started_rx) = mpsc::channel();
         let (go, go_rx) = mpsc::channel();
         *self.hold.lock().unwrap() = Some((started, go_rx));
         (started_rx, go)
     }
 
-    fn committed(&self) -> AuditLogSnapshot {
+    pub(super) fn committed(&self) -> AuditLogSnapshot {
         self.snapshot.lock().unwrap().clone().unwrap()
     }
 }
@@ -102,7 +102,7 @@ impl ClockReader for FixedClock {
     }
 }
 
-fn audit_log() -> ObjectIdentifier {
+pub(super) fn audit_log() -> ObjectIdentifier {
     oid(ObjectType::AUDIT_LOG, 7)
 }
 
@@ -129,7 +129,7 @@ async fn install(fixture: &Fixture, storage: &Arc<HeldStorage>) {
     }
 }
 
-async fn fixture(storage: &Arc<HeldStorage>) -> Arc<Fixture> {
+pub(super) async fn fixture(storage: &Arc<HeldStorage>) -> Arc<Fixture> {
     let fixture = Fixture::new(None);
     install(&fixture, storage).await;
     Arc::new(fixture)
@@ -149,7 +149,11 @@ fn write_request(property: PropertyIdentifier, written: PropertyValue) -> Bytes 
     request.freeze()
 }
 
-async fn write(fixture: &Fixture, property: PropertyIdentifier, written: PropertyValue) -> Vec<u8> {
+pub(super) async fn write(
+    fixture: &Fixture,
+    property: PropertyIdentifier,
+    written: PropertyValue,
+) -> Vec<u8> {
     wire(
         fixture,
         ConfirmedServiceChoice::WRITE_PROPERTY,
@@ -158,7 +162,7 @@ async fn write(fixture: &Fixture, property: PropertyIdentifier, written: Propert
     .await
 }
 
-fn attempt(property: PropertyIdentifier, written: PropertyValue) -> BACnetPropertyValue {
+pub(super) fn attempt(property: PropertyIdentifier, written: PropertyValue) -> BACnetPropertyValue {
     BACnetPropertyValue {
         property_identifier: property,
         property_array_index: None,
@@ -332,7 +336,7 @@ async fn a_buffer_size_write_that_cannot_be_committed_is_refused_and_changes_not
     assert_eq!(storage.committed(), before);
 }
 
-fn log_attempts(first: BACnetPropertyValue, second: BACnetPropertyValue) -> Bytes {
+pub(super) fn log_attempts(first: BACnetPropertyValue, second: BACnetPropertyValue) -> Bytes {
     wpm(vec![WriteAccessSpecification {
         object_identifier: audit_log(),
         list_of_properties: vec![first, second],

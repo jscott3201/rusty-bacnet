@@ -43,6 +43,10 @@ pub struct AuditLogSnapshot {
     pub records: Vec<BACnetAuditLogRecordResult>,
     /// Bounded completed confirmed-request receipts owned by this Audit Log.
     pub completed_receipts: Vec<CompletedAuditReceipt>,
+    /// Description, once a peer's write has set it (#2407), at most 16 KiB
+    /// of UTF-8; `None` until then. Only a snapshot holding one takes
+    /// schema version 4, so one without it keeps version 3's octets.
+    pub description: Option<String>,
 }
 
 /// Application-owned persistence port for one AuditLog object.

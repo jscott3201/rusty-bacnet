@@ -5343,7 +5343,9 @@ writes in the same file, with the same rules:
 - Device and the two lighting outputs (Lighting Output, Binary Lighting
   Output), in their Tags storage, through `with_tags_persistence`;
 - Color and Color Temperature, with Present_Value and a written default,
-  through `with_output_persistence`.
+  through `with_output_persistence`;
+- the Audit Log, in the snapshot its `AuditLogPersistence` commits, beside
+  its records, Enable and Buffer_Size (#2407).
 
 A write of Description is saved before it is answered, refused with DEVICE /
 OPERATIONAL_PROBLEM when the save fails, and staged by the server with the
@@ -5353,8 +5355,8 @@ anything is saved; a long one the object took before it had storage refuses
 no other write. A NULL succeeds, changes nothing and saves nothing. A saved
 Description wins over `set_description` (on the analog, binary and
 multi-state objects, Event Enrollment, the logs, Notification Class,
-Notification Forwarder, Device and the two lighting outputs; the others have
-no setter) until the type's clear drops it:
+Notification Forwarder, Device, the two lighting outputs and the Audit Log;
+the others have no setter) until the type's clear drops it:
 
 - `clear_written_reporting` on the thirteen reporting types and the logs,
   with their written reporting settings;
@@ -5362,8 +5364,8 @@ no setter) until the type's clear drops it:
   they keep;
 - `clear_written_description` on Notification Class, Notification
   Forwarder, Access Rights, Device, Lighting Output, Binary Lighting Output,
-  Color and Color Temperature, which drops the Description alone. A colour
-  object's `clear_written_default` leaves it in place.
+  Color, Color Temperature and Audit Log, which drops the Description alone.
+  A colour object's `clear_written_default` leaves it in place.
 
 Each clear saves before it returns, keeps what was written when the save
 fails and returns storage's error, and does nothing without storage or a
@@ -5372,8 +5374,10 @@ are: it waits for its save. The text served stays until the setter or a
 write changes it. A log's `written_reporting().description`, and the
 `description` field of `TimerWriteConfig`, `ChannelWriteConfig`,
 `LogReportingSettings`, `NotificationClassSnapshot`, `ForwarderSnapshot`,
-`AccessRightsSnapshot`, `TagsSnapshot` and `ColorOutputSnapshot`, show what
-is saved.
+`AccessRightsSnapshot`, `TagsSnapshot`, `ColorOutputSnapshot` and
+`AuditLogSnapshot`, and an Audit Log's `written_description()`, show what is
+saved. `AuditLogSnapshot` gained the field: a struct literal of it now sets
+`description` (`None` for none).
 
 Storage holds it as kind 5 of `RBNWCF01`
 (`snapshot::write_config::KIND_WITH_DESCRIPTION`): the Description, then the
@@ -5402,17 +5406,19 @@ build refuses one with it as an unknown version:
   that holds a Description;
 - `RBNCLR03` (`snapshot::color::MAGIC_WITH_DESCRIPTION`): the Description
   between the header and version 2's body. Versions 1 to 3 all load, and
-  the file's cap rises from 64 octets to 16,452.
+  the file's cap rises from 64 octets to 16,452;
+- the Audit Log's slot, schema version 4 of `RBALOG01`
+  (`snapshot::audit_log::VERSION_WITH_DESCRIPTION`, #2407): the Description,
+  its length in four octets and its UTF-8, after the completed receipts.
+  Versions 1 to 4 all load.
 
 Once a clear leaves no Description saved, the next save writes the older
 version again.
 
 An endpoint session's server, a full server (#2617), keeps it the same way.
 
-So every type with a store keeps a written Description, with one
-exception: the Audit Log. Its `AuditLogPersistence` keeps the records,
-Enable and Buffer_Size, and a Description a peer writes to it lasts
-until a restart. The store must also be the one that takes it: an analog,
+So every type with a store keeps a written Description. The store must be
+the one that takes it: an analog,
 binary or multi-state object, a Color or a Color Temperature built with
 Tags storage alone keeps a written Description in memory, since its
 reporting or output store is the one that holds it. An object built

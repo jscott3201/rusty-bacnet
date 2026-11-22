@@ -4277,12 +4277,12 @@ holding another fails its build the same way.
 
 These builders, `add_timer`, `add_channel`, the three log builders,
 `add_notification_class`, `add_notification_forwarder`, `add_access_rights`,
-`add_color` and `add_color_temperature` keep a written Description in their
-`storage_path` file, with these rules: every builder that takes
-`storage_path` does, except `add_audit_log`. An Audit Log's files keep its
-records, Enable and Buffer_Size, and a Description a peer writes to it
-lasts until the server restarts. So does one written to an object built
-without `storage_path`, or to a type whose builder has none: the Device and
+`add_color`, `add_color_temperature` and `add_audit_log` keep a written
+Description in their `storage_path` file, with these rules: every builder
+that takes `storage_path` does. An Audit Log keeps it in the files that hold
+its records, Enable and Buffer_Size (#2407). A Description written to an
+object built without `storage_path`, or to a type whose builder has none,
+lasts until the server restarts: the Device and
 the two lighting outputs among them, which keep one only through the Rust
 API's `with_tags_persistence`, and the Network Port, whose transport keeps
 only its own tables in `bdt_persist_path`.

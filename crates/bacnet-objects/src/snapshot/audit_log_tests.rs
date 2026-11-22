@@ -46,6 +46,7 @@ fn snapshot(generation: u64) -> AuditLogSnapshot {
             record(7, BACnetAuditLogDatum::TimeChange(2.5)),
         ],
         completed_receipts: vec![CompletedAuditReceipt::new(vec![4, 5], 9_000).unwrap()],
+        description: None,
     }
 }
 
@@ -99,11 +100,11 @@ fn a_slot_refuses_with_the_kind_it_names() {
     flipped[30] ^= 1;
     assert_eq!(kind(&flipped, object()), (SnapshotErrorKind::Damaged, true));
     let mut newer = octets.clone();
-    newer[8..10].copy_from_slice(&4u16.to_be_bytes());
+    newer[8..10].copy_from_slice(&5u16.to_be_bytes());
     reseal(&mut newer);
     assert_eq!(
         kind(&newer, object()),
-        (SnapshotErrorKind::UnknownVersion(4), false)
+        (SnapshotErrorKind::UnknownVersion(5), false)
     );
     let other = oid(ObjectType::AUDIT_LOG, 3);
     assert_eq!(
@@ -156,7 +157,7 @@ fn the_newer_slot_wins_and_damage_is_passed_over() {
     }
     // A sound slot this build must not take stops the choice.
     let mut newer = slot(5);
-    newer[8..10].copy_from_slice(&4u16.to_be_bytes());
+    newer[8..10].copy_from_slice(&5u16.to_be_bytes());
     reseal(&mut newer);
     assert!(newest([Some(&three), Some(&newer)]).is_err());
 }

@@ -14,7 +14,8 @@
 //! a multi-state object a written State_Text (#2414), and those
 //! objects, a Timer, a Channel, the three logs, a Notification Class or
 //! Forwarder, an Access Rights object, a Device, the two lighting outputs
-//! and the two colour objects a written Description (#2364), and a Load
+//! and the two colour objects a written Description (#2364), an Audit Log
+//! its written Description too (#2407), and a Load
 //! Control the shed request, Enable, Description and Shed_Levels elements a
 //! peer writes (#2479, #2502),
 //! before serving it, and refuses the write if the save fails. So
@@ -118,7 +119,8 @@ enum TargetValue {
 /// with a reporting store,
 /// the three logs, a Notification Class, a forwarder, an Access Rights
 /// object, a Device, a Lighting Output, a Binary Lighting Output and the
-/// two colour objects keep a written Description too (#2364). A Load
+/// two colour objects keep a written Description too (#2364), and an
+/// Audit Log does (#2407). A Load
 /// Control keeps its four request properties, Enable, a written
 /// Description (#2479) and the Shed_Levels elements written (#2502).
 /// Under a policy that decides mutations, every attempt of a
@@ -138,9 +140,12 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
                 | PropertyIdentifier::DESCRIPTION
         ),
+        // And a written Description (#2407).
         ObjectType::AUDIT_LOG => matches!(
             property,
-            PropertyIdentifier::ENABLE | PropertyIdentifier::BUFFER_SIZE
+            PropertyIdentifier::ENABLE
+                | PropertyIdentifier::BUFFER_SIZE
+                | PropertyIdentifier::DESCRIPTION
         ),
         ObjectType::NOTIFICATION_CLASS => matches!(
             property,

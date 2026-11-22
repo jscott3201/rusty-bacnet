@@ -121,6 +121,7 @@ fn log_object(
         total_record_count,
         records,
         completed_receipts: Vec::new(),
+        description: None,
     }));
     AuditLogObject::new(instance, format!("Audit-{instance}"), capacity, persistence).unwrap()
 }

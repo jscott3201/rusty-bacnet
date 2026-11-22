@@ -28,6 +28,8 @@ use mutations::{InitialCovNotification, MutationEffects};
 #[cfg(test)]
 mod audit_log_buffer_wire_tests;
 #[cfg(test)]
+mod audit_log_description_wire_tests;
+#[cfg(test)]
 mod color_command_wire_tests;
 #[cfg(test)]
 mod description_durable_tests;

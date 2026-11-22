@@ -254,4 +254,12 @@ pub const FORMATS: &[Format] = &[
         sample: samples::written_levels_load_control,
         kind: Kind::LoadControl,
     },
+    // The Audit Log's schema version 4, with a written Description
+    // (#2407). Last for the same reason.
+    Format {
+        name: "described_audit_log",
+        two_slot: true,
+        sample: samples::described_audit_log,
+        kind: Kind::AuditLog,
+    },
 ];

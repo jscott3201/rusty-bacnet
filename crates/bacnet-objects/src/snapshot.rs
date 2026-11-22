@@ -24,7 +24,7 @@
 //! | Module | Snapshot | Tag | Versions read (written) | File backend |
 //! | --- | --- | --- | --- | --- |
 //! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2, 3 (2, 3) | `FileLogPersistence`, one slot of two |
-//! | [`audit_log`] | [`AuditLogSnapshot`] | `RBALOG01` | 1, 2, 3 (3) | `FileAuditLogPersistence`, one slot of two |
+//! | [`audit_log`] | [`AuditLogSnapshot`] | `RBALOG01` | 1, 2, 3, 4 (3, 4) | `FileAuditLogPersistence`, one slot of two |
 //! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1 to 6 (2 to 6) | `FileWriteConfigPersistence` |
 //! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1, 2 (1, 2) | `FileNotificationClassPersistence` |
 //! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1, 2 (1, 2) | `FileNotificationForwarderPersistence` |
@@ -34,8 +34,9 @@
 //! | [`load_control`] | [`LoadControlSnapshot`] | `RBNLCT02` | 1 (`RBNLCT01`), 2 (1, 2) | `FileLoadControlPersistence` |
 //!
 //! A written Description (#2364) takes the newest version (or kind) in each
-//! row it changed: log schema version 3, write configuration kind 5, the
-//! colour output's version 3 and the other one-file formats' version 2.
+//! row it changed: log schema version 3, the Audit Log's schema version 4
+//! (#2407), write configuration kind 5, the colour output's version 3 and
+//! the other one-file formats' version 2.
 //! Only a snapshot holding one is written that
 //! way, so a snapshot without one keeps the octets an earlier release wrote,
 //! and a release that predates the version refuses one with it as
