@@ -18,8 +18,25 @@ async fn invoke_to(
     service: &str,
     arguments: &[&str],
 ) -> std::process::Output {
+    invoke_from(0, port, target, service, arguments).await
+}
+
+/// `invoke_to` with the CLI's own `--port`, for a test that names its sends.
+async fn invoke_from(
+    source_port: u16,
+    port: Option<u16>,
+    target: &str,
+    service: &str,
+    arguments: &[&str],
+) -> std::process::Output {
     let mut cmd = command();
-    cmd.args(["--interface", "127.0.0.1", "--port", "0", "--json"]);
+    cmd.args([
+        "--interface",
+        "127.0.0.1",
+        "--port",
+        &source_port.to_string(),
+        "--json",
+    ]);
     if let Some(port) = port {
         cmd.args(["--foreign-bbmd", &format!("127.0.0.1:{port}")]);
     }
@@ -278,12 +295,11 @@ async fn routed_later_file_window_failure_removes_partial_stream_and_record_outp
 
 #[tokio::test]
 async fn routed_file_write_without_permission_precedes_discovery_and_registration() {
-    use std::io::ErrorKind;
-    let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    socket.set_nonblocking(true).unwrap();
+    let peer = Unsent::new();
     for target in [format!("{DNET}:{INSTANCE}"), format!("{DNET}:0x05")] {
-        let output = invoke(
-            socket.local_addr().unwrap().port(),
+        let output = invoke_from(
+            peer.source_port(),
+            Some(peer.port()),
             &target,
             "file-write",
             &["10", "no-such-input.bin"],
@@ -297,10 +313,7 @@ async fn routed_file_write_without_permission_precedes_discovery_and_registratio
         assert_eq!(refusal["command"], "file-write");
         assert_eq!(refusal["class"], "write");
         assert_eq!(refusal["missing"], json!(["--allow-write"]));
-        assert_eq!(
-            socket.recv_from(&mut [0; 1500]).unwrap_err().kind(),
-            ErrorKind::WouldBlock
-        );
+        peer.assert_nothing_sent("file-write refusal");
     }
 }
 
