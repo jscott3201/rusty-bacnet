@@ -22,8 +22,9 @@
 //! bound means measuring the sizes on dev again with the new compiler and
 //! setting the bounds from those, not a regression to chase here.
 //!
-//! `cli_main` holds the command line, whose paths are 8 bytes wider on
-//! Windows (its `OsString` keeps a UTF-8 flag beside the bytes), so its
+//! `cli_main` takes the command line boxed, but still holds values built
+//! from it, such as the transport arguments, whose paths are 8 bytes wider
+//! on Windows (an `OsString` keeps a UTF-8 flag beside the bytes), so its
 //! bound is checked on Linux and macOS only; the dispatch holds no path.
 
 use std::future::Future;
@@ -38,9 +39,14 @@ const DISPATCH_BOUND: usize = 472 + 32;
 /// `execute_bip_command`'s future was 232 bytes.
 const BIP_DISPATCH_BOUND: usize = 232 + 32;
 
-/// `cli_main`'s future was 2,448 bytes.
+/// `cli_main`'s future was 2,448 bytes when it held the command line
+/// inline. It takes it boxed since #2667, and was 1,320 bytes then (Rust
+/// 1.99.0, with and without the CLI's optional features), measured on
+/// macOS arm64 as every bound here was. Linux checks it too: the 2,448
+/// bound, measured the same way, held there (#2656), and CI's first run
+/// of this one is its check on Linux.
 #[cfg(not(windows))]
-const MAIN_BOUND: usize = 2_448 + 32;
+const MAIN_BOUND: usize = 1_320 + 32;
 
 /// The size of the future `f` returns, without calling it.
 #[cfg(not(windows))]

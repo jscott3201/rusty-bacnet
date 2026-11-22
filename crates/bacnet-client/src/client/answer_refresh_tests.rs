@@ -215,7 +215,6 @@ async fn a_routers_refusal_leaves_the_age() {
     );
     client
         .configure_routed_path_max_npdu(&router, DNET, 1497)
-        .await
         .unwrap();
     let seen = crate::discovery::now();
     client

@@ -370,7 +370,7 @@ the user.
 | `bacnet://device/{instance}/object/{type}:{n}` | the point preset | one managed SubscribeCOV per object with a finite lifetime (300 s, renewed), or polling at 10 s or slower when the device refuses COV |
 | `.../property/{prop}` | one property | SubscribeCOVProperty, or polling |
 | `bacnet://alarms`, `bacnet://device/{instance}/alarms` | active and unacknowledged alarms | GetEventInformation polled (60 s per device, rate limited) |
-| `bacnet://session` | level, expiry, grants, limits, rate meter, COV footprint | updated on arm, plan-grant spend, or expiry (#2160) |
+| `bacnet://session` | level, expiry, grants, limits, rate meter, COV footprint, routed path limits and the reject counters (read-only, #2667) | updated on arm, plan-grant spend, or expiry (#2160) |
 | `bacnet://ledger` | this principal's ledger entries still in effect | updated on each settle or revert (#2160) |
 
 Mechanics:

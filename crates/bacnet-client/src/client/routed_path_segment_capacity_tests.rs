@@ -21,7 +21,6 @@ async fn reason_4_during_segmented_send_prevents_window_retransmission() {
     );
     client
         .configure_routed_path_max_npdu(&router, DNET, 300)
-        .await
         .unwrap();
 
     let task = routed_request(

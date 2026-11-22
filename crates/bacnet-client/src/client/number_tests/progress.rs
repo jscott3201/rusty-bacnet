@@ -16,7 +16,6 @@ async fn client_number_held_egress_preserves_routed_reject_and_apdu_dispatch() {
     bounded(gates.entered.acquire()).await.unwrap().forget();
     client
         .configure_routed_path_max_npdu(&[2], 100, 1497)
-        .await
         .unwrap();
     let routed = {
         let client = client.clone();

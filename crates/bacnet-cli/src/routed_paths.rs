@@ -16,7 +16,8 @@
 
 use std::future::Future;
 
-use bacnet_client::client::{BACnetClient, RoutedPathLimit};
+use bacnet_client::client::BACnetClient;
+use bacnet_ops::RoutedPathStatus;
 use bacnet_ops::target::{AddressStyle, address_mac};
 use bacnet_transport::port::TransportPort;
 use serde::Serialize;
@@ -33,9 +34,9 @@ const SHAPE: &str = "ROUTER/NETWORK=MAX_NPDU, such as 192.168.1.20:47808/5=480";
 /// network and the limit in NPDU octets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LimitArg {
-    router: String,
-    network: u16,
-    max_npdu: u16,
+    pub(crate) router: String,
+    pub(crate) network: u16,
+    pub(crate) max_npdu: u16,
 }
 
 /// Parse `ROUTER/NETWORK=MAX_NPDU`. The router is everything before the
@@ -46,28 +47,36 @@ pub(crate) fn parse_limit_arg(text: &str) -> Result<LimitArg, String> {
     let (path, max_npdu) = text
         .rsplit_once('=')
         .ok_or_else(|| format!("'{text}' is not {SHAPE}"))?;
-    let (router, network) = path
-        .rsplit_once('/')
-        .ok_or_else(|| format!("'{text}' is not {SHAPE}"))?;
-    if router.is_empty() {
-        return Err(format!("'{text}' names no router: {SHAPE}"));
-    }
-    let network = match network.parse::<u16>() {
-        Ok(network @ 1..=65534) => network,
-        _ => {
-            return Err(format!(
-                "'{network}' is not a remote network number from 1 to 65534"
-            ));
-        }
-    };
+    let (router, network) = parse_path_arg(path).map_err(|why| match path.rsplit_once('/') {
+        None => format!("'{text}' is not {SHAPE}"),
+        Some(("", _)) => format!("'{text}' names no router: {SHAPE}"),
+        Some(_) => why,
+    })?;
     let max_npdu = max_npdu
         .parse::<u16>()
         .map_err(|_| format!("'{max_npdu}' is not a number of NPDU octets from 0 to 65535"))?;
     Ok(LimitArg {
-        router: router.to_owned(),
+        router,
         network,
         max_npdu,
     })
+}
+
+/// Parse `ROUTER/NETWORK`, the path part of [`parse_limit_arg`]: the router
+/// is everything before the last `/`, and the network 1 to 65534.
+pub(crate) fn parse_path_arg(path: &str) -> Result<(String, u16), String> {
+    let Some((router, network)) = path.rsplit_once('/') else {
+        return Err(format!("'{path}' is not ROUTER/NETWORK"));
+    };
+    if router.is_empty() {
+        return Err(format!("'{path}' names no router"));
+    }
+    match network.parse::<u16>() {
+        Ok(network @ 1..=65534) => Ok((router.to_owned(), network)),
+        _ => Err(format!(
+            "'{network}' is not a remote network number from 1 to 65534"
+        )),
+    }
 }
 
 /// The subcommands with no client of their own to set a limit on, or whose
@@ -142,7 +151,6 @@ pub(crate) async fn around<T: TransportPort + 'static>(
     for (mac, limit) in &paths {
         client
             .configure_routed_path_max_npdu(mac, limit.network, limit.max_npdu)
-            .await
             .map_err(|error| format!("--routed-path-limit {}: {error}", limit.router))?;
     }
     let outcome = command.await;
@@ -180,39 +188,13 @@ fn timed_out(outcome: &CliResult) -> bool {
     false
 }
 
-/// One path as the summary shows it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct PathRow {
-    /// The router's address on this network, in the link's own form.
-    router: String,
-    network: u16,
-    max_npdu: u16,
-    /// `default`, `configured` or `learned`.
-    source: &'static str,
-    configured_max_npdu: Option<u16>,
-    learned_max_npdu: Option<u16>,
-    below_minimum_reject_seen: bool,
-}
-
-impl PathRow {
-    fn of(path: &RoutedPathLimit, style: AddressStyle) -> Self {
-        Self {
-            router: style.format(&path.router_mac),
-            network: path.dnet,
-            max_npdu: path.max_npdu(),
-            source: path.source().name(),
-            configured_max_npdu: path.configured_max_npdu,
-            learned_max_npdu: path.learned_max_npdu,
-            below_minimum_reject_seen: path.below_minimum_reject_seen,
-        }
-    }
-}
-
 /// The client's routed paths and its two counts of too-long rejects it
 /// did not believe, after the command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct Summary {
-    routed_paths: Vec<PathRow>,
+    /// Each path as `bacnet_ops` decodes it: router in the link's own form,
+    /// network, the limit and its source, and the raw values.
+    routed_paths: Vec<RoutedPathStatus>,
     too_long_reject_drops: u64,
     below_minimum_reject_drops: u64,
     /// What to do about a timeout on a path whose router refused a small
@@ -222,23 +204,17 @@ struct Summary {
 
 impl Summary {
     fn of<T: TransportPort + 'static>(client: &BACnetClient<T>, timed_out: bool) -> Self {
-        let style = AddressStyle::of(client.transport());
-        let routed_paths: Vec<PathRow> = client
-            .routed_path_limits()
-            .iter()
-            .map(|path| PathRow::of(path, style))
-            .collect();
-        let below_minimum_reject_drops = client.below_minimum_reject_drops();
+        let paths = bacnet_ops::raw::routed_paths(client);
         Self::new(
-            routed_paths,
-            client.too_long_reject_drops(),
-            below_minimum_reject_drops,
+            paths.paths,
+            paths.too_long_reject_drops,
+            paths.below_minimum_reject_drops,
             timed_out,
         )
     }
 
     fn new(
-        routed_paths: Vec<PathRow>,
+        routed_paths: Vec<RoutedPathStatus>,
         too_long_reject_drops: u64,
         below_minimum_reject_drops: u64,
         timed_out: bool,
@@ -287,10 +263,10 @@ impl Summary {
             ]);
             for path in &self.routed_paths {
                 table.add_row(vec![
-                    path.router.clone(),
-                    path.network.to_string(),
+                    path.path.router().to_owned(),
+                    path.path.network().to_string(),
                     path.max_npdu.to_string(),
-                    path.source.to_owned(),
+                    path.source.name().to_owned(),
                     dash(path.configured_max_npdu),
                     dash(path.learned_max_npdu),
                     if path.below_minimum_reject_seen {
@@ -317,11 +293,11 @@ impl Summary {
 
 /// The hint for a timeout after a dropped below-minimum reject, naming the
 /// flag for each path that drew one.
-fn hint(paths: &[PathRow]) -> String {
+fn hint(paths: &[RoutedPathStatus]) -> String {
     let flagged: Vec<String> = paths
         .iter()
         .filter(|path| path.below_minimum_reject_seen)
-        .map(|path| format!("--routed-path-limit {}/{}=SIZE", path.router, path.network))
+        .map(|path| format!("--routed-path-limit {}=SIZE", path.path))
         .collect();
     let set = if flagged.is_empty() {
         "--routed-path-limit ROUTER/NETWORK=SIZE".to_owned()

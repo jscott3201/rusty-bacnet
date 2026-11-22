@@ -50,6 +50,7 @@ mod mstp;
 mod network;
 mod point;
 pub(crate) mod profile;
+mod routed_paths;
 mod row_error;
 mod safety;
 // Without `sc-tls` nothing reports to the SC screen; it still draws.

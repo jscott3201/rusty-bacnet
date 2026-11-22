@@ -60,11 +60,11 @@ impl BACnetClient {
     /// the standard asks; one that could carry no request at all (under 66
     /// on B/IP, 61 on MS/TP) raises ValueError, as do a bad router or
     /// network; an `int` outside 0 to 65535 raises OverflowError, a `bool`
-    /// TypeError. The call waits for a request active on the path, or one
-    /// queued for it, but not out the hold a request with no answer leaves:
-    /// the change applies at once, and the next request still waits the hold
-    /// out. Nothing goes through the path. Raises RuntimeError before start
-    /// and after stop.
+    /// TypeError. The change applies at once (#2683): it waits neither for
+    /// a request on the path nor out the hold a request with no answer
+    /// leaves; a request waiting out the hold goes sized to the new limit
+    /// when it ends. Nothing goes through the path. Raises RuntimeError
+    /// before start and after stop.
     fn configure_routed_path_max_npdu<'py>(
         &self,
         py: Python<'py>,
@@ -81,7 +81,6 @@ impl BACnetClient {
             let mac = router.on(&client, NOT_A_ROUTER).await?;
             client
                 .configure_routed_path_max_npdu(&mac, network, max_npdu)
-                .await
                 .map_err(path_err)
         })
     }
@@ -89,7 +88,7 @@ impl BACnetClient {
     /// Put the routed path through `router` to `network` back on the
     /// default, 228 octets, dropping the limit set or learned for it.
     /// Takes `router` and `network` as `configure_routed_path_max_npdu`
-    /// does, and waits the same way. Nothing goes through the path.
+    /// does, and applies at once too. Nothing goes through the path.
     fn clear_routed_path_limit<'py>(
         &self,
         py: Python<'py>,
@@ -104,7 +103,6 @@ impl BACnetClient {
             let mac = router.on(&client, NOT_A_ROUTER).await?;
             client
                 .clear_routed_path_limit(&mac, network)
-                .await
                 .map_err(path_err)
         })
     }

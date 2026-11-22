@@ -131,6 +131,15 @@ pub(crate) const COMMANDS: &[Syntax] = &[
         what: "Monitor thresholds, safe-join window, or receive-only baud scan",
     },
     Syntax {
+        name: "path-limit",
+        alias: None,
+        usage: &[
+            "path-limit ROUTER/NETWORK=SIZE",
+            "path-limit ROUTER/NETWORK clear",
+        ],
+        what: "A routed path's size limit; sends nothing",
+    },
+    Syntax {
         name: "dcc",
         alias: Some("control"),
         usage: &[
@@ -203,6 +212,8 @@ pub(crate) enum Line {
     /// DeviceCommunicationControl or ReinitializeDevice to the selected
     /// device.
     Manage(Action),
+    /// Set or clear a routed path's size limit.
+    PathLimit(crate::tui::routed_paths::PathLimit),
 }
 
 /// `dcc ACTION [MINUTES|forever]`. A disable without a duration lasts
@@ -493,6 +504,9 @@ pub(crate) fn parse(text: &str, devices: &DeviceTable) -> Result<Line, String> {
             Ok(Line::Scan(Some(Duration::from_secs(seconds))))
         }
         ("mstp", [which, value]) => Ok(Line::Mstp(mstp_setting(which, value)?)),
+        ("path-limit", words) => Ok(Line::PathLimit(crate::tui::routed_paths::PathLimit::parse(
+            words,
+        )?)),
         ("dcc", [action, rest @ ..]) if rest.len() <= 1 => {
             Ok(Line::Manage(dcc(action, rest.first().copied())?))
         }
@@ -534,6 +548,7 @@ impl App {
                     Ok(Line::Mstp(setting)) => self.mstp_setting(setting),
                     Ok(Line::Scan(window)) => self.mstp_scan(window, out),
                     Ok(Line::Manage(action)) => self.open_manage(action),
+                    Ok(Line::PathLimit(change)) => out.push(Command::PathLimit(change)),
                     Err(error) => self.flash(error, FLASH_FOR),
                 }
             }

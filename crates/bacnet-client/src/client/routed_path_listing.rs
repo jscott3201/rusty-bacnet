@@ -4,7 +4,7 @@
 use bacnet_types::MacAddr;
 
 use super::BACnetClient;
-use super::routed_path_limits::CONSERVATIVE_ROUTED_PATH_MAX_NPDU;
+use super::routed_path_limits::DEFAULT_ROUTED_PATH_MAX_NPDU;
 use bacnet_transport::port::TransportPort;
 
 /// Where the limit in force on a routed path comes from
@@ -62,7 +62,7 @@ impl RoutedPathLimit {
     pub fn max_npdu(&self) -> u16 {
         let base = self
             .configured_max_npdu
-            .unwrap_or(CONSERVATIVE_ROUTED_PATH_MAX_NPDU);
+            .unwrap_or(DEFAULT_ROUTED_PATH_MAX_NPDU);
         self.learned_max_npdu
             .map_or(base, |learned| base.min(learned))
     }
@@ -73,7 +73,7 @@ impl RoutedPathLimit {
     pub fn source(&self) -> RoutedPathLimitSource {
         let base = self
             .configured_max_npdu
-            .unwrap_or(CONSERVATIVE_ROUTED_PATH_MAX_NPDU);
+            .unwrap_or(DEFAULT_ROUTED_PATH_MAX_NPDU);
         match (self.configured_max_npdu, self.learned_max_npdu) {
             (_, Some(learned)) if learned < base => RoutedPathLimitSource::Learned,
             (Some(_), _) => RoutedPathLimitSource::Configured,

@@ -8,15 +8,15 @@ use std::sync::Arc;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
-use tokio::time::{Duration, Instant, sleep};
+use tokio::time::{Duration, sleep};
 
-use super::routed_path_answered_tests::{LARGE, Path, WINDOW, timed_out, too_long};
+use super::routed_path_answered_tests::{LARGE, Path, too_long};
 use super::routed_path_limit_tests::{DNET, confirmed_request, harness};
 use super::{BACnetClient, ClientConfig, RoutedPathLimit, RoutedPathLimitSource, Station};
 
-const ROUTER: [u8; 1] = [2];
+pub(super) const ROUTER: [u8; 1] = [2];
 
-fn listed(
+pub(super) fn listed(
     configured: Option<u16>,
     learned: Option<u16>,
     below_minimum_reject_seen: bool,
@@ -45,9 +45,7 @@ async fn a_limit_that_can_carry_no_request_is_refused_at_configure_time() {
             .await
             .unwrap();
         for refused in [0, 1, smallest - 1] {
-            let result = client
-                .configure_routed_path_max_npdu(&ROUTER, DNET, refused)
-                .await;
+            let result = client.configure_routed_path_max_npdu(&ROUTER, DNET, refused);
             assert!(
                 matches!(&result, Err(Error::Encoding(message))
                     if message.contains(&format!("give at least {smallest}"))),
@@ -58,7 +56,6 @@ async fn a_limit_that_can_carry_no_request_is_refused_at_configure_time() {
 
         client
             .configure_routed_path_max_npdu(&ROUTER, DNET, smallest)
-            .await
             .unwrap();
         assert_eq!(
             client.routed_path_limits(),
@@ -117,16 +114,12 @@ async fn the_listing_names_configured_and_learned_limits() {
 
     path.client
         .configure_routed_path_max_npdu(&ROUTER, DNET, 480)
-        .await
         .unwrap();
     assert_eq!(
         path.client.routed_path_limits(),
         [listed(Some(480), None, false)]
     );
-    path.client
-        .clear_routed_path_limit(&ROUTER, DNET)
-        .await
-        .unwrap();
+    path.client.clear_routed_path_limit(&ROUTER, DNET).unwrap();
     assert!(path.client.routed_path_limits().is_empty());
     path.stop().await;
 }
@@ -152,7 +145,6 @@ async fn a_below_minimum_reject_lists_its_path_until_the_limit_is_set() {
 
     path.client
         .configure_routed_path_max_npdu(&ROUTER, DNET, 128)
-        .await
         .unwrap();
     assert_eq!(
         path.client.routed_path_limits(),
@@ -175,7 +167,6 @@ async fn the_listing_is_ordered_by_router_then_network() {
     for (router, dnet) in [([9u8], 2u16), ([2], 7), ([2], 3)] {
         client
             .configure_routed_path_max_npdu(&router, dnet, 300)
-            .await
             .unwrap();
     }
     let order: Vec<(Vec<u8>, u16)> = client
@@ -186,121 +177,6 @@ async fn the_listing_is_ordered_by_router_then_network() {
     assert_eq!(order, [(vec![2], 3), (vec![2], 7), (vec![9], 2)]);
     let mut client = Arc::try_unwrap(client).ok().unwrap();
     client.stop().await.unwrap();
-}
-
-/// A request with no answer leaves its path held for the window (the APDU
-/// timeout times the attempts): returns the client when it has ended.
-async fn timed_out_path() -> Path {
-    let mut path = Path::new(ClientConfig::default(), None).await;
-    let task = path.request(1, 0x41);
-    for _ in 0..4 {
-        path.next_frame().await;
-    }
-    assert!(timed_out(task.await.unwrap()));
-    path
-}
-
-/// A change of the limit after a timeout applies at once instead of waiting
-/// out the hold, and leaves the hold as it was: made 10 s into it, the next
-/// request still goes out when the hold ends, 10 s short of a full window,
-/// sized to the new limit (480 octets: 469 of APDU, so 304 go out whole,
-/// where the default would segment them).
-#[tokio::test(start_paused = true)]
-async fn a_change_after_a_timeout_applies_at_once_and_the_hold_stays() {
-    let mut path = timed_out_path().await;
-    let into = Duration::from_secs(10);
-    sleep(into).await;
-    let from = Instant::now();
-    path.client
-        .configure_routed_path_max_npdu(&ROUTER, DNET, 300)
-        .await
-        .unwrap();
-    path.client
-        .clear_routed_path_limit(&ROUTER, DNET)
-        .await
-        .unwrap();
-    path.client
-        .configure_routed_path_max_npdu(&ROUTER, DNET, 480)
-        .await
-        .unwrap();
-    assert_eq!(
-        from.elapsed(),
-        Duration::ZERO,
-        "a change waited out the hold"
-    );
-    let first = path.next_goes_out_after(LARGE, WINDOW - into, 469).await;
-    assert!(!first.segmented);
-    path.stop().await;
-}
-
-/// A request already queued on the path holds it while it waits out the
-/// hold, so a change made then waits for that request to end, and the
-/// request goes out at the old size (228 octets: segments of 217 APDU
-/// octets). The request after it is sized to the new limit.
-#[tokio::test(start_paused = true)]
-async fn a_change_waits_for_a_request_queued_in_the_hold() {
-    let mut path = timed_out_path().await;
-    let queued = path.request(LARGE, 0x42);
-    sleep(Duration::from_millis(1)).await;
-    let change = {
-        let client = Arc::clone(&path.client);
-        tokio::spawn(async move {
-            client
-                .configure_routed_path_max_npdu(&ROUTER, DNET, 480)
-                .await
-        })
-    };
-    sleep(Duration::from_millis(10)).await;
-    assert!(
-        !change.is_finished(),
-        "the change ran ahead of the queued request"
-    );
-    let first = path.next_frame().await;
-    assert!(first.segmented);
-    assert_eq!(
-        first.service_request.len(),
-        217 - 6,
-        "sized by the old limit"
-    );
-    assert!(!change.is_finished());
-    path.finish_segmented(first, 217).await;
-    assert!(queued.await.unwrap().unwrap().is_empty());
-    change.await.unwrap().unwrap();
-    let next = path.next_goes_out_after(LARGE, Duration::ZERO, 469).await;
-    assert!(!next.segmented);
-    path.stop().await;
-}
-
-/// A reason 4 that lands in the hold after a change finds no request
-/// active on the path: it is discarded, uncounted, and neither the new
-/// limit nor a learned one moves, as #2651's hold has it for any reject
-/// there. The next request goes out after the rest of the hold at the new
-/// limit.
-#[tokio::test(start_paused = true)]
-async fn a_reject_in_the_hold_after_a_change_is_discarded() {
-    let mut path = timed_out_path().await;
-    path.client
-        .configure_routed_path_max_npdu(&ROUTER, DNET, 480)
-        .await
-        .unwrap();
-    path.reject().await;
-    sleep(Duration::from_millis(10)).await;
-    assert_eq!(
-        (
-            path.client.below_minimum_reject_drops(),
-            path.client.too_long_reject_drops()
-        ),
-        (0, 0)
-    );
-    assert_eq!(
-        path.client.routed_path_limits(),
-        [listed(Some(480), None, false)]
-    );
-    let first = path
-        .next_goes_out_after(LARGE, WINDOW - Duration::from_millis(10), 469)
-        .await;
-    assert!(!first.segmented);
-    path.stop().await;
 }
 
 /// Clearing a path the table doesn't hold reserves nothing, so it succeeds
@@ -319,19 +195,15 @@ async fn clearing_an_unknown_path_reserves_nothing() {
         let path = u16::try_from(path).unwrap();
         client
             .configure_routed_path_max_npdu(&path.to_be_bytes(), path, 1497)
-            .await
             .unwrap();
     }
-    client
-        .clear_routed_path_limit(&[0xff, 0xfe], 300)
-        .await
-        .unwrap();
+    client.clear_routed_path_limit(&[0xff, 0xfe], 300).unwrap();
     assert_eq!(
         client.routed_path_limits.entry_count(),
         MAX_ROUTED_PATH_ENTRIES
     );
     assert!(matches!(
-        client.clear_routed_path_limit(&[], 300).await,
+        client.clear_routed_path_limit(&[], 300),
         Err(Error::Encoding(_))
     ));
     client.stop().await.unwrap();

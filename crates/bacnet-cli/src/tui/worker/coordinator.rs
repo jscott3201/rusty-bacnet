@@ -162,6 +162,10 @@ async fn run(
                         let refused = |why| WorkerEvent::Capture(CaptureEvent::Ended { what: TAP.into(), why });
                         forward_or_refuse(active.as_ref(), command, generation, &sink, refused).await;
                     }
+                    Command::PathLimit(_) => {
+                        let refused = |why| WorkerEvent::PathLimit(format!("path-limit: {why}"));
+                        forward_or_refuse(active.as_ref(), command, generation, &sink, refused).await;
+                    }
                     Command::CaptureExport(job) => {
                         // A profile's workspace, or the working directory.
                         let dir = options.watch.workspace.clone().unwrap_or_else(|| ".".into());

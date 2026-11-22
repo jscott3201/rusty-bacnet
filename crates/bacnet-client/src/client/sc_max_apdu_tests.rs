@@ -246,7 +246,6 @@ async fn client_routed_unsegmented_request_accounts_for_npdu_overhead_bucket() {
     assert_eq!(client.max_apdu_length(), 1024);
     client
         .configure_routed_path_max_npdu(&router_mac, remote_network, 1497)
-        .await
         .unwrap();
 
     let service_data: Vec<u8> = (0..900).map(|i| (i % 251) as u8).collect();

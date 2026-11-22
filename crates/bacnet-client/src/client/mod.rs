@@ -965,6 +965,7 @@ pub use event_notifications::{
 pub use i_have::{I_HAVE_CHANNEL_CAPACITY, MAX_I_HAVE_REPLIES, ReceivedIHave, collect_answers};
 pub use network_reports::{DiscoveredRouter, NETWORK_REPORT_CHANNEL_CAPACITY};
 pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
+pub use routed_path_limits::DEFAULT_ROUTED_PATH_MAX_NPDU;
 pub use routed_path_listing::{RoutedPathLimit, RoutedPathLimitSource};
 pub use routing_table::{
     DEFAULT_ROUTING_TABLE_MAX_ENTRIES, RoutingTable, RoutingTableError, RoutingTableWait,
@@ -1036,6 +1037,8 @@ mod response_correlation_tests;
 mod routed_max_apdu_tests;
 #[cfg(test)]
 mod routed_path_answered_tests;
+#[cfg(test)]
+mod routed_path_change_tests;
 #[cfg(test)]
 mod routed_path_floor_tests;
 #[cfg(test)]

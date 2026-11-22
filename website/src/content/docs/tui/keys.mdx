@@ -249,6 +249,8 @@ The arm dialog, the write and relinquish forms, the previews, the ledger and the
 | `mstp rotation MS` | Monitor: flag token rotations longer than this |
 | `mstp hold MS` | Monitor: flag token holds longer than this |
 | `mstp listen SECS` | Monitor: how long the safe join listens before it proposes |
+| `path-limit ROUTER/NETWORK=SIZE` | Size requests to network NETWORK through the router at ROUTER (its address on this network, as the routers list shows it; a B/IPv6 router by its `bip6:0x...` VMAC) to at most SIZE octets of NPDU, for this session. Sends nothing, so it works at every level |
+| `path-limit ROUTER/NETWORK clear` | Put that path back on the default of 228 octets |
 
 Single or double quotes group words, and a backslash makes a following quote, whitespace character or backslash plain text. A quote left open shows an error instead of running the line. In `writem`, a quoted or escaped value is a character string; a quoted number, such as `'72.5'`, is a string too, so a numeric property refuses it. `find` takes the rest of the line as typed, and unwraps a name that is one quoted word, such as `find "Zone  Temp"`.
 

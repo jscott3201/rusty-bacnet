@@ -763,11 +763,12 @@ B/IP, 61 on MS/TP) raises ValueError, as do a bad router or network.
 An `int` outside 0 to 65535 raises OverflowError, and a `bool`
 for `network` or `max_npdu` TypeError.
 
-The call waits for a request active on the path, or one queued for
-it, but not out the hold a request with no answer leaves (the APDU
-timeout times the attempts): the change applies at once, and the next
-request still waits the hold out, sized to the new limit. Nothing goes
-through the path. RuntimeError before start and after stop.
+The change applies at once (#2683): it waits neither for a request on
+the path nor out the hold a request with no answer leaves (the APDU
+timeout times the attempts). A request waiting out the hold still
+waits it out, then goes sized to the new limit; one already sent
+keeps its size. Nothing goes through the path. RuntimeError before
+start and after stop.
 
 ### BACnetClient.clear_routed_path_limit
 
@@ -778,7 +779,7 @@ def clear_routed_path_limit(self, router: str | bytes, network: int) -> Awaitabl
 Put the routed path through `router` to `network` back on the
 default, 228 octets, dropping the limit set or learned for it
 (#2667). Takes `router` and `network` as
-`configure_routed_path_max_npdu` does and waits the same way.
+`configure_routed_path_max_npdu` does and applies at once too.
 Nothing goes through the path. RuntimeError before start and after
 stop.
 
