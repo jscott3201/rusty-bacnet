@@ -156,7 +156,9 @@ still alive (#2617): its tasks end, its open requests fail and the link stops.
 From then on the client sends nothing more: its requests and unconfirmed sends
 fail at once, and a call made directly on its `transport()`, such as a BVLC
 query, fails with the transport's stopped error. Dropping the client afterwards
-changes nothing.
+changes nothing. Dropping the session without a stop ends the client the same
+way and aborts the link the client still holds: nothing graceful is sent, and
+the link's sockets close as the runtime drops its aborted tasks.
 
 ## The server role
 
@@ -250,7 +252,8 @@ dial, and MS/TP station/timing knobs stay transport-specific by design.
 
 - [`session::EndpointSession`] is the sole lifecycle owner:
   start-once/completed-stop-once; canceled stop can resume joining. `Drop`
-  aborts owned tasks and retains Audit membership through their quiescence.
+  aborts owned tasks and the link, a live client or not (#2617), and retains
+  Audit membership through their quiescence.
 - The client ([`client`](session::EndpointSession::client)) is an owned
   `BACnetClient`. Its own `stop` stops it alone, never the link. Stopping or
   dropping the session ends its work; a client kept past that survives as a

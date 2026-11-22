@@ -202,17 +202,27 @@ impl<S: SerialPort> MstpTransport<S> {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn abort_task_and_release_state(&mut self) {
-        let running = self.running_mut();
-        if let Some(task) = running.task.take() {
-            if let Some(runtime) = &running.runtime {
-                runtime.hold_until_node_dropped();
-            }
-            task.abort();
+    /// End the node without waiting, through `&self` (#2617): what an
+    /// abort and a drop do. The queues close, so every later send is
+    /// refused at once; the node's task is aborted, and the serial port
+    /// goes with it as the runtime drops it; a dedicated thread is told to
+    /// end. A stop after it has nothing left to join.
+    fn abort_task(&self) {
+        if let Some(link) = &self.link {
+            link.queues.close();
         }
-        running.runtime.take();
-        self.serial.take();
-        self.link.take();
+        let ended = {
+            let mut running = lock(&self.running);
+            if let Some(task) = running.task.take() {
+                if let Some(runtime) = &running.runtime {
+                    runtime.hold_until_node_dropped();
+                }
+                task.abort();
+            }
+            running.runtime.take()
+        };
+        // Its thread ends once the sender inside goes, out of the lock.
+        drop(ended);
     }
 
     /// Queue an NPDU for the core, refusing it at once if it cannot be sent.
@@ -378,8 +388,8 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         Ok(())
     }
 
-    fn abort(&mut self) {
-        self.abort_task_and_release_state();
+    fn abort(&self) {
+        self.abort_task();
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
@@ -437,7 +447,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
 impl<S: SerialPort> Drop for MstpTransport<S> {
     fn drop(&mut self) {
-        self.abort_task_and_release_state();
+        self.abort_task();
     }
 }
 

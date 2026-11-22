@@ -145,6 +145,8 @@ pub struct ScTransport<W: WebSocketPort> {
     recv_task: StdMutex<Option<JoinHandle<()>>>,
     /// One stop at a time (#2617).
     stop_gate: crate::stopping::StopGate,
+    /// Set by an abort through `&self` (#2617): every later send fails.
+    aborted: std::sync::atomic::AtomicBool,
     connect_timeout_ms: u64,
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
@@ -730,11 +732,12 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         stopped
     }
 
-    /// Unlike `stop()`, abort (and drop) cannot join the receive task, so a
-    /// reconnect finishing on another worker may still report `Connected`
-    /// after the `LocalClose` this sends.
-    fn abort(&mut self) {
-        self.abort_background_task_and_drop_sockets();
+    /// Abort through `&self` (#2617), as `ScTransport::abort_and_release`
+    /// describes. Unlike `stop()`, abort (and drop) cannot join the receive
+    /// task, so a reconnect finishing on another worker may still report
+    /// `Connected` after the `LocalClose` this sends.
+    fn abort(&self) {
+        self.abort_and_release();
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {

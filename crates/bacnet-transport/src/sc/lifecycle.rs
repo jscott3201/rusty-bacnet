@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::port::TransportPort;
 
-use super::{ScConnectionState, ScTransport, WebSocketPort, advertisement};
+use super::{ScConnectionState, ScTransport, WebSocketPort};
 use crate::sc_frame::encode_sc_message;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
@@ -169,27 +169,35 @@ impl<W: WebSocketPort> ScTransport<W> {
         (task, restore_task)
     }
 
-    /// [`Self::abort_background_tasks`], then drop the sockets and the
-    /// direct discovery state, for `abort` and drop.
-    pub(super) fn abort_background_task_and_drop_sockets(&mut self) {
+    /// The abort, through `&self` (#2617): nothing is said to the hub or a
+    /// direct peer. The direct listener is sealed, the receive and restore
+    /// tasks are aborted and the direct links ended, the sockets given
+    /// before start are let go of, and the hub socket comes out of the send
+    /// slot; every later send fails with [`crate::port::stopped`]'s error.
+    /// A send that holds the slot at that moment finishes, and the socket
+    /// then comes out on the runtime, or, with none current, as the
+    /// transport drops. What an aborted task still holds goes as the
+    /// runtime drops it. The transport does not start again.
+    pub(super) fn abort_and_release(&self) {
+        self.aborted
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.stop_gate.abort();
         self.seal_direct_listener();
-        #[cfg(feature = "sc-tls")]
-        {
-            self.direct_listener_shutdown = None;
-        }
-        self.direct_intake = advertisement::DirectIntake::default();
         let _ = self.abort_background_tasks();
-        self.ws_shared = None;
-        self.connection = None;
-        *self
-            .ws
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        *self
-            .failover_ws
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.direct = None;
+        drop(lock_unstarted(&self.ws).take());
+        drop(lock_unstarted(&self.failover_ws).take());
+        let Some(slot) = &self.ws_shared else {
+            return;
+        };
+        match slot.try_lock() {
+            Ok(mut hub) => drop(hub.take()),
+            Err(_) => {
+                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                    let slot = std::sync::Arc::clone(slot);
+                    runtime.spawn(async move { drop(slot.lock().await.take()) });
+                }
+            }
+        }
     }
 }
 

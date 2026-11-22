@@ -533,14 +533,19 @@ mod transport {
             true
         }
 
-        fn abort(&mut self) {
-            // The handle stays, as before: a start after an abort alone
-            // refuses, and a stop still joins the task.
+        /// Abort through `&self` (#2617): the socket comes out, so every
+        /// later send fails with [`crate::port::stopped`]'s error, and the
+        /// task is aborted. The handle stays, as before: a start after an
+        /// abort alone refuses, and a stop still joins the task.
+        fn abort(&self) {
+            self.stop_gate.abort();
             self.tasks.abort();
-            *self
+            let socket = self
                 .socket
-                .get_mut()
-                .unwrap_or_else(PoisonError::into_inner) = None;
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            drop(socket);
         }
 
         async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {

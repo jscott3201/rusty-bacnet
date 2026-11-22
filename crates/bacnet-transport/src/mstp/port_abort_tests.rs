@@ -56,10 +56,14 @@ async fn abort_takes_task_and_releases_serial_for_reopen() {
     let _rx = transport.start().await.unwrap();
     assert!(ExclusiveSerial::open(in_use.clone()).is_none());
 
+    // Later sends are refused as a stopped transport's are (#2617).
     transport.abort();
     assert!(lock(&transport.running).task.is_none());
-    assert!(transport.link.is_none());
-    assert!(transport.send_broadcast(&[1, 0]).await.is_err());
+    let refused = transport.send_broadcast(&[1, 0]).await;
+    assert!(
+        matches!(&refused, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+        "{refused:?}"
+    );
     drop(reopen(&in_use).await);
     assert!(!in_use.load(Ordering::SeqCst));
 }

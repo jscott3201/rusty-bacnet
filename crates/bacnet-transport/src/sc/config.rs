@@ -39,6 +39,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             state_tx,
             recv_task: StdMutex::new(None),
             stop_gate: crate::stopping::StopGate::default(),
+            aborted: std::sync::atomic::AtomicBool::new(false),
             connect_timeout_ms: 10_000,
             heartbeat_interval_ms: heartbeat::DEFAULT_HEARTBEAT_INTERVAL_MS,
             heartbeat_timeout_ms: heartbeat::DEFAULT_HEARTBEAT_TIMEOUT_MS,

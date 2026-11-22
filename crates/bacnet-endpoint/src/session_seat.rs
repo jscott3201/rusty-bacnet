@@ -99,6 +99,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// client after that changes nothing, and the client's own
     /// [`BACnetClient::stop`] is not needed.
     ///
+    /// Dropping the session without a stop ends the client the same way
+    /// and aborts the link ([`TransportPort::abort`]), even while the client
+    /// still holds it: nothing graceful is sent (no BACnet/SC disconnect,
+    /// for one) and nothing is waited for. The link's sockets close as the
+    /// runtime drops its aborted tasks, so a B/IP port binds again shortly
+    /// after the drop.
+    ///
     /// ```no_run
     /// use bacnet_client::client::Broadcast;
     /// use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};

@@ -434,7 +434,10 @@ impl TransportPort for RouterApplicationPort {
         Ok(())
     }
 
-    fn abort(&mut self) {
+    /// Abort through `&self` (#2617): what a stop does, at once.
+    fn abort(&self) {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::Release);
         self.end_tasks();
     }
 

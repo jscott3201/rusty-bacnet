@@ -116,7 +116,7 @@ impl TransportPort for AppTransport {
         each!(self, t => t.stop().await)
     }
 
-    fn abort(&mut self) {
+    fn abort(&self) {
         each!(self, t => t.abort());
     }
 

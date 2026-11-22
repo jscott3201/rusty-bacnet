@@ -217,3 +217,70 @@ async fn sc_start_after_a_stop_says_the_transport_was_stopped() {
     transport.stop().await.unwrap();
     assert!(stopped_start(transport.start().await));
 }
+
+/// An abort through a shared reference, with another holder alive (#2617):
+/// nothing is said to the hub, the hub socket leaves the send slot at once
+/// and closes as the runtime drops the aborted receive task, every later
+/// send fails with the stopped error, and the transport does not start
+/// again.
+#[tokio::test]
+async fn sc_abort_through_a_shared_reference_closes_the_hub_socket_without_a_goodbye() {
+    let (transport, ws_hub) = start_loopback_sc([0x01; 6], [0x10; 6]).await;
+    let transport = Arc::new(transport);
+    let other = Arc::clone(&transport);
+    other.abort();
+    assert!(
+        transport
+            .ws_shared
+            .as_ref()
+            .unwrap()
+            .try_lock()
+            .unwrap()
+            .is_none(),
+        "the hub socket left the send slot"
+    );
+    for sent in [
+        transport.send_unicast(&[0x01, 0x00], &[0x20; 6]).await,
+        transport.send_broadcast(&[0x01, 0x00]).await,
+    ] {
+        assert!(
+            matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+            "{sent:?}"
+        );
+    }
+    timeout(Duration::from_secs(1), async {
+        while let Ok(data) = ws_hub.recv().await {
+            let function = decode_sc_message(&data).unwrap().function;
+            assert_ne!(function, ScFunction::DisconnectRequest, "no goodbye");
+        }
+    })
+    .await
+    .expect("the hub socket closed");
+    drop(other);
+    let mut transport = Arc::into_inner(transport).unwrap();
+    assert!(stopped_start(transport.start().await));
+}
+
+/// An abort that finds the hub slot held, as by a send under way, still
+/// fails every later send at once, and the socket leaves the slot on the
+/// runtime once the holder lets go (#2617).
+#[tokio::test]
+async fn sc_abort_beside_a_held_hub_slot_fails_later_sends_and_lets_go_on_the_runtime() {
+    let (transport, ws_hub) = start_loopback_sc([0x01; 6], [0x10; 6]).await;
+    let slot = Arc::clone(transport.ws_shared.as_ref().unwrap());
+    let held = slot.lock().await;
+    transport.abort();
+    drop(held);
+    // Before the runtime runs anything: the socket is still in the slot.
+    let sent = transport.send_unicast(&[0x01, 0x00], &[0x20; 6]).await;
+    assert!(
+        matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+        "{sent:?}"
+    );
+    timeout(Duration::from_secs(1), async {
+        while ws_hub.recv().await.is_ok() {}
+    })
+    .await
+    .expect("the hub socket closed");
+    assert!(slot.lock().await.is_none(), "the socket left the slot");
+}

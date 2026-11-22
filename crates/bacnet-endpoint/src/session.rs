@@ -24,7 +24,9 @@
 //! [`stop`](EndpointSession::stop)), then seals admission, joins dispatch
 //! and owned workers, and stops ingress. Undelivered audit records may be
 //! lost on shutdown. A client kept past the stop, or past the session's
-//! drop, fails each call.
+//! drop, fails each call. A drop ends the link too, the client still alive
+//! or not (#2617): it aborts the transport, which lets go of its sockets
+//! without a goodbye and without waiting.
 //!
 //! The session keeps its object database through `stop()` and lets go of it
 //! when it drops. Every holder of the database (the session, its server,
@@ -916,7 +918,9 @@ mod source_reporter_tests;
 impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
     fn drop(&mut self) {
         // Synchronous abort path: never orphan dispatch/ingress/role work.
-        // `stop()` remains the graceful path; Drop only seals + aborts.
+        // `stop()` remains the graceful path; Drop only seals + aborts. The
+        // ingress, dropped after this, aborts the link through the layer the
+        // client may still share (#2617), so no live client keeps it up.
         if let Some(task) = &self.network_number_task {
             task.abort();
         }

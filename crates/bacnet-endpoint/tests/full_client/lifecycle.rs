@@ -248,28 +248,41 @@ async fn a_client_whose_seat_closed_does_not_ask_for_the_network_number() {
     lab.peer.stop().await.unwrap();
 }
 
+/// Dropping the session without a stop ends the client and aborts the
+/// link, though the client still holds it (#2617): no live client keeps a
+/// dropped session's link up.
 #[tokio::test(start_paused = true)]
-async fn dropping_the_session_ends_the_client_and_the_last_owner_releases_the_link() {
+async fn dropping_the_session_ends_the_client_and_aborts_the_link_it_still_holds() {
     let lab = lab(SessionRole::Both).await;
     let client = Arc::new(lab.session.client().unwrap());
     let read = open_read(&lab, &client).await;
     let Lab {
         session,
         node_link,
+        node_sent,
         mut peer,
         ..
     } = lab;
 
     let asked = Instant::now();
     drop(session);
+    // At once, with no turn of the runtime: an abort, not a stop.
+    assert_eq!((node_link.stops(), node_link.aborts()), (0, 1));
     assert!(read.await.unwrap().is_err());
     assert_eq!(asked.elapsed(), Duration::ZERO);
-    assert_eq!((node_link.stops(), node_link.aborts()), (0, 0));
+    // The client sends nothing more, through its seat or its link.
+    let sent = node_sent.len();
+    assert!(client.who_is(Broadcast::Global, None).await.is_err());
+    let transport = client.transport();
+    assert!(stopped(transport.send_broadcast(&[0x01, 0x00]).await));
+    assert!(stopped(
+        transport
+            .send_unicast(&[0x01, 0x00], &Wire::mac(PEER))
+            .await
+    ));
+    assert_eq!(node_sent.len(), sent, "no frame went out");
+    assert_eq!(node_link.stops(), 0);
     drop(client);
-    eventually(WAIT, "the transport released", async || {
-        node_link.aborts() == 1
-    })
-    .await;
     peer.stop().await.unwrap();
     drop(peer);
     assert_no_task_left().await;

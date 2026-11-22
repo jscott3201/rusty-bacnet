@@ -978,6 +978,17 @@ a stop, as before; MS/TP, BACnet/SC, the loopback and a router's application
 port do not. A custom transport keeps what its stop takes behind a lock that
 only start and stop use, and fails every later send.
 
+`TransportPort::abort` takes `&self` too, and so does the new
+`NetworkLayer::abort` (#2617): the owner of a link ends it from a `Drop`
+while others still hold it, as a dropped `EndpointSession` does under a
+live `client()`. An abort never waits and needs no runtime: the background
+tasks are aborted, not joined, so their sockets close as the runtime drops
+them; the transport lets go of what it holds itself; every later send fails
+with the same `NotConnected` error as after a stop; and nothing graceful
+goes out (no BACnet/SC Disconnect-Request). Dropping a `NetworkLayer`
+aborts it. A custom transport's abort does what its stop does at once,
+through the same locks.
+
 ### Throttled peer warnings
 
 A warning that a peer can set off once per frame or connection (a frame that
@@ -13804,7 +13815,10 @@ assert!(client.who_is(Broadcast::Global, None).await.is_err());
   open requests and stops the link. From then on the client sends nothing:
   requests and unconfirmed sends fail at once, and a call made directly on
   `client.transport()`, such as a BVLC query, fails with the transport's
-  stopped error. Dropping the client afterwards changes nothing.
+  stopped error. Dropping the client afterwards changes nothing. Dropping
+  the session without a stop ends the client the same way and aborts the
+  link, though the client still holds it: nothing graceful is sent, and the
+  link's sockets close as the runtime drops its aborted tasks.
 - The full client's type is the session's: `BACnetClient<T>` for an
   `EndpointSession<T>`. An owner that keeps its clients over one enum of
   links builds the session over that enum with

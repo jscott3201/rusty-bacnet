@@ -3,8 +3,10 @@
 //! [`TransportPort::stop`](crate::port::TransportPort::stop) takes `&self`,
 //! so two owners can stop the same link at once. A transport keeps a
 //! [`StopGate`]: the first stop runs, one that comes while it runs waits
-//! for it, and one after it returns at once. Its background tasks go in a
-//! [`Tasks`], which a stop aborts and joins. Neither holds a lock across an
+//! for it, and one after it returns at once. An abort, which doesn't wait,
+//! marks the gate, so the transport reads as stopped, and leaves what it
+//! aborted for a later stop to join. The transport's background tasks go in
+//! a [`Tasks`], which a stop aborts and joins. Neither holds a lock across an
 //! await: each lock is taken only to read or change what it guards, never on
 //! a send path, and `start`, which has `&mut self`, reaches them through
 //! `get_mut`.
@@ -24,6 +26,9 @@ enum Gate {
     /// Nothing has stopped the transport since it was made or last started.
     #[default]
     Open,
+    /// Aborted, through `&self` (#2617): the transport reads as stopped,
+    /// but a stop still runs, to join what the abort didn't wait for.
+    Aborted,
     /// A stop is running; it sends `true` as it ends.
     Stopping(watch::Receiver<bool>),
     /// A stop finished; the next start opens the gate again.
@@ -32,12 +37,14 @@ enum Gate {
 
 /// The right to run a stop, from [`StopGate::enter`]. Call [`Self::finish`]
 /// once the stop is done. Dropped unfinished (the stop was cancelled), it
-/// opens the gate again, so a waiting or later stop runs what is left.
+/// puts the gate back as it found it, open or aborted, so a waiting or
+/// later stop runs what is left.
 #[derive(Debug)]
 pub(crate) struct Stopping<'a> {
     gate: &'a StopGate,
     done: watch::Sender<bool>,
     finished: bool,
+    aborted: bool,
 }
 
 impl StopGate {
@@ -53,13 +60,15 @@ impl StopGate {
             let mut running = {
                 let mut gate = self.lock();
                 match &*gate {
-                    Gate::Open => {
+                    Gate::Open | Gate::Aborted => {
+                        let aborted = matches!(*gate, Gate::Aborted);
                         let (done, running) = watch::channel(false);
                         *gate = Gate::Stopping(running);
                         return Some(Stopping {
                             gate: self,
                             done,
                             finished: false,
+                            aborted,
                         });
                     }
                     Gate::Stopping(running) => running.clone(),
@@ -76,9 +85,18 @@ impl StopGate {
         *self.0.get_mut().unwrap_or_else(PoisonError::into_inner) = Gate::Open;
     }
 
-    /// Whether a stop has finished since the last start.
+    /// Mark an abort (#2617): from now on [`Self::is_stopped`] is true,
+    /// and a stop still runs. A stop running or finished stays as it is.
+    pub(crate) fn abort(&self) {
+        let mut gate = self.lock();
+        if matches!(*gate, Gate::Open) {
+            *gate = Gate::Aborted;
+        }
+    }
+
+    /// Whether a stop has finished, or an abort come, since the last start.
     pub(crate) fn is_stopped(&self) -> bool {
-        matches!(*self.lock(), Gate::Stopped)
+        matches!(*self.lock(), Gate::Stopped | Gate::Aborted)
     }
 }
 
@@ -93,6 +111,8 @@ impl Drop for Stopping<'_> {
     fn drop(&mut self) {
         *self.gate.lock() = if self.finished {
             Gate::Stopped
+        } else if self.aborted {
+            Gate::Aborted
         } else {
             Gate::Open
         };
@@ -169,18 +189,6 @@ impl Tasks {
     #[cfg(test)]
     pub(crate) fn take_all(&self) -> Vec<JoinHandle<()>> {
         std::mem::take(&mut *self.lock())
-    }
-
-    /// Abort every task and let go of them, for `abort` and drop.
-    pub(crate) fn abort_and_forget(&mut self) {
-        for task in self
-            .0
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .drain(..)
-        {
-            task.abort();
-        }
     }
 }
 

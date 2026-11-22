@@ -906,19 +906,30 @@ pub(crate) fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
 }
 
 impl<T: TransportPort> NetworkLayer<T> {
-    fn abort_dispatch_task(&self) {
+    /// End the layer at once, without waiting, through a shared reference,
+    /// so the owner of an `Arc<NetworkLayer>` can end it from a `Drop`
+    /// while a client or another holder still has it (#2617).
+    ///
+    /// Responses are sealed, the [`ApduReceiver`] yields what was queued
+    /// and then `None`, the dispatch task is aborted, not joined, and the
+    /// transport is aborted ([`TransportPort::abort`]): every later send
+    /// through the layer fails with the transport's stopped error, and
+    /// nothing graceful goes out. It needs no runtime and is idempotent.
+    /// Dropping the layer does the same; [`Self::stop`] is the graceful
+    /// path.
+    pub fn abort(&self) {
+        self.response_scope.seal();
+        ingress::close_queue(&self.receiver_queue);
         if let Some(dispatch) = &self.dispatch {
             dispatch.abort.abort();
         }
+        self.transport.abort();
     }
 }
 
 impl<T: TransportPort> Drop for NetworkLayer<T> {
     fn drop(&mut self) {
-        self.response_scope.seal();
-        ingress::close_queue(&self.receiver_queue);
-        self.abort_dispatch_task();
-        self.transport.abort();
+        self.abort();
     }
 }
 

@@ -26,9 +26,9 @@
 //! under [`SendMode::Forward`].
 //!
 //! Every send runs this pipeline, unless the transport has stopped: from a
-//! stop's return to the next start every send fails at once with
-//! [`crate::port::stopped`]'s error, recording nothing, as a real link's
-//! does (#2617).
+//! stop's return, or an abort, to the next start every send fails at once
+//! with [`crate::port::stopped`]'s error, recording nothing, as a real
+//! link's does (#2617).
 //! 1. The [`SendMode`] for its kind (unicast or broadcast): `Ignore` returns
 //!    `Ok(())` untouched, skipping every later step, `Panic` panics, and
 //!    `Fail` records the frame and returns its error.
@@ -609,13 +609,22 @@ impl TransportPort for TestTransport {
         result
     }
 
-    fn abort(&mut self) {
+    /// Count the abort, through `&self` (#2617); then, as on a real link,
+    /// every send fails until the next start, the `Fresh` channel closes
+    /// and a held lease goes. The hook, or the inner transport's abort,
+    /// runs too.
+    fn abort(&self) {
         self.shared.aborts.fetch_add(1, Ordering::SeqCst);
+        self.shared.stopped.store(true, Ordering::Release);
         self.close_fresh_channel();
+        self.port_lease
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         if let Some(hook) = &self.hooks.on_abort {
             hook();
         }
-        if let Some(inner) = &mut self.inner {
+        if let Some(inner) = &self.inner {
             inner.abort();
         }
     }
