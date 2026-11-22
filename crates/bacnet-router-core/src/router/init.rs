@@ -23,7 +23,10 @@ impl<
 {
     /// Initialize-Routing-Table. A count of 0 is a query, answered with the
     /// whole table in Acks, ascending, each network with its port's wire
-    /// Port ID; the table doesn't change, and the host isn't asked. The
+    /// Port ID; the table doesn't change. The host is asked only about a
+    /// query that carries an SNET ([`ControlClass::InitQuery`], #2715),
+    /// since its answer crosses networks toward a source the query only
+    /// claims; refused, it draws no Ack. The
     /// Acks go back out of the arrival port to the link sender, toward the
     /// query's SNET and SADR when it has them, from the router's address
     /// the query named when that is on another port (named at the arrival
@@ -66,6 +69,12 @@ impl<
             let source = npdu.destination.filter(|_| named.is_some());
             if super::ReplyPlan::new(at.port, at.source, source, npdu.source).is_err() {
                 return self.bad_message();
+            }
+            // From another network, it is the host's to refuse (#2715).
+            let class = ControlClass::InitQuery;
+            let none = Targets::Entries(entries);
+            if npdu.source.is_some() && !self.authorize(at, npdu, class, none, host) {
+                return Received::Discarded(Discard::Denied);
             }
             self.out
                 .push(Task::table_ack(at.port, at.source, npdu.source, named));

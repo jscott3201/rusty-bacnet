@@ -72,7 +72,8 @@ fn assert_routed_answer(sent: &[Sent], requester: Address<'_>, source: Option<Ad
 /// A query relayed by R7 with the requester's SNET and SADR is answered out
 /// of the arrival port, unicast to R7, with the requester as DNET and DADR,
 /// hop count 255 and no SNET: the router answers as the station R7
-/// delivered to. The table doesn't change and the host isn't asked.
+/// delivered to. The table doesn't change. The host is asked once, about a
+/// query from another network (#2715), and told what the query claims.
 #[test]
 fn a_relayed_query_is_answered_toward_its_snet_out_of_the_arrival_port() {
     let mut router = router();
@@ -90,7 +91,90 @@ fn a_relayed_query_is_answered_toward_its_snet_out_of_the_arrival_port() {
     assert_routed_answer(&sent, REQUESTER, None);
     assert_eq!(sent.iter().flat_map(rows).collect::<Vec<_>>(), before);
     assert_eq!(router.table().networks().collect::<Vec<_>>(), before);
-    assert!(host.asked.is_empty(), "a query is never gated");
+    let [asked] = &host.asked[..] else {
+        panic!("{:?}", host.asked)
+    };
+    assert_eq!(
+        (asked.class, asked.snet, asked.dnet, asked.port),
+        (ControlClass::InitQuery, Some(81), None, PortId(1))
+    );
+    assert_eq!(asked.source, R7, "the link peer, not the SADR");
+    assert_eq!(
+        asked.message_type,
+        NetworkMessageType::INITIALIZE_ROUTING_TABLE
+    );
+    assert!(asked.targets.is_empty() && !asked.targets_omitted);
+    assert_eq!(router.counters().denied, 0);
+}
+
+/// A host that refuses the class draws no Ack for a query from another
+/// network, whether it names no address, the router at the arrival port or
+/// the router at another port; the query is counted as denied and changes
+/// nothing. The same host still gets a local query (no SNET) answered, and
+/// is not asked about it: only a query whose answer crosses networks is
+/// the host's to refuse (#2715).
+#[test]
+fn a_host_that_refuses_remote_queries_draws_no_ack_and_local_ones_are_unaffected() {
+    let mut router = router();
+    learn(&mut router, 100..104);
+    let before: Vec<u16> = router.table().networks().collect();
+    let mut host = Recorder {
+        deny: vec![ControlClass::InitQuery],
+        ..Recorder::default()
+    };
+    let named = [None, Some(addr(2, OWN_1)), Some(addr(1, OWN_0))];
+    for (index, destination) in named.into_iter().enumerate() {
+        let frame = query(REQUESTER, destination);
+        let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &frame, at(1));
+        assert_eq!(
+            outcome,
+            Outcome::Discarded(Discard::Denied),
+            "{destination:?}"
+        );
+        assert!(sent.is_empty(), "{destination:?}: {sent:?}");
+        assert_eq!(host.asked.len(), index + 1);
+        assert_eq!(host.asked[index].class, ControlClass::InitQuery);
+        assert_eq!(host.asked[index].dnet, destination.map(|to| to.network));
+    }
+    assert_eq!(router.counters().denied, 3);
+    assert_eq!(router.table().networks().collect::<Vec<_>>(), before);
+
+    // Local: from R7 itself, with no SNET, and the same naming the
+    // router's address on its other port.
+    let plain = Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0]);
+    let naming = Npdu {
+        destination: Some(addr(1, OWN_0)),
+        ..plain
+    };
+    for (frame, source) in [(plain, None), (naming, Some(addr(1, OWN_0)))] {
+        let frame = bytes(&frame);
+        let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &frame, at(2));
+        assert_eq!(outcome, Outcome::Handled);
+        let [ack] = &sent[..] else { panic!("{sent:?}") };
+        assert_eq!((ack.port, ack.to.as_deref()), (1, Some(R7)));
+        assert_eq!(rows(ack), before);
+        assert_eq!(
+            (ack.parsed().destination, ack.parsed().source),
+            (None, source)
+        );
+    }
+    assert_eq!(host.asked.len(), 3, "a local query is never asked about");
+    assert_eq!(router.counters().denied, 3);
+}
+
+/// A query from another network with bad data is refused as malformed
+/// before the host hears of it: the data is checked first.
+#[test]
+fn the_host_is_not_asked_about_a_remote_query_with_bad_data() {
+    let mut router = router();
+    let mut host = Recorder::default();
+    let frame = bytes(&Npdu {
+        source: Some(REQUESTER),
+        ..Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0, 9])
+    });
+    let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &frame, at(1));
+    assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
+    assert!(sent.is_empty() && host.asked.is_empty());
 }
 
 /// A query that names the router's address on its other port (DNET 1, DADR

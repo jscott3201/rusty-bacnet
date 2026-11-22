@@ -3767,6 +3767,16 @@ the routing table. With `control_policy(ControlPolicy::Hardened)` and a
 `control_authorizer()`, only the controls the authorizer allows can learn, mark
 busy or available, reject or initialize routes.
 
+The gate also decides one read: a routing-table query that arrives from another
+network, an Initialize-Routing-Table with a port count of zero and an SNET
+(#2715). It changes nothing, but the router answers it with its whole table (up
+to three Acks for 256 routes) sent across the internetwork toward a source
+that the query only claims. The default gate answers it, a hardened one with no
+authorizer doesn't, and an authorizer sees it with `source_net` set and no
+`target_nets`, where an update always names a network. A query with no SNET is
+answered on its own link without the gate. `control_snapshot().init_query`
+counts the decisions.
+
 `ControlAuthContext::sending_peer_principal()` is the `ScPrincipal` of the
 verified leaf certificate of the direct BACnet/SC peer that handed the message
 over: the last hop, even when the message carries an SNET. Trusting it trusts

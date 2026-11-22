@@ -7,8 +7,11 @@
 //!
 //! Protected (hardened denies unknown authority): Init updates/purges, I-Am
 //! learning, Init-ACK learning, Busy/Available marks, Reject transitions,
-//! I-Could-Be inserts. Read-only (always allowed): Who-Is relay/answer,
-//! Init queries, What-Is/Number-Is, Establish/Disconnect no-ops, security
+//! I-Could-Be inserts, and an Init query that carries an SNET (#2715): it
+//! changes nothing, but its answer is the whole table, sent across the
+//! internetwork toward a source the query only claims. Read-only (always
+//! allowed): Who-Is relay/answer, an Init query with no SNET,
+//! What-Is/Number-Is, Establish/Disconnect no-ops, security
 //! ack-only, proprietary explicit-reject, directed opaque forwarding.
 //! Deny is a silent local drop: no mutation, relay, ACK, or Reject emission.
 //! Validation precedes policy. The router's engine asks for each decision
@@ -196,6 +199,11 @@ impl std::fmt::Debug for ControlAuthContext {
 /// Fast, nonblocking, side-effect-free control authorizer.
 ///
 /// Consulted for protected controls only; read-only discovery never calls it.
+/// A routing-table query from another network is one of them (#2715): it
+/// comes as an Initialize-Routing-Table with
+/// [`source_net`](ControlAuthContext::source_net) set and no
+/// [`target_nets`](ControlAuthContext::target_nets), where an update always
+/// names at least one network.
 /// Do not block, reenter the router/table, or perform side effects. It runs
 /// under the router's engine lock (#1679), one call at a time per router:
 /// every port's routing waits while it runs, and calling into the router
@@ -218,6 +226,7 @@ fn index(class: ControlClass) -> Option<usize> {
         ControlClass::Available => Some(4),
         ControlClass::Reject => Some(5),
         ControlClass::ICouldBe => Some(6),
+        ControlClass::InitQuery => Some(7),
         _ => None,
     }
 }
@@ -233,7 +242,7 @@ pub struct ControlServiceCounters {
     pub policy_deny_total: u64,
 }
 
-/// Fixed-shape telemetry for the seven protected classes.
+/// Fixed-shape telemetry for the eight protected classes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ControlDecisionCounters {
     /// Totals for I-Am-Router-To-Network.
@@ -250,6 +259,9 @@ pub struct ControlDecisionCounters {
     pub reject: ControlServiceCounters,
     /// Totals for I-Could-Be-Router-To-Network.
     pub i_could_be: ControlServiceCounters,
+    /// Totals for Initialize-Routing-Table queries that carried an SNET
+    /// (#2715). A query with no SNET is never put to the gate.
+    pub init_query: ControlServiceCounters,
 }
 
 #[derive(Clone, Copy)]
@@ -261,7 +273,7 @@ enum Decision {
 
 /// Atomic per-class totals shared via [`ControlGate`].
 #[derive(Default)]
-pub struct ControlDecisions([[AtomicU64; 3]; 7]);
+pub struct ControlDecisions([[AtomicU64; 3]; 8]);
 
 impl std::fmt::Debug for ControlDecisions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -290,6 +302,7 @@ impl ControlDecisions {
             available,
             reject,
             i_could_be,
+            init_query,
         ] = rows;
         ControlDecisionCounters {
             i_am,
@@ -299,6 +312,7 @@ impl ControlDecisions {
             available,
             reject,
             i_could_be,
+            init_query,
         }
     }
 

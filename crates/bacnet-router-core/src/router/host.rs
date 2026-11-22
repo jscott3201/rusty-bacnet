@@ -16,8 +16,10 @@ use crate::table::RejectEffect;
 /// calls them under the lock it keeps the router in: an implementation
 /// must not block, and must never call into the router or take that lock.
 pub trait Host {
-    /// Whether to act on a protected network message (RB-09). The router
-    /// asks after the message's data has been checked and before anything
+    /// Whether to act on a protected network message (RB-09): one that
+    /// would change the routing table, or a routing-table query from
+    /// another network ([`ControlClass::InitQuery`]). The router asks
+    /// after the message's data has been checked and before anything
     /// changes. `false` drops it silently: no table change, relay, answer
     /// or reject.
     fn authorize(&mut self, claim: &Claim<'_>) -> bool {
@@ -38,8 +40,9 @@ pub struct Permissive;
 
 impl Host for Permissive {}
 
-/// The protected classes of network message, one per kind of change a
-/// message can make to the routing table.
+/// The protected classes of network message: one per kind of change a
+/// message can make to the routing table, and one for a read of the table
+/// that is answered across networks.
 ///
 /// It is `#[non_exhaustive]`, so a new class isn't a breaking change: a
 /// `match` needs a wildcard arm.
@@ -60,6 +63,18 @@ pub enum ControlClass {
     Reject,
     /// Routes stored from I-Could-Be-Router.
     ICouldBe,
+    /// A routing-table query, an Initialize-Routing-Table with a port count
+    /// of zero, that carries an SNET (#2715). It changes nothing, but its
+    /// answer is the whole table, in as many Acks as that takes, sent
+    /// toward the SNET and SADR the query claims: with a forged source,
+    /// one short query sends a table's worth of Acks across the
+    /// internetwork to someone else. A host that allows every class
+    /// answers it, as Clause 6.6.3.8 has a router answer the source of a
+    /// query; one that refuses it sends nothing, and one can count them to
+    /// limit how often it answers. Its [`Claim::targets`] are empty. A
+    /// query with no SNET is answered on the link it came from and is
+    /// never asked about.
+    InitQuery,
 }
 
 /// The networks a protected message names.

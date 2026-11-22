@@ -133,6 +133,12 @@ impl<A, C> RouterOptions<A, C> {
     /// [`ControlPolicy::Hardened`] denies a protected control unless an
     /// authorizer approves it, as a silent drop. Read the totals with
     /// [`BACnetRouter::control_snapshot`].
+    ///
+    /// The protected controls are the messages that change the routing
+    /// table, and a routing-table query that carries an SNET (#2715): the
+    /// router answers one with its whole table, toward a source on another
+    /// network that the query only claims. So a hardened router with no
+    /// authorizer answers a table query from its own networks only.
     pub fn control_policy(mut self, policy: ControlPolicy) -> Self {
         self.policy = policy;
         self
