@@ -9764,8 +9764,7 @@ typed call or `confirmed_request` to a remote `Station` or address, a
 station from `resolve_device`, the routed COV subscriptions) refuses
 any of them with `Error::Encoding` before the path is reserved or a
 transaction registered. Both configuration methods use the same DNET check,
-`add_routed_device` refuses such a peer, and the endpoint requester refuses
-such a routed destination. Unconfirmed sends keep remote and global broadcasts,
+and `add_routed_device` refuses such a peer. Unconfirmed sends keep remote and global broadcasts,
 for example `broadcast_network_unconfirmed`.
 
 A routed destination whose DNET is the client's own network number, once the

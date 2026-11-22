@@ -91,14 +91,34 @@ fn a_failed_requests_result() {
         );
     }
     let communication = |code| (ErrorClass::COMMUNICATION, code);
-    assert_eq!(
-        audit_result(&Error::abort(AbortReason::from_raw(64))),
-        communication(ErrorCode::ABORT_PROPRIETARY)
-    );
-    assert_eq!(
-        audit_result(&Error::reject(RejectReason::from_raw(64))),
-        communication(ErrorCode::REJECT_PROPRIETARY)
-    );
+    // Reasons the standard leaves unassigned below the proprietary range
+    // are OTHER; the proprietary range keeps its own codes, to its top.
+    for reason in [12, 63] {
+        assert_eq!(
+            audit_result(&Error::abort(AbortReason::from_raw(reason))),
+            communication(ErrorCode::OTHER),
+            "abort {reason}"
+        );
+    }
+    for reason in [10, 11, 63] {
+        assert_eq!(
+            audit_result(&Error::reject(RejectReason::from_raw(reason))),
+            communication(ErrorCode::OTHER),
+            "reject {reason}"
+        );
+    }
+    for reason in [64, 255] {
+        assert_eq!(
+            audit_result(&Error::abort(AbortReason::from_raw(reason))),
+            communication(ErrorCode::ABORT_PROPRIETARY),
+            "abort {reason}"
+        );
+        assert_eq!(
+            audit_result(&Error::reject(RejectReason::from_raw(reason))),
+            communication(ErrorCode::REJECT_PROPRIETARY),
+            "reject {reason}"
+        );
+    }
     assert_eq!(
         audit_result(&Error::Timeout(Duration::from_secs(1))),
         communication(ErrorCode::TIMEOUT)
@@ -125,6 +145,12 @@ fn a_failed_requests_result() {
     assert_eq!(
         audit_result(&Error::protocol(refused.0, refused.1)),
         refused
+    );
+    // A class or code outside the standard's lists passes through as sent.
+    let unknown = (ErrorClass::from_raw(512), ErrorCode::from_raw(513));
+    assert_eq!(
+        audit_result(&Error::protocol(unknown.0, unknown.1)),
+        unknown
     );
 }
 

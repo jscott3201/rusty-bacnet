@@ -160,6 +160,62 @@ async fn source_read_range_choices_empty_and_multiple_items_both_modes() {
     sink.stop().await.unwrap();
 }
 
+/// A ReadRange answered in segments is taken segment by segment, each
+/// acknowledged, and recorded once whole, as an unsegmented answer is.
+#[tokio::test(start_paused = true)]
+async fn source_read_range_segmented_answer_is_reassembled_and_recorded() {
+    use bacnet_encoding::apdu::SegmentAck;
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
+    session.start().await.unwrap();
+    let client = client_of(&session);
+    let read = range_start(&client, peer.local_mac(), None);
+    let request = receive(&mut requests).await;
+    let (invoke, rr) = range_request(&request);
+    let (expected, Apdu::ComplexAck(whole)) = range_ack(invoke, &rr, 2) else {
+        unreachable!()
+    };
+    let half = whole.service_ack.len() / 2;
+    for (sequence, more) in [(0, true), (1, false)] {
+        let mut segment = whole.clone();
+        segment.segmented = true;
+        segment.more_follows = more;
+        segment.sequence_number = Some(sequence);
+        segment.proposed_window_size = Some(1);
+        segment.service_ack = if more {
+            whole.service_ack.slice(..half)
+        } else {
+            whole.service_ack.slice(half..)
+        };
+        send(&peer, &request.source_mac, Apdu::ComplexAck(segment)).await;
+        let acknowledged = decode_apdu(receive(&mut requests).await.apdu).unwrap();
+        assert!(
+            matches!(
+                &acknowledged,
+                Apdu::SegmentAck(SegmentAck { invoke_id, sequence_number, negative_ack: false, .. })
+                    if *invoke_id == invoke && *sequence_number == sequence
+            ),
+            "segment {sequence}: {acknowledged:?}"
+        );
+    }
+    let actual = timeout(WAIT, read).await.unwrap().unwrap().unwrap();
+    assert_eq!(actual.item_count, expected.item_count);
+    assert_eq!(actual.item_data, expected.item_data);
+    assert_eq!(actual.first_sequence_number, expected.first_sequence_number);
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.operation, AuditOperation::READ);
+    assert_eq!(record.invoke_id, Some(invoke));
+    assert_eq!(record.target_object, Some(target()));
+    assert_eq!(record.result, None);
+    assert!(records.try_recv().is_err());
+    drop(client);
+    session.stop().await.unwrap();
+    assert_eq!(session.active_leases(), 0);
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
 /// Each way a ReadRange can fail is recorded with its Result: a peer's
 /// Error, Reject and Abort, no answer, and an answer that names another
 /// object, property or index or doesn't decode.

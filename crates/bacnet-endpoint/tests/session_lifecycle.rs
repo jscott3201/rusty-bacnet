@@ -62,9 +62,12 @@ async fn cancel_pending_request_releases_exact_lease() {
     let mut peer_rx = peer.start().await.unwrap();
     // Consume the request so the peer side does not apply backpressure, but
     // never send a reply.
-    let client_handle = client.client().unwrap();
+    // The client stays alive outside the task: only the cancelled request,
+    // not a dropped client, may give the lease back.
+    let client_handle = std::sync::Arc::new(client.client().unwrap());
+    let request_client = std::sync::Arc::clone(&client_handle);
     let request = tokio::spawn(async move {
-        client_handle
+        request_client
             .read_property(
                 &[0x02],
                 object_id(1),
@@ -86,7 +89,10 @@ async fn cancel_pending_request_releases_exact_lease() {
         client.active_leases() == 0
     })
     .await;
+    // Cancelling one request does not end the client that issued it.
+    assert_eq!(std::sync::Arc::strong_count(&client_handle), 1);
     client.stop().await.unwrap();
+    drop(client_handle);
     peer.stop().await.unwrap();
 }
 
