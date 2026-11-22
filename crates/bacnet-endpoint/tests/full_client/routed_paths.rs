@@ -109,7 +109,7 @@ async fn nth_request(lab: &Lab, n: usize, within: Duration) -> u8 {
 #[tokio::test(start_paused = true)]
 async fn a_seated_client_frees_an_answered_path_at_once_and_gates_a_stale_reject() {
     let lab = lab(SessionRole::Both).await;
-    let client = Arc::new(lab.session.full_client().unwrap());
+    let client = Arc::new(lab.session.client().unwrap());
     client
         .configure_routed_path_max_npdu(&Wire::mac(ROUTER), DNET, 1497)
         .unwrap();
@@ -150,7 +150,7 @@ async fn a_seated_client_frees_an_answered_path_at_once_and_gates_a_stale_reject
 #[tokio::test(start_paused = true)]
 async fn a_seated_client_drops_a_reject_for_a_frame_below_the_floor() {
     let lab = lab(SessionRole::Both).await;
-    let client = Arc::new(lab.session.full_client().unwrap());
+    let client = Arc::new(lab.session.client().unwrap());
     client
         .configure_routed_path_max_npdu(&Wire::mac(ROUTER), DNET, 1497)
         .unwrap();

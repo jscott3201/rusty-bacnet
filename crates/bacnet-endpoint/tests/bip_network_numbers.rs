@@ -27,7 +27,6 @@ async fn foreign() -> (Endpoint, SocketAddrV4, UdpSocket) {
     )
     .await
     .unwrap(); // port 0: nothing to lose
-    assert!(endpoint.client().is_some());
     assert!(endpoint.server().is_none());
     let (registration, source) = receive(&bbmd).await;
     assert_eq!(source, local);
@@ -162,6 +161,48 @@ async fn endpoint_number_foreign_client_wire_and_alternate_sender() {
     .await;
 }
 
+/// A session stopped, or only dropped, while its client lives lets go of
+/// its port (#2617): the client then sends nothing, through its seat or
+/// through its link.
+#[tokio::test]
+async fn a_session_stopped_or_dropped_under_a_live_client_releases_its_port() {
+    use bacnet_client::client::Broadcast;
+    use bacnet_transport::port::TransportPort;
+    for bare_drop in [false, true] {
+        // The release probe can lose the port to another process (#1070).
+        rerun_on_lost_port(async || {
+            // Port 0: nothing to lose at the start.
+            let (mut endpoint, local) = start(builder().role(SessionRole::Both)).await.unwrap();
+            let client = endpoint.client().unwrap();
+            if !bare_drop {
+                bounded(endpoint.stop()).await.unwrap();
+            }
+            drop(endpoint);
+            // A drop's aborted tasks let go of the socket in the background.
+            let probe = || std::net::UdpSocket::bind(local);
+            port_retry::bind_eventually(std::time::Duration::from_secs(5), probe)
+                .await
+                .map(drop)?;
+            assert!(
+                bounded(client.who_is(Broadcast::Global, None))
+                    .await
+                    .is_err()
+            );
+            let sent = bounded(client.transport().send_broadcast(&[1, 0])).await;
+            assert!(
+                matches!(
+                    &sent,
+                    Err(bacnet_types::error::Error::Transport(io))
+                        if io.kind() == std::io::ErrorKind::NotConnected
+                ),
+                "bare drop {bare_drop}: {sent:?}"
+            );
+            Ok(())
+        })
+        .await;
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn endpoint_number_bbmd_server_wire_admission() {
@@ -188,7 +229,6 @@ async fn endpoint_number_bbmd_server_wire_admission() {
             }));
         let (server, local) = start(configured).await?;
         assert!(server.server().is_some());
-        assert!(server.client().is_none());
         let group = SocketAddrV4::new(BROADCAST, local.port());
         // Before relying on shared capture, prove the real production wildcard
         // receives this broadcast (BDT fanout) and the independent observer sees it.

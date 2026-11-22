@@ -140,13 +140,8 @@ pub enum LeaseOwner {
 /// reads a lease without claiming it (#2617).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaseHolder {
-    /// A full client's request: every [`LeaseOwner::Requester`] lease that
-    /// was not marked as the endpoint requester's.
+    /// The client's request ([`LeaseOwner::Requester`]).
     Client,
-    /// The narrow endpoint requester's request, which it marked as its own.
-    /// Goes when that requester does (#2617).
-    #[doc(hidden)]
-    EndpointRequester,
     /// A request the server role started ([`LeaseOwner::Notification`]).
     Server,
 }
@@ -409,11 +404,6 @@ struct CoordinatorState {
     next_invoke_id: usize,
     last_generation: u64,
     active_count: usize,
-    /// Per invoke ID, the generation of the lease the endpoint requester
-    /// marked as its own, or 0 (no lease has generation 0). A mark is
-    /// compared with the active lease's generation and never cleared, so
-    /// reserving and releasing a lease do no work for it (#2617).
-    endpoint_requester: Box<[u64]>,
 }
 
 impl CoordinatorState {
@@ -424,7 +414,6 @@ impl CoordinatorState {
             next_invoke_id: 0,
             last_generation: 0,
             active_count: 0,
-            endpoint_requester: vec![0; INVOKE_ID_COUNT].into_boxed_slice(),
         }
     }
 
@@ -575,24 +564,6 @@ impl OutboundTransactionCoordinator {
         }
     }
 
-    /// Mark the active lease of `invoke_id` as the narrow endpoint
-    /// requester's, so [`Self::holder_of`] tells it from a full client's on
-    /// the same coordinator (#2617). The requester calls this as it
-    /// registers the transaction, before the request is sent. With no active
-    /// lease nothing is marked.
-    #[doc(hidden)]
-    pub fn mark_endpoint_requester(&self, invoke_id: u8) -> Result<(), CoordinatorError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| CoordinatorError::StatePoisoned)?;
-        let index = usize::from(invoke_id);
-        if let Some(generation) = state.slots[index].as_ref().map(|active| active.generation) {
-            state.endpoint_requester[index] = generation;
-        }
-        Ok(())
-    }
-
     /// The role that holds the active lease of `invoke_id` for `peer`, or
     /// `None` when no lease is active for that pair. Nothing is claimed or
     /// changed: the role [`admits`](Self::admit) the answer itself. A
@@ -609,16 +580,12 @@ impl OutboundTransactionCoordinator {
         invoke_id: u8,
     ) -> Option<(LeaseHolder, ConfirmedServiceChoice)> {
         let state = self.state.lock().ok()?;
-        let index = usize::from(invoke_id);
-        let active = state.slots[index].as_ref()?;
+        let active = state.slots[usize::from(invoke_id)].as_ref()?;
         if active.metadata.peer != *peer {
             return None;
         }
         let holder = match active.metadata.owner {
             LeaseOwner::Notification => LeaseHolder::Server,
-            LeaseOwner::Requester if state.endpoint_requester[index] == active.generation => {
-                LeaseHolder::EndpointRequester
-            }
             LeaseOwner::Requester => LeaseHolder::Client,
         };
         Some((holder, active.metadata.service_choice))

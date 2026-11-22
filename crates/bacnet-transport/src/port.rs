@@ -674,12 +674,28 @@ pub trait TransportPort: Send + Sync {
     /// after a stop says so in its own documentation.
     fn stop(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
-    /// Synchronously abort background work and release owned transport resources.
+    /// End the link at once, without waiting, through a shared reference,
+    /// so the owner of a link that others still hold can end it from a
+    /// `Drop` (#2617).
     ///
-    /// This hook is intended for `Drop` paths where async [`Self::stop`] cannot
-    /// be awaited. Implementations should not attempt graceful protocol shutdown
-    /// here; graceful disconnects remain the responsibility of [`Self::stop`].
-    fn abort(&mut self) {}
+    /// The background tasks are aborted, not joined, so what they hold goes
+    /// once the runtime drops them, in the background, or with the runtime;
+    /// the transport lets go of the sockets, ports and leases it holds
+    /// itself, at once or as the runtime frees them; and every later send
+    /// fails, as after [`Self::stop`], with an [`Error::Transport`] of kind
+    /// [`NotConnected`](std::io::ErrorKind::NotConnected). A send already
+    /// under way may still finish. Nothing graceful happens here: no
+    /// disconnect or unregistration goes out, which remains
+    /// [`Self::stop`]'s. It needs no runtime and is idempotent.
+    ///
+    /// The aborted tasks stay with the transport: a stop after an abort
+    /// joins them, and returns once they have let go of the link, as a stop
+    /// alone does. Until that stop, a start is refused; after it, a
+    /// transport that starts again after a stop does. What the transport
+    /// can't reach without waiting (an MS/TP serial port not yet started,
+    /// say) goes when it drops. The default does nothing, for a transport
+    /// that holds nothing.
+    fn abort(&self) {}
 
     /// Send NPDU bytes to a specific MAC address (unicast).
     ///

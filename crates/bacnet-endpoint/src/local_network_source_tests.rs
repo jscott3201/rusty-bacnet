@@ -121,7 +121,7 @@ fn record(sent: Sent, station: u8) -> BACnetAuditNotification {
 /// peer, and return the record it gave `station`.
 async fn audited_read(
     endpoint: &mut Endpoint,
-    destination: EndpointApduDestination,
+    destination: Station,
     station: u8,
 ) -> BACnetAuditNotification {
     let read = endpoint.read(destination);
@@ -190,10 +190,7 @@ async fn source_routes_refuse_an_address_on_another_network_but_audit_a_routed_r
             assert_eq!(audit.target_device, address(network, PEER));
             // The change sent nothing: the next frame is a direct read's
             // request, and its record still goes to the bound Device.
-            let direct = EndpointApduDestination::Direct {
-                destination_mac: mac(PEER),
-            };
-            audited_read(&mut endpoint, direct, SINK).await;
+            audited_read(&mut endpoint, direct_read(), SINK).await;
             endpoint.stop().await;
         }
     }

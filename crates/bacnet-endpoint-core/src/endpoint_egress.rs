@@ -196,29 +196,6 @@ impl EndpointEgress {
         })
     }
 
-    /// Queue caller-owned work without a deadline. Dropping its completion retracts
-    /// queued work and cancels an in-progress transport future, whose wire outcome
-    /// may already be ambiguous. A session-owned caller can retain this same guard.
-    #[doc(hidden)]
-    pub fn admit_owned_apdu(
-        &self,
-        apdu: Vec<u8>,
-        destination: EndpointApduDestination,
-        expecting_reply: bool,
-        priority: NetworkPriority,
-        data_attributes: Vec<DataAttribute>,
-    ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
-        self.admit(ApduAdmission {
-            apdu,
-            destination,
-            expecting_reply,
-            priority,
-            data_attributes,
-            deadline: None,
-            cancel_on_drop: true,
-        })
-    }
-
     fn admit(&self, send: ApduAdmission) -> Result<EndpointSend, EndpointEgressAdmissionError> {
         let ApduAdmission {
             apdu,

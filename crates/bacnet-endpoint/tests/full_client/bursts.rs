@@ -148,7 +148,7 @@ async fn no_burst_of_any_kind_or_size_ends_the_session() {
     {
         for size in [50, 100, 300, 1_000] {
             let lab = burst_lab(capacity).await;
-            let client = lab.session.full_client().unwrap();
+            let client = lab.session.client().unwrap();
             burst(&lab, (0..size).map(|i| kind.frame(i)));
             tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -219,10 +219,11 @@ async fn no_burst_of_any_kind_or_size_ends_the_session() {
 }
 
 /// The session hands ingress its coordinator: a flood of answers no lease
-/// holds, ahead of the answer to the narrow client's read, fills the small
-/// answer queue only down to its reserve, so that answer still gets in.
+/// holds, ahead of the answer to the client's read, overflows the session's
+/// small answer queue and is dropped there, while the answer the client's
+/// lease holds goes to its seat and still gets in.
 #[tokio::test(start_paused = true)]
-async fn a_narrow_client_read_completes_through_a_flood_of_stray_answers() {
+async fn a_client_read_completes_through_a_flood_of_stray_answers() {
     let lab = burst_lab(SMALL).await;
     let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
     lab.wire.hold(&node);
@@ -253,7 +254,7 @@ async fn a_narrow_client_read_completes_through_a_flood_of_stray_answers() {
 #[tokio::test(start_paused = true)]
 async fn reads_in_flight_complete_during_a_thousand_frame_i_am_burst() {
     let lab = burst_lab(SMALL).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let mut other = other_client(&lab.wire).await;
     let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
 

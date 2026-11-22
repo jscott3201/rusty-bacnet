@@ -61,7 +61,7 @@ use bacnet_encoding::{
     apdu::{Apdu, ComplexAck, decode_apdu, encode_apdu},
     npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu},
 };
-use bacnet_endpoint::{EndpointApduDestination, EndpointSession, SessionConfig};
+use bacnet_endpoint::{EndpointSession, SessionConfig};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::{loopback::LoopbackTransport, port::TransportPort};
 use bacnet_types::{MacAddr, enums::ConfirmedServiceChoice, error::Error};
@@ -72,9 +72,13 @@ fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, instance).unwrap()
 }
 
+/// A client with a link of its own, or a session and its client.
 enum Reader {
     Standalone(BACnetClient<LoopbackTransport>),
-    Endpoint(Box<EndpointSession<LoopbackTransport>>),
+    Endpoint(
+        Box<EndpointSession<LoopbackTransport>>,
+        BACnetClient<LoopbackTransport>,
+    ),
 }
 impl Reader {
     async fn read(
@@ -87,43 +91,19 @@ impl Reader {
             request.property_identifier,
             request.property_array_index,
         );
-        match self {
-            Self::Standalone(client) if routed => {
-                client
-                    .read_property(&Station::routed(&[2], 100, &[3]), object, property, index)
-                    .await
-            }
-            Self::Standalone(client) => client.read_property(&[2], object, property, index).await,
-            Self::Endpoint(session) if routed => {
-                session
-                    .client()
-                    .unwrap()
-                    .read_property_with_destination(
-                        EndpointApduDestination::Routed {
-                            router_mac: MacAddr::from_slice(&[2]),
-                            destination_network: 100,
-                            destination_mac: MacAddr::from_slice(&[3]),
-                        },
-                        vec![],
-                        object,
-                        property,
-                        index,
-                    )
-                    .await
-            }
-            Self::Endpoint(session) => {
-                session
-                    .client()
-                    .unwrap()
-                    .read_property(&[2], object, property, index)
-                    .await
-            }
+        let (Self::Standalone(client) | Self::Endpoint(_, client)) = self;
+        if routed {
+            client
+                .read_property(&Station::routed(&[2], 100, &[3]), object, property, index)
+                .await
+        } else {
+            client.read_property(&[2], object, property, index).await
         }
     }
     async fn stop(&mut self) {
         match self {
             Self::Standalone(client) => client.stop().await.unwrap(),
-            Self::Endpoint(session) => {
+            Self::Endpoint(session, _) => {
                 assert_eq!(session.active_leases(), 0);
                 session.stop().await.unwrap();
             }
@@ -139,7 +119,8 @@ async fn correlation_matrix(endpoint: bool, routed: bool) {
             EndpointSession::new(transport, SessionRole::ClientOnly, SessionConfig::default())
                 .unwrap();
         session.start().await.unwrap();
-        Reader::Endpoint(Box::new(session))
+        let client = session.client().unwrap();
+        Reader::Endpoint(Box::new(session), client)
     } else {
         Reader::Standalone(
             BACnetClient::generic_builder()
@@ -262,7 +243,7 @@ async fn correlation_matrix(endpoint: bool, routed: bool) {
                 "case{i}: {result:?}"
             );
         }
-        if let Reader::Endpoint(session) = &reader {
+        if let Reader::Endpoint(session, _) = &reader {
             assert_eq!(session.active_leases(), 0, "case{i} leaked lease");
         }
     }

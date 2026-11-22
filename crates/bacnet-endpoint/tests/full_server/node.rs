@@ -39,7 +39,7 @@ async fn dcc_lab(config: SessionConfig) -> Lab {
                 .on_reinitialize(|_, _| Ok(())),
         );
     session.start().await.unwrap();
-    let client = session.full_client().unwrap();
+    let client = session.client().unwrap();
     Lab {
         wire,
         session,
@@ -101,10 +101,9 @@ fn cov_notification(invoke_id: u8) -> Bytes {
     )
 }
 
-/// While the node is disabled, nothing it would initiate goes: the full
-/// client's requests and unconfirmed sends, the narrow client's requests
-/// and the session's own I-Am all fail with the typed error, and nothing is
-/// sent.
+/// While the node is disabled, nothing it would initiate goes: the
+/// client's requests and unconfirmed sends and the session's own I-Am all
+/// fail with the typed error, and nothing is sent.
 #[tokio::test(start_paused = true)]
 async fn disable_initiation_stops_every_initiation_on_the_node() {
     let lab = dcc_lab(SessionConfig::default()).await;
@@ -114,21 +113,6 @@ async fn disable_initiation_stops_every_initiation_on_the_node() {
     assert!(disabled(client_reads(&lab.client).await));
     assert!(disabled(lab.client.who_is(Broadcast::Global, None).await));
     assert!(disabled(lab.session.broadcast_i_am().await));
-    let narrow = lab
-        .session
-        .client()
-        .unwrap()
-        .read_property(
-            &Wire::mac(PEER),
-            ai1(),
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-        )
-        .await;
-    assert!(
-        matches!(narrow, Err(Error::InitiationDisabled { sent: false })),
-        "{narrow:?}"
-    );
     assert!(lab.server().broadcast_i_am().await.is_err());
     assert_eq!(lab.node_sent.len(), before, "the node sent nothing");
 
@@ -213,12 +197,12 @@ async fn an_operator_override() {
         .await
         .unwrap();
     drop(client);
-    let late = session.full_client().unwrap();
+    let late = session.client().unwrap();
     assert!(disabled(client_reads(&late).await));
     drop(late);
 
     let exempt = session
-        .full_client_with(ClientOptions::default().with_node_dcc_override(true))
+        .client_with(ClientOptions::default().with_node_dcc_override(true))
         .unwrap();
     client_reads(&exempt).await.unwrap();
     drop(exempt);
@@ -501,7 +485,7 @@ async fn a_who_is_behind_the_number_question_is_held_back() {
                     .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive),
             );
     session.start().await.unwrap();
-    let client = session.full_client().unwrap();
+    let client = session.client().unwrap();
 
     let who_is = Box::pin(client.who_is(Broadcast::Global, None));
     let disable = Box::pin(async {

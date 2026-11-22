@@ -1,18 +1,24 @@
 use super::*;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
-use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::primitives::{Date, Time};
 
+/// A ReadRange of `target()`'s Log_Buffer, in a task of its own.
 fn range_start(
-    session: &EndpointSession<TestTransport>,
+    client: &Client,
     mac: &[u8],
     range: Option<RangeSpec>,
 ) -> tokio::task::JoinHandle<Result<ReadRangeAck, Error>> {
-    let client = session.cloned_client_handle().unwrap();
+    let client = Arc::clone(client);
     let mac = mac.to_vec();
     tokio::spawn(async move {
         client
-            .read_range(&mac, target(), PropertyIdentifier::LOG_BUFFER, None, range)
+            .read_range(
+                &mac[..],
+                target(),
+                PropertyIdentifier::LOG_BUFFER,
+                None,
+                range,
+            )
             .await
     })
 }
@@ -21,7 +27,6 @@ fn range_request(envelope: &ReceivedApdu) -> (u8, ReadRangeRequest) {
         panic!()
     };
     assert_eq!(pdu.service_choice, ConfirmedServiceChoice::READ_RANGE);
-    assert!(!pdu.segmented_response_accepted);
     (
         pdu.invoke_id,
         ReadRangeRequest::decode(&pdu.service_request).unwrap(),
@@ -96,10 +101,11 @@ async fn source_read_range_choices_empty_and_multiple_items_both_modes() {
     for confirmed in [false, true] {
         let mut session = session(database(confirmed), SessionRole::Both, &sink);
         session.start().await.unwrap();
+        let client = client_of(&session);
         let mut sequence = 0;
         for range in ranges() {
             for count in [0, 2] {
-                let read = range_start(&session, peer.local_mac(), range.clone());
+                let read = range_start(&client, peer.local_mac(), range.clone());
                 let request = receive(&mut requests).await;
                 let (invoke, rr) = range_request(&request);
                 assert_eq!(rr.range, range);
@@ -154,14 +160,74 @@ async fn source_read_range_choices_empty_and_multiple_items_both_modes() {
     sink.stop().await.unwrap();
 }
 
+/// A ReadRange answered in segments is taken segment by segment, each
+/// acknowledged, and recorded once whole, as an unsegmented answer is.
 #[tokio::test(start_paused = true)]
-async fn source_read_range_terminal_errors_and_segmented_attempt_are_reported() {
+async fn source_read_range_segmented_answer_is_reassembled_and_recorded() {
+    use bacnet_encoding::apdu::SegmentAck;
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    for case in 0..9 {
-        let read = range_start(&session, peer.local_mac(), None);
+    let client = client_of(&session);
+    let read = range_start(&client, peer.local_mac(), None);
+    let request = receive(&mut requests).await;
+    let (invoke, rr) = range_request(&request);
+    let (expected, Apdu::ComplexAck(whole)) = range_ack(invoke, &rr, 2) else {
+        unreachable!()
+    };
+    let half = whole.service_ack.len() / 2;
+    for (sequence, more) in [(0, true), (1, false)] {
+        let mut segment = whole.clone();
+        segment.segmented = true;
+        segment.more_follows = more;
+        segment.sequence_number = Some(sequence);
+        segment.proposed_window_size = Some(1);
+        segment.service_ack = if more {
+            whole.service_ack.slice(..half)
+        } else {
+            whole.service_ack.slice(half..)
+        };
+        send(&peer, &request.source_mac, Apdu::ComplexAck(segment)).await;
+        let acknowledged = decode_apdu(receive(&mut requests).await.apdu).unwrap();
+        assert!(
+            matches!(
+                &acknowledged,
+                Apdu::SegmentAck(SegmentAck { invoke_id, sequence_number, negative_ack: false, .. })
+                    if *invoke_id == invoke && *sequence_number == sequence
+            ),
+            "segment {sequence}: {acknowledged:?}"
+        );
+    }
+    let actual = timeout(WAIT, read).await.unwrap().unwrap().unwrap();
+    assert_eq!(actual.item_count, expected.item_count);
+    assert_eq!(actual.item_data, expected.item_data);
+    assert_eq!(actual.first_sequence_number, expected.first_sequence_number);
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.operation, AuditOperation::READ);
+    assert_eq!(record.invoke_id, Some(invoke));
+    assert_eq!(record.target_object, Some(target()));
+    assert_eq!(record.result, None);
+    assert!(records.try_recv().is_err());
+    drop(client);
+    session.stop().await.unwrap();
+    assert_eq!(session.active_leases(), 0);
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
+/// Each way a ReadRange can fail is recorded with its Result: a peer's
+/// Error, Reject and Abort, no answer, and an answer that names another
+/// object, property or index or doesn't decode.
+#[tokio::test(start_paused = true)]
+async fn source_read_range_terminal_errors_are_reported() {
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
+    session.start().await.unwrap();
+    let client = client_of(&session);
+    for case in 0..8 {
+        let read = range_start(&client, peer.local_mac(), None);
         let request = receive(&mut requests).await;
         let (invoke_id, mut rr) = range_request(&request);
         let communication = (ErrorClass::COMMUNICATION, ErrorCode::OTHER);
@@ -203,30 +269,13 @@ async fn source_read_range_terminal_errors_and_segmented_attempt_are_reported() 
                 };
                 (Some(range_ack(invoke_id, &rr, 2).1), communication)
             }
-            7 => {
+            _ => {
                 let (_, mut ack) = range_ack(invoke_id, &rr, 2);
                 let Apdu::ComplexAck(ref mut pdu) = ack else {
                     unreachable!()
                 };
                 pdu.service_ack = Bytes::from_static(&[0]);
                 (Some(ack), communication)
-            }
-            _ => {
-                let (_, mut ack) = range_ack(invoke_id, &rr, 2);
-                let Apdu::ComplexAck(ref mut pdu) = ack else {
-                    unreachable!()
-                };
-                pdu.segmented = true;
-                pdu.more_follows = true;
-                pdu.sequence_number = Some(0);
-                pdu.proposed_window_size = Some(1);
-                (
-                    Some(ack),
-                    (
-                        ErrorClass::COMMUNICATION,
-                        ErrorCode::ABORT_INVALID_APDU_IN_THIS_STATE,
-                    ),
-                )
             }
         };
         if let Some(reply) = reply {
@@ -241,13 +290,8 @@ async fn source_read_range_terminal_errors_and_segmented_attempt_are_reported() 
             Some(BACnetTimeStamp::SequenceNumber(case))
         );
         assert!(record.target_value.is_none());
-        if case == 8 {
-            let abort = receive(&mut requests).await;
-            assert!(
-                matches!(decode_apdu(abort.apdu).unwrap(),Apdu::Abort(pdu) if pdu.abort_reason==AbortReason::SEGMENTATION_NOT_SUPPORTED)
-            );
-        }
     }
+    assert!(requests.try_recv().is_err());
     session.stop().await.unwrap();
     assert_eq!(session.active_leases(), 0);
     peer.stop().await.unwrap();
@@ -260,7 +304,7 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = session.cloned_client_handle().unwrap();
+    let client = client_of(&session);
     for (property, index, range) in [
         (PropertyIdentifier::ALL, None, None),
         (PropertyIdentifier::REQUIRED, None, None),
@@ -311,12 +355,12 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
                 .is_err()
         );
     }
+    // An audited read goes to one station, never to a broadcast.
     assert!(
         client
-            .read_range_with_destination(
-                bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::LocalBroadcast,
-                vec![],
-                bacnet_services::read_range::ReadRangeRequest {
+            .read_range_with(
+                &encode_bip_mac([255; 4], 47808)[..],
+                &bacnet_services::read_range::ReadRangeRequest {
                     object_identifier: target(),
                     property_identifier: PropertyIdentifier::LOG_BUFFER,
                     property_array_index: None,
@@ -338,7 +382,7 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
     );
     assert!(requests.try_recv().is_err());
     assert!(records.try_recv().is_err());
-    let read = range_start(&session, peer.local_mac(), None);
+    let read = range_start(&client, peer.local_mac(), None);
     let envelope = receive(&mut requests).await;
     let (invoke, rr) = range_request(&envelope);
     send(&peer, &envelope.source_mac, range_ack(invoke, &rr, 0).1).await;
@@ -354,8 +398,9 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
 }
 
 /// A page numbered from 0 after the device's wrap: strict refuses it as a
-/// broken rule, lenient keeps it with the rule named, and the audit record
-/// reports each outcome (#1531).
+/// broken rule and lenient keeps it with the rule named (#1531). The audit
+/// record is the same for both: the device answered the read, and which
+/// check its caller asked for is the caller's own.
 #[tokio::test(start_paused = true)]
 async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
     use bacnet_services::read_range::{ReadRangeValidation, ReadRangeViolation};
@@ -364,6 +409,7 @@ async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
+    let shared = client_of(&session);
     let request = ReadRangeRequest {
         object_identifier: target(),
         property_identifier: PropertyIdentifier::LOG_BUFFER,
@@ -374,11 +420,11 @@ async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
         }),
     };
     for validation in [ReadRangeValidation::Strict, ReadRangeValidation::Lenient] {
-        let client = session.cloned_client_handle().unwrap();
+        let client = Arc::clone(&shared);
         let mac = peer.local_mac().to_vec();
         let sent = request.clone();
         let read =
-            tokio::spawn(async move { client.read_range_with(&mac, &sent, validation).await });
+            tokio::spawn(async move { client.read_range_with(&mac[..], &sent, validation).await });
         let received = receive(&mut requests).await;
         let (invoke_id, rr) = range_request(&received);
         let (mut ack, _) = range_ack(invoke_id, &rr, 2);
@@ -405,10 +451,6 @@ async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
                         ReadRangeViolation::ZeroFirstSequenceNumber
                     ))
                 ));
-                assert_eq!(
-                    record.result,
-                    Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
-                );
             }
             ReadRangeValidation::Lenient => {
                 let reply = outcome.unwrap();
@@ -417,9 +459,9 @@ async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
                     [ReadRangeViolation::ZeroFirstSequenceNumber]
                 );
                 assert_eq!(reply.ack.item_data, ack.item_data);
-                assert_eq!(record.result, None);
             }
         }
+        assert_eq!(record.result, None, "{validation:?}");
     }
     session.stop().await.unwrap();
     assert_eq!(session.active_leases(), 0);
@@ -439,11 +481,14 @@ async fn read_log_page_finds_the_oldest_record_and_decodes_its_page() {
     let (sink, _records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = session.cloned_client_handle().unwrap();
+    let client = client_of(&session);
     let mac = peer.local_mac().to_vec();
     let log = oid(ObjectType::TREND_LOG, 3);
-    let read =
-        tokio::spawn(async move { client.read_log_page(&mac, log, LogCursor::Oldest, 10).await });
+    let read = tokio::spawn(async move {
+        client
+            .read_log_page(&mac[..], log, LogCursor::Oldest, 10)
+            .await
+    });
     // Total_Record_Count, Record_Count and Total_Record_Count again all read
     // 42: records 1 to 42.
     for property in [
@@ -516,6 +561,9 @@ async fn read_log_page_finds_the_oldest_record_and_decodes_its_page() {
     sink.stop().await.unwrap();
 }
 
+/// A caller that goes away loses nothing: the session's task retries the
+/// ReadRange unchanged and records its answer once; a stop then ends a
+/// request still waiting and gives no further client.
 #[tokio::test(start_paused = true)]
 async fn source_read_range_cancelled_caller_keeps_one_retry_record_and_stop_releases() {
     let (peer, mut requests) = network().await;
@@ -523,13 +571,14 @@ async fn source_read_range_cancelled_caller_keeps_one_retry_record_and_stop_rele
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
-    let read = range_start(&session, peer.local_mac(), None);
+    let client = client_of(&session);
+    let read = range_start(&client, peer.local_mac(), None);
     let first = receive(&mut requests).await;
     let (invoke, rr) = range_request(&first);
     read.abort();
     assert!(read.await.unwrap_err().is_cancelled());
     let retry = receive(&mut requests).await;
-    assert_eq!(range_request(&retry).0, invoke);
+    assert_eq!(retry.apdu, first.apdu);
     send(&peer, &retry.source_mac, range_ack(invoke, &rr, 2).1).await;
     let (record, _) = notification(&receive(&mut records).await, false);
     assert_eq!(record.invoke_id, Some(invoke));
@@ -539,13 +588,13 @@ async fn source_read_range_cancelled_caller_keeps_one_retry_record_and_stop_rele
             .await
             .is_err()
     );
-    let read = range_start(&session, peer.local_mac(), None);
+    let read = range_start(&client, peer.local_mac(), None);
     receive(&mut requests).await;
     session.stop().await.unwrap();
     assert!(read.await.unwrap().is_err());
     assert_eq!(session.active_leases(), 0);
-    let client = session.cloned_client_handle();
-    assert!(client.is_none());
+    drop(client);
+    assert!(session.client().is_err());
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
@@ -557,7 +606,8 @@ async fn source_read_range_snapshot_and_generation_survive_recipient_change() {
     let (new, mut new_records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &old);
     session.start().await.unwrap();
-    let read = range_start(&session, peer.local_mac(), None);
+    let client = client_of(&session);
+    let read = range_start(&client, peer.local_mac(), None);
     let envelope = receive(&mut requests).await;
     let (invoke, rr) = range_request(&envelope);
     let recipient = BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
@@ -595,7 +645,7 @@ async fn source_read_range_snapshot_and_generation_survive_recipient_change() {
         record.result,
         Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
     );
-    let read = range_start(&session, peer.local_mac(), None);
+    let read = range_start(&client, peer.local_mac(), None);
     let envelope = receive(&mut requests).await;
     let (invoke, rr) = range_request(&envelope);
     send(&peer, &envelope.source_mac, range_ack(invoke, &rr, 0).1).await;
@@ -621,8 +671,8 @@ async fn source_read_range_drop_unblocks_retained_caller_and_releases_database()
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let db = Arc::clone(session.database.as_ref().unwrap());
-    let client = session.cloned_client_handle().unwrap();
-    let read = range_start(&session, peer.local_mac(), None);
+    let client = client_of(&session);
+    let read = range_start(&client, peer.local_mac(), None);
     receive(&mut requests).await;
     let coordinator = Arc::clone(&session.coordinator);
     drop(session);

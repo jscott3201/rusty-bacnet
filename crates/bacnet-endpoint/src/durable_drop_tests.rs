@@ -310,9 +310,7 @@ async fn an_audited_read_in_flight_lets_the_source_database_go_off_the_runtime()
     // the source Audit runtime in hand once it has taken its permit.
     let reading = Arc::clone(&db).read_owned().await;
     let source = Arc::clone(endpoint.session.source_audit.as_ref().unwrap());
-    let read = endpoint.read(EndpointApduDestination::Direct {
-        destination_mac: mac(PEER),
-    });
+    let read = endpoint.read(direct_read());
     bounded(async {
         while source.available_operations() == 64 {
             tokio::task::yield_now().await;

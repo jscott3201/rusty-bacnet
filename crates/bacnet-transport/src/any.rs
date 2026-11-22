@@ -191,7 +191,7 @@ impl TransportPort for AnyTransport {
         }
     }
 
-    fn abort(&mut self) {
+    fn abort(&self) {
         match self {
             Self::Bip(t) => t.abort(),
             Self::Mstp(t) => t.abort(),

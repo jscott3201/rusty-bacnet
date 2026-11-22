@@ -8,7 +8,7 @@ use bacnet_types::enums::PropertyIdentifier;
 #[tokio::test(start_paused = true)]
 async fn who_is_fills_the_full_clients_table_in_each_scope() {
     let lab = lab(SessionRole::Both).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let peer = Wire::mac(PEER);
     let mut events = client.device_events();
 
@@ -66,7 +66,7 @@ async fn who_is_fills_the_full_clients_table_in_each_scope() {
 #[tokio::test(start_paused = true)]
 async fn the_full_client_reads_as_a_standalone_client_does() {
     let lab = lab(SessionRole::Both).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let peer = Wire::mac(PEER);
 
     let value = client

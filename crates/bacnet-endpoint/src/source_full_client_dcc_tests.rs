@@ -25,7 +25,7 @@ async fn read_and_record(
     requests: &mut bacnet_network::layer::ApduReceiver,
     records: &mut bacnet_network::layer::ApduReceiver,
 ) -> BACnetAuditNotification {
-    let read = full_read(
+    let read = start_read(
         client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
@@ -49,7 +49,7 @@ async fn disable_initiation_refuses_an_audited_request_before_admission() {
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let source = Arc::clone(session.source_audit.as_ref().unwrap());
     let seat = node_dcc(&session);
     let first = read_and_record(&client, &peer, &mut requests, &mut records).await;
@@ -59,7 +59,7 @@ async fn disable_initiation_refuses_an_audited_request_before_admission() {
     );
 
     seat.dcc.set(true);
-    let refused = full_read(
+    let refused = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
@@ -79,7 +79,7 @@ async fn disable_initiation_refuses_an_audited_request_before_admission() {
     drop(client);
     let exempt = Arc::new(
         session
-            .full_client_with(ClientOptions::default().with_node_dcc_override(true))
+            .client_with(ClientOptions::default().with_node_dcc_override(true))
             .unwrap(),
     );
     let record = read_and_record(&exempt, &peer, &mut requests, &mut records).await;
@@ -91,7 +91,7 @@ async fn disable_initiation_refuses_an_audited_request_before_admission() {
     drop(exempt);
 
     seat.dcc.set(false);
-    let client = full_client(&session);
+    let client = client_of(&session);
     let after = read_and_record(&client, &peer, &mut requests, &mut records).await;
     assert_eq!(
         after.source_timestamp,
@@ -113,7 +113,7 @@ async fn a_request_waiting_for_the_database_takes_no_sequence_number() {
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let seat = node_dcc(&session);
     let source = Arc::clone(session.source_audit.as_ref().unwrap());
     let first = read_and_record(&client, &peer, &mut requests, &mut records).await;
@@ -123,7 +123,7 @@ async fn a_request_waiting_for_the_database_takes_no_sequence_number() {
     );
     let db = Arc::clone(session.database.as_ref().unwrap());
     let guard = db.write().await;
-    let waiting = full_read(
+    let waiting = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
@@ -163,11 +163,11 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let seat = node_dcc(&session);
     let reads: Vec<_> = (0..65)
         .map(|_| {
-            full_read(
+            start_read(
                 &client,
                 peer.local_mac(),
                 PropertyIdentifier::PRESENT_VALUE,
@@ -182,7 +182,7 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
     seat.dcc.set(true);
     // A request made now is refused at once, while every slot is held: at
     // its registration, before it would wait for one.
-    let late = full_read(
+    let late = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::OBJECT_NAME,
@@ -250,9 +250,9 @@ async fn an_audited_request_whose_retry_is_withheld_is_recorded_as_failed() {
     session.client_config.apdu_timeout_ms = 1_000;
     session.client_config.apdu_retries = 2;
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let seat = node_dcc(&session);
-    let read = full_read(
+    let read = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,

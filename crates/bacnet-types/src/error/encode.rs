@@ -213,12 +213,6 @@ pub enum SegmentationError {
     /// The peer kept asking for the same window again with negative
     /// SegmentACKs past the sender's retry limit.
     NegativeAckRetriesExhausted,
-    /// An endpoint operation's acknowledgement is longer than the endpoint's
-    /// maximum APDU; endpoint operations don't reassemble segments.
-    EndpointAckTooLong,
-    /// An endpoint request too long for one APDU; the endpoint requester
-    /// doesn't segment.
-    EndpointRequestTooLong,
 }
 
 impl fmt::Display for SegmentationError {
@@ -253,12 +247,6 @@ impl fmt::Display for SegmentationError {
             Self::PayloadAccountingOverflow => f.write_str("request payload accounting overflow"),
             Self::NegativeAckRetriesExhausted => {
                 f.write_str("too many negative SegmentAck retransmissions")
-            }
-            Self::EndpointAckTooLong => {
-                f.write_str("endpoint operation ACK exceeds configured max APDU")
-            }
-            Self::EndpointRequestTooLong => {
-                f.write_str("endpoint requester supports only unsegmented requests")
             }
         }
     }

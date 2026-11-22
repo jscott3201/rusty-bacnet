@@ -3,10 +3,10 @@
 //! `write_property`, `atomic_read_file`, `atomic_write_file`,
 //! `subscribe_cov`, `unsubscribe_cov`, `subscribe_cov_property`,
 //! `unsubscribe_cov_property` and `subscribe_cov_property_multiple` take one
-//! where they take an address, on a standalone
-//! client and on one from `endpoint.client()` alike, as the narrow endpoint
-//! client did (#2612). Each call goes through the client's own routed
-//! requests, so it is paced, sized and segmented as every other request is.
+//! where they take an address, on a standalone client and on one from
+//! `endpoint.client()` alike (#2612). Each call goes through the client's
+//! own routed requests, so it is paced, sized and segmented as every other
+//! request is.
 //!
 //! A `str` stays an address on the local link and is never read as a
 //! routed one. With `router` given, the request goes through that router.

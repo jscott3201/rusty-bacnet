@@ -59,7 +59,7 @@ fn stopped<T: std::fmt::Debug>(result: Result<T, bacnet_types::error::Error>) ->
 async fn the_session_stopping_first_fails_open_requests_and_stops_the_link_under_a_live_client() {
     for _ in 0..20 {
         let mut lab = lab(SessionRole::Both).await;
-        let client = Arc::new(lab.session.full_client().unwrap());
+        let client = Arc::new(lab.session.client().unwrap());
         let read = open_read(&lab, &client).await;
 
         // One stop, with the client still alive (#2617): it ends the
@@ -71,7 +71,7 @@ async fn the_session_stopping_first_fails_open_requests_and_stops_the_link_under
         assert_eq!(asked.elapsed(), Duration::ZERO);
         assert_eq!(lab.node_link.stops(), 1);
         assert!(!lab.session.is_running());
-        assert!(lab.session.full_client().is_err());
+        assert!(lab.session.client().is_err());
         // From here the client sends nothing: a request, a Who-Is in any
         // scope and a network message each fail at once, and no frame of
         // theirs reaches the link.
@@ -126,10 +126,10 @@ async fn the_session_stopping_first_fails_open_requests_and_stops_the_link_under
 async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
     for _ in 0..20 {
         let lab = lab(SessionRole::Both).await;
-        let client = Arc::new(lab.session.full_client().unwrap());
+        let client = Arc::new(lab.session.client().unwrap());
         let read = open_read(&lab, &client).await;
         // While one full client lives, the session makes no second.
-        assert!(lab.session.full_client().is_err());
+        assert!(lab.session.client().is_err());
 
         // A caller's request borrows the client, so it is given up before
         // the client can be stopped: its lease goes back to the node's pool.
@@ -142,7 +142,7 @@ async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
         // The stopped client's tasks were joined by its stop, so the seat
         // is free as soon as the client is dropped. (A client dropped
         // without a stop is the next test's.)
-        let at_once = lab.session.full_client().expect("the seat is free");
+        let at_once = lab.session.client().expect("the seat is free");
         drop(at_once);
         lab.wire.release(&Wire::mac(NODE));
         eventually(WAIT, "the stopped client's lease released", async || {
@@ -150,19 +150,9 @@ async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
         })
         .await;
 
-        // The session still runs: its narrow client reads, its server role
-        // answers, and it takes a new full client.
+        // The session still runs: its server role answers, and it takes a
+        // new client.
         assert!(lab.session.is_running());
-        let narrow = lab.session.client().unwrap();
-        narrow
-            .read_property(
-                &Wire::mac(PEER),
-                ai1(),
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-            )
-            .await
-            .unwrap();
         let other = other_client(&lab.wire).await;
         other
             .read_property(
@@ -173,7 +163,7 @@ async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
             )
             .await
             .unwrap();
-        let again = lab.session.full_client().unwrap();
+        let again = lab.session.client().unwrap();
         again
             .read_property(
                 &Wire::mac(PEER),
@@ -194,7 +184,7 @@ async fn the_client_stopping_first_leaves_the_session_and_its_link_running() {
 async fn a_client_dropped_without_a_stop_frees_the_seat_at_once() {
     let lab = lab(SessionRole::Both).await;
     let peer = Wire::mac(PEER);
-    let mut client = lab.session.full_client().unwrap();
+    let mut client = lab.session.client().unwrap();
     for _ in 0..20 {
         // The drop aborts the client's tasks, which still hold the seat's
         // queue until the runtime next runs them. The session takes the
@@ -202,7 +192,7 @@ async fn a_client_dropped_without_a_stop_frees_the_seat_at_once() {
         drop(client);
         client = lab
             .session
-            .full_client()
+            .client()
             .expect("the dropped client's seat is free");
         client
             .read_property(&peer, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
@@ -223,7 +213,7 @@ async fn a_client_dropped_without_a_stop_frees_the_seat_at_once() {
 #[tokio::test(start_paused = true)]
 async fn a_client_whose_seat_closed_does_not_ask_for_the_network_number() {
     let mut lab = lab_with(SessionRole::Both, true).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     assert_eq!(client.network_number(), None);
     let routed = || bacnet_client::discovery::RoutedDeviceConfig {
         instance: 777,
@@ -247,7 +237,7 @@ async fn a_client_whose_seat_closed_does_not_ask_for_the_network_number() {
     // The same call on a running session's client does ask, once: the
     // check above is not passing for want of a question.
     let mut lab = lab_with(SessionRole::Both, true).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     client.add_routed_device(routed()).await.unwrap();
     assert_eq!(
         network_messages(&lab.node_sent),
@@ -258,28 +248,41 @@ async fn a_client_whose_seat_closed_does_not_ask_for_the_network_number() {
     lab.peer.stop().await.unwrap();
 }
 
+/// Dropping the session without a stop ends the client and aborts the
+/// link, though the client still holds it (#2617): no live client keeps a
+/// dropped session's link up.
 #[tokio::test(start_paused = true)]
-async fn dropping_the_session_ends_the_client_and_the_last_owner_releases_the_link() {
+async fn dropping_the_session_ends_the_client_and_aborts_the_link_it_still_holds() {
     let lab = lab(SessionRole::Both).await;
-    let client = Arc::new(lab.session.full_client().unwrap());
+    let client = Arc::new(lab.session.client().unwrap());
     let read = open_read(&lab, &client).await;
     let Lab {
         session,
         node_link,
+        node_sent,
         mut peer,
         ..
     } = lab;
 
     let asked = Instant::now();
     drop(session);
+    // At once, with no turn of the runtime: an abort, not a stop.
+    assert_eq!((node_link.stops(), node_link.aborts()), (0, 1));
     assert!(read.await.unwrap().is_err());
     assert_eq!(asked.elapsed(), Duration::ZERO);
-    assert_eq!((node_link.stops(), node_link.aborts()), (0, 0));
+    // The client sends nothing more, through its seat or its link.
+    let sent = node_sent.len();
+    assert!(client.who_is(Broadcast::Global, None).await.is_err());
+    let transport = client.transport();
+    assert!(stopped(transport.send_broadcast(&[0x01, 0x00]).await));
+    assert!(stopped(
+        transport
+            .send_unicast(&[0x01, 0x00], &Wire::mac(PEER))
+            .await
+    ));
+    assert_eq!(node_sent.len(), sent, "no frame went out");
+    assert_eq!(node_link.stops(), 0);
     drop(client);
-    eventually(WAIT, "the transport released", async || {
-        node_link.aborts() == 1
-    })
-    .await;
     peer.stop().await.unwrap();
     drop(peer);
     assert_no_task_left().await;
@@ -293,19 +296,19 @@ async fn a_full_client_needs_a_running_session() {
         EndpointSession::new(wire.port(NODE).build(), SessionRole::Both, config.clone())
             .unwrap()
             .device(bacnet_endpoint::DeviceIdentity::new(901, 42).unwrap());
-    assert!(session.full_client().is_err(), "before start");
+    assert!(session.client().is_err(), "before start");
     session.start().await.unwrap();
-    let client = session.full_client().unwrap();
+    let client = session.client().unwrap();
     drop(client);
     session.stop().await.unwrap();
-    assert!(session.full_client().is_err(), "after stop");
+    assert!(session.client().is_err(), "after stop");
 
     // A session with a source Audit Reporter has one too once it runs; its
     // reads and writes are audited (#2617).
     let audited = EndpointSession::new(wire.port(OTHER).build(), SessionRole::ClientOnly, config)
         .unwrap()
         .with_source_audit_reporter(oid(ObjectType::AUDIT_REPORTER, 1));
-    let error = audited.full_client().err().expect("not running");
+    let error = audited.client().err().expect("not running");
     assert!(error.to_string().contains("not running"));
 }
 
@@ -315,7 +318,7 @@ async fn a_full_client_needs_a_running_session() {
 #[tokio::test(start_paused = true)]
 async fn the_sessions_stop_does_not_wait_on_a_client_task_stuck_in_a_turn() {
     let mut lab = lab(SessionRole::Both).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let peer = Wire::mac(PEER);
     let mut notifications = client.cov_notifications();
     client
@@ -361,7 +364,7 @@ fn expecting_reply(
 #[tokio::test(start_paused = true)]
 async fn a_frame_expecting_a_reply_is_answered_on_its_own_path_by_the_role_it_is_for() {
     let lab = lab(SessionRole::Both).await;
-    let client = lab.session.full_client().unwrap();
+    let client = lab.session.client().unwrap();
     let mut notifications = client.cov_notifications();
     let node = Wire::mac(NODE);
     let to_other = |log: &SendLog| {

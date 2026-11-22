@@ -49,12 +49,12 @@ fn expected_summary(count: u64, timestamp: BACnetTimeStamp) -> BACnetAuditNotifi
     }
 }
 pub(super) async fn complete_read(
-    session: &EndpointSession<TestTransport>,
+    client: &Client,
     peer: &NetworkLayer<TestTransport>,
     requests: &mut bacnet_network::layer::ApduReceiver,
 ) {
     let read = start_read(
-        session,
+        client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -76,12 +76,13 @@ async fn source_failure_permit_losses_wire_shape_reverse_completion_and_sequence
         }
         let mut session = session(db, SessionRole::ClientOnly, &sink);
         session.start().await.unwrap();
+        let client = client_of(&session);
         let owner = session.notifications.as_ref().unwrap();
         let permits: Vec<_> = (0..64).map(|_| owner.try_admit_audit().unwrap()).collect();
         let mut operations = Vec::new();
         for _ in 0..3 {
             let read = start_read(
-                &session,
+                &client,
                 peer.local_mac(),
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
@@ -134,6 +135,7 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
     for change in ["mode-aba", "level-aba", "filter-aba"] {
         let mut session = session(failure_database(true), SessionRole::ClientOnly, &sink);
         session.start().await.unwrap();
+        let client = client_of(&session);
         let permits: Vec<_> = (0..64)
             .map(|_| {
                 session
@@ -144,7 +146,7 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
                     .unwrap()
             })
             .collect();
-        complete_read(&session, &peer, &mut requests).await;
+        complete_read(&client, &peer, &mut requests).await;
         let old_status;
         {
             let mut db = session.database.as_ref().unwrap().write().await;
@@ -212,7 +214,7 @@ async fn source_failure_pending_worker_stop_and_drop_reclaim_owner() {
     for stop in [true, false] {
         let mut session = session(failure_database(true), SessionRole::ClientOnly, &sink);
         session.start().await.unwrap();
-        let client = session.cloned_client_handle().unwrap();
+        let client = client_of(&session);
         let weak_db = Arc::downgrade(session.database.as_ref().unwrap());
         let weak_source = Arc::downgrade(session.source_audit.as_ref().unwrap());
         let coordinator = Arc::clone(&session.coordinator);
@@ -226,7 +228,7 @@ async fn source_failure_pending_worker_stop_and_drop_reclaim_owner() {
                     .unwrap()
             })
             .collect();
-        complete_read(&session, &peer, &mut requests).await;
+        complete_read(&client, &peer, &mut requests).await;
         if stop {
             session.stop().await.unwrap();
         }

@@ -130,7 +130,7 @@ async fn lab() -> Lab {
         .unwrap();
     let (session, node_sent, node_link) =
         session(&wire, SessionRole::Both, BACnetServer::generic_builder()).await;
-    let client = session.full_client().unwrap();
+    let client = session.client().unwrap();
     Lab {
         wire,
         session,

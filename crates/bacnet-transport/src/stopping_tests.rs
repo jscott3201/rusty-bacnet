@@ -100,3 +100,37 @@ async fn futures_poll_once<F: Future + Unpin>(mut future: F) -> std::task::Poll<
     std::future::poll_fn(|cx| std::task::Poll::Ready(std::pin::Pin::new(&mut future).poll(cx)))
         .await
 }
+
+/// An abort reads as stopped at once, and a stop after it still runs, to
+/// join what the abort left (#2617); an abort after a stop changes nothing.
+#[tokio::test]
+async fn an_abort_reads_as_stopped_and_leaves_the_stop_to_run() {
+    let mut gate = StopGate::default();
+    gate.abort();
+    assert!(gate.is_stopped());
+    gate.abort();
+    gate.enter()
+        .await
+        .expect("a stop runs after an abort")
+        .finish();
+    assert!(gate.is_stopped());
+    gate.abort();
+    assert!(gate.enter().await.is_none(), "still stopped");
+    gate.open();
+    assert!(!gate.is_stopped());
+}
+
+/// An abort that comes while a stop runs, which is then cancelled, is not
+/// forgotten: the gate stays aborted, and the next stop runs (#2617).
+#[tokio::test]
+async fn an_abort_during_a_cancelled_stop_leaves_the_gate_aborted() {
+    let gate = StopGate::default();
+    let stopping = gate.enter().await.expect("the first stop runs");
+    assert!(!gate.is_stopped());
+    gate.abort();
+    assert!(gate.is_stopped(), "an abort reads as stopped at once");
+    drop(stopping);
+    assert!(gate.is_stopped(), "the cancelled stop kept the abort");
+    gate.enter().await.expect("the next stop runs").finish();
+    assert!(gate.enter().await.is_none());
+}

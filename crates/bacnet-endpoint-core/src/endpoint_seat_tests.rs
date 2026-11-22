@@ -143,10 +143,6 @@ async fn an_answer_goes_to_the_role_that_holds_its_lease_and_nothing_is_claimed(
     let mut seated = seated(true, 8).await;
     let coordinator = Arc::clone(&seated.coordinator);
     let client = coordinator.reserve(requester(&PEER)).unwrap();
-    let narrow = coordinator.reserve(requester(&PEER)).unwrap();
-    coordinator
-        .mark_endpoint_requester(narrow.invoke_id())
-        .unwrap();
     let server = coordinator
         .reserve(LeaseMetadata::notification(
             CanonicalPeer::direct(&PEER),
@@ -158,10 +154,6 @@ async fn an_answer_goes_to_the_role_that_holds_its_lease_and_nothing_is_claimed(
     assert_eq!(
         coordinator.holder_of(&peer, client.invoke_id()),
         Some(LeaseHolder::Client)
-    );
-    assert_eq!(
-        coordinator.holder_of(&peer, narrow.invoke_id()),
-        Some(LeaseHolder::EndpointRequester)
     );
     assert_eq!(
         coordinator.holder_of(&peer, server.invoke_id()),
@@ -213,15 +205,10 @@ async fn an_answer_goes_to_the_role_that_holds_its_lease_and_nothing_is_claimed(
         assert_quiet(&mut seated);
     }
 
-    // The endpoint requester's and the server role's answers, an answer for
-    // a lease another peer holds, and one no lease holds, all stay with the
-    // endpoint, which counts what nothing claims.
-    for id in [
-        narrow.invoke_id(),
-        server.invoke_id(),
-        elsewhere.invoke_id(),
-        200,
-    ] {
+    // The server role's answers, an answer for a lease another peer holds,
+    // and one no lease holds, all stay with the endpoint, which counts what
+    // nothing claims.
+    for id in [server.invoke_id(), elsewhere.invoke_id(), 200] {
         let apdu = [0x20, id, 0x0c];
         inject(&seated.link, &apdu).await;
         assert_eq!(

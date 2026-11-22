@@ -491,7 +491,9 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     /// (#2617), whether or not the seated roles themselves are still alive.
     /// Their sends after that fail with the transport's stopped error, and
     /// dropping them later changes nothing. A seated server's own stop is
-    /// best run first: it joins its work and settles its saves.
+    /// best run first: it joins its work and settles its saves. Dropping
+    /// the ingress instead aborts the layer, with the same end for the
+    /// seated roles but nothing graceful sent and nothing waited for.
     pub async fn stop(&mut self) -> Result<ClassifierExit, Error> {
         if !matches!(
             self.lifecycle,
@@ -536,6 +538,12 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     }
 }
 
+/// A drop aborts, never waits: the seats' queues close, the session task is
+/// aborted, and the started layer is aborted through the shared reference
+/// (#2617), so a seated client still alive keeps no link up. It sends
+/// nothing more, the transport's sockets go as the runtime drops its aborted
+/// tasks, and nothing graceful goes out; [`EndpointIngress::stop`] is the
+/// graceful path.
 impl<T: TransportPort> Drop for EndpointIngress<T> {
     fn drop(&mut self) {
         if let Some(seats) = &self.seats {
@@ -549,6 +557,9 @@ impl<T: TransportPort> Drop for EndpointIngress<T> {
         }
         if let Some(task) = self.session_task.take() {
             task.abort();
+        }
+        if let Some(network) = self.started.upgrade() {
+            network.abort();
         }
         // An aborted session task reports no tail of its own.
         let _ = self.drops.flush();

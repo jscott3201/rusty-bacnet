@@ -27,7 +27,7 @@ bacnet-transport.workspace = true
 
 [dev-dependencies]
 bacnet-bip-codec.workspace = true
-# The high-level client over an endpoint's full client (endpoint_full_client).
+# The high-level client over an endpoint session's client (endpoint_full_client).
 bacnet-ops.workspace = true
 bacnet-transport = { workspace = true, features = ["test-support"] }
 # Fixed waits before a Network-Number-Is answer (network_number_answers).

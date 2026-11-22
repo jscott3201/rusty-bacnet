@@ -392,7 +392,8 @@ impl BipTransport {
     /// socket, so every later send fails, and a call still running (the
     /// receive loop, the driver, a request given up) counts nothing more, so
     /// the status cleared next stays clear. Then the tasks are aborted, in
-    /// place: a stop joins them, an abort lets go of them.
+    /// place: a stop joins them, and after an abort they stay for a later
+    /// stop to join, or go with the transport.
     fn stop_at_once(&self) {
         if let Some(node) = &self.node {
             node.stop();
@@ -419,6 +420,15 @@ impl BipTransport {
     /// transport's do.
     fn require_node(&self) -> Result<&Arc<NodeHandle>, Error> {
         self.node.as_ref().ok_or_else(not_started)
+    }
+
+    /// Let go of a registered Network Port's lease, as a stop or an abort
+    /// does.
+    fn release_network_port_lease(&self) {
+        self.network_port_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 
     /// Whether the transport is running: started, and not stopped since.
@@ -779,19 +789,22 @@ impl TransportPort for BipTransport {
         };
         self.stop_at_once();
         self.tasks.stop().await;
-        self.network_port_lease
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        self.release_network_port_lease();
         stopping.finish();
         Ok(())
     }
 
-    fn abort(&mut self) {
+    /// Abort through `&self` (#2617): what a stop does at once, so the node
+    /// lets go of the socket and every later send fails with
+    /// [`crate::port::stopped`]'s error, and the tasks are aborted; and a
+    /// registered Network Port's lease is let go of. The socket closes as
+    /// the runtime drops the aborted tasks, which still hold it. A start is
+    /// refused until a stop has joined them; then the transport starts
+    /// again, as after any stop.
+    fn abort(&self) {
+        self.stop_gate.abort();
         self.stop_at_once();
-        self.tasks.abort_and_forget();
-        self.own_broadcast = None;
-        self.node = None;
+        self.release_network_port_lease();
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {

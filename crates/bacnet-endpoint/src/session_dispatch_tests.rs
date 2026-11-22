@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_encoding::apdu::{SimpleAck, encode_apdu};
-use bacnet_endpoint_core::coordinator::CanonicalPeer;
+use bacnet_endpoint_core::coordinator::{CanonicalPeer, LeaseMetadata, TerminalPolicy};
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::BytesMut;
@@ -43,7 +43,6 @@ fn fixture() -> (
     let coordinator = Arc::new(OutboundTransactionCoordinator::new());
     let notifications = NotificationTransactions::with_coordinator(Arc::clone(&coordinator));
     let shared = Arc::new(SessionShared {
-        token: crate::roles::SessionToken::new(Arc::clone(&coordinator)),
         counters: Mutex::new(PolicyCounters {
             ingress_policy: 0,
             no_server_role: 0,
@@ -56,7 +55,6 @@ fn fixture() -> (
             inbound,
             terminal,
             policy,
-            requester: None,
             notifications: Some(notifications),
             coordinator,
             shared,
@@ -239,4 +237,46 @@ async fn closed_streams_drain_buffered_events_before_exit() {
         next_event(&mut parts, &mut next).await,
         DispatchEvent::Closed
     ));
+}
+
+/// An answer the session's own queue gets for a lease nothing here can take
+/// is released and counted: a client's lease, whose client has gone, and a
+/// notification's on a session with no pool for it.
+#[tokio::test]
+async fn an_answer_with_no_role_to_take_it_releases_its_lease_and_is_counted() {
+    let (mut parts, _inbound, _terminal, _policy) = fixture();
+    let peer = || CanonicalPeer::direct(&[2]);
+    let notice = ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION;
+    let no_client_role = async |parts: &DispatchParts| {
+        let counters = parts.shared.counters.lock().await;
+        (counters.no_client_role, counters.unclaimed_terminal)
+    };
+
+    // A client's lease: the pool is there, and it is not the pool's.
+    let lease = parts
+        .coordinator
+        .reserve(LeaseMetadata::requester(
+            peer(),
+            notice,
+            TerminalPolicy::EitherAck,
+        ))
+        .unwrap();
+    handle_terminal(&mut parts, envelope(lease.invoke_id())).await;
+    assert_eq!(parts.coordinator.active_count().unwrap(), 0);
+    assert_eq!(no_client_role(&parts).await, (1, 0));
+
+    // A notification's lease, with no pool.
+    let owner = parts.notifications.take().unwrap();
+    let lease = parts
+        .coordinator
+        .reserve(LeaseMetadata::notification(peer(), notice))
+        .unwrap();
+    handle_terminal(&mut parts, envelope(lease.invoke_id())).await;
+    assert_eq!(parts.coordinator.active_count().unwrap(), 0);
+    assert_eq!(no_client_role(&parts).await, (2, 0));
+
+    // With no lease at all the answer is unclaimed, and nothing else.
+    handle_terminal(&mut parts, envelope(7)).await;
+    assert_eq!(no_client_role(&parts).await, (2, 1));
+    owner.close();
 }

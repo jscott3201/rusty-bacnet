@@ -248,3 +248,46 @@ async fn a_waiting_send_wakes_at_the_stop() {
     assert!(stopped(&sent));
     assert!(received_nothing(&peer));
 }
+
+/// An abort through a shared reference (#2617): every later send fails
+/// with the stopped error at once, the socket closes as the runtime drops
+/// the aborted tasks, and a start is refused until a stop has joined them;
+/// then the transport starts again, as after any stop. Each run starts on
+/// a fresh port; see `restart` for why it can lose it.
+#[tokio::test]
+async fn an_abort_fails_later_sends_and_a_start_waits_for_a_stop() {
+    for attempt in 1..=crate::port_ownership::ATTEMPTS {
+        let (transport, socket, mut rx) = shared().await;
+        let other = Arc::clone(&transport);
+        let (_peer, mac) = peer();
+        other.abort();
+        for sent in [
+            transport.send_unicast(&[0x01, 0x00], &mac).await,
+            transport.send_broadcast(&[0x01, 0x00]).await,
+        ] {
+            assert!(stopped(&sent), "{sent:?}");
+        }
+        assert!(rx.recv().await.is_none(), "the receiver ends");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !closed(&socket) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the socket closed");
+        drop(other);
+        let mut transport = Arc::into_inner(transport).unwrap();
+        let refused = transport.start().await;
+        assert!(
+            matches!(&refused, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::AlreadyExists),
+            "{refused:?}"
+        );
+        transport.stop().await.unwrap();
+        let Some(started) = crate::port_ownership::restart(&mut transport, attempt).await else {
+            continue;
+        };
+        let _rx = started.unwrap();
+        transport.stop().await.unwrap();
+        return;
+    }
+}

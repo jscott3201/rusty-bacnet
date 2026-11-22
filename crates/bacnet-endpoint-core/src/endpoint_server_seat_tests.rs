@@ -229,7 +229,7 @@ async fn a_server_that_stops_reading_holds_up_neither_the_client_nor_the_link() 
         .count();
     assert_eq!(released, 4);
     assert_eq!(node.endpoint.client_seat_counters().full_drops, 0);
-    // None of it reached the endpoint's narrow roles.
+    // None of it reached the endpoint's own request queue.
     assert!(node.ingress.inbound_requests.try_recv().is_err());
     assert_eq!(
         node.endpoint.full_drop_counters(),

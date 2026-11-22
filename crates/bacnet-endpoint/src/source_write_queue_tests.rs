@@ -2,6 +2,8 @@ use super::super::queued::gated;
 use super::*;
 use bacnet_transport::loopback::LoopbackTransport;
 use tokio::sync::{Notify, Semaphore};
+/// An audited write whose caller goes away while it waits in the egress
+/// queue is still sent and recorded: the session's task owns it.
 #[tokio::test(start_paused = true)]
 async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
     let source_mac = encode_bip_mac([127, 0, 0, 1], 30001);
@@ -50,22 +52,8 @@ async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
         )
         .unwrap();
     timeout(WAIT, entered.notified()).await.unwrap();
-    let client = session.cloned_client_handle().unwrap();
-    let caller = tokio::spawn(async move {
-        client
-            .write_property(
-                &peer_mac,
-                WritePropertyRequest {
-                    object_identifier: target(),
-                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                    property_array_index: None,
-                    property_value: vec![0],
-                    priority: None,
-                },
-                Commandability::Commandable,
-            )
-            .await
-    });
+    let client = client_of(&session);
+    let caller = start_write(&client, &peer_mac, PropertyIdentifier::PRESENT_VALUE, None);
     eventually(WAIT, "the request holds its lease", async || {
         session.active_leases() == 1
     })
@@ -100,6 +88,9 @@ async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
     peer.stop().await.unwrap();
 }
 
+/// With no source Audit a write is its caller's alone: when the caller
+/// goes away its lease is released and its request, queued or in the
+/// link's hands, doesn't reach the peer.
 #[tokio::test(start_paused = true)]
 async fn endpoint_write_unreported_cancel_retracts_queued_and_in_progress_sends() {
     for queued in [true, false] {
@@ -138,22 +129,8 @@ async fn endpoint_write_unreported_cancel_retracts_queued_and_in_progress_sends(
             timeout(WAIT, entered.notified()).await.unwrap();
             drop(blocker);
         }
-        let client = session.cloned_client_handle().unwrap();
-        let task = tokio::spawn(async move {
-            client
-                .write_property(
-                    &peer_mac,
-                    WritePropertyRequest {
-                        object_identifier: target(),
-                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                        property_array_index: None,
-                        property_value: vec![0],
-                        priority: None,
-                    },
-                    Commandability::Noncommandable,
-                )
-                .await
-        });
+        let client = client_of(&session);
+        let task = start_write(&client, &peer_mac, PropertyIdentifier::PRESENT_VALUE, None);
         eventually(WAIT, "the request holds its lease", async || {
             session.active_leases() == 1
         })

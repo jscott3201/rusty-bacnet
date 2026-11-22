@@ -52,8 +52,8 @@ async fn source_recipient_canceled_stop_keeps_sealed_membership_until_retry_barr
     let mut session = session(database(false), SessionRole::Both, &sink);
     session.start().await.unwrap();
     let db = session.database.as_ref().unwrap().clone();
-    let client = session.cloned_client_handle().unwrap();
-    let token = session.shared.token.clone();
+    let client = client_of(&session);
+    let source = Arc::downgrade(session.source_audit.as_ref().unwrap());
     let mut guard = db.write().await;
     protected(&mut guard);
     assert!(
@@ -61,7 +61,7 @@ async fn source_recipient_canceled_stop_keeps_sealed_membership_until_retry_barr
             .await
             .is_err()
     );
-    assert!(!token.is_open());
+    assert!(source.upgrade().is_some_and(|source| source.sealed()));
     protected(&mut guard);
     assert!(
         guard
@@ -115,10 +115,15 @@ async fn source_recipient_drop_does_not_pin_membership_for_dormant_external_read
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
     let db = session.database.as_ref().unwrap().clone();
-    let client = session.cloned_client_handle().unwrap();
+    let client = client_of(&session);
     let mut guard = db.write().await;
     let peer_mac = sink.local_mac().to_vec();
-    let read = client.read_property(&peer_mac, target(), PropertyIdentifier::PRESENT_VALUE, None);
+    let read = client.read_property(
+        &peer_mac[..],
+        target(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+    );
     tokio::pin!(read);
     assert!(timeout(Duration::from_millis(10), &mut read).await.is_err());
     protected(&mut guard);
@@ -163,7 +168,8 @@ async fn source_recipient_protected_topology_preserves_pending_failure_then_rele
                 .unwrap()
         })
         .collect();
-    failures::complete_read(&session, &peer, &mut requests).await;
+    let client = client_of(&session);
+    failures::complete_read(&client, &peer, &mut requests).await;
     {
         let mut db = session.database.as_ref().unwrap().write().await;
         protected(&mut db);

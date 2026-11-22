@@ -1,7 +1,9 @@
 //! B/IP Python endpoint owner: one UDP socket above both roles.
 //!
 //! A private lifecycle owner orders preparation, session startup and joined
-//! teardown. Role handles hold cloned role values with no lifecycle.
+//! teardown. The `client()` and `server()` handles are the standalone
+//! `BACnetClient` and `BACnetServer` classes on the session's one socket;
+//! the owner stops them.
 //!
 //! Builder-time config only: the constructor validates the single
 //! `DeviceIdentity` (instance/vendor/APDU/segmentation/services/ports/UUID)

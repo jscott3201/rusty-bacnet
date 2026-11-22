@@ -20,8 +20,8 @@ async fn an_audited_operation_cut_off_by_a_stop_is_not_recorded() {
         let mut session = session(database(false), SessionRole::Both, &sink);
         session.client_config.apdu_timeout_ms = 60_000;
         session.start().await.unwrap();
-        let client = full_client(&session);
-        let read = full_read(
+        let client = client_of(&session);
+        let read = start_read(
             &client,
             peer.local_mac(),
             PropertyIdentifier::PRESENT_VALUE,
@@ -89,10 +89,10 @@ async fn a_caller_that_gives_up_before_admission_sends_nothing() {
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let db = Arc::clone(session.database.as_ref().unwrap());
     let guard = db.write().await;
-    let read = full_read(
+    let read = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
@@ -125,15 +125,15 @@ async fn audited_reads_at_once_each_end_only_their_own_transaction() {
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::Both, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
-    let first = full_read(
+    let client = client_of(&session);
+    let first = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
     );
     let first_request = receive(&mut requests).await;
-    let second = full_read(
+    let second = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::OBJECT_NAME,
@@ -176,8 +176,8 @@ async fn requests_the_reporter_does_not_cover_go_unrecorded() {
         .unwrap();
     let mut session = session(db, SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
-    let read = full_read(
+    let client = client_of(&session);
+    let read = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
@@ -222,9 +222,9 @@ async fn an_audited_request_to_no_one_station_or_that_does_not_decode_is_refused
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let nowhere = encode_bip_mac([127, 0, 0, 1], 0);
-    let read = full_read(&client, &nowhere, PropertyIdentifier::PRESENT_VALUE, None);
+    let read = start_read(&client, &nowhere, PropertyIdentifier::PRESENT_VALUE, None);
     let error = timeout(WAIT, read).await.unwrap().unwrap().unwrap_err();
     assert!(error.to_string().contains("unicast"), "{error}");
     let error = Box::pin(client.confirmed_request(
@@ -268,7 +268,7 @@ async fn a_segmented_request_is_audited_as_any_other() {
         .unwrap();
     let mut session = session(db, SessionRole::ClientOnly, &sink);
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let mut i_am = BytesMut::new();
     IAmRequest {
         object_identifier: oid(ObjectType::DEVICE, 77),
@@ -361,7 +361,7 @@ async fn an_unaudited_service_and_an_unconfirmed_send_go_as_they_are() {
     session.client_config.apdu_retries = 2;
     session.client_config.apdu_timeout_ms = 3_000;
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     // DeviceCommunicationControl, ENABLE for no set time.
     let communication_control = |client: &Client| {
         let client = Arc::clone(client);
@@ -459,8 +459,8 @@ async fn a_new_client_after_one_dropped_mid_request_is_audited_alone() {
     let mut session = session(database(false), SessionRole::Both, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
-    let client = full_client(&session);
-    let read = full_read(
+    let client = client_of(&session);
+    let read = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
@@ -473,10 +473,10 @@ async fn a_new_client_after_one_dropped_mid_request_is_audited_alone() {
         panic!("the read's task let its client go")
     };
     drop(client);
-    let client = full_client(&session);
+    let client = client_of(&session);
     let (invoke, rp) = read_request(&first);
     send(&peer, &first.source_mac, ack(invoke, &rp)).await;
-    let read = full_read(
+    let read = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::OBJECT_NAME,

@@ -78,8 +78,12 @@ pub(super) async fn next_event(parts: &mut DispatchParts, next: &mut usize) -> D
     .await
 }
 
+/// An answer in the session's own answer queue. A client's answers go to
+/// its seat and a seated server's to its own, so what a lease holds here is
+/// an acknowledgment for the source Audit's pool on a session with no
+/// server, or an answer whose role has gone.
 pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: ReceivedApdu) {
-    let Some(apdu) = decode_terminal(&received) else {
+    let Ok(apdu) = bacnet_encoding::apdu::decode_apdu(received.apdu.clone()) else {
         let mut counters = parts.shared.counters.lock().await;
         counters.unclaimed_terminal += 1;
         if let Some(reply_tx) = received.reply_tx {
@@ -102,11 +106,12 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
         return;
     }
     // Exactly one shared-coordinator admit per terminal APDU (exact-once
-    // terminal claim). Equal numeric IDs are unambiguous: the admitted
-    // lease owner selects requester vs notification.
-    let outcome = admit_once(
-        &parts.coordinator,
-        &received,
+    // terminal claim), by the answer's envelope and the session's known
+    // network number. Equal numeric IDs are unambiguous: the admitted
+    // lease's owner says whose it is.
+    let outcome = parts.coordinator.admit_from_source(
+        received.source_mac.as_slice(),
+        received.source_network.as_ref(),
         parts.local_network.get(),
         &apdu,
     );
@@ -129,40 +134,26 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
             return;
         }
     };
-    if is_requester_lease(&admission) {
-        let Some(requester) = parts.requester.as_ref() else {
-            // Lease was admitted but has no consumer: release the exact
-            // lease so exhaustion → release → reuse still holds.
-            let _ = parts.coordinator.release(admission.token());
-            let mut counters = parts.shared.counters.lock().await;
-            counters.no_client_role += 1;
-            if let Some(reply_tx) = received.reply_tx {
-                drop(reply_tx);
-            }
-            return;
-        };
-        // `complete_pre_admitted` delivers via the exact token without
-        // re-admitting; a `false` means the TSM no longer owns it (lost
-        // consumer / stale), the coordinator lease was already completed
-        // inside the TSM path on success.
-        let _ = requester
-            .complete_pre_admitted(admission, apdu, received)
-            .await;
-    } else {
-        let Some(notifications) = parts.notifications.as_ref() else {
-            let _ = parts.coordinator.release(admission.token());
-            let mut counters = parts.shared.counters.lock().await;
-            counters.no_client_role += 1;
-            if let Some(reply_tx) = received.reply_tx {
-                drop(reply_tx);
-            }
-            return;
-        };
-        let _ = notifications.complete_pre_admitted(admission, &apdu);
-        // Notification replies carry no reply sender; drop one if present.
-        if let Some(reply_tx) = received.reply_tx {
-            drop(reply_tx);
+    let pool = parts
+        .notifications
+        .as_ref()
+        .filter(|_| admission.metadata().owner() == LeaseOwner::Notification);
+    match pool {
+        Some(notifications) => {
+            let _ = notifications.complete_pre_admitted(admission, &apdu);
         }
+        // The lease was admitted but has no consumer here: a client's whose
+        // seat gave the answer back because the client has gone, or a
+        // server's with no pool of the session's. Release the exact lease,
+        // so exhaustion → release → reuse still holds.
+        None => {
+            let _ = parts.coordinator.release(admission.token());
+            parts.shared.counters.lock().await.no_client_role += 1;
+        }
+    }
+    // An answer carries no reply sender; drop one if present.
+    if let Some(reply_tx) = received.reply_tx {
+        drop(reply_tx);
     }
 }
 

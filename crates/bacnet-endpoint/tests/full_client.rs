@@ -2,8 +2,8 @@
 //! time over an in-memory link with broadcasts; `stop_waits` alone runs on
 //! real time, and says why.
 //!
-//! The node under test is an endpoint session with its server role, its
-//! narrow client role and a full client on its seat. Its peers are a
+//! The node under test is an endpoint session with its server role and
+//! its client on the seat. Its peers are a
 //! `bacnet-server` device with enough objects that reading its Object_List
 //! takes a segmented answer, and, where a test needs one, a standalone
 //! client or frames the test writes itself.

@@ -253,7 +253,7 @@ impl NodeDccState {
         if self.restricted && !self.exempt.is_empty() {
             tracing::warn!(
                 exempt_clients = self.exempt.len(),
-                "DeviceCommunicationControl disabled initiation on this node, but a full client \
+                "DeviceCommunicationControl disabled initiation on this node, but a client \
                  started outside the node's DeviceCommunicationControl keeps initiating \
                  (an operator override of Clause 16.1)"
             );

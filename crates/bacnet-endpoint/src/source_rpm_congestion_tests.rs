@@ -63,6 +63,7 @@ async fn congestion(mode: u8) {
     let mut peer = NetworkLayer::new(peer);
     let mut received = peer.start().await.unwrap();
     session.start().await.unwrap();
+    let client = client_of(&session);
     let specs = vec![ReadAccessSpecification {
         object_identifier: target(),
         list_of_property_references: vec![
@@ -73,7 +74,7 @@ async fn congestion(mode: u8) {
             64
         ],
     }];
-    let read = start(&session, &peer_mac, specs);
+    let read = start(&client, &peer_mac, specs);
     let env = receive(&mut received).await;
     let (invoke, rpm) = request(&env);
     entered.notified().await; // consume the request's transport-entry marker
@@ -156,7 +157,7 @@ async fn congestion(mode: u8) {
             );
         }
         let read = start(
-            &session,
+            &client,
             &peer_mac,
             vec![ReadAccessSpecification {
                 object_identifier: target(),

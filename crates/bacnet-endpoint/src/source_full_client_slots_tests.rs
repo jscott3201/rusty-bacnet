@@ -13,11 +13,11 @@ async fn audited_requests_past_the_slots_wait_for_one() {
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let source = Arc::clone(session.source_audit.as_ref().unwrap());
     let reads: Vec<_> = (0..65)
         .map(|_| {
-            full_read(
+            start_read(
                 &client,
                 peer.local_mac(),
                 PropertyIdentifier::PRESENT_VALUE,
@@ -32,7 +32,7 @@ async fn audited_requests_past_the_slots_wait_for_one() {
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(requests.try_recv().is_err(), "the 65th waits for a slot");
     assert_eq!(source.available_operations(), 0);
-    let quitter = full_read(
+    let quitter = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::OBJECT_NAME,
@@ -82,10 +82,10 @@ async fn a_stop_ends_the_wait_for_a_slot() {
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
-    let client = full_client(&session);
+    let client = client_of(&session);
     let reads: Vec<_> = (0..65)
         .map(|_| {
-            full_read(
+            start_read(
                 &client,
                 peer.local_mac(),
                 PropertyIdentifier::PRESENT_VALUE,
@@ -122,8 +122,8 @@ async fn the_turn_at_the_destination_travels_with_an_audited_request() {
     session.client_config.min_request_interval_ms = 5_000;
     session.client_config.apdu_timeout_ms = 60_000;
     session.start().await.unwrap();
-    let client = full_client(&session);
-    let first = full_read(
+    let client = client_of(&session);
+    let first = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
@@ -133,7 +133,7 @@ async fn the_turn_at_the_destination_travels_with_an_audited_request() {
     let sent = tokio::time::Instant::now();
     first.abort();
     let _ = first.await;
-    let second = full_read(
+    let second = start_read(
         &client,
         peer.local_mac(),
         PropertyIdentifier::OBJECT_NAME,

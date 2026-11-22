@@ -319,8 +319,9 @@ async fn source_recipient_read_keeps_admitted_route_and_later_read_uses_new_valu
     db.set_clock_reader(None);
     let mut session = session(db, SessionRole::ClientOnly, &old);
     session.start().await.unwrap();
+    let client = client_of(&session);
     let read = start_read(
-        &session,
+        &client,
         peer.local_mac(),
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -347,7 +348,7 @@ async fn source_recipient_read_keeps_admitted_route_and_later_read_uses_new_valu
         record.source_timestamp,
         Some(BACnetTimeStamp::SequenceNumber(0))
     );
-    failures::complete_read(&session, &peer, &mut requests).await;
+    failures::complete_read(&client, &peer, &mut requests).await;
     assert_eq!(
         notification(&receive(&mut new_records).await, false)
             .0
@@ -500,7 +501,8 @@ async fn source_recipient_unresolved_device_preserves_read_and_rejects_live_chan
         reliability(&session).await,
         Reliability::CONFIGURATION_ERROR.to_raw()
     );
-    failures::complete_read(&session, &peer, &mut requests).await;
+    let client = client_of(&session);
+    failures::complete_read(&client, &peer, &mut requests).await;
     assert!(records.try_recv().is_err());
     assert_eq!(
         session

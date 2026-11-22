@@ -244,6 +244,11 @@ impl TransportPort for LoopbackTransport {
         Ok(())
     }
 
+    /// Refuse every later send, as a stop does (#2617).
+    fn abort(&self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         self.unicast(npdu, mac, &[]).await
     }

@@ -49,8 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_loopback_session(ws_client)?;
     assert_eq!(session.active_leases(), 0);
     assert!(
-        session.client().is_none(),
-        "unstarted session has no roles yet"
+        session.client().is_err(),
+        "an unstarted session gives no client yet"
     );
     println!("SC loopback session builds OK (unstarted; hub dial is sc-tls).");
 

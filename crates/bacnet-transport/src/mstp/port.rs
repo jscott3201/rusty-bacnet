@@ -202,17 +202,28 @@ impl<S: SerialPort> MstpTransport<S> {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn abort_task_and_release_state(&mut self) {
-        let running = self.running_mut();
-        if let Some(task) = running.task.take() {
-            if let Some(runtime) = &running.runtime {
+    /// End the node without waiting, through `&self` (#2617): what an
+    /// abort and a drop do. The queues close, so every later send is
+    /// refused at once; the node's task is aborted, and the serial port
+    /// goes with it as the runtime drops it; a dedicated thread is told to
+    /// end. The task and the thread stay here, so a stop after an abort
+    /// still waits for both, and so for the serial port.
+    fn abort_task(&self) {
+        if let Some(link) = &self.link {
+            link.queues.close();
+        }
+        let mut running = lock(&self.running);
+        let Running { task, runtime } = &mut *running;
+        if let Some(task) = task {
+            if let Some(runtime) = runtime {
                 runtime.hold_until_node_dropped();
             }
             task.abort();
         }
-        running.runtime.take();
-        self.serial.take();
-        self.link.take();
+        if let Some(runtime) = runtime {
+            // The thread ends once its runtime has dropped the aborted node.
+            drop(runtime.stopping());
+        }
     }
 
     /// Queue an NPDU for the core, refusing it at once if it cannot be sent.
@@ -378,8 +389,8 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         Ok(())
     }
 
-    fn abort(&mut self) {
-        self.abort_task_and_release_state();
+    fn abort(&self) {
+        self.abort_task();
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
@@ -437,7 +448,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
 impl<S: SerialPort> Drop for MstpTransport<S> {
     fn drop(&mut self) {
-        self.abort_task_and_release_state();
+        self.abort_task();
     }
 }
 
