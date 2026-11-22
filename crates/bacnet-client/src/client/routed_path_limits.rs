@@ -10,13 +10,14 @@ use tokio::time::Instant as TokioInstant;
 use super::*;
 use crate::tsm::CompletionOutcome;
 
-/// The smallest NPDU a router must be able to forward between any two data
-/// links, the lowest of the per-link figures in Table 6-1 (Clause 6.6). It is
-/// the default path limit, and also the floor of what a path can learn: a
-/// conforming router never refuses a frame this small as too long, so a
-/// reason 4 claimed by a request whose largest frame is no larger is not
-/// about that frame ([`RoutedPathLimits::claim_active`]).
-pub(super) const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
+/// The smallest NPDU, in octets, a router must be able to forward between
+/// any two data links, the lowest of the per-link figures in Table 6-1
+/// (Clause 6.6). It is the limit of a routed path nothing was set or learned
+/// for ([`RoutedPathLimitSource::Default`](super::RoutedPathLimitSource::Default)),
+/// and also the floor of what a path can learn: a conforming router never
+/// refuses a frame this small as too long, so the client does not believe a
+/// reason-4 reject for a request whose largest frame is no larger.
+pub const DEFAULT_ROUTED_PATH_MAX_NPDU: u16 = 228;
 /// Hard bound covering gates, configured evidence, and learned evidence.
 pub(super) const MAX_ROUTED_PATH_ENTRIES: usize = 256;
 
@@ -555,7 +556,7 @@ impl RoutedPathLimits {
     /// could be for an earlier answered generation's larger frame is
     /// dropped and counted, and the request runs on to its own answer,
     /// retry or timeout. So is one claimed by a request whose largest frame is
-    /// within [`CONSERVATIVE_ROUTED_PATH_MAX_NPDU`] (counted apart): no
+    /// within [`DEFAULT_ROUTED_PATH_MAX_NPDU`] (counted apart): no
     /// conforming router refuses such a frame, so the reject was for other
     /// traffic, and believing it would pin the path below any link's minimum.
     /// The first such drop on a path logs a warning and marks the path,
@@ -583,7 +584,7 @@ impl RoutedPathLimits {
         // This check stays before the arms below: they clear the answered
         // record and mark a one-frame generation refused, which a dropped
         // reject must not do.
-        if largest <= CONSERVATIVE_ROUTED_PATH_MAX_NPDU {
+        if largest <= DEFAULT_ROUTED_PATH_MAX_NPDU {
             state.below_minimum_drops = state.below_minimum_drops.saturating_add(1);
             let first = entry.sized_under == entry.changed
                 && !std::mem::replace(&mut entry.below_minimum_warned, true);
@@ -593,7 +594,7 @@ impl RoutedPathLimits {
                     router_mac = ?router_mac,
                     dnet,
                     npdu_octets = largest,
-                    minimum_npdu_octets = CONSERVATIVE_ROUTED_PATH_MAX_NPDU,
+                    minimum_npdu_octets = DEFAULT_ROUTED_PATH_MAX_NPDU,
                     "Ignored a reason-4 (too long) network reject for a frame within \
                      the 228-octet routed minimum of Table 6-1; a router refusing a frame that \
                      small is outside the standard. If this router really limits the path \
@@ -652,7 +653,7 @@ impl RoutedPathLimits {
         };
         // A learned limit stays at the conservative one or above, whatever
         // the caller passes (`claim_active` already drops smaller frames).
-        let attempted_npdu = attempted_npdu.max(CONSERVATIVE_ROUTED_PATH_MAX_NPDU + 1);
+        let attempted_npdu = attempted_npdu.max(DEFAULT_ROUTED_PATH_MAX_NPDU + 1);
         let exclusive_max_npdu = entry.learned.as_ref().map_or(attempted_npdu, |learned| {
             learned.exclusive_max_npdu.min(attempted_npdu)
         });
@@ -685,7 +686,7 @@ impl RoutedPathLease {
             entry
                 .configured
                 .as_ref()
-                .map_or(CONSERVATIVE_ROUTED_PATH_MAX_NPDU, |configured| {
+                .map_or(DEFAULT_ROUTED_PATH_MAX_NPDU, |configured| {
                     tracing::trace!(
                         max_npdu = configured.max_npdu,
                         provenance = ?configured.provenance,

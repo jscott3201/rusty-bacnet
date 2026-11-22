@@ -218,6 +218,18 @@ pub(crate) fn refusal(command: Command) -> Option<WorkerEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `:path-limit` in a passive session is answered, so the bar's flash
+    /// says why nothing changed (#2667).
+    #[test]
+    fn a_path_limit_is_refused_with_a_reason() {
+        let change = crate::tui::routed_paths::PathLimit::parse(&["10.0.0.9:47808/2=128"]).unwrap();
+        assert!(!transmits(&Command::PathLimit(change.clone())));
+        let Some(WorkerEvent::PathLimit(why)) = refusal(Command::PathLimit(change)) else {
+            panic!("expected a path-limit refusal");
+        };
+        assert!(why.contains("passive session"), "{why}");
+    }
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},

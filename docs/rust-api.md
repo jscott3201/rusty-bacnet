@@ -13078,14 +13078,20 @@ destination network: `router` in the link's own form (`192.168.1.20:47808`,
   `RoutedPathLimitSource`, the configured and learned values, and
   `below_minimum_reject_seen`), with `too_long_reject_drops` and
   `below_minimum_reject_drops`. `status(&path)` reads one path, the default
-  of 228 octets when it is not listed. It serializes with `source` as
-  `default`, `configured` or `learned`. `RoutedPaths::of(&low_level)` builds
-  the same from a `BACnetClient` alone, as the CLI's summary does.
+  `bacnet_ops::client::DEFAULT_ROUTED_PATH_MAX_NPDU` (228 octets, the
+  low-level client's `bacnet_client::client::DEFAULT_ROUTED_PATH_MAX_NPDU`)
+  when it is not listed. It serializes with `source` as `default`,
+  `configured` or `learned`. `bacnet_ops::raw::routed_paths(&low_level)`
+  builds the same from a `BACnetClient` alone, as the CLI's summary does, and
+  `raw::routed_path_to(&low_level, &address)` is `Device::routed_path`'s.
 - `set_routed_path_limit(&path, max_npdu)` and `clear_routed_path_limit(&path)`
   apply at once and send nothing; a limit that carries no request is an
   `OpsError::Parse`.
 - `routed_path_at("ROUTER", network)` reads a router address in the target
-  grammar, and `routed_path(router_mac, network)` takes the MAC.
+  grammar, and `routed_path(router_mac, network)` takes the MAC; an empty or
+  over-long MAC, or a network outside 1 to 65534, is an `OpsError::Parse`
+  (`what` is `"routed path"`). `RoutedPath` gives `router()`, `router_mac()`
+  and `network()`; two paths are equal by MAC and network.
 - `Device::routed_path()` is the path a handle's device is reached by now,
   through the router the discovery table holds for its network: `None` on
   this client's own network, `OpsError::UnknownDevice` when no router is

@@ -20,55 +20,93 @@ use bacnet_client::client::{BACnetClient, RoutedPathLimitSource};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
+
+pub use bacnet_client::client::DEFAULT_ROUTED_PATH_MAX_NPDU;
 
 use super::Client;
 use crate::device::{Device, DeviceAddress};
 use crate::error::OpsError;
 use crate::target::{AddressStyle, address_mac};
 
-/// The least every router must carry, in NPDU octets (Table 6-1): the limit
-/// of a path nothing has been set or learned for.
-pub const DEFAULT_ROUTED_PATH_MAX_NPDU: u16 = 228;
-
 /// A routed path: the router this client sends through, on its own link,
-/// and the destination network behind it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+/// and the destination network behind it. Two paths are the same when
+/// their router MACs and networks are; the router's text is only how it is
+/// shown. Serializes as `router` (the text) and `network`.
+#[derive(Debug, Clone)]
 pub struct RoutedPath {
-    /// The router's address on this client's link, in the link's own form
-    /// (`192.168.1.20:47808`, `mstp:5`, `bip6:0x0004D2`, or hex octets).
-    pub router: String,
-    /// The router's MAC on this client's link.
-    #[serde(skip)]
-    pub router_mac: MacAddr,
-    /// The destination network, 1 to 65534.
-    pub network: u16,
+    router: String,
+    router_mac: MacAddr,
+    network: u16,
 }
 
 impl RoutedPath {
     /// The path through the router at `router_mac` to `network`, its router
-    /// shown in `style`.
-    pub fn new(style: AddressStyle, router_mac: &[u8], network: u16) -> Self {
-        Self {
-            router: style.format(router_mac),
+    /// shown in `style`. A MAC that is empty or longer than
+    /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets, or a network outside
+    /// 1 to 65534, names no routed path and is refused as
+    /// [`OpsError::Parse`] (`what` is `"routed path"`).
+    pub fn new(style: AddressStyle, router_mac: &[u8], network: u16) -> Result<Self, OpsError> {
+        let router = style.format(router_mac);
+        let refused = |reason: String| {
+            let path = format!("{router}/{network}");
+            OpsError::parse("routed path", &path, format!("{path}: {reason}"))
+        };
+        if !(1..=bacnet_npdu::MAX_MAC_LEN).contains(&router_mac.len()) {
+            return Err(refused(format!(
+                "a router MAC is 1 to {} octets",
+                bacnet_npdu::MAX_MAC_LEN
+            )));
+        }
+        if !(1..=65534).contains(&network) {
+            return Err(refused("a routed path's network is 1 to 65534".into()));
+        }
+        Ok(Self {
+            router,
             router_mac: MacAddr::from_slice(router_mac),
             network,
-        }
+        })
     }
 
-    /// The path a request from `client` to the device at `address` takes:
-    /// through the router `client`'s discovery table holds for its network,
-    /// `None` on `client`'s own network. A remote address whose network has
-    /// no router in the table fails as [`OpsError::UnknownDevice`]. Sends
-    /// nothing. [`Device::routed_path`] for a handle; this for a front end
-    /// with the low-level client alone.
-    pub async fn to_device<T: TransportPort + 'static>(
-        client: &BACnetClient<T>,
-        address: &DeviceAddress,
-    ) -> Result<Option<Self>, OpsError> {
-        let router = crate::device::router_for(client, address).await?;
-        let style = AddressStyle::of(client.transport());
-        Ok(router.map(|(router_mac, network)| Self::new(style, &router_mac, network)))
+    /// The router's address on this client's link, in the link's own form
+    /// (`192.168.1.20:47808`, `mstp:5`, `bip6:0x0004D2`, or hex octets).
+    pub fn router(&self) -> &str {
+        &self.router
+    }
+
+    /// The router's MAC on this client's link.
+    pub fn router_mac(&self) -> &[u8] {
+        &self.router_mac
+    }
+
+    /// The destination network, 1 to 65534.
+    pub fn network(&self) -> u16 {
+        self.network
+    }
+}
+
+impl PartialEq for RoutedPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.router_mac == other.router_mac && self.network == other.network
+    }
+}
+
+impl Eq for RoutedPath {}
+
+impl std::hash::Hash for RoutedPath {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.router_mac.as_slice().hash(state);
+        self.network.hash(state);
+    }
+}
+
+impl Serialize for RoutedPath {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut path = serializer.serialize_struct("RoutedPath", 2)?;
+        path.serialize_field("router", &self.router)?;
+        path.serialize_field("network", &self.network)?;
+        path.end()
     }
 }
 
@@ -127,15 +165,21 @@ pub struct RoutedPaths {
 }
 
 impl RoutedPaths {
-    /// What `client` holds now, decoded for its link: for a front end that
-    /// has the low-level client alone. Sends nothing.
-    pub fn of<T: TransportPort + 'static>(client: &BACnetClient<T>) -> Self {
+    /// What `client` holds now, decoded for its link
+    /// ([`raw::routed_paths`](crate::raw::routed_paths)). Sends nothing.
+    pub(crate) fn of<T: TransportPort + 'static>(client: &BACnetClient<T>) -> Self {
         let style = AddressStyle::of(client.transport());
         let paths = client
             .routed_path_limits()
             .into_iter()
-            .map(|limit| RoutedPathStatus {
-                path: RoutedPath::new(style, &limit.router_mac, limit.dnet),
+            .filter_map(|limit| {
+                // The client keys a path only by a MAC and network
+                // `RoutedPath::new` takes, so none is left out.
+                let path = RoutedPath::new(style, &limit.router_mac, limit.dnet).ok()?;
+                Some((path, limit))
+            })
+            .map(|(path, limit)| RoutedPathStatus {
+                path,
                 max_npdu: limit.max_npdu(),
                 source: limit.source(),
                 configured_max_npdu: limit.configured_max_npdu,
@@ -180,7 +224,7 @@ impl<T: TransportPort + 'static> Client<T> {
             return Err(OpsError::parse(
                 "network",
                 &network.to_string(),
-                "a routed path's network is 1 to 65534".into(),
+                format!("'{network}' is not a routed path's network, 1 to 65534"),
             ));
         }
         let transport = self.shared.client.transport();
@@ -192,12 +236,14 @@ impl<T: TransportPort + 'static> Client<T> {
         )
         .await
         .map_err(|reason| OpsError::parse("address", router, reason))?;
-        Ok(self.routed_path(&mac, network))
+        self.routed_path(&mac, network)
     }
 
     /// The path through the router whose MAC on this client's link is
-    /// `router_mac` to `network`, decoded for display.
-    pub fn routed_path(&self, router_mac: &[u8], network: u16) -> RoutedPath {
+    /// `router_mac` to `network`, decoded for display. An empty or
+    /// over-long MAC, or a network outside 1 to 65534, is refused as
+    /// [`OpsError::Parse`] ([`RoutedPath::new`]).
+    pub fn routed_path(&self, router_mac: &[u8], network: u16) -> Result<RoutedPath, OpsError> {
         RoutedPath::new(
             AddressStyle::of(self.shared.client.transport()),
             router_mac,
@@ -237,12 +283,28 @@ impl<T: TransportPort + 'static> Client<T> {
 }
 
 /// The low-level client's refusal of a change to `path`: an argument it
-/// refused as [`OpsError::Parse`], anything else as itself.
+/// refused as [`OpsError::Parse`], its reason naming the path, anything else
+/// as itself.
 fn refused(path: &RoutedPath, error: Error) -> OpsError {
     match error {
-        Error::Encoding(reason) => OpsError::parse("routed path limit", &path.to_string(), reason),
+        Error::Encoding(reason) => OpsError::parse(
+            "routed path limit",
+            &path.to_string(),
+            format!("{path}: {reason}"),
+        ),
         other => OpsError::from(other),
     }
+}
+
+/// [`raw::routed_path_to`](crate::raw::routed_path_to).
+pub(crate) async fn routed_path_to<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    address: &DeviceAddress,
+) -> Result<Option<RoutedPath>, OpsError> {
+    let Some((router_mac, network)) = crate::device::router_for(client, address).await? else {
+        return Ok(None);
+    };
+    RoutedPath::new(AddressStyle::of(client.transport()), &router_mac, network).map(Some)
 }
 
 impl<T: TransportPort + 'static> Device<T> {
@@ -253,7 +315,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// has no router in the table fails as
     /// [`OpsError::UnknownDevice`]. Sends nothing.
     pub async fn routed_path(&self) -> Result<Option<RoutedPath>, OpsError> {
-        RoutedPath::to_device(self.client().low_level(), &self.address()).await
+        routed_path_to(self.client().low_level(), &self.address()).await
     }
 }
 

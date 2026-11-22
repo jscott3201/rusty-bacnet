@@ -17,8 +17,8 @@
 use std::future::Future;
 
 use bacnet_client::client::BACnetClient;
+use bacnet_ops::RoutedPathStatus;
 use bacnet_ops::target::{AddressStyle, address_mac};
-use bacnet_ops::{RoutedPathStatus, RoutedPaths};
 use bacnet_transport::port::TransportPort;
 use serde::Serialize;
 
@@ -66,10 +66,10 @@ pub(crate) fn parse_limit_arg(text: &str) -> Result<LimitArg, String> {
 /// is everything before the last `/`, and the network 1 to 65534.
 pub(crate) fn parse_path_arg(path: &str) -> Result<(String, u16), String> {
     let Some((router, network)) = path.rsplit_once('/') else {
-        return Err("is not ROUTER/NETWORK".into());
+        return Err(format!("'{path}' is not ROUTER/NETWORK"));
     };
     if router.is_empty() {
-        return Err("names no router".into());
+        return Err(format!("'{path}' names no router"));
     }
     match network.parse::<u16>() {
         Ok(network @ 1..=65534) => Ok((router.to_owned(), network)),
@@ -204,7 +204,7 @@ struct Summary {
 
 impl Summary {
     fn of<T: TransportPort + 'static>(client: &BACnetClient<T>, timed_out: bool) -> Self {
-        let paths = RoutedPaths::of(client);
+        let paths = bacnet_ops::raw::routed_paths(client);
         Self::new(
             paths.paths,
             paths.too_long_reject_drops,
@@ -263,8 +263,8 @@ impl Summary {
             ]);
             for path in &self.routed_paths {
                 table.add_row(vec![
-                    path.path.router.clone(),
-                    path.path.network.to_string(),
+                    path.path.router().to_owned(),
+                    path.path.network().to_string(),
                     path.max_npdu.to_string(),
                     path.source.name().to_owned(),
                     dash(path.configured_max_npdu),

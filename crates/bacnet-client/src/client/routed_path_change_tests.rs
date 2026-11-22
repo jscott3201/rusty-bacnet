@@ -190,6 +190,39 @@ async fn a_below_minimum_reject_sized_before_a_change_leaves_no_mark() {
     path.stop().await;
 }
 
+/// A clear while a request is in flight works as a configure does: the
+/// request keeps its size, and the reject for it fails it but teaches the
+/// cleared path nothing (it would have learned 314).
+#[tokio::test(start_paused = true)]
+async fn a_clear_while_a_request_is_in_flight_learns_nothing_from_its_reject() {
+    let mut path = Path::new(ClientConfig::default(), Some(1497)).await;
+    let task = path.request(LARGE, 0x41);
+    let frame = path.next_frame().await;
+    assert!(!frame.segmented);
+    path.client.clear_routed_path_limit(&ROUTER, DNET).unwrap();
+    path.reject().await;
+    assert!(too_long(task.await.unwrap()));
+    assert!(path.client.routed_path_limits().is_empty());
+    path.stop().await;
+}
+
+/// A below-minimum reject for a request sized before a clear is counted,
+/// but doesn't mark the path just put back on the default.
+#[tokio::test(start_paused = true)]
+async fn a_below_minimum_reject_sized_before_a_clear_leaves_no_mark() {
+    let mut path = Path::new(ClientConfig::default(), Some(1497)).await;
+    let task = path.request(1, 0x41);
+    let frame = path.next_frame().await;
+    path.client.clear_routed_path_limit(&ROUTER, DNET).unwrap();
+    path.reject().await;
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(path.client.below_minimum_reject_drops(), 1);
+    assert!(path.client.routed_path_limits().is_empty());
+    path.ack(frame.invoke_id).await;
+    assert!(task.await.unwrap().unwrap().is_empty());
+    path.stop().await;
+}
+
 /// A reason 4 that lands in the hold after a change finds no request
 /// active on the path: it is discarded, uncounted, and neither the new
 /// limit nor a learned one moves, as #2651's hold has it for any reject
@@ -225,7 +258,9 @@ async fn a_reject_in_the_hold_after_a_change_is_discarded() {
 /// request to a new path reclaiming that entry on a full table never makes
 /// the clear fail for capacity (#2667). One task keeps taking new paths
 /// through a one-entry table while another recreates the path and clears
-/// it.
+/// it. The one-lock shape is what makes the race impossible; this test only
+/// guards against a return to a check and a reservation in two steps, and
+/// catches that in some runs, not every one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_clear_racing_a_reclaim_never_reports_capacity() {
     let limits = Arc::new(RoutedPathLimits::with_capacity(

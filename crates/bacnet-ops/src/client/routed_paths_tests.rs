@@ -17,7 +17,8 @@ async fn a_limit_set_and_cleared_shows_decoded() {
     let bus = Bus::new();
     let (client, _sent) = client(&bus).await;
     let path = client.routed_path_at("10.0.0.254:47808", 5).await.unwrap();
-    assert_eq!(path.router_mac.as_slice(), mac(254));
+    assert_eq!(path.router_mac(), mac(254));
+    assert_eq!((path.router(), path.network()), ("10.0.0.254:47808", 5));
     assert_eq!(path.to_string(), "10.0.0.254:47808/5");
     assert_eq!(
         client.routed_paths(),
@@ -66,18 +67,47 @@ async fn a_limit_set_and_cleared_shows_decoded() {
     assert!(client.routed_paths().paths.is_empty());
 }
 
-/// Refusals: a limit that carries no request and a network outside 1 to
-/// 65534 are parse errors; a device instance is not a router.
+/// Refusals: a limit that carries no request, a router MAC that is empty
+/// or too long and a network outside 1 to 65534 are parse errors whose
+/// text names the path; a device instance is not a router.
 #[tokio::test]
 async fn refused_paths_and_limits_are_parse_errors() {
     let bus = Bus::new();
     let (client, _sent) = client(&bus).await;
-    let path = client.routed_path(&mac(254), 5);
+    let path = client.routed_path(&mac(254), 5).unwrap();
+    let refused = client.set_routed_path_limit(&path, 10).unwrap_err();
     assert!(matches!(
-        client.set_routed_path_limit(&path, 10),
-        Err(OpsError::Parse { what: "routed path limit", ref input, .. })
-            if input == "10.0.0.254:47808/5"
+        &refused,
+        OpsError::Parse { what: "routed path limit", input, .. } if input == "10.0.0.254:47808/5"
     ));
+    assert!(
+        refused
+            .to_string()
+            .starts_with("10.0.0.254:47808/5: a routed path limit of 10"),
+        "{refused}"
+    );
+    for (router, network) in [
+        (&[][..], 5),
+        (&[1; 19][..], 5),
+        (&mac(254)[..], 0),
+        (&mac(254)[..], 65535),
+    ] {
+        let refused = client.routed_path(router, network).unwrap_err();
+        assert!(
+            matches!(
+                &refused,
+                OpsError::Parse {
+                    what: "routed path",
+                    ..
+                }
+            ),
+            "{refused:?}"
+        );
+        assert!(
+            refused.to_string().contains(&format!("/{network}: ")),
+            "{refused}"
+        );
+    }
     for network in [0, 65535] {
         assert!(matches!(
             client.routed_path_at("10.0.0.254:47808", network).await,
@@ -123,7 +153,14 @@ async fn a_routed_handle_names_its_path() {
         .unwrap();
     assert_eq!(
         routed.routed_path().await.unwrap(),
-        Some(client.routed_path(&mac(254), 5))
+        Some(client.routed_path(&mac(254), 5).unwrap())
+    );
+    // The same from the low-level client alone.
+    assert_eq!(
+        crate::raw::routed_path_to(client.low_level(), &DeviceAddress::new(5, &[9]).unwrap())
+            .await
+            .unwrap(),
+        Some(client.routed_path(&mac(254), 5).unwrap())
     );
 
     let local = client
@@ -138,4 +175,22 @@ async fn a_routed_handle_names_its_path() {
         routed.routed_path().await,
         Err(OpsError::UnknownDevice { .. })
     ));
+}
+
+/// Two paths are the same by router MAC and network, whatever text shows
+/// the router: an MS/TP station formatted as B/IP is still that station.
+#[test]
+fn paths_compare_by_mac_and_network() {
+    use std::collections::HashSet;
+    let mstp = RoutedPath::new(AddressStyle::Mstp, &[5], 2).unwrap();
+    let hex = RoutedPath::new(AddressStyle::Hex, &[5], 2).unwrap();
+    assert_ne!(mstp.router(), hex.router());
+    assert_eq!(mstp, hex);
+    assert_eq!(HashSet::from([mstp.clone(), hex]).len(), 1);
+    assert_ne!(mstp, RoutedPath::new(AddressStyle::Mstp, &[5], 3).unwrap());
+    assert_ne!(mstp, RoutedPath::new(AddressStyle::Mstp, &[6], 2).unwrap());
+    assert_eq!(
+        serde_json::to_value(&mstp).unwrap(),
+        serde_json::json!({"router": "mstp:5", "network": 2})
+    );
 }

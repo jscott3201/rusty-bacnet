@@ -131,6 +131,56 @@ async fn a_timeout_after_a_small_request_refused_hints_at_the_path_limit() {
     client.stop().await.unwrap();
 }
 
+/// The browse worker sends the hint ahead of the failure it explains: a
+/// device read of the station behind the router that refuses everything
+/// times out, and the worker delivers the hint, then the failure, for the
+/// same request.
+#[tokio::test(start_paused = true)]
+async fn the_browse_worker_sends_the_hint_before_the_failure() {
+    use crate::tui::message::{Command, WorkerEvent};
+    use crate::tui::point::{BrowseRead, BrowseResult};
+
+    let mut client = site().await;
+    let rate = bacnet_ops::limits::RequestLimits::new(0);
+    let (sink, mut events) = crate::tui::worker::EventSink::channel(16);
+    let (commands, commands_rx) = mpsc::channel(4);
+    commands
+        .send(Command::Browse {
+            req: 7,
+            device: 77,
+            at: DeviceAddress::new(DNET, &[STATION]).unwrap(),
+            read: BrowseRead::Device,
+        })
+        .await
+        .unwrap();
+    let mut results = Vec::new();
+    {
+        let worker = crate::tui::worker::browse::run(&client, &sink, commands_rx, &rate);
+        tokio::pin!(worker);
+        // Up to the failure, which ends the read.
+        while !matches!(results.last(), Some((_, BrowseResult::Failed(_)))) {
+            tokio::select! {
+                () = &mut worker => panic!("the browse worker ended"),
+                event = events.recv() => match event.unwrap() {
+                    WorkerEvent::Browse { req, result } => results.push((req, result)),
+                    other => panic!("unexpected {other:?}"),
+                },
+            }
+        }
+    }
+    let [
+        (7, BrowseResult::PathHint(hint)),
+        (7, BrowseResult::Failed(error)),
+    ] = results.as_slice()
+    else {
+        panic!("expected a hint, then a failure: {results:?}");
+    };
+    assert!(hint.contains(":path-limit 10.0.0.9:47808/2=SIZE"), "{hint}");
+    assert!(!error.is_empty());
+    drop(commands);
+    client.stop().await.unwrap();
+}
+
 /// The command refuses what the client refuses, naming the path: a limit
 /// too small for any request, and a router given as a device.
 #[tokio::test(start_paused = true)]
@@ -175,4 +225,13 @@ fn the_command_takes_a_limit_or_clear() {
     ] {
         assert!(PathLimit::parse(words).is_err(), "{words:?}");
     }
+    // Each refusal names what was typed.
+    assert_eq!(
+        PathLimit::parse(&["foo", "clear"]),
+        Err("'foo' is not ROUTER/NETWORK".into())
+    );
+    assert_eq!(
+        PathLimit::parse(&["/5", "clear"]),
+        Err("'/5' names no router".into())
+    );
 }

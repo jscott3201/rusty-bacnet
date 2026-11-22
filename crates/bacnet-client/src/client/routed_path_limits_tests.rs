@@ -9,7 +9,7 @@ use bytes::Bytes;
 fn conservative_and_configured_npdu_envelopes_use_forwarded_source() {
     let header = forwarded_npci_len(6, 6).unwrap();
     assert_eq!(header, 21);
-    assert_eq!(CONSERVATIVE_ROUTED_PATH_MAX_NPDU - header, 207);
+    assert_eq!(DEFAULT_ROUTED_PATH_MAX_NPDU - header, 207);
     assert_eq!(1497 - header, 1476);
     assert_eq!(forwarded_npci_len(1, 1).unwrap(), 11);
     assert_eq!(forwarded_npci_len(4, 6).unwrap(), 19);
@@ -140,7 +140,7 @@ async fn a_learned_limit_is_never_below_the_conservative_floor() {
     };
     let changed = limits.state().entries[&RoutedPathKey::new(&router, 100)].changed;
     limits.commit_learned_limit(active, 16, changed);
-    assert_eq!(lease.max_apdu(11), CONSERVATIVE_ROUTED_PATH_MAX_NPDU - 11);
+    assert_eq!(lease.max_apdu(11), DEFAULT_ROUTED_PATH_MAX_NPDU - 11);
 }
 
 /// A change of the path's limit may run between a reason 4's claim and its

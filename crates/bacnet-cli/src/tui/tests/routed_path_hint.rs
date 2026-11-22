@@ -63,10 +63,11 @@ async fn the_hint_shows_beside_a_failed_read() {
     };
     let mut site = Site::start_with(vec![server], ClientLimits::default()).await;
     open_device(&mut site).await;
-    let path = bacnet_ops::RoutedPath::new(AddressStyle::Bip, &[10, 0, 0, 9, 0xBA, 0xC0], 2);
+    let path =
+        bacnet_ops::RoutedPath::new(AddressStyle::Bip, &[10, 0, 0, 9, 0xBA, 0xC0], 2).unwrap();
     let browser = site.app.browser.as_mut().unwrap();
     assert!(matches!(browser.list, ListState::Failed(_)));
-    browser.path_hint = Some(hint_text(&path));
+    browser.list_hint = Some(hint_text(&path));
     let text = screen(&mut site.app, 100, 30);
     assert!(
         text.contains("The router at 10.0.0.9:47808 refused"),
@@ -85,6 +86,7 @@ async fn the_hint_shows_beside_a_failed_read() {
         .unwrap(),
         "request timed out after 6s".into(),
     );
+    browser.view_hint = Some(hint_text(&path));
     browser.focus = Pane::Properties;
     let text = screen(&mut site.app, 100, 30);
     assert!(text.contains("Read failed: request timed out"), "{text}");

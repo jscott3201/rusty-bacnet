@@ -272,7 +272,7 @@ fn objects_pane(frame: &mut Frame, area: Rect, browser: &Browser, names: Names, 
         .collect();
     // A failed device read lists nothing: under its "failed", why a device
     // behind a router may not answer, and what to set (#2667).
-    let lines = match (&browser.list, &browser.path_hint) {
+    let lines = match (&browser.list, &browser.list_hint) {
         (ListState::Failed(_), Some(hint)) if lines.is_empty() => {
             hint_lines(hint, usize::from(area.width.saturating_sub(2)), theme)
         }
@@ -329,7 +329,7 @@ fn properties_pane(frame: &mut Frame, area: Rect, browser: &Browser, theme: &The
                 .map(|line| Line::styled(format!(" {line}"), theme.danger()))
                 .chain(
                     browser
-                        .path_hint
+                        .view_hint
                         .iter()
                         .flat_map(|hint| hint_lines(hint, inner, theme)),
                 )

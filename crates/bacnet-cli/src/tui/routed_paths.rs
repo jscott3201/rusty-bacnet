@@ -14,7 +14,7 @@
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::target::{Target, parse_target_on};
-use bacnet_ops::{DeviceAddress, RoutedPath, RoutedPaths};
+use bacnet_ops::{DeviceAddress, RoutedPath};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
@@ -90,7 +90,7 @@ impl PathLimit {
             }
         };
         let style = bacnet_ops::target::AddressStyle::of(client.transport());
-        let path = RoutedPath::new(style, &mac, self.network);
+        let path = RoutedPath::new(style, &mac, self.network).map_err(|e| e.to_string())?;
         let refused = |error: Error| match error {
             Error::Encoding(reason) => reason,
             other => other.to_string(),
@@ -102,7 +102,8 @@ impl PathLimit {
                     .map_err(refused)?;
                 Ok(format!(
                     "Requests to network {} through {} now go in at most {max_npdu} NPDU octets",
-                    path.network, path.router
+                    path.network(),
+                    path.router()
                 ))
             }
             None => {
@@ -110,8 +111,10 @@ impl PathLimit {
                     .clear_routed_path_limit(&mac, self.network)
                     .map_err(refused)?;
                 Ok(format!(
-                    "Requests to network {} through {} are back on the default of 228 NPDU octets",
-                    path.network, path.router
+                    "Requests to network {} through {} are back on the default of {} NPDU octets",
+                    path.network(),
+                    path.router(),
+                    bacnet_ops::client::DEFAULT_ROUTED_PATH_MAX_NPDU
                 ))
             }
         }
@@ -130,8 +133,10 @@ pub(crate) async fn hint<T: TransportPort + 'static>(
     if !bacnet_ops::raw::timed_out(error) {
         return None;
     }
-    let path = RoutedPath::to_device(client, address).await.ok()??;
-    RoutedPaths::of(client)
+    let path = bacnet_ops::raw::routed_path_to(client, address)
+        .await
+        .ok()??;
+    bacnet_ops::raw::routed_paths(client)
         .status(&path)
         .below_minimum_reject_seen
         .then(|| hint_text(&path))
@@ -145,7 +150,8 @@ pub(crate) fn hint_text(path: &RoutedPath) -> String {
          the request timed out. If that router really carries less, set the path's limit: \
          :path-limit {path}=SIZE, with SIZE what it carries (at least the 50-octet minimum APDU \
          and its header).",
-        path.router, path.network
+        path.router(),
+        path.network()
     )
 }
 

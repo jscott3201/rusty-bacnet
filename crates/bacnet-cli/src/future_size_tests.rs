@@ -41,7 +41,10 @@ const BIP_DISPATCH_BOUND: usize = 232 + 32;
 
 /// `cli_main`'s future was 2,448 bytes when it held the command line
 /// inline. It takes it boxed since #2667, and was 1,320 bytes then (Rust
-/// 1.99.0, with and without the CLI's optional features).
+/// 1.99.0, with and without the CLI's optional features), measured on
+/// macOS arm64 as every bound here was. Linux checks it too: the 2,448
+/// bound, measured the same way, held there (#2656), and CI's first run
+/// of this one is its check on Linux.
 #[cfg(not(windows))]
 const MAIN_BOUND: usize = 1_320 + 32;
 

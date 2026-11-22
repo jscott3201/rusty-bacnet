@@ -209,8 +209,10 @@ written. A path's limit lasts for the run only. `tui`, `mcp`, plain `bacnet`,
 `capture`, `sc-check` and `mstp-ports` refuse the flag rather than ignore it.
 In the TUI, the command bar's `path-limit ROUTER/NETWORK=SIZE` sets a path's
 limit for the session, and `path-limit ROUTER/NETWORK clear` puts the default
-back; they take the router as the flag does (a B/IPv6 router by its
-`bip6:0x...` VMAC), send nothing, and work at every write level. When a device
+back. They take the router in the flag's forms but one: a B/IPv6 router is
+named by its `bip6:0x...` VMAC, since the TUI refuses a socket address
+rather than ask the router for its VMAC. They send nothing, and work at every
+write level. When a device
 behind a router stops answering after a small request was refused there, the
 browser says so under its failed read and names the command.
 

@@ -36,7 +36,7 @@ mod discover;
 pub(crate) mod find;
 mod log;
 pub(crate) mod read;
-mod routed_paths;
+pub(crate) mod routed_paths;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
