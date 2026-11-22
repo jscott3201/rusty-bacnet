@@ -288,6 +288,7 @@ fn real_python_context_preserves_sentinel_while_failed_cleanup_blocks_restart() 
                             port: 0,
                             broadcast: std::net::Ipv4Addr::LOCALHOST,
                             mode: bacnet_transport::bip::BipMode::Normal,
+                            isolated: false,
                         }],
                         application: super::application::Application::None,
                         lifecycle,

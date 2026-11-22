@@ -611,7 +611,7 @@ async with router:
 ```
 
 Each immutable `BipRouterPort` has a unique network number from 1 through 65534,
-IPv4 interface, UDP port, and broadcast address. A router accepts one through
+IPv4 interface, UDP port, broadcast address and `isolated` flag. A router accepts one through
 255 ports. Port zero requests an ephemeral port: `ports()` reports its actual
 post-start address and six-byte MAC in configured order. Constructor validation
 opens no socket. Invalid addresses, reserved or duplicate networks and invalid
@@ -624,6 +624,43 @@ They are mutually exclusive. `Bbmd()` continues to refuse foreign registrations
 by default; opt in with `Bbmd(accept_foreign_devices=True)` when intended. The
 router does not implicitly enable that option. B/IP deployment still needs the
 correct interface, port, broadcast and BBMD topology for each attached network.
+
+### Isolated ports
+
+`BipRouterPort(..., isolated=True)` keeps a port apart from the router's other
+isolated ports (#2716); the default is `False`, and `port.isolated` reads it
+back. The router carries nothing between two isolated ports and hides each from
+the other: neither learns the other's networks from what the router
+announces (I-Am-Router-To-Network) or from a routing-table query. Both still
+reach every ordinary port, and one isolated port alone changes nothing.
+
+```python
+router = BACnetRouter([
+    BipRouterPort(1, interface="192.0.2.10", broadcast_address="192.0.2.255"),
+    BipRouterPort(5, interface="198.51.100.10",
+                  broadcast_address="198.51.100.255", isolated=True),
+    BipRouterPort(7, interface="203.0.113.10",
+                  broadcast_address="203.0.113.255", isolated=True),
+])
+```
+
+Here networks 5 and 7 each exchange traffic with network 1 and never with each
+other. A request from network 5 for one device on network 7 draws the router's
+Reject-Message-To-Network, reason 1, naming network 7 (Clause 6.6.3.5): the
+same answer a router with no route gives. A client sees it as a
+`reject_message_to_network` report from `network_reports()`, and its request
+ends unanswered, as a `BacnetAbortError` with reason `TSM_TIMEOUT`. A
+broadcast is dropped without an answer.
+
+Isolation limits transit between isolated ports, by design. It is no trust
+level for a port and no access control: a Reject-Message-To-Network or a
+routing-table update from a node on an isolated port can still mark, remove or
+redirect a route through an ordinary port. The native controls for those
+(`RouterOptions::next_hop_rejects()`, and the control policy and authorizer)
+are not exposed by this binding, and neither are the router's counters
+(`isolated_drops`, `isolated_refusals`). A routing-table update that arrives
+from another network is dropped (#2717), since this binding can't turn on the
+native option that accepts one.
 
 `routes()` returns frozen `RouterRoute` objects with destination network, egress
 index, direct/learned identity, next-hop MAC (`None` for a direct route), and
