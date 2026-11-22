@@ -12,13 +12,24 @@ async fn invoke(
     service: &str,
     arguments: &[&str],
 ) -> std::process::Output {
+    invoke_from(0, port, target, service, arguments).await
+}
+
+/// `invoke` with the CLI's own `--port`, for a test that names its sends.
+async fn invoke_from(
+    source_port: u16,
+    port: u16,
+    target: &str,
+    service: &str,
+    arguments: &[&str],
+) -> std::process::Output {
     let mut cmd = command();
     cmd.env("BACNET_CLI_ROUTED_WAIT_MS", "300")
         .args([
             "--interface",
             "127.0.0.1",
             "--port",
-            "0",
+            &source_port.to_string(),
             "--json",
             "--foreign-bbmd",
             &format!("127.0.0.1:{port}"),
@@ -184,16 +195,15 @@ async fn routed_local_and_utc_time_sync_are_observed_at_remote_clock() {
 
 #[tokio::test]
 async fn routed_admin_guards_refuse_before_registration_or_discovery() {
-    let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let port = socket.local_addr().unwrap().port();
+    let peer = Unsent::new();
+    let (source, port) = (peer.source_port(), peer.port());
     for target in [format!("{DNET}:{INSTANCE}"), format!("{DNET}:0x05")] {
         for (service, args) in [
             ("control", vec!["enable"]),
             ("reinit", vec!["warmstart"]),
             ("time-sync", vec![]),
         ] {
-            let output = invoke(port, &target, service, &args).await;
+            let output = invoke_from(source, port, &target, service, &args).await;
             assert_eq!(output.status.code(), Some(4));
             assert!(output.stdout.is_empty());
             let refusal: Value = serde_json::from_slice(&output.stderr).unwrap();
@@ -201,15 +211,12 @@ async fn routed_admin_guards_refuse_before_registration_or_discovery() {
             if service != "time-sync" {
                 let mut args = args.clone();
                 args.push("--allow-write");
-                let output = invoke(port, &target, service, &args).await;
+                let output = invoke_from(source, port, &target, service, &args).await;
                 assert_eq!(output.status.code(), Some(4));
                 let refusal: Value = serde_json::from_slice(&output.stderr).unwrap();
                 assert_eq!(refusal["reason"], "yes-required");
             }
-            assert_eq!(
-                socket.recv_from(&mut [0; 1500]).unwrap_err().kind(),
-                std::io::ErrorKind::WouldBlock
-            );
+            peer.assert_nothing_sent(service);
         }
     }
 }
