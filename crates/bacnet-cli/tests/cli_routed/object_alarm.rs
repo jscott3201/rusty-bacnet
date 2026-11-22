@@ -66,6 +66,21 @@ async fn invoke_at(
     arguments: &[&str],
     source_port: Option<u16>,
 ) -> std::process::Output {
+    let process = spawn_at(port, target, service, arguments, source_port);
+    if source_port.is_some() {
+        support::paused::output(process).await
+    } else {
+        process.output().await
+    }
+}
+
+fn spawn_at(
+    port: Option<u16>,
+    target: &str,
+    service: &str,
+    arguments: &[&str],
+    source_port: Option<u16>,
+) -> Process {
     let mut cmd = command();
     cmd.args([
         "--interface",
@@ -78,12 +93,7 @@ async fn invoke_at(
         cmd.args(["--foreign-bbmd", &format!("127.0.0.1:{port}")]);
     }
     cmd.arg(service).arg(target).args(arguments);
-    let process = Process::spawn(&mut cmd);
-    if source_port.is_some() {
-        support::paused::output(process).await
-    } else {
-        process.output().await
-    }
+    Process::spawn(&mut cmd)
 }
 
 fn success(output: &std::process::Output, message: &str) {
@@ -332,9 +342,8 @@ async fn direct_object_and_alarm_commands_preserve_output_and_state_changes() {
 
 #[tokio::test]
 async fn routed_object_and_ack_guards_refuse_before_foreign_registration() {
-    let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let port = socket.local_addr().unwrap().port();
+    let peer = Unsent::new();
+    let port = peer.port();
     for target in [format!("{DNET}:{INSTANCE}"), format!("{DNET}:0x05")] {
         for (service, args) in [
             ("create-object", vec!["bi:100"]),
@@ -364,7 +373,15 @@ async fn routed_object_and_ack_guards_refuse_before_foreign_registration() {
                 ],
             ),
         ] {
-            let output = invoke(Some(port), &target, service, &args).await;
+            let output = spawn_at(
+                Some(port),
+                &target,
+                service,
+                &args,
+                Some(peer.source_port()),
+            )
+            .output()
+            .await;
             assert_eq!(output.status.code(), Some(4));
             assert!(output.stdout.is_empty());
             let refusal: Value = serde_json::from_slice(&output.stderr).unwrap();
@@ -379,10 +396,7 @@ async fn routed_object_and_ack_guards_refuse_before_foreign_registration() {
                     service
                 }
             );
-            assert_eq!(
-                socket.recv_from(&mut [0; 1500]).unwrap_err().kind(),
-                std::io::ErrorKind::WouldBlock
-            );
+            peer.assert_nothing_sent(service);
         }
     }
 }
