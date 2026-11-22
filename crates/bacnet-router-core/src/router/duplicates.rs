@@ -15,16 +15,21 @@
 //! fresh messages of its own, I-Am-Router, Router-Busy and
 //! Router-Available (#1810). They carry no hop count, and the relay
 //! names no origin, so around a loop nothing else stops them. A repeat
-//! within the time to live is neither applied to the table nor passed on.
-//! Each entry is tagged with its message type, so it matches only its own
-//! kind:
+//! within the time to live is never passed on, and a repeated Router-Busy
+//! or Router-Available isn't applied to the table either. Each entry is
+//! tagged with its message type, so it matches only its own kind:
 //!
 //! - An I-Am-Router is kept by its data alone, under network 0xFFFF, which
 //!   no origin's network can be: a loop hands it on from a different
 //!   router each time. So two routers announcing the same networks within
-//!   one time to live look like one, and the second is dropped until it
-//!   announces again; identical lists from two neighbours mean a loop or
-//!   a failover, and the first wins for one time to live.
+//!   one time to live look like one, and the second is not passed on. It
+//!   is still learned from where that keeps a route on its port (#2713):
+//!   a network the table lacks is added, and a route through the arrival
+//!   port is refreshed, with the sender as its next router. A network
+//!   reached through another port stays there: identical lists on two
+//!   ports mean a loop or a failover, and for the port the first wins for
+//!   one time to live. Learned, the copy a loop brings back would turn
+//!   each router's route toward the next router round the loop.
 //! - A Router-Busy or Router-Available is kept by its sender, the arrival
 //!   network and link source, and its data, since its effect is scoped to
 //!   the routes through that sender: another router's identical message

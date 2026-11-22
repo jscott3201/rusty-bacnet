@@ -123,7 +123,9 @@ pub enum Discard {
     /// Router-Available or Who-Is-Router the router would pass on, seen
     /// within the duplicate time to live
     /// ([`Options::duplicates`](super::Options::duplicates), #1698, #1810,
-    /// #2020): neither relayed, delivered nor applied.
+    /// #2020): neither relayed, delivered nor applied, except that a
+    /// repeated I-Am-Router is still learned from where it moves no route
+    /// to another port (#2713).
     Duplicate,
     /// A global broadcast or a Who-Is-Router whose SNET and SADR name the
     /// router itself, on one of its ports: the router's own, come back
