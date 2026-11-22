@@ -6,8 +6,7 @@
 #[allow(dead_code)]
 mod support;
 
-use std::io::ErrorKind;
-use std::net::{Ipv4Addr, UdpSocket};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16,6 +15,7 @@ use bacnet_transport::bip::BipTransport;
 use serde_json::{Value, json};
 use support::lab::{lab_database, lab_identity};
 use support::run;
+use support::unsent::Unsent;
 
 /// Every mutating one-shot, aliases included, as arguments after the target.
 const MUTATING: &[(&str, &[&str])] = &[
@@ -67,31 +67,24 @@ fn canonical(command: &str) -> &str {
     }
 }
 
-/// A loopback "device" that only counts what reaches it.
-fn listener() -> (UdpSocket, String) {
-    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let target = format!("127.0.0.1:{}", socket.local_addr().unwrap().port());
-    (socket, target)
-}
-
-/// Nothing has arrived. The CLI process has exited, so anything it sent
-/// over loopback is already queued on the socket.
-fn assert_nothing_sent(socket: &UdpSocket, what: &str) {
-    let mut buf = [0u8; 1500];
-    match socket.recv_from(&mut buf) {
-        Err(e) if e.kind() == ErrorKind::WouldBlock => {}
-        other => panic!("{what}: a datagram reached the device: {other:?}"),
-    }
-}
-
 fn args<'a>(
     globals: &[&'a str],
     command: &'a str,
     target: &'a str,
     rest: &[&'a str],
 ) -> Vec<&'a str> {
-    let mut args = vec!["--interface", "127.0.0.1", "--port", "0"];
+    args_from("0", globals, command, target, rest)
+}
+
+/// `args` with the CLI's own `--port`, for a test that names its sends.
+fn args_from<'a>(
+    source_port: &'a str,
+    globals: &[&'a str],
+    command: &'a str,
+    target: &'a str,
+    rest: &[&'a str],
+) -> Vec<&'a str> {
+    let mut args = vec!["--interface", "127.0.0.1", "--port", source_port];
     args.extend_from_slice(globals);
     args.push(command);
     args.push(target);
@@ -101,10 +94,21 @@ fn args<'a>(
 
 #[tokio::test]
 async fn a_mutating_one_shot_without_allow_write_sends_nothing() {
-    let (socket, target) = listener();
+    let device = Unsent::new();
+    let (source, target) = (
+        device.source_port().to_string(),
+        format!("127.0.0.1:{}", device.port()),
+    );
     for &(command, rest) in MUTATING {
         // Table errors name the missing flag.
-        let output = run(args(&["--format", "table"], command, &target, rest)).await;
+        let output = run(args_from(
+            &source,
+            &["--format", "table"],
+            command,
+            &target,
+            rest,
+        ))
+        .await;
         assert_eq!(output.status.code(), Some(4), "{command}");
         assert!(output.stdout.is_empty(), "{command}");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -113,10 +117,10 @@ async fn a_mutating_one_shot_without_allow_write_sends_nothing() {
             "{command}: {stderr}"
         );
         assert!(stderr.contains("nothing was sent"), "{command}: {stderr}");
-        assert_nothing_sent(&socket, command);
+        device.assert_nothing_sent(command);
 
         // JSON: the stable shape, on stderr.
-        let output = run(args(&["--json"], command, &target, rest)).await;
+        let output = run(args_from(&source, &["--json"], command, &target, rest)).await;
         assert_eq!(output.status.code(), Some(4), "{command}");
         assert!(output.stdout.is_empty(), "{command}");
         let refusal: Value = serde_json::from_slice(&output.stderr).unwrap();
@@ -130,24 +134,35 @@ async fn a_mutating_one_shot_without_allow_write_sends_nothing() {
         assert_eq!(refusal["command"], canonical(command), "{command}");
         assert_eq!(refusal["class"], class(command), "{command}");
         assert_eq!(refusal["missing"], missing, "{command}");
-        assert_nothing_sent(&socket, command);
+        device.assert_nothing_sent(command);
     }
 }
 
 #[tokio::test]
 async fn device_management_off_a_terminal_needs_yes_as_well() {
-    let (socket, target) = listener();
+    let device = Unsent::new();
+    let (source, target) = (
+        device.source_port().to_string(),
+        format!("127.0.0.1:{}", device.port()),
+    );
     for &(command, rest) in MUTATING {
         if class(command) != "device-management" {
             continue;
         }
-        let output = run(args(&["--json", "--allow-write"], command, &target, rest)).await;
+        let output = run(args_from(
+            &source,
+            &["--json", "--allow-write"],
+            command,
+            &target,
+            rest,
+        ))
+        .await;
         assert_eq!(output.status.code(), Some(4), "{command}");
         assert!(output.stdout.is_empty(), "{command}");
         let refusal: Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(refusal["reason"], "yes-required", "{command}");
         assert_eq!(refusal["missing"], json!(["--yes"]), "{command}");
-        assert_nothing_sent(&socket, command);
+        device.assert_nothing_sent(command);
     }
 }
 
