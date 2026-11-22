@@ -77,7 +77,10 @@ pub mod watch;
 pub mod write;
 
 pub use arrival::{IAmArrival, IAmArrivals};
-pub use client::{Client, Discover, Find, ResolveScope, RouterDiscovery, Scope};
+pub use client::{
+    Client, Discover, Find, ResolveScope, RoutedPath, RoutedPathStatus, RoutedPaths,
+    RouterDiscovery, Scope,
+};
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};
@@ -96,6 +99,11 @@ pub use write::{
 /// `.into()`. The low-level client's type, re-exported so an application
 /// needs no direct `bacnet-client` dependency to name one.
 pub use bacnet_client::client::Station;
+
+/// Where a routed path's size limit comes from ([`RoutedPathStatus::source`]):
+/// the default, a limit set by hand, or one learned from a router's too-long
+/// reject. The low-level client's type, re-exported as [`Station`] is.
+pub use bacnet_client::client::RoutedPathLimitSource;
 
 /// The BACnet/SC TLS configuration [`Client::sc`] takes, and the error its
 /// constructors return with the types its variants name, so an application

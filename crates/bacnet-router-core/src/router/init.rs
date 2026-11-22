@@ -4,6 +4,7 @@
 use super::Storage;
 use super::config::Options;
 use super::control::Claimed;
+use super::counters::bump;
 use super::host::{ControlClass, Event, Host, Targets};
 use super::ingress::{Arrival, Discard, Received};
 use super::tasks::Task;
@@ -23,7 +24,10 @@ impl<
 {
     /// Initialize-Routing-Table. A count of 0 is a query, answered with the
     /// whole table in Acks, ascending, each network with its port's wire
-    /// Port ID; the table doesn't change, and the host isn't asked. The
+    /// Port ID; the table doesn't change. The host is asked only about a
+    /// query that carries an SNET ([`ControlClass::InitQuery`], #2715),
+    /// since its answer crosses networks toward a source the query only
+    /// claims; refused, it draws no Ack. The
     /// Acks go back out of the arrival port to the link sender, toward the
     /// query's SNET and SADR when it has them, from the router's address
     /// the query named when that is on another port (named at the arrival
@@ -34,6 +38,12 @@ impl<
     /// and the sender, and the sender gets an Ack with no data. Reserved
     /// networks and unknown Port IDs are skipped, direct routes are never
     /// touched, and the route cap ends the update for new networks.
+    ///
+    /// An update that carries an SNET came from another network, and is
+    /// dropped before the host is asked unless
+    /// [`Options::remote_table_updates`] is on (#2717). Clause 6.6.3.8 has
+    /// a router apply the update it receives and sets no limit on who may
+    /// send one; this limit is the router's own.
     ///
     /// From an isolated port (one with an isolated peer), an entry is
     /// refused, counted and reported when its network's route goes through
@@ -67,9 +77,25 @@ impl<
             if super::ReplyPlan::new(at.port, at.source, source, npdu.source).is_err() {
                 return self.bad_message();
             }
+            // From another network, it is the host's to refuse (#2715).
+            let class = ControlClass::InitQuery;
+            let none = Targets::Entries(entries);
+            if npdu.source.is_some() && !self.authorize(at, npdu, class, none, host) {
+                return Received::Discarded(Discard::Denied);
+            }
             self.out
                 .push(Task::table_ack(at.port, at.source, npdu.source, named));
             return Received::Handled;
+        }
+        if let Some(source) = npdu.source
+            && !options.remote_table_updates
+        {
+            bump(&mut self.counters.denied);
+            host.observe(Event::RemoteUpdateRefused {
+                port: at.port,
+                snet: source.network,
+            });
+            return Received::Discarded(Discard::Denied);
         }
         if !self.authorize(
             at,

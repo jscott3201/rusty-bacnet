@@ -3767,6 +3767,30 @@ the routing table. With `control_policy(ControlPolicy::Hardened)` and a
 `control_authorizer()`, only the controls the authorizer allows can learn, mark
 busy or available, reject or initialize routes.
 
+The gate also decides one read: a routing-table query that arrives from another
+network, an Initialize-Routing-Table with a port count of zero and an SNET
+(#2715). It changes nothing, but the router answers it with its whole table (up
+to three Acks for 256 routes) sent across the internetwork toward a source
+that the query only claims. The default gate answers it, a hardened one with no
+authorizer doesn't, and an authorizer sees it with `class` set to
+`ControlClass::InitQuery`, where an update or purge is `ControlClass::InitMgmt`
+(`ControlAuthContext::class` names every control's class). A query with no SNET is
+answered on its own link without the gate. `control_snapshot().init_query`
+counts the decisions.
+
+One control doesn't reach the gate by default: an Initialize-Routing-Table
+update (a port count other than zero) that carries an SNET, so one that came
+from another network (#2717). A single update can remove or redirect any
+learned route, and none of the router's own networks can vouch for a sender
+behind another router. The router drops it silently, whatever the policy and
+authorizer, and counts it in `Counters::denied`. Clause 6.6.3.8 itself has a
+router apply the update it receives, so a site that manages router tables from
+a station on another network turns it on with
+`RouterOptions::new().remote_table_updates()`; such an update then goes to the
+gate like a local one, with `source_net` set, and an authorizer can still pick
+which to take. Updates from the router's own networks, and table queries, are
+the same either way.
+
 `ControlAuthContext::sending_peer_principal()` is the `ScPrincipal` of the
 verified leaf certificate of the direct BACnet/SC peer that handed the message
 over: the last hop, even when the message carries an SNET. Trusting it trusts
@@ -3791,8 +3815,9 @@ to certificates), and keeps the standard behaviour on B/IP:
 
 ```rust
 use std::sync::Arc;
-use bacnet_network::router::control_policy::{ControlAuthContext, ControlAuthorizer, ControlPolicy};
-use bacnet_npdu::NetworkMessageType as Message;
+use bacnet_network::router::control_policy::{
+    ControlAuthContext, ControlAuthorizer, ControlClass, ControlPolicy,
+};
 
 let routers: Vec<ScPrincipal> = configured_router_certificates();
 let announcers: Vec<MacAddr> = configured_router_vmacs();
@@ -3800,13 +3825,14 @@ let authorizer: ControlAuthorizer = Arc::new(move |context: &ControlAuthContext|
     if ![0, 1].contains(&context.port_idx) {
         return true; // B/IP: no certificates
     }
-    let unicast = [
-        Message::INITIALIZE_ROUTING_TABLE,
-        Message::INITIALIZE_ROUTING_TABLE_ACK,
-        Message::REJECT_MESSAGE_TO_NETWORK,
-        Message::I_COULD_BE_ROUTER_TO_NETWORK,
-    ]
-    .contains(&context.message_type);
+    let unicast = matches!(
+        context.class,
+        ControlClass::InitMgmt
+            | ControlClass::InitQuery
+            | ControlClass::InitAck
+            | ControlClass::Reject
+            | ControlClass::ICouldBe
+    );
     if unicast {
         context.sending_peer_principal().is_some_and(|peer| routers.contains(&peer))
     } else {
@@ -4342,6 +4368,16 @@ as that latest one, so a clock that steps back holds the router's timers
 still instead of failing; the router keeps that time from `Router::new` on.
 The router always follows Clause 6, R1 to R7 above included, with no switch
 back to the hosted router's behaviour before 0.13.0.
+
+The `Host` a caller passes decides each protected network message
+(`Host::authorize`, with its `ControlClass`): the ones that change the table,
+and, as `ControlClass::InitQuery`, a routing-table query that carries an SNET
+(#2715), since its answer crosses networks toward a source the query only
+claims. `Permissive` allows them all. A routing-table update that carries an
+SNET is dropped before the host is asked unless
+`Options::remote_table_updates` is on (#2717). It is off in `STANDARD` and in
+`HOSTED`, so a router built on the crate takes table updates from its own
+networks only until it sets the field.
 
 The types that may grow are `#[non_exhaustive]` (#1684), so code outside the
 crate builds them like this:
@@ -9714,12 +9750,10 @@ Applications with path-specific evidence can configure the NPDU envelope
 without changing `ClientConfig`:
 
 ```rust
-client
-    .configure_routed_path_max_npdu(&router_mac, dnet, 1497)
-    .await?;
+client.configure_routed_path_max_npdu(&router_mac, dnet, 1497)?;
 
 // Restore the conservative unknown-path policy.
-client.clear_routed_path_limit(&router_mac, dnet).await?;
+client.clear_routed_path_limit(&router_mac, dnet)?;
 
 // Each path with a configured or learned limit, or a below-minimum reject.
 for path in client.routed_path_limits() {
@@ -9735,6 +9769,16 @@ a one-octet DADR and the client's own MAC as SADR), so 66 on B/IP and 61 on
 MS/TP (#2667). Any larger value is taken, 228 or below included. A request to
 a station whose longer MAC leaves less than the minimum is still refused as
 `Error::RoutedPathTooLong` when it is made.
+
+Both methods are synchronous and apply at once (#2683). They send nothing and
+wait neither for a request on the path nor out the hold a request with no
+answer leaves (the APDU timeout times the attempts, #2651). A request waiting
+out the hold still waits it out, then goes sized to the new limit; a reason-4
+reject that lands in the hold is still discarded. A request sized before the
+change keeps its size, and a reject for it teaches the path nothing. Requests
+to one path still go one at a time, in the order they were made.
+`clear_routed_path_limit` on a path the client holds nothing for reserves
+nothing, so it never fails for capacity.
 
 `routed_path_limits()` lists every path holding more than the default, as
 `RoutedPathLimit` values ordered by router MAC and then network: the router
@@ -10777,7 +10821,10 @@ successful empty table. Silence after the table query was sent yields
 `NoAnswer`; for a routed query its `routed` field holds the network, and its
 text says that an older router may answer a table query only on its own link,
 where only the next hop hears it, so query the next hop or ask from a node on
-that network.
+that network. A router that refuses table queries from other networks drops a
+routed query silently, so it ends as `NoAnswer` too: a hosted router on the
+hardened control policy with no authorizer does, as does a `bacnet-router-core`
+host that refuses `ControlClass::InitQuery` (#2715).
 A client runs one query at a time. A `first_answer` greater than `total`
 returns `InvalidArgument`.
 
@@ -13055,6 +13102,51 @@ place of `device: Option<u32>`; take the instance from
 `i_am.object_identifier`), `DecodedNpdu` the SADR (`source_address`) and the DADR (`dest_address`), and
 `decode::frame::Link` the typed origin (`origin`) and the source MAC the frame
 names (`source_mac`).
+
+### Routed path limits
+
+`Client` carries the low-level client's routed path limits
+([Routed Confirmed-Request Limits](#routed-confirmed-request-limits), #2667)
+in decoded form. A `RoutedPath` is a router on this client's link and a
+destination network, read through `router()` (the router in the link's own
+form: `192.168.1.20:47808`, `mstp:5`), `router_mac()` and `network()`, and
+shown as `ROUTER/NETWORK`.
+
+- `routed_paths()` returns `RoutedPaths`: each path holding more than the
+  default as a `RoutedPathStatus` (`max_npdu`, `source` as
+  `RoutedPathLimitSource`, the configured and learned values, and
+  `below_minimum_reject_seen`), with `too_long_reject_drops` and
+  `below_minimum_reject_drops`. `status(&path)` reads one path, the default
+  `bacnet_ops::client::DEFAULT_ROUTED_PATH_MAX_NPDU` (228 octets, the
+  low-level client's `bacnet_client::client::DEFAULT_ROUTED_PATH_MAX_NPDU`)
+  when it is not listed. It serializes with `source` as `default`,
+  `configured` or `learned`. `bacnet_ops::raw::routed_paths(&low_level)`
+  builds the same from a `BACnetClient` alone, as the CLI's summary does, and
+  `raw::routed_path_to(&low_level, &address)` is `Device::routed_path`'s.
+- `set_routed_path_limit(&path, max_npdu)` and `clear_routed_path_limit(&path)`
+  apply at once and send nothing; a limit that carries no request is an
+  `OpsError::Parse`.
+- `routed_path_at("ROUTER", network)` reads a router address in the target
+  grammar, and `routed_path(router_mac, network)` takes the MAC; an empty or
+  over-long MAC, or a network outside 1 to 65534, is an `OpsError::Parse`
+  (`what` is `"routed path"`). `RoutedPath` gives `router()`, `router_mac()`
+  and `network()`; two paths are equal by MAC and network.
+- `Device::routed_path()` is the path a handle's device is reached by now,
+  through the router the discovery table holds for its network: `None` on
+  this client's own network, `OpsError::UnknownDevice` when no router is
+  known.
+
+```rust,ignore
+let device = client.device("5:0x09").await?;
+if let Some(path) = device.routed_path().await? {
+    if client.routed_paths().status(&path).below_minimum_reject_seen {
+        client.set_routed_path_limit(&path, 128)?;
+    }
+}
+```
+
+The client never shrinks a request by itself after a timeout: setting a limit
+stays the caller's step.
 
 ### Moved to bacnet-tool
 

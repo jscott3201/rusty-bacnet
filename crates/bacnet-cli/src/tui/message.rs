@@ -181,6 +181,9 @@ pub(crate) enum Command {
     /// Write the ring to pcap files; the coordinator does it, on a
     /// blocking thread.
     CaptureExport(Box<super::capture::ExportJob>),
+    /// Set or clear a routed path's size limit on the session's client
+    /// (#2667); sends nothing.
+    PathLimit(super::routed_paths::PathLimit),
 }
 
 /// One row of the device table, already formatted for display.
@@ -431,6 +434,8 @@ pub(crate) enum WorkerEvent {
     /// The MCP listener's state (#2185).
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Mcp(McpListener),
+    /// What a [`Command::PathLimit`] did, or why it didn't.
+    PathLimit(String),
 }
 
 /// The session's MCP listener, for the status bar (#2185).

@@ -56,7 +56,11 @@ pub enum OpsError {
         /// What the text was meant to be: `"target"`, `"address"`,
         /// `"object"` or `"property"`; for a discovery's scope or range,
         /// `"network"` or `"range"`; for an MS/TP connect builder's
-        /// settings, `"MS/TP settings"`.
+        /// settings, `"MS/TP settings"`; for a routed path (#2667),
+        /// `"routed path"` (a router MAC or network that names none, with
+        /// `"address"` and `"network"` from
+        /// [`Client::routed_path_at`](crate::Client::routed_path_at)) or
+        /// `"routed path limit"` (a limit the client refuses for it).
         what: &'static str,
         /// The text as given.
         input: String,

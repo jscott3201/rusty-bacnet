@@ -607,6 +607,8 @@ mod rb09_control_policy_tests;
 #[cfg(test)]
 mod reject_tests;
 #[cfg(test)]
+mod remote_control_tests;
+#[cfg(test)]
 mod tests;
 
 impl Drop for BACnetRouter {

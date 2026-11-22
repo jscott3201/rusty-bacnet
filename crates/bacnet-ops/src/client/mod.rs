@@ -26,6 +26,9 @@
 //! [`Client::find`] the devices that hold an object; each one's Who-Is or
 //! Who-Has is a local broadcast unless the [`Discover`] or [`Find`] names
 //! another [`Scope`].
+//!
+//! [`Client::routed_paths`] shows the size limit of each path through a
+//! router, and [`Client::set_routed_path_limit`] sets one (#2667).
 
 pub(crate) mod batch;
 mod connect;
@@ -33,6 +36,7 @@ mod discover;
 pub(crate) mod find;
 mod log;
 pub(crate) mod read;
+pub(crate) mod routed_paths;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -62,6 +66,9 @@ pub(crate) use self::read::{
     Halt, Reader, RpmFailure, failed_locally, rpm_failure, timed_out, unreachable,
 };
 pub use self::read::{ListRead, MAX_OBJECTS, ReadVia, Wanted};
+pub use self::routed_paths::{
+    DEFAULT_ROUTED_PATH_MAX_NPDU, RoutedPath, RoutedPathStatus, RoutedPaths,
+};
 use crate::device::{ClientEvent, DeviceAddress, Follows};
 use crate::format::Value;
 use crate::limits::RequestLimits;

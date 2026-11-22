@@ -121,6 +121,7 @@ mod passive_retention;
 mod port_retry;
 mod profile_ui;
 mod request_gate;
+mod routed_path_hint;
 #[cfg(feature = "sc-tls")]
 mod sc_codes;
 #[cfg(feature = "sc-tls")]

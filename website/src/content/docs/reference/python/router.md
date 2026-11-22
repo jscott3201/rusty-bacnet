@@ -124,6 +124,14 @@ name (the adapter friendly name on Windows), resolved once, at
 construction, to one usable IPv4 address; `broadcast_address` is not
 derived from it. See "Selecting an interface" in docs/python-api.md.
 
+`isolated=True` keeps the port apart from the router's other isolated
+ports (#2716): the router carries nothing between two isolated ports and
+hides each from the other, while both still reach the ordinary ports.
+A request from one isolated port for one device behind another draws
+Reject-Message-To-Network, reason 1; a broadcast is dropped quietly. One
+isolated port alone changes nothing. It limits transit only and is no
+trust level for a port; see "Isolated ports" in docs/python-api.md.
+
 Properties:
 
 - `network_number: int`
@@ -131,6 +139,7 @@ Properties:
 - `port: int`
 - `broadcast_address: str`
 - `mode: Literal["normal", "bbmd", "foreign_device"]`
+- `isolated: bool`: Whether the router keeps this port apart from its other isolated ports.
 
 ### BipRouterPort.__init__
 
@@ -144,6 +153,7 @@ def __init__(
     broadcast_address: str = "255.255.255.255",
     bbmd: Bbmd | None = None,
     foreign_device: ForeignDevice | None = None,
+    isolated: bool = False,
 ) -> None
 ```
 

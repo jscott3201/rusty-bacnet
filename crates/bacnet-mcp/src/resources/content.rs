@@ -450,6 +450,11 @@ pub(super) fn session<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
             "requests_last_10_s": limits.recent(),
             "agents_requests_last_10_s": limits.recent_agents(),
         });
+        // The routed paths' size limits and the too-long rejects the client
+        // did not believe (#2667): why requests through a router may time
+        // out. Read-only: a limit is set where the client was started.
+        body["routed_paths"] =
+            serde_json::to_value(client.routed_paths()).expect("routed paths serialize");
     }
     // Attached to the TUI: whether a write could be confirmed there now
     // (#2185). Read-only: only the person at the TUI arms it.

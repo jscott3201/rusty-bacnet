@@ -9,7 +9,7 @@ use bytes::Bytes;
 fn conservative_and_configured_npdu_envelopes_use_forwarded_source() {
     let header = forwarded_npci_len(6, 6).unwrap();
     assert_eq!(header, 21);
-    assert_eq!(CONSERVATIVE_ROUTED_PATH_MAX_NPDU - header, 207);
+    assert_eq!(DEFAULT_ROUTED_PATH_MAX_NPDU - header, 207);
     assert_eq!(1497 - header, 1476);
     assert_eq!(forwarded_npci_len(1, 1).unwrap(), 11);
     assert_eq!(forwarded_npci_len(4, 6).unwrap(), 19);
@@ -140,14 +140,14 @@ async fn a_learned_limit_is_never_below_the_conservative_floor() {
     };
     let changed = limits.state().entries[&RoutedPathKey::new(&router, 100)].changed;
     limits.commit_learned_limit(active, 16, changed);
-    assert_eq!(lease.max_apdu(11), CONSERVATIVE_ROUTED_PATH_MAX_NPDU - 11);
+    assert_eq!(lease.max_apdu(11), DEFAULT_ROUTED_PATH_MAX_NPDU - 11);
 }
 
-/// Once a reason 4 is delivered, its request may drop its lease before the
-/// commit, and a change queued on the path may run in between; a clear may
-/// even leave the entry to be reclaimed for another path (#2667). The
-/// commit then learns nothing and does not panic: the change reset learned
-/// evidence, and the reject was for a frame sized before it.
+/// A change of the path's limit may run between a reason 4's claim and its
+/// commit; a clear may even leave the entry to be reclaimed for another
+/// path once the request drops its lease (#2667). The commit then learns
+/// nothing and does not panic: the change reset learned evidence, and the
+/// reject was for a frame sized before it.
 #[tokio::test]
 async fn a_commit_after_a_change_or_a_reclaim_learns_nothing() {
     let limits = Arc::new(RoutedPathLimits::with_capacity(
@@ -186,31 +186,21 @@ async fn a_commit_after_a_change_or_a_reclaim_learns_nothing() {
         })
     };
 
-    let lease = limits.acquire(&router, 100).await.unwrap();
-    lease.configure(1497);
+    limits.configure(&router, 100, 1497).unwrap();
     let changed = limits.state().entries[&key].changed;
-    drop(lease);
     // Nothing changed since the claim: it learns.
     limits.commit_learned_limit(active(1), 400, changed);
     assert_eq!(learned(&limits), Some(400));
 
     // A configure ran between the claim and the commit.
     let changed = limits.state().entries[&key].changed;
-    limits
-        .acquire_for_change(&router, 100)
-        .await
-        .unwrap()
-        .configure(1497);
+    limits.configure(&router, 100, 1497).unwrap();
     limits.commit_learned_limit(active(2), 300, changed);
     assert_eq!(learned(&limits), None);
 
     // A clear, and another path took the table's one entry.
     let changed = limits.state().entries[&key].changed;
-    limits
-        .acquire_for_change(&router, 100)
-        .await
-        .unwrap()
-        .clear();
+    limits.clear(&router, 100).unwrap();
     drop(limits.acquire(&[9], 7).await.unwrap());
     assert!(!limits.state().entries.contains_key(&key));
     limits.commit_learned_limit(active(3), 300, changed);
@@ -242,9 +232,7 @@ async fn configured_and_learned_evidence_are_never_evicted_for_capacity() {
     let configured_key = RoutedPathKey::new(&[1], 100);
     let learned_key = RoutedPathKey::new(&[2], 200);
 
-    let configured = limits.acquire(&[1], 100).await.unwrap();
-    configured.configure(1497);
-    drop(configured);
+    limits.configure(&[1], 100, 1497).unwrap();
 
     let learned = limits.acquire(&[2], 200).await.unwrap();
     limits

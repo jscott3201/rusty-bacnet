@@ -158,6 +158,15 @@ fn card_pane(frame: &mut Frame, area: Rect, browser: &Browser, theme: &Theme) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// The routed path hint (#2667), wrapped inside a pane `inner` columns
+/// wide, with a space each side.
+fn hint_lines<'a>(hint: &str, inner: usize, theme: &Theme) -> Vec<Line<'a>> {
+    wrap(hint, inner.saturating_sub(2))
+        .into_iter()
+        .map(|line| Line::styled(format!(" {line}"), theme.warn()))
+        .collect()
+}
+
 fn list_status(browser: &Browser) -> String {
     match &browser.list {
         ListState::Card => " reading the device ".into(),
@@ -261,6 +270,14 @@ fn objects_pane(frame: &mut Frame, area: Rect, browser: &Browser, names: Names, 
             }
         })
         .collect();
+    // A failed device read lists nothing: under its "failed", why a device
+    // behind a router may not answer, and what to set (#2667).
+    let lines = match (&browser.list, &browser.list_hint) {
+        (ListState::Failed(_), Some(hint)) if lines.is_empty() => {
+            hint_lines(hint, usize::from(area.width.saturating_sub(2)), theme)
+        }
+        _ => lines,
+    };
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -310,6 +327,12 @@ fn properties_pane(frame: &mut Frame, area: Rect, browser: &Browser, theme: &The
             wrap(&format!("Read failed: {error}"), inner.saturating_sub(2))
                 .into_iter()
                 .map(|line| Line::styled(format!(" {line}"), theme.danger()))
+                .chain(
+                    browser
+                        .view_hint
+                        .iter()
+                        .flat_map(|hint| hint_lines(hint, inner, theme)),
+                )
                 .collect(),
         ),
         ViewState::Ready(view) => (title(view), property_lines(view, inner, theme)),

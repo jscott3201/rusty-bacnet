@@ -384,6 +384,7 @@ fn row_of(line: &Line) -> &'static str {
         Line::Mstp(_) | Line::Scan(_) => "mstp",
         Line::Manage(Action::Dcc { .. }) => "dcc",
         Line::Manage(Action::Reinit { .. }) => "reinit",
+        Line::PathLimit(_) => "path-limit",
     }
 }
 
@@ -405,6 +406,8 @@ fn every_command_has_its_hint_from_the_table_the_parser_reads() {
         "dcc disable-initiation 30",
         "control enable",
         "reinit warmstart",
+        "path-limit 10.0.0.254:47808/5=128",
+        "path-limit mstp:3/7 clear",
     ];
     let mut rows = std::collections::BTreeSet::new();
     for sample in samples {

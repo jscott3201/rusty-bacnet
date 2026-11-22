@@ -101,7 +101,7 @@ use self::follow::Followed;
 pub(crate) use self::follow::Follows;
 pub use self::misses::MISS_MEMORY;
 pub(crate) use self::misses::StationMisses;
-pub(crate) use self::route::path_to;
+pub(crate) use self::route::{path_to, router_for};
 use crate::client::{Client, lock};
 use crate::error::OpsError;
 

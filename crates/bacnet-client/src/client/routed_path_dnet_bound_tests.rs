@@ -127,10 +127,8 @@ async fn path_apis_and_routed_requests_share_the_remote_dnet_bound() {
     let (client, inbound, mut outbound) = client().await;
     for dnet in [0, u16::MAX] {
         let refused = [
-            client
-                .configure_routed_path_max_npdu(&ROUTER, dnet, 1497)
-                .await,
-            client.clear_routed_path_limit(&ROUTER, dnet).await,
+            client.configure_routed_path_max_npdu(&ROUTER, dnet, 1497),
+            client.clear_routed_path_limit(&ROUTER, dnet),
         ];
         for result in refused {
             assert!(
@@ -143,9 +141,8 @@ async fn path_apis_and_routed_requests_share_the_remote_dnet_bound() {
     for dnet in [1, u16::MAX - 1] {
         client
             .configure_routed_path_max_npdu(&ROUTER, dnet, 1497)
-            .await
             .unwrap();
-        client.clear_routed_path_limit(&ROUTER, dnet).await.unwrap();
+        client.clear_routed_path_limit(&ROUTER, dnet).unwrap();
     }
 
     let client = Arc::new(client);

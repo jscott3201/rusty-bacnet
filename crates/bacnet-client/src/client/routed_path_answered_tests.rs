@@ -57,7 +57,6 @@ impl Path {
         if let Some(max_npdu) = max_npdu {
             client
                 .configure_routed_path_max_npdu(&ROUTER, DNET, max_npdu)
-                .await
                 .unwrap();
         }
         Self {

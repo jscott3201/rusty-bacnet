@@ -10,13 +10,14 @@ use tokio::time::Instant as TokioInstant;
 use super::*;
 use crate::tsm::CompletionOutcome;
 
-/// The smallest NPDU a router must be able to forward between any two data
-/// links, the lowest of the per-link figures in Table 6-1 (Clause 6.6). It is
-/// the default path limit, and also the floor of what a path can learn: a
-/// conforming router never refuses a frame this small as too long, so a
-/// reason 4 claimed by a request whose largest frame is no larger is not
-/// about that frame ([`RoutedPathLimits::claim_active`]).
-pub(super) const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
+/// The smallest NPDU, in octets, a router must be able to forward between
+/// any two data links, the lowest of the per-link figures in Table 6-1
+/// (Clause 6.6). It is the limit of a routed path nothing was set or learned
+/// for ([`RoutedPathLimitSource::Default`]),
+/// and also the floor of what a path can learn: a conforming router never
+/// refuses a frame this small as too long, so the client does not believe a
+/// reason-4 reject for a request whose largest frame is no larger.
+pub const DEFAULT_ROUTED_PATH_MAX_NPDU: u16 = 228;
 /// Hard bound covering gates, configured evidence, and learned evidence.
 pub(super) const MAX_ROUTED_PATH_ENTRIES: usize = 256;
 
@@ -116,9 +117,16 @@ struct RoutedPathEntry {
     /// limit was last configured or cleared.
     below_minimum_warned: bool,
     /// A table-wide sequence number, unique to this entry's latest limit
-    /// change: its creation, a configure or a clear. A reason 4 claimed
-    /// before a change teaches nothing after it ([`RoutedPathLimits::commit_learned_limit`]).
+    /// change: its creation, a configure or a clear. A reason 4 for a frame
+    /// sized before a change teaches nothing after it
+    /// ([`RoutedPathLimits::commit_learned_limit`]).
     changed: u64,
+    /// [`changed`](Self::changed) as it stood when the path's latest
+    /// request read its limit ([`RoutedPathLease::max_apdu`]). A change
+    /// applies at once, even while a request sized before it is in flight
+    /// (#2683), so a reason 4 is judged by the limit its request was sized
+    /// to, not the one in force when it lands.
+    sized_under: u64,
 }
 
 impl RoutedPathEntry {
@@ -136,6 +144,7 @@ impl RoutedPathEntry {
             generation_end: GenerationEnd::Open,
             below_minimum_warned: false,
             changed: last_used,
+            sized_under: last_used,
         }
     }
 
@@ -174,7 +183,7 @@ impl RoutedPathLimits {
         Self::with_capacity(MAX_ROUTED_PATH_ENTRIES, quarantine_horizon)
     }
 
-    fn with_capacity(capacity: usize, quarantine_horizon: Duration) -> Self {
+    pub(super) fn with_capacity(capacity: usize, quarantine_horizon: Duration) -> Self {
         assert!(capacity > 0, "routed path capacity must be nonzero");
         Self {
             state: StdMutex::new(RoutedPathState {
@@ -259,22 +268,6 @@ impl RoutedPathLimits {
         Ok(lease)
     }
 
-    /// [`acquire`](Self::acquire) for a change of the path's limit
-    /// (`configure_routed_path_max_npdu`, `clear_routed_path_limit`): it
-    /// waits for the gate, so for a request on the path, but not out a hold
-    /// a request left behind it. The change sends nothing, and it leaves the
-    /// hold in place, so the next request still waits it out. A reason 4
-    /// that lands in the hold finds no request active on the path and is
-    /// discarded ([`Self::claim_active`]), as it is without the change: it
-    /// can't touch the new limit. The change resets learned evidence anyway.
-    pub(super) async fn acquire_for_change(
-        self: &Arc<Self>,
-        router_mac: &[u8],
-        dnet: u16,
-    ) -> Result<RoutedPathLease, Error> {
-        self.lock_path(router_mac, dnet).await
-    }
-
     /// Reserve the path's entry and take its gate. A router MAC outside
     /// [`routed_mac_fits`] is refused before any entry is reserved.
     async fn lock_path(
@@ -293,16 +286,6 @@ impl RoutedPathLimits {
         })
     }
 
-    /// Whether the table holds an entry for the path, after the router MAC
-    /// check [`lock_path`](Self::lock_path) makes. Reserves nothing.
-    pub(super) fn holds(&self, router_mac: &[u8], dnet: u16) -> Result<bool, Error> {
-        check_router_mac(router_mac)?;
-        Ok(self
-            .state()
-            .entries
-            .contains_key(&RoutedPathKey::new(router_mac, dnet)))
-    }
-
     fn reserve_gate(&self, key: &RoutedPathKey) -> Result<Arc<AsyncMutex<()>>, Error> {
         let mut state = self.state();
         let last_used = bump_use(&mut state);
@@ -311,6 +294,17 @@ impl RoutedPathLimits {
             return Ok(Arc::clone(&entry.gate));
         }
 
+        self.make_room(&mut state)?;
+        let entry = RoutedPathEntry::new(last_used);
+        let gate = Arc::clone(&entry.gate);
+        state.entries.insert(key.clone(), entry);
+        Ok(gate)
+    }
+
+    /// Room for one more entry: on a full table, reclaim the least recently
+    /// used entry that [`is_safely_reclaimable`](Self::is_safely_reclaimable),
+    /// or refuse with [`Error::RoutedPathCapacityExceeded`].
+    fn make_room(&self, state: &mut RoutedPathState) -> Result<(), Error> {
         if state.entries.len() >= state.capacity {
             let now = TokioInstant::now();
             let reclaim = state
@@ -333,11 +327,66 @@ impl RoutedPathLimits {
                 capacity: state.capacity,
             });
         }
+        Ok(())
+    }
 
-        let entry = RoutedPathEntry::new(last_used);
-        let gate = Arc::clone(&entry.gate);
-        state.entries.insert(key.clone(), entry);
-        Ok(gate)
+    /// Set the path's limit to `max_npdu`, reserving its entry if the table
+    /// holds none, and drop what it learned. One lock, no wait: no request
+    /// sizes itself while it is held, and a request sized before keeps its
+    /// size ([`RoutedPathEntry::sized_under`]). A hold on the path stays as
+    /// it is. See [`BACnetClient::configure_routed_path_max_npdu`].
+    pub(super) fn configure(
+        &self,
+        router_mac: &[u8],
+        dnet: u16,
+        max_npdu: u16,
+    ) -> Result<(), Error> {
+        check_router_mac(router_mac)?;
+        let key = RoutedPathKey::new(router_mac, dnet);
+        let mut guard = self.state();
+        let state = &mut *guard;
+        if !state.entries.contains_key(&key) {
+            self.make_room(state)?;
+            let created = bump_use(state);
+            state
+                .entries
+                .insert(key.clone(), RoutedPathEntry::new(created));
+        }
+        let changed = bump_use(state);
+        let entry = state
+            .entries
+            .get_mut(&key)
+            .expect("the entry was found or made under this lock");
+        entry.last_used = changed;
+        entry.configured = Some(ConfiguredPathLimit {
+            max_npdu,
+            provenance: ConfiguredLimitProvenance::ExplicitApi,
+            observed_at: StdInstant::now(),
+        });
+        entry.learned = None;
+        entry.below_minimum_warned = false;
+        entry.changed = changed;
+        Ok(())
+    }
+
+    /// Put the path back on the default: drop its configured and learned
+    /// limits. A path the table holds no entry for is left alone, with none
+    /// reserved, so a clear never fails for capacity. The check and the
+    /// clear take one lock (#2667). See
+    /// [`BACnetClient::clear_routed_path_limit`].
+    pub(super) fn clear(&self, router_mac: &[u8], dnet: u16) -> Result<(), Error> {
+        check_router_mac(router_mac)?;
+        let key = RoutedPathKey::new(router_mac, dnet);
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let changed = bump_use(state);
+        if let Some(entry) = state.entries.get_mut(&key) {
+            entry.configured = None;
+            entry.learned = None;
+            entry.below_minimum_warned = false;
+            entry.changed = changed;
+        }
+        Ok(())
     }
 
     /// Whether `entry` holds nothing a later request depends on at `now`,
@@ -491,26 +540,28 @@ impl RoutedPathLimits {
             &active.owner,
             reject.network,
         );
-        // Once delivered, the request may end and drop its lease before
-        // the commit, and a change queued on the path may run in between
-        // (and a clear may leave the entry to be reclaimed); the commit then
-        // learns nothing.
+        // A change of the path's limit may run at any point here (and a
+        // clear may leave the entry to be reclaimed once the request drops
+        // its lease); the commit then learns nothing.
         if outcome == CompletionOutcome::Delivered {
             self.commit_learned_limit(active, attempted_npdu, changed);
         }
     }
 
     /// Take the active request a reason 4 for `router_mac` and `dnet` ends,
-    /// with the largest forwarded NPDU it has sent and the path's
-    /// [`changed`](RoutedPathEntry::changed) number. A reject that reached
+    /// with the largest forwarded NPDU it has sent and the
+    /// [`changed`](RoutedPathEntry::changed) number it was sized under
+    /// ([`RoutedPathEntry::sized_under`]). A reject that reached
     /// ingress before the request was installed is not its own. One that
     /// could be for an earlier answered generation's larger frame is
     /// dropped and counted, and the request runs on to its own answer,
     /// retry or timeout. So is one claimed by a request whose largest frame is
-    /// within [`CONSERVATIVE_ROUTED_PATH_MAX_NPDU`] (counted apart): no
+    /// within [`DEFAULT_ROUTED_PATH_MAX_NPDU`] (counted apart): no
     /// conforming router refuses such a frame, so the reject was for other
     /// traffic, and believing it would pin the path below any link's minimum.
-    /// The first such drop on a path logs a warning.
+    /// The first such drop on a path logs a warning and marks the path,
+    /// unless the request was sized before the path's latest limit change:
+    /// the mark and the warning are about the limit in force.
     fn claim_active(
         &self,
         router_mac: &[u8],
@@ -533,16 +584,17 @@ impl RoutedPathLimits {
         // This check stays before the arms below: they clear the answered
         // record and mark a one-frame generation refused, which a dropped
         // reject must not do.
-        if largest <= CONSERVATIVE_ROUTED_PATH_MAX_NPDU {
+        if largest <= DEFAULT_ROUTED_PATH_MAX_NPDU {
             state.below_minimum_drops = state.below_minimum_drops.saturating_add(1);
-            let first = !std::mem::replace(&mut entry.below_minimum_warned, true);
+            let first = entry.sized_under == entry.changed
+                && !std::mem::replace(&mut entry.below_minimum_warned, true);
             drop(guard);
             if first {
                 tracing::warn!(
                     router_mac = ?router_mac,
                     dnet,
                     npdu_octets = largest,
-                    minimum_npdu_octets = CONSERVATIVE_ROUTED_PATH_MAX_NPDU,
+                    minimum_npdu_octets = DEFAULT_ROUTED_PATH_MAX_NPDU,
                     "Ignored a reason-4 (too long) network reject for a frame within \
                      the 228-octet routed minimum of Table 6-1; a router refusing a frame that \
                      small is outside the standard. If this router really limits the path \
@@ -570,14 +622,17 @@ impl RoutedPathLimits {
                 }
             }
         }
-        let changed = entry.changed;
-        entry.active.take().map(|active| (active, largest, changed))
+        let sized_under = entry.sized_under;
+        entry
+            .active
+            .take()
+            .map(|active| (active, largest, sized_under))
     }
 
-    /// Learn from a reason 4 claimed while the path's limit was last changed
-    /// at `changed`. A path whose limit changed since, or whose entry is
-    /// gone, learns nothing: the change reset learned evidence, and the
-    /// reject was for a frame sized before it.
+    /// Learn from a reason 4 for a request sized while the path's limit was
+    /// last changed at `changed`. A path whose limit changed since, or whose
+    /// entry is gone, learns nothing: the change reset learned evidence, and
+    /// the reject was for a frame sized before it.
     fn commit_learned_limit(&self, active: ActiveRoutedSend, attempted_npdu: u16, changed: u64) {
         let mut state = self.state();
         let Some(entry) = state
@@ -585,11 +640,20 @@ impl RoutedPathLimits {
             .get_mut(&active.path)
             .filter(|entry| entry.changed == changed)
         else {
+            drop(state);
+            tracing::debug!(
+                router_mac = ?active.path.immediate_router_mac,
+                dnet = active.path.dnet,
+                npdu_octets = attempted_npdu,
+                "Learned no routed-path limit from a reason-4 (too long) network reject: \
+                 the path's limit was set or cleared after the request was sized, or the \
+                 path left the table"
+            );
             return;
         };
         // A learned limit stays at the conservative one or above, whatever
         // the caller passes (`claim_active` already drops smaller frames).
-        let attempted_npdu = attempted_npdu.max(CONSERVATIVE_ROUTED_PATH_MAX_NPDU + 1);
+        let attempted_npdu = attempted_npdu.max(DEFAULT_ROUTED_PATH_MAX_NPDU + 1);
         let exclusive_max_npdu = entry.learned.as_ref().map_or(attempted_npdu, |learned| {
             learned.exclusive_max_npdu.min(attempted_npdu)
         });
@@ -609,17 +673,20 @@ pub(super) struct RoutedPathLease {
 impl RoutedPathLease {
     /// The APDU allowance left on this path after the forwarded NPCI that
     /// [`forwarded_npci_len`] measured.
+    /// It also records the limit's version the request is sized under
+    /// ([`RoutedPathEntry::sized_under`]).
     pub(super) fn max_apdu(&self, forwarded_npci_len: u16) -> u16 {
-        let state = self.limits.state();
+        let mut state = self.limits.state();
         let entry = state
             .entries
-            .get(&self.key)
+            .get_mut(&self.key)
             .expect("path entry remains present while its gate is held");
+        entry.sized_under = entry.changed;
         let configured_or_conservative =
             entry
                 .configured
                 .as_ref()
-                .map_or(CONSERVATIVE_ROUTED_PATH_MAX_NPDU, |configured| {
+                .map_or(DEFAULT_ROUTED_PATH_MAX_NPDU, |configured| {
                     tracing::trace!(
                         max_npdu = configured.max_npdu,
                         provenance = ?configured.provenance,
@@ -655,36 +722,6 @@ impl RoutedPathLease {
             .get_mut(&self.key)
             .expect("path entry remains present while its gate is held");
         entry.generation_end = GenerationEnd::Answered;
-    }
-
-    fn configure(&self, max_npdu: u16) {
-        let mut state = self.limits.state();
-        let changed = bump_use(&mut state);
-        let entry = state
-            .entries
-            .get_mut(&self.key)
-            .expect("path entry remains present while its gate is held");
-        entry.configured = Some(ConfiguredPathLimit {
-            max_npdu,
-            provenance: ConfiguredLimitProvenance::ExplicitApi,
-            observed_at: StdInstant::now(),
-        });
-        entry.learned = None;
-        entry.below_minimum_warned = false;
-        entry.changed = changed;
-    }
-
-    fn clear(&self) {
-        let mut state = self.limits.state();
-        let changed = bump_use(&mut state);
-        let entry = state
-            .entries
-            .get_mut(&self.key)
-            .expect("path entry remains present while its gate is held");
-        entry.configured = None;
-        entry.learned = None;
-        entry.below_minimum_warned = false;
-        entry.changed = changed;
     }
 }
 
@@ -767,24 +804,29 @@ pub(super) fn forwarded_npci_len(
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Configure the maximum NPDU for one immediate-router/DNET path.
     ///
-    /// The update waits for a request on the same path: the one active
-    /// there, or one queued for it, which holds the path from when it starts
-    /// waiting out a hold until it ends. It doesn't wait out a hold itself:
-    /// after a request with no answer the path is held for the APDU timeout
-    /// times the attempts (#2651), and the update applies at once; the next
-    /// request still waits the hold out, sized to the new limit. It
-    /// replaces the previous configured value and deliberately clears learned
-    /// reason-4 evidence for that path. A router MAC outside 1 to
-    /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets or a DNET outside 1..=65534 is
-    /// refused with [`Error::Encoding`], and so is a `max_npdu` that can
-    /// carry no request: one under the 50-octet minimum APDU plus the
-    /// smallest NPCI a router adds to a request from this client, 10 octets
-    /// and the client's own MAC (66 on B/IP, 61 on MS/TP). A limit under
-    /// 228 octets is otherwise taken, for a router that forwards less than
-    /// every router must. A station whose longer MAC leaves a request less
-    /// than the minimum still fails that request, with
-    /// [`Error::RoutedPathTooLong`].
-    pub async fn configure_routed_path_max_npdu(
+    /// The change applies at once and sends nothing: it waits neither for a
+    /// request on the path nor out a hold (#2683). After a request with no
+    /// answer the path is held for the APDU timeout times the attempts
+    /// (#2651); a request made in the hold, or already waiting it out, goes
+    /// out when the hold ends, sized to the new limit. The hold is neither
+    /// shortened nor restarted, and a reason-4 reject that lands in it is
+    /// still discarded. A request sized before the change keeps its size,
+    /// and a reject for it teaches nothing about the path. The change
+    /// replaces the previous configured value and deliberately clears
+    /// learned reason-4 evidence for that path.
+    ///
+    /// A router MAC outside 1 to [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN)
+    /// octets or a DNET outside 1..=65534 is refused with
+    /// [`Error::Encoding`], and so is a `max_npdu` that can carry no
+    /// request: one under the 50-octet minimum APDU plus the smallest NPCI a
+    /// router adds to a request from this client, 10 octets and the
+    /// client's own MAC (66 on B/IP, 61 on MS/TP). A limit under 228 octets
+    /// is otherwise taken, for a router that forwards less than every router
+    /// must. A station whose longer MAC leaves a request less than the
+    /// minimum still fails that request, with [`Error::RoutedPathTooLong`].
+    /// A path new to a full table of 256 paths, none of them idle, is
+    /// refused with [`Error::RoutedPathCapacityExceeded`].
+    pub fn configure_routed_path_max_npdu(
         &self,
         router_mac: &[u8],
         dnet: u16,
@@ -801,34 +843,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE,
             )));
         }
-        let lease = self
-            .routed_path_limits
-            .acquire_for_change(router_mac, dnet)
-            .await?;
-        lease.configure(max_npdu);
-        Ok(())
+        self.routed_path_limits
+            .configure(router_mac, dnet, max_npdu)
     }
 
     /// Restore one immediate-router/DNET path to the conservative default.
     ///
-    /// The update waits as a configure does, not out a hold, and clears both
-    /// configured and learned reason-4 evidence; a path the client holds
-    /// nothing for is left alone, with no entry reserved for it. Later requests therefore use the 228-octet
-    /// conservative routed NPDU envelope until new evidence is supplied. The
-    /// router MAC and DNET are checked as in
+    /// It applies at once, as a configure does, and clears both configured
+    /// and learned reason-4 evidence; a path the client holds nothing for
+    /// is left alone, with no entry reserved for it, so a clear never fails
+    /// for capacity. Later requests therefore use the 228-octet
+    /// conservative routed NPDU envelope until new evidence is supplied.
+    /// The router MAC and DNET are checked as in
     /// [`configure_routed_path_max_npdu`](Self::configure_routed_path_max_npdu).
-    pub async fn clear_routed_path_limit(&self, router_mac: &[u8], dnet: u16) -> Result<(), Error> {
+    pub fn clear_routed_path_limit(&self, router_mac: &[u8], dnet: u16) -> Result<(), Error> {
         check_remote_dnet(dnet)?;
-        // A path with no entry holds nothing to clear: reserve none.
-        if !self.routed_path_limits.holds(router_mac, dnet)? {
-            return Ok(());
-        }
-        let lease = self
-            .routed_path_limits
-            .acquire_for_change(router_mac, dnet)
-            .await?;
-        lease.clear();
-        Ok(())
+        self.routed_path_limits.clear(router_mac, dnet)
     }
 }
 
@@ -858,7 +888,8 @@ fn check_router_mac(router_mac: &[u8]) -> Result<(), Error> {
 /// or address a confirmed request (Clauses 6.2.2.1 and 6.3, #1278). The path
 /// APIs and every routed confirmed request share this check;
 /// [`check_router_mac`] checks the router MAC, from
-/// [`RoutedPathLimits::lock_path`] and [`RoutedPathLimits::holds`].
+/// [`RoutedPathLimits::lock_path`], [`RoutedPathLimits::configure`] and
+/// [`RoutedPathLimits::clear`].
 pub(super) fn check_remote_dnet(dnet: u16) -> Result<(), Error> {
     if dnet == 0 || dnet == u16::MAX {
         return Err(Error::Encoding("routed DNET must be in 1..=65534".into()));

@@ -70,6 +70,7 @@ A profile's workspace also holds `audit.jsonl`, the record of every write sessio
 | Symptom | What to check |
 |---|---|
 | A red error in the footer after connecting | The connection failed. `p` opens the profile to fix it, `c` retries |
+| A device behind a router doesn't answer, and the browser says its router refused a small request as too long | The router carries less than the 228 octets every router must. Set its path's limit with `:path-limit ROUTER/NETWORK=SIZE`, as the browser shows it; it applies at once, to the next request |
 | `drop` counts up | The UI fell behind a burst of traffic. The tables are refreshed from the client afterwards; lower `--fps` or narrow the Who-Is |
 | `W` says another process holds the profile | Another `bacnet tui` has that profile open, or `bacnet mcp serve` is writing through it. Only one process may change its ledger at a time |
 | A profile edited by hand doesn't change | Press `r` in the profile dialog to reload it |
