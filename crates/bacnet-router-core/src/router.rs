@@ -104,9 +104,11 @@ use crate::{Instant, MAX_NPDU, PortId};
 /// that is on (`B` of 0 keeps none, and so suppresses nothing).
 ///
 /// With the default [`Groups`], [`new`](Self::new) is a `const fn` whose
-/// result is all zero bits. Firmware keeps it in a zero-initialized static
-/// (`.bss`) and lends it to
-/// the router; a host can box it. `P` is at most 255 and `N` at least
+/// result is all zero bits, whatever the sizes (the duplicate record's
+/// too, since #2679). Firmware keeps it in a zero-initialized static
+/// (`.bss`) and lends it to the router; a host can box it, and a box
+/// filled from the constant is zeroed memory, with no image of it in the
+/// program. `P` is at most 255 and `N` at least
 /// [`MAX_NPDU`], both checked when the program compiles:
 ///
 /// ```
@@ -161,8 +163,10 @@ impl<
     const B: usize,
 > Storage<P, R, H, D, N, G, B>
 {
-    /// Empty storage: all zero bits with the default [`Groups`] rule.
-    /// Custom rules supply their own unused-slot value through [`GroupClassifier::NONE`].
+    /// Empty storage: all zero bits with the default [`Groups`] rule,
+    /// whatever the sizes. Custom rules supply their own unused-slot value
+    /// through [`GroupClassifier::NONE`], and the storage is all zero bits
+    /// when that is.
     #[must_use]
     pub const fn new() -> Self {
         const { assert!(P <= 255, "a router has at most 255 ports") };
