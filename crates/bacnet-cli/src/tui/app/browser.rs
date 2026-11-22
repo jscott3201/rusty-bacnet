@@ -130,6 +130,11 @@ impl Browser {
 
     /// Apply a result for request `req`; one for any other request is
     /// stale and dropped. Returns whether it was applied.
+    ///
+    /// A `PathHint` must come before its read's failure, as the browse
+    /// worker sends it: an object read's request is forgotten once the read
+    /// has failed, so a hint arriving after that is dropped. A device read's
+    /// request is kept, so its hint is shown in either order.
     pub(crate) fn apply(&mut self, req: ReqId, result: BrowseResult) -> bool {
         if let BrowseResult::PathHint(hint) = result {
             if req == self.device_req {

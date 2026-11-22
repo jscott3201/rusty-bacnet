@@ -13070,8 +13070,9 @@ names (`source_mac`).
 `Client` carries the low-level client's routed path limits
 ([Routed Confirmed-Request Limits](#routed-confirmed-request-limits), #2667)
 in decoded form. A `RoutedPath` is a router on this client's link and a
-destination network: `router` in the link's own form (`192.168.1.20:47808`,
-`mstp:5`), `router_mac` and `network`, shown as `ROUTER/NETWORK`.
+destination network, read through `router()` (the router in the link's own
+form: `192.168.1.20:47808`, `mstp:5`), `router_mac()` and `network()`, and
+shown as `ROUTER/NETWORK`.
 
 - `routed_paths()` returns `RoutedPaths`: each path holding more than the
   default as a `RoutedPathStatus` (`max_npdu`, `source` as

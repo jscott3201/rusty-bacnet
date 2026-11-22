@@ -132,13 +132,25 @@ async fn a_timeout_after_a_small_request_refused_hints_at_the_path_limit() {
 }
 
 /// The browse worker sends the hint ahead of the failure it explains: a
-/// device read of the station behind the router that refuses everything
-/// times out, and the worker delivers the hint, then the failure, for the
-/// same request.
+/// read of the station behind the router that refuses everything times out,
+/// and the worker delivers the hint, then the failure, for the same request.
+/// The browser relies on that order for an object read, whose request it
+/// forgets once the read has failed, so both kinds of read are checked.
 #[tokio::test(start_paused = true)]
 async fn the_browse_worker_sends_the_hint_before_the_failure() {
+    use bacnet_types::enums::ObjectType;
+    use bacnet_types::primitives::ObjectIdentifier;
+
+    use crate::tui::point::BrowseRead;
+
+    hint_then_failure(BrowseRead::Device).await;
+    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    hint_then_failure(BrowseRead::Object(ai1)).await;
+}
+
+async fn hint_then_failure(read: crate::tui::point::BrowseRead) {
     use crate::tui::message::{Command, WorkerEvent};
-    use crate::tui::point::{BrowseRead, BrowseResult};
+    use crate::tui::point::BrowseResult;
 
     let mut client = site().await;
     let rate = bacnet_ops::limits::RequestLimits::new(0);
@@ -149,7 +161,7 @@ async fn the_browse_worker_sends_the_hint_before_the_failure() {
             req: 7,
             device: 77,
             at: DeviceAddress::new(DNET, &[STATION]).unwrap(),
-            read: BrowseRead::Device,
+            read: read.clone(),
         })
         .await
         .unwrap();
@@ -173,7 +185,7 @@ async fn the_browse_worker_sends_the_hint_before_the_failure() {
         (7, BrowseResult::Failed(error)),
     ] = results.as_slice()
     else {
-        panic!("expected a hint, then a failure: {results:?}");
+        panic!("expected a hint, then a failure, for {read:?}: {results:?}");
     };
     assert!(hint.contains(":path-limit 10.0.0.9:47808/2=SIZE"), "{hint}");
     assert!(!error.is_empty());

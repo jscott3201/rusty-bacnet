@@ -217,6 +217,11 @@ pub(crate) fn refusal(command: Command) -> Option<WorkerEvent> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
 
     /// `:path-limit` in a passive session is answered, so the bar's flash
@@ -230,10 +235,7 @@ mod tests {
         };
         assert!(why.contains("passive session"), "{why}");
     }
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+
     struct Broken {
         calls: Arc<AtomicUsize>,
         drops: Arc<AtomicUsize>,
