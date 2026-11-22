@@ -80,10 +80,10 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | guides/safe-writes.md:52 | sh | `bacnet --allow-write write 192.168.1.100 av:1 pv 72.5 --p...` | run against a loopback server |  |
 | integrate/pics.mdx:26 | rust | `use bacnet_objects::DeviceIdentity;` | compiled: a Cargo example's exact text |  |
 | integrate/router.mdx:41 | sh | `bacnet whois-router` | CLI arguments parsed by the CLI (--help) |  |
-| integrate/router.mdx:94 | toml | `<Code code={routerManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
-| integrate/router.mdx:96 | rust | `<Code code={routerSource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
-| integrate/router.mdx:103 | python | `<Code code={routerPython} lang="python" title="bip_router...` | run or compiled by another CI test |  |
-| integrate/router.mdx:110 | text | `Router started: networks 1 and 5` | run or compiled by another CI test |  |
+| integrate/router.mdx:95 | toml | `<Code code={routerManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
+| integrate/router.mdx:97 | rust | `<Code code={routerSource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
+| integrate/router.mdx:104 | python | `<Code code={routerPython} lang="python" title="bip_router...` | run or compiled by another CI test |  |
+| integrate/router.mdx:111 | text | `Router started: networks 1 and 5` | run or compiled by another CI test |  |
 | integrate/security.mdx:115 | toml | `<Code code={policyManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
 | integrate/security.mdx:117 | rust | `<Code code={policySource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
 | integrate/security.mdx:123 | sh | `BACNET_DCC_PASSWORD='replace-me' cargo run -- operator.ex...` | run or compiled by another CI test |  |

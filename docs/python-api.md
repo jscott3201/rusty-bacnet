@@ -591,7 +591,9 @@ inspection, and a client and server on the router's own application entity
 ([below](#a-client-and-a-server-on-the-router)). Other link types, route
 administration, and the full native `RouterOptions` surface are outside this
 binding. Native router defaults apply, including the permissive
-wire-control policy; this API does not add an authorization policy.
+wire-control policy; this API does not add an authorization policy. One
+default is not permissive: a routing-table update that arrives from another
+network is dropped (#2717), and this binding has no option to accept one.
 
 ```python
 from rusty_bacnet import BACnetRouter, BipRouterPort
@@ -658,9 +660,7 @@ routing-table update from a node on an isolated port can still mark, remove or
 redirect a route through an ordinary port. The native controls for those
 (`RouterOptions::next_hop_rejects()`, and the control policy and authorizer)
 are not exposed by this binding, and neither are the router's counters
-(`isolated_drops`, `isolated_refusals`). A routing-table update that arrives
-from another network is dropped (#2717), since this binding can't turn on the
-native option that accepts one.
+(`isolated_drops`, `isolated_refusals`).
 
 `routes()` returns frozen `RouterRoute` objects with destination network, egress
 index, direct/learned identity, next-hop MAC (`None` for a direct route), and
