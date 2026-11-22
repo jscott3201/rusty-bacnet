@@ -13,7 +13,7 @@ use crate::tsm::CompletionOutcome;
 /// The smallest NPDU, in octets, a router must be able to forward between
 /// any two data links, the lowest of the per-link figures in Table 6-1
 /// (Clause 6.6). It is the limit of a routed path nothing was set or learned
-/// for ([`RoutedPathLimitSource::Default`](super::RoutedPathLimitSource::Default)),
+/// for ([`RoutedPathLimitSource::Default`]),
 /// and also the floor of what a path can learn: a conforming router never
 /// refuses a frame this small as too long, so the client does not believe a
 /// reason-4 reject for a request whose largest frame is no larger.
