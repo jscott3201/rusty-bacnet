@@ -12,6 +12,8 @@ pub(super) struct PortConfig {
     pub port: u16,
     pub broadcast: Ipv4Addr,
     pub mode: BipMode,
+    /// Kept apart from the router's other isolated ports (#2716).
+    pub isolated: bool,
 }
 
 impl PortConfig {
@@ -43,8 +45,16 @@ pub(crate) struct PyBipRouterPort(pub(super) PortConfig);
 impl PyBipRouterPort {
     /// Configure one attached network. The default is normal B/IP; BBMD foreign
     /// device acceptance is enabled only by the supplied explicit Bbmd options.
+    ///
+    /// `isolated=True` keeps the port apart from the router's other isolated
+    /// ports (#2716): `RouterPort::isolated` in Rust. It limits transit
+    /// between isolated ports and is no trust level for the port.
     #[new]
-    #[pyo3(signature = (network_number, *, interface="0.0.0.0", port=47808, broadcast_address="255.255.255.255", bbmd=None, foreign_device=None))]
+    #[pyo3(signature = (network_number, *, interface="0.0.0.0", port=47808, broadcast_address="255.255.255.255", bbmd=None, foreign_device=None, isolated=false))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the Python signature: one positional and six keyword-only options"
+    )]
     fn new(
         py: Python<'_>,
         network_number: u16,
@@ -53,6 +63,7 @@ impl PyBipRouterPort {
         broadcast_address: &str,
         bbmd: Option<PyRef<'_, PyBbmd>>,
         foreign_device: Option<PyRef<'_, PyForeignDevice>>,
+        isolated: bool,
     ) -> PyResult<Self> {
         if matches!(network_number, 0 | 65535) {
             return Err(PyValueError::new_err(
@@ -65,6 +76,7 @@ impl PyBipRouterPort {
             port,
             broadcast: parse_ip(broadcast_address, "broadcast_address")?,
             mode: bip_mode("bip", bbmd, foreign_device)?,
+            isolated,
         }))
     }
     /// The directly attached network number.
@@ -92,13 +104,20 @@ impl PyBipRouterPort {
     fn mode(&self) -> &'static str {
         self.0.mode_name()
     }
+    /// Whether the router keeps this port apart from its other isolated
+    /// ports.
+    #[getter]
+    fn isolated(&self) -> bool {
+        self.0.isolated
+    }
     fn __repr__(&self) -> String {
         format!(
-            "BipRouterPort(network_number={}, interface={:?}, port={}, mode={:?})",
+            "BipRouterPort(network_number={}, interface={:?}, port={}, mode={:?}, isolated={})",
             self.0.network_number,
             self.interface(),
             self.0.port,
-            self.mode()
+            self.mode(),
+            if self.0.isolated { "True" } else { "False" }
         )
     }
 }

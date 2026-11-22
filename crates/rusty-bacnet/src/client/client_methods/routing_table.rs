@@ -112,7 +112,11 @@ impl BACnetClient {
     /// The router need not advertise a Device. A routed answer must arrive through that hop and carry the queried
     /// source network and address. An older router that answers a table query
     /// only on its own link never answers this client: the call raises
-    /// `BacnetTimeoutError`, whose text for a routed query says so.
+    /// `BacnetTimeoutError`, whose text for a routed query says so. A router
+    /// that refuses table queries from other networks (a hardened hosted
+    /// router with no authorizer, or a host that refuses the query class)
+    /// drops a routed query silently, and the call raises
+    /// `BacnetTimeoutError` too (#2715).
     /// One query runs at a time. The call holds the started client through
     /// resolution, sending and collection, so `stop()` waits for it.
     #[pyo3(signature = (router, *, wait=3.0, quiet=0.5, total=10.0, max_entries=4096))]

@@ -9,7 +9,9 @@ mod fixture;
 use bacnet_router_core::PortId;
 use bacnet_router_core::message::RoutingEntries;
 use bacnet_router_core::npdu::{Address, Mac, NetworkMessageType, Npdu, NpduLimits};
-use bacnet_router_core::router::{ControlClass, Discard, Groups, Options, PortConfig, SendRefusal};
+use bacnet_router_core::router::{
+    ControlClass, Discard, Event, Groups, Options, PortConfig, SendRefusal,
+};
 use fixture::{
     OWN_0, OWN_1, Outcome, R7, Recorder, Sent, addr, at, bytes, deliver, drain, drain_refusing,
     port_on, router, router_with,
@@ -72,7 +74,8 @@ fn assert_routed_answer(sent: &[Sent], requester: Address<'_>, source: Option<Ad
 /// A query relayed by R7 with the requester's SNET and SADR is answered out
 /// of the arrival port, unicast to R7, with the requester as DNET and DADR,
 /// hop count 255 and no SNET: the router answers as the station R7
-/// delivered to. The table doesn't change and the host isn't asked.
+/// delivered to. The table doesn't change. The host is asked once, about a
+/// query from another network (#2715), and told what the query claims.
 #[test]
 fn a_relayed_query_is_answered_toward_its_snet_out_of_the_arrival_port() {
     let mut router = router();
@@ -90,7 +93,90 @@ fn a_relayed_query_is_answered_toward_its_snet_out_of_the_arrival_port() {
     assert_routed_answer(&sent, REQUESTER, None);
     assert_eq!(sent.iter().flat_map(rows).collect::<Vec<_>>(), before);
     assert_eq!(router.table().networks().collect::<Vec<_>>(), before);
-    assert!(host.asked.is_empty(), "a query is never gated");
+    let [asked] = &host.asked[..] else {
+        panic!("{:?}", host.asked)
+    };
+    assert_eq!(
+        (asked.class, asked.snet, asked.dnet, asked.port),
+        (ControlClass::InitQuery, Some(81), None, PortId(1))
+    );
+    assert_eq!(asked.source, R7, "the link peer, not the SADR");
+    assert_eq!(
+        asked.message_type,
+        NetworkMessageType::INITIALIZE_ROUTING_TABLE
+    );
+    assert!(asked.targets.is_empty() && !asked.targets_omitted);
+    assert_eq!(router.counters().denied, 0);
+}
+
+/// A host that refuses the class draws no Ack for a query from another
+/// network, whether it names no address, the router at the arrival port or
+/// the router at another port; the query is counted as denied and changes
+/// nothing. The same host still gets a local query (no SNET) answered, and
+/// is not asked about it: only a query whose answer crosses networks is
+/// the host's to refuse (#2715).
+#[test]
+fn a_host_that_refuses_remote_queries_draws_no_ack_and_local_ones_are_unaffected() {
+    let mut router = router();
+    learn(&mut router, 100..104);
+    let before: Vec<u16> = router.table().networks().collect();
+    let mut host = Recorder {
+        deny: vec![ControlClass::InitQuery],
+        ..Recorder::default()
+    };
+    let named = [None, Some(addr(2, OWN_1)), Some(addr(1, OWN_0))];
+    for (index, destination) in named.into_iter().enumerate() {
+        let frame = query(REQUESTER, destination);
+        let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &frame, at(1));
+        assert_eq!(
+            outcome,
+            Outcome::Discarded(Discard::Denied),
+            "{destination:?}"
+        );
+        assert!(sent.is_empty(), "{destination:?}: {sent:?}");
+        assert_eq!(host.asked.len(), index + 1);
+        assert_eq!(host.asked[index].class, ControlClass::InitQuery);
+        assert_eq!(host.asked[index].dnet, destination.map(|to| to.network));
+    }
+    assert_eq!(router.counters().denied, 3);
+    assert_eq!(router.table().networks().collect::<Vec<_>>(), before);
+
+    // Local: from R7 itself, with no SNET, and the same naming the
+    // router's address on its other port.
+    let plain = Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0]);
+    let naming = Npdu {
+        destination: Some(addr(1, OWN_0)),
+        ..plain
+    };
+    for (frame, source) in [(plain, None), (naming, Some(addr(1, OWN_0)))] {
+        let frame = bytes(&frame);
+        let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &frame, at(2));
+        assert_eq!(outcome, Outcome::Handled);
+        let [ack] = &sent[..] else { panic!("{sent:?}") };
+        assert_eq!((ack.port, ack.to.as_deref()), (1, Some(R7)));
+        assert_eq!(rows(ack), before);
+        assert_eq!(
+            (ack.parsed().destination, ack.parsed().source),
+            (None, source)
+        );
+    }
+    assert_eq!(host.asked.len(), 3, "a local query is never asked about");
+    assert_eq!(router.counters().denied, 3);
+}
+
+/// A query from another network with bad data is refused as malformed
+/// before the host hears of it: the data is checked first.
+#[test]
+fn the_host_is_not_asked_about_a_remote_query_with_bad_data() {
+    let mut router = router();
+    let mut host = Recorder::default();
+    let frame = bytes(&Npdu {
+        source: Some(REQUESTER),
+        ..Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0, 9])
+    });
+    let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &frame, at(1));
+    assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
+    assert!(sent.is_empty() && host.asked.is_empty());
 }
 
 /// A query that names the router's address on its other port (DNET 1, DADR
@@ -284,21 +370,71 @@ fn a_full_queue_ends_a_routed_answer() {
     assert!(drain(&mut router).is_empty());
 }
 
-/// Today an Initialize-Routing-Table update that arrives from another
-/// network (SNET set) goes through the host's `authorize` exactly as a local
-/// one does: refused, it changes nothing and draws nothing; allowed, it is
-/// applied and acknowledged to the link peer. Pinned as it stands; the
-/// default policy for remote updates is a separate decision.
-#[test]
-fn today_a_remote_table_update_is_authorized_like_a_local_one() {
-    let update = bytes(&Npdu {
+/// An Initialize-Routing-Table update that carries an SNET.
+fn remote_update(data: &[u8], destination: Option<Address<'_>>) -> Vec<u8> {
+    bytes(&Npdu {
         source: Some(REQUESTER),
-        ..Npdu::message(
-            NetworkMessageType::INITIALIZE_ROUTING_TABLE,
-            &[1, 0, 44, 1, 0],
-        )
-    });
-    let mut router = router();
+        destination,
+        ..Npdu::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, data)
+    })
+}
+
+/// By default an Initialize-Routing-Table update that arrives from another
+/// network (SNET set) is dropped before the host is asked (#2717): it
+/// changes nothing and draws no Ack, whether it would add a route or
+/// remove one, and whether or not it names the router at the arrival port.
+/// It is counted as denied and reported. The same update with no SNET is
+/// applied and acknowledged as it always was. Both sets of options start
+/// with the default.
+#[test]
+fn a_table_update_from_another_network_is_refused_by_default() {
+    for options in [Options::HOSTED, Options::STANDARD] {
+        assert!(!options.remote_table_updates);
+        let mut router = router_with(&fixture::two_ports(), options);
+        learn(&mut router, 100..101);
+        let mut host = Recorder::default();
+        let add: &[u8] = &[1, 0, 44, 1, 0];
+        let remove: &[u8] = &[1, 0, 100, 0, 0];
+        let named = Some(addr(2, OWN_1));
+        for (data, destination) in [(add, None), (remove, None), (add, named)] {
+            let frame = remote_update(data, destination);
+            let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &frame, at(1));
+            assert_eq!(outcome, Outcome::Discarded(Discard::Denied));
+            assert!(sent.is_empty(), "{sent:?}");
+        }
+        assert!(router.table().lookup(44).is_none());
+        assert!(router.table().lookup(100).is_some());
+        assert!(host.asked.is_empty(), "the host is not asked");
+        assert_eq!(router.counters().denied, 3);
+        let refused = Event::RemoteUpdateRefused {
+            port: PortId(1),
+            snet: 81,
+        };
+        assert_eq!(host.events, [refused; 3]);
+
+        // Local: the same data with no SNET.
+        let local = fixture::message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, add);
+        let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &local, at(2));
+        assert_eq!(outcome, Outcome::Handled);
+        assert!(router.table().lookup(44).is_some());
+        assert_eq!(sent.len(), 1, "the data-less Ack");
+        let [asked] = &host.asked[..] else {
+            panic!("{:?}", host.asked)
+        };
+        assert_eq!((asked.class, asked.snet), (ControlClass::InitMgmt, None));
+        assert_eq!(router.counters().denied, 3);
+    }
+}
+
+/// With [`Options::remote_table_updates`] on, an update from another
+/// network goes through the host's `authorize` exactly as a local one
+/// does, as every update did before #2717: refused, it changes nothing and
+/// draws nothing; allowed, it is applied and acknowledged to the link peer.
+#[test]
+fn with_the_option_a_remote_table_update_is_authorized_like_a_local_one() {
+    let update = remote_update(&[1, 0, 44, 1, 0], None);
+    let on = fixture::options(|options| options.remote_table_updates = true);
+    let mut router = router_with(&fixture::two_ports(), on);
     let mut denying = Recorder {
         deny: vec![ControlClass::InitMgmt],
         ..Recorder::default()
