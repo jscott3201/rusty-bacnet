@@ -140,6 +140,7 @@ fn multicast_endpoint() -> Endpoint {
                 .try_send(Sent {
                     link: frame.mac,
                     npdu: frame.npdu,
+                    attributes: frame.attributes,
                 })
                 .expect("bounded send observation");
             async { Ok(()) }

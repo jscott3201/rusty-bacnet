@@ -487,15 +487,22 @@ async fn a_routed_read_takes_the_first_of_two_relayed_answers() {
 
 /// A routed read whose router is the link's broadcast or a group address
 /// is refused before a transaction is registered and before anything is
-/// sent (#2612): a confirmed request goes through one router.
+/// sent (#2612, #2722): a confirmed request goes through one router.
+///
+/// The link stays open while the read runs (the test holds its inbound
+/// sender). A link whose inbound has closed ends the session's client seat,
+/// and a read sent there ends at once with the cut-off error, not at its
+/// timeout: that, not anything about the router, is why this read ended
+/// with `TSM response channel closed` when the check was missing.
 #[tokio::test(start_paused = true)]
-#[ignore = "#2722: the client sends a routed confirmed request whose router is a broadcast or group address"]
 async fn a_routed_read_through_a_group_router_is_refused_unsent() {
     use bacnet_transport::test_transport::{BIP_LOCAL_MAC, TestTransport};
 
     const GROUP: [u8; 6] = [10, 0, 0, 255, 0xBA, 0xC0];
+    let (_link_open, inbound) = tokio::sync::mpsc::channel(1);
     let transport = TestTransport::builder()
         .local_mac(&BIP_LOCAL_MAC)
+        .inbound(inbound)
         .on_is_group_destination(|mac| mac == GROUP)
         .build();
     let sent = transport.sent();
@@ -527,7 +534,11 @@ async fn a_routed_read_through_a_group_router_is_refused_unsent() {
         stray.len(),
         stray[0].mac
     );
-    assert!(matches!(refused, Err(Error::Encoding(_))), "{refused:?}");
+    assert!(
+        matches!(&refused, Err(Error::Encoding(message))
+            if message.contains("the router 0A:00:00:FF:BA:C0 is a broadcast or group address")),
+        "{refused:?}"
+    );
     assert_eq!(session.active_leases(), 0);
     session.stop().await.unwrap();
 }

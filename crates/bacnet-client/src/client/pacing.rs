@@ -8,7 +8,9 @@
 //! A request that has to wait sleeps until then and checks again, so a reply
 //! that comes late still gets the whole pause. Requests waiting together go
 //! one at a time, the interval apart, in no particular order. Destinations
-//! don't wait on each other, and an interval of zero changes nothing.
+//! don't wait on each other, and an interval of zero changes nothing. A
+//! request still waiting when the client's tasks end, by its stop or its
+//! node's, fails then and takes no turn (#2720).
 //!
 //! Pacing runs before a routed request takes its path lease. That lease is
 //! shared by every device on the same network behind the same router, so
@@ -25,6 +27,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
+use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
 
 use super::ConfirmedTarget;
@@ -135,6 +138,12 @@ pub(crate) struct PaceGuard {
 }
 
 impl PaceGuard {
+    /// The turn of a request its client doesn't pace: it ends nothing.
+    #[inline]
+    pub(crate) fn unpaced() -> Self {
+        Self { sent: None }
+    }
+
     /// Move the request's turn out, leaving a guard that ends none: for a
     /// segmented request its node audits, which only borrows its caller's
     /// guard (#2617).
@@ -177,6 +186,13 @@ impl RequestPacer {
         }
     }
 
+    /// Whether this pacer spaces requests at all: an interval of zero
+    /// paces nothing, and a request needs no turn from it.
+    #[inline]
+    pub(crate) fn paces(&self) -> bool {
+        !self.interval.is_zero()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Lanes> {
         self.lanes.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -209,11 +225,24 @@ impl RequestPacer {
     /// The check and the claim happen under one lock, so two requests that
     /// wake together can't both go: the second sees the first and sleeps
     /// again. The lock is never held while sleeping.
-    pub(crate) async fn wait(self: &Arc<Self>, key: PaceKey) -> PaceGuard {
+    ///
+    /// `None` once `ended` ends (its sender is dropped: the client's
+    /// dispatch task has ended, by a stop or its node's stop or drop) while
+    /// the request sleeps (#2720). Such a request never went, so it claims
+    /// no turn: the destination's next request is due when it was before.
+    /// A request that doesn't have to sleep never looks at `ended`.
+    pub(crate) async fn wait(
+        self: &Arc<Self>,
+        key: PaceKey,
+        ended: &watch::Receiver<()>,
+    ) -> Option<PaceGuard> {
         if self.interval.is_zero() {
-            return PaceGuard { sent: None };
+            return Some(PaceGuard { sent: None });
         }
         let interval = self.interval;
+        // Cloned once the request has to sleep, so one that goes at once
+        // pays nothing for it.
+        let mut ending = None;
         loop {
             let due = {
                 let mut lanes = self.lock();
@@ -226,13 +255,21 @@ impl RequestPacer {
                     Some(due) if due > now => due,
                     _ => {
                         let (key, generation, ticket) = self.claim(&mut lanes, &key, now);
-                        return PaceGuard {
+                        return Some(PaceGuard {
                             sent: Some((Arc::clone(self), key, generation, ticket)),
-                        };
+                        });
                     }
                 }
             };
-            tokio::time::sleep_until(due).await;
+            let ending = ending.get_or_insert_with(|| ended.clone());
+            // Neither branch takes a lock: the pacer's is a std mutex, held
+            // only above, between polls.
+            tokio::select! {
+                biased;
+                // Never sent on, so this resolves only when the sender drops.
+                _ = ending.changed() => return None,
+                () = tokio::time::sleep_until(due) => {}
+            }
         }
     }
 
@@ -257,6 +294,17 @@ impl RequestPacer {
         };
         lanes.by_destination.insert(key.clone(), lane);
         (key.clone(), lane.generation, lane.ticket)
+    }
+
+    /// [`Self::wait`] for a client whose tasks never end, for tests of the
+    /// pacing alone.
+    #[cfg(test)]
+    pub(crate) async fn turn(self: &Arc<Self>, key: PaceKey) -> PaceGuard {
+        static RUNNING: OnceLock<(watch::Sender<()>, watch::Receiver<()>)> = OnceLock::new();
+        let running = &RUNNING.get_or_init(|| watch::channel(())).1;
+        self.wait(key, running)
+            .await
+            .expect("a client whose tasks run")
     }
 
     #[cfg(test)]

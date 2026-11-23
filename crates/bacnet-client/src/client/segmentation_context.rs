@@ -81,6 +81,9 @@ pub(super) struct SegmentedRequestLimits<'a> {
     /// request, whose age the device's answer restarts; `None` when no row
     /// did (see `BACnetClient::note_answer`).
     pub(super) sized_by: Option<(u16, &'a [u8])>,
+    /// The data attributes the request carries (#2723), which its
+    /// transaction keeps once registered.
+    pub(super) attributes: super::data_attributes::Attributes<'a>,
 }
 
 /// Where and for whom a reassembly abort is sent and completed.

@@ -203,9 +203,10 @@ pub(super) struct RoutingQueries {
     pub(super) outstanding: std::sync::Mutex<Option<QueryTarget>>,
     /// Ends (its sender is dropped) when the dispatch task does, however it
     /// ends: stop, abort, a closed link or a seat's node stopping. A call
-    /// waits on it, so it returns `ClientStopped` at once. It is never
+    /// waits on it, so it returns `ClientStopped` at once, and so does a
+    /// confirmed request waiting for its pacing turn (#2720). It is never
     /// sent on, so it costs nothing per APDU.
-    ended: tokio::sync::watch::Receiver<()>,
+    pub(super) ended: tokio::sync::watch::Receiver<()>,
     /// One routing-table query at a time. Network messages carry no invoke
     /// ID, so two queries to one router would each collect both answers.
     /// The mutex guards no data: holding it across the call's awaits is its

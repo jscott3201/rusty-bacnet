@@ -7990,8 +7990,9 @@ address only.
 slave proxy), pass `router` from `discover_routers()`.** Without it each such
 station costs two Who-Is and their 3-second waits before the call fails; the
 remembered miss below only spares repeat calls.
-`RoutedTarget(network, address, router=None)` takes its arguments in that
-order, positionally or by keyword:
+`RoutedTarget(network, address, router=None, *, arcnet=False)` takes its
+first three arguments in that order, positionally or by keyword, and
+`arcnet` by keyword only:
 
 - `network`: the station's network number, an `int` from 1 to 65534.
 - `address`: the station's MAC on that network, 1 to 18 octets, as `bytes`
@@ -8001,11 +8002,25 @@ order, positionally or by keyword:
   a B/IPv6 VMAC, two or more hex octets `"aa:bb:..."`, or one octet in
   decimal as `"N"` or `"mstp:N"` (0 to 254): `RoutedTarget(5, "10")` equals
   `RoutedTarget(5, b"\x0a")`. The string forms refuse 255 (MS/TP's
-  broadcast), while `b"\xff"` is taken: a station on an ARCNET network,
-  whose broadcast is 0.
+  broadcast).
 - `router`: the next hop's address on the local link, in the same forms or
   as `bytes` (a routed `DiscoveredDevice`'s `mac_address`, or the `mac` of a
   router `BACnetClient.discover_routers()` found), or `None`.
+- `arcnet`: `True` marks the station's network as ARCNET, where 255 is a
+  station and 0 the broadcast. It takes a one-octet `address` only.
+
+A call refuses an `address` that is a broadcast or a group on its network
+with `BacnetError`, before anything is sent or looked up (#2709). The
+client can't see the far network's link, so it goes by length: `b"\xff"`
+(MS/TP's broadcast), two octets beginning `0x00` or `0xFF` (a LonTalk
+broadcast or group), three octets of `0xFF` (no device's VMAC), and six
+beginning with four of `0xFF` (the B/IP limited broadcast at any port, an
+Ethernet group MAC, BACnet/SC's broadcast). For station 255 on an ARCNET
+network pass `arcnet=True`; `b"\x00"` is then refused instead. Without a
+`router`, an ARCNET station 255 is reached through its discovery-table row
+alone, so name its router when the client has heard no I-Am from it.
+Unconfirmed calls (`who_is` and `discover` with a `RoutedTarget` scope) are
+left alone.
 
 ```python
 from rusty_bacnet import RoutedTarget
@@ -8033,7 +8048,8 @@ such as an MS/TP slave with no proxy, needs `router`**: `discover_routers()` fin
 the routers on the link. A `router` that is a broadcast or group
 address on the link (the configured broadcast address, 255.255.255.255, a
 multicast group, MS/TP station 255) raises `BacnetError` before anything is
-sent: a routed request goes to its router by unicast. A network that turns
+sent: a routed request goes to its router by unicast. The client makes this
+check, for Rust and Python alike (#2722). A network that turns
 out to be the client's own goes to the station direct, its router unused.
 
 The answer the router relays from the station completes the call. A
@@ -8045,8 +8061,8 @@ the same target. To reach a routed device with a service that takes no
 and `_to_device` forms, by its instance (#2588 brings a routed form to
 every service).
 
-`RoutedTarget` is frozen, compares and hashes by its network and octets
-however they were written, and copies and pickles. A bad value raises
+`RoutedTarget` is frozen, compares and hashes by its network, octets and
+ARCNET mark however they were written, and copies and pickles. A bad value raises
 `ValueError`, a network outside 0 to 65535 `OverflowError`, a `bool` network
 or a type other than `str` or `bytes` `TypeError`, as does a call in another
 order, since `network` takes an `int`.

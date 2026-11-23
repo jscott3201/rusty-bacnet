@@ -137,6 +137,7 @@ mod tests {
             router_mac: &[9],
             dest_network: 42,
             dest_mac: &[4, 5],
+            arcnet: false,
         }
         .transaction_peer();
         let routed_response = TransactionPeer::of_answer(&[8], Some(&address(42, &[4, 5])), None);
@@ -153,6 +154,7 @@ mod tests {
             router_mac: &[9],
             dest_network: 42,
             dest_mac: &[4, 5],
+            arcnet: false,
         }
         .localized(Some(42))
         .transaction_peer();
@@ -180,6 +182,7 @@ mod tests {
             router_mac: &[9],
             dest_network,
             dest_mac: &[4, 5],
+            arcnet: false,
         };
         assert!(matches!(
             routed(42).localized(Some(42)),
@@ -192,6 +195,7 @@ mod tests {
                     router_mac: &[9],
                     dest_network: 42,
                     dest_mac: &[4, 5],
+                    arcnet: false,
                 }
             ));
         }

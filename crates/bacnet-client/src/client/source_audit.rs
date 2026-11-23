@@ -216,9 +216,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Hand a request whose registration was diverted to the node's source
     /// Audit (#2617). `named` is the target as the caller named it, which
     /// the runner starts from again. `pace` is the caller's turn at the
-    /// destination, which the request keeps until it ends; `lease`, a
-    /// routed path the caller took, is let go at once, and the runner takes
-    /// it again.
+    /// destination, which the request keeps until it ends. A routed path the
+    /// caller took is the caller's to let go first, and the runner takes it
+    /// again. The runner's frames carry `attributes`, the caller's (#2723).
     ///
     /// The future awaits the request's end, owns everything it needs, and
     /// is boxed and type-erased: the request path it runs ends here again.
@@ -237,9 +237,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
         pace: PaceGuard,
-        lease: Option<RoutedPathLease>,
+        attributes: Attributes<'_>,
     ) -> Diverted {
-        drop(lease);
         // A seat that has closed, by the node's stop or the client's own,
         // takes nothing more: refused at once, before the node is asked.
         if let Err(error) = self.seat_open() {
@@ -255,9 +254,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (runner, invoke_id) = self.runner();
         let station = Station::of(named);
         let data = Bytes::copy_from_slice(service_data);
+        // The node runs the request in a task of its own, so it owns the
+        // data attributes its caller made it with (#2723).
+        let attributes = attributes.cloned();
         let run: Run = Box::pin(async move {
             let result = runner
-                .confirmed_request(&station, service_choice, &data)
+                .confirmed_request_with(&station, service_choice, &data, attributes.as_ref())
                 .await;
             drop(pace);
             (result, invoke_id.get().copied())
@@ -292,9 +294,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_data: &[u8],
         limits: &mut SegmentedRequestLimits<'_>,
     ) -> Diverted {
-        let (pace, lease) = (limits.pace.take(), limits.routed_path_lease.take());
-        let named = *limits.named;
-        self.audited_request(auditor, named, service_choice, service_data, pace, lease)
+        drop(limits.routed_path_lease.take());
+        let (pace, named) = (limits.pace.take(), *limits.named);
+        self.audited_request(
+            auditor,
+            named,
+            service_choice,
+            service_data,
+            pace,
+            limits.attributes,
+        )
     }
 
     /// A copy of this client that runs one request for its node: the same
@@ -349,7 +358,15 @@ impl Station {
                 router_mac,
                 dest_network,
                 dest_mac,
-            } => Self::routed(router_mac, dest_network, dest_mac),
+                arcnet,
+            } => {
+                let station = if router_mac == super::station::VIA_LOCAL_BROADCAST {
+                    Self::routed_via_local_broadcast(dest_network, dest_mac)
+                } else {
+                    Self::routed(router_mac, dest_network, dest_mac)
+                };
+                if arcnet { station.arcnet() } else { station }
+            }
         }
     }
 }

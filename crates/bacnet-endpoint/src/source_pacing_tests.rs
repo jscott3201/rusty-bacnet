@@ -59,8 +59,9 @@ async fn a_waiting_audited_read_holds_no_permit_or_database_lock() {
     endpoint.stop().await;
 }
 
+/// The read fails with the error a request the stop cut off in flight gets
+/// (#2720), which the Python binding reads as the client having stopped.
 #[tokio::test(start_paused = true)]
-#[ignore = "#2720: the client's wait for its turn at a destination doesn't end when the session stops or drops"]
 async fn a_waiting_audited_read_fails_at_once_when_the_session_stops_or_drops() {
     for stop in [true, false] {
         let mut endpoint = paced_source(LONG_MS).await;
@@ -75,7 +76,7 @@ async fn a_waiting_audited_read_fails_at_once_when_the_session_stops_or_drops() 
         };
         let error = bounded(read).await.unwrap().unwrap_err();
         assert!(
-            matches!(&error, Error::Encoding(message) if message == "endpoint shutdown"),
+            matches!(&error, Error::Encoding(message) if message == "TSM response channel closed"),
             "stopped {stop}: {error:?}"
         );
         // The waiter no longer holds the source, so nothing of the session

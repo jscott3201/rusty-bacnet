@@ -15,7 +15,8 @@
 //! resolves at that moment instead.
 
 use super::TransactionOwner;
-use std::sync::{Mutex, PoisonError};
+use bacnet_transport::port::DataAttribute;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tokio::sync::Notify;
 
 /// Request-side timer state delivered to the task waiting for a response.
@@ -38,6 +39,11 @@ pub(super) struct TransactionShared {
     // Held only to copy two words in or out, never across an await.
     state: Mutex<ProgressState>,
     notify: Notify,
+    /// The data attributes every frame of the request carries (#2723), set
+    /// once, at registration, for a request made with some. The request's
+    /// sends (its first, its retries and its segments) all hold this owner,
+    /// so none of their futures carries them.
+    data_attributes: OnceLock<Arc<[DataAttribute]>>,
 }
 
 impl TransactionShared {
@@ -48,6 +54,19 @@ impl TransactionShared {
                 value: TransactionProgress::AwaitingResponse,
             }),
             notify: Notify::new(),
+            data_attributes: OnceLock::new(),
+        }
+    }
+
+    pub(super) fn set_data_attributes(&self, attributes: Arc<[DataAttribute]>) {
+        let _ = self.data_attributes.set(attributes);
+    }
+
+    #[inline]
+    pub(super) fn data_attributes(&self) -> &[DataAttribute] {
+        match self.data_attributes.get() {
+            Some(attributes) => attributes,
+            None => &[],
         }
     }
 

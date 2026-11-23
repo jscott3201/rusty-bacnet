@@ -44,7 +44,7 @@ async fn the_request_futures_stay_within_their_bounds() {
         .unwrap();
     let target = ConfirmedTarget::Local { mac: &[2] };
     let request =
-        client.confirmed_request_inner(target, ConfirmedServiceChoice::READ_PROPERTY, &[]);
+        client.confirmed_request_inner(target, ConfirmedServiceChoice::READ_PROPERTY, &[], None);
     let request_size = std::mem::size_of_val(&request);
     drop(request);
     let station = Station::local(&[2]);
@@ -57,7 +57,7 @@ async fn the_request_futures_stay_within_their_bounds() {
     let read_size = std::mem::size_of_val(&read);
     drop(read);
     // The client doesn't pace, so its turn is the empty one.
-    let mut pace = client.pacer.wait(PaceKey::of(target)).await;
+    let mut pace = client.pacer.turn(PaceKey::of(target)).await;
     let mut lease = None;
     let mut limits = SegmentedRequestLimits {
         named: &target,
@@ -67,6 +67,7 @@ async fn the_request_futures_stay_within_their_bounds() {
         routed_path_lease: &mut lease,
         pace: &mut pace,
         sized_by: None,
+        attributes: None,
     };
     let segmented = client.segmented_confirmed_request(
         target,

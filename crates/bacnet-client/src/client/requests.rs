@@ -31,6 +31,15 @@ impl core::fmt::Display for LengthBoundedBy {
     }
 }
 
+/// What a confirmed request fails with when the client's tasks end under it
+/// (#2617, #2720): its open transaction is dropped by the stop, or, still
+/// waiting for its turn at the destination, it is woken by the dispatch
+/// task's end. The Python binding reads this text as that case.
+#[cold]
+pub(super) fn request_cut_off() -> Error {
+    Error::Encoding("TSM response channel closed".into())
+}
+
 /// Whether `response` is the device's own answer to a confirmed request: an
 /// acknowledgment, or its Error, Reject or Abort. Any of them shows that the
 /// request reached the device (Clause 19.4). A router's refusal, a reason 4
@@ -114,10 +123,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// would make it a local broadcast (Clause 6.3, #1479); an empty MAC in
     /// an address; and on another network a network of 0 or 65535 or a MAC
     /// longer than [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets, which
-    /// no router carries to one station. [`Error::UnknownDevice`] for a
-    /// remote address with no named router and no row in the discovery
-    /// table, since the row is the route. Then the errors of the request
-    /// itself.
+    /// no router carries to one station, a MAC that is a broadcast or a
+    /// group on that network ([`RemoteBroadcast`], #2709), or a
+    /// named router that is a broadcast or group address on this link
+    /// (#2722). [`Error::UnknownDevice`] for a remote address with no named
+    /// router and no row in the discovery table, since the row is the route.
+    /// Then the errors of the request itself; a request the client's stop
+    /// cuts off, waiting for its turn or open, fails with
+    /// `Error::Encoding("TSM response channel closed")`.
     ///
     /// [`BACnetAddress`]: bacnet_types::constructed::BACnetAddress
     pub async fn confirmed_request(
@@ -126,7 +139,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
-        to.confirmed(self, service_choice, service_data).await
+        to.confirmed(self, service_choice, service_data, None).await
     }
 
     /// Register a confirmed request with the TSM, its lock held for the
@@ -151,11 +164,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             )
     }
 
+    /// The one request path: `attributes` are the data attributes each
+    /// frame carries (#2723), `None` for none.
     pub(super) async fn confirmed_request_inner(
         &self,
         target: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
+        attributes: Attributes<'_>,
     ) -> Result<Bytes, Error> {
         // A destination that is not one device (#1278), or a DADR or local
         // source MAC that no router could carry (#1267), fails here, before
@@ -173,19 +189,36 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             check_routed_unicast(dest_network, dest_mac.len())?;
         }
         let target = named.localized(self.network.local_network_number().get());
-        if let ConfirmedTarget::Local { mac } = target {
-            // An empty MAC names no one station: refused as an address on
-            // network 0 with no MAC is, whichever form named it (#2588).
-            Self::station_of(0, mac)?;
-            // With no DNET, a group destination is a local broadcast, which
-            // carries no confirmed request (Clause 6.3, #1479).
-            if self.network.transport().is_group_destination(mac) {
-                return Err(Error::Encoding(
-                    "a confirmed request goes to one device, not to a broadcast or group \
-                     address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
-                     Clause 6.3)"
-                        .into(),
-                ));
+        match target {
+            ConfirmedTarget::Local { mac } => {
+                // An empty MAC names no one station: refused as an address
+                // on network 0 with no MAC is, whichever form named it
+                // (#2588).
+                Self::station_of(0, mac)?;
+                // With no DNET, a group destination is a local broadcast,
+                // which carries no confirmed request (Clause 6.3, #1479).
+                if self.network.transport().is_group_destination(mac) {
+                    return Err(Error::Encoding(
+                        "a confirmed request goes to one device, not to a broadcast or group \
+                         address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
+                         Clause 6.3)"
+                            .into(),
+                    ));
+                }
+            }
+            // Still routed, so on another network: its MAC there must not
+            // spell that network's broadcast (#2709), and the router it goes
+            // through must be one station on this link (#2722). The local
+            // broadcast form names no router; its DNET and DADR name the
+            // one station, so they are all it is checked by.
+            ConfirmedTarget::Routed {
+                router_mac,
+                dest_network,
+                dest_mac,
+                arcnet,
+            } => {
+                send_checks::check_remote_station(dest_network, dest_mac, arcnet)?;
+                send_checks::check_router(self.network.transport(), dest_network, router_mac)?;
             }
         }
         let routed_forwarded_npci_len = match target {
@@ -197,17 +230,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // Pace before the path lease, so the wait holds up no other request
         // through the same router. The guard lives until this request
         // returns, by any path or by being dropped, and then starts the
-        // interval for the next request to this destination.
-        let mut _pace = self.pacer.wait(pacing::PaceKey::of(target)).await;
+        // interval for the next request to this destination. A request still
+        // waiting when the client's tasks end (its stop, or its node's stop
+        // or drop) ends then, as the open requests do, and claims no turn
+        // (#2720). A client with no interval names no destination and
+        // waits for nothing.
+        let mut _pace = if self.pacer.paces() {
+            let key = pacing::PaceKey::of(target);
+            match self.pacer.wait(key, &self.routing_query.ended).await {
+                Some(pace) => pace,
+                None => return Err(request_cut_off()),
+            }
+        } else {
+            pacing::PaceGuard::unpaced()
+        };
         // The lease serializes one active request per (immediate router, DNET)
         // and remains live through every return path, including cancellation.
-        let mut path_lease = match target {
-            ConfirmedTarget::Local { .. } => None,
-            ConfirmedTarget::Routed {
-                router_mac,
-                dest_network,
-                ..
-            } => Some(
+        // A request by local broadcast names no router, so it takes none.
+        let mut path_lease = match target.routed_path() {
+            None => None,
+            Some((router_mac, dest_network)) => Some(
                 self.routed_path_limits
                     .acquire(router_mac, dest_network)
                     .await?,
@@ -294,6 +336,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 routed_path_lease: &mut path_lease,
                 pace: &mut _pace,
                 sized_by,
+                attributes,
             };
             return self
                 .segmented_confirmed_request(target, service_choice, service_data, &mut limits)
@@ -319,13 +362,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Err(refused) => match self.on_refused(refused, target, service_choice, false)? {
                 Refused::Registered(registered) => registered,
                 Refused::Audited(auditor) => {
+                    // The runner takes the routed path again.
+                    drop(path_lease);
                     let request = self.audited_request(
                         auditor,
                         named,
                         service_choice,
                         service_data,
                         _pace,
-                        path_lease,
+                        attributes,
                     );
                     return request.await;
                 }
@@ -333,6 +378,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         };
 
         let owner = registration.owner.clone();
+        // The transaction keeps the request's data attributes, so its sends
+        // carry them from there (#2723).
+        owner.set_data_attributes(attributes);
         let mut guard = TransactionGuard::new(
             Arc::clone(&self.tsm),
             self.cleanup_tx.clone(),
@@ -385,7 +433,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             ));
         }
 
-        if let Err(e) = self.send_confirmed_target_apdu(target, &buf).await {
+        if let Err(e) = self.send_confirmed_target_apdu(target, &buf, &owner).await {
             guard.mark_completed();
             let mut tsm = self.tsm.lock();
             tsm.cancel_transaction_for_owner(&tsm_mac, invoke_id, &owner);
@@ -473,7 +521,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
             tokio::select! {
                 response = &mut response_rx => {
-                    return response.map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                    return response.map_err(|_| request_cut_off());
                 }
                 // Progress is never published after the transaction leaves
                 // the TSM; the response arm above resolves then instead.
@@ -522,11 +570,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         retry_apdu.len(),
                                     ) {
                                         return (&mut response_rx).await.map_err(|_| {
-                                            Error::Encoding("TSM response channel closed".into())
+                                            request_cut_off()
                                         });
                                     }
                                     let send_result = self
-                                        .send_confirmed_target_apdu(target, retry_apdu)
+                                        .send_confirmed_target_apdu(target, retry_apdu, owner)
                                         .await;
                                     if let Err(error) = send_result {
                                         let expiration = self
@@ -541,7 +589,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                             RequestTimerExpiration::NoTransaction => {
                                                 return (&mut response_rx)
                                                     .await
-                                                    .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                                    .map_err(|_| request_cut_off());
                                             }
                                             RequestTimerExpiration::TimedOut => {
                                                 self.enqueue_transaction_cleanup(
@@ -590,7 +638,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 RequestTimerExpiration::NoTransaction => {
                                     return (&mut response_rx)
                                         .await
-                                        .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                        .map_err(|_| request_cut_off());
                                 }
                             }
                         }
@@ -621,7 +669,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 SegmentTimerExpiration::NoTransaction => {
                                     return (&mut response_rx)
                                         .await
-                                        .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                        .map_err(|_| request_cut_off());
                                 }
                             }
                         }
@@ -652,31 +700,55 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         super::confirmed_response_result(response)
     }
 
+    /// Send one frame of a confirmed request (its first, a retry or a
+    /// segment) with the data attributes it was made with
+    /// ([`BACnetClient::with_data_attributes`]), which its transaction's
+    /// `owner` keeps, none by default: to the station's MAC, to its router,
+    /// or by one broadcast on this link for the form that names no router.
     pub(super) async fn send_confirmed_target_apdu(
         &self,
         target: ConfirmedTarget<'_>,
         apdu: &[u8],
+        owner: &TransactionOwner,
     ) -> Result<(), Error> {
+        let priority = NetworkPriority::Normal;
+        let attributes = owner.data_attributes();
         match target {
             ConfirmedTarget::Local { mac } => {
                 self.network
-                    .send_apdu(apdu, mac, true, NetworkPriority::Normal)
+                    .send_apdu_with_data_attributes(apdu, mac, true, priority, attributes)
                     .await
             }
             ConfirmedTarget::Routed {
                 router_mac,
                 dest_network,
                 dest_mac,
-            } => {
+                ..
+            } if router_mac == station::VIA_LOCAL_BROADCAST => {
                 self.network
-                    .send_apdu_routed(
+                    .send_apdu_routed_via_local_broadcast_with_data_attributes(
                         apdu,
                         dest_network,
                         dest_mac,
-                        router_mac,
                         true,
-                        NetworkPriority::Normal,
+                        priority,
+                        attributes,
                     )
+                    .await
+            }
+            ConfirmedTarget::Routed {
+                router_mac,
+                dest_network,
+                dest_mac,
+                ..
+            } => {
+                let to = bacnet_network::layer::RoutedTarget {
+                    network: dest_network,
+                    mac: dest_mac,
+                    router_mac,
+                };
+                self.network
+                    .send_apdu_routed_with_data_attributes(apdu, to, true, priority, attributes)
                     .await
             }
         }
