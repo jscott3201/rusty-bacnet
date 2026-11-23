@@ -7764,8 +7764,16 @@ async with endpoint:
   and Who-Has among them, so the endpoint is discoverable, and the Device's
   Protocol_Services_Supported lists them, with the client's I-Am, I-Have and
   COV notifications beside them. A ConfirmedEventNotification is the
-  server's to acknowledge. Segmentation stays as the identity declares it:
-  `segmentation` must still be NO_SEGMENTATION on an endpoint.
+  server's to acknowledge.
+- **Segmentation.** `segmentation` (default `Segmentation.SEGMENTED_BOTH`,
+  #2617) is the Device's Segmentation_Supported, and both roles do what it
+  says: the server reassembles segmented requests and sends long answers in
+  segments, and `client()` takes segmented answers and sends a long request
+  in segments, each only where the value allows. A request that would need
+  segments the endpoint doesn't send fails before anything goes out.
+  `NO_SEGMENTATION` keeps everything to one APDU, for a constrained link or
+  a peer that can't segment. `BACnetServer()` keeps its own default,
+  `NO_SEGMENTATION`.
 - **Who may write.** The keyword-only `mutation_policy` takes what
   `BACnetServer`'s does: `"permissive"` (any peer), `"deny_all"` (no peer,
   COV subscriptions included) or a callable that gets a `MutationContext`

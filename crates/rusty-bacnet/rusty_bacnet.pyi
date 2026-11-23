@@ -10026,6 +10026,16 @@ class BipEndpoint:
     endpoint until ``time_sync_policy`` turns it on, whatever the
     ``mutation_policy``: a default that differs from ``BACnetServer()``'s.
 
+    ``segmentation`` (default ``Segmentation.SEGMENTED_BOTH``, #2617) is the
+    Device's Segmentation_Supported, and both roles do what it says: the
+    server reassembles segmented requests and sends long answers in segments,
+    and ``client()`` takes segmented answers and sends a long request in
+    segments, each only where the value allows it. A request that would
+    need segments the endpoint doesn't send fails before anything goes out.
+    ``Segmentation.NO_SEGMENTATION`` keeps every request and answer to one
+    APDU, for a constrained link or a peer that can't segment.
+    ``BACnetServer()`` keeps its own default of ``NO_SEGMENTATION``.
+
     ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
     no object may have it, so it, or anything larger, raises ValueError at
     construction (#2171).
@@ -10365,7 +10375,8 @@ class ScEndpoint:
     """SC endpoint: one hub connection that both initiates and executes.
 
     ``sc_device_uuid`` is the single durable lifetime identity for both the
-    hub dial and DEVICE_UUID. Lifecycle mirrors ``BipEndpoint``.
+    hub dial and DEVICE_UUID. Lifecycle and ``segmentation`` (default
+    ``SEGMENTED_BOTH``) mirror ``BipEndpoint``.
     ``device_instance`` takes 0 to 4194302, as there: 4194303 or more raises
     ValueError at construction (#2171).
     """
@@ -10622,7 +10633,8 @@ class MstpEndpoint:
     """MS/TP endpoint: one serial owner that both initiates and executes.
 
     Opens a real serial device via ``TokioSerialPort`` like the current
-    wrappers. Lifecycle mirrors ``BipEndpoint``.
+    wrappers. Lifecycle and ``segmentation`` (default ``SEGMENTED_BOTH``)
+    mirror ``BipEndpoint``.
     ``device_instance`` takes 0 to 4194302, as there: 4194303 or more raises
     ValueError at construction (#2171).
     """

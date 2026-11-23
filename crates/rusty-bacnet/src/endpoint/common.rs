@@ -79,11 +79,12 @@ pub(crate) fn parse_device_uuid(
     }
 }
 
-/// Map an optional segmentation override (default: NO_SEGMENTATION, the proven value).
+/// Map an optional segmentation override (default: SEGMENTED_BOTH, the
+/// identity's default, which both of the endpoint's roles follow, #2617).
 pub(crate) fn parse_segmentation(segmentation: Option<PySegmentation>) -> Segmentation {
     segmentation
         .map(|s| s.to_rust())
-        .unwrap_or(Segmentation::NO_SEGMENTATION)
+        .unwrap_or(Segmentation::SEGMENTED_BOTH)
 }
 
 /// Build the single validated DeviceIdentity (builder-time only).

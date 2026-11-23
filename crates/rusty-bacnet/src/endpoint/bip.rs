@@ -195,7 +195,9 @@ impl PyBipEndpoint {
     ///     max_apdu: Raw receive ceiling, at least 50 bytes, resolved against
     ///         the B/IP link before Device construction. Request headers use
     ///         the largest supported code that does not exceed it.
-    ///     segmentation: `Segmentation` override (default NO_SEGMENTATION, the proven value).
+    ///     segmentation: `Segmentation` override (default SEGMENTED_BOTH). The
+    ///         Device states it, and the endpoint's server and client both
+    ///         segment only as it says.
     ///     device_uuid: Optional 16-byte UUID (zeros allowed for BIP-only;
     ///         stored into DEVICE_UUID, single identity source).
     ///     queue_capacity: Bounded queue capacity (must be >0, default 256).
