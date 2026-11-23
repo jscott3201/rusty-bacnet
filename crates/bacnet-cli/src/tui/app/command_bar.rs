@@ -24,6 +24,12 @@
 //!   `find ""`, closes the list.
 //! - `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`: the MS/TP
 //!   monitor's thresholds, and how long its join wizard listens.
+//! - `path-limit DEVICE SIZE|clear`, `path-limit ROUTER/NETWORK=SIZE` and
+//!   `path-limit ROUTER/NETWORK clear`: a routed path's size limit for the
+//!   session (#2667), named by a device reached through it (#2726) or by
+//!   its router. A router form's first word always holds the `/` between
+//!   router and network, which no device word has. DEVICE is a row of the
+//!   device table as `writem` takes it, or `.` for the selected device.
 //! - `dcc ACTION [MINUTES]` (or `control`) and `reinit STATE`:
 //!   DeviceCommunicationControl and ReinitializeDevice to the selected
 //!   device, the action and state named as the one-shot `control` and
@@ -47,10 +53,12 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use self::words::Word;
 use super::devices::DeviceTable;
+use super::manage::NO_DEVICE;
 use super::monitor::Setting;
 use super::{App, FLASH_FOR, FilterKey, Overlay};
 use crate::commands::device::{parse_enable_disable, parse_reinit_state};
 use crate::tui::message::{Command, DeviceRow};
+use crate::tui::routed_paths::{PathLimit, PathTo};
 use crate::tui::safety::WriteSpec;
 use crate::tui::safety::manage::{Action, DccTime};
 use crate::tui::watched::{Point, WatchCommand};
@@ -83,6 +91,9 @@ impl Syntax {
             ("find", _) if passive => "Not in a passive session, which sends no Who-Has",
             ("find", "find --dnet N NAME") => "Who-Has by object name on remote network N",
             ("find", "find --global NAME") => "Who-Has by object name on every network",
+            ("path-limit", "path-limit DEVICE SIZE|clear") => {
+                "The size limit of the path to DEVICE (. for the selected one); sends nothing"
+            }
             _ => self.what,
         }
     }
@@ -134,6 +145,7 @@ pub(crate) const COMMANDS: &[Syntax] = &[
         name: "path-limit",
         alias: None,
         usage: &[
+            "path-limit DEVICE SIZE|clear",
             "path-limit ROUTER/NETWORK=SIZE",
             "path-limit ROUTER/NETWORK clear",
         ],
@@ -213,7 +225,10 @@ pub(crate) enum Line {
     /// device.
     Manage(Action),
     /// Set or clear a routed path's size limit.
-    PathLimit(crate::tui::routed_paths::PathLimit),
+    PathLimit(PathLimit),
+    /// Set or clear the size limit of the path to the selected device
+    /// (`path-limit . SIZE|clear`); `None` clears it.
+    SelectedPathLimit(Option<u16>),
 }
 
 /// `dcc ACTION [MINUTES|forever]`. A disable without a duration lasts
@@ -239,6 +254,41 @@ fn dcc(action: &str, duration: Option<&str>) -> Result<Action, String> {
         ),
     };
     Ok(Action::Dcc { state, time })
+}
+
+/// `path-limit`'s words (#2726). A first word with a `/` names the path by
+/// its router (`ROUTER/NETWORK`); any other names a device, since no form
+/// of the target grammar has a `/`: `.` for the selected device, or a row
+/// of the device table as `writem` takes it, then SIZE or `clear`.
+fn path_limit(words: &[&str], devices: &DeviceTable) -> Result<Line, String> {
+    match words {
+        [first, ..] if first.contains('/') => Ok(Line::PathLimit(PathLimit::parse(words)?)),
+        [".", size] => Ok(Line::SelectedPathLimit(PathLimit::size(size)?)),
+        [device, size] => {
+            let max_npdu = PathLimit::size(size)?;
+            let row = row(device, "path-limit", devices).map_err(|why| {
+                match parse_target(device) {
+                    // An address: perhaps a router, named without its network.
+                    Ok(Target::Mac(_)) => {
+                        format!("{why}; a path through a router is ROUTER/NETWORK=SIZE")
+                    }
+                    _ => why,
+                }
+            })?;
+            Ok(Line::PathLimit(PathLimit {
+                path: PathTo::Device {
+                    instance: row.instance,
+                    at: row.at.clone(),
+                },
+                max_npdu,
+            }))
+        }
+        [word] if word.contains('=') => Err(format!(
+            "'{word}': a device takes its size as a word of its own (path-limit DEVICE SIZE); \
+             ROUTER/NETWORK=SIZE names a path by its router"
+        )),
+        _ => Err(crate::tui::routed_paths::USAGE.into()),
+    }
 }
 
 /// `mstp rotation|hold MS` or `mstp listen SECS`, each at least 1.
@@ -504,9 +554,7 @@ pub(crate) fn parse(text: &str, devices: &DeviceTable) -> Result<Line, String> {
             Ok(Line::Scan(Some(Duration::from_secs(seconds))))
         }
         ("mstp", [which, value]) => Ok(Line::Mstp(mstp_setting(which, value)?)),
-        ("path-limit", words) => Ok(Line::PathLimit(crate::tui::routed_paths::PathLimit::parse(
-            words,
-        )?)),
+        ("path-limit", words) => path_limit(words, devices),
         ("dcc", [action, rest @ ..]) if rest.len() <= 1 => {
             Ok(Line::Manage(dcc(action, rest.first().copied())?))
         }
@@ -549,9 +597,24 @@ impl App {
                     Ok(Line::Scan(window)) => self.mstp_scan(window, out),
                     Ok(Line::Manage(action)) => self.open_manage(action),
                     Ok(Line::PathLimit(change)) => out.push(Command::PathLimit(change)),
+                    Ok(Line::SelectedPathLimit(max_npdu)) => {
+                        self.selected_path_limit(max_npdu, out);
+                    }
                     Err(error) => self.flash(error, FLASH_FOR),
                 }
             }
+        }
+    }
+
+    /// `path-limit . SIZE|clear`: the path to the device in front of the
+    /// operator, as `:dcc` finds it.
+    fn selected_path_limit(&mut self, max_npdu: Option<u16>, out: &mut Vec<Command>) {
+        match self.selected_device() {
+            Some((instance, at)) => out.push(Command::PathLimit(PathLimit {
+                path: PathTo::Device { instance, at },
+                max_npdu,
+            })),
+            None => self.flash(NO_DEVICE, FLASH_FOR),
         }
     }
 }

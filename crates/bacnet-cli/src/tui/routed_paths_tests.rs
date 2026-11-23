@@ -1,5 +1,6 @@
 //! `:path-limit` and the browser's routed path hint (#2667), against a
-//! client whose router refuses every request as too long.
+//! client whose router refuses every request as too long; the path named
+//! by a device of the table (#2726).
 
 use std::time::Duration;
 
@@ -82,7 +83,7 @@ async fn hint_of(
     address: &DeviceAddress,
     error: &Error,
 ) -> Option<String> {
-    tokio::time::timeout(Duration::from_secs(1), hint(client, address, error))
+    tokio::time::timeout(Duration::from_secs(1), hint(client, 77, address, error))
         .await
         .unwrap()
 }
@@ -108,7 +109,11 @@ async fn a_timeout_after_a_small_request_refused_hints_at_the_path_limit() {
 
     let hint = hint_of(&client, &station, &error).await.expect("a hint");
     assert!(hint.contains("The router at 10.0.0.9:47808"), "{hint}");
-    assert!(hint.contains(":path-limit 10.0.0.9:47808/2=SIZE"), "{hint}");
+    // The device's own form first, then the path's (#2726).
+    assert!(
+        hint.contains(":path-limit 2:77 SIZE (or :path-limit 10.0.0.9:47808/2=SIZE)"),
+        "{hint}"
+    );
     let other = Error::Encoding("no".into());
     assert_eq!(hint_of(&client, &station, &other).await, None);
     let local = DeviceAddress::local(&ROUTER).unwrap();
@@ -116,7 +121,7 @@ async fn a_timeout_after_a_small_request_refused_hints_at_the_path_limit() {
 
     let set = PathLimit::parse(&["10.0.0.9:47808/2=128"]).unwrap();
     assert_eq!(
-        set.apply(&client),
+        set.apply(&client).await,
         "Requests to network 2 through 10.0.0.9:47808 now go in at most 128 NPDU octets"
     );
     assert_eq!(
@@ -126,7 +131,12 @@ async fn a_timeout_after_a_small_request_refused_hints_at_the_path_limit() {
     assert_eq!(hint_of(&client, &station, &error).await, None);
 
     let clear = PathLimit::parse(&["10.0.0.9:47808/2", "clear"]).unwrap();
-    assert!(clear.apply(&client).contains("back on the default of 228"));
+    assert!(
+        clear
+            .apply(&client)
+            .await
+            .contains("back on the default of 228")
+    );
     assert!(client.routed_path_limits().is_empty());
     client.stop().await.unwrap();
 }
@@ -199,13 +209,13 @@ async fn hint_then_failure(read: crate::tui::point::BrowseRead) {
 async fn the_command_reports_what_it_refused() {
     let mut client = site().await;
     let tiny = PathLimit::parse(&["10.0.0.9:47808/2=10"]).unwrap();
-    let said = tiny.apply(&client);
+    let said = tiny.apply(&client).await;
     assert!(
         said.starts_with("path-limit 10.0.0.9:47808/2: a routed path limit of 10"),
         "{said}"
     );
     let device = PathLimit::parse(&["1234/2=480"]).unwrap();
-    assert!(device.apply(&client).contains("not a device"));
+    assert!(device.apply(&client).await.contains("not a device"));
     assert!(client.routed_path_limits().is_empty());
     client.stop().await.unwrap();
 }
@@ -215,16 +225,20 @@ fn the_command_takes_a_limit_or_clear() {
     assert_eq!(
         PathLimit::parse(&["192.168.1.20:47808/5=128"]),
         Ok(PathLimit {
-            router: "192.168.1.20:47808".into(),
-            network: 5,
+            path: PathTo::Router {
+                router: "192.168.1.20:47808".into(),
+                network: 5,
+            },
             max_npdu: Some(128),
         })
     );
     assert_eq!(
         PathLimit::parse(&["mstp:3/7", "clear"]),
         Ok(PathLimit {
-            router: "mstp:3".into(),
-            network: 7,
+            path: PathTo::Router {
+                router: "mstp:3".into(),
+                network: 7,
+            },
             max_npdu: None,
         })
     );
@@ -246,4 +260,72 @@ fn the_command_takes_a_limit_or_clear() {
         PathLimit::parse(&["/5", "clear"]),
         Err("'/5' names no router".into())
     );
+    // A size as a word of its own belongs to the device form.
+    assert_eq!(
+        PathLimit::parse(&["10.0.0.9:47808/2", "480"]),
+        Err("'10.0.0.9:47808/2 480': a path takes its size after '=': \
+             path-limit 10.0.0.9:47808/2=480"
+            .into())
+    );
+    assert_eq!(PathLimit::size("clear"), Ok(None));
+    assert_eq!(PathLimit::size("480"), Ok(Some(480)));
+    assert!(
+        PathLimit::size("reset")
+            .unwrap_err()
+            .contains("neither clear nor")
+    );
+}
+
+/// A device of the table names the path the client reaches it by (#2726):
+/// the router and network its discovery row holds, the same path the
+/// router form names. A device on this network has no path, and a device
+/// the client no longer knows is refused; neither changes anything.
+#[tokio::test(start_paused = true)]
+async fn a_device_names_the_path_it_is_reached_by() {
+    let mut client = site().await;
+    let device = |instance, at| PathLimit {
+        path: PathTo::Device { instance, at },
+        max_npdu: Some(128),
+    };
+    let station = DeviceAddress::new(DNET, &[STATION]).unwrap();
+    assert_eq!(
+        device(77, station.clone()).apply(&client).await,
+        "Requests to network 2 through 10.0.0.9:47808 (device 77's path) now go in at most \
+         128 NPDU octets"
+    );
+    let limits = client.routed_path_limits();
+    assert_eq!(
+        (limits[0].router_mac.as_slice(), limits[0].dnet),
+        (&ROUTER[..], DNET)
+    );
+    assert_eq!(limits[0].configured_max_npdu, Some(128));
+
+    let local = DeviceAddress::local(&[10, 0, 0, 5, 0xBA, 0xC0]).unwrap();
+    assert_eq!(
+        device(9, local).apply(&client).await,
+        "path-limit device 9: device 9 at 10.0.0.5:47808 is on this network, not behind a \
+         router, so no routed path's limit applies to it"
+    );
+    let unknown = DeviceAddress::new(3, &[7]).unwrap();
+    let said = device(8, unknown).apply(&client).await;
+    assert!(
+        said.starts_with("path-limit device 8: device 3:0x07"),
+        "{said}"
+    );
+    assert_eq!(
+        client.routed_path_limits()[0].configured_max_npdu,
+        Some(128)
+    );
+
+    let clear = PathLimit {
+        max_npdu: None,
+        ..device(77, station)
+    };
+    assert_eq!(
+        clear.apply(&client).await,
+        "Requests to network 2 through 10.0.0.9:47808 (device 77's path) are back on the \
+         default of 228 NPDU octets"
+    );
+    assert!(client.routed_path_limits().is_empty());
+    client.stop().await.unwrap();
 }

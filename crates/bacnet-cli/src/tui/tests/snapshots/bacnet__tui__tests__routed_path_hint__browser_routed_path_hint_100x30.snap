@@ -8,7 +8,7 @@ expression: text
 "│ The router at 10.0.0.9:47808 refused a request of 228 NPDU octets or fewer to network 2 as too   │"
 "│ long. No router that follows the standard does, so the client did not believe it,                │"
 "│ and the request timed out. If that router really carries less,                                   │"
-"│ set the path's limit: :path-limit 10.0.0.9:47808/2=SIZE,                                         │"
+"│ set the path's limit: :path-limit 2:100 SIZE (or :path-limit 10.0.0.9:47808/2=SIZE),             │"
 "│ with SIZE what it carries (at least the 50-octet minimum APDU and its header).                   │"
 "│                                                                                                  │"
 "│                                                                                                  │"
