@@ -4,7 +4,7 @@
 //! [`BACnetServer::send_to_recipient`].
 
 use super::binding_probes::{DeviceLookup, LookupMiss, LookupStart, can_look_for};
-use super::device_bindings::DeviceResolution;
+use super::device_bindings::{BindingFreshness, DeviceResolution};
 use super::event_forwarding::ForwardingBudget;
 use super::event_recipient_route::{
     ConfirmedRecipientRoute, ConfirmedRouteRefusal, RecipientRoute,
@@ -76,7 +76,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// For a confirmed notification it returns a receiver that resolves once
     /// the notification's first attempt is handed to the network, or once it
     /// ends without one. One that finds every invoke ID leased waits here
-    /// for one to come back, which holds its lane (#2537).
+    /// for one to come back, which holds its lane (#2537); a Device
+    /// recipient's binding is read again after that wait (#2569).
     pub(super) async fn send_to_recipient(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
@@ -84,6 +85,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         process_id: u32,
         confirmed: bool,
     ) -> Option<oneshot::Receiver<()>> {
+        let class = outbound.notification_class;
+        let route = Self::recipient_route(ctx, recipient, class).await?;
+        let rebind = matches!(recipient, BACnetRecipient::Device(_)).then_some(recipient);
+        Self::send_on_route(ctx, outbound, route, process_id, confirmed, rebind).await
+    }
+
+    /// `recipient`'s route, localized, or `None` when its device's look
+    /// ended with nothing to send or count ([`Self::device_route`]).
+    async fn recipient_route(
+        ctx: &EventDelivery<'_, T>,
+        recipient: &BACnetRecipient,
+        notification_class: u32,
+    ) -> Option<RecipientRoute> {
         let network = ctx.network;
         // Read without the database lock (#1298).
         let local_network = network.local_network_number().get();
@@ -96,7 +110,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 RecipientRoute::resolve_address(address, is_link_broadcast)
             }
             BACnetRecipient::Device(identifier) => {
-                let class = outbound.notification_class;
+                let class = notification_class;
                 match Self::device_route(ctx, recipient, *identifier, class).await {
                     Some(resolution) => RecipientRoute::from_device_resolution(resolution),
                     None => return None,
@@ -106,7 +120,61 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // A recipient on this network by number is sent to as a local one
         // (#1299).
         .localize(local_network, is_link_broadcast, is_group);
-        Self::send_on_route(ctx, outbound, route, process_id, confirmed).await
+        Some(route)
+    }
+
+    /// The freshness of `recipient`'s binding now, when it still routes as
+    /// `route`, the route its confirmed notification waited for an invoke ID
+    /// on; `None` when the binding lapsed, moved or went meanwhile (#2569).
+    /// Reads the table only: no Who-Is.
+    async fn rebound(
+        ctx: &EventDelivery<'_, T>,
+        recipient: &BACnetRecipient,
+        route: &RecipientRoute,
+    ) -> Option<BindingFreshness> {
+        let BACnetRecipient::Device(device) = recipient else {
+            return None;
+        };
+        let network = ctx.network;
+        let is_link_broadcast = |mac: &[u8]| network.transport().is_broadcast_mac(mac);
+        let is_group = |mac: &[u8]| network.transport().is_group_destination(mac);
+        let now = runtime_clock::now();
+        let resolution = ctx
+            .device_bindings
+            .read()
+            .await
+            .resolve_at(device, now, is_group);
+        let local_network = network.local_network_number().get();
+        RecipientRoute::from_device_resolution(resolution)
+            .localize(local_network, is_link_broadcast, is_group)
+            .rebound_freshness(route)
+    }
+
+    /// Send `outbound` again to `recipient`, a Device recipient whose binding
+    /// lapsed or moved while its confirmed notification waited for an invoke
+    /// ID, the ID given back (#2569): its device is looked for as at a first
+    /// send, a Who-Is when the table holds no fresh binding, and the route
+    /// found goes through every check again, so a new address is checked
+    /// for a broadcast form (#2732). Once only: should it wait for an ID
+    /// again, it goes on the route it waited on. The forwarding cap a
+    /// forwarded copy drew on is not drawn on again.
+    fn send_rebound<'a>(
+        ctx: EventDelivery<'a, T>,
+        outbound: &'a OutboundNotification<'a>,
+        recipient: &'a BACnetRecipient,
+        process_id: u32,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Option<oneshot::Receiver<()>>> + Send + 'a>> {
+        Box::pin(async move {
+            let again = OutboundNotification {
+                notification_class: outbound.notification_class,
+                priority: outbound.priority,
+                encode_for: outbound.encode_for,
+                admits: Arc::clone(&outbound.admits),
+                budget: None,
+            };
+            let route = Self::recipient_route(&ctx, recipient, again.notification_class).await?;
+            Self::send_on_route(&ctx, &again, route, process_id, true, None).await
+        })
     }
 
     /// The binding to send to `device`, the Device recipient whose lane is
@@ -174,13 +242,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// resolved and localized route, confirmed or not as it asks: the second
     /// half of [`Self::send_to_recipient`]. For a confirmed one whose worker
     /// started, a receiver that resolves once its first attempt is handed to
-    /// the network.
+    /// the network. `rebind` is the Device recipient whose binding is read
+    /// again should a confirmed one wait for an invoke ID (#2569).
     async fn send_on_route(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
         route: RecipientRoute,
         process_id: u32,
         confirmed: bool,
+        rebind: Option<&BACnetRecipient>,
     ) -> Option<oneshot::Receiver<()>> {
         let &EventDelivery {
             db: _,
@@ -308,13 +378,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         {
             // With every invoke ID leased, the notification waits here for
             // one, counted once, so its lane holds and the destination's
-            // later entries stay behind it (#2537).
+            // later entries stay behind it (#2537), and behind the other
+            // destinations' notifications that waited first (#2563).
             // Should DCC restrict initiation meanwhile, the first attempt
             // withdraws it, uncounted.
+            let mut waited = false;
             let reservation = notification_transactions.reserve_waiting(
                 canonical_peer,
                 ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
                 || {
+                    waited = true;
                     suppressions.record(EventSuppression::ConfirmedWaitedForInvokeId);
                     debug!("Every invoke ID is leased; the EventNotification waits for one");
                 },
@@ -338,6 +411,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     );
                     return None;
                 }
+            };
+            // A Device binding may have lapsed or moved during the wait: the
+            // notification goes on the binding as it is now, its current
+            // lifetime checked from here on, or is looked for again (#2569).
+            let freshness = match rebind.filter(|_| waited) {
+                Some(recipient) => match Box::pin(Self::rebound(ctx, recipient, &route)).await {
+                    Some(now) => Some(now),
+                    None => {
+                        drop((operation, result_rx));
+                        if let BACnetRecipient::Device(device) = recipient {
+                            debug!(
+                                %device,
+                                "The Device recipient's binding lapsed or moved while its \
+                                 EventNotification waited for an invoke ID; looking again"
+                            );
+                        }
+                        return Self::send_rebound(*ctx, outbound, recipient, process_id).await;
+                    }
+                },
+                None => freshness,
             };
             let id = operation.invoke_id();
 
@@ -478,11 +571,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         invoke_id = id,
                         "EventNotification withdrawn: DCC restricts initiation"
                     ),
-                    // The device's observed binding ran out before an
-                    // attempt (a retry, or a first one that waited for its
-                    // invoke ID): the server no longer holds an address for
-                    // it, as when the first send finds none, so it counts
-                    // where that skip does.
+                    // The device's observed binding ran out before a retry
+                    // (a first attempt that waited for its invoke ID read
+                    // the binding again, #2569): the server no longer holds
+                    // an address for it, as when the first send finds none,
+                    // so it counts where that skip does.
                     Err(Withdrawal::BindingLapsed) => {
                         suppressions.record(EventSuppression::DeviceRecipientUnbound);
                         warn!(
