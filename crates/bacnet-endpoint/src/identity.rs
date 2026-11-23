@@ -44,7 +44,10 @@ pub fn client_config(identity: &DeviceIdentity) -> bacnet_client::client::Client
     config
 }
 
-/// Apply receive capacity without changing client timers or retry policy.
+/// Apply the Device's receive capacity and segmentation without changing
+/// the client's APDU timeout or retries. The client then does what the
+/// Device's segmentation says, as an endpoint session's client does
+/// (#2617): see [`EndpointSession::client`](crate::session::EndpointSession::client).
 pub fn apply_to_client_config(
     identity: &DeviceIdentity,
     config: &mut bacnet_client::client::ClientConfig,
@@ -52,7 +55,44 @@ pub fn apply_to_client_config(
     config.max_apdu_length =
         bacnet_encoding::apdu::max_apdu_header_at_or_below(u32::from(identity.max_apdu_length()))
             .expect("validated identity exceeds the minimum message size");
+    apply_segmentation(identity, config);
 }
+
+/// Have a client do what the Device's segmentation says (#2617):
+///
+/// - it accepts segmented answers, and states more than 64 segments in its
+///   requests (the Device's Max_Segments_Accepted of 65, Clause 12.11.20),
+///   only when the Device receives segments (SEGMENTED_RECEIVE or
+///   SEGMENTED_BOTH);
+/// - it sends a request too long for one APDU as segments only when the
+///   Device transmits them (SEGMENTED_TRANSMIT or SEGMENTED_BOTH); otherwise
+///   such a request fails before anything is sent;
+/// - its segment timeout is the Device's APDU_Segment_Timeout when the
+///   Device segments at all, and its APDU timeout otherwise.
+pub(crate) fn apply_segmentation(
+    identity: &DeviceIdentity,
+    config: &mut bacnet_client::client::ClientConfig,
+) {
+    use bacnet_types::enums::Segmentation;
+    let mode = identity.segmentation();
+    let receives = matches!(
+        mode,
+        Segmentation::SEGMENTED_BOTH | Segmentation::SEGMENTED_RECEIVE
+    );
+    config.segmented_response_accepted = receives;
+    config.max_segments = receives.then_some(MORE_THAN_64_SEGMENTS);
+    config.segmented_requests = matches!(
+        mode,
+        Segmentation::SEGMENTED_BOTH | Segmentation::SEGMENTED_TRANSMIT
+    );
+    config.apdu_segment_timeout_ms =
+        (mode != Segmentation::NO_SEGMENTATION).then(|| identity.apdu_segment_timeout_ms());
+}
+
+/// The client's max-segments setting that states "more than 64" in a
+/// request header (B'111', Clause 20.1.2.4), the Device's
+/// Max_Segments_Accepted of 65 for a device that receives segments.
+const MORE_THAN_64_SEGMENTS: u8 = 65;
 
 /// Full-server settings using the same Device declarations.
 pub fn server_config(identity: &DeviceIdentity) -> bacnet_server::server::ServerConfig {

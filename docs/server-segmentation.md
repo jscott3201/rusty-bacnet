@@ -1,9 +1,11 @@
 # Full-server segmentation timing
 
 `DeviceIdentity::with_apdu_segment_timeout_ms(...)` supplies one segment timeout
-(Tseg) in milliseconds. Its default is 5000. The generic, B/IP and SC builders
-accept that identity through `.device(...)`. A full server uses Tseg when waiting for a
-response SegmentACK and uses `4 * Tseg` for incoming request inactivity.
+(Tseg) in milliseconds. Its default is 5000. `DeviceIdentity::new` segments
+both ways by default (#2617); `with_segmentation(...)` picks another mode. The
+generic, B/IP and SC builders accept that identity through `.device(...)`. A
+full server uses Tseg when waiting for a response SegmentACK and uses
+`4 * Tseg` for incoming request inactivity.
 `APDU_Timeout` and retry counts keep their separate meanings.
 
 A selected Device must declare the same `Segmentation_Supported` as the server.
@@ -46,11 +48,13 @@ segment zero can start a fresh transfer. The existing 128 global / 16 per-peer
 slots, 4 MiB saved-payload budget and 256-segment limit remain in force.
 
 `DeviceIdentity` is shared by full servers and endpoints, with a 5000 ms
-segment timeout. `with_apdu_segment_timeout_ms(...)` changes both.
-The narrow `EndpointSession` roles require `NO_SEGMENTATION` in both an explicit identity
-and the selected Device database, and reject unsupported declarations before
-ingress. Client timers remain caller-owned; this does not change their coupling
-or add segmentation to endpoint roles.
+segment timeout. `with_apdu_segment_timeout_ms(...)` changes both. An
+`EndpointSession` takes any of the four modes (#2617): its full server follows
+the table above, and its client follows the same identity, accepting segmented
+answers only when the Device receives segments, sending segmented requests only
+when it transmits them, and taking the identity's Tseg as its segment timeout.
+A selected Device database must state the identity's mode. The client's APDU
+timeout and retries stay the session's.
 
 The Python full server accepts keyword-only `segmentation_supported` (default
 `Segmentation.NO_SEGMENTATION`) and `apdu_segment_timeout_ms` (default 5000). It constructs

@@ -41,12 +41,14 @@ const DEVICE_INSTANCE: u32 = 2175;
 /// One object per catalogue type. A type added to the catalogue changes it.
 const CATALOGUE_TYPES: usize = 64;
 /// Values an RPM ALL reads over the catalogue: every row but Property_List.
-/// A row added or dropped changes it.
-const VALUES_READ: usize = 1142;
+/// A row added or dropped changes it: the Device segmenting by default
+/// added two (#2617).
+const VALUES_READ: usize = 1144;
 /// Rows a write over the wire is refused for access: the rows without a
 /// write route and the Out_Of_Service rows, the arrays that read empty
-/// included (#2305).
-const REFUSED_ROWS: usize = 690;
+/// included (#2305). The Device segmenting by default added its
+/// APDU_Segment_Timeout and Max_Segments_Accepted (#2617).
+const REFUSED_ROWS: usize = 692;
 /// Types the built-in table creates. A table entry changes it.
 const CREATED_TYPES: usize = 27;
 /// Types DeleteObject removes: all but Device and Network Port.

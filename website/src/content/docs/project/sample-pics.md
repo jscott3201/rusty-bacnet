@@ -333,6 +333,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 | Property | Access |
 |----------|--------|
+| APDU_SEGMENT_TIMEOUT | R |
 | APDU_TIMEOUT | R |
 | APPLICATION_SOFTWARE_VERSION | R |
 | DAYLIGHT_SAVINGS_STATUS | RO |
@@ -359,6 +360,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | PROTOCOL_REVISION | R |
 | ACTIVE_COV_SUBSCRIPTIONS | RO |
 | DATABASE_REVISION | R |
+| MAX_SEGMENTS_ACCEPTED | R |
 | LAST_RESTART_REASON | RO |
 | PROPERTY_LIST | R |
 | ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS | RO |

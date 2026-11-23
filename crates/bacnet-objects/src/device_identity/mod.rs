@@ -48,9 +48,13 @@ pub struct DeviceIdentity {
 impl DeviceIdentity {
     /// Creates an identity with endpoint-composed defaults.
     ///
-    /// Defaults: `max_apdu = 1476`, `segmentation = NO_SEGMENTATION`,
-    /// `services = [READ_PROPERTY]`, no ports, zero UUID (B/IP-only may keep zeros; SC dial requires
-    /// [`with_device_uuid`](Self::with_device_uuid)). Returns
+    /// Defaults: `max_apdu = 1476`, `segmentation = SEGMENTED_BOTH` with a
+    /// 5000 ms segment timeout (#2617), `services = [READ_PROPERTY]`, no
+    /// ports, zero UUID (B/IP-only may keep zeros; SC dial requires
+    /// [`with_device_uuid`](Self::with_device_uuid)). A device that segments
+    /// neither way, such as one answered by `bacnet-device-core`'s
+    /// `Responder`, says so with
+    /// [`with_segmentation`](Self::with_segmentation). Returns
     /// [`Error::Range`] for an instance past 4194303, or for 4194303 itself,
     /// which no object may have (Clause 12.1.1, #2171).
     pub fn new(instance: u32, vendor_id: u16) -> Result<Self, Error> {
@@ -59,7 +63,7 @@ impl DeviceIdentity {
             instance,
             vendor_id,
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NO_SEGMENTATION,
+            segmentation_supported: Segmentation::SEGMENTED_BOTH,
             apdu_segment_timeout_ms: 5000,
             services: vec![ServiceSupported::READ_PROPERTY],
             network_ports: Vec::new(),
@@ -83,18 +87,20 @@ impl DeviceIdentity {
         Ok(self)
     }
 
-    /// Overrides segmentation support for a matching full server.
-    ///
-    /// An EndpointSession still requires NO_SEGMENTATION and refuses any
-    /// other identity before its link starts. A full server uses this
-    /// declaration with the segment timeout supplied by this identity.
+    /// Overrides segmentation support (default SEGMENTED_BOTH): the
+    /// Device's Segmentation_Supported and the I-Am's. A full server, and
+    /// both roles of an endpoint session, do what it says, with this
+    /// identity's segment timeout. NO_SEGMENTATION suits a constrained link
+    /// or a device core that can't segment.
     pub fn with_segmentation(mut self, segmentation: Segmentation) -> Self {
         self.segmentation_supported = segmentation;
         self
     }
 
-    /// Sets the Device and full-server segment timeout. EndpointSession roles
-    /// require segmentation NO_SEGMENTATION; client timers remain caller-owned.
+    /// Sets the segment timeout (default 5000 ms): the Device's
+    /// APDU_Segment_Timeout, which a full server and an endpoint session's
+    /// client use while they segment. Its APDU timeout and retries stay the
+    /// caller's.
     pub fn with_apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.apdu_segment_timeout_ms = timeout_ms;
         self
