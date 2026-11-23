@@ -44,7 +44,8 @@ impl BACnetClient {
         sc_control_rate_limit=None,
         router=None,
         write_policy=None,
-        resolve_scope=None
+        resolve_scope=None,
+        accept_complex_ack_for_simple_services=false
     ))]
     fn new(
         py: Python<'_>,
@@ -88,6 +89,7 @@ impl BACnetClient {
         router: Option<PyRef<'_, crate::router::PyBACnetRouter>>,
         write_policy: Option<PyRef<'_, crate::high_level::PyWritePolicy>>,
         resolve_scope: Option<Bound<'_, PyAny>>,
+        accept_complex_ack_for_simple_services: bool,
     ) -> PyResult<Self> {
         let resolve_scope =
             crate::high_level::resolve_scope_arg(resolve_scope.as_ref(), transport)?;
@@ -195,6 +197,7 @@ impl BACnetClient {
             min_request_interval_ms,
             write_policy: write_policy.map_or_else(Default::default, |policy| policy.0),
             resolve_scope,
+            accept_complex_ack_for_simple_services,
         })
     }
 
@@ -237,6 +240,7 @@ impl BACnetClient {
         let ipv6_device_instance = slf.borrow().ipv6_device_instance;
         let mstp = slf.borrow().mstp.clone();
         let min_request_interval_ms = slf.borrow().min_request_interval_ms;
+        let accept_complex_ack = slf.borrow().accept_complex_ack_for_simple_services;
         let router = slf.borrow().router.clone();
         let write_policy = slf.borrow().write_policy;
         let resolve_scope = slf.borrow().resolve_scope;
@@ -259,6 +263,7 @@ impl BACnetClient {
                             .multicast(multicast)
                             .apdu_timeout_ms(timeout_ms)
                             .min_request_interval_ms(min_request_interval_ms)
+                            .accept_complex_ack_for_simple_services(accept_complex_ack)
                             .build_into(),
                     )
                     .await
@@ -273,7 +278,8 @@ impl BACnetClient {
                         .port(port)
                         .share_wildcard_port(share_wildcard_port)
                         .apdu_timeout_ms(timeout_ms)
-                        .min_request_interval_ms(min_request_interval_ms);
+                        .min_request_interval_ms(min_request_interval_ms)
+                        .accept_complex_ack_for_simple_services(accept_complex_ack);
                     if let Some(instance) = ipv6_device_instance {
                         builder = builder.device_instance(instance);
                     }
@@ -310,7 +316,8 @@ impl BACnetClient {
                         .npdu_per_origin_limit(sc_npdu_admission_policy.per_origin_limit)
                         .control_rate_limit(sc_npdu_admission_policy.control_rate)
                         .apdu_timeout_ms(timeout_ms)
-                        .min_request_interval_ms(min_request_interval_ms);
+                        .min_request_interval_ms(min_request_interval_ms)
+                        .accept_complex_ack_for_simple_services(accept_complex_ack);
                     if let Some(ms) = sc_heartbeat_interval_ms {
                         builder = builder.heartbeat_interval_ms(ms);
                     }
@@ -342,6 +349,7 @@ impl BACnetClient {
                             .transport(AppTransport::from(transport))
                             .apdu_timeout_ms(timeout_ms)
                             .min_request_interval_ms(min_request_interval_ms)
+                            .accept_complex_ack_for_simple_services(accept_complex_ack)
                             .build(),
                     )
                     .await
@@ -361,6 +369,7 @@ impl BACnetClient {
                             .transport(AppTransport::Router(port))
                             .apdu_timeout_ms(timeout_ms)
                             .min_request_interval_ms(min_request_interval_ms)
+                            .accept_complex_ack_for_simple_services(accept_complex_ack)
                             .build(),
                     )
                     .await

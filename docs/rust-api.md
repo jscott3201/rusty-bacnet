@@ -393,6 +393,19 @@ the network: a timeout, which `bacnet_ops::raw::timed_out` and the bindings
 treat as the TSM_TIMEOUT abort it stands for, whose text adds the router and
 the network ("BACnet abort: tsm-timeout; on the way, Reject-Message-To-Network
 from router mstp:2: busy for network 7 (router-busy, reason 2)").
+`Error::UnexpectedAck { service, complex }` is a device's acknowledgement of
+the other kind than the service takes (#2721): a Complex-ACK for a service
+acknowledged with a Simple-ACK (`complex` true, such as WriteProperty), or a
+Simple-ACK where a Complex-ACK carries the result (ReadProperty). The
+transaction ends there, nothing more is sent, and whether the device carried
+the request out is unknown. ConfirmedPrivateTransfer takes either at the
+transaction (vendor devices answer it both ways); its typed call reports a
+Simple-ACK, which carries none of the acknowledgement's numbers, as this
+error. For a device found in the field that acknowledges writes with a
+Complex-ACK, `ClientConfig::accept_complex_ack_for_simple_services` (each
+builder's `accept_complex_ack_for_simple_services(true)`, and
+`SessionConfig`'s field of that name for an endpoint's client) takes such an
+acknowledgement as success; a Simple-ACK where data is due stays an error.
 `Error::RoutedPathCapacityExceeded { capacity }` reports that all bounded path
 state is protected by a held/waiting gate or configured/learned evidence, so a
 new path was rejected before transaction registration or frame emission.

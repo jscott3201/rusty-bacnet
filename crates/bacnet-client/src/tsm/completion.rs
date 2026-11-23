@@ -138,7 +138,11 @@ impl Tsm {
         // form than its service takes still ends the transaction, as any
         // final acknowledgement does, but fails the request (#2721).
         let mut response = response;
-        if let Some(complex) = super::ack_form::wrong_kind(expected, &response) {
+        if let Some(complex) = super::ack_form::wrong_kind(
+            expected,
+            &response,
+            self.config.accept_complex_ack_for_simple_services,
+        ) {
             response = TsmResponse::UnexpectedAck {
                 service: expected,
                 complex,

@@ -573,7 +573,7 @@ ask only the instances between them: give both or neither.
 | `BacnetProtocolError`, `BacnetRejectError`, `BacnetAbortError` | The device's own Error, Reject or Abort |
 | `BacnetTimeoutError` | No answer. A write may or may not have been applied. `busy_router` and `busy_network` name a router that said it was busy for the network first, else `None` (#2724) |
 | `BacnetNetworkRejectError` | A router on the way refused the request (#2724); `reached_device` is `False` when it never reached the device, `None` when an earlier attempt may have |
-| `BacnetError` | Among others, an acknowledgement of the wrong kind for the service: a write may or may not have been applied (#2721) |
+| `BacnetError` | Among others, an acknowledgement of the wrong kind for the service: a write may or may not have been applied (#2721). For a device in the field that acknowledges writes with a Complex-ACK, `BACnetClient(..., accept_complex_ack_for_simple_services=True)` takes that as success |
 | `BacnetTransportError` | The link failed |
 | `BacnetReadBackError`, `BacnetNoPriorityArrayError` | A relinquish the device acknowledged whose read back failed, or found no Priority_Array |
 | `BacnetPagingError` | A device broke a paged read's rules. No call pages yet |

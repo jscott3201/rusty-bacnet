@@ -6,8 +6,26 @@
 //! service 135-2020 defines is acknowledged with a Simple-ACK. The state
 //! machine ends the transaction on either (Clause 5.4.4.3); the wrong one
 //! for the service fails the request instead of completing it as a
-//! success. A removed service (13, 24, 25) and a number the standard
-//! doesn't assign take either, as before.
+//! success. Some take either:
+//!
+//! - ConfirmedPrivateTransfer (18): vendor devices answer it both ways, so
+//!   the raw request takes either, as it always did; the typed call, which
+//!   needs the acknowledgement's vendor and service numbers, reports a
+//!   Simple-ACK itself. Every other Complex-ACK production has members the
+//!   standard requires, so no other service has an answer that may be
+//!   left out.
+//! - A removed service (13, 24, 25) and a number the standard doesn't
+//!   assign.
+//!
+//! A client with
+//! [`ClientConfig::accept_complex_ack_for_simple_services`](crate::client::ClientConfig::accept_complex_ack_for_simple_services)
+//! takes a Complex-ACK for a Simple-ACK service too, for a device in the
+//! field that answers so; a Simple-ACK where data is due stays an error.
+//!
+//! A segmented Complex-ACK of the wrong kind is caught once it is
+//! reassembled, when it completes the transaction: no service acknowledged
+//! with a Simple-ACK has a result to segment, so a device sending one is
+//! rare enough that its segments are acknowledged first.
 
 use bacnet_types::enums::ConfirmedServiceChoice;
 
@@ -28,7 +46,6 @@ const COMPLEX: u64 = bit(ConfirmedServiceChoice::GET_ALARM_SUMMARY)
     | bit(ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE)
     | bit(ConfirmedServiceChoice::READ_RANGE)
     | bit(ConfirmedServiceChoice::AUDIT_LOG_QUERY)
-    | bit(ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER)
     | bit(ConfirmedServiceChoice::VT_OPEN)
     | bit(ConfirmedServiceChoice::VT_DATA);
 
@@ -60,13 +77,18 @@ const fn listed(set: u64, service: ConfirmedServiceChoice) -> bool {
 
 /// The acknowledgement `response` would complete a request for `service`
 /// with is the wrong kind for it: `Some(true)` for a Complex-ACK the
-/// service doesn't take, `Some(false)` for a Simple-ACK. `None` for the
-/// right kind, any other response, and a service that takes either.
+/// service doesn't take (unless `accept_complex` lets it), `Some(false)`
+/// for a Simple-ACK. `None` for the right kind, any other response, and a
+/// service that takes either.
 #[inline]
-pub(super) fn wrong_kind(service: ConfirmedServiceChoice, response: &TsmResponse) -> Option<bool> {
+pub(super) fn wrong_kind(
+    service: ConfirmedServiceChoice,
+    response: &TsmResponse,
+    accept_complex: bool,
+) -> Option<bool> {
     match response {
         TsmResponse::SimpleAck if listed(COMPLEX, service) => Some(false),
-        TsmResponse::ComplexAck { .. } if listed(SIMPLE, service) => Some(true),
+        TsmResponse::ComplexAck { .. } if !accept_complex && listed(SIMPLE, service) => Some(true),
         _ => None,
     }
 }
@@ -84,14 +106,14 @@ mod tests {
             let service = ConfirmedServiceChoice::from_raw(raw);
             let complex = listed(COMPLEX, service);
             let simple = listed(SIMPLE, service);
-            let removed = matches!(raw, 13 | 24 | 25);
+            let either = matches!(raw, 13 | 18 | 24 | 25);
             assert_eq!(
                 complex || simple,
-                service.name().is_some() && !removed,
+                service.name().is_some() && !either,
                 "service {raw}"
             );
         }
-        assert_eq!(COMPLEX.count_ones(), 13);
+        assert_eq!(COMPLEX.count_ones(), 12);
         assert_eq!(SIMPLE.count_ones(), 18);
     }
 }

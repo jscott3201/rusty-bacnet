@@ -318,6 +318,9 @@ pub struct BACnetClient {
     /// (#2561): `None` is this network alone, and on a router's
     /// application, which has no network of its own, nowhere.
     resolve_scope: Option<bacnet_ops::ResolveScope>,
+    /// Whether a Complex-ACK completes a write-like request as a success,
+    /// for a device in the field that answers so (#2721).
+    accept_complex_ack_for_simple_services: bool,
 }
 
 mod client_methods {

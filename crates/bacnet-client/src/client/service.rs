@@ -217,12 +217,30 @@ macro_rules! acked {
     )*};
 }
 
+/// ConfirmedPrivateTransfer, whose raw request takes either acknowledgement
+/// (#2721): its typed answer needs the ACK's vendor and service numbers, so
+/// a Simple-ACK, which carries none, is the device's wrong kind.
+impl Confirmed for &PrivateTransferRequest {
+    type Answer = PrivateTransferAck;
+    fn choice(&self) -> ConfirmedServiceChoice {
+        ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER
+    }
+    fn encode_into(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.encode(buf);
+        Ok(())
+    }
+    fn answer(self, data: Bytes) -> Result<PrivateTransferAck, Error> {
+        if data.is_empty() {
+            return Err(Error::UnexpectedAck {
+                service: ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER,
+                complex: false,
+            });
+        }
+        PrivateTransferAck::decode(&data)
+    }
+}
+
 acked! {
-    &PrivateTransferRequest => ConfirmedServiceChoice::CONFIRMED_PRIVATE_TRANSFER,
-        PrivateTransferAck, |r, buf| {
-            r.encode(buf);
-            Ok(())
-        };
     &VTOpenRequest => ConfirmedServiceChoice::VT_OPEN, VTOpenAck, |r, buf| {
         r.encode(buf);
         Ok(())

@@ -74,5 +74,31 @@ class AckKindTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("with a Simple-ACK", str(error))
 
 
+class LegacyAckTests(unittest.IsolatedAsyncioTestCase):
+    """``accept_complex_ack_for_simple_services=True``, for a device in the
+    field that acknowledges writes with a Complex-ACK: the write succeeds;
+    a Simple-ACK to a read is still an error."""
+
+    async def asyncSetUp(self):
+        self.client = rb.BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000,
+                                      accept_complex_ack_for_simple_services=True)
+        await self.client.__aenter__()
+        self.addAsyncCleanup(self.stop)
+
+    async def stop(self):
+        await asyncio.wait_for(self.client.stop(), 10)
+
+    async def test_the_write_succeeds_and_the_read_still_fails(self):
+        writes = RawPeer(answering("complex"))
+        self.addCleanup(writes.close)
+        await asyncio.wait_for(
+            self.client.write_property(writes.address, AI_0, PV, rb.PropertyValue.real(1.5)), 10)
+        reads = RawPeer(answering("simple"))
+        self.addCleanup(reads.close)
+        with self.assertRaises(rb.BacnetError) as caught:
+            await asyncio.wait_for(self.client.read_property(reads.address, AI_0, PV), 10)
+        self.assertIn("read-property with a Simple-ACK", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

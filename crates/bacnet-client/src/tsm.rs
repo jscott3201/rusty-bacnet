@@ -39,6 +39,9 @@ pub struct TsmConfig {
     pub apdu_segment_timeout_ms: u64,
     /// Number of APDU retries (default 3).
     pub apdu_retries: u8,
+    /// See [`ClientConfig::accept_complex_ack_for_simple_services`](crate::client::ClientConfig::accept_complex_ack_for_simple_services)
+    /// (default `false`).
+    pub accept_complex_ack_for_simple_services: bool,
 }
 
 impl Default for TsmConfig {
@@ -47,6 +50,7 @@ impl Default for TsmConfig {
             apdu_timeout_ms: 6000,
             apdu_segment_timeout_ms: 6000,
             apdu_retries: 3,
+            accept_complex_ack_for_simple_services: false,
         }
     }
 }
@@ -845,3 +849,6 @@ impl Tsm {
 mod coordinated_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "tsm/timer_tests.rs"]
+mod timer_tests;

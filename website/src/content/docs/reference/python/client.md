@@ -132,6 +132,7 @@ def __init__(
     router: Optional[BACnetRouter] = None,
     write_policy: Optional[WritePolicy] = None,
     resolve_scope: Literal["local", "global"] | int | None = None,
+    accept_complex_ack_for_simple_services: bool = False,
 ) -> None
 ```
 
@@ -152,6 +153,15 @@ no network of its own, `"local"` raises ValueError and None asks
 nowhere: a bare instance the client hasn't heard from raises
 `BacnetLookupError`. Another name or number raises ValueError,
 another type TypeError.
+
+`accept_complex_ack_for_simple_services` (default False): a device
+that acknowledges a request whose service takes a Simple-ACK, such
+as `write_property`, with a Complex-ACK fails the request with
+`BacnetError` (#2721), since whether it carried the request out is
+unknown. Set it True only for a device found in the field that
+answers so, whose Complex-ACK this client then takes as the success
+it means. A Simple-ACK where an answer must carry data, such as a
+`read_property`'s, stays an error either way.
 
 `transport="router"` with `router` (a `BACnetRouter` built
 with `application="client"` or `"client_and_server"`): run the
