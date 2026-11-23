@@ -29,7 +29,7 @@ Examples use `ai:1` for analog input 1, `av:1` for analog value 1, and `pv` for 
 
 Do not use an object-name string where an object identifier is required. Do not assume a BACnet device instance is an IP address or that a discovered downstream device can be addressed by a router's IP alone.
 
-A new one-shot process has its own lifecycle and keeps no discovered devices, so give it an address, a `bip6:` or `mstp:` target, or a routed `DNET:instance` or `DNET:0xMAC` target. For a routed target the CLI asks that network for the device with a Who-Is and sends the request through the router that answers. `read`, `readm`, `read-range`, `alarms`, `alarm-summary`, `enrollment-summary`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`, `create-object`, `delete-object` and `ack-alarm` take routed targets; the BBMD commands `bdt`, `fdt`, `register` and `unregister` address local B/IP peers and refuse them.
+A new one-shot process has its own lifecycle and keeps no discovered devices, so give it an address, a `bip6:` or `mstp:` target, or a routed `DNET:instance` or `DNET:0xMAC` target (`DNET:0xMAC:one-station` for a MAC that looks like a broadcast but is one station). For a routed target the CLI asks that network for the device with a Who-Is and sends the request through the router that answers. `read`, `readm`, `read-range`, `alarms`, `alarm-summary`, `enrollment-summary`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`, `create-object`, `delete-object` and `ack-alarm` take routed targets; the BBMD commands `bdt`, `fdt`, `register` and `unregister` address local B/IP peers and refuse them.
 
 ## Session behavior
 

@@ -38,6 +38,11 @@ pub enum Target {
         dnet: u16,
         /// The station's MAC on that network.
         mac: Vec<u8>,
+        /// The target ends in [`ONE_STATION_SUFFIX`]: the operator says the
+        /// MAC is one station, though its form is a broadcast or group
+        /// address on some links (#2738). Only ever set for a form the
+        /// mark lifts ([`check_one_station`]).
+        one_station: bool,
     },
 }
 
@@ -55,7 +60,51 @@ pub fn ip_to_bip_mac(ip: Ipv4Addr, port: u16) -> Vec<u8> {
 /// The forms [`parse_target`] takes, for error messages.
 pub const TARGET_FORMS: &str = "IP[:port], a 6-octet MAC or SC VMAC \
      (02:00:00:00:00:01 or 020000000001), bip6:INSTANCE, bip6:0xVMAC, [IPv6][:port], \
-     mstp:STATION, device instance, dnet:instance or dnet:0xMAC";
+     mstp:STATION, device instance, dnet:instance, dnet:0xMAC or dnet:0xMAC:one-station";
+
+/// The third field of a routed station, `5:0xFF:one-station`: the operator
+/// says the MAC is one station (#2738). The low-level client refuses a
+/// confirmed request to a MAC that is a broadcast or group address on some
+/// network, as the one octet `0xFF` is on MS/TP and a station on ARCNET;
+/// this says which it is, and the request goes. It is written exactly at
+/// the MACs the mark lifts, so each address has one spelling.
+pub const ONE_STATION_SUFFIX: &str = "one-station";
+
+/// Whether `mac`, a station's MAC on a remote network, is one the
+/// [`ONE_STATION_SUFFIX`] lifts (#2738): the one octet `0xFF`, and two
+/// octets starting `0x00` or `0xFF` but for `0x0000` and `0xFFFF`. The
+/// check the low-level client's unmarked refusal makes, read the other way.
+pub fn lifted_by_one_station(mac: &[u8]) -> bool {
+    bacnet_client::client::RemoteBroadcast::of(mac, false)
+        .is_some_and(bacnet_client::client::RemoteBroadcast::lifted_by_one_station)
+}
+
+/// Why `mac` takes no [`ONE_STATION_SUFFIX`], decoded; `Ok` where it
+/// does. The mark only lifts, so it is refused wherever it would lift
+/// nothing: that keeps the text form canonical.
+///
+/// # Errors
+///
+/// A MAC no form of which the client refuses (an ordinary station, or the
+/// one octet `0x00`), or a broadcast or group form no mark lifts (two
+/// octets `0x0000` and `0xFFFF`, three of `0xFF`, six beginning with four).
+pub fn check_one_station(mac: &[u8]) -> Result<(), String> {
+    use bacnet_client::client::RemoteBroadcast;
+    let hex = hex_upper(mac);
+    match RemoteBroadcast::of(mac, false) {
+        Some(form) if form.lifted_by_one_station() => Ok(()),
+        Some(form) => Err(format!(
+            "':{ONE_STATION_SUFFIX}' lifts nothing at MAC 0x{hex}: it is {form}, which no mark \
+             makes a station"
+        )),
+        None => Err(format!(
+            "':{ONE_STATION_SUFFIX}' lifts nothing at MAC 0x{hex}: it is an ordinary station \
+             without the suffix; write it only for the one octet 0xFF or two octets 0x0001 to \
+             0x00FF or 0xFF00 to 0xFFFE, which are otherwise refused as a broadcast or group \
+             address"
+        )),
+    }
+}
 
 /// The prefix of an MS/TP station's address, `mstp:5` or `mstp:0x05`.
 pub const MSTP_TEXT_PREFIX: &str = "mstp:";
@@ -83,6 +132,12 @@ fn parse_mstp_station(text: &str) -> Result<u8, String> {
 /// - `dnet:instance`: a routed device (e.g., `2:1234`)
 /// - `dnet:0xHEX`: a routed station by its MAC on that network (e.g.,
 ///   `2:0x05` for MS/TP station 5)
+/// - `dnet:0xHEX:one-station`: the same, for a MAC that is one station
+///   though it looks like a broadcast or group address (`5:0xFF`, ARCNET
+///   station 255; `9:0x0012`, a gateway's two-octet virtual station). Only
+///   the MACs the mark lifts take it ([`check_one_station`]), so each
+///   address has one spelling; a device instance (`5:1234:one-station`)
+///   takes none
 /// - `ip` or `ip:port`: a direct BIP MAC (e.g., `192.168.1.100` or
 ///   `192.168.1.100:47808`)
 /// - six hex octets, `02:00:00:00:00:01`, `02-00-00-00-00-01` or
@@ -115,8 +170,13 @@ pub fn parse_target(s: &str) -> Result<Target, String> {
 
     if let Some((left, right)) = s.split_once(':') {
         if let Ok(dnet) = left.parse::<u16>() {
+            // `dnet:0xMAC:one-station`: the third field is the mark.
+            let (body, mark) = match right.split_once(':') {
+                Some((body, mark)) => (body, Some(mark)),
+                None => (right, None),
+            };
             let routed =
-                right.parse::<u32>().is_ok() || right.starts_with("0x") || right.starts_with("0X");
+                body.parse::<u32>().is_ok() || body.starts_with("0x") || body.starts_with("0X");
             // 0 isn't a network number, and 65535 means every network.
             if routed && matches!(dnet, 0 | u16::MAX) {
                 return Err(format!(
@@ -124,14 +184,41 @@ pub fn parse_target(s: &str) -> Result<Target, String> {
                 ));
             }
             // dnet:instance: both parts numeric.
-            if let Ok(instance) = right.parse::<u32>() {
-                return Ok(Target::Routed { dnet, instance });
+            if let Ok(instance) = body.parse::<u32>() {
+                match mark {
+                    None => return Ok(Target::Routed { dnet, instance }),
+                    Some(ONE_STATION_SUFFIX) => {
+                        return Err(format!(
+                            "'{s}': ':{ONE_STATION_SUFFIX}' marks a station's MAC, not a device \
+                             instance; a device at such an address is named by its address, \
+                             {dnet}:0xMAC:{ONE_STATION_SUFFIX}"
+                        ));
+                    }
+                    Some(_) => {}
+                }
             }
-            if let Some(hex) = right.strip_prefix("0x").or(right.strip_prefix("0X")) {
+            if let Some(hex) = body.strip_prefix("0x").or(body.strip_prefix("0X")) {
                 let mac = parse_hex(hex).ok_or_else(|| {
                     format!("invalid MAC in routed target '{s}': expected 0x and hex octets")
                 })?;
-                return Ok(Target::RoutedMac { dnet, mac });
+                let one_station = match mark {
+                    None => false,
+                    Some(ONE_STATION_SUFFIX) => {
+                        check_one_station(&mac).map_err(|why| format!("'{s}': {why}"))?;
+                        true
+                    }
+                    Some(other) => {
+                        return Err(format!(
+                            "invalid suffix ':{other}' in routed target '{s}': the only one is \
+                             ':{ONE_STATION_SUFFIX}'"
+                        ));
+                    }
+                };
+                return Ok(Target::RoutedMac {
+                    dnet,
+                    mac,
+                    one_station,
+                });
             }
         }
         // If the left side is not a network number, it might be an IP:port.
@@ -417,11 +504,27 @@ impl AddressStyle {
 /// empty MAC names no station (it is a broadcast on that network), so it
 /// has no target form and gives `None`; the capture, which shows routed
 /// broadcasts, writes those itself.
+///
+/// This names the address and nothing about the one-station mark, which
+/// only an operator's say-so can give (#2738): a MAC a router passed on in
+/// a capture may be a broadcast. [`routed_target`] writes the mark.
 pub fn routed_station(network: u16, mac: &[u8]) -> Option<String> {
     if mac.is_empty() {
         return None;
     }
     Some(format!("{network}:0x{}", hex_upper(mac)))
+}
+
+/// A routed station as [`routed_station`] writes it, followed by
+/// `:one-station` ([`ONE_STATION_SUFFIX`]) when `one_station` says the
+/// address is marked, so [`parse_target`] reads it back as it was.
+pub fn routed_target(network: u16, mac: &[u8], one_station: bool) -> Option<String> {
+    let station = routed_station(network, mac)?;
+    Some(if one_station {
+        format!("{station}:{ONE_STATION_SUFFIX}")
+    } else {
+        station
+    })
 }
 
 /// Format a MAC address as a target the CLI reads back: a BIP MAC (6 bytes:

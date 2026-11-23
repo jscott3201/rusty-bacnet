@@ -87,11 +87,13 @@ fn routed_devices_show_their_station_as_a_target_that_reads_back() {
         [
             Ok(Target::RoutedMac {
                 dnet: 2,
-                mac: vec![0x7F, 0, 0, 1, 0xC3, 0x35]
+                mac: vec![0x7F, 0, 0, 1, 0xC3, 0x35],
+                one_station: false
             }),
             Ok(Target::RoutedMac {
                 dnet: 3,
-                mac: vec![5]
+                mac: vec![5],
+                one_station: false
             }),
         ]
     );

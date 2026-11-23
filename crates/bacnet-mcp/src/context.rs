@@ -281,7 +281,8 @@ impl Call {
 }
 
 /// A device argument: an instance, `dnet:instance`, or an address (`ip:port`,
-/// `dnet:0xMAC` and the target grammar's other station forms), as a string,
+/// `dnet:0xMAC`, `dnet:0xMAC:one-station` and the target grammar's other
+/// station forms), as a string,
 /// or an instance as a number.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
@@ -374,6 +375,11 @@ impl<T: TransportPort + 'static> Ctx<T> {
             error => ToolError::Failed(format!("{text}: {error}")),
         };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
+        // The handle an address made, when the call named an address: for
+        // a station at a MAC the one-station mark lifts, the row has no
+        // `DeviceAddress` of its own, so it is the only handle there is
+        // (#2738).
+        let mut named = None;
         let entry = match parsed {
             Target::Instance(instance) => match client.low_level().get_device(instance).await {
                 Ok(Some(entry)) => entry,
@@ -394,11 +400,13 @@ impl<T: TransportPort + 'static> Ctx<T> {
                 // there.
                 let handle = client.device(text.as_str()).await.map_err(failed)?;
                 let at = handle.address();
-                client
+                let row = client
                     .low_level()
                     .get_device_at(at.network(), at.mac())
                     .await
-                    .ok_or_else(unknown)?
+                    .ok_or_else(unknown)?;
+                named = Some(handle);
+                row
             }
             Target::Bip6(_) => {
                 return Err(ToolError::invalid(
@@ -407,7 +415,10 @@ impl<T: TransportPort + 'static> Ctx<T> {
                 ));
             }
         };
-        let handle = client.device(&entry).await.map_err(failed)?;
+        let handle = match named {
+            Some(handle) => handle,
+            None => client.device(&entry).await.map_err(failed)?,
+        };
         let address = handle.address();
         let device = Device {
             instance: entry.object_identifier.instance_number(),

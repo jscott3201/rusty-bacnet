@@ -253,7 +253,8 @@ Rules:
 4. **Targets are numeric.** A device is an instance, `dnet:instance` for
    the one claiming it on that network, or the address of a device in the
    discovery table (`ip:port`, `mstp:N`, `bip6:0xVMAC`, `dnet:0xMAC` behind
-   a router), in the shared target grammar (#2560). Devices are known, allowed
+   a router, `dnet:0xMAC:one-station` for a MAC that looks like a broadcast
+   but is one station), in the shared target grammar (#2560). Devices are known, allowed
    and cached by address, so two networks holding one instance are two
    devices, and an instance two addresses claim is refused, naming both. An
    object is `type:instance` (`ai:1`, `analog-output:3`). Write tools never

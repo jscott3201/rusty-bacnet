@@ -315,8 +315,12 @@ fn device(word: &str, command: &str, devices: &DeviceTable) -> Result<(u32, Opti
     match parse_target(word)? {
         Target::Instance(instance) => Ok((instance, None)),
         Target::Routed { dnet, instance } => Ok((instance, Some(dnet))),
-        Target::RoutedMac { dnet, mac } => {
-            let row = at_station(devices, word, dnet, &mac)?;
+        Target::RoutedMac {
+            dnet,
+            mac,
+            one_station,
+        } => {
+            let row = at_station(devices, word, (dnet, &mac, one_station))?;
             Ok((row.instance, Some(dnet)))
         }
         _ => Err(format!(
@@ -342,7 +346,11 @@ fn row<'a>(word: &str, command: &str, devices: &'a DeviceTable) -> Result<&'a De
             let here = claims.into_iter().filter(|row| row.network == Some(dnet));
             one_claim(word, here.collect()).ok_or_else(missing)?
         }
-        Target::RoutedMac { dnet, mac } => at_station(devices, word, dnet, &mac),
+        Target::RoutedMac {
+            dnet,
+            mac,
+            one_station,
+        } => at_station(devices, word, (dnet, &mac, one_station)),
         Target::Mac(mac) => {
             let at = DeviceAddress::local(&mac).map_err(|why| format!("'{word}': {why}"))?;
             devices.at(&at).ok_or_else(missing)
@@ -375,12 +383,24 @@ fn one_claim<'a>(word: &str, claims: Vec<&'a DeviceRow>) -> Option<Result<&'a De
 
 /// The device the table lists at station `mac` on network `dnet` (#1914):
 /// the table holds one row per address (#2560).
+///
+/// `station` is its network, its MAC and whether the target marked it one
+/// station (`dnet:0xMAC:one-station`, #2738). The table keys a row by the
+/// address its I-Am gave, which is never marked (an I-Am can't say what a
+/// router's network is), so no row is at a marked address: the refusal says
+/// where such a device is reached instead.
 fn at_station<'a>(
     devices: &'a DeviceTable,
     word: &str,
-    dnet: u16,
-    mac: &[u8],
+    station: (u16, &[u8], bool),
 ) -> Result<&'a DeviceRow, String> {
+    let (dnet, mac, one_station) = station;
+    if one_station {
+        return Err(format!(
+            "'{word}': the device table lists no device at a one-station address (an I-Am \
+             can't mark its own); a one-shot command or an MCP tool reaches it by this address"
+        ));
+    }
     DeviceAddress::new(dnet, mac)
         .ok()
         .and_then(|at| devices.at(&at))

@@ -159,6 +159,7 @@ Commands that take a `<target>` argument accept several formats:
 | Device instance | `1234` | Looks up address from discovered device cache |
 | DNET:instance | `2:1234` | Routed device (network:instance) |
 | DNET:0xMAC | `2:0x05` | Routed station by its MAC on that network (MS/TP station 5 here) |
+| DNET:0xMAC:one-station | `5:0xFF:one-station`, `9:0x0012:one-station` | Routed station whose MAC looks like a broadcast or group address but is one station (below) |
 
 When using a device instance number, the device must have been previously found via `discover` in the same process. A one-shot command starts with an empty device table, so give it an address, a `bip6:` or `mstp:` target, or a routed `DNET:instance` target, which it looks up itself.
 
@@ -170,9 +171,19 @@ yet, `DNET:instance` sends a Who-Is for that instance on the named network.
 `DNET:0xMAC` directs its Who-Is to the named station. A MAC that is a
 broadcast or group form on its network (`2:0xFF`, two octets starting `0x00`
 or `0xFF`, `0xFFFFFF`, six octets starting `FF:FF:FF:FF`) is refused as no
-station. Rust and Python reach an ARCNET station 255 or a gateway's two-octet
-virtual station by marking its address one station (#2738); the target
-grammar has no form for that mark yet. The CLI waits up to
+station. A station that really is at such a MAC, an ARCNET station 255
+(`5:0xFF`) or a gateway's two-octet virtual station (`9:0x0012`), is written
+with a third field, `5:0xFF:one-station` or `9:0x0012:one-station` (#2738):
+you say the address is one station, and the request goes there. The suffix is
+for exactly the MACs it lifts, the one octet `0xFF` and two octets from
+`0x0001` to `0x00FF` or `0xFF00` to `0xFFFE`, and the CLI refuses it
+anywhere else, naming why (an ordinary station, `0x0000`, `0xFFFF`, three or
+six octets, a device instance). A device at such an address is named by its
+address, never by `DNET:instance`. The write ledger, the audit file and
+every table print the suffix back, so a saved target reads back as it was.
+The TUI's device table lists no device at such an address (an I-Am can't
+mark itself), so its commands refuse the form and point to the one-shot
+commands and the MCP tools. The CLI waits up to
 three seconds for a reply, then sends the service request through the router
 that relayed it. `read-range --all` keeps every metadata read and range request routed
 to that device while paging its log. `file-read` routes every stream or record

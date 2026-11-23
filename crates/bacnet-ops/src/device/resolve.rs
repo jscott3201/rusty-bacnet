@@ -50,9 +50,17 @@ impl<T: TransportPort + 'static> Client<T> {
                 let parse = |reason| OpsError::parse("target", text, reason);
                 match parse_target_on(transport, text).map_err(parse)? {
                     Target::Mac(mac) => self.at(local(&mac).map_err(parse)?).await,
-                    Target::RoutedMac { dnet, mac } => {
-                        self.at(DeviceAddress::new(dnet, &mac).map_err(parse)?)
-                            .await
+                    Target::RoutedMac {
+                        dnet,
+                        mac,
+                        one_station,
+                    } => {
+                        let address = if one_station {
+                            DeviceAddress::marked(dnet, &mac)
+                        } else {
+                            DeviceAddress::new(dnet, &mac)
+                        };
+                        self.at(address.map_err(parse)?).await
                     }
                     Target::Bip6(peer) => {
                         let vmac = bip6_vmac(transport, peer).await.map_err(|why| match why {
@@ -96,6 +104,23 @@ impl<T: TransportPort + 'static> Client<T> {
     /// address without a row is looked for first ([`Self::find_station`]).
     async fn at(&self, address: DeviceAddress) -> Result<Device<T>, OpsError> {
         let address = self.localized(address);
+        // A marked address lifts nothing on this client's own network,
+        // where the station is on this link and the link judges its MAC
+        // (#2738).
+        if address.is_one_station() && Some(address.network()) == self.low_level().network_number()
+        {
+            let shown = address.to_string();
+            return Err(OpsError::parse(
+                "address",
+                &shown,
+                format!(
+                    "network {} is this client's own network, so the station is on this link \
+                     and ':{}' lifts nothing there; its MAC is judged by the link",
+                    address.network(),
+                    crate::target::ONE_STATION_SUFFIX
+                ),
+            ));
+        }
         if address.is_local() {
             let shown = address.styled(self.address_style());
             check_local_mac(self.low_level().transport(), address.mac(), &shown)
@@ -269,8 +294,17 @@ impl<T: TransportPort + 'static> Client<T> {
         let station = Scope::Directed(address.clone().into());
         let is_station = |row: &DiscoveredDevice| {
             let low = self.low_level();
-            DeviceAddress::of(row)
-                .is_some_and(|at| station.covers(&at, low.network_number(), &low.local_networks()))
+            match DeviceAddress::of(row) {
+                Some(at) => station.covers(&at, low.network_number(), &low.local_networks()),
+                // A row at a MAC the one-station mark lifts has no
+                // `DeviceAddress` (an I-Am can't mark itself), but the
+                // station an operator marked is that row (#2738).
+                None => row.address().is_some_and(|at| {
+                    address.is_one_station()
+                        && at.network_number == address.network()
+                        && at.mac_address.as_slice() == address.mac()
+                }),
+            }
         };
         let misses = &self.shared.station_misses;
         let known = lock(misses).get(address, tokio::time::Instant::now());

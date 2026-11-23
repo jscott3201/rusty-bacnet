@@ -2,10 +2,10 @@
 //! to the address it was planned at, in the turn [`super::place`] gives.
 
 use bacnet_client::client::BACnetClient;
+use bacnet_client::client::Station;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -59,7 +59,7 @@ pub(super) async fn send<T: TransportPort + 'static>(
         }
     }
     let result = client
-        .write_property_multiple(&BACnetAddress::from(&preview.address), specs)
+        .write_property_multiple(&Station::from(&preview.address), specs)
         .await;
     batch_outcomes(items, &result)
 }
@@ -76,7 +76,7 @@ pub(super) async fn write_property<T: TransportPort + 'static>(
     let (object, property, index) = target;
     client
         .write_property(
-            &BACnetAddress::from(address),
+            &Station::from(address),
             object,
             property,
             index,

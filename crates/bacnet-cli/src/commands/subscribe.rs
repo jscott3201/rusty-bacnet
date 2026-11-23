@@ -330,7 +330,8 @@ mod tests {
                 parse_target(text),
                 Ok(Target::RoutedMac {
                     dnet: network,
-                    mac: mac.to_vec()
+                    mac: mac.to_vec(),
+                    one_station: false
                 })
             );
         }

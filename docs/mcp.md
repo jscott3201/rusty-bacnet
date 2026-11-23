@@ -41,7 +41,8 @@ in the CLI reference's [Input Forms](CLI.md#input-forms). A `device`
 argument is an instance (`1201`), `dnet:instance` for the one claiming it
 on that network, or the address of a device in the discovery table
 (`10.0.0.2:47808`, `mstp:5`, `bip6:0x0004D2`, six hex octets, or
-`2001:0x33` behind a router; #2560); nothing is sent to resolve one, and
+`2001:0x33` behind a router, `2001:0xFF:one-station` for a station whose MAC
+looks like a broadcast but is one station; #2560, #2738); nothing is sent to resolve one, and
 every request of the call goes to the address the policy checked. An
 instance two addresses claim is refused (`ambiguous-device`), naming both:
 name one by its address.
