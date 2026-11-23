@@ -66,6 +66,7 @@ impl BACnetServer {
         utc_offset_minutes=0,
         daylight_savings=false,
         clock_zone_writable=false,
+        device_storage_path=None,
         share_port_by_address=false,
         share_wildcard_port=false,
         segmentation_supported=crate::types::PySegmentation { inner: bacnet_types::enums::Segmentation::NO_SEGMENTATION },
@@ -143,6 +144,7 @@ impl BACnetServer {
         utc_offset_minutes: i16,
         daylight_savings: bool,
         clock_zone_writable: bool,
+        device_storage_path: Option<String>,
         share_port_by_address: bool,
         share_wildcard_port: bool,
         segmentation_supported: crate::types::PySegmentation,
@@ -248,6 +250,7 @@ impl BACnetServer {
         let time_sync_policy = super::time_sync_policy::time_sync_policy(time_sync_policy)?;
         let clock_zone = server::ClockConfig::new(utc_offset_minutes, daylight_savings)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let device_storage = crate::object_options::device_storage(device_storage_path)?;
         if transport == "sc" {
             crate::tls::required_sc_credentials(
                 sc_ca_cert.as_deref(),
@@ -318,6 +321,7 @@ impl BACnetServer {
             time_sync_policy,
             clock_zone,
             clock_zone_writable,
+            device_storage,
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),

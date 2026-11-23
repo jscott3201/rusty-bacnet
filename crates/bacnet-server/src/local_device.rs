@@ -2,8 +2,10 @@
 use bacnet_objects::{DeviceIdentity, database::ObjectDatabase};
 use bacnet_types::{error::Error, primitives::ObjectIdentifier};
 
-/// Only an absent database requests generation. An explicitly empty database
-/// stays empty; a supplied Device is checked without rebuilding its state.
+/// Only an absent database requests generation, its Device kept at the
+/// configured storage path, if any (#2730). An explicitly empty database
+/// stays empty; a supplied Device is checked without rebuilding its state,
+/// and a storage path beside it is refused.
 pub(crate) fn prepare_database(
     config: &mut crate::server::ServerConfig,
     database: Option<ObjectDatabase>,
@@ -11,12 +13,20 @@ pub(crate) fn prepare_database(
 ) -> Result<ObjectDatabase, Error> {
     config.device = config.device.resolve(local_receive_capacity)?;
     let database = match database {
-        Some(database) => database,
-        None => config
-            .device
-            .clone()
-            .with_services(bacnet_objects::device::EXECUTED_SERVICES)
-            .build_database()?,
+        Some(database) => {
+            crate::server::device_storage::refuse_unused_path(
+                config,
+                "the database the builder was given",
+            )?;
+            database
+        }
+        None => {
+            let identity = config
+                .device
+                .clone()
+                .with_services(bacnet_objects::device::EXECUTED_SERVICES);
+            crate::server::device_storage::stock_database(config, &identity)?
+        }
     };
     validate_startup(&database, &config.device)?;
     Ok(database)

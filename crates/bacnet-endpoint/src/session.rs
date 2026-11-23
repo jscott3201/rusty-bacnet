@@ -366,6 +366,9 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     config: SessionConfig,
     client_config: ClientConfig,
     database: Option<Arc<RwLock<ObjectDatabase>>>,
+    /// Where the Device the session builds keeps what peers write to it
+    /// ([`Self::with_device_storage_path`], #2730).
+    device_storage_path: Option<std::path::PathBuf>,
     source_audit_reporter: Option<ObjectIdentifier>,
     source_audit: Option<Arc<crate::source_audit::SourceAudit>>,
     pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
@@ -467,6 +470,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             config,
             client_config,
             database: None,
+            device_storage_path: None,
             source_audit_reporter: None,
             source_audit: None,
             source_audit_bindings: Vec::new(),

@@ -141,6 +141,12 @@ pub trait TagsPersistence: Send + Sync {
 /// The file holds what [`snapshot::tags::encode`] returns; that module
 /// documents the format.
 ///
+/// Its errors name the file's path (#2730), keeping their kind: a protocol
+/// error a write would get passes through as it is. A file saved for
+/// another object is refused naming the object it belongs to and the one
+/// loading it, and saying how to go on: remove or move the file, or give
+/// each object a path of its own.
+///
 /// [`snapshot::tags::encode`]: crate::snapshot::tags::encode
 #[derive(Clone, Debug)]
 #[cfg(feature = "std")]
@@ -174,19 +180,54 @@ impl FileTagsPersistence {
     pub fn path(&self) -> &Path {
         self.file.path()
     }
+
+    /// `error`, its text naming the file. The kind stays, and a protocol
+    /// error, which a write is answered with, is left as it is.
+    fn named(&self, error: Error) -> Error {
+        let at = |reason: &dyn core::fmt::Display| format!("{}: {reason}", self.path().display());
+        match error {
+            Error::Transport(io) => Error::Transport(std::io::Error::new(io.kind(), at(&io))),
+            Error::Encoding(reason) => Error::Encoding(at(&reason)),
+            Error::OutOfRange(reason) => Error::OutOfRange(at(&reason)),
+            other => other,
+        }
+    }
+
+    /// The refusal of `octets`, saved for another object than `object`.
+    fn other_object(&self, object: ObjectIdentifier, octets: &[u8]) -> Error {
+        let owner = octets
+            .get(8..crate::snapshot::framing::HEADER_LEN)
+            .and_then(|identifier| ObjectIdentifier::decode(identifier).ok())
+            .map_or_else(|| "another object".to_owned(), |owner| owner.to_string());
+        Error::Encoding(format!(
+            "{}: the Tags file belongs to {owner}, not {object}; remove or move it, or give \
+             each object a path of its own",
+            self.path().display()
+        ))
+    }
 }
 
 #[cfg(feature = "std")]
 impl TagsPersistence for FileTagsPersistence {
     fn load(&self, object: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error> {
-        let Some(octets) = self.file.read()? else {
-            return Ok(None);
+        let octets = match self.file.read() {
+            Ok(Some(octets)) => octets,
+            Ok(None) => return Ok(None),
+            Err(error) => return Err(self.named(error)),
         };
-        Ok(Some(format::decode(object, &octets)?))
+        format::decode(object, &octets)
+            .map(Some)
+            .map_err(|error| match error.kind() {
+                crate::snapshot::SnapshotErrorKind::OtherObject => {
+                    self.other_object(object, &octets)
+                }
+                _ => self.named(error.into()),
+            })
     }
 
     fn save(&self, object: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<(), Error> {
-        self.file
-            .save_octets(format::encode_checked(object, snapshot)?)
+        format::encode_checked(object, snapshot)
+            .and_then(|octets| self.file.save_octets(octets))
+            .map_err(|error| self.named(error))
     }
 }

@@ -219,6 +219,14 @@ pub struct ServerConfig {
     /// warning at start. A clockless server has neither property, so this
     /// changes nothing there.
     pub clock_zone_writable: bool,
+    /// The file that keeps what peers write to the Device a builder builds
+    /// (#2730): see [`ServerBuilder::device_storage_path`], which sets it.
+    /// Only the builders read it, when they build the Device from
+    /// [`device`](Self::device); a start that finds it still set, beside a
+    /// database the application gave, is refused, since that database's
+    /// Device brings its own storage. `None` by default: such writes then
+    /// last until the server stops.
+    pub device_storage_path: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -280,6 +288,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("request_admission_policy", &self.request_admission_policy)
             .field("object_types", &self.object_types)
             .field("clock_zone_writable", &self.clock_zone_writable)
+            .field("device_storage_path", &self.device_storage_path)
             .finish()
     }
 }
@@ -356,6 +365,7 @@ impl Default for ServerConfig {
             request_admission_policy: RequestAdmissionPolicy::default(),
             object_types: ObjectTypeRegistry::default(),
             clock_zone_writable: false,
+            device_storage_path: None,
         }
     }
 }
