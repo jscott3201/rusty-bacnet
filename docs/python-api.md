@@ -4267,10 +4267,14 @@ peer writes to it (#2730): a written Description and, with
 `clock_zone_writable`, a written UTC_Offset and Daylight_Savings_Status. Each
 such write is saved before it is answered, and the next server started on
 the same path serves it again. Without it the writes are answered and served
-until `stop()`, then lost. A file `start()` can't read or load raises before
-the registrations are taken, naming the path, and a write whose save fails
-is refused with DEVICE / OPERATIONAL_PROBLEM. `BipEndpoint`, `ScEndpoint`
-and `MstpEndpoint` take the same keyword. [The Device's
+until `stop()`, then lost. A relative path is resolved against the current
+directory at construction. A file `start()` can't read or load raises
+`BacnetError` before the registrations are taken, naming the path (another
+Device's file names both Devices: remove or move it, or give each instance
+its own path), and a write whose save fails is refused with DEVICE /
+OPERATIONAL_PROBLEM. An empty path raises `BacnetError` at construction, as
+an object's `storage_path` does. `BipEndpoint`, `ScEndpoint` and
+`MstpEndpoint` take the same keyword. [The Device's
 storage](rust-api.md#the-devices-storage-2730) has the full rules.
 
 `segmentation_supported` accepts `Segmentation.NO_SEGMENTATION`, `SEGMENTED_TRANSMIT`, `SEGMENTED_RECEIVE` or

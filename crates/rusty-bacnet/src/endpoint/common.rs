@@ -10,7 +10,7 @@ use std::net::Ipv4Addr;
 use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::object_profile::ObjectProfile;
+use bacnet_objects::object_profile::{FileTagsPersistence, ObjectProfile};
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
@@ -162,21 +162,22 @@ pub(crate) fn with_sc_port(
 /// parity: `ObjectDatabase::add` reports `Error::protocol(PROPERTY,
 /// DUPLICATE_NAME)`, never an Encoding string). So does an object whose
 /// identifier the Device, a port or another object already has (OBJECT /
-/// OBJECT_IDENTIFIER_ALREADY_EXISTS, #2250). With `device_storage_path`, the
+/// OBJECT_IDENTIFIER_ALREADY_EXISTS, #2250). With `device_storage`, the
 /// Device keeps what peers write to it in that file (#2730); a file that
 /// can't be read or loaded raises, naming the path.
 pub(crate) fn build_database(
     identity: &DeviceIdentity,
     extra: Vec<Box<dyn BACnetObject>>,
-    device_storage_path: Option<&str>,
+    device_storage: Option<&FileTagsPersistence>,
 ) -> PyResult<ObjectDatabase> {
-    let built =
-        match crate::object_options::device_storage(device_storage_path, identity.device_oid())? {
-            Some(storage) => bacnet_objects::device_identity::build_database_with_tags_persistence(
-                identity, storage, extra,
-            ),
-            None => build_database_with_extra(identity, extra),
-        };
+    let built = match device_storage {
+        Some(storage) => bacnet_objects::device_identity::build_database_with_tags_persistence(
+            identity,
+            std::sync::Arc::new(storage.clone()),
+            extra,
+        ),
+        None => build_database_with_extra(identity, extra),
+    };
     built.map_err(|e| match &e {
         bacnet_types::error::Error::Remote(RemoteError::Error { class, code })
             if *class == ErrorClass::PROPERTY && *code == ErrorCode::DUPLICATE_NAME =>

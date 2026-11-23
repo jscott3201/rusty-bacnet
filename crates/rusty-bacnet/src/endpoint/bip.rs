@@ -100,7 +100,7 @@ impl BipEndpointConfig {
         probe.set_share_wildcard_port(config.share_wildcard_port);
         probe.check_bind().map_err(to_py_err)?;
         let boxes = build_pending_boxes(&objects)?;
-        let mut db = build_database(&config.identity, boxes, config.server.device_storage_path())?;
+        let mut db = build_database(&config.identity, boxes, config.server.device_storage())?;
         if let Some(source) = &config.source_audit {
             source.provision(&config.identity, &mut db)?;
         }
@@ -253,9 +253,10 @@ impl PyBipEndpoint {
     ///         Device keeps what peers write to it in (#2730), as
     ///         `BACnetServer`'s keyword of the same name: with a
     ///         `mutation_policy` that lets peers write, a written
-    ///         Description survives a restart. An empty path raises
-    ///         ValueError; a file that can't be read or loaded raises at
-    ///         `start()`, naming the path.
+    ///         Description survives a restart. A relative path is resolved
+    ///         here; an empty one raises BacnetError; a file that can't be
+    ///         read or loaded raises BacnetError at `start()`, naming the
+    ///         path.
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only (#2348). `source_audit_reporter` is the
     ///         `ObjectIdentifier` of an Audit Reporter added with

@@ -344,6 +344,11 @@ impl ProfileState {
         }
     }
 
+    /// Whether the object was built with Tags storage (#2730).
+    pub(crate) fn has_storage(&self) -> bool {
+        self.kept.is_some()
+    }
+
     /// The Description storage holds, one a write set now or before a
     /// restart (#2364): the object serves it, and its setter leaves it
     /// alone. `None` without storage, and on an object that doesn't keep

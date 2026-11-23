@@ -5,9 +5,11 @@ The Device keeps what a peer writes to it in that file: a written
 Description and, with ``clock_zone_writable``, a written UTC_Offset. A
 server started again on the same path serves both; with the opt-in off the
 kept offset stays in the file, unapplied. Without a path such a write lasts
-until ``stop()``. A file that can't be loaded raises at ``start()``, naming
-the path, and leaves the registrations for the next start; a write whose
-save fails is refused with DEVICE / OPERATIONAL_PROBLEM.
+until ``stop()``. A file that can't be loaded raises BacnetError at
+``start()``, as an object's ``storage_path`` does, naming the path (and,
+for another Device's file, both Devices), and leaves the registrations for
+the next start; a write whose save fails is refused with DEVICE /
+OPERATIONAL_PROBLEM. A relative path is resolved at construction.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from pathlib import Path
 
 from rusty_bacnet import (
     BACnetClient,
+    BacnetError,
     BacnetProtocolError,
     BACnetServer,
     BipEndpoint,
@@ -118,9 +121,9 @@ class DeviceStorageTests(unittest.IsolatedAsyncioTestCase):
         self.path.write_bytes(b"not a Tags file")
         server = self.server()
         server.add_analog_input(1, "AI-1")
-        with self.assertRaises(Exception) as raised:
+        with self.assertRaises(BacnetError) as raised:
             await server.start()
-        self.assertIn(f"Device storage {self.path}", str(raised.exception))
+        self.assertIn(str(self.path), str(raised.exception))
         self.assertIn("no valid header", str(raised.exception))
         self.assertEqual(self.path.read_bytes(), b"not a Tags file")
         # Raised before the registrations were taken: a repaired file starts.
@@ -128,6 +131,39 @@ class DeviceStorageTests(unittest.IsolatedAsyncioTestCase):
         self.path.unlink()
         await server.start()
         await server.stop()
+
+    async def test_another_devices_file_names_both_and_the_way_on(self) -> None:
+        server = await self.started()
+        try:
+            await self.peer_writes(server, (P.DESCRIPTION, LOBBY))
+        finally:
+            await server.stop()
+        renumbered = BACnetServer(INSTANCE + 1, interface="127.0.0.1", port=0,
+                                  device_storage_path=str(self.path))
+        with self.assertRaises(BacnetError) as raised:
+            await renumbered.start()
+        message = str(raised.exception)
+        for part in (str(self.path), f",{INSTANCE}", f",{INSTANCE + 1}",
+                     "remove or move it", "a path of its own"):
+            self.assertIn(part, message)
+
+    async def test_a_relative_path_is_resolved_at_construction(self) -> None:
+        home = os.getcwd()
+        self.addCleanup(os.chdir, home)
+        os.chdir(self.path.parent.parent)
+        server = BACnetServer(INSTANCE, interface="127.0.0.1", port=0,
+                              broadcast_address="127.0.0.1",
+                              device_storage_path=os.path.join("state", "device.tags"))
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        os.chdir(elsewhere.name)
+        await server.start()
+        try:
+            await self.peer_writes(server, (P.DESCRIPTION, LOBBY))
+        finally:
+            await server.stop()
+        self.assertTrue(self.path.exists())
+        self.assertFalse(Path(elsewhere.name, "state").exists())
 
     async def test_a_write_whose_save_fails_is_refused(self) -> None:
         server = await self.started()
@@ -160,9 +196,10 @@ class DeviceStorageTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await server.read_property(DEVICE, P.DESCRIPTION), LOBBY)
 
     def test_the_keyword(self) -> None:
-        with self.assertRaises(ValueError):
+        # As an object's storage_path= refuses one.
+        with self.assertRaisesRegex(BacnetError, "path must not be empty"):
             BACnetServer(INSTANCE, device_storage_path="")
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(BacnetError, "path must not be empty"):
             BipEndpoint(INSTANCE, device_storage_path="")
         with self.assertRaises(TypeError):
             BACnetServer(INSTANCE, device_storage_path=7)

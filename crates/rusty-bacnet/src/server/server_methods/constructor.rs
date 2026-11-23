@@ -250,7 +250,7 @@ impl BACnetServer {
         let time_sync_policy = super::time_sync_policy::time_sync_policy(time_sync_policy)?;
         let clock_zone = server::ClockConfig::new(utc_offset_minutes, daylight_savings)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        crate::object_options::check_device_storage_path(device_storage_path.as_deref())?;
+        let device_storage = crate::object_options::device_storage(device_storage_path)?;
         if transport == "sc" {
             crate::tls::required_sc_credentials(
                 sc_ca_cert.as_deref(),
@@ -321,7 +321,7 @@ impl BACnetServer {
             time_sync_policy,
             clock_zone,
             clock_zone_writable,
-            device_storage_path,
+            device_storage,
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),

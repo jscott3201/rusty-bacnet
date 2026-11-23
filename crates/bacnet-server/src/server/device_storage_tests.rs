@@ -12,9 +12,11 @@ use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::object_profile::{TagsPersistence, TagsSnapshot};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::ReceivedNpdu;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use PropertyIdentifier as P;
@@ -285,7 +287,8 @@ async fn without_a_path_a_written_description_lasts_until_stop() {
 
 /// A file the Device can't load fails the build with an error naming the
 /// path and the reason, and is left as it was: damaged octets, a newer
-/// release's version, and another Device's file.
+/// release's version, and another Device's file, whose error names both
+/// Devices and the way on (a Device instance changed on the same path).
 #[tokio::test(start_paused = true)]
 async fn a_file_that_does_not_load_fails_the_build_naming_the_path() {
     let scratch = Scratch::new();
@@ -294,22 +297,22 @@ async fn a_file_that_does_not_load_fails_the_build_naming_the_path() {
     let other = ObjectIdentifier::new(ObjectType::DEVICE, DEVICE + 1).unwrap();
     let newer = [&b"RBNTAG09"[..], &device().encode(), &[0]].concat();
     let anothers = [&b"RBNTAG01"[..], &other.encode(), &[0]].concat();
-    for (octets, reason) in [
-        (b"not a Tags file".to_vec(), "no valid header"),
-        (newer, "version 9"),
-        (anothers, "another object"),
+    let belongs = format!("belongs to {other}, not {}", device());
+    for (octets, reasons) in [
+        (b"not a Tags file".to_vec(), vec!["no valid header"]),
+        (newer, vec!["version 9"]),
+        (anothers, vec![belongs.as_str(), "remove or move it"]),
     ] {
         std::fs::write(&path, &octets).unwrap();
         let Err(error) = Peer::build(Some(&path), true).await else {
-            panic!("{reason}: the build must fail");
+            panic!("{reasons:?}: the build must fail");
         };
         let message = error.to_string();
-        assert!(
-            message.contains(&format!("Device storage {}", path.display())),
-            "{message}"
-        );
-        assert!(message.contains(reason), "{message}");
-        assert_eq!(std::fs::read(&path).unwrap(), octets, "{reason}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        for reason in &reasons {
+            assert!(message.contains(reason), "{message}");
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), octets, "{reasons:?}");
     }
 }
 
@@ -335,33 +338,29 @@ async fn a_write_whose_save_fails_is_refused() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
-/// The storage's own errors name its path, a save's as a load's, so the
-/// warning a failed save logs says which file; a protocol error is left as
-/// it is. An empty path is refused.
-#[test]
-fn storage_errors_name_the_path() {
+/// With the zone opt-in on, a Device without storage gets one warning at
+/// start that a written zone lasts until the server stops; with a path, or
+/// with the opt-in off, none.
+#[tokio::test(start_paused = true)]
+async fn a_writable_zone_without_storage_is_warned_about() {
     let scratch = Scratch::new();
     let path = scratch.file();
-    let storage = device_storage(&path).unwrap();
-    std::fs::create_dir_all(&path).unwrap();
-    let saved = storage.save(device(), &TagsSnapshot::default());
-    let loaded = storage.load(device());
-    for error in [saved.unwrap_err(), loaded.unwrap_err()] {
-        assert!(matches!(error, Error::Transport(_)), "{error:?}");
-        let message = error.to_string();
-        assert!(
-            message.contains(&format!("Device storage {}", path.display())),
-            "{message}"
+    let warned = |spy: &super::super::warn_spy::WarnSpy| {
+        spy.warnings()
+            .iter()
+            .filter(|warning| warning.message.contains("lasts until the server stops"))
+            .count()
+    };
+    for (stored, writable, expected) in [(false, true, 1), (true, true, 0), (false, false, 0)] {
+        let (spy, _guard) = super::super::warn_spy::WarnSpy::install();
+        let peer = Peer::start(stored.then_some(path.as_path()), writable).await;
+        assert_eq!(
+            warned(&spy),
+            expected,
+            "stored {stored}, writable {writable}"
         );
+        peer.stop().await;
     }
-    let named = NamedFile(FileTagsPersistence::new(&path).unwrap());
-    let refusal = Error::protocol(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY);
-    assert!(matches!(
-        named.named(refusal),
-        Error::Remote(RemoteError::Error { class, code })
-            if class == ErrorClass::RESOURCES && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
-    ));
-    assert!(device_storage(Path::new("")).is_err());
 }
 
 /// A path beside a database the application gave, or in the configuration
@@ -400,20 +399,22 @@ async fn a_path_beside_a_given_database_is_refused() {
     assert!(!scratch.0.exists());
 }
 
-/// Every builder takes the path into its configuration.
+/// Every builder takes the path into its configuration, a relative one
+/// resolved against the current directory when it is given.
 #[test]
 fn the_builders_take_the_path() {
-    let path = PathBuf::from("device.tags");
+    let relative = PathBuf::from("device.tags");
+    let path = std::env::current_dir().unwrap().join(&relative);
     assert_eq!(
         BACnetServer::<TestTransport>::generic_builder()
-            .device_storage_path(&path)
+            .device_storage_path(&relative)
             .config
             .device_storage_path,
         Some(path.clone())
     );
     assert_eq!(
         BACnetServer::bip_builder()
-            .device_storage_path(&path)
+            .device_storage_path(&relative)
             .config
             .device_storage_path,
         Some(path.clone())
@@ -421,7 +422,7 @@ fn the_builders_take_the_path() {
     #[cfg(feature = "sc-tls")]
     assert_eq!(
         BACnetServer::sc_builder()
-            .device_storage_path(&path)
+            .device_storage_path(&relative)
             .config
             .device_storage_path,
         Some(path)

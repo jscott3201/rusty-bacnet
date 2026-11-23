@@ -5,15 +5,14 @@
 //! only when they build the Device from the identity, and a start checks
 //! none is left: a database the application hands over brings its Device's
 //! storage itself ([`DeviceObject::with_tags_persistence`]). The file is a
-//! [`FileTagsPersistence`] whose errors name its path, so a start that can't
-//! load it, and the warning a failed save logs, say which file.
+//! [`FileTagsPersistence`], whose errors name its path.
 //!
 //! [`DeviceObject::with_tags_persistence`]: bacnet_objects::device::DeviceObject::with_tags_persistence
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use bacnet_objects::DeviceIdentity;
-use bacnet_objects::object_profile::{FileTagsPersistence, TagsPersistence, TagsSnapshot};
+use bacnet_objects::object_profile::FileTagsPersistence;
 
 use super::*;
 
@@ -27,7 +26,9 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// served until the server stops, then lost. The built Device has no
     /// Tags row, so a Tags write is refused either way.
     ///
-    /// The builder reads it only when it builds the Device, from its
+    /// A relative `path` is resolved against the current directory here,
+    /// so a later change of directory doesn't move the saves. The builder
+    /// reads it only when it builds the Device, from its
     /// [`device`](Self::device) identity: a [`database`](Self::database)
     /// given as well is refused at build, since that database's Device
     /// brings its own storage. A missing file, or a missing directory,
@@ -39,7 +40,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// served, and the save's error is logged as a warning naming the path.
     /// One server at a time may use a path.
     pub fn device_storage_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.config.device_storage_path = Some(path.into());
+        self.config.device_storage_path = Some(absolute(path.into()));
         self
     }
 }
@@ -48,7 +49,7 @@ impl BipServerBuilder {
     /// Keep what peers write to the built Device in the file at `path`; see
     /// [`ServerBuilder::device_storage_path`].
     pub fn device_storage_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.config.device_storage_path = Some(path.into());
+        self.config.device_storage_path = Some(absolute(path.into()));
         self
     }
 }
@@ -58,9 +59,16 @@ impl super::ScServerBuilder {
     /// Keep what peers write to the built Device in the file at `path`; see
     /// [`ServerBuilder::device_storage_path`].
     pub fn device_storage_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.config.device_storage_path = Some(path.into());
+        self.config.device_storage_path = Some(absolute(path.into()));
         self
     }
+}
+
+/// `path` against the current directory, if it is relative; as given when
+/// it can't be (an empty path, which the build refuses, or no current
+/// directory).
+fn absolute(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
 }
 
 /// The stock database `identity` declares, its Device kept at the path
@@ -74,7 +82,7 @@ pub(crate) fn stock_database(
     match config.device_storage_path.take() {
         Some(path) => bacnet_objects::device_identity::build_database_with_tags_persistence(
             identity,
-            device_storage(&path)?,
+            Arc::new(FileTagsPersistence::new(path)?),
             Vec::new(),
         ),
         None => identity.build_database(),
@@ -92,50 +100,6 @@ pub(crate) fn refuse_unused_path(config: &ServerConfig, database: &str) -> Resul
             path.display()
         ))),
         None => Ok(()),
-    }
-}
-
-/// The Device's storage in the file at `path` (#2730), for the endpoint's
-/// session and the Python bindings, which build the Device too: a
-/// [`FileTagsPersistence`] whose errors name `path`. Not a stable API.
-#[doc(hidden)]
-pub fn device_storage(path: &Path) -> Result<Arc<dyn TagsPersistence>, Error> {
-    if path.as_os_str().is_empty() {
-        return Err(Error::OutOfRange(
-            "device_storage_path must not be empty".into(),
-        ));
-    }
-    Ok(Arc::new(NamedFile(FileTagsPersistence::new(path)?)))
-}
-
-/// A Tags file whose errors name it.
-struct NamedFile(FileTagsPersistence);
-
-impl NamedFile {
-    /// `error`, its text naming the file. The kind stays, and a protocol
-    /// error, which a write is answered with, is left as it is.
-    fn named(&self, error: Error) -> Error {
-        let at = |reason: &dyn std::fmt::Display| {
-            format!("Device storage {}: {reason}", self.0.path().display())
-        };
-        match error {
-            Error::Transport(io) => Error::Transport(std::io::Error::new(io.kind(), at(&io))),
-            Error::Encoding(reason) => Error::Encoding(at(&reason)),
-            Error::OutOfRange(reason) => Error::OutOfRange(at(&reason)),
-            other => other,
-        }
-    }
-}
-
-impl TagsPersistence for NamedFile {
-    fn load(&self, object: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error> {
-        self.0.load(object).map_err(|error| self.named(error))
-    }
-
-    fn save(&self, object: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<(), Error> {
-        self.0
-            .save(object, snapshot)
-            .map_err(|error| self.named(error))
     }
 }
 

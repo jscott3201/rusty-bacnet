@@ -1,4 +1,5 @@
 use super::super::*;
+use bacnet_objects::object_profile::TagsPersistence;
 use bacnet_transport::port::TransportPort;
 
 /// The ValueError for an object the database refuses: a duplicate name, or
@@ -65,12 +66,20 @@ impl BACnetServer {
             .with_segmentation(self.segmentation_supported)
             .with_apdu_segment_timeout_ms(self.apdu_segment_timeout_ms);
         identity.validate().map_err(to_py_err)?;
-        // Before anything is drained, so a file that can't be loaded leaves
-        // the registrations for the next start (#2730).
-        let device_storage = crate::object_options::device_storage(
-            self.device_storage_path.as_deref(),
-            identity.device_oid(),
-        )?;
+        // Load the Device's file once before anything is drained, so one
+        // that can't be loaded raises and leaves the registrations for the
+        // next start (#2730). The Device loads it again as it is built,
+        // after the transport is prepared: its identity needs the link's
+        // receive capacity first, and a file of at most 1 MiB is cheap to
+        // read twice.
+        let device_storage = match &self.device_storage {
+            Some(storage) => {
+                storage.load(identity.device_oid()).map_err(to_py_err)?;
+                let storage: Arc<dyn TagsPersistence> = Arc::new(storage.clone());
+                Some(storage)
+            }
+            None => None,
+        };
         let mut builder = server::BACnetServer::generic_builder().device(identity.clone());
         if let Some(instance) = self.registered_network_port {
             let oid = bacnet_types::primitives::ObjectIdentifier::new(

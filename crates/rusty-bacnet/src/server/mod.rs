@@ -168,7 +168,7 @@ pub struct BACnetServer {
     clock_zone_writable: bool,
     /// The file that keeps what peers write to the Device
     /// (`device_storage_path`, #2730).
-    device_storage_path: Option<String>,
+    device_storage: Option<bacnet_objects::object_profile::FileTagsPersistence>,
     audit_notification_sink: Option<AuditNotificationSink>,
     audit_reporters: Option<server::AuditReportersConfig>,
     audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,

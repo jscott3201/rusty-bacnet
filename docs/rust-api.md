@@ -12361,8 +12361,10 @@ UTC_Offset and Daylight_Savings_Status (#2395). With storage, each such
 write is saved before it is answered, and the next server built on the same
 storage serves it again. **Without storage, the write is still answered and
 served, but only until the server stops**: the next start serves what the
-Device was configured with. This section is where the docs state that; the
-rest point here.
+Device was configured with (maintainer decision, 2026-11-23). This section
+is where the docs state that; the rest point here. A server whose peers may
+write the zone (`clock_zone_writable`) and whose Device has no storage logs
+one warning at start saying a written zone lasts until the server stops.
 
 A Device gets its storage in one of these ways:
 
@@ -12385,11 +12387,15 @@ A Device gets its storage in one of these ways:
   builds the stock database around a Device on given storage, as
   `build_database_with_extra` builds it without.
 
-A path is refused where nothing builds the Device from it: beside a
-`database` the builder or session was given (that Device brings its own
-storage), in the `ServerConfig` passed to `BACnetServer::start`, on a
-session without an identity, and by an endpoint builder's
-`build_transport`.
+A relative path is resolved against the current directory when the builder,
+the session or the Python constructor is given it, so a later change of
+directory doesn't move the saves. A path is refused where nothing builds a
+Device a server serves from it: beside a `database` the builder or session
+was given (that Device brings its own storage), in the `ServerConfig`
+passed to `BACnetServer::start`, on a `SessionRole::ClientOnly` session,
+which runs no server, and by an endpoint builder's `build_transport`. An
+empty path fails the build (in Python, the constructor raises
+`BacnetError`, as an object's `storage_path` does).
 
 The file is a `FileTagsPersistence` (`RBNTAG01` to `RBNTAG03`; see
 [Persisted snapshot formats](#persisted-snapshot-formats-2047)):
@@ -12399,9 +12405,14 @@ The file is a `FileTagsPersistence` (`RBNTAG01` to `RBNTAG03`; see
 - Each save writes `<path>.tmp`, synchronizes it and renames it over the
   file, so a failed save leaves the previous file whole.
 - A file that can't be read, is damaged, was saved for another Device or by
-  a newer release fails the build (in Python, `start()` raises before it
-  takes the registrations), with an error that names the path and the
-  reason. The file is left as it is.
+  a newer release fails the build (in Python, `start()` raises
+  `BacnetError` before it takes the registrations), with an error that
+  names the path and the reason. The file is left as it is.
+  `FileTagsPersistence` names its path in every error it returns.
+- A file saved for another Device, as when the Device instance changes and
+  the path stays, is refused naming the Device it belongs to and the one
+  starting. To go on, remove or move the file (what it kept is lost to the
+  new Device), or give each Device instance a path of its own.
 - A peer's write whose save fails is refused with DEVICE /
   OPERATIONAL_PROBLEM, and the value served before stays. The failed save
   is also logged as a warning ("Failed to save object Tags") whose error

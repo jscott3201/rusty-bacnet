@@ -2,8 +2,8 @@
 //! `with_device_storage_path` names (#2730): a session started again on the
 //! path serves a written Description to a peer on the in-memory link. The
 //! path is refused, before the link starts, beside a database of the
-//! session's, on a session without an identity, and on its server's
-//! builder, which takes none of its own; a bare B/IP transport refuses it.
+//! session's, on a client-only session, and on its server's builder, which
+//! takes none of its own; a bare B/IP transport refuses it.
 use super::*;
 use crate::session::server_seat::tests::wire::Wire;
 use crate::session::{SessionConfig, SessionRole};
@@ -130,8 +130,9 @@ async fn refused(session: &mut EndpointSession<TestTransport>) -> String {
 }
 
 /// The path is refused at start, before the link starts, where the
-/// session builds no Device: beside its own database, without an identity,
-/// and named on the server's builder rather than the session.
+/// session builds no Device for a server: beside its own database, on a
+/// client-only session, and named on the server's builder rather than the
+/// session.
 #[tokio::test(start_paused = true)]
 async fn a_path_the_session_cannot_use_is_refused_at_start() {
     let scratch = Scratch::new();
@@ -142,15 +143,21 @@ async fn a_path_the_session_cannot_use_is_refused_at_start() {
     let error = refused(&mut given).await;
     assert!(error.contains("given a database"), "{error}");
 
-    let mut nameless = EndpointSession::new(
+    // A client-only session runs no server, so nothing could write the
+    // Device it would build.
+    let mut client_only = EndpointSession::new(
         wire.port(NODE).build(),
         SessionRole::ClientOnly,
         SessionConfig::default(),
     )
     .unwrap()
+    .device(identity())
     .with_device_storage_path(&path);
-    let error = refused(&mut nameless).await;
-    assert!(error.contains("no Device identity"), "{error}");
+    let error = refused(&mut client_only).await;
+    assert!(
+        error.contains("client-only session runs no server"),
+        "{error}"
+    );
 
     let builder: ServerBuilder<TestTransport> =
         BACnetServer::generic_builder().device_storage_path(&path);
@@ -183,9 +190,10 @@ fn the_bip_builder_hands_the_path_to_its_session() {
         panic!("a bare transport must refuse the path");
     };
     assert!(error.to_string().contains("Device storage path"), "{error}");
+    // Resolved against the current directory when it is given.
     let session = builder().build_session().unwrap();
     assert_eq!(
-        session.device_storage_path.as_deref(),
-        Some(Path::new("device.tags"))
+        session.device_storage_path,
+        Some(std::env::current_dir().unwrap().join("device.tags"))
     );
 }

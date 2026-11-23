@@ -134,8 +134,9 @@ server's `report_device_reset_local()`. `ScEndpoint` and
 Device keeps what peers write to it, as `BACnetServer`'s keyword
 of the same name: with a `mutation_policy` that lets peers write,
 a written Description survives a restart. Without it, such a write
-lasts until `close()`. An empty path raises ValueError; a file
-that can't be read or loaded raises at `start()`, naming the path.
+lasts until `close()`. A relative path is resolved here; an empty
+one raises BacnetError; a file that can't be read or loaded raises
+BacnetError at `start()`, naming the path.
 `ScEndpoint` and `MstpEndpoint` take it too.
 
 `source_audit_reporter` / `audit_recipient` /

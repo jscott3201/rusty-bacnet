@@ -7514,13 +7514,16 @@ class BACnetServer:
         and Daylight_Savings_Status. Each such write is saved before it is
         answered, and the next server started on the same path serves it
         again. Without it the writes are answered and served until
-        ``stop()``, then lost. The Device has no Tags row. A missing file or
-        directory starts with nothing kept; ``start()`` raises, naming the
-        path, for a file it can't read or load (damaged, another Device's,
-        or from a newer release), and leaves the file alone. A write whose
-        save fails is refused with DEVICE / OPERATIONAL_PROBLEM. One server
-        at a time per path; an empty path raises ValueError. The full rules
-        are in docs/rust-api.md, "The Device's storage".
+        ``stop()``, then lost. The Device has no Tags row. A relative path
+        is resolved against the current directory here. A missing file or
+        directory starts with nothing kept; ``start()`` raises BacnetError,
+        naming the path, for a file it can't read or load (damaged, from a
+        newer release, or another Device's, which names both Devices: remove
+        or move it, or give each instance its own path), and leaves the file
+        alone. A write whose save fails is refused with DEVICE /
+        OPERATIONAL_PROBLEM. One server at a time per path; an empty path
+        raises BacnetError, as an object's ``storage_path`` does. The full
+        rules are in docs/rust-api.md, "The Device's storage".
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -10144,8 +10147,9 @@ class BipEndpoint:
         Device keeps what peers write to it, as ``BACnetServer``'s keyword
         of the same name: with a ``mutation_policy`` that lets peers write,
         a written Description survives a restart. Without it, such a write
-        lasts until ``close()``. An empty path raises ValueError; a file
-        that can't be read or loaded raises at ``start()``, naming the path.
+        lasts until ``close()``. A relative path is resolved here; an empty
+        one raises BacnetError; a file that can't be read or loaded raises
+        BacnetError at ``start()``, naming the path.
         ``ScEndpoint`` and ``MstpEndpoint`` take it too.
 
         ``source_audit_reporter`` / ``audit_recipient`` /

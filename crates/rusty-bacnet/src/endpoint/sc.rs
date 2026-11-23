@@ -67,7 +67,7 @@ impl ScEndpointConfig {
         )
         .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?;
         let boxes = build_pending_boxes(&objects)?;
-        let mut db = build_database(&config.identity, boxes, config.server.device_storage_path())?;
+        let mut db = build_database(&config.identity, boxes, config.server.device_storage())?;
         if let Some(source) = &config.source_audit {
             source.provision(&config.identity, &mut db)?;
         }

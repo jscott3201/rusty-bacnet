@@ -174,10 +174,11 @@ impl ScEndpointBuilder {
     }
 
     /// Keeps what peers write to the Device the session builds in the file
-    /// at `path` (#2730); see
-    /// [`EndpointSession::with_device_storage_path`].
+    /// at `path` (#2730), a relative one resolved against the current
+    /// directory here; see [`EndpointSession::with_device_storage_path`].
     pub fn device_storage_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
-        self.device_storage_path = Some(path.into());
+        let path = path.into();
+        self.device_storage_path = Some(std::path::absolute(&path).unwrap_or(path));
         self
     }
 

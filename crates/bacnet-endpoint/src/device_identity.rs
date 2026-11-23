@@ -1,5 +1,6 @@
 //! Resolve Device declarations while the session still owns an unstarted link.
 use crate::session::EndpointSession;
+use bacnet_objects::object_profile::FileTagsPersistence;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 use std::sync::Arc;
@@ -10,11 +11,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// `path` (#2730), as a server builder's
     /// [`device_storage_path`](bacnet_server::server::ServerBuilder::device_storage_path)
     /// does for the Device it builds, with the same rules for a missing,
-    /// damaged or unwritable file. The session builds the Device from its
+    /// damaged or unwritable file. A relative `path` is resolved against the
+    /// current directory here. The session builds the Device from its
     /// [`device`](Self::device) identity when no database was given, at
-    /// [`start`](Self::start), which refuses the path without an identity or
-    /// beside a [`with_database`](Self::with_database) database, whose
-    /// Device brings its own storage. A server builder given to
+    /// [`start`](Self::start), which refuses the path on a
+    /// [`SessionRole::ClientOnly`](crate::session::SessionRole::ClientOnly)
+    /// session, which runs no server to write it, and beside a
+    /// [`with_database`](Self::with_database) database, whose Device brings
+    /// its own storage. A server builder given to
     /// [`with_server`](Self::with_server) takes no path of its own here:
     /// the session builds the node's Device. Peers write to it only
     /// through a server whose policy lets them; the read-only one lets
@@ -24,23 +28,30 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Panics if startup has already consumed the session configuration.
     pub fn with_device_storage_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.assert_configurable();
-        self.device_storage_path = Some(path.into());
+        let path = path.into();
+        self.device_storage_path = Some(std::path::absolute(&path).unwrap_or(path));
         self
     }
 
     pub(super) async fn prepare_identity(&mut self) -> Result<(), Error> {
-        let Some(identity) = self.identity.as_ref() else {
-            return match &self.device_storage_path {
-                Some(path) => Err(storage_refused(path, "the session has no Device identity")),
-                None => Ok(()),
-            };
-        };
-        if let (Some(path), Some(_)) = (&self.device_storage_path, &self.database) {
-            return Err(storage_refused(
-                path,
-                "the session was given a database, whose Device brings its own storage",
-            ));
+        if let Some(path) = &self.device_storage_path {
+            if matches!(self.role, crate::session::SessionRole::ClientOnly) {
+                return Err(storage_refused(
+                    path,
+                    "a client-only session runs no server, so it has no Device for peers to \
+                     write",
+                ));
+            }
+            if self.database.is_some() {
+                return Err(storage_refused(
+                    path,
+                    "the session was given a database, whose Device brings its own storage",
+                ));
+            }
         }
+        let Some(identity) = self.identity.as_ref() else {
+            return Ok(());
+        };
         let identity = identity.resolve(self.local_receive_capacity)?;
         // Validate before replacing configuration or constructing an object.
         if let Some(database) = &self.database {
@@ -54,7 +65,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 Some(path) => {
                     bacnet_objects::device_identity::build_database_with_tags_persistence(
                         &identity,
-                        bacnet_server::server::device_storage::device_storage(path)?,
+                        Arc::new(FileTagsPersistence::new(path)?),
                         Vec::new(),
                     )?
                 }
