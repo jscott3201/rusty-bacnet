@@ -10,7 +10,9 @@ use bacnet_services::who_is::IAmRequest;
 /// server refuses to start on a database whose lowest Device isn't the
 /// identity's).
 fn second_device() -> Box<DeviceObject> {
-    let identity = bacnet_objects::DeviceIdentity::new(5, 0x105).unwrap();
+    let identity = bacnet_objects::DeviceIdentity::new(5, 0x105)
+        .unwrap()
+        .with_segmentation(Segmentation::NO_SEGMENTATION);
     let config = DeviceConfig {
         identity,
         ..Default::default()

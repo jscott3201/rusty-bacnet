@@ -385,10 +385,11 @@ pub(super) async fn bounded<T>(future: impl Future<Output = T>) -> T {
         .expect("in-process TUI test exceeded its deadline")
 }
 
-/// A device with only its Device object, vendor 0.
+/// A device with only its Device object, vendor 0, that doesn't segment.
 fn bare_device(instance: u32) -> (bacnet_objects::DeviceIdentity, ObjectDatabase) {
     let identity = bacnet_objects::DeviceIdentity::new(instance, 0)
         .expect("valid Device identity")
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_name(format!("Lab device {instance}"));
     let mut db = ObjectDatabase::new();
     db.add(Box::new(

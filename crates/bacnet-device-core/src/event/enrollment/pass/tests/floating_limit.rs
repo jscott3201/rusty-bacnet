@@ -95,6 +95,7 @@ fn setup_qualified_setpoint(
             DeviceObject::new(DeviceConfig {
                 identity: bacnet_objects::DeviceIdentity::new(instance, 0)
                     .expect("valid Device identity")
+                    .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
                     .with_name(format!("Device-{instance}")),
                 ..DeviceConfig::default()
             })
@@ -179,7 +180,9 @@ fn floating_limit_setpoint_naming_another_device_stays_unavailable() {
 /// the application adds a lower Device 50 (#2227).
 #[test]
 fn references_naming_the_identity_device_stay_local_beside_a_lower_one() {
-    let identity = bacnet_objects::DeviceIdentity::new(100, 0).unwrap();
+    let identity = bacnet_objects::DeviceIdentity::new(100, 0)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     let start = |db: &mut ObjectDatabase| {
         crate::event::enrollment::pass::tests::helpers::bind_database(db, &identity);
         db.add(crate::event::enrollment::pass::tests::helpers::lower_device(50))

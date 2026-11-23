@@ -59,6 +59,7 @@ fn device(
         .collect();
     let identity = DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(&services);
     let mut db = identity.build_database().unwrap();
     let responder = Responder::new(identity, Limits::default()).unwrap();

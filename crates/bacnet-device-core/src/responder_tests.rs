@@ -73,6 +73,7 @@ impl BACnetObject for Lenient {
 fn identity() -> DeviceIdentity {
     DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_name("core-device")
         .with_services(SERVICES)
 }
@@ -492,7 +493,9 @@ fn announced(db: &mut ObjectDatabase, apdu: Bytes) -> Option<ObjectIdentifier> {
 fn who_is_and_who_has_name_the_identity_device_beside_a_second_one() {
     let mut db = database();
     let second = bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
-        identity: DeviceIdentity::new(5, 0x105).unwrap(),
+        identity: DeviceIdentity::new(5, 0x105)
+            .unwrap()
+            .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION),
         ..Default::default()
     });
     db.add(Box::new(second.unwrap())).unwrap();

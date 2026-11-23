@@ -301,8 +301,11 @@ impl Lab {
         indexed_only: bool,
         site: bool,
     ) -> Self {
+        // The lab devices don't segment, so a long answer is cut short
+        // (MORE_ITEMS) and the tools page across answers (#2617).
         let identity = DeviceIdentity::new(LAB, 260)
             .unwrap()
+            .with_segmentation(Segmentation::NO_SEGMENTATION)
             .with_name("Lab device");
         let database = build_database_with_extra(&identity, lab_objects(extra, site)).unwrap();
         let (client_port, server_port) =
@@ -317,6 +320,7 @@ impl Lab {
             links.push((alias_mac(alias), Arc::new(client_port)));
             let identity = DeviceIdentity::new(alias, 260)
                 .unwrap()
+                .with_segmentation(Segmentation::NO_SEGMENTATION)
                 .with_name(format!("Lab device {alias}"));
             let database = build_database_with_extra(&identity, lab_objects(extra, site)).unwrap();
             let server = BACnetServer::generic_builder()

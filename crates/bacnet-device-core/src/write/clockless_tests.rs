@@ -90,7 +90,9 @@ fn encoded(list: &[BACnetDestination]) -> Vec<u8> {
 /// A Device and a Notification Class with no destination, and a
 /// responder for them, with a clock when `clocked`.
 fn device(clocked: bool) -> (Responder, ObjectDatabase) {
-    let identity = DeviceIdentity::new(9, 0x105).unwrap();
+    let identity = DeviceIdentity::new(9, 0x105)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     let forwarder =
         bacnet_objects::notification_forwarder::NotificationForwarderObject::new(1, "NF-1");
     let objects: Vec<Box<dyn BACnetObject>> = vec![

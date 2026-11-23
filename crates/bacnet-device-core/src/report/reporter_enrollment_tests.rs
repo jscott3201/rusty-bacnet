@@ -55,6 +55,7 @@ fn enrolled_with(
 ) -> Device {
     let identity = DeviceIdentity::new(9, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(SERVICES);
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
     class.ack_required = EventTransitionBits::TO_OFFNORMAL;
@@ -116,7 +117,9 @@ const TEN: Duration = Duration::from_secs(10);
 
 #[test]
 fn an_enrollment_pass_needs_the_event_path() {
-    let identity = DeviceIdentity::new(9, 0x105).unwrap();
+    let identity = DeviceIdentity::new(9, 0x105)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     let responder = Responder::new(identity, crate::responder::Limits::default()).unwrap();
     let config = ReportConfig::default().with_event_enrollment(TEN);
     assert!(Reporter::new(responder, config).is_err());
@@ -261,7 +264,9 @@ fn a_reference_to_another_device_is_not_evaluated() {
 /// With no period set the reporter runs no pass.
 #[test]
 fn without_a_period_no_pass_runs() {
-    let identity = DeviceIdentity::new(9, 0x105).unwrap();
+    let identity = DeviceIdentity::new(9, 0x105)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     let objects: Vec<Box<dyn bacnet_objects::traits::BACnetObject>> = vec![
         Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap()),
         Box::new(enrollment(1, P::PRESENT_VALUE, 0)),

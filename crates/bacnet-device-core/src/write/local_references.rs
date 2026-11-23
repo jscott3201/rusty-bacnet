@@ -339,7 +339,8 @@ mod tests {
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
                 identity: bacnet_objects::DeviceIdentity::new(instance, 0)
-                    .expect("valid Device identity"),
+                    .expect("valid Device identity")
+                    .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION),
                 ..DeviceConfig::default()
             })
             .unwrap(),
@@ -374,6 +375,7 @@ mod tests {
             DeviceObject::new(DeviceConfig {
                 identity: bacnet_objects::DeviceIdentity::new(3, 0)
                     .unwrap()
+                    .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
                     .with_name("Device-3"),
                 ..DeviceConfig::default()
             })

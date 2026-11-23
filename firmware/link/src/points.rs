@@ -211,7 +211,9 @@ pub fn list() -> Result<PointList, Error> {
 /// The device's identity, declaring the services the responder runs: the
 /// objects image's.
 pub fn identity() -> Result<DeviceIdentity, Error> {
-    Ok(DeviceIdentity::new(DEVICE, VENDOR)?.with_services(SERVICES))
+    Ok(DeviceIdentity::new(DEVICE, VENDOR)?
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
+        .with_services(SERVICES))
 }
 
 /// Run the whole scenario on `list` ([`list`]), handing the responder

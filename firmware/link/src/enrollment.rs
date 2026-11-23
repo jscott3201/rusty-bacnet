@@ -138,7 +138,9 @@ fn database() -> Result<ObjectDatabase, Error> {
         .chain(report::EVENT_SERVICES)
         .copied()
         .collect();
-    let identity = DeviceIdentity::new(DEVICE, VENDOR)?.with_services(&services);
+    let identity = DeviceIdentity::new(DEVICE, VENDOR)?
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
+        .with_services(&services);
     let mut input = AnalogInputObject::new(7, "AI-7", EngineeringUnits::DEGREES_CELSIUS)?;
     input.set_present_value(20.0);
     let mut enrollment = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE)?;
@@ -251,7 +253,8 @@ pub fn run(
 /// The Event Enrollment device's part of [`run`].
 fn scenario(summary: &mut Summary) -> Result<(), Error> {
     let (ai7, ee1) = (ai7()?, ee1()?);
-    let identity = DeviceIdentity::new(crate::objects::DEVICE, crate::objects::VENDOR)?;
+    let identity = DeviceIdentity::new(crate::objects::DEVICE, crate::objects::VENDOR)?
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     let responder = Responder::new(identity, Limits::default())?;
     let second = Duration::from_secs(1);
     let config = ReportConfig::new(CovPolicy::default())
