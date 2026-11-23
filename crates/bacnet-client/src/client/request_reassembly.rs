@@ -138,8 +138,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// The body of `dispatch_apdu`'s branch for a segment of a confirmed
     /// request, when the client receives segments: hand it to the
     /// reassembly task, starting the task on the first one.
+    ///
+    /// `#[inline]`, so each crate that compiles `dispatch_apdu` compiles
+    /// its own copy, and the task's sends share the send path every request
+    /// takes; `#[cold]` keeps it out of `dispatch_apdu`. With
+    /// `#[inline(never)]` the program used the copy of a crate further up
+    /// that also starts a client, which brought a second copy of the B/IP
+    /// unicast send: the optimizer stopped inlining the datagram split into
+    /// either, about 28 instructions a request (perf-counts runs 45247178797
+    /// and 45254404722, #2646).
     #[cold]
-    #[inline(never)]
+    #[inline]
     pub(super) fn hand_off_segment(
         at: HandOff<'_, T>,
         source_mac: &[u8],
@@ -197,9 +206,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// The body of `dispatch_apdu`'s branch for an Abort with the server
     /// bit clear: hand it to the reassembly task, if one runs, to end the
-    /// transfer it names (Clause 5.4.5.2). It draws nothing back.
+    /// transfer it names (Clause 5.4.5.2). It draws nothing back. Inline
+    /// and cold for the reason [`Self::hand_off_segment`] gives.
     #[cold]
-    #[inline(never)]
+    #[inline]
     pub(super) fn hand_off_abort(
         tsm: &Arc<SyncMutex<Tsm>>,
         source_mac: &[u8],

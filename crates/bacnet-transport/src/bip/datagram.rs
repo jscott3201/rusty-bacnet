@@ -37,12 +37,6 @@ impl<'a> OutgoingDatagram<'a> {
     /// encoder writes `npdu` last and in one piece. `None` otherwise, which
     /// the unicast send reports as an encoding error: an
     /// Original-Unicast-NPDU always splits.
-    ///
-    /// Always inlined into the unicast send, its one caller: whether the
-    /// optimizer did so by itself hung on how many callers the rest of the
-    /// program gave the send path, and out of line it cost every request
-    /// about 32 instructions (perf-counts run 45247178797, #2646).
-    #[inline(always)]
     pub(super) fn split(message: &Bvll<'_>, npdu: &'a [u8]) -> Option<Self> {
         let head_len = message.encoded_len().ok()?.checked_sub(npdu.len())?;
         if head_len > HEAD_ROOM {
