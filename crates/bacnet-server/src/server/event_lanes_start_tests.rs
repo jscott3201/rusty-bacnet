@@ -3,10 +3,12 @@
 //! returns, without waiting for any device; the devices are looked for in
 //! the background, under the usual wait, and each silent one counts once.
 //! `stop()` while they are looked for returns at once and leaves no lane,
-//! no task and no send behind.
+//! no task and no send behind. The plan's COV fanout still goes, after the
+//! alarms are handed off.
 //!
 //! STG-1 drives BV-1, BV-2 and BV-3 active at start-up; BV-k alarms when
-//! active through Notification Class k, which names Device 9 + k, silent.
+//! active through Notification Class k, which names Device 9 + k, silent
+//! unless a test answers for it.
 
 use super::*;
 use bacnet_objects::binary::BinaryValueObject;
@@ -142,4 +144,61 @@ async fn stop_while_the_devices_are_looked_for_leaves_nothing() {
     tokio::time::sleep(WAIT * 2).await;
     assert_eq!(log.len(), sent, "nothing is sent after stop()");
     assert_eq!(counted(&h), (0, 0));
+}
+
+/// Whether `frame` is an event notification.
+fn is_event(frame: &crate::server::test_transport::SentFrame) -> bool {
+    matches!(frame.apdu(), Apdu::UnconfirmedRequest(request)
+        if request.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION)
+}
+
+/// A subscriber to BV-1 there before the plan's COV fanout, which waits for
+/// the start-up alarms: once the devices answer and the alarms go, the
+/// fanout reports BV-1 to it, after every alarm.
+#[tokio::test(start_paused = true)]
+async fn the_plans_cov_fanout_follows_its_alarms() {
+    let mut h = started().await;
+    h.server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 30, 0xBA, 0xC0]),
+            subscriber_network: None,
+            subscriber_process_identifier: 1,
+            monitored_object_identifier: bv(1),
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_observation: None,
+            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        })
+        .unwrap();
+    let mut looked_for = 0;
+    until("a Who-Is for each device", || {
+        looked_for += who_is_sent(&h).len();
+        looked_for == TARGETS as usize
+    })
+    .await;
+    assert_eq!(cov_reports(&h), 0, "the fanout waits for the alarms");
+    for k in 1..=TARGETS {
+        let mac = [10, 0, 0, 20 + k as u8, 0xBA, 0xC0];
+        deliver(&h, &i_am(9 + k), &mac, None).await;
+    }
+    until("the report", || cov_reports(&h) == 1).await;
+    let frames = h.server.test_network().transport().sent().frames();
+    let report = frames.iter().position(is_cov).unwrap();
+    let alarms: Vec<_> = (frames.iter().enumerate())
+        .filter(|(_, frame)| is_event(frame))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(alarms.len(), TARGETS as usize);
+    assert!(
+        alarms.iter().all(|&at| at < report),
+        "{alarms:?} then {report}"
+    );
+    h.server.stop().await.unwrap();
 }

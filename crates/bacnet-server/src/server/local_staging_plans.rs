@@ -118,8 +118,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         .await;
         super::command_runs::CommandRunner::for_server(self).start(runs);
         let cov = self.local_cov_context();
+        // What a caller of `start()` can rely on: the writes are committed
+        // when it returns; their event notifications may still be in flight,
+        // and a `stop()` at once drops those not yet sent.
         let Some(settled) = settle.into_wait() else {
-            // No notification to wait for: the fanout goes now.
+            // No notification to wait for: the fanout goes now, before
+            // `start()` returns, as it always has.
             let (coarse, life_safety) = (&owed.coarse, &owed.life_safety);
             Self::fire_post_write_cov_notifications(&cov, coarse, life_safety).await;
             return;
@@ -131,10 +135,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &self.device_bindings,
         );
         let cap = self.config.cov_retry_timeout_ms;
-        self.request_tasks.spawn(async move {
+        self.request_tasks
+            .spawn(Self::start_up_fanout(fanout, settled, cap, owed));
+    }
+
+    /// The start-up plans' COV fanout, once their notifications are handed
+    /// off or `cap` runs out. A panic ends only it, said as its own, not as
+    /// a request's.
+    async fn start_up_fanout(
+        fanout: super::super::cov_fanout::CovFanout<T>,
+        settled: oneshot::Receiver<()>,
+        cap: u64,
+        owed: CommittedCov,
+    ) {
+        use futures_util::FutureExt;
+        let fire = async {
             settled_lanes(Some(settled), cap, &fanout.notification_transactions).await;
             fanout.fire(&owed).await;
-        });
+        };
+        if std::panic::AssertUnwindSafe(fire)
+            .catch_unwind()
+            .await
+            .is_err()
+        {
+            warn!(
+                objects = owed.coarse.len() + owed.life_safety.len(),
+                "The start-up Staging plans' COV fanout panicked; those objects report on \
+                 their next change"
+            );
+        }
     }
 
     pub(in crate::server) fn take_staging_plans(
