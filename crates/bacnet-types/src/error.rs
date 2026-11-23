@@ -22,7 +22,7 @@ use crate::constructed::BACnetObjectPropertyReference;
 use crate::data_link::DataLink;
 #[cfg(feature = "alloc")]
 use crate::enums::PropertyIdentifier;
-use crate::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
+use crate::enums::{AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason};
 
 mod decode;
 mod encode;
@@ -55,6 +55,34 @@ impl fmt::Display for NotAdvancing {
                  the device answered with no records"
             ),
         }
+    }
+}
+
+/// [`Error::UnexpectedAck`]'s text.
+struct WrongAck {
+    service: ConfirmedServiceChoice,
+    complex: bool,
+}
+
+impl fmt::Display for WrongAck {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (came, takes) = if self.complex {
+            ("a Complex-ACK", "a Simple-ACK, with no data")
+        } else {
+            ("a Simple-ACK", "a Complex-ACK carrying its result")
+        };
+        f.write_str("the device acknowledged ")?;
+        remote::write_name(
+            f,
+            self.service.name(),
+            "service",
+            u16::from(self.service.to_raw()),
+        )?;
+        write!(
+            f,
+            " with {came}, but that service is acknowledged with {takes}; whether it \
+             carried out the request is unknown"
+        )
     }
 }
 
@@ -179,6 +207,25 @@ pub enum Error {
     /// [`Error::RoutedPathTooLong`].
     #[error("{0}")]
     NetworkRejected(NetworkReject),
+
+    /// The device acknowledged a confirmed request with the other kind of
+    /// acknowledgement than its service takes (#2721): a Complex-ACK for a
+    /// service whose result carries no data, such as WriteProperty, or a
+    /// Simple-ACK for one whose result does, such as ReadProperty (Clause
+    /// 21 lists the services with a Complex-ACK). The transaction ended
+    /// there, as any final acknowledgement ends it, so the client retries
+    /// nothing and sends the device nothing more; whether the device
+    /// carried out the request is unknown. A service the standard doesn't
+    /// define, or one it removed, takes either.
+    #[error("{}", WrongAck { service: *.service, complex: *.complex })]
+    UnexpectedAck {
+        /// The service the request asked for.
+        service: ConfirmedServiceChoice,
+        /// `true`: a Complex-ACK came for a service acknowledged with a
+        /// Simple-ACK; `false`: a Simple-ACK came for one acknowledged with
+        /// a Complex-ACK.
+        complex: bool,
+    },
 
     /// The client cannot safely allocate state for another routed path.
     #[error("routed path state capacity of {capacity} entries is exhausted")]

@@ -531,3 +531,29 @@ fn network_reject_error_codes_follow_the_reason() {
     assert_eq!(code(R::OTHER), ErrorCode::OTHER);
     assert_eq!(code(R::from_raw(9)), ErrorCode::OTHER);
 }
+
+/// An acknowledgement of the wrong kind names the service and both kinds,
+/// and says the request's outcome is unknown (#2721).
+#[test]
+fn unexpected_ack_display_names_the_service_and_both_kinds() {
+    let complex = Error::UnexpectedAck {
+        service: ConfirmedServiceChoice::WRITE_PROPERTY,
+        complex: true,
+    };
+    assert_eq!(
+        complex.to_string(),
+        "the device acknowledged write-property with a Complex-ACK, but that service is \
+         acknowledged with a Simple-ACK, with no data; whether it carried out the request is \
+         unknown"
+    );
+    let simple = Error::UnexpectedAck {
+        service: ConfirmedServiceChoice::READ_PROPERTY,
+        complex: false,
+    };
+    assert_eq!(
+        simple.to_string(),
+        "the device acknowledged read-property with a Simple-ACK, but that service is \
+         acknowledged with a Complex-ACK carrying its result; whether it carried out the \
+         request is unknown"
+    );
+}

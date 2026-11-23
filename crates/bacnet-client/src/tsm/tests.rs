@@ -2,6 +2,13 @@ use super::*;
 use bacnet_types::{enums::RejectReason, error::RemoteError};
 use tokio::time::{Duration, timeout};
 
+/// The Complex-ACK a ReadProperty transaction completes with (#2721).
+fn read_ack() -> TsmResponse {
+    TsmResponse::ComplexAck {
+        service_data: Bytes::new(),
+    }
+}
+
 fn assert_initial_response_aborted(
     admission: SegmentedResponseAdmission,
     expected_wire_reason: AbortReason,
@@ -483,13 +490,13 @@ async fn sent_all_segments_enables_response_correlation_before_final_ack() {
             &mac,
             invoke_id,
             Some(ConfirmedServiceChoice::READ_PROPERTY),
-            TsmResponse::SimpleAck,
+            read_ack(),
         ),
         CompletionOutcome::Delivered
     );
     assert!(matches!(
         registration.response.await.unwrap(),
-        TsmResponse::SimpleAck
+        TsmResponse::ComplexAck { .. }
     ));
 }
 
@@ -704,7 +711,7 @@ async fn stale_owner_cannot_mutate_reused_transaction_key() {
             invoke_id,
             &first.owner,
             Some(ConfirmedServiceChoice::READ_PROPERTY),
-            TsmResponse::SimpleAck,
+            read_ack(),
         ),
         CompletionOutcome::NoTransaction
     );
@@ -719,12 +726,12 @@ async fn stale_owner_cannot_mutate_reused_transaction_key() {
             invoke_id,
             &replacement.owner,
             Some(ConfirmedServiceChoice::READ_PROPERTY),
-            TsmResponse::SimpleAck,
+            read_ack(),
         ),
         CompletionOutcome::Delivered
     );
     assert!(matches!(
         replacement.response.await.unwrap(),
-        TsmResponse::SimpleAck
+        TsmResponse::ComplexAck { .. }
     ));
 }

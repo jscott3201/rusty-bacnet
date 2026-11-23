@@ -134,6 +134,16 @@ impl Tsm {
         {
             return CompletionOutcome::ServiceChoiceMismatch { expected, observed };
         }
+        // The device's acknowledgement of this transaction in the other
+        // form than its service takes still ends the transaction, as any
+        // final acknowledgement does, but fails the request (#2721).
+        let mut response = response;
+        if let Some(complex) = super::ack_form::wrong_kind(expected, &response) {
+            response = TsmResponse::UnexpectedAck {
+                service: expected,
+                complex,
+            };
+        }
         let pending = entry.remove();
         let responder = pending.responder;
         self.release_pending_lease(source_mac, invoke_id, pending.lease, release);

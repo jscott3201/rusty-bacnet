@@ -331,7 +331,7 @@ async fn reassembled_ack_for_a_different_service_is_discarded() {
 #[tokio::test]
 async fn abort_with_server_false_does_not_end_the_transaction() {
     let mut link =
-        PeerLink::issuing(config(), ConfirmedServiceChoice::READ_PROPERTY, vec![0x01]).await;
+        PeerLink::issuing(config(), ConfirmedServiceChoice::WRITE_PROPERTY, vec![0x01]).await;
     let invoke_id = link.request_invoke_id().await;
 
     // Clause 5.4.4.3 gates every AWAIT_CONFIRMATION abort transition on
@@ -344,7 +344,7 @@ async fn abort_with_server_false_does_not_end_the_transaction() {
     .await;
     link.send(Apdu::SimpleAck(SimpleAck {
         invoke_id,
-        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
     }))
     .await;
 

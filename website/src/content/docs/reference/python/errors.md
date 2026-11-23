@@ -17,6 +17,12 @@ The exceptions methods raise. The [Python reference](/rusty-bacnet/reference/pyt
 
 Base exception for all BACnet errors.
 
+Raised as itself for, among others, a device that acknowledged a request
+with the other kind of acknowledgement than its service takes: a
+Complex-ACK to a write or a Simple-ACK to a read (#2721). The request
+failed at once with no retry, and whether the device carried it out is
+unknown.
+
 ## BacnetProtocolError
 
 `class BacnetProtocolError(BacnetError)`

@@ -238,20 +238,6 @@ pub(crate) fn new_coordinated_tsm(
     )
 }
 
-pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
-    match response {
-        TsmResponse::SimpleAck => Ok(Bytes::new()),
-        TsmResponse::ComplexAck { service_data } => Ok(service_data),
-        TsmResponse::Remote {
-            error: RemoteError::Error { class, code },
-            detail,
-        } => Err(Error::with_detail(class, code, detail)),
-        TsmResponse::Remote { error, .. } => Err(Error::Remote(error)),
-        TsmResponse::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
-        TsmResponse::NetworkRejected(reject) => Err(Error::NetworkRejected(reject)),
-    }
-}
-
 impl ClientOptions {
     /// Set the COV notification broadcast channel capacity.
     pub fn with_cov_channel_capacity(mut self, capacity: usize) -> Self {
@@ -979,6 +965,8 @@ pub use routing_table::{
 use station::ConfirmedTarget;
 pub use station::{Broadcast, Station, ToStation};
 
+#[cfg(test)]
+mod ack_kind_tests;
 #[cfg(test)]
 mod acknowledge_alarm_tests;
 #[cfg(test)]

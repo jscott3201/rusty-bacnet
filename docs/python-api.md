@@ -572,6 +572,8 @@ ask only the instances between them: give both or neither.
 | `BacnetWriteDeniedError` | The write policy refuses the priority. Nothing was sent |
 | `BacnetProtocolError`, `BacnetRejectError`, `BacnetAbortError` | The device's own Error, Reject or Abort |
 | `BacnetTimeoutError` | No answer. A write may or may not have been applied |
+| `BacnetNetworkRejectError` | A router on the way refused the request: it never reached the device (#2724) |
+| `BacnetError` | Among others, an acknowledgement of the wrong kind for the service: a write may or may not have been applied (#2721) |
 | `BacnetTransportError` | The link failed |
 | `BacnetReadBackError`, `BacnetNoPriorityArrayError` | A relinquish the device acknowledged whose read back failed, or found no Priority_Array |
 | `BacnetPagingError` | A device broke a paged read's rules. No call pages yet |
@@ -7075,7 +7077,7 @@ All BACnet errors are raised as Python exceptions:
 
 | Exception | Meaning |
 |-----------|---------|
-| `BacnetError` | Base exception for all BACnet errors |
+| `BacnetError` | Base exception for all BACnet errors. Raised as itself for, among others, an acknowledgement of the other kind than the service takes (a Complex-ACK to a write, a Simple-ACK to a read, #2721): the request failed at once, no retry went, and whether the device carried it out is unknown |
 | `BacnetProtocolError` | A remote or local BACnet protocol check returned an error (class + code) |
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |

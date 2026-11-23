@@ -207,7 +207,7 @@ async fn confirmed_request_at_minimum_message_size_is_sent_unsegmented() {
     });
 
     let result = client
-        .confirmed_request(&remote_mac, ConfirmedServiceChoice::READ_PROPERTY, &[])
+        .confirmed_request(&remote_mac, ConfirmedServiceChoice::WRITE_PROPERTY, &[])
         .await;
 
     assert!(

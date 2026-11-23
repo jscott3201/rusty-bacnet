@@ -238,9 +238,10 @@ pub(super) fn decode(
 }
 
 /// Whether a request that ended with `result` reached its target, given
-/// that it registered a transaction. A peer's answer, a timeout, a
-/// transport failure while sending, a router's refusal of a request that
-/// went out (#2724), and a request sent before the node's
+/// that it registered a transaction. A peer's answer (an acknowledgement
+/// of the wrong kind included, #2721), a timeout, a transport failure while
+/// sending, a router's refusal of a request that went out (#2724), and a
+/// request sent before the node's
 /// DeviceCommunicationControl withheld its retry did; a refusal before
 /// anything was sent, and a request whose transaction its client's or
 /// node's stop ended, did not.
@@ -253,6 +254,7 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
                 | Error::Structured { .. }
                 | Error::RoutedPathTooLong { .. }
                 | Error::NetworkRejected(_)
+                | Error::UnexpectedAck { .. }
                 | Error::Timeout(_)
                 | Error::Transport(_)
                 | Error::Segmentation(_)
@@ -269,7 +271,8 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
 /// say the device didn't answer in time. A router's network reject is the
 /// COMMUNICATION code Clause 18 gives its reason
 /// ([`NetworkReject::error_code`](bacnet_types::error::NetworkReject::error_code)).
-/// A request whose retry the node's
+/// An acknowledgement of the wrong kind for the service (#2721), whose
+/// outcome is unknown, is OTHER. A request whose retry the node's
 /// DeviceCommunicationControl withheld is SERVICES, COMMUNICATION_DISABLED,
 /// the pair the standard uses for a device whose communication that
 /// control turned off.

@@ -301,7 +301,8 @@ if let Error::Structured { detail, .. } = &e {
 }
 
 // Other variants: Timeout, RoutedPathTooLong, NetworkRejected,
-// RoutedPathCapacityExceeded, UnsupportedTransport, Encoding, etc.
+// UnexpectedAck, RoutedPathCapacityExceeded, UnsupportedTransport, Encoding,
+// etc.
 ```
 
 `RemoteError` has three arms, one per PDU: `Error { class, code }`,
@@ -13363,6 +13364,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Structured { class, code, detail }` | Remote error whose Clause 21 body adds fields (ChangeList-Error, CreateObject-Error, WritePropertyMultiple-Error and others): `detail` is the boxed `ErrorDetail` |
 | `Error::Timeout(duration)` | APDU retry exhausted |
 | `Error::RoutedPathTooLong { dnet }` | Router rejected the active message as too long for DNET |
+| `Error::UnexpectedAck { service, complex }` | The device acknowledged the request with the other kind of acknowledgement than its service takes: a Complex-ACK for a service acknowledged with a Simple-ACK (`complex` true, such as WriteProperty), or the reverse (#2721). The request failed at once and nothing more was sent; whether the device carried it out is unknown |
 | `Error::NetworkRejected(NetworkReject)` | The router a routed request went through refused it, sending back a Reject-Message-To-Network (no route, an addressing error, other); names the router in the link's form, the network and the reason |
 | `Error::RoutedPathCapacityExceeded { capacity }` | No routed-path entry can be allocated without discarding protected safety state |
 | `Error::UnsupportedTransport { required, actual }` | The client's data link cannot carry the operation (a BBMD helper on a non-B/IP transport) |

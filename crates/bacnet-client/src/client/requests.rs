@@ -41,14 +41,18 @@ pub(super) fn request_cut_off() -> Error {
 }
 
 /// Whether `response` is the device's own answer to a confirmed request: an
-/// acknowledgment, or its Error, Reject or Abort. Any of them shows that the
-/// request reached the device (Clause 19.4). A router's refusal, a reason 4
-/// ending the request as [`TsmResponse::NetworkPathTooLong`], is no answer
-/// from the device.
+/// acknowledgment, of the right kind or not (#2721), or its Error, Reject
+/// or Abort. Any of them shows that the request reached the device (Clause
+/// 19.4). A router's refusal, a reason 4 ending the request as
+/// [`TsmResponse::NetworkPathTooLong`] or another reason as
+/// [`TsmResponse::NetworkRejected`], is no answer from the device.
 pub(super) fn answered_by_peer(response: &Result<TsmResponse, Error>) -> bool {
     matches!(
         response,
-        Ok(TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Remote { .. })
+        Ok(TsmResponse::SimpleAck
+            | TsmResponse::ComplexAck { .. }
+            | TsmResponse::UnexpectedAck { .. }
+            | TsmResponse::Remote { .. })
     )
 }
 
@@ -697,7 +701,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     pub(super) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
-        super::confirmed_response_result(response)
+        response.into_result()
     }
 
     /// Send one frame of a confirmed request (its first, a retry or a

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
+mod ack_form;
 mod final_segment;
 #[cfg(test)]
 pub(crate) use final_segment::TerminalResponseAdmission;
@@ -81,6 +82,14 @@ pub enum TsmResponse {
     /// The router the request went through refused it at the network
     /// layer for another reason that ends a request at once (#2724).
     NetworkRejected(bacnet_types::error::NetworkReject),
+    /// The device acknowledged the request with the other kind of
+    /// acknowledgement than its service takes (#2721).
+    UnexpectedAck {
+        /// The service the request asked for.
+        service: ConfirmedServiceChoice,
+        /// `true` for a Complex-ACK, `false` for a Simple-ACK.
+        complex: bool,
+    },
 }
 
 impl TsmResponse {
@@ -100,6 +109,26 @@ impl TsmResponse {
         Self::Remote {
             error,
             detail: None,
+        }
+    }
+
+    /// What a request ends with: an acknowledgement's service data (empty
+    /// for a Simple-ACK), or the error the completion reports.
+    pub(crate) fn into_result(self) -> Result<Bytes, bacnet_types::error::Error> {
+        use bacnet_types::error::Error;
+        match self {
+            Self::SimpleAck => Ok(Bytes::new()),
+            Self::ComplexAck { service_data } => Ok(service_data),
+            Self::Remote {
+                error: RemoteError::Error { class, code },
+                detail,
+            } => Err(Error::with_detail(class, code, detail)),
+            Self::Remote { error, .. } => Err(Error::Remote(error)),
+            Self::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
+            Self::NetworkRejected(reject) => Err(Error::NetworkRejected(reject)),
+            Self::UnexpectedAck { service, complex } => {
+                Err(Error::UnexpectedAck { service, complex })
+            }
         }
     }
 }
