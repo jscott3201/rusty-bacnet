@@ -156,7 +156,12 @@ pub struct ClientConfig {
     /// Values 0 and 1 are invalid. Finite values between the BACnet wire
     /// encodings are conservatively rounded down (for example, 5 advertises 4).
     pub max_segments: Option<u8>,
-    /// Whether this client accepts segmented responses.
+    /// Whether this client receives segments (default `true`): it states
+    /// in each request that it accepts a segmented answer, and it
+    /// reassembles a confirmed notification its sender segments before it
+    /// executes it (#2646). Off, such a notification's first segment draws
+    /// an Abort (SEGMENTATION_NOT_SUPPORTED). An endpoint session's client
+    /// follows its Device's Segmentation_Supported (#2617).
     pub segmented_response_accepted: bool,
     /// Whether this client sends a confirmed request too long for one APDU
     /// as segments (default `true`). Off, such a request fails before
@@ -661,6 +666,9 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     /// The dispatch task's response-warning throttle, for tests to read.
     #[cfg(test)]
     response_warning: Arc<WarnThrottle>,
+    /// The dispatch task's segmented requests in progress, for tests to read.
+    #[cfg(test)]
+    request_transfers: Arc<request_reassembly::RequestTransfersHook>,
     local_mac: MacAddr,
     routed_path_limits: Arc<RoutedPathLimits>,
     /// See [`Self::group_source_request_drops`].
@@ -935,6 +943,7 @@ mod object_mgmt;
 pub(crate) mod pacing;
 mod property;
 mod read_range;
+mod request_reassembly;
 mod requests;
 mod response_admission;
 mod routed_path_limits;

@@ -56,9 +56,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///   APDU_Segment_Timeout are the identity's, and both roles do what
     ///   they say: the server reassembles segmented requests and segments
     ///   its answers as the identity allows, and the
-    ///   [`client`](Self::client) follows it too. The client still aborts
-    ///   a segmented ConfirmedCOVNotification, which it can't reassemble
-    ///   yet (#2646);
+    ///   [`client`](Self::client) follows it too, reassembling a segmented
+    ///   COV notification of either form when the identity receives
+    ///   segments (#2646);
     /// - a registered Network Port ([`with_registered_network_port`](Self::with_registered_network_port))
     ///   is the session's to reserve and publish, and the server serves it
     ///   for wildcard reads; written values take effect through the

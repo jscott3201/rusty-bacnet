@@ -1223,9 +1223,9 @@ source.
 An unsubscribed sender's broadcast can bring a
 `CovNotificationMultiple` too, so check `kind` (or use
 `isinstance`) before reading a `CovNotification`'s fields. A
-segmented COV-multiple request is answered with an Abort (the client
-does not support segmentation; tracked in #2646), and a confirmed
-notification sent again, its answer lost, is published again.
+confirmed notification that comes in segments is reassembled, then
+acknowledged and yielded once (#2646), and a confirmed notification
+sent again, its answer lost, is published again.
 
 ### BACnetClient.delete_object
 

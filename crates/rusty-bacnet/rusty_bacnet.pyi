@@ -6400,9 +6400,9 @@ class BACnetClient:
         An unsubscribed sender's broadcast can bring a
         ``CovNotificationMultiple`` too, so check ``kind`` (or use
         ``isinstance``) before reading a ``CovNotification``'s fields. A
-        segmented COV-multiple request is answered with an Abort (the client
-        does not support segmentation; tracked in #2646), and a confirmed
-        notification sent again, its answer lost, is published again.
+        confirmed notification that comes in segments is reassembled, then
+        acknowledged and yielded once (#2646), and a confirmed notification
+        sent again, its answer lost, is published again.
         """
         ...
 
@@ -10037,9 +10037,8 @@ class BipEndpoint:
     ``BACnetServer()`` keeps its own default of ``NO_SEGMENTATION``. The
     keyword-only ``apdu_segment_timeout_ms`` (default 5000, positive when
     segmenting) is the Device's APDU_Segment_Timeout, which both roles use
-    while they segment. Known gap: ``client()`` still aborts a segmented
-    ConfirmedCOVNotification (#2646), though the Device says it takes
-    segments.
+    while they segment. ``client()`` reassembles a segmented COV
+    notification while the Device takes segments (#2646).
 
     ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
     no object may have it, so it, or anything larger, raises ValueError at

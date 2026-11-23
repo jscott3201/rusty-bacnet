@@ -40,7 +40,9 @@
 //!   counted and dropped;
 //! - an Abort or Segment-ACK sent by a requester is about a request the
 //!   node serves: it goes to the server seat, or to the endpoint's answer
-//!   queue when there is none;
+//!   queue when there is none. The client seat also gets a copy of such an
+//!   Abort, with no reply authority: the client may be reassembling the
+//!   segmented notification it ends (#2646);
 //! - every network control goes to the client seat, beside the endpoint's
 //!   own Number owner. The server seat gets none: the node's one Number
 //!   owner answers for the network number.
@@ -56,8 +58,8 @@
 //! spare finds it full first:
 //!
 //! - Unconfirmed-Requests (I-Ams, Who-Is, notifications), and on the client
-//!   seat the segmented answers no lease holds, may fill it only down to
-//!   half of it;
+//!   seat the segmented answers no lease holds and the copies of a
+//!   requester's Abort, may fill it only down to half of it;
 //! - Confirmed-Requests may fill it down to its last quarter, the reserve
 //!   each endpoint queue keeps;
 //! - answers to the role's own requests, and a requester's Abort or

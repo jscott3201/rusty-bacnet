@@ -206,9 +206,9 @@ identity says, both ways by default (#2617): the server reassembles requests
 and segments answers, and the client accepts segmented answers, sends
 segmented requests and takes the identity's segment timeout only as far as the
 Device's Segmentation_Supported allows. Each segment, Segment-ACK and Abort
-reaches the role whose transaction it is. Known gap: the client still aborts a
-segmented ConfirmedCOVNotification (#2646), though the Device says it receives
-segments.
+reaches the role whose transaction it is. When the Device receives segments
+the client also reassembles a segmented COV notification of either form, as
+the answering side, and answers it once it is whole (#2646).
 
 ## What is proven
 

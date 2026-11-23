@@ -1,4 +1,5 @@
 use super::dispatch_context::{DispatchContext, InboundApdu};
+use super::request_reassembly::{ReceiveState, RequestSegment, RequestSegmentContext};
 use super::response_admission::{
     TerminalDispatchOutcome, TerminalResponse, admit_terminal_during_reassembly,
     complete_terminal_response, current_reassembly_owner, log_coordinated_mismatch,
@@ -13,7 +14,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Dispatch a received APDU to the appropriate handler.
     pub(super) async fn dispatch_apdu(
         context: DispatchContext<'_, T>,
-        seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
+        seg_state: &mut ReceiveState,
         inbound: InboundApdu<'_>,
         apdu: Apdu,
         limits: ResponseLimits,
@@ -66,13 +67,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let coordinator_apdu = Apdu::SimpleAck(ack.clone());
                 admit_terminal_during_reassembly(
                     tsm,
-                    seg_state,
+                    &mut seg_state.responses,
                     &key,
                     &canonical_peer,
                     &coordinator_apdu,
                 )
                 .await;
-                if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
+                if let Some(state) =
+                    take_current_reassembly(tsm, &mut seg_state.responses, &key).await
+                {
                     debug!(
                         invoke_id = ack.invoke_id,
                         "Aborting reassembly on a SimpleAck"
@@ -127,7 +130,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::handle_segmented_complex_ack(
                         tsm,
                         network,
-                        seg_state,
+                        &mut seg_state.responses,
                         InboundSegmentSource {
                             mac: source_mac,
                             network: source_network,
@@ -148,13 +151,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     let coordinator_apdu = Apdu::ComplexAck(ack.clone());
                     admit_terminal_during_reassembly(
                         tsm,
-                        seg_state,
+                        &mut seg_state.responses,
                         &key,
                         &canonical_peer,
                         &coordinator_apdu,
                     )
                     .await;
-                    if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
+                    if let Some(state) =
+                        take_current_reassembly(tsm, &mut seg_state.responses, &key).await
+                    {
                         debug!(
                             invoke_id = ack.invoke_id,
                             "Aborting reassembly on an unsegmented ComplexAck"
@@ -219,13 +224,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let coordinator_apdu = Apdu::Error(err.clone());
                 admit_terminal_during_reassembly(
                     tsm,
-                    seg_state,
+                    &mut seg_state.responses,
                     &key,
                     &canonical_peer,
                     &coordinator_apdu,
                 )
                 .await;
-                if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
+                if let Some(state) =
+                    take_current_reassembly(tsm, &mut seg_state.responses, &key).await
+                {
                     debug!(
                         invoke_id = err.invoke_id,
                         "Aborting reassembly on an Error PDU"
@@ -284,13 +291,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let coordinator_apdu = Apdu::Reject(rej.clone());
                 admit_terminal_during_reassembly(
                     tsm,
-                    seg_state,
+                    &mut seg_state.responses,
                     &key,
                     &canonical_peer,
                     &coordinator_apdu,
                 )
                 .await;
-                if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
+                if let Some(state) =
+                    take_current_reassembly(tsm, &mut seg_state.responses, &key).await
+                {
                     debug!(
                         invoke_id = rej.invoke_id,
                         "Aborting reassembly on a Reject PDU"
@@ -329,9 +338,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // must not, echoed back or spoofed, complete the very
                 // transaction it was trying to abort.
                 if !abt.sent_by_server {
+                    // A requester's Abort ends the reassembly of its
+                    // request, if one is open (Clause 5.4.5.2
+                    // AbortPDU_Received), and draws nothing back (#2646).
                     debug!(
                         invoke_id = abt.invoke_id,
-                        "Ignoring Abort PDU with server=FALSE"
+                        "Abort PDU with server=FALSE ends its request's reassembly"
+                    );
+                    seg_state.requests.abort(
+                        source_mac,
+                        source_network.as_ref(),
+                        abt.invoke_id,
+                        provenance,
                     );
                     return;
                 }
@@ -348,7 +366,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // the slot frees at the Abort, not at the peer's next move.
                 let key = (tsm_mac, abt.invoke_id, provenance);
                 let tsm_mac = &key.0;
-                let reassembly_owner = current_reassembly_owner(tsm, seg_state, &key).await;
+                let reassembly_owner =
+                    current_reassembly_owner(tsm, &mut seg_state.responses, &key).await;
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
                 // Carries no service choice (Clause 20.1.9).
                 let response = TsmResponse::remote(abt.remote_error());
@@ -373,10 +392,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     ))
                 ) && let Some(owner) = reassembly_owner
                     && seg_state
+                        .responses
                         .get(&key)
                         .is_some_and(|state| state.owner.same_as(&owner))
                 {
-                    seg_state.remove(&key);
+                    seg_state.responses.remove(&key);
                 }
             }
             Apdu::ConfirmedRequest(req) => {
@@ -390,14 +410,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     return;
                 }
                 if req.segmented {
-                    Self::send_server_abort(
-                        network,
-                        source_mac,
-                        source_network,
-                        reply,
-                        req.invoke_id,
-                        bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED,
-                    )
+                    // Boxed: the reassembly's state stays out of this
+                    // future, which every APDU builds (#2646).
+                    Box::pin(Self::receive_request_segment(
+                        RequestSegmentContext {
+                            network,
+                            cov_tx,
+                            event_tx,
+                            policy: confirmed_cov_ack_policy,
+                            decode_warning,
+                            response_warning,
+                            receives: limits.segmented_response_accepted,
+                        },
+                        &mut seg_state.requests,
+                        RequestSegment {
+                            source_mac,
+                            source_network,
+                            reply,
+                            request: req,
+                        },
+                    ))
                     .await;
                     return;
                 }
@@ -542,7 +574,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 //
                 // Receive state is checked before the outgoing phase because
                 // SEGMENTED_CONF gives this PDU the opposite disposition.
-                if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
+                if let Some(state) =
+                    take_current_reassembly(tsm, &mut seg_state.responses, &key).await
+                {
                     debug!(invoke_id, "Aborting reassembly on an unexpected SegmentAck");
                     // The stored identity, not this PDU's source. A key match
                     // already forces the inbound SNET/SADR to equal the
@@ -656,6 +690,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 fn is_confirmed_cov_notification(service: ConfirmedServiceChoice) -> bool {
     service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
         || service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+}
+
+/// Whether `service` is a ConfirmedEventNotification (Clause 13.8).
+pub(super) fn is_confirmed_event_notification(service: ConfirmedServiceChoice) -> bool {
+    service == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
+}
+
+/// Whether the client executes a confirmed request for `service`, so
+/// reassembles one that comes segmented (#2646): a COV notification of
+/// either form, or a ConfirmedEventNotification. Beside a server role only
+/// the COV notifications reach that far.
+pub(super) fn executes_segmented(service: ConfirmedServiceChoice) -> bool {
+    is_confirmed_cov_notification(service) || is_confirmed_event_notification(service)
 }
 
 /// Whether a confirmed COV notification is the several-object form

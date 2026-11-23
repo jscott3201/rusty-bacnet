@@ -34,7 +34,7 @@ fn remote() -> Option<NpduAddress> {
     })
 }
 
-fn payload(text: Option<&[u8]>) -> Bytes {
+pub(super) fn payload(text: Option<&[u8]>) -> Bytes {
     let mut data = BytesMut::from(PREFIX);
     if let Some(text) = text {
         encode_tag(&mut data, 7, TagClass::Context, text.len() as u32);
@@ -121,10 +121,17 @@ struct Harness {
 
 impl Harness {
     async fn new(capacity: usize) -> Self {
+        Self::receiving_segments(capacity, true).await
+    }
+
+    /// A client that takes segments when `segments`; one that doesn't
+    /// aborts a segmented request (#2646).
+    async fn receiving_segments(capacity: usize, segments: bool) -> Self {
         let (input, input_rx) = mpsc::channel(8);
         let (output_tx, output) = mpsc::channel(8);
         let client = BACnetClient::generic_builder()
             .transport(receive_transport(input_rx, output_tx))
+            .segmented_response_accepted(segments)
             .event_channel_capacity(capacity)
             .confirmed_cov_notification_ack_policy(|_| {
                 panic!("event notifications must not invoke the COV policy")
@@ -501,7 +508,8 @@ async fn unconfirmed_group_event_is_delivered_without_reply() {
 
 #[tokio::test]
 async fn segmented_event_request_keeps_server_abort_and_never_publishes() {
-    let mut h = Harness::new(64).await;
+    // A client that takes no segments (#2646).
+    let mut h = Harness::receiving_segments(64, false).await;
     let mut rx = h.client.event_notifications();
     for source in [None, remote()] {
         h.send(inbound(request(payload(None), true, true), source.clone()))
@@ -514,7 +522,9 @@ async fn segmented_event_request_keeps_server_abort_and_never_publishes() {
 
 #[tokio::test]
 async fn immediate_reply_and_closed_channel_fallback_preserve_event_responses() {
-    let mut h = Harness::new(64).await;
+    // A client that takes no segments, so the segmented case is one Abort
+    // (#2646).
+    let mut h = Harness::receiving_segments(64, false).await;
     let mut rx = h.client.event_notifications();
     for source in [None, remote()] {
         for closed in [false, true] {

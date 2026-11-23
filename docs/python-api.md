@@ -2737,10 +2737,9 @@ client acknowledges a confirmed notification of either kind whether or not it
 knows the subscription, so match one by its `subscriber_process_identifier`
 and source. An unsubscribed sender's broadcast can bring a
 `CovNotificationMultiple` too, so check `kind` (or `isinstance`) before
-reading a `CovNotification`'s fields. A segmented COV-multiple request is
-answered with an Abort (the client does not support segmentation; tracked in
-#2646), and a confirmed notification sent again, its answer lost, is
-published again.
+reading a `CovNotification`'s fields. A confirmed notification that comes in
+segments is reassembled, then acknowledged and yielded once (#2646), and a
+confirmed notification sent again, its answer lost, is published again.
 
 ```python
 notifications = await client.cov_notifications()
@@ -7782,9 +7781,8 @@ async with endpoint:
   a peer that can't segment. `BACnetServer()` keeps its own default,
   `NO_SEGMENTATION`. The keyword-only `apdu_segment_timeout_ms` (default
   5000, positive when segmenting) is the Device's APDU_Segment_Timeout,
-  which both roles use while they segment. Known gap: `client()` still
-  aborts a segmented ConfirmedCOVNotification (#2646), though the Device
-  says it takes segments.
+  which both roles use while they segment. `client()` reassembles a
+  segmented COV notification while the Device takes segments (#2646).
 - **Who may write.** The keyword-only `mutation_policy` takes what
   `BACnetServer`'s does: `"permissive"` (any peer), `"deny_all"` (no peer,
   COV subscriptions included) or a callable that gets a `MutationContext`

@@ -21,12 +21,12 @@ bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-transport.workspace = true
 bacnet-network.workspace = true
+bytes = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
 bacnet-transport = { workspace = true, features = ["test-support"] }
-bytes = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 
 [lints]

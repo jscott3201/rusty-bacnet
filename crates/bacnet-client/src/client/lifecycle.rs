@@ -274,6 +274,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let decode_warning_hook = Arc::clone(&decode_warning);
         #[cfg(test)]
         let response_warning_hook = Arc::clone(&response_warning);
+        #[cfg(test)]
+        let request_transfers = Arc::new(request_reassembly::RequestTransfersHook::default());
+        #[cfg(test)]
+        let request_transfers_dispatch = Arc::clone(&request_transfers);
+        let segment_timeout = Duration::from_millis(config.segment_timeout_ms());
 
         let device_purge_task = spawn_device_purge(
             Arc::clone(&device_table),
@@ -284,7 +289,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let dispatch_task = tokio::spawn(async move {
             // Dropped when this task ends, however it ends (#2612).
             let _routing_end = routing_end;
-            let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
+            let mut seg_state = request_reassembly::ReceiveState::new(
+                segment_timeout,
+                #[cfg(test)]
+                request_transfers_dispatch,
+            );
             let mut order = TurnOrder::default();
 
             loop {
@@ -334,11 +343,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         // snapshot for this (mac, invoke) with a matching
                         // owner, regardless of trust context (fail-closed).
                         let found = seg_state
+                            .responses
                             .keys()
                             .find(|key| {
                                 key.0 == cleanup.mac
                                     && key.1 == cleanup.invoke_id
                                     && seg_state
+                                        .responses
                                         .get(*key)
                                         .is_some_and(|state| state.owner.same_as(&cleanup.owner))
                             })
@@ -346,7 +357,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         #[cfg(test)]
                         let removed = found.is_some();
                         if let Some(found) = found {
-                            seg_state.remove(&found);
+                            seg_state.responses.remove(&found);
                         }
                         if let Some(expected_sender) = cleanup.seg_ack_sender {
                             let key = (cleanup.mac, cleanup.invoke_id);
@@ -478,6 +489,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             decode_warning: decode_warning_hook,
             #[cfg(test)]
             response_warning: response_warning_hook,
+            #[cfg(test)]
+            request_transfers,
             local_mac,
             routed_path_limits,
             group_source_request_drops,

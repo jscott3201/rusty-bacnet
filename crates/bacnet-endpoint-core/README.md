@@ -5,6 +5,8 @@ Shared outbound transaction coordination and single-owner APDU ingress for the
 [`coordinator::OutboundTransactionCoordinator`] leases device-wide invoke IDs
 and matches decoded responses to their owning operation. [`endpoint_ingress`]
 classifies incoming APDUs into bounded role queues above one network layer.
+[`segmented_request`] reassembles segmented Confirmed-Requests on the answering
+side, without I/O.
 Applications that need a complete client/server lifecycle can use
 `bacnet-endpoint`; this crate provides the underlying coordination components.
 

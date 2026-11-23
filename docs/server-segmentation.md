@@ -54,9 +54,15 @@ the table above, and its client follows the same identity, accepting segmented
 answers only when the Device receives segments, sending segmented requests only
 when it transmits them, and taking the identity's Tseg as its segment timeout.
 A selected Device database must state the identity's mode. The client's APDU
-timeout and retries stay the session's. Known gap: the session's client still
-aborts a segmented ConfirmedCOVNotification (#2646), though the Device says it
-receives segments.
+timeout and retries stay the session's. When the Device receives segments, the
+session's client also reassembles a segmented COV notification of either form
+(#2646), with the full server's limits and timers
+(`bacnet_endpoint_core::segmented_request`): it acknowledges segment zero at
+once with the window the requester proposed, then each full window and the
+last segment, all with the server bit set, and answers the whole notification
+as one that came in one APDU. A standalone client does the same for every
+confirmed notification it executes, unless `segmented_response_accepted` is
+off.
 
 The Python full server accepts keyword-only `segmentation_supported` (default
 `Segmentation.NO_SEGMENTATION`) and `apdu_segment_timeout_ms` (default 5000). It constructs

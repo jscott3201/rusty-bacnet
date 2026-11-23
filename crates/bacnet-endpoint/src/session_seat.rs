@@ -77,9 +77,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// answers at once; the server 128 requests, 16 from one peer), so one
     /// role's transfers never take the other's room. A session without an
     /// identity leaves the client its own defaults: segmented both ways,
-    /// with its APDU timeout as its segment timeout. Known gap: the client
-    /// still aborts a segmented ConfirmedCOVNotification (#2646), though
-    /// the Device says it receives segments.
+    /// with its APDU timeout as its segment timeout. When the Device
+    /// receives segments, the client also reassembles a COV notification of
+    /// either form that its sender segments, acknowledging each segment as
+    /// the answering side, and then answers it as one that came whole
+    /// (#2646); otherwise it aborts the first segment
+    /// (SEGMENTATION_NOT_SUPPORTED). A requester's Abort ends such a
+    /// transfer in the client and in the server alike.
     ///
     /// **Who answers what.** Beside a server role the client answers only
     /// the COV notifications of its own subscriptions; the server answers
