@@ -81,7 +81,8 @@ impl DeviceAddress {
             // there, which only the one-station mark lets through (#2738).
             let marked = if network != 0 && form.lifted_by_one_station() {
                 "; a station at such an address needs the one-station mark, which the target \
-                 grammar has no form for"
+                 grammar can't write yet; Rust (Station::one_station) and Python \
+                 (RoutedTarget(..., one_station=True)) can"
             } else {
                 ""
             };

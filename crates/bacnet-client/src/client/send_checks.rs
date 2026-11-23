@@ -54,10 +54,15 @@ fn remote_broadcast_refused(
     } else {
         ""
     };
+    // The station the form may be, named for its length.
+    let which = match form {
+        RemoteBroadcast::MstpBroadcast => "ARCNET's station 255",
+        _ => "a station a gateway numbers in two octets",
+    };
     let way = if !one_station && form.lifted_by_one_station() {
         format!(
-            ". If {station} is one station on its network (ARCNET's station 255, or a station \
-             a gateway numbers in two octets), mark it one station (one_station)"
+            ". If {station} is one station on its network ({which}), mark it one station \
+             (one_station)"
         )
     } else {
         String::new()

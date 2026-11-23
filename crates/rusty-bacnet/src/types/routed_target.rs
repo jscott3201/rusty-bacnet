@@ -29,12 +29,13 @@ use super::*;
 /// are a station on some links: a call then goes to `b"\xff"` (station 255
 /// on ARCNET) and to two octets starting `0x00` or `0xFF` (a gateway's
 /// virtual network numbering its stations in two octets), but not to
-/// `b"\x00\x00"` or `b"\xff\xff"`; a marked one-octet address is read as
-/// ARCNET's, so `b"\x00"`, its broadcast, is refused instead, and three and
-/// six octets are checked as unmarked. `router`, when given, is the next
-/// hop's address on the local link, in the same forms or as `bytes`, such
-/// as a routed `DiscoveredDevice`'s `mac_address`; a call refuses one that is a
-/// broadcast or group address on the local link (#2722). Without an
+/// `b"\x00\x00"` or `b"\xff\xff"`, and three and six octets are checked
+/// as unmarked. The mark only lifts: `b"\x00"` goes marked or not, so an
+/// ARCNET network's broadcast there is not caught. `router`, when given, is
+/// the next hop's address on the local link, in the same forms or as
+/// `bytes`, such as a routed `DiscoveredDevice`'s `mac_address`; a call
+/// refuses one that is a broadcast or group address on the local link
+/// (#2722). Without an
 /// explicit next hop the client reuses its learned route, or learns one
 /// from a Who-Is addressed to this station, then one to its network if
 /// nothing answers (a marked station at a form bacnet-ops refuses, such as
@@ -164,7 +165,7 @@ impl PyRoutedTarget {
 
     /// Whether the address is marked one station: `b"\xff"` and two
     /// octets starting `0x00` or `0xFF` (but `b"\x00\x00"` and `b"\xff\xff"`)
-    /// are a station, and `b"\x00"` ARCNET's broadcast.
+    /// are a station.
     #[getter]
     fn one_station(&self) -> bool {
         self.one_station

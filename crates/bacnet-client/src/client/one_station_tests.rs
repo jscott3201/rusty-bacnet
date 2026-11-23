@@ -25,10 +25,9 @@ fn routed_row(router: &[u8], mac: &[u8]) -> DiscoveredDevice {
 
 /// Each form by the routed, the table-routed and the local-broadcast form
 /// alike: unmarked, the one octet `0xFF` and two octets starting `0x00` or
-/// `0xFF` are refused and an MS/TP station 0 goes; marked, those go but for
-/// `0x0000` and `0xFFFF`, and the one octet `0x00`, ARCNET's broadcast as a
-/// marked one-octet address is read, is refused. Three and six octets of a
-/// broadcast form stay refused either way.
+/// `0xFF` are refused; marked, those go but for `0x0000` and `0xFFFF`.
+/// The mark only lifts, so the one octet `0x00` goes either way, and three
+/// and six octets of a broadcast form stay refused either way.
 #[tokio::test(start_paused = true)]
 async fn the_one_station_mark_lifts_exactly_its_forms_in_every_form() {
     let (mut client, sent, _inbound) = client_on(
@@ -43,7 +42,7 @@ async fn the_one_station_mark_lifts_exactly_its_forms_in_every_form() {
     // The MAC, then whether a confirmed request goes unmarked and marked.
     let cases: [(&[u8], bool, bool); 13] = [
         (&[0xFF], false, true),
-        (&[0x00], true, false),
+        (&[0x00], true, true),
         (&[0x05], true, true),
         (&[0x00, 0x01], false, true),
         (&[0x00, 0xFF], false, true),
@@ -117,7 +116,6 @@ async fn a_refusal_names_the_mark_only_where_it_lifts_the_form() {
         (station(&[0xFF, 0x07], false), true, false),
         (station(&[0x00, 0x00], false), false, false),
         (station(&[0xFF; 3], false), false, false),
-        (station(&[0x00], true), false, true),
         (station(&[0x00, 0x00], true), false, true),
         (station(&[0xFF, 0xFF], true), false, true),
         (station(&[0xFF; 6], true), false, true),

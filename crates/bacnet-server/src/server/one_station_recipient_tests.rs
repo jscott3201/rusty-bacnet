@@ -1,10 +1,13 @@
 //! A Device binding marked one station (#2738) reaches a station at a form
-//! the mark lifts with confirmed event notifications and a Notification
+//! the mark lifts, and at the one octet `0x00`, which the mark never
+//! refuses, with confirmed event notifications and a Notification
 //! Forwarder's confirmed copies, read from the shared test transport's send
 //! log; the forms the mark doesn't lift stay unconfirmed only and count, as
 //! an unmarked binding's do.
 
-use super::super::event_recipient_route::broadcast_station_tests::{LIFTED, MARKED_FORMS};
+use super::super::event_recipient_route::broadcast_station_tests::{
+    LIFTED, MARKED_FORMS, MARKED_STATIONS,
+};
 use super::*;
 
 fn marked(instance: u32, mac: &[u8]) -> DeviceBinding {
@@ -20,7 +23,7 @@ fn marked(instance: u32, mac: &[u8]) -> DeviceBinding {
 async fn a_device_bound_marked_one_station_gets_confirmed_notifications_where_the_mark_lifts() {
     let mut bindings = DeviceBindingTable::new();
     let mut destinations = Vec::new();
-    let macs: Vec<&[u8]> = LIFTED.into_iter().chain(MARKED_FORMS).collect();
+    let macs: Vec<&[u8]> = MARKED_STATIONS.into_iter().chain(MARKED_FORMS).collect();
     for (instance, mac) in (100..).zip(&macs) {
         bindings
             .insert_configured(marked(instance, mac), |_| false)
@@ -38,7 +41,7 @@ async fn a_device_bound_marked_one_station_gets_confirmed_notifications_where_th
         via: Some(ROUTER.to_vec()),
     };
     let mut expected: Vec<Sent> = (100..)
-        .zip(LIFTED)
+        .zip(MARKED_STATIONS)
         .map(|(process, mac)| through_router(process, true, mac))
         .chain(
             (200..)
@@ -80,7 +83,7 @@ async fn the_same_binding_unmarked_gets_unconfirmed_notifications_only() {
 /// counted, and the unconfirmed copy goes either way.
 #[tokio::test]
 async fn a_forwarded_confirmed_copy_to_a_device_bound_marked_one_station() {
-    for (mac, delivered) in LIFTED
+    for (mac, delivered) in MARKED_STATIONS
         .into_iter()
         .map(|mac| (mac, true))
         .chain(MARKED_FORMS.into_iter().map(|mac| (mac, false)))

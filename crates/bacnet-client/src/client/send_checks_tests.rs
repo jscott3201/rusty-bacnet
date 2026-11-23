@@ -7,9 +7,8 @@ use super::*;
 /// of each length goes.
 #[test]
 fn a_confirmed_request_refuses_exactly_the_remote_broadcast_forms() {
-    let refused: [(&[u8], bool); 11] = [
+    let refused: [(&[u8], bool); 10] = [
         (&[0xFF], false),
-        (&[0x00], true),
         (&[0x00, 0x05], false),
         (&[0xFF, 0x07], false),
         (&[0x00, 0x00], true),
@@ -24,8 +23,9 @@ fn a_confirmed_request_refuses_exactly_the_remote_broadcast_forms() {
         let checked = check_remote_station(7, mac, one_station);
         assert!(checked.is_err(), "{mac:02X?} one_station {one_station}");
     }
-    let stations: [(&[u8], bool); 10] = [
+    let stations: [(&[u8], bool); 11] = [
         (&[0xFF], true),
+        (&[0x00], true),
         (&[0x00, 0x05], true),
         (&[0xFF, 0x07], true),
         (&[0x00], false),
@@ -56,7 +56,11 @@ fn a_remote_broadcast_refusal_says_which_form_and_what_to_use() {
         text.contains("7:0xFF on network 7 is station 255"),
         "{text}"
     );
-    assert!(text.contains("mark it one station (one_station)"), "{text}");
+    assert!(
+        text.contains("(ARCNET's station 255), mark it one station (one_station)"),
+        "{text}"
+    );
+    assert!(!text.contains("two octets"), "{text}");
     assert!(text.contains("only an unconfirmed request"), "{text}");
     let decoded: [(u16, &[u8], &str); 3] = [
         (
@@ -81,6 +85,15 @@ fn a_remote_broadcast_refusal_says_which_form_and_what_to_use() {
             panic!("refused");
         };
         assert!(text.contains(expected), "{text}");
+        // A two-octet form's hint names a gateway's two-octet station, not
+        // ARCNET; the six-octet form names no mark, which can't lift it.
+        let two = mac.len() == 2;
+        assert_eq!(
+            text.contains("(a station a gateway numbers in two octets), mark it one station"),
+            two,
+            "{text}"
+        );
+        assert!(!text.contains("ARCNET"), "{text}");
     }
 }
 

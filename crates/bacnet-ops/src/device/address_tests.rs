@@ -87,7 +87,8 @@ fn only_a_station_is_an_address() {
     assert_eq!(
         refused,
         "MAC 0x0005 is a LonTalk broadcast (subnet 5), not a station; a station at such an \
-         address needs the one-station mark, which the target grammar has no form for"
+         address needs the one-station mark, which the target grammar can't write yet; Rust \
+         (Station::one_station) and Python (RoutedTarget(..., one_station=True)) can"
     );
     assert!(DeviceAddress::new(5, &[0xFF, 0x07]).is_err());
     assert!("5:0xFFFFFFFFFFFF".parse::<DeviceAddress>().is_err());

@@ -190,9 +190,11 @@ async fn a_device_bound_at_a_remote_broadcast_form_gets_unconfirmed_records_only
 /// reads a configuration error and sends nothing, as unmarked.
 #[tokio::test(start_paused = true)]
 async fn a_device_bound_marked_one_station_gets_confirmed_records_where_the_mark_lifts() {
-    use crate::server::event_recipient_route::broadcast_station_tests::{LIFTED, MARKED_FORMS};
+    use crate::server::event_recipient_route::broadcast_station_tests::{
+        MARKED_FORMS, MARKED_STATIONS,
+    };
     let recipient = oid(ObjectType::DEVICE, 20);
-    let lifted = LIFTED.into_iter().map(|mac| (mac, true));
+    let lifted = MARKED_STATIONS.into_iter().map(|mac| (mac, true));
     for (mac, routed) in lifted.chain(MARKED_FORMS.into_iter().map(|mac| (mac, false))) {
         let mut reporter = reporter();
         reporter.set_issue_confirmed_notifications(true).unwrap();

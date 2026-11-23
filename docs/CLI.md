@@ -170,7 +170,7 @@ yet, `DNET:instance` sends a Who-Is for that instance on the named network.
 `DNET:0xMAC` directs its Who-Is to the named station. A MAC that is a
 broadcast or group form on its network (`2:0xFF`, two octets starting `0x00`
 or `0xFF`, `0xFFFFFF`, six octets starting `FF:FF:FF:FF`) is refused as no
-station. The library reaches an ARCNET station 255 or a gateway's two-octet
+station. Rust and Python reach an ARCNET station 255 or a gateway's two-octet
 virtual station by marking its address one station (#2738); the target
 grammar has no form for that mark yet. The CLI waits up to
 three seconds for a reply, then sends the service request through the router

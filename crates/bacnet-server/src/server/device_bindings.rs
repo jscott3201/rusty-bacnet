@@ -102,11 +102,12 @@ impl DeviceBinding {
     /// Forwarder's copies, Channel and Command writes, audit notifications
     /// and Audit Log forwarding) goes to `0xFF`, station 255 on ARCNET, and
     /// to two octets starting `0x00` or `0xFF`, but for `0x0000` and
-    /// `0xFFFF`; a marked one-octet `0x00`, ARCNET's broadcast as a marked
-    /// one-octet address is read, gets none, and three and six octets are
-    /// judged as unmarked (`bacnet_npdu::RemoteBroadcast` has the table). A
-    /// local binding is returned unchanged: the link's own group rule judges
-    /// its MAC.
+    /// `0xFFFF`; three and six octets are judged as unmarked
+    /// (`bacnet_npdu::RemoteBroadcast` has the table). The mark only lifts:
+    /// it refuses nothing an unmarked binding takes, so the one octet `0x00`
+    /// gets confirmed requests either way, and an ARCNET network's
+    /// broadcast there is not caught. A local binding is returned
+    /// unchanged: the link's own group rule judges its MAC.
     #[must_use]
     pub fn one_station(mut self) -> Self {
         if let DeviceBindingTarget::Routed { one_station, .. } = &mut self.target {

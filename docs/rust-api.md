@@ -4251,9 +4251,10 @@ Marked, every confirmed request the server starts toward that device (event
 notifications and a Notification Forwarder's copies to a Device recipient,
 Channel and Command writes, audit notifications and Audit Log forwarding)
 goes to the one octet `0xFF` and to two octets starting `0x00` or `0xFF`, but
-not to `0x0000` or `0xFFFF`. A marked one-octet address is read as ARCNET's,
-so `0x00`, its broadcast, gets none; three and six octets are judged as
-unmarked. `bacnet_npdu::RemoteBroadcast` has the table, and an endpoint
+not to `0x0000` or `0xFFFF`; three and six octets are judged as unmarked.
+The mark only lifts, never refuses: the one octet `0x00` takes confirmed
+requests marked or not, so an ARCNET network's broadcast there is not
+caught. `bacnet_npdu::RemoteBroadcast` has the table, and an endpoint
 session's source Audit binding takes the same mark
 (`with_source_audit_routed_one_station_binding`). Without the mark nothing
 changes. Three addresses can't carry it and stay unconfirmed-only at those
@@ -10932,9 +10933,10 @@ naming the address in its link's form (#2722, #2709):
   networks: ARCNET's station 255 is `0xFF`, and a gateway may number its
   virtual stations in two octets. Mark such a station `.one_station()`
   (#2738) and a confirmed request goes to `0xFF` and to two octets starting
-  `0x00` or `0xFF`, but not `0x0000` or `0xFFFF`; a marked one-octet address
-  is read as ARCNET's, so `0x00`, its broadcast, is refused instead, and
-  three and six octets are checked as unmarked. The refusal of an unmarked
+  `0x00` or `0xFF`, but not `0x0000` or `0xFFFF`, and three and six octets
+  are checked as unmarked. The mark only lifts, never refuses: the one octet
+  `0x00` goes marked or not, so an ARCNET network's broadcast there is not
+  caught. The refusal of an unmarked
   form the mark lifts names the mark. The target grammar of the CLI, TUI and
   MCP and `bacnet_ops::DeviceAddress` have no form for a marked address; a
   `Station` reaches one.

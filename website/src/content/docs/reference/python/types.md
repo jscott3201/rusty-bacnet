@@ -1443,9 +1443,9 @@ network (#2738), for the forms that are a station on some links: a call
 then goes to `b"\xff"` (station 255 on ARCNET) and to two octets
 beginning `0x00` or `0xFF` (a gateway's virtual network numbering
 its stations in two octets), but not to `b"\x00\x00"` or
-`b"\xff\xff"`. A marked one-octet address is read as ARCNET's, so
-`b"\x00"`, its broadcast, raises instead; three and six octets are
-checked as unmarked, and the mark changes nothing for other addresses.
+`b"\xff\xff"`; three and six octets are checked as unmarked. The
+mark only lifts, never refuses: `b"\x00"` goes marked or not, so an
+ARCNET network's broadcast there is not caught.
 With no `router`, a marked station at one of those forms is reached
 through its discovery-table row alone. A `router` that is a broadcast
 or group address on the local link raises BacnetError when a call is
@@ -1479,7 +1479,7 @@ Properties:
 - `network: int`
 - `address: bytes`: The station's MAC on its network.
 - `router: bytes | None`: The router's MAC on the local link, or None for the route the client knows.
-- `one_station: bool`: Whether the address is marked one station: `b"\xff"` and two octets beginning `0x00` or `0xFF` (but `b"\x00\x00"` and `b"\xff\xff"`) are a station, and `b"\x00"` ARCNET's broadcast.
+- `one_station: bool`: Whether the address is marked one station: `b"\xff"` and two octets beginning `0x00` or `0xFF` (but `b"\x00\x00"` and `b"\xff\xff"`) are a station.
 
 ### RoutedTarget.__init__
 

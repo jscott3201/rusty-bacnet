@@ -146,8 +146,10 @@ async fn audit_forwarding_to_a_parent_bound_at_a_remote_broadcast_form_never_sen
 /// the station; at a form the mark doesn't lift nothing goes, as unmarked.
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_to_a_parent_bound_marked_one_station() {
-    use crate::server::event_recipient_route::broadcast_station_tests::{LIFTED, MARKED_FORMS};
-    let lifted = LIFTED.into_iter().map(|mac| (mac, true));
+    use crate::server::event_recipient_route::broadcast_station_tests::{
+        MARKED_FORMS, MARKED_STATIONS,
+    };
+    let lifted = MARKED_STATIONS.into_iter().map(|mac| (mac, true));
     for (mac, sent) in lifted.chain(MARKED_FORMS.into_iter().map(|mac| (mac, false))) {
         let binding = DeviceBinding::routed(oid(ObjectType::DEVICE, 20), 200, mac, [2])
             .unwrap()

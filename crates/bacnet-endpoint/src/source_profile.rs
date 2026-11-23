@@ -176,11 +176,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// others. A Reporter sending confirmed records then reaches the one
     /// octet `0xFF` (station 255 on ARCNET) and two octets starting `0x00`
     /// or `0xFF` (a gateway's virtual network numbering its stations in two
-    /// octets), but not `0x0000` or `0xFFFF`; a one-octet `0x00`, ARCNET's
-    /// broadcast as a marked one-octet address is read, has no confirmed
-    /// route, and three and six octets are judged as unmarked
-    /// ([`bacnet_npdu::RemoteBroadcast`] has the table). [`start`](Self::start)
-    /// refuses what it refuses of an unmarked binding.
+    /// octets), but not `0x0000` or `0xFFFF`; three and six octets are
+    /// judged as unmarked ([`bacnet_npdu::RemoteBroadcast`] has the table).
+    /// The mark only lifts: the one octet `0x00` has a confirmed route
+    /// either way, and an ARCNET network's broadcast there is not caught.
+    /// [`start`](Self::start) refuses what it refuses of an unmarked
+    /// binding.
     ///
     /// [`with_source_audit_routed_device_binding`]: Self::with_source_audit_routed_device_binding
     ///

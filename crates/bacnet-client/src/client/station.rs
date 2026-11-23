@@ -142,10 +142,11 @@ impl Station {
     /// [`RemoteBroadcast`] form. Marked, it sends one to the one octet
     /// `0xFF` (station 255 on ARCNET, Clause 8) and to two octets starting
     /// `0x00` or `0xFF` (a gateway's virtual network that numbers its
-    /// stations in two octets), but for `0x0000` and `0xFFFF`. A marked
-    /// one-octet address is read as ARCNET's, so `0x00`, its broadcast, is
-    /// refused instead; three and six octets are checked as unmarked
-    /// (the table in [`RemoteBroadcast`]'s docs). A station on this link is
+    /// stations in two octets), but for `0x0000` and `0xFFFF`; three and six
+    /// octets are checked as unmarked (the table in [`RemoteBroadcast`]'s
+    /// docs). The mark only lifts: it refuses nothing the unmarked check
+    /// takes, so the one octet `0x00` goes either way, and an ARCNET
+    /// network's broadcast there is not caught. A station on this link is
     /// returned unchanged: the link's own group rule judges its MAC.
     #[must_use]
     pub fn one_station(self) -> Self {

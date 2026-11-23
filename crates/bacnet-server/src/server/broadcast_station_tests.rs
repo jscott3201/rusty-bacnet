@@ -32,12 +32,22 @@ pub(in crate::server) const LIFTED: [&[u8]; 6] = [
     &[0xFF, 0x07],
 ];
 
-/// Forms still refused for a binding marked one station: the one octet
-/// `0x00` (ARCNET's broadcast, as a marked one-octet address is read),
-/// `0x0000`, `0xFFFF`, and the three- and six-octet forms the mark doesn't
-/// touch.
-pub(in crate::server) const MARKED_FORMS: [&[u8]; 6] = [
+/// Addresses a binding marked one station reaches: each form the mark
+/// lifts, and the one octet `0x00`, which the mark never refuses (it only
+/// lifts), so an ARCNET network's broadcast there goes uncaught.
+pub(in crate::server) const MARKED_STATIONS: [&[u8]; 7] = [
     &[0x00],
+    &[0xFF],
+    &[0x00, 0x01],
+    &[0x00, 0xFF],
+    &[0xFF, 0x00],
+    &[0xFF, 0xFE],
+    &[0xFF, 0x07],
+];
+
+/// Forms still refused for a binding marked one station: `0x0000`, `0xFFFF`,
+/// and the three- and six-octet forms the mark doesn't touch.
+pub(in crate::server) const MARKED_FORMS: [&[u8]; 5] = [
     &[0x00, 0x00],
     &[0xFF, 0xFF],
     &[0xFF, 0xFF, 0xFF],
@@ -146,6 +156,12 @@ fn a_binding_marked_one_station_lifts_exactly_its_forms() {
         let unicast = bound(mac, true).into_unicast(no_group).expect("one hop");
         assert_eq!(unicast.broadcast_station(), Some(station));
     }
+    // The mark only lifts: the one octet 0x00 is a station marked or not.
+    for one_station in [false, true] {
+        assert_eq!(BroadcastStation::of(NETWORK, &[0x00], one_station), None);
+        let confirmed = bound(&[0x00], one_station).into_confirmed(no_group);
+        assert_eq!(confirmed.expect("a station").broadcast_station(), None);
+    }
     // The mark is dropped where the binding is localized: the link judges.
     let local = bound(&[0xFF], true).localize(Some(NETWORK), no_group, no_group);
     let confirmed = local
@@ -184,11 +200,6 @@ fn the_log_text_names_the_address_what_it_is_and_the_mark() {
     assert_eq!(
         text(&[0x00, 0x00], true),
         "5:0x0000, a LonTalk broadcast to the whole domain, even marked one station"
-    );
-    assert_eq!(
-        text(&[0x00], true),
-        "5:0x00, station 0, the broadcast of an ARCNET network (a one-octet address marked \
-         one station is read as ARCNET's), even marked one station"
     );
     let six = text(&[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0], false);
     assert!(

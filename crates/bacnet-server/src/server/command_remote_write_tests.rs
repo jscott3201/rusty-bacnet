@@ -209,13 +209,13 @@ async fn command_write_to_a_device_bound_at_a_remote_broadcast_form_is_never_sen
 /// starting `0x00` or `0xFF`), and none at a form it doesn't.
 #[tokio::test(start_paused = true)]
 async fn command_write_to_a_device_bound_marked_one_station() {
-    use super::event_recipient_route::broadcast_station_tests::{LIFTED, MARKED_FORMS};
+    use super::event_recipient_route::broadcast_station_tests::{MARKED_FORMS, MARKED_STATIONS};
     let marked = |mac: &[u8]| {
         DeviceBinding::routed(device(9), 5, mac, PEER)
             .unwrap()
             .one_station()
     };
-    for mac in LIFTED {
+    for mac in MARKED_STATIONS {
         let mut h = start(marked(mac)).await;
         write_pv(&mut h, 1, 1).await.unwrap();
         remote_write(&h).await;

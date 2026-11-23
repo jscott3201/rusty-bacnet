@@ -101,11 +101,10 @@ pub struct EventNotificationCounters {
     /// one-station mark, so an ARCNET station 255 or a gateway's two-octet
     /// virtual station named by its address counts here too; a Device
     /// binding marked one station ([`DeviceBinding::one_station`], #2738)
-    /// takes such a station out, but for `0x0000`, `0xFFFF` and the marked
-    /// one octet `0x00`. Clause 6.3 lets only
-    /// unconfirmed requests be broadcast, and sending one unconfirmed would
-    /// drop the acknowledgment the destination asks for. No invoke ID is
-    /// reserved for them.
+    /// takes such a station out, but for `0x0000` and `0xFFFF`. Clause 6.3
+    /// lets only unconfirmed requests be broadcast, and sending one
+    /// unconfirmed would drop the acknowledgment the destination asks for.
+    /// No invoke ID is reserved for them.
     pub confirmed_broadcast_recipient: u64,
     /// Confirmed notifications that found every invoke ID in use and waited
     /// for one to come back, counted once each as its wait starts (#2537).

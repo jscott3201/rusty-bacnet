@@ -8097,9 +8097,9 @@ some networks: ARCNET's station 255 is `b"\xff"`, and a gateway's virtual
 network may number its stations in two octets starting `0x00` or `0xFF`. For
 such a station pass `one_station=True`: a call then goes to `b"\xff"` and to
 two octets beginning `0x00` or `0xFF`, but not `b"\x00\x00"` or
-`b"\xff\xff"`. A marked one-octet address is read as ARCNET's, so `b"\x00"`,
-its broadcast, is refused instead; three and six octets are checked as
-unmarked. The error for an unmarked address the mark would let through says
+`b"\xff\xff"`; three and six octets are checked as unmarked. The mark only
+lifts, never refuses: `b"\x00"` goes marked or not, so an ARCNET network's
+broadcast there is not caught. The error for an unmarked address the mark would let through says
 so. Without a `router`, a marked station at one of those forms is reached
 through its discovery-table row alone, so name its router when the client
 has heard no I-Am from it. Unconfirmed calls (`who_is` and `discover` with a

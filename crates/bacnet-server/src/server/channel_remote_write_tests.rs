@@ -635,7 +635,7 @@ async fn channel_member_in_a_device_at_a_remote_broadcast_form_is_never_sent() {
 /// distribution succeeds; at a form the mark doesn't lift neither is sent.
 #[tokio::test(start_paused = true)]
 async fn channel_member_in_a_device_bound_marked_one_station() {
-    use super::event_recipient_route::broadcast_station_tests::{LIFTED, MARKED_FORMS};
+    use super::event_recipient_route::broadcast_station_tests::{MARKED_FORMS, MARKED_STATIONS};
     let bind = |h: &Harness, mac: &[u8]| {
         let binding = DeviceBinding::routed(device(10), 5, mac, PEER)
             .unwrap()
@@ -649,7 +649,7 @@ async fn channel_member_in_a_device_bound_marked_one_station() {
                 .unwrap();
         }
     };
-    for mac in LIFTED {
+    for mac in MARKED_STATIONS {
         let mut h = start().await;
         bind(&h, mac).await;
         write_channel(&mut h, 6, &PropertyValue::Real(80.0), Some(8))

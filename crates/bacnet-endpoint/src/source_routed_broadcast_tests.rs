@@ -20,10 +20,12 @@ const FORMS: [&[u8]; 5] = [
     &[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0],
 ];
 
-/// Forms a binding marked one station lifts: ARCNET's station 255 and
-/// two-octet stations starting `0x00` or `0xFF`, the ends of each range
-/// included.
-const LIFTED: [&[u8]; 6] = [
+/// Addresses a binding marked one station reaches: the forms the mark
+/// lifts (ARCNET's station 255, two-octet stations starting `0x00` or
+/// `0xFF`, the ends of each range included), and the one octet `0x00`, which
+/// the mark never refuses.
+const MARKED_STATIONS: [&[u8]; 7] = [
+    &[0x00],
     &[0xFF],
     &[0x00, 0x01],
     &[0x00, 0xFF],
@@ -33,8 +35,7 @@ const LIFTED: [&[u8]; 6] = [
 ];
 
 /// Forms still refused for a binding marked one station.
-const MARKED_FORMS: [&[u8]; 5] = [
-    &[0x00],
+const MARKED_FORMS: [&[u8]; 4] = [
     &[0x00, 0x00],
     &[0xFF, 0xFF],
     &[0xFF, 0xFF, 0xFF],
@@ -197,12 +198,13 @@ async fn a_recipient_change_broadcasts_for_a_side_at_a_routed_broadcast_form() {
 }
 
 /// A confirmed Reporter reaches a Device bound marked one station at each
-/// form the mark lifts, its record a confirmed request naming the station;
+/// form the mark lifts and at `0x00`, its record a confirmed request naming
+/// the station;
 /// at a form the mark doesn't lift it reads CONFIGURATION_ERROR and sends
 /// nothing, as unmarked (#2738).
 #[tokio::test(start_paused = true)]
 async fn a_confirmed_reporter_reaches_a_device_bound_marked_one_station() {
-    let lifted = LIFTED.into_iter().map(|mac| (mac, true));
+    let lifted = MARKED_STATIONS.into_iter().map(|mac| (mac, true));
     for (mac, routed) in lifted.chain(MARKED_FORMS.into_iter().map(|mac| (mac, false))) {
         let (mut session, log, _inbound) = session(true, mac, true).await;
         let expected = if routed {

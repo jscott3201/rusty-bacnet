@@ -385,8 +385,9 @@ class RoutedWireTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual("mark it one station (one_station)" in str(raised.exception),
                                      address in lifted)
         self.assertEqual(self.requests, [])
-        # Marked one station, 255 and the two-octet forms are a station there.
-        for address in lifted + (b"\x00\x01", b"\xff\xfe"):
+        # Marked one station, 255 and the two-octet forms are a station
+        # there; the mark only lifts, so 0 goes marked as it does unmarked.
+        for address in lifted + (b"\x00\x01", b"\xff\xfe", b"\x00"):
             self.requests.clear()
             marked = rb.RoutedTarget(5, address, router=self.router.address, one_station=True)
             with self.subTest(address=address):
@@ -395,10 +396,9 @@ class RoutedWireTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(value, rb.PropertyValue.unsigned(0))
                 [request] = self.requests
                 self.assertEqual((request["dnet"], request["dadr"]), (5, address))
-        # Marked, 0 is ARCNET's broadcast, and 0x0000 and 0xFFFF stay refused.
+        # Marked, 0x0000 and 0xFFFF stay refused.
         self.requests.clear()
-        for address, form in ((b"\x00", "broadcast of an ARCNET network"),
-                              (b"\x00\x00", "whole domain"), (b"\xff\xff", "group 255"),
+        for address, form in ((b"\x00\x00", "whole domain"), (b"\xff\xff", "group 255"),
                               (b"\xff" * 3, "VMAC 0xFFFFFF")):
             with self.subTest(address=address), \
                     self.assertRaisesRegex(rb.BacnetError, f"{form}.*even marked one station"):
@@ -414,6 +414,32 @@ class RoutedWireTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(self.role.read_property(
                     rb.RoutedTarget(5, address, one_station=True), AI_1, P.PRESENT_VALUE), 5)
         self.assertEqual(self.requests, [])
+
+    async def test_a_marked_station_with_no_router_is_reached_through_its_row(self):
+        # An I-Am the router relays from each station gives the client its
+        # row, and so its router: a marked target with no router then goes
+        # there, naming the station (#2738).
+        ip, port = (await self.endpoint.local_address()).rsplit(":", 1)
+        stations = {b"\xff": FAR + 2, b"\x00\x05": FAR + 3}
+        for address, instance in stations.items():
+            self.router.send(i_am(5, address, instance), (ip, int(port)))
+        async with asyncio.timeout(5):
+            while not set(stations.values()) <= {row.object_identifier.instance
+                                                 for row in await self.role.discovered_devices()}:
+                await asyncio.sleep(0.01)
+        for address in stations:
+            self.requests.clear()
+            with self.subTest(address=address):
+                value = await asyncio.wait_for(self.role.read_property(
+                    rb.RoutedTarget(5, address, one_station=True), AI_1, P.PRESENT_VALUE), 5)
+                self.assertEqual(value, rb.PropertyValue.unsigned(0))
+                [request] = self.requests
+                self.assertEqual((request["control"], request["dnet"], request["dadr"]),
+                                 (0x24, 5, address))
+        # Unmarked, the same row doesn't make the address one station.
+        with self.assertRaisesRegex(rb.BacnetError, "carries only an unconfirmed request"):
+            await asyncio.wait_for(self.role.read_property(
+                rb.RoutedTarget(5, b"\xff"), AI_1, P.PRESENT_VALUE), 5)
 
     async def test_a_wrong_address_type_raises_at_the_call(self):
         made = calls(self.role, 7)
